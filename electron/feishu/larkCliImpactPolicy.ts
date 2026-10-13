@@ -17,7 +17,8 @@ export type LarkCliImpactResult = {
 export type LarkMessageTarget = 'self' | 'direct-other' | 'group-or-multiple' | 'unknown'
 
 /** Classify message target against the authenticated Feishu actor; argv alone never establishes self. */
-export function classifyLarkMessageTarget(argv: readonly string[], trustedActorOpenId?: string): LarkMessageTarget {
+export function classifyLarkMessageTarget(argv: unknown, trustedActorOpenId?: string): LarkMessageTarget {
+  if (!Array.isArray(argv) || !argv.every((arg): arg is string => typeof arg === 'string')) return 'unknown'
   if (argv[0]?.toLowerCase() !== 'message' || !['send', 'create', 'reply'].includes(argv[1]?.toLowerCase() ?? '')) return 'unknown'
   const rest = argv.slice(2).map((arg) => arg.toLowerCase())
   if (rest.includes('--chat-type') && rest[rest.indexOf('--chat-type') + 1] === 'group') return 'group-or-multiple'

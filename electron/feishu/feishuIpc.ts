@@ -30,13 +30,13 @@ import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
-import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
+import { isRemoteAsyncApprovalEnabledForRuntime } from '../confirmation/remoteAsyncApprovalRuntime'
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { scheduleStartupWakeRecovery } from '../remote/startupWakeRecovery'
 import { createDeferredImBundleRuntime } from '../remote/deferredImBundleRuntime'
 import { recheckDeferredTaskControl } from '../remote/deferredImDispatch'
 import { executeDeferredImTool } from '../remote/imDeferredToolExecutor'
-import { createImDeferredApprovalProducer, createImDeferredConfirmationAdapter } from '../remote/imDeferredApprovalProducer'
+import { createImDeferredApprovalProducer, createImDeferredConfirmationAdapter, resolveImTaskDigest } from '../remote/imDeferredApprovalProducer'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createDeferredResumeRequestStore } from '../confirmation/deferredResumeRequestStore'
 import { createDeferredTodoTaskControlSafetyPort } from '../remote/deferredTodoTaskControlAdapter'
@@ -144,16 +144,14 @@ export function createFeishuBundle(deps: {
   const deferredProducer = createImDeferredApprovalProducer({ db: deps.db, channel: 'feishu', todoStore: deferredTodos,
     capacity: deferredTodoCapacity, intentStore: deferredIntentStore, envelopeStore: createDeferredEnvelopeStore(deps.db),
     notificationDelivery: deferredNotificationDelivery,
-    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled,
+    isEnabled: () => isRemoteAsyncApprovalEnabledForRuntime(deps.db) && readCfg().remoteEnabled,
+    onFallback: (reason) => logFeishuCliEvent('error', 'feishu.async_approval.defer_failed', { reason }),
     getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('feishu'),
-    resolveTaskDigest: (context) => {
-      if (!deps.sessionStorage || !context.currentUserMessageId || !context.originSessionId) return undefined
-      return deps.sessionStorage.queries.readMessages({ sessionId: context.originSessionId }).find((message) => message.id === context.currentUserMessageId)?.content
-    }
+    resolveTaskDigest: (context) => resolveImTaskDigest(deps.sessionStorage, context)
   })
   const deferredApprovalRuntime = createDeferredImBundleRuntime({
     db: deps.db, channel: 'feishu', todoStore: deferredTodos, notificationDelivery: deferredNotificationDelivery,
-    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled,
+    isEnabled: () => isRemoteAsyncApprovalEnabledForRuntime(deps.db) && readCfg().remoteEnabled,
     getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('feishu'),
     maxParallel: deps.getMaxParallel(),
     isOwnerAuthorized: (todo) => {
@@ -286,7 +284,7 @@ export function createFeishuBundle(deps: {
     getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
     getShellConfig: () => readShellConfigFromDb(deps.db),
     turnRuntime: deps.turnRuntime,
-    isRemoteAsyncApprovalEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db),
+    isRemoteAsyncApprovalEnabled: () => isRemoteAsyncApprovalEnabledForRuntime(deps.db),
     retryDeferredApprovalNotifications: ({ identityKey, ownerId }) => deferredNotificationDelivery.retryForAuthenticatedInbound({
       channel: 'feishu', identityKey, ownerId, authorizationEpoch: remoteAuthorizationRegistry.getAuthorizationEpoch('feishu')
     }),

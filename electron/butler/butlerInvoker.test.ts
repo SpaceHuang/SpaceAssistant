@@ -1514,14 +1514,20 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       } else {
         await fs.writeFile(toolPath, 'must not read needle')
       }
+      let providerCalls = 0
       mockCreateAnthropicClient.mockReturnValue({
         messages: {
           stream: vi.fn(() => ({
             async *[Symbol.asyncIterator]() {},
-            finalMessage: vi.fn(async () => ({
-              content: [{ type: 'tool_use', id: toolUseId, name: toolName, input }],
-              stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 8 }
-            }))
+            finalMessage: vi.fn(async () => {
+              providerCalls += 1
+              return providerCalls === 1
+                ? {
+                    content: [{ type: 'tool_use', id: toolUseId, name: toolName, input }],
+                    stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 8 }
+                  }
+                : { content: [{ type: 'text', text: 'The requested read was not dispatched.' }], stop_reason: 'end_turn', usage: { input_tokens: 8, output_tokens: 2 } }
+            })
           }))
         }
       })
@@ -1544,7 +1550,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       releaseClaim()
       const result = await runningTask
 
-      expect(result.ok).toBe(false)
+      expect(result.ok).toBe(termination !== 'cancel')
       expect(executor).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({

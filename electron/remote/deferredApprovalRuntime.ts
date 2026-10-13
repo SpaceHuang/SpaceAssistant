@@ -5,6 +5,8 @@ import type { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelo
 import type { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
 import { createDeferredApprovalIngress, type parseDeferredApprovalReply } from './deferredApprovalIngress'
 import { createDeferredResumeCoordinator } from './deferredResumeCoordinator'
+import { isRemoteAsyncApprovalTestModeEnabled, isRemoteAsyncApprovalTestTodoEnabled,
+  remoteAsyncApprovalTestRunIdFromPolicyVersion } from '../confirmation/remoteAsyncApprovalTestMode'
 
 type TodoStore = ReturnType<typeof createDeferredTodoStore>
 type EnvelopeStore = ReturnType<typeof createDeferredEnvelopeStore>
@@ -49,10 +51,15 @@ export function createDeferredApprovalRuntime(input: {
         authorizationEpoch: row.authorizationEpoch, rule: row.rule
       }] : []
     },
-    getTodo: (todoId, binding) => input.todoStore.get(todoId, {
-      channel: binding.channel, identityKey: binding.identityKey, ownerId: binding.ownerId,
-      authorizationEpoch: binding.authorizationEpoch, originSessionId: binding.originSessionId, rule: binding.rule
-    }),
+    getTodo: (todoId, binding) => {
+      const todo = input.todoStore.get(todoId, {
+        channel: binding.channel, identityKey: binding.identityKey, ownerId: binding.ownerId,
+        authorizationEpoch: binding.authorizationEpoch, originSessionId: binding.originSessionId, rule: binding.rule
+      })
+      if (todo && (isRemoteAsyncApprovalTestModeEnabled() || remoteAsyncApprovalTestRunIdFromPolicyVersion(todo.policyBehaviorVersion)) &&
+        !isRemoteAsyncApprovalTestTodoEnabled(todo)) return null
+      return todo
+    },
     requestResume: (request, commitReceipt) => resume.requestResume(request, commitReceipt),
     audit: input.audit
   })

@@ -356,10 +356,16 @@ export type SpaceAssistantApi = {
     domain: 'desktop' | 'im' | 'automation'
     policyBehaviorVersion: string
     revision: number
-    snapshot: Record<string, unknown> & { developmentAutoReviewTestAvailable?: boolean; developmentAutoReviewTestEnabled?: boolean }
+    snapshot: Record<string, unknown> & {
+      developmentAutoReviewTestAvailable?: boolean
+      developmentAutoReviewTestEnabled?: boolean
+      developmentAsyncApprovalTestAvailable?: boolean
+      developmentAsyncApprovalTestEnabled?: boolean
+    }
   }>
   /** Process-local automatic-review test switch; main process rejects this in packaged builds. */
   securitySetImAutoReviewTestMode: (payload: { enabled: boolean }) => Promise<{ enabled: boolean }>
+  /** Process-local deferred-approval integration test switch; main process rejects this in packaged builds. */
   /** Versioned shared IM policy update with optimistic concurrency control. */
   securityWritePolicy: (payload: {
     lane: 'wechat' | 'feishu'
@@ -376,6 +382,7 @@ export type SpaceAssistantApi = {
     | { status: 'conflict'; currentRevision: number }
     | { status: 'already-migrated'; revision: number }
   >
+  securitySetImAsyncApprovalTestMode: (payload: { enabled: boolean }) => Promise<{ enabled: boolean }>
   /** 套餐选择（每链路）；变更落 settings.policy-change。 */
   securitySetPolicyPackage: (payload: {
     lane: ExecutionLane

@@ -1,16 +1,18 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
-import { createSession } from '../database/operations'
+import { appendMessage, createSession } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { serializeQueueScope, buildImQueueScope } from '../../src/shared/queueScope'
 import { ensureImTurnTaskControl } from '../database/taskControl'
 import { createDeferredTodoCapacityController } from '../confirmation/deferredTodoCapacity'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
-import { createImDeferredApprovalProducer, createImDeferredConfirmationAdapter } from './imDeferredApprovalProducer'
+import { createImDeferredApprovalProducer, createImDeferredConfirmationAdapter, resolveImTaskDigest } from './imDeferredApprovalProducer'
 import { createDeferredImBundleRuntime } from './deferredImBundleRuntime'
 import { AgentChannel } from '../confirmation/agentChannel'
 import type { RemoteContext } from '../tools/types'
@@ -22,12 +24,76 @@ import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPe
 import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
 import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegistry'
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
+import { setRemoteAsyncApprovalTestModeEnabled } from '../confirmation/remoteAsyncApprovalTestMode'
 
 function seedImPolicy(db: ReturnType<typeof createMemoryAppDb>): void {
   commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'producer-policy-seed' })
 }
 
 describe('production IM deferred approval producer', () => {
+  afterEach(() => { setRemoteAsyncApprovalTestModeEnabled(false, false) })
+
+  it('reads the authenticated user message from the IM queue scope when resolving task delegation', () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'im-task-digest' }).id
+    const userMessageId = 'wechat-scoped-user-message'
+    appendMessage(db, { id: userMessageId, sessionId, role: 'user', content: '覆盖 b.txt 为 test', timestamp: Date.now(), status: 'sent' })
+    getDbConnection(db).prepare('UPDATE messages SET queue_scope=? WHERE id=?')
+      .run(serializeQueueScope(buildImQueueScope('wechat', sessionId)), userMessageId)
+
+    const storage = createSqliteSessionStorage(db)
+    expect(storage.queries.readMessages({ sessionId })).toEqual([])
+    expect(resolveImTaskDigest(storage, { source: 'wechat', originSessionId: sessionId, currentUserMessageId: userMessageId } as RemoteContext))
+      .toBe('覆盖 b.txt 为 test')
+    db.close()
+  })
+
+  it('creates a WeChat approval todo when the authenticated user message is stored in the IM queue scope', async () => {
+    const db = createMemoryAppDb()
+    seedImPolicy(db)
+    const sessionId = createSession(db, { name: 'im-task-digest-admission' }).id
+    const requestId = 'wechat-task-digest-request'
+    const userMessageId = 'wechat-task-digest-user'
+    appendMessage(db, { id: userMessageId, sessionId, role: 'user', content: '覆盖 b.txt 为 test', timestamp: Date.now(), status: 'sent' })
+    getDbConnection(db).prepare('UPDATE messages SET queue_scope=? WHERE id=?')
+      .run(serializeQueueScope(buildImQueueScope('wechat', sessionId)), userMessageId)
+    const storage = createSqliteSessionStorage(db)
+    const binding = ensureImTurnTaskControl(db, { sessionId, ownerId: 'wechat-owner', requestId, userMessageId })
+    if (!binding.ok) throw new Error('task binding unavailable')
+    const capacity = createDeferredTodoCapacityController(db)
+    const todoStore = createDeferredTodoStore(db, { capacity })
+    const intentStore = createSecurityActionIntentStore(db)
+    const notificationDelivery = createDeferredApprovalNotificationDelivery({ db, todoStore, intentStore,
+      adapter: { send: async () => ({ messageId: 'wechat-task-digest-notice' }) }, audit: vi.fn() })
+    const producer = createImDeferredApprovalProducer({ db, channel: 'wechat', todoStore, capacity, intentStore,
+      envelopeStore: createDeferredEnvelopeStore(db), notificationDelivery, isEnabled: () => true,
+      getAuthorizationEpoch: () => 5, resolveTaskDigest: (context) => resolveImTaskDigest(storage, context) })
+    const remoteContext: RemoteContext = { source: 'wechat', messageId: 'platform-message', userId: 'wechat-owner', authOwner: 'wechat-owner',
+      originSessionId: sessionId, requestId, turnId: 'wechat-task-digest-turn', currentUserMessageId: userMessageId,
+      taskBinding: binding.taskBinding, providerRouteId: 'wechat-route', model: 'model', workDirProfileId: 'profile' }
+    const call = { invocationId: 'wechat-task-digest-turn', toolCallId: 'wechat-task-digest-call', toolName: 'write_file',
+      input: { path: 'b.txt', content: 'test' } }
+    const context = { facts: { actionClass: 'write', baseRiskLevel: 'high', summary: { text: '覆盖 b.txt' },
+      signals: [{ kind: 'path-target', path: '/workspace/b.txt', zone: 'workdir-normal' }] }, decision: { riskLevel: 'high' as const,
+      memoryTiers: [], timeoutMs: null, answerer: 'user' as const, disposition: 'human-required' as const } }
+
+    const result = await producer.defer(call, { kind: 'denied', answerer: 'user', cause: 'human-required' },
+      { call, modelTurn: 1, confirmationId: call.toolCallId, answerer: 'user', reasonCode: 'im-write-ask', context }, context,
+      { kind: 'rejected', cause: 'no-answerer', answererKind: 'user' }, remoteContext)
+
+    expect(result).toMatchObject({ kind: 'deferred', invocationId: call.invocationId })
+    const todoId = (result as { todoId: string }).todoId
+    const factsHash = (getDbConnection(db).prepare('SELECT facts_hash FROM deferred_todos WHERE todo_id=?').get(todoId) as { facts_hash: string }).facts_hash
+    expect(todoStore.get(todoId, { channel: 'wechat', identityKey: 'wechat-owner', ownerId: 'wechat-owner',
+      authorizationEpoch: 5, originSessionId: sessionId, rule: { ruleId: 'im-write-ask', factsHash } }))
+      .toMatchObject({ status: 'pending', taskId: binding.taskBinding.taskId })
+    expect(notificationDelivery.list(todoId)).toMatchObject([{ state: 'delivered' }])
+    expect(notificationDelivery.list(todoId)[0]?.dto.sections).toContainEqual(expect.objectContaining({
+      kind: 'user-delegation', text: '覆盖 b.txt 为 test'
+    }))
+    db.close()
+  })
+
   it('allows a standard-package clean read through the assembled policy and RegisteredTools executor exactly once', async () => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
@@ -277,9 +343,52 @@ describe('production IM deferred approval producer', () => {
     const similar = await producer.defer(similarCall, { kind: 'denied', answerer: 'agent', cause: scenario.cause },
       similarConfirmation, confirmation.context, primaryOutcome, similarContext)
     expect(similar).toMatchObject({ kind: 'denied', cause: 'pending-existing', answerer: 'user' })
-    expect((similar as { userMessage?: string }).userMessage).toMatch(/已有.*待审批/)
+    expect((similar as { userMessage?: string }).userMessage).toContain('通知短码：01')
+    expect((similar as { userMessage?: string }).userMessage).toContain('本次请求未执行')
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM deferred_todos WHERE owner_id=?').get('owner')).toEqual({ count: 1 })
     expect(sendNotification).toHaveBeenCalledOnce()
+    db.close()
+  })
+
+  it('does not tell the user to process a notification whose delivery is unconfirmed', async () => {
+    const db = createMemoryAppDb()
+    seedImPolicy(db)
+    const sessionId = createSession(db, { name: 'unconfirmed-notification-copy' }).id
+    const binding = ensureImTurnTaskControl(db, { sessionId, ownerId: 'owner', requestId: 'copy-request-1', userMessageId: 'copy-user-1' })
+    if (!binding.ok) throw new Error('task binding unavailable')
+    const capacity = createDeferredTodoCapacityController(db)
+    const todoStore = createDeferredTodoStore(db, { capacity })
+    const intentStore = createSecurityActionIntentStore(db)
+    const envelopeStore = createDeferredEnvelopeStore(db)
+    const notificationDelivery = createDeferredApprovalNotificationDelivery({ db, todoStore, intentStore,
+      adapter: { send: vi.fn().mockRejectedValue(new Error('transport failed')) }, allocateShortCode: () => '07', audit: vi.fn() })
+    const producer = createImDeferredApprovalProducer({ db, channel: 'wechat', todoStore, capacity, intentStore, envelopeStore,
+      notificationDelivery, isEnabled: () => true, getAuthorizationEpoch: () => 4, resolveTaskDigest: () => 'Update summary.md.' })
+    const call = { invocationId: 'copy-turn-1', toolCallId: 'copy-call-1', toolName: 'write_file',
+      input: { path: 'summary.md', content: 'first request' } }
+    const confirmation = { call, modelTurn: 1, confirmationId: call.toolCallId, answerer: 'agent' as const,
+      reasonCode: 'write-rule', context: { facts: { actionClass: 'write', baseRiskLevel: 'high',
+        signals: [{ kind: 'path-target', path: '/workspace/summary.md', zone: 'workdir-normal' }], summary: { text: 'Update summary.md' } },
+        decision: { riskLevel: 'high' as const, memoryTiers: [], timeoutMs: null, disposition: 'human-required' as const } } }
+    const remoteContext: RemoteContext = { source: 'wechat', messageId: 'copy-platform-1', userId: 'owner', authOwner: 'owner',
+      originSessionId: sessionId, requestId: 'copy-request-1', turnId: 'copy-turn-1', currentUserMessageId: 'copy-user-1',
+      taskBinding: binding.taskBinding, providerRouteId: 'wechat-route', model: 'model', workDirProfileId: 'profile' }
+    const primaryOutcome = { kind: 'rejected', cause: 'no-answerer', answererKind: 'user' } as const
+    const deferred = await producer.defer(call, { kind: 'denied', answerer: 'user', cause: 'human-required' }, confirmation,
+      confirmation.context, primaryOutcome, remoteContext)
+    expect(deferred).toMatchObject({ kind: 'deferred' })
+
+    const nextCall = { ...call, invocationId: 'copy-turn-2', toolCallId: 'copy-call-2', input: { path: 'summary.md', content: 'second request' } }
+    const blocked = await producer.defer(nextCall, { kind: 'denied', answerer: 'user', cause: 'human-required' },
+      { ...confirmation, call: nextCall, confirmationId: nextCall.toolCallId }, confirmation.context, primaryOutcome,
+      { ...remoteContext, requestId: 'copy-request-2', turnId: 'copy-turn-2', messageId: 'copy-platform-2' })
+    expect(blocked).toMatchObject({ kind: 'denied', cause: 'pending-existing', answerer: 'user' })
+    const userMessage = (blocked as { userMessage?: string }).userMessage ?? ''
+    expect(userMessage).toContain('无法确认原审批通知是否已送达')
+    expect(userMessage).toContain('本次请求未执行')
+    expect(userMessage).not.toContain('请先处理原审批通知')
+    expect(userMessage).not.toContain('通知短码：07')
+    expect(notificationDelivery.list(deferred!.todoId)).toMatchObject([{ state: 'undelivered', shortCode: '07' }])
     db.close()
   })
 
@@ -299,6 +408,52 @@ describe('production IM deferred approval producer', () => {
       context, { kind: 'rejected', cause: 'agent-deny', answererKind: 'agent' }, { source: 'wechat', authOwner: 'owner' } as RemoteContext))
       .resolves.toBeUndefined()
     expect(todoStore).toBeDefined()
+    db.close()
+  })
+
+  it('does not silently fall back to a synchronous prompt when enabled human-required deferral lacks authenticated context', async () => {
+    const db = createMemoryAppDb()
+    seedImPolicy(db)
+    const capacity = createDeferredTodoCapacityController(db)
+    const todoStore = createDeferredTodoStore(db, { capacity })
+    const onFallback = vi.fn()
+    const producer = createImDeferredApprovalProducer({ db, channel: 'wechat', todoStore, capacity,
+      intentStore: createSecurityActionIntentStore(db), envelopeStore: createDeferredEnvelopeStore(db),
+      notificationDelivery: { createAndSend: vi.fn() } as never, isEnabled: () => true,
+      getAuthorizationEpoch: () => 1, resolveTaskDigest: () => undefined, onFallback })
+    const context = { facts: { actionClass: 'write' }, decision: { riskLevel: 'high' as const, memoryTiers: [], timeoutMs: null,
+      answerer: 'user' as const, disposition: 'human-required' as const } }
+    await expect(producer.defer({ invocationId: 'missing-material-invocation', toolCallId: 'call', toolName: 'write_file', input: {} },
+      { kind: 'denied', answerer: 'user', cause: 'human-required' },
+      { call: {} as never, modelTurn: 1, confirmationId: 'call', answerer: 'user', reasonCode: 'im-write-ask', context },
+      context, { kind: 'rejected', cause: 'no-answerer', answererKind: 'user' }, { source: 'wechat', authOwner: 'owner' } as RemoteContext))
+      .resolves.toMatchObject({ kind: 'unavailable', cause: 'unavailable', userMessage: expect.any(String) })
+    expect(onFallback).toHaveBeenCalledWith(expect.stringContaining('required-context-missing:'))
+    expect(onFallback.mock.calls[0]?.[0]).toContain('taskBinding')
+    expect(onFallback.mock.calls[0]?.[0]).toContain('taskDigest')
+    expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('reports a disabled WeChat runtime instead of falling back when async approval test mode is switched on', async () => {
+    const db = createMemoryAppDb()
+    seedImPolicy(db)
+    setRemoteAsyncApprovalTestModeEnabled(true, false)
+    const capacity = createDeferredTodoCapacityController(db)
+    const onFallback = vi.fn()
+    const producer = createImDeferredApprovalProducer({ db, channel: 'wechat', todoStore: createDeferredTodoStore(db, { capacity }), capacity,
+      intentStore: createSecurityActionIntentStore(db), envelopeStore: createDeferredEnvelopeStore(db),
+      notificationDelivery: { createAndSend: vi.fn() } as never, isEnabled: () => false,
+      getAuthorizationEpoch: () => 1, resolveTaskDigest: () => 'Create the requested file.', onFallback })
+    const context = { facts: { actionClass: 'write' }, decision: { riskLevel: 'high' as const, memoryTiers: [], timeoutMs: null,
+      answerer: 'user' as const, disposition: 'human-required' as const } }
+    await expect(producer.defer({ invocationId: 'runtime-disabled-invocation', toolCallId: 'call', toolName: 'write_file', input: {} },
+      { kind: 'denied', answerer: 'user', cause: 'human-required' },
+      { call: {} as never, modelTurn: 1, confirmationId: 'call', answerer: 'user', reasonCode: 'im-write-ask', context },
+      context, { kind: 'rejected', cause: 'no-answerer', answererKind: 'user' }, { source: 'wechat', authOwner: 'owner' } as RemoteContext))
+      .resolves.toMatchObject({ kind: 'unavailable', cause: 'unavailable' })
+    expect(onFallback).toHaveBeenCalledWith('runtime-disabled')
+    expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
     db.close()
   })
 
@@ -367,11 +522,14 @@ describe('production IM deferred approval producer', () => {
   })
 
   it.each([
-    { label: 'sensitive script path', language: 'python', code: 'open("/etc/hosts", "r").read()', ruleId: 'script-system-dir-confirm' },
-    { label: 'dynamic execution', language: 'python', code: 'exec("print(1)")', ruleId: 'script-path-unknown-confirm' }
-  ])('closes the real assembler → human-required producer → trusted reply → fenced dispatcher path for $label', async ({ label, language, code, ruleId }) => {
+    { label: 'sensitive script path', language: 'python', code: 'open("/etc/hosts", "r").read()', ruleId: 'script-system-dir-confirm', mode: 'release-gate' as const },
+    { label: 'dynamic execution', language: 'python', code: 'exec("print(1)")', ruleId: 'script-path-unknown-confirm', mode: 'release-gate' as const },
+    { label: 'sensitive script path', language: 'python', code: 'open("/etc/hosts", "r").read()', ruleId: 'script-system-dir-confirm', mode: 'development-test' as const },
+    { label: 'dynamic execution', language: 'python', code: 'exec("print(1)")', ruleId: 'script-path-unknown-confirm', mode: 'development-test' as const }
+  ])('closes the real assembler → human-required producer → trusted reply → fenced dispatcher path for $label ($mode)', async ({ label, language, code, ruleId, mode }) => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
+    if (mode === 'development-test') setRemoteAsyncApprovalTestModeEnabled(true, false)
     const sessionId = createSession(db, { name: 'e2e-session' }).id
     const binding = ensureImTurnTaskControl(db, { sessionId, ownerId: 'owner', requestId: 'request-e2e', userMessageId: 'user-e2e' })
     if (!binding.ok) throw new Error('task binding unavailable')
@@ -414,6 +572,9 @@ describe('production IM deferred approval producer', () => {
     const deferred = await confirmationPort({ call, modelTurn: 1, confirmationId: call.toolCallId, answerer: 'user',
       reasonCode: gate.decision.type === 'require-confirm' ? gate.decision.ruleId : 'unexpected', context: confirmationContext })
     expect(deferred).toMatchObject({ kind: 'deferred' })
+    const storedPolicyVersion = (getDbConnection(db).prepare('SELECT policy_behavior_version FROM deferred_todos WHERE todo_id=?')
+      .get(deferred!.todoId) as { policy_behavior_version: string }).policy_behavior_version
+    expect(storedPolicyVersion).toMatch(mode === 'development-test' ? /^im-standard-v2:dev-test:/ : /^im-standard-v2$/)
     expect(channelRequest).not.toHaveBeenCalled()
     expect(agentChannelFactory).not.toHaveBeenCalled()
     expect(envelopeStore.get(call.invocationId)).toMatchObject({ canonicalArgs: call.input,

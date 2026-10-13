@@ -4,6 +4,8 @@ import type { DeferredResumeRequest } from '../confirmation/deferredResumeReques
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
 import { getTaskControlRecord } from '../database/taskControl'
 import { readImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { isRemoteAsyncApprovalTestModeEnabled, isRemoteAsyncApprovalTestTodoEnabled,
+  remoteAsyncApprovalTestRunIdFromPolicyVersion } from '../confirmation/remoteAsyncApprovalTestMode'
 
 export function recheckDeferredTaskControl(db: AppDatabase, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean {
   const context = envelope.executionContext
@@ -37,11 +39,19 @@ export function createDeferredImDispatchPorts(input: {
   const recheck = async (_request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope) => {
     const context = envelope.executionContext
     let policyMatches = true
+    let testRunMatches = true
+    const testRunId = remoteAsyncApprovalTestRunIdFromPolicyVersion(todo.policyBehaviorVersion)
+    if (isRemoteAsyncApprovalTestModeEnabled() || testRunId) {
+      testRunMatches = isRemoteAsyncApprovalTestTodoEnabled(todo)
+    }
     if (input.db && (todo.channel === 'wechat' || todo.channel === 'feishu') && todo.policyBehaviorVersion !== undefined) {
       try {
         const snapshot = readImPolicySnapshot(getDbConnection(input.db), { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
         const epoch = getDbConnection(input.db).prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='im'").get() as { epoch?: number } | undefined
-        policyMatches = typeof todo.policyBehaviorVersion === 'string' && todo.policyBehaviorVersion === snapshot.policyBehaviorVersion &&
+        const baseBehaviorVersion = testRunId
+          ? todo.policyBehaviorVersion!.slice(0, todo.policyBehaviorVersion!.lastIndexOf(':dev-test:'))
+          : todo.policyBehaviorVersion
+        policyMatches = typeof baseBehaviorVersion === 'string' && baseBehaviorVersion === snapshot.policyBehaviorVersion &&
           todo.policyRevision === snapshot.revision && Number.isSafeInteger(todo.policyEpoch) && epoch?.epoch === todo.policyEpoch
       } catch {
         policyMatches = false
@@ -57,7 +67,7 @@ export function createDeferredImDispatchPorts(input: {
       ? true
       : context.policyBehaviorVersion === todo.policyBehaviorVersion && context.policyRevision === todo.policyRevision &&
         context.policyEpoch === todo.policyEpoch && context.ruleId === todo.rule.ruleId && context.factsHash === todo.rule.factsHash
-    const allowed = input.isEnabled() && todo.channel === input.channel &&
+    const allowed = input.isEnabled() && testRunMatches && todo.channel === input.channel &&
       todo.authorizationEpoch === input.getAuthorizationEpoch() && input.isOwnerAuthorized(todo) &&
       policyMatches && identityMatches && approvalMatches && input.recheckTask(todo, envelope)
     return { allowed }

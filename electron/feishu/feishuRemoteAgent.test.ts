@@ -160,7 +160,8 @@ describe('runFeishuRemoteAgent locale', () => {
     expect(mockRunToolChatSession).toHaveBeenCalledTimes(1)
     expect(capturedSystem).toContain('feishu_remote_command')
     expect(capturedSystem).toContain('im-standard-v2')
-    expect(capturedSystem).toContain('自动审核未启用')
+    expect(capturedSystem).toContain('自动审核规则已配置')
+    expect(capturedSystem).toContain('异步人工审批通知由独立安全门禁控制')
     expect(capturedSystem).not.toContain('remoteConfirmPolicy=')
   })
 

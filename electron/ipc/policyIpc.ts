@@ -8,6 +8,7 @@ import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { isPolicyPackage, validateRuleOverride } from '../../src/shared/policy/policyPackages'
 import { IM_STANDARD_BEHAVIOR_DIFF_IDS } from '../../src/shared/policy/imPolicyBehavior'
 import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
+import { isRemoteAsyncApprovalTestModeEnabled, setRemoteAsyncApprovalTestModeEnabled } from '../confirmation/remoteAsyncApprovalTestMode'
 import { isImAutoReviewTestModeEnabled, setImAutoReviewTestModeEnabled } from '../confirmation/imAutoReviewTestMode'
 import type { PolicyAction } from '../../src/shared/confirmation/types'
 import '../capabilities/registerBuiltinCapabilities'
@@ -40,6 +41,14 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase, options: { 
     }
     return { enabled: setImAutoReviewTestModeEnabled((payload as { enabled: boolean }).enabled, options.isPackaged) }
   })
+  ipcMain.handle('policy:set-im-async-approval-test-mode', async (_event, payload: unknown) => {
+    if (options.isPackaged) throw new Error('REMOTE_ASYNC_APPROVAL_TEST_MODE_UNAVAILABLE')
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+        Object.keys(payload).length !== 1 || typeof (payload as Record<string, unknown>).enabled !== 'boolean') {
+      throw new Error('REMOTE_ASYNC_APPROVAL_TEST_MODE_INVALID')
+    }
+    return { enabled: setRemoteAsyncApprovalTestModeEnabled((payload as { enabled: boolean }).enabled, options.isPackaged) }
+  })
   ipcMain.handle('policy:read-for-lane', async (_event, payload: unknown) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('POLICY_READ_PAYLOAD_INVALID')
     const request = payload as Record<string, unknown>
@@ -51,7 +60,9 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase, options: { 
     if (domain !== 'im') return policy
     return { ...policy, snapshot: { ...policy.snapshot, enabled: isRemoteAsyncApprovalGateEnabled(db),
       developmentAutoReviewTestAvailable: !options.isPackaged,
-      developmentAutoReviewTestEnabled: !options.isPackaged && isImAutoReviewTestModeEnabled() } }
+      developmentAutoReviewTestEnabled: !options.isPackaged && isImAutoReviewTestModeEnabled(),
+      developmentAsyncApprovalTestAvailable: !options.isPackaged,
+      developmentAsyncApprovalTestEnabled: !options.isPackaged && isRemoteAsyncApprovalTestModeEnabled() } }
   })
   ipcMain.handle('policy:write', async (_event, payload: unknown) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('POLICY_WRITE_PAYLOAD_INVALID')

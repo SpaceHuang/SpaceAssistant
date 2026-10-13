@@ -629,15 +629,16 @@ describe('fixed task-set actual gate shadow integration', () => {
     const unauthorizedDispatches = dangerous.filter(({ taskId, lane }) =>
       taskId === 'third-party-send' && lane === 'im-standard' &&
       result.decisions?.some((item) => item.taskId === taskId && item.lane === lane && item.decision === 'deny')).length
-    expect(imHuman).toBe(7)
+    expect(imHuman).toBe(2)
     expect(ordinaryByLane('im-standard').filter(({ decision }) => decision === 'agent-candidate').map(({ taskId }) => taskId))
-      .toEqual(['multi-time-check', 'multi-time-check', 'multi-time-check'])
+      .toEqual(['public-search', 'public-search', 'multi-time-check', 'multi-time-check', 'multi-time-check',
+        'multi-turn-search', 'multi-turn-search', 'multi-turn-search'])
     expect(imAuto / ordinaryByLane('im-standard').length).toBeLessThan(desktopAuto / ordinaryByLane('desktop').length)
     expect(dangerousAuto).toBe(3)
     expect({ ordinaryDenominatorPerLane: ordinaryByLane('desktop').length, desktopAuto, desktopAgentCandidates, imAuto,
       imAutoRate: imAuto / ordinaryByLane('im-standard').length, imAgentCandidates, imHumanNotifications: imHuman,
         dangerousDenominatorPerLane: dangerous.length / 2, dangerousAuto, failures: 0, rejects: dangerous.filter(({ decision }) => decision === 'deny').length })
-      .toMatchObject({ ordinaryDenominatorPerLane: 11, desktopAuto: 4, desktopAgentCandidates: 7, imAuto: 1, imAgentCandidates: 3, imHumanNotifications: 7,
+      .toMatchObject({ ordinaryDenominatorPerLane: 11, desktopAuto: 4, desktopAgentCandidates: 7, imAuto: 1, imAgentCandidates: 8, imHumanNotifications: 2,
         dangerousDenominatorPerLane: 6, dangerousAuto: 3, failures: 0 })
     expect(unauthorizedDispatches).toBe(0)
     expect(audits.filter((event) => (event as { event?: string }).event === 'policy.decision' &&

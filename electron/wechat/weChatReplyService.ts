@@ -47,11 +47,26 @@ export interface WeChatReplyBot {
 export function requireWeChatSentMessageId(result: unknown): { messageId: string } {
   if (typeof result === 'string' && result.trim()) return { messageId: result }
   if (result && typeof result === 'object' && !Array.isArray(result)) {
-    const value = result as { messageId?: unknown; message_id?: unknown; id?: unknown; data?: { message_id?: unknown } }
+    const value = result as { messageId?: unknown; message_id?: unknown; id?: unknown; data?: { message_id?: unknown };
+      kind?: unknown; delivery?: unknown; binding?: { kind?: unknown; value?: unknown } }
+    if (value.kind === 'sent' && value.delivery === 'bound' && value.binding?.kind === 'message-id' &&
+      typeof value.binding.value === 'string' && value.binding.value.trim()) return { messageId: value.binding.value }
     const messageId = value.messageId ?? value.message_id ?? value.id ?? value.data?.message_id
     if (typeof messageId === 'string' && messageId.trim()) return { messageId }
   }
   throw new Error('WECHAT_DELIVERY_MESSAGE_ID_MISSING')
+}
+
+/** Sends through the channel's receipt-aware adapter so callers can bind replies to the trusted message. */
+export async function sendWeChatTextToUserWithReceipt(
+  bot: Pick<WeChatReplyBot, 'sendToUser'>,
+  userId: string,
+  content: string
+): Promise<{ messageId: string }> {
+  const target = userId.trim()
+  if (!target) throw new Error('WECHAT_DELIVERY_TARGET_REQUIRED')
+  if (!bot.sendToUser) throw new Error('WECHAT_DELIVERY_UNAVAILABLE')
+  return requireWeChatSentMessageId(await bot.sendToUser(target, content))
 }
 
 export async function replyWeChatSummary(

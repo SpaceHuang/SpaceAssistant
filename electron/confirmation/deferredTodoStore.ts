@@ -6,6 +6,7 @@ import { recordRemoteTrackRuntimeDiagnostic } from '../database/remoteTrackRunti
 import { runInTransaction } from '../database/transaction'
 import type { DeferredTodoCapacityLifecycle } from './deferredTodoCapacity'
 import { readImPolicySnapshot } from './imPolicyStore'
+import { isRemoteAsyncApprovalTestPolicyVersionEnabled, remoteAsyncApprovalTestRunIdFromPolicyVersion } from './remoteAsyncApprovalTestMode'
 
 export const DEFAULT_DEFERRED_TODO_TTL_MS = 24 * 60 * 60_000
 
@@ -161,7 +162,14 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
           const snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
           const epoch = conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='im'").get() as { epoch: number } | undefined
           if (!epoch || !Number.isSafeInteger(epoch.epoch) || epoch.epoch < 0) throw new Error('IM_POLICY_EPOCH_INVALID')
-          policyFence = { policyBehaviorVersion: snapshot.policyBehaviorVersion, policyRevision: snapshot.revision, policyEpoch: epoch.epoch }
+          const testRunId = remoteAsyncApprovalTestRunIdFromPolicyVersion(input.policyBehaviorVersion)
+          const testPolicyVersion = typeof input.policyBehaviorVersion === 'string' && input.policyBehaviorVersion.includes(':dev-test:')
+          if (testPolicyVersion && (!isRemoteAsyncApprovalTestPolicyVersionEnabled(input.policyBehaviorVersion) || !testRunId ||
+            input.policyBehaviorVersion !== `${snapshot.policyBehaviorVersion}:dev-test:${testRunId}`)) {
+            throw new Error('DEFERRED_TEST_POLICY_FENCE_INVALID')
+          }
+          policyFence = { policyBehaviorVersion: testPolicyVersion ? input.policyBehaviorVersion! : snapshot.policyBehaviorVersion,
+            policyRevision: snapshot.revision, policyEpoch: epoch.epoch }
         }
         conn.prepare(`INSERT INTO deferred_todos(${TODO_COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
           todoId, input.invocationId, input.channel, input.identityKey, input.ownerId, input.authorizationEpoch,

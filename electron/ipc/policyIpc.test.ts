@@ -5,6 +5,7 @@ import { registerPolicyIpc } from './policyIpc'
 import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { afterEach } from 'vitest'
 import { setImAutoReviewTestModeEnabled } from '../confirmation/imAutoReviewTestMode'
+import { isRemoteAsyncApprovalTestModeEnabled, setRemoteAsyncApprovalTestModeEnabled } from '../confirmation/remoteAsyncApprovalTestMode'
 
 function registeredHandlers(db = createMemoryAppDb('policy-ipc-contract'), isPackaged = false) {
   const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -13,7 +14,38 @@ function registeredHandlers(db = createMemoryAppDb('policy-ipc-contract'), isPac
 }
 
 describe('policy domain read IPC contract', () => {
-  afterEach(() => { setImAutoReviewTestModeEnabled(false, false) })
+  afterEach(() => {
+    setImAutoReviewTestModeEnabled(false, false)
+    setRemoteAsyncApprovalTestModeEnabled(false, false)
+  })
+
+  it('offers an isolated async-approval test switch in development without changing the production gate', async () => {
+    const dev = registeredHandlers(createMemoryAppDb('policy-ipc-async-test-switch'), false)
+    commitImPolicySnapshot(getDbConnection(dev.db), { policyBehaviorVersion: 'im-standard-v2', snapshot: {}, updatedAt: 1, eventId: 'async-test-switch-seed' })
+    const read = dev.handlers.get('policy:read-for-lane')!
+    const write = dev.handlers.get('policy:set-im-async-approval-test-mode')!
+
+    expect((await read({}, { lane: 'wechat' })).snapshot).toMatchObject({
+      enabled: false, developmentAsyncApprovalTestAvailable: true, developmentAsyncApprovalTestEnabled: false
+    })
+    await expect(write({}, { enabled: true })).resolves.toEqual({ enabled: true })
+    expect(isRemoteAsyncApprovalTestModeEnabled()).toBe(true)
+    expect((await read({}, { lane: 'feishu' })).snapshot).toMatchObject({
+      enabled: false, developmentAsyncApprovalTestEnabled: true
+    })
+    expect(getDbConnection(dev.db).prepare('SELECT state FROM remote_async_approval_gate_state WHERE singleton=1').get())
+      .toEqual({ state: 'disabled' })
+    await expect(write({}, { enabled: false, extra: true })).rejects.toThrow('REMOTE_ASYNC_APPROVAL_TEST_MODE_INVALID')
+    dev.db.close()
+
+    const packaged = registeredHandlers(createMemoryAppDb('policy-ipc-async-test-packaged'), true)
+    commitImPolicySnapshot(getDbConnection(packaged.db), { policyBehaviorVersion: 'im-standard-v2', snapshot: {}, updatedAt: 1, eventId: 'async-test-packaged-seed' })
+    await expect(packaged.handlers.get('policy:set-im-async-approval-test-mode')!({}, { enabled: true }))
+      .rejects.toThrow('REMOTE_ASYNC_APPROVAL_TEST_MODE_UNAVAILABLE')
+    expect((await packaged.handlers.get('policy:read-for-lane')!({}, { lane: 'wechat' })).snapshot)
+      .toMatchObject({ enabled: false, developmentAsyncApprovalTestAvailable: false, developmentAsyncApprovalTestEnabled: false })
+    packaged.db.close()
+  })
 
   it('offers a process-only auto-review test switch in development and refuses it in packaged builds', async () => {
     const dev = registeredHandlers(createMemoryAppDb('policy-ipc-dev-switch'), false)

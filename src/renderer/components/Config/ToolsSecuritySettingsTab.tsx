@@ -73,6 +73,8 @@ function PolicyPackageSection({
   const [imGateReason, setImGateReason] = useState<string | null>(null)
   const [imAutoReviewTestAvailable, setImAutoReviewTestAvailable] = useState(false)
   const [imAutoReviewTestEnabled, setImAutoReviewTestEnabled] = useState(false)
+  const [imAsyncApprovalTestAvailable, setImAsyncApprovalTestAvailable] = useState(false)
+  const [imAsyncApprovalTestEnabled, setImAsyncApprovalTestEnabled] = useState(false)
 
   const actionLabel = (action: PolicyAction): string =>
     action === 'deny'
@@ -121,6 +123,8 @@ function PolicyPackageSection({
     setImGateReason(typeof snapshot.disabledReason === 'string' ? snapshot.disabledReason : null)
     setImAutoReviewTestAvailable(snapshot.developmentAutoReviewTestAvailable === true)
     setImAutoReviewTestEnabled(snapshot.developmentAutoReviewTestEnabled === true)
+    setImAsyncApprovalTestAvailable(snapshot.developmentAsyncApprovalTestAvailable === true)
+    setImAsyncApprovalTestEnabled(snapshot.developmentAsyncApprovalTestEnabled === true)
     setImRuleOverrides(snapshot.ruleOverrides && typeof snapshot.ruleOverrides === 'object' && !Array.isArray(snapshot.ruleOverrides)
       ? snapshot.ruleOverrides as Record<string, string> : {})
     setImDisabledRuleIds(Array.isArray(snapshot.disabledRuleIds)
@@ -518,6 +522,31 @@ function PolicyPackageSection({
                               setImAutoReviewTestEnabled(result.enabled)
                             } catch {
                               message.error(t('toolsSecurity.policy.devAutoReviewTestFailed'))
+                            }
+                          }}
+                        />
+                      </Space>
+                    )}
+                  />
+                ) : null}
+                {lane === 'wechat' && imAsyncApprovalTestAvailable ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message={t('toolsSecurity.policy.devAsyncApprovalTestTitle')}
+                    description={(
+                      <Space direction="vertical" align="start">
+                        <span>{t('toolsSecurity.policy.devAsyncApprovalTestHint')}</span>
+                        <Switch
+                          checked={imAsyncApprovalTestEnabled}
+                          checkedChildren={t('toolsSecurity.policy.devAutoReviewTestOn')}
+                          unCheckedChildren={t('toolsSecurity.policy.devAutoReviewTestOff')}
+                          onChange={async (enabled) => {
+                            try {
+                              const result = await window.api.securitySetImAsyncApprovalTestMode({ enabled })
+                              setImAsyncApprovalTestEnabled(result.enabled)
+                            } catch {
+                              message.error(t('toolsSecurity.policy.devAsyncApprovalTestFailed'))
                             }
                           }}
                         />
