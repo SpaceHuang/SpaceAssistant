@@ -399,6 +399,31 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     resetDefaultAgentRuntimeForTests()
   })
 
+  it('refuses a source request tool recheck after the session work directory changes', async () => {
+    let currentWorkDir = '/workspace/A'
+    const requestId = 'workdir-source-binding'
+    const { agentSdk } = assembleInvocation({
+      requestId, sessionId: requestId, turnId: requestId, model: 'test-model', providerRouteId: 'hosted-route',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/workspace/A', resolveWorkDir: () => currentWorkDir,
+      userDataDir: '/tmp', getApiKey: async () => 'key', agentSdkHistory: new MemoryHistory(),
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'probe-tool', parseInput: (raw) => raw as Record<string, unknown>, plan: async () => ({}), execute: async () => ({ success: true }) }))
+    runtime.modelProviders.register({ routeId: 'hosted-route', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, {
+      providerId: 'workdir-source-binding', stream: async function* () { yield { type: 'finish' as const, reason: 'stop' as const } }
+    })
+    const hosted = await agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['probe-tool']) })
+    const ports = await hosted.host.createPorts({ invocationId: requestId, turnId: requestId, routeId: 'hosted-route', request: { messages: [], maxTokens: 10 } })
+    const call = { invocationId: requestId, toolCallId: 'stale-call', toolName: 'probe-tool', input: {} }
+    await ports.prepareTool(call, { kind: 'initial' })
+    currentWorkDir = '/workspace/B'
+    await expect(ports.prepareTool(call, {
+      kind: 'recheck', requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/A' } }
+    })).rejects.toMatchObject({ reasonCode: 'WORKDIR_BINDING_CHANGED' })
+    await hosted.dispose()
+  })
+
   it('preserves registry methods and forwards revocation events to the runtime instance', () => {
     const { ports } = assembleInvocation({
       requestId: 'req-adapter',

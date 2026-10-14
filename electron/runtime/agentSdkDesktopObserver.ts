@@ -47,7 +47,8 @@ export function createAgentSdkDesktopObserver(input: {
   /** FR8：节省量按轮日志出口（assembler 落 agentLogger；事件面不进 wire 面与会话事件流）。 */
   onDeferredSavings?(input: { modelTurn: number; toolCount: number; eagerEquivalentTokens: number; indexTokens: number; savedTokens: number }): void
   onDispatchDiagnostic?(event: Readonly<Record<string, unknown>>): void
-  getWorkDir?(): string
+  getWorkDir?(modelTurn: number): string
+  getWorkDirSnapshot?(): Readonly<{ workDir: string; profileId: string; key: string; revision: number }>
   agentsMdEnabled?: boolean
 }): AgentTurnObserver {
   let pendingChunks: ObserverChunk[] = []
@@ -90,6 +91,7 @@ export function createAgentSdkDesktopObserver(input: {
   }>()
   const projectedToolUsage = new Map<number, ContextUsageRaw>()
   const agentsMdSnapshots = new Map<number, AgentsMdLoadResult>()
+  const agentsMdWorkspaceBindings = new Map<number, Readonly<{ workDir: string; profileId: string; key: string; revision: number }>>()
   const stepId = (modelTurn: number) => `${input.requestId}:model:${modelTurn}`
   const emitFact = (event: AssistantFactEvent) => input.emitFactEvent?.(event)
   const emitSessionEvent = (event: SessionEventInput) => input.emitSessionEvent?.({
@@ -116,8 +118,11 @@ export function createAgentSdkDesktopObserver(input: {
   }
   const prepareRequestProjection = async (request: Parameters<NonNullable<AgentTurnObserver['onModelRequest']>>[0]) => {
     let agentsMdSnapshot = agentsMdSnapshots.get(request.modelTurn)
+    let workspaceBinding = agentsMdWorkspaceBindings.get(request.modelTurn)
     if (!agentsMdSnapshot) {
-      agentsMdSnapshot = await loadAgentsMd(input.getWorkDir?.() ?? '', { enabled: input.agentsMdEnabled, contextWindow: input.contextWindow, promptOverheadTokens: estimateTokensFromUtf8Text(renderAgentsMdSection('')) })
+      workspaceBinding = input.getWorkDirSnapshot?.()
+      if (workspaceBinding) agentsMdWorkspaceBindings.set(request.modelTurn, workspaceBinding)
+      agentsMdSnapshot = await loadAgentsMd(workspaceBinding?.workDir ?? input.getWorkDir?.(request.modelTurn) ?? '', { enabled: input.agentsMdEnabled, contextWindow: input.contextWindow, promptOverheadTokens: estimateTokensFromUtf8Text(renderAgentsMdSection('')) })
       agentsMdSnapshots.set(request.modelTurn, agentsMdSnapshot)
     }
     const agentsMdSection = agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content
@@ -245,7 +250,7 @@ export function createAgentSdkDesktopObserver(input: {
         source: 'AGENTS.md', scope: 'workdir-root',
         workDir: agentsMdSnapshot.workDir,
         ...(agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content !== null ? { content: agentsMdSnapshot.content } : {})
-      } },
+      }, ...(workspaceBinding ? { workspaceBinding } : {}) },
       ...(requestPatch ? { requestPatch } : {}),
       ...(input.sessionEventLocation ? { sessionLedger: {
         location: input.sessionEventLocation,

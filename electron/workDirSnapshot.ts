@@ -85,11 +85,12 @@ export function createWorkspaceSnapshotTracker(opts: {
   sessionQueries: SessionQueries | undefined
   sessionId: string
   workDirManager: WorkDirManager | undefined
-  fallbackWorkDir: string
+  fallbackWorkDir: string | (() => string)
   onRebound?: (e: WorkspaceReboundEvent) => void
 }): WorkspaceSnapshotTracker {
-  let current: WorkspaceSnapshot = fallbackSnapshot(opts.fallbackWorkDir)
-  const resolved = resolveWorkspaceSnapshot(opts.sessionQueries, opts.sessionId, opts.workDirManager, opts.fallbackWorkDir)
+  const fallbackWorkDir = () => typeof opts.fallbackWorkDir === 'function' ? opts.fallbackWorkDir() : opts.fallbackWorkDir
+  let current: WorkspaceSnapshot = fallbackSnapshot(fallbackWorkDir())
+  const resolved = resolveWorkspaceSnapshot(opts.sessionQueries, opts.sessionId, opts.workDirManager, fallbackWorkDir())
   if (resolved) current = resolved
 
   function fallbackSnapshot(workDir: string): WorkspaceSnapshot {
@@ -106,9 +107,9 @@ export function createWorkspaceSnapshotTracker(opts: {
     snapshot: () => current,
     refresh: () => {
       const next =
-        resolveWorkspaceSnapshot(opts.sessionQueries, opts.sessionId, opts.workDirManager, opts.fallbackWorkDir) ??
-        fallbackSnapshot(opts.fallbackWorkDir)
-      if (next.key === current.key) {
+        resolveWorkspaceSnapshot(opts.sessionQueries, opts.sessionId, opts.workDirManager, fallbackWorkDir()) ??
+        fallbackSnapshot(fallbackWorkDir())
+      if (next.key === current.key && next.profileId === current.profileId && next.source === current.source && next.sensitive === current.sensitive) {
         return current
       }
       const rebound: WorkspaceSnapshot = { ...next, revision: current.revision + 1 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
+import { AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, ToolDeniedError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
 import { ModelProviderRegistry, type CanonicalModelMessage, type StreamChunk } from '../src/model'
 import { CapabilityRegistry } from '../src/capability'
 import { InMemorySafetyPermitStore, type PermitBinding } from '../src/safetyPermit'
@@ -75,6 +75,210 @@ describe('runAgentTurn', () => {
     expect((await history.read(invocationId)).events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({
       sourceRequestId: `${invocationId}:round:1`, modelTurn: 1
     })
+  })
+  it('passes the originating logical request metadata to initial and final tool preparation', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'request-bound-tool-metadata', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'bound-call', toolName: 'lookup', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    const stages: Array<{ kind: string; requestMetadata?: Readonly<Record<string, unknown>> }> = []
+    const invocationId = 'request-bound-tool-metadata'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      observer: { prepareModelRequest: ({ modelTurn }) => ({ requestMetadata: { agentsMdSnapshot: { workDir: `/workspace/${modelTurn}` } } }) },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => {
+        stages.push({ kind: stage.kind, requestMetadata: stage.requestMetadata })
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }
+      },
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'ok' })), maxModelTurns: 2
+    })
+    expect(stages).toEqual([
+      { kind: 'initial', requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/1' } } },
+      { kind: 'recheck', requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/1' } } }
+    ])
+  })
+  it('runs switch_work_dir before the response siblings and returns siblings as not dispatched', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'request-switch-barrier', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'sibling', toolName: 'lookup', input: {} }
+        yield { type: 'tool-call' as const, toolCallId: 'switch', toolName: 'switch_work_dir', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    const executionOrder: string[] = []
+    const invocationId = 'request-switch-barrier'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup', 'switch_work_dir'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+      toolExecution: toolExecutionPort(permits, async (call) => { executionOrder.push(call.toolName); return { output: 'ok' } }), maxModelTurns: 2
+    })
+    expect(executionOrder).toEqual(['switch_work_dir'])
+    const events = (await history.read(invocationId)).events
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'sibling', reason: 'WORKDIR_SWITCH_BARRIER' }) }))
+    expect(events.findIndex(({ kind, payload }) => kind === 'tool-call-started' && (payload as { toolCallId?: string }).toolCallId === 'switch'))
+      .toBeLessThan(events.findIndex(({ kind, payload }) => kind === 'tool-call-not-dispatched' && (payload as { toolCallId?: string }).toolCallId === 'sibling'))
+  })
+  it('loads the next logical request from the directory selected by switch_work_dir', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    let currentWorkDir = '/workspace/A'
+    const requestMetadata: Array<Record<string, unknown>> = []
+    registry.register(route, { providerId: 'request-switch-refresh', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'switch-to-b', toolName: 'switch_work_dir', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    const invocationId = 'request-switch-refresh'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['switch_work_dir'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'switch to B' }], maxTokens: 32 },
+      observer: { prepareModelRequest: () => {
+        const metadata = { agentsMdSnapshot: { workDir: currentWorkDir, content: `instructions-${currentWorkDir}` } }
+        requestMetadata.push(metadata)
+        return { requestMetadata: metadata }
+      } },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+      toolExecution: toolExecutionPort(permits, async () => { currentWorkDir = '/workspace/B'; return { output: 'switched' } }), maxModelTurns: 2
+    })
+    expect(requestMetadata.map(({ agentsMdSnapshot }) => (agentsMdSnapshot as { workDir: string }).workDir)).toEqual(['/workspace/A', '/workspace/B'])
+    const historyMetadata = (await history.read(invocationId)).events.filter(({ kind }) => kind === 'model-request-started').map(({ payload }) => (payload as { requestMetadata?: unknown }).requestMetadata)
+    expect(historyMetadata).toEqual(requestMetadata)
+  })
+  it('does not execute a request-bound tool when the work directory changes while waiting for its resource lock', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'request-binding-resource-lock', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'stale-after-lock', toolName: 'lookup', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    let currentWorkDir = '/workspace/A'
+    let markLockEntered!: () => void
+    let releaseLock!: () => void
+    const lockEntered = new Promise<void>((resolve) => { markLockEntered = resolve })
+    const lockBarrier = new Promise<void>((resolve) => { releaseLock = resolve })
+    const invocationId = 'request-binding-resource-lock'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const execute = vi.fn(async () => ({ output: 'must not execute' }))
+    const execution = runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      observer: { prepareModelRequest: () => ({ requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/A' } } }) },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => {
+        if (stage.kind === 'recheck' && stage.requestMetadata?.agentsMdSnapshot &&
+          (stage.requestMetadata.agentsMdSnapshot as { workDir?: string }).workDir !== currentWorkDir) {
+          throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'work directory changed')
+        }
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }
+      },
+      toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 2,
+      resourceLocks: { acquire: async () => { markLockEntered(); await lockBarrier; return { release: vi.fn() } } }
+    })
+    await lockEntered
+    currentWorkDir = '/workspace/B'
+    releaseLock()
+    await expect(execution).rejects.toMatchObject({ reasonCode: 'WORKDIR_BINDING_CHANGED' })
+    expect(execute).not.toHaveBeenCalled()
+    expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'stale-after-lock', reason: 'WORKDIR_BINDING_CHANGED' }) }))
+  })
+  it('cancels an approved operation when its source work directory changes during approval wait', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'request-binding-approval', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'stale-after-approval', toolName: 'lookup', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    let currentWorkDir = '/workspace/A'
+    let approve!: (result: { kind: 'approved'; receipt: string }) => void
+    let requestApproval!: () => void
+    const approvalRequested = new Promise<void>((resolve) => { requestApproval = resolve })
+    const invocationId = 'request-binding-approval'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const execute = vi.fn(async () => ({ output: 'must not execute' }))
+    const execution = runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      observer: { prepareModelRequest: () => ({ requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/A' } } }) },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'ask' as const, confirmationId: 'approval', answerer: 'user', reasonCode: 'CONFIRM_REQUIRED' }) } }),
+      confirmation: async () => { requestApproval(); return new Promise((resolve) => { approve = resolve }) },
+      prepareTool: async (call, stage) => {
+        if (stage.kind === 'recheck' && stage.requestMetadata?.agentsMdSnapshot &&
+          (stage.requestMetadata.agentsMdSnapshot as { workDir?: string }).workDir !== currentWorkDir) {
+          throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'work directory changed')
+        }
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }
+      },
+      toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 2
+    })
+    await approvalRequested
+    currentWorkDir = '/workspace/B'
+    approve({ kind: 'approved', receipt: 'approval-receipt' })
+    await expect(execution).rejects.toMatchObject({ reasonCode: 'WORKDIR_BINDING_CHANGED' })
+    expect(execute).not.toHaveBeenCalled()
+    expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'stale-after-approval', reason: 'WORKDIR_BINDING_CHANGED' }) }))
   })
   it('rechecks authorization after asynchronous model request projection', async () => {
     const registry = new ModelProviderRegistry()

@@ -242,8 +242,8 @@ type CanonicalToolExecutionResult = {
   invocationDisposition?: 'cancelled' | 'timed-out' | 'authorization-invalidated'
 }
 export type ToolPreparationStage =
-  | Readonly<{ kind: 'initial' }>
-  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string }> }>
+  | Readonly<{ kind: 'initial'; requestMetadata?: Readonly<Record<string, unknown>> }>
+  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string }>; requestMetadata?: Readonly<Record<string, unknown>> }>
 export type ToolConfirmationResult = Readonly<{
   answerer?: 'user' | 'agent'
   cause?: string
@@ -1617,8 +1617,18 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     const approvalSlots = new Semaphore(2)
     let parkRequested = false
     let parkedTodoId: string | undefined
-    const settledTools = await mapWithConcurrency(toolCalls, input.maxConcurrentTools ?? 2, async (tool) => {
+    const primaryWorkDirSwitchId = toolCalls.find((tool) => tool.toolName === 'switch_work_dir')?.toolCallId
+    const hasWorkDirSwitch = primaryWorkDirSwitchId !== undefined
+    const dispatchToolCalls = primaryWorkDirSwitchId
+      ? [toolCalls.find((tool) => tool.toolCallId === primaryWorkDirSwitchId)!, ...toolCalls.filter((tool) => tool.toolCallId !== primaryWorkDirSwitchId)]
+      : toolCalls
+    const settledInDispatchOrder = await mapWithConcurrency(dispatchToolCalls, hasWorkDirSwitch ? 1 : input.maxConcurrentTools ?? 2, async (tool) => {
       if (parkRequested) throw new DeferredTurnParkedError()
+      if (hasWorkDirSwitch && tool.toolCallId !== primaryWorkDirSwitchId) {
+        const message = 'This tool was not executed because the same model response requested a work directory switch. Re-evaluate the operation in a new model request after the switch result.'
+        await markNotDispatched(tool, 'WORKDIR_SWITCH_BARRIER', message)
+        return { role: 'tool', toolCallId: tool.toolCallId, content: message, isError: true } satisfies CanonicalTurnMessage
+      }
       const executionCall = {
         invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName,
         input: structuredClone(tool.input),
@@ -1637,7 +1647,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       releaseCandidate = approvalCandidate ? await candidateSlots.acquire(invocationId, input.request.signal) : undefined
       const initialBinding = await (async () => {
         try {
-          return await input.prepareTool(executionCall, { kind: 'initial' })
+          return await input.prepareTool(executionCall, { kind: 'initial', ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {}) })
         } catch (error) {
           // FR12②：host 侧 prepareTool 可抛 ToolDeniedError（如 REGISTERED_TOOL_NOT_FOUND → 结构化拒绝）；
           // 与 safetyGate deny 路径一致，先解除 pending 再抛，避免 invocation 终态校验挂起。
@@ -1775,11 +1785,13 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         // Match the host lifecycle: resource ownership is acquired before the final policy/facts recheck.
         let recheckBinding: PermitBinding
         try {
-          recheckBinding = await input.prepareTool(executionCall, { kind: 'recheck', ...(confirmation ? { confirmation } : {}) })
+          recheckBinding = await input.prepareTool(executionCall, { kind: 'recheck', ...(confirmation ? { confirmation } : {}), ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {}) })
         } catch (error) {
           throwIfAborted(input.request.signal)
           const message = error instanceof Error ? error.message : ''
-          const reasonCode = /^[A-Z0-9_]{1,64}$/.test(message) ? message : 'PREPARED_RECHECK_FAILED'
+          const reasonCode = error instanceof ToolDeniedError
+            ? error.reasonCode
+            : /^[A-Z0-9_]{1,64}$/.test(message) ? message : 'PREPARED_RECHECK_FAILED'
           await markNotDispatched(tool, reasonCode)
           throw new ToolDeniedError(reasonCode)
         }
@@ -1881,6 +1893,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       shouldDrain: (reason) => reason instanceof ToolDeniedError || reason instanceof PlanRejectedError,
       shouldStop: (reason) => reason instanceof ToolExecutionAfterDispatchError
     })
+    const settledTools = toolCalls.map((tool) => settledInDispatchOrder[dispatchToolCalls.findIndex((candidate) => candidate.toolCallId === tool.toolCallId)])
     const isLifecycleFailure = (reason: unknown): boolean =>
       reason instanceof AgentTurnCancelledError || reason instanceof AgentTurnTimedOutError ||
       reason instanceof AgentTurnLifecycleInvalidatedError ||

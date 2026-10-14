@@ -180,28 +180,28 @@
 
 **阶段完成条件：** 没有旧目录的 provider response 或待审批工具能在新目录 / 新 grant 下执行；Agent 主动切换保留既有语义并重新装配后续请求。
 
-- [ ] **5.1 将来源 binding 校验落到每个工具的最终派发边界**
+- [x] **5.1 将来源 binding 校验落到每个工具的最终派发边界**
   - 依赖：0.2、4.3
   - 完成判据：provider response 收到时可先做批次级早期检查，但每个普通工具、只读工具均须携带来源 logical request 的 workDir / binding identity，在经过工具队列、前一工具等待或 resource lock 后、最终 claim / recheck 或进入 executor 前再次与当前会话绑定比较。
   - 目录一致性：绑定校验所用的已解析 workDir 必须就是随后传给工具执行上下文的目录；不得校验 A 后再通过动态 `resolveWorkDir()` 解析并执行 B。发生绑定变化的未派发工具不进入 executor，返回明确未执行结果；已执行工具不回滚或重放。
-  - 既有机制复用：阶段 0 先检查 existing initial / recheck / claim 是否已经提供该保证；若充分，引用代码路径和回归证据即可，不另造调度器或重复检查层。
-- [ ] **5.2 实现 switch_work_dir 同批顺序屏障**
+  - 既有机制复用：SDK 工具生命周期已经在 resource lock 后统一调用 `prepareTool(..., recheck)`；扩展其中性 preparation metadata 将来源 request snapshot 传至此最终边界。workspace tracker 比较目录 key、profileId、source/sensitive 和 revision，校验后的来源 root 直接成为 executor context.workDir。
+- [x] **5.2 实现 switch_work_dir 同批顺序屏障**
   - 依赖：5.1
   - 完成判据：一个 provider response 含 switch 与 sibling tools 时，只有 switch 先完成；sibling 不并发越过；成功后 siblings 标为未执行并回传模型，下一请求在新目录 rules 下重新决定；失败时保留旧绑定并报告未执行 siblings。
-- [ ] **5.3 审批恢复前重新校验目录与 grant**
+- [x] **5.3 审批恢复前重新校验目录与 grant**
   - 依赖：5.1、3.4
   - 完成判据：目录 / binding / grant 未变时，审批通过后按来源请求操作和快照执行；任一授权边界变化时取消待派发操作，不转用新目录 grant；明确提示模型重新发起新操作。审批校验需与普通工具最终派发校验共用清晰的来源身份语义，不以“重新审批通过”替代来源请求 binding 校验。
-- [ ] **5.4 验证 Agent 主动切换后的 R2 装配**
+- [x] **5.4 验证 Agent 主动切换后的 R2 装配**
   - 依赖：5.2、4.3
   - 完成判据：A→B 成功后同一 invocation R2 从 B 读取 B/AGENTS.md；R1 的 A snapshot 仍保留在历史中；B 文件不覆盖 A 请求记录。
-- [ ] **5.5 测试边界竞态和不变量**
+- [x] **5.5 测试边界竞态和不变量**
   - 依赖：5.1–5.4
   - 完成判据：测试 provider 在途时外部切换、同批工具切换、switch 失败、审批等待期间切换、切换后旧 grant 撤销；断言执行目录、可写授权、返回模型的 tool outcome 与快照版本一致。
   - 必测派发窗口：响应检查完成后暂停工具队列或 resource lock；外部将 A 切到 B，再恢复；断言尚未派发的普通工具及无审批只读工具均未进入 executor，回传未执行结果，下一逻辑请求加载 B 指令。
   - 必测同批前序窗口：同批前一个普通工具执行期间将 A 切到 B，后续未派发工具不得使用动态解析出的 B 执行 A 请求产生的操作；已执行工具不重放。至少一项并发 / 操作序列回归覆盖 dispatch 不会绕过最终边界。
-- [ ] **5.6 跑定向安全测试并提交**
+- [x] **5.6 跑定向安全测试并提交**
   - 依赖：5.5
-  - 完成判据：合并运行 `electron/tools/workDirExecutors.test.ts`、相关 `toolChatLoop` / approval / boundary tests；记录测试命令和 SHA。
+  - 完成判据：合并运行 `npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/invocationAssembler.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/runtime/hostedAgentTurnHost.test.ts electron/tools/workDirExecutors.test.ts electron/confirmation/approvalAgent.test.ts electron/runtime/hostedTurnHandoff.test.ts electron/workDirSnapshot.test.ts electron/toolChatLoop.workdir.test.ts electron/toolChatLoop.invocation.test.ts electron/workDirSnapshot.junction.test.ts electron/workDirBinding.test.ts electron/remote/remoteWriteGrantRegistry.test.ts`（13 文件 / 421 项通过）；`npx tsc -p tsconfig.electron.json --noEmit`、`npm run check:agent-sdk`、`npm run typecheck:agent-sdk` 通过。resource lock 与 approval wait 的 A→B 竞态均未进入 executor；R1/R2、switch barrier、相同目录 profile 改绑均有回归。阶段提交 SHA 由阶段 6 记录。
 
 ### 阶段 6：设置开关与请求级状态 UI / IPC
 
