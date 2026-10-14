@@ -37,4 +37,20 @@ describe('createDebouncedDbSave', () => {
     vi.advanceTimersByTime(100)
     expect(write).toHaveBeenCalledTimes(1)
   })
+
+  it('suspends timer writes while keeping flushNow available (compaction copy window)', () => {
+    const write = vi.fn()
+    const { schedule, flushNow, setSuspended } = createDebouncedDbSave(write, 100)
+    setSuspended(true)
+    schedule()
+    schedule()
+    vi.advanceTimersByTime(500)
+    expect(write).not.toHaveBeenCalled() // 挂起期间不安排任何 checkpoint 写入
+    flushNow()
+    expect(write).toHaveBeenCalledTimes(1) // 显式落盘不受挂起影响
+    setSuspended(false)
+    schedule()
+    vi.advanceTimersByTime(100)
+    expect(write).toHaveBeenCalledTimes(2) // 恢复后排程照常
+  })
 })

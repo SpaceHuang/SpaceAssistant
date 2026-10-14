@@ -26,6 +26,8 @@ export type AppDatabase = {
 }
 
 const connMap = new WeakMap<AppDatabase, DatabaseSync>()
+type DbSaveHandle = { schedule: () => void; flushNow: () => void; setSuspended: (value: boolean) => void }
+const saveHandleMap = new WeakMap<AppDatabase, DbSaveHandle>()
 
 export function getDbConnection(db: AppDatabase): DatabaseSync {
   const conn = connMap.get(db)
@@ -57,25 +59,35 @@ export function openSqliteDatabase(dbPath: string, options?: OpenSqliteDatabaseO
   initSchema(conn)
 
   const checkpoint = (truncate: boolean) => walCheckpoint(conn, truncate)
-  const { schedule, flushNow } = createDebouncedDbSave(() => checkpoint(false))
+  const saveHandle = createDebouncedDbSave(() => checkpoint(false))
 
   const db: AppDatabase = {
     filePath: dbPath,
-    save: schedule,
+    save: saveHandle.schedule,
     flushSave: () => {
-      flushNow()
+      saveHandle.flushNow()
       checkpoint(true)
     },
     close: () => {
-      flushNow()
+      saveHandle.flushNow()
       checkpoint(true)
       conn.close()
       connMap.delete(db)
+      saveHandleMap.delete(db)
     }
   }
 
   connMap.set(db, conn)
+  saveHandleMap.set(db, { schedule: saveHandle.schedule, flushNow: saveHandle.flushNow, setSuspended: saveHandle.setSuspended })
   return db
+}
+
+/**
+ * 挂起/恢复防抖 checkpoint（压缩换入窗口专用）：挂起期间 save() 只记脏标记，
+ * 不再写主库文件，worker 归档复制得以读到稳定快照；显式 flushSave 不受影响。
+ */
+export function setDatabaseSaveSuspended(db: AppDatabase, suspended: boolean): void {
+  saveHandleMap.get(db)?.setSuspended(suspended)
 }
 
 /**
@@ -86,21 +98,23 @@ export function openSqliteDatabase(dbPath: string, options?: OpenSqliteDatabaseO
 export function reopenDatabaseConnection(db: AppDatabase): AppDatabase {
   const conn = new DatabaseSync(db.filePath, { timeout: DEFAULT_BUSY_TIMEOUT_MS })
   configureConnection(conn)
-  const { schedule, flushNow } = createDebouncedDbSave(() => walCheckpoint(conn, false))
+  const saveHandle = createDebouncedDbSave(() => walCheckpoint(conn, false))
   Object.assign(db, {
-    save: schedule,
+    save: saveHandle.schedule,
     flushSave: () => {
-      flushNow()
+      saveHandle.flushNow()
       walCheckpoint(conn, true)
     },
     close: () => {
-      flushNow()
+      saveHandle.flushNow()
       walCheckpoint(conn, true)
       conn.close()
       connMap.delete(db)
+      saveHandleMap.delete(db)
     }
   })
   connMap.set(db, conn)
+  saveHandleMap.set(db, { schedule: saveHandle.schedule, flushNow: saveHandle.flushNow, setSuspended: saveHandle.setSuspended })
   return db
 }
 

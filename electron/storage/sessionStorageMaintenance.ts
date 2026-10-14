@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { performance } from 'node:perf_hooks'
 import type { Worker } from 'node:worker_threads'
 import type { AppDatabase } from '../database'
-import { getDbConnection, reopenDatabaseConnection } from '../database/sqliteStore'
+import { getDbConnection, reopenDatabaseConnection, setDatabaseSaveSuspended } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 import { StorageMaintenanceError } from './storageMaintenanceError'
@@ -311,6 +311,9 @@ export async function compactSessionDatabase(
         } catch { /* staging 尚未创建；下一轮再试。 */ }
       }, 200)
       vacuumPoller.unref?.()
+      // 挂起防抖 checkpoint：worker 复制主库的数秒窗口内主文件必须零变化，
+      // 否则并发 checkpoint 会把副本撕成新旧混合页（真机实测：quick_check 拒收 + 用户手动重试）。
+      setDatabaseSaveSuspended(db, true)
       try {
         workerResult = await runSessionMaintenanceWorker(
           { dbPath, archivePath, spillRoot, degradedSpillRoot, stagingPath },
@@ -335,10 +338,19 @@ export async function compactSessionDatabase(
           logAgentEvent('warn', 'storage.maintenance.compact', { executionTarget: 'worker', stage: 'degraded-to-in-process' })
           return compactSessionDatabaseInProcess(db, userDataDir, onProgress, options)
         }
-        throw error
+        // 归档副本 quick_check 被拒（复制窗口竞态兜底；挂起 checkpoint 已消除主因）→ 计数内自动重试。
+        const retryableArchiveVerify = error instanceof Error &&
+          error.message.includes('archived database failed quick_check') &&
+          snapshotAttempts < COMPACT_SNAPSHOT_RETRY_LIMIT
+        if (!retryableArchiveVerify) throw error
+        removeStagingArtifacts(stagingPath)
+        fs.rmSync(archivePath, { recursive: true, force: true })
+        archiveVerified = false
       } finally {
+        setDatabaseSaveSuspended(db, false)
         clearInterval(vacuumPoller)
       }
+      if (!workerResult) continue
       // 防线②（worker 返回后立即复核）：worker 内部 data_version 探针覆盖其自身 vacuum 窗口，
       // 主库文件快照 + 主连接 data_version 覆盖「spawn 前到 worker 返回」的窗口——
       // 任一变化即丢弃 staging 与归档重做，重做读到的快照已包含该写入；永不换入过期快照。

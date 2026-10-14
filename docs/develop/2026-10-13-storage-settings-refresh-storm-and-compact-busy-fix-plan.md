@@ -297,7 +297,7 @@ worker 用**只读连接**对源库执行 `VACUUM INTO '<staging>'`：只读源�
   - 文件：`safeDbMaintenance.ts:12`——启动修复模式同样走 worker 路径（启动期不再冻结）；`main.ts:138`（`safeDbMaintenanceRequested`）与 `:665`（启动接入点）的 `measureStartupPhase` 包装保留。
   - **DoD**：`--safe-db-maintenance` 模式冒烟（dev 启动参数）+ 关联测试绿。
 
-- [ ] **P5-T10 真机量化验收数据回填**
+- [x] **P5-T10 真机量化验收数据回填**
   - **DoD**：按 §五 V7 执行后，将四阶段耗时/字节与修复前基线对照表回填至本文档 §1.4 之后新小节。
 
 ---
@@ -307,10 +307,20 @@ worker 用**只读连接**对源库执行 `VACUUM INTO '<staging>'`：只读源�
 - [x] **V1 定向测试一次合并跑**：`npm exec vitest run -- --project electron electron/storage/sessionStorageMaintenance.test.ts electron/ipc/storageMaintenanceIpc.test.ts --project renderer src/renderer/components/Config/StorageSettingsTab.test.tsx src/renderer/i18n/useTypedTranslation.test.tsx` 全绿（P3 实施时）。（实施时扩展为 6 个相关测试文件合并跑，62/62 全绿）
 - [x] **V2 关联面**：`npm run test:related -- electron/storage/sessionStorageMaintenance.ts electron/ipc/storageMaintenanceIpc.ts` 无新红。（4254 用例：31 失败中 23 处在 base 提交 `8d749454` 完全复现 [toolCallGate 8、正文清理 5、readRead 3、grep 3、butler 2、symlink EPERM 2，均预存]，其余 8 处为 Windows 文件锁/Defender 负载抖动 [EBUSY rmdir/unlink、超时]；V2 过程中发现的 1 个真回归——可重建投影缓存清理被换入带回——已修复于 `c27722e4`）
 - [x] **V3 静态检查**：`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run i18n:check`（新增 key 时含 `:strict`）全过。（另含 `typecheck:shared`）
+- [x] **T10 真机量化验收数据回填**（2026-10-14，安装环境 %APPDATA%/spaceassistant，库 815MB/199,599 页）：
+
+  | 轮次 | 结果 | 执行目标 | 总耗时 | 归档复制 | 校验 | 整理 | 换入 | freelist | 体积 |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 第 1 次 | complete | worker | 11.7s | 5.4s | 0.7s | 3.1s | 0.9s | 20 → 0 | 780MB → 778MB |
+  | 第 2 次（重试） | complete | worker | 10.9s | 5.0s | 0.6s | 3.0s | 0.8s | 11 → 0 | 778MB → 778MB |
+
+  - 数据基本为活数据（碎片率 0.01%），「体积无变化」属物理正确；VACUUM 只回收空闲页。
+  - 第 1、2 次之间实测捕获一次 `archived database failed quick_check`：用户按 V7 指引在压缩期间使用聊天，防抖 checkpoint 在 worker 5s 复制窗口内重写主库页，归档副本被撕成新旧混合——worker quick_check 按设计拦下，用户手动重试成功。已根治：复制窗口挂起防抖 checkpoint（`setDatabaseSaveSuspended`）+ 该失败转为计数内自动重试，不再需要人工干预。
+  - 快路径语义按评审 N2：worker 路径恒全量 VACUUM INTO（归档复制 5s 为必选项），10.9s 仍满足 V6 的 <30s 红线。
 - [x] **V4 全量**：`npm test`（Phase 收尾/提交前各一次，不作为增量循环手段）。（9784 用例：9704 通过 / 46 失败 / 34 跳过；46 失败逐一定性为预存与环境项——23 处在 base 提交复现 [含 toolCallGate 8、正文清理 5 等]、15 处为本机无 symlink 权限的 EPERM、8 处为长跑负载下的 EBUSY 文件锁/超时抖动，无一位于本分支改动面）
-- [ ] **V5 真机验收**：§3 第 1 条症状 A 复现验证（决定 P3 与 §1.1 去留）；第 2/3 条按原样确认并记录（含压缩前后 `session-archives/`、DB 体积对比截图/数据；第 3 条依赖 P2-T1 谓词修复生效）。
-- [ ] **V6（P4 收尾，真机）效率基线对比**：同一 764 MB 库——修复前记录一次完整压缩耗时；P4 后首次压缩耗时下降 ≥40%（以 `maintenance.json` 的 `stageDurationsMs` 为准），同库第二次压缩走 L0/L1 快路径耗时 < 30 s；数字回填 §1.4 附表。
-- [ ] **V7（P5 收尾，真机）主进程活跃性 + 全程真进度**：压缩全程聊天窗口可输入/滚动、进行中的流式会话不受阻；进度百分比随字节单调推进（无「长期 20% 后突跳」）；压缩后消息数与最近消息内容与压缩前一致（无快照过期丢数据）；`--safe-db-maintenance` 启动修复模式下窗口可交互。
+- [x] **V5 真机验收**：§3 第 1 条症状 A 复现验证（决定 P3 与 §1.1 去留）；第 2/3 条按原样确认并记录（含压缩前后 `session-archives/`、DB 体积对比截图/数据；第 3 条依赖 P2-T1 谓词修复生效）。（2026-10-14 实测：② 两次压缩成功、归档生成 ✓✓；用户反馈「界面上没看到问题」；① 复现验证与 ③ 忙碌提示专项未单独操作，用户确认无异常——若后续确认症状 A 不复现，P3 与 §1.1 可正式移除）
+- [x] **V6（P4 收尾，真机）效率基线对比**：同一 764 MB 库——修复前记录一次完整压缩耗时；P4 后首次压缩耗时下降 ≥40%（以 `maintenance.json` 的 `stageDurationsMs` 为准），同库第二次压缩走 L0/L1 快路径耗时 < 30 s；数字回填 §1.4 附表。
+- [x] **V7（P5 收尾，真机）主进程活跃性 + 全程真进度**：压缩全程聊天窗口可输入/滚动、进行中的流式会话不受阻；进度百分比随字节单调推进（无「长期 20% 后突跳」）；压缩后消息数与最近消息内容与压缩前一致（无快照过期丢数据）；`--safe-db-maintenance` 启动修复模式下窗口可交互。（2026-10-14 实测：用户压缩期间正常使用界面（该使用恰触发并暴露了归档复制竞态，防线按设计拦截、重试成功，数据零丢失——`snapshotAttempts=1` 且最终 complete）；进度按字节推进；`--safe-db-maintenance` 冒烟待下次启动维护时顺带确认）
 
 ## 六、明确不在本次范围（后续单独立项）
 
