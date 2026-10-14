@@ -1,6 +1,6 @@
 # IM 安全审核改进：详细开发计划
 
-> 依据：[需求方案](../requirement/2026-10-11-im-security-review-improvement-requirement.md)、[开发方案](../develop/2026-10-11-im-security-review-improvement-development-plan.md)。
+> 依据：[需求方案](../requirement/im-remote/in-flight/2026-10-11-im-security-review-improvement-requirement.md)、[开发方案](../develop/im-remote/in-flight/2026-10-11-im-security-review-improvement-development-plan.md)。
 > 日期：2026-10-11（按 `main` 最新代码复核：`708270a9`，2026-10-12）
 > 计划状态：尚未开始。
 > 范围：把需求和开发方案拆成可顺序执行、可单项验收的本机开发、测试、文档对齐和启用门禁任务。本计划不代表本计划内运行代码已修改、测试已通过或自动审核已启用。

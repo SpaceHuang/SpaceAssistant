@@ -1,6 +1,6 @@
 # Wiki 集中共享存储 — 开发与测试计划
 
-> 依据：[wiki-shared-centralized-storage-requirement.md](../requirement/wiki-shared-centralized-storage-requirement.md) v1.12（已通过；v1.11 实施基线 + v1.12 展示数据源补丁）
+> 依据：[wiki-shared-centralized-storage-requirement.md](../requirement/archive/knowledge-skills/wiki-shared-centralized-storage-requirement.md) v1.12（已通过；v1.11 实施基线 + v1.12 展示数据源补丁）
 > 评审轨迹：需求 v1–v4 四轮评审无未决项；计划 v1 评审 9 条 + 复审 v2 4 条全部落实
 > 更新：2026-10-10（初版）
 > 修订：2026-10-10（**v2**：按[计划评审报告](../review/2026-10-10-wiki-shared-centralized-storage-dev-test-plan-review.md) 9 条建议修订——#3 T1.1/T1.2 倒置、#4 T1.12 拆 a/b/c、#5 T2.2 拆 a/b、#1/#2 补覆盖缺口（`config.wiki.migration` 持久化、失效广播 hint 词汇路径）、#6–#8 依赖与关键路径修正、#9 断言补齐）

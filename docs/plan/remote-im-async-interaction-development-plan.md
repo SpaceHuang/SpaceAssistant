@@ -1,6 +1,6 @@
 # 远程 IM 异步交互：本机开发与测试计划
 
-> 依据：[`docs/develop/remote-im-async-interaction-design.md`](../develop/remote-im-async-interaction-design.md) v0.2、其引用的 [`docs/requirement/remote-im-async-approval-security-requirement.md`](../requirement/remote-im-async-approval-security-requirement.md) v1.1，以及历轮设计/开发计划评审报告。
+> 依据：[`docs/develop/remote-im-async-interaction-design.md`](../develop/im-remote/in-flight/remote-im-async-interaction-design.md) v0.2、其引用的 [`docs/requirement/remote-im-async-approval-security-requirement.md`](../requirement/archive/im-remote/remote-im-async-approval-security-requirement.md) v1.1，以及历轮设计/开发计划评审报告。
 > 范围：只列可在本机工作区通过代码、SQLite 临时数据库、fake adapter/provider 和自动化测试完成的开发与验证；不包含真实飞书/微信账号联调、外部审批、发布、部署或人工 UX 验收。
 > 日期：2026-10-08
 > 计划状态：尚未开始。

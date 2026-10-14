@@ -30,7 +30,7 @@ updated: 2026-09-26
 
 # LLM Wiki 支持 — 需求要点（父需求）
 
-> **原文**：[docs/requirement/llm-wiki-requirement.md](../../../../../requirement/llm-wiki-requirement.md)
+> **原文**：[docs/requirement/llm-wiki-requirement.md](../../../../../requirement/archive/knowledge-skills/llm-wiki-requirement.md)
 > v1.6 · 2026-05-24 · 1009 行 · 状态「待评审」· 参考 Karpathy LLM Wiki (gist)
 > **主责模块**：`p-ui`（用户可见交付面：设置页 / 文件 Tab 分段 / 命令入口 / 归档）
 > **附属模块**：`s-capability`（文件工具维护 Wiki）、`s-safety`（raw 只读、SCHEMA 写入确认）、

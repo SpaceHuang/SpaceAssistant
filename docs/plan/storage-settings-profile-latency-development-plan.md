@@ -1,6 +1,6 @@
 # 存储设置占用刷新卡顿：本机开发与自动化验证计划
 
-> 依据：[`docs/develop/storage-settings-profile-latency-analysis-and-optimization-plan.md`](../develop/storage-settings-profile-latency-analysis-and-optimization-plan.md)、[`docs/review/2026-10-10-storage-settings-profile-latency-plan-review.md`](../review/2026-10-10-storage-settings-profile-latency-plan-review.md)、[`docs/develop/2026-10-10-storage-settings-profile-latency-development-plan-review.md`](../develop/2026-10-10-storage-settings-profile-latency-development-plan-review.md)。
+> 依据：[`docs/develop/storage-settings-profile-latency-analysis-and-optimization-plan.md`](../develop/archive/storage-session/storage-settings-profile-latency-analysis-and-optimization-plan.md)、[`docs/review/2026-10-10-storage-settings-profile-latency-plan-review.md`](../review/2026-10-10-storage-settings-profile-latency-plan-review.md)、[`docs/develop/2026-10-10-storage-settings-profile-latency-development-plan-review.md`](../develop/archive/storage-session/2026-10-10-storage-settings-profile-latency-development-plan-review.md)。
 > 范围：本机 TypeScript/Vitest、临时 SQLite/文件 fixture、Electron worker 实际启动和打包 smoke test，以及本机真实安装数据只读采样。不依赖外部服务或人工 UI 观察。
 > 日期：2026-10-10
 > 计划状态：执行中（worktree `codex/storage-settings-profile-latency`，基线 `ed3dac54`）。

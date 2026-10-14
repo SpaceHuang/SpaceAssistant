@@ -27,7 +27,7 @@ updated: 2026-09-26
 
 # Wiki 外部文件导入并 Ingest — 需求要点
 
-> **原文**：[docs/requirement/wiki-import-ingest-requirement.md](../../../../../requirement/wiki-import-ingest-requirement.md)
+> **原文**：[docs/requirement/wiki-import-ingest-requirement.md](../../../../../requirement/archive/knowledge-skills/wiki-import-ingest-requirement.md)
 > v1.1 · 2026-05-24 · 508 行 · 状态「待评审」
 > **主责模块**：`p-ui`（交付面为「收录到 Wiki」的各 UI 入口）
 > **附属模块**：`p-workspace`（会话与沙箱前置）、`s-capability`（raw 只读拦截、文本类型判定）、`p-storage`（`.wiki-meta.json` 记录）
