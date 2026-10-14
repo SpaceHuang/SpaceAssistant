@@ -1263,7 +1263,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     }
     if (!collected.usage) throw new InvalidModelStreamError('non-cancelled model attempt completed without usage')
     throwIfAborted(input.request.signal)
-    const acceptedChunks = collected.chunks.map((chunk) => chunk.type === 'tool-call' && chunk.toolName === 'run_shell'
+    const acceptedChunks = collected.chunks.map((chunk) => !initialResponse && chunk.type === 'tool-call' && chunk.toolName === 'run_shell'
       ? { ...chunk, input: normalizeRunShellJustification(chunk.input) }
       : chunk)
     const toolCalls = acceptedChunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'tool-call' }> => chunk.type === 'tool-call')

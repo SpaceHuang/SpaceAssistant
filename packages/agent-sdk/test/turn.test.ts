@@ -2092,20 +2092,30 @@ describe('runAgentTurn', () => {
     const history = new MemoryHistory()
     const writer = new InvocationHistoryWriter(history, { invocationId: 'host-seeded', turnId: 'turn-seeded' })
     const userMessage = { role: 'user' as const, content: 'hello' }
-    const assistantMessage = { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'starting' }], toolCalls: [{ id: 'host-seeded-tool', name: 'lookup', input: { query: 'q' } }] }
+    const truncatedJustification = 'x'.repeat(2_000)
+    const committedShellInput = { command: 'pwd', justification: truncatedJustification, _justificationTruncated: true }
+    const assistantMessage = { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'starting' }], toolCalls: [{ id: 'host-seeded-tool', name: 'lookup', input: { query: 'q' } }, { id: 'host-seeded-shell', name: 'run_shell', input: committedShellInput }] }
     await writer.append([
       { kind: 'invocation-context-committed', payload: { messages: [userMessage] } },
       { kind: 'model-response-committed', payload: { message: assistantMessage, finishReason: 'tool_use', usage: { inputTokens: 1, outputTokens: 1 } } }
     ])
     const permits = new InMemorySafetyPermitStore()
     const capabilities = new CapabilityRegistry()
-    capabilities.define('host-seeded', ['lookup'])
+    capabilities.define('host-seeded', ['lookup', 'run_shell'])
+    const preparedInputs: Record<string, unknown>[] = []
+    const dispatchedInputs: Record<string, unknown>[] = []
     const ports = {
       registry, routeId: route.routeId, invocationId: 'host-seeded', turnId: 'turn-seeded', history,
       request: { messages: [userMessage], maxTokens: 80 },
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
-      prepareTool: async (call: { invocationId: string; toolCallId: string; toolName: string }, stage: { kind: 'initial' | 'recheck' }) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
-      toolExecution: toolExecutionPort(permits, async () => ({ output: 'tool result' })), maxModelTurns: 2
+      prepareTool: async (call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }, stage: { kind: 'initial' | 'recheck' }) => {
+        preparedInputs.push(call.input)
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }
+      },
+      toolExecution: toolExecutionPort(permits, async (call) => {
+        dispatchedInputs.push((call as typeof call & { input: Record<string, unknown> }).input)
+        return { output: 'tool result' }
+      }), maxModelTurns: 2
     }
     const host: AgentTurnHost = { createPorts: async () => ports }
     const observedChunks: unknown[] = []
@@ -2123,6 +2133,8 @@ describe('runAgentTurn', () => {
     expect(result.text).toBe('startingdone')
     expect(firstProviderStream).not.toHaveBeenCalled()
     expect(nextProviderStream).toHaveBeenCalledOnce()
+    expect(preparedInputs).toContainEqual(committedShellInput)
+    expect(dispatchedInputs).toContainEqual(committedShellInput)
     expect(observedChunks).toEqual([
       { type: 'text-delta', text: 'done' },
       { type: 'usage', inputTokens: 2, outputTokens: 1 }
