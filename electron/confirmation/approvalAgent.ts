@@ -27,6 +27,7 @@ import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRo
 import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { AGENT_TURN_TIMEOUT_ABORT_REASON } from '../../packages/agent-sdk/src/turn'
+import { readWikiConfig } from '../wiki/wikiConfigReader'
 
 /**
  * 审批执行链（P2-2，复用管家模式但**绝不取管家准入票**，评审 N8）：
@@ -340,6 +341,8 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     }, getDefaultAgentRuntime().modelProviders)
 
     const { invocation, ports, agentSdk } = assembleInvocation({
+      // W3 lane 对齐：未透传会被执行层按「未启用」误拒（桌面/IM 链路均注入）
+      wikiConfig: readWikiConfig(db),
       requestId: inv.requestId,
       turnId: acceptedTurn.turnId,
       acceptedTurn,

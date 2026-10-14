@@ -99,4 +99,40 @@ describe('知识库未启用时 llm-wiki/ 前缀兜底引导（W3）', () => {
     expect(res.success).toBe(false)
     expect(res.error ?? '').not.toContain('共享知识库未启用')
   })
+
+  it.each([
+    ['大小写变体（Windows 同目录）', 'LLM-WIKI/notes/a.md'],
+    ['前导 ./ 变体', './llm-wiki/notes/a.md']
+  ])('%s → 与挂载判定同一决策点拦截', async (_name, rawPath) => {
+    const ctx = await setupCtx(false)
+    const res = await readFileExecutor.execute({ path: rawPath }, ctx)
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('共享知识库未启用')
+    expect(res.diagnostic).toMatchObject({ caseId: 'wiki-vocabulary-disabled' })
+  })
+
+  it('前导 / 绝对形态：挂载侧越界不挂载（启用时同样被范围守卫拒绝）→ 不给引导、不误导成功', async () => {
+    const ctx = await setupCtx(false)
+    const res = await readFileExecutor.execute({ path: '/llm-wiki/notes/a.md' }, ctx)
+    expect(res.success).toBe(false)
+    expect(res.error ?? '').not.toContain('共享知识库未启用')
+  })
+
+  it('workDir 内指向 llm-wiki/ 的绝对路径 → 拦截', async () => {
+    const ctx = await setupCtx(false)
+    const abs = path.join(ctx.workDir, 'llm-wiki', 'notes', 'a.md')
+    const res = await readFileExecutor.execute({ path: abs }, ctx)
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('共享知识库未启用')
+  })
+
+  it.each([
+    ['write_file 大小写变体', (ctx: ToolExecutionContext) => writeFileExecutor.execute({ path: 'LLM-WIKI/notes/a.md', content: 'body' }, ctx)],
+    ['grep 大小写变体', (ctx: ToolExecutionContext) => grepExecutor.execute({ pattern: 'wiki', path: 'LLM-WIKI' }, ctx)]
+  ])('%s → 同样拦截', async (_name, run) => {
+    const ctx = await setupCtx(false)
+    const res = await run(ctx)
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('共享知识库未启用')
+  })
 })

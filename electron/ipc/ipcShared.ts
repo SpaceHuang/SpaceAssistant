@@ -15,12 +15,14 @@ import { WorkDirManager } from '../workDirManager'
 import { app, shell } from 'electron'
 import { detectLocaleFromSystem, isAppLocale } from '../../src/shared/locale'
 import { getConfigValue, setConfigValue, deleteConfigValue, updateSession } from '../database'
+import { readWikiConfig as readWikiConfigFromDb } from '../wiki/wikiConfigReader'
 
 import { getMainWindow } from '../windowRef'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../../src/shared/planTypes'
 import { mergeSkillsConfig, mergeToolsConfig, stripPlanFieldsFromFeishuConfig } from '../../src/shared/domainTypes'
 import { mergeWikiConfig, mergeFeishuConfig } from '../../src/shared/domainTypes'
+import { WIKI_CONFIG_DB_KEY } from '../wiki/wikiConfigReader'
 import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
 import { readFeishuConfigFromDb } from '../feishu/feishuIpc'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
@@ -123,7 +125,7 @@ export const CONFIG_KEYS = {
   preferredVisionModelId: LLM_SERVICE_CONFIG_KEYS.preferredVisionModelId,
   tools: 'config.tools',
   skills: 'config.skills',
-  wiki: 'config.wiki',
+  wiki: WIKI_CONFIG_DB_KEY,
   feishu: 'config.feishu',
   wechat: 'config.wechat',
   workDirProfiles: 'config.workDirProfiles',
@@ -197,14 +199,9 @@ export function readSkillsConfig(db: AppDatabase): SkillsConfig {
   }
 }
 
+/** 实现收敛在叶子模块 electron/wiki/wikiConfigReader.ts（无 electron 依赖，供非 IPC 装配点复用）。 */
 export function readWikiConfig(db: AppDatabase): WikiConfig {
-  const raw = getConfigValue(db, CONFIG_KEYS.wiki)
-  if (!raw) return mergeWikiConfig(null)
-  try {
-    return mergeWikiConfig(JSON.parse(raw) as Partial<WikiConfig>)
-  } catch {
-    return mergeWikiConfig(null)
-  }
+  return readWikiConfigFromDb(db)
 }
 
 
