@@ -34,21 +34,22 @@ function rowToResult(row: ResultRow): DeferredExecutionResult {
 }
 
 export function createDeferredExecutionResultStore(db: AppDatabase, options: { audit?: (event: SecurityAuditEvent) => void } = {}) {
-  const conn = getDbConnection(db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每函数入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(db)
 
   function getByTodo(todoId: string): DeferredExecutionResult | null {
-    const row = conn.prepare(`SELECT todo_id,invocation_id,dispatch_key,state,result_json,dispatch_started_at,updated_at
+    const row = liveConn().prepare(`SELECT todo_id,invocation_id,dispatch_key,state,result_json,dispatch_started_at,updated_at
       FROM deferred_execution_results WHERE todo_id=?`).get(todoId) as ResultRow | undefined
     return row ? rowToResult(row) : null
   }
 
   function outboxForTodo(todoId: string): OutboxRow[] {
-    return conn.prepare(`SELECT outbox_id,todo_id,invocation_id,dispatch_key,result_json,state,created_at,updated_at
+    return liveConn().prepare(`SELECT outbox_id,todo_id,invocation_id,dispatch_key,result_json,state,created_at,updated_at
       FROM deferred_completion_outbox WHERE todo_id=? ORDER BY created_at,outbox_id`).all(todoId) as OutboxRow[]
   }
 
   function persistResult(todoId: string, result: Record<string, unknown>, now: number): { result: DeferredExecutionResult; duplicate: boolean } {
-    const persisted = runInTransaction(conn, () => {
+    const persisted = runInTransaction(liveConn(), () => {
       const current = getByTodo(todoId)
       if (!current) throw new Error('DEFERRED_EXECUTION_NOT_FOUND')
       if (current.state === 'outcome_unknown') throw new Error('DEFERRED_EXECUTION_OUTCOME_UNKNOWN')
@@ -56,20 +57,20 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
         return { result: current, duplicate: true }
       }
       const resultJson = JSON.stringify(result)
-      conn.prepare(`UPDATE deferred_execution_results SET state='completion_outboxed',result_json=?,updated_at=?
+      liveConn().prepare(`UPDATE deferred_execution_results SET state='completion_outboxed',result_json=?,updated_at=?
         WHERE todo_id=? AND state='dispatching'`).run(resultJson, now, todoId)
-      conn.prepare(`INSERT OR IGNORE INTO deferred_completion_outbox(
+      liveConn().prepare(`INSERT OR IGNORE INTO deferred_completion_outbox(
         outbox_id,todo_id,invocation_id,dispatch_key,result_json,state,created_at,updated_at
       ) SELECT ?,todo_id,invocation_id,dispatch_key,?,'pending',?,? FROM deferred_execution_results WHERE todo_id=?`)
         .run(randomUUID(), resultJson, now, now, todoId)
-      const todo = conn.prepare('SELECT origin_session_id FROM deferred_todos WHERE todo_id=?').get(todoId) as { origin_session_id: string } | undefined
+      const todo = liveConn().prepare('SELECT origin_session_id FROM deferred_todos WHERE todo_id=?').get(todoId) as { origin_session_id: string } | undefined
       if (todo?.origin_session_id) appendWakeEvent(db, { sessionId: todo.origin_session_id, type: 'safety-recovery',
         reasonKey: `deferred-completion:${current.dispatchKey}`, payloadRef: { kind: 'safety-approval', approvalId: todoId } })
       db.save()
       return { result: getByTodo(todoId)!, duplicate: false }
     })
     if (!persisted.duplicate) {
-      const context = conn.prepare(`SELECT channel,origin_session_id FROM deferred_todos WHERE todo_id=?`)
+      const context = liveConn().prepare(`SELECT channel,origin_session_id FROM deferred_todos WHERE todo_id=?`)
         .get(todoId) as { channel: 'feishu' | 'wechat'; origin_session_id: string } | undefined
       if (context) options.audit?.(buildDeferredApprovalAuditEvent({
         kind: 'result', lane: context.channel, sessionId: context.origin_session_id, todoId,
@@ -87,8 +88,8 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
         throw new TypeError('DEFERRED_EXECUTION_IDENTITY_REQUIRED')
       }
       const now = input.now ?? Date.now()
-      return runInTransaction(conn, () => {
-        const existing = conn.prepare(`SELECT todo_id,invocation_id,dispatch_key,state FROM deferred_execution_results
+      return runInTransaction(liveConn(), () => {
+        const existing = liveConn().prepare(`SELECT todo_id,invocation_id,dispatch_key,state FROM deferred_execution_results
           WHERE todo_id=? OR invocation_id=? OR dispatch_key=?`).get(input.todoId, input.invocationId, input.dispatchKey) as
           { todo_id: string; invocation_id: string; dispatch_key: string; state: DeferredExecutionState } | undefined
         if (existing) {
@@ -99,7 +100,7 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
             ? { ok: false, reason: 'outcome_unknown' }
             : { ok: false, reason: 'already_started' }
         }
-        conn.prepare(`INSERT INTO deferred_execution_results(todo_id,invocation_id,dispatch_key,state,result_json,dispatch_started_at,updated_at)
+        liveConn().prepare(`INSERT INTO deferred_execution_results(todo_id,invocation_id,dispatch_key,state,result_json,dispatch_started_at,updated_at)
           VALUES(?,?,?,'dispatching',NULL,?,?)`).run(input.todoId, input.invocationId, input.dispatchKey, now, now)
         db.save()
         return { ok: true, state: 'dispatching' }
@@ -114,7 +115,7 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
     async recover(dispatchKey: string, queryResult: (key: string) => Promise<
       { status: 'found'; dispatchKey: string; result: Record<string, unknown> } | { status: 'unknown' }
     >): Promise<{ state: DeferredExecutionState; duplicate?: boolean; replayAllowed?: boolean }> {
-      const row = conn.prepare(`SELECT todo_id,invocation_id,dispatch_key,state,result_json,dispatch_started_at,updated_at
+      const row = liveConn().prepare(`SELECT todo_id,invocation_id,dispatch_key,state,result_json,dispatch_started_at,updated_at
         FROM deferred_execution_results WHERE dispatch_key=?`).get(dispatchKey) as ResultRow | undefined
       if (!row) return { state: 'outcome_unknown', replayAllowed: false }
       const current = rowToResult(row)
@@ -127,20 +128,20 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
         const committed = persistResult(current.todoId, queried.result, Date.now())
         return { state: committed.result.state, ...(committed.duplicate ? { duplicate: true } : {}) }
       }
-      conn.prepare("UPDATE deferred_execution_results SET state='outcome_unknown',updated_at=? WHERE todo_id=? AND state='dispatching'")
+      liveConn().prepare("UPDATE deferred_execution_results SET state='outcome_unknown',updated_at=? WHERE todo_id=? AND state='dispatching'")
         .run(Date.now(), current.todoId)
       db.save()
       return { state: 'outcome_unknown', replayAllowed: false }
     },
 
     markCompletionDelivered(todoId: string, now = Date.now()): boolean {
-      return runInTransaction(conn, () => {
+      return runInTransaction(liveConn(), () => {
         const outbox = outboxForTodo(todoId).find((item) => item.state === 'pending')
         if (!outbox) return outboxForTodo(todoId).some((item) => item.state === 'delivered')
-        const changed = conn.prepare("UPDATE deferred_completion_outbox SET state='delivered',updated_at=? WHERE outbox_id=? AND state='pending'")
+        const changed = liveConn().prepare("UPDATE deferred_completion_outbox SET state='delivered',updated_at=? WHERE outbox_id=? AND state='pending'")
           .run(now, outbox.outbox_id)
         if (Number(changed.changes) !== 1) return false
-        conn.prepare("UPDATE deferred_execution_results SET state='delivered',updated_at=? WHERE todo_id=? AND state='completion_outboxed'")
+        liveConn().prepare("UPDATE deferred_execution_results SET state='delivered',updated_at=? WHERE todo_id=? AND state='completion_outboxed'")
           .run(now, todoId)
         db.save()
         return true
@@ -148,7 +149,7 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
     },
 
     markOutcomeUnknown(todoId: string, now = Date.now()): boolean {
-      const changed = conn.prepare("UPDATE deferred_execution_results SET state='outcome_unknown',updated_at=? WHERE todo_id=? AND state='dispatching'")
+      const changed = liveConn().prepare("UPDATE deferred_execution_results SET state='outcome_unknown',updated_at=? WHERE todo_id=? AND state='dispatching'")
         .run(now, todoId)
       if (Number(changed.changes) === 1) db.save()
       return Number(changed.changes) === 1
@@ -162,7 +163,7 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
       }))
     },
     listRecoverableSessionIds(channel: 'feishu' | 'wechat'): string[] {
-      return (conn.prepare(`SELECT DISTINCT t.origin_session_id AS session_id FROM deferred_todos t
+      return (liveConn().prepare(`SELECT DISTINCT t.origin_session_id AS session_id FROM deferred_todos t
         JOIN deferred_execution_results r ON r.todo_id=t.todo_id JOIN deferred_completion_outbox o ON o.todo_id=t.todo_id
         WHERE t.channel=? AND r.state IN ('completion_outboxed','delivered') AND o.state IN ('pending','delivered')
         ORDER BY t.origin_session_id`).all(channel) as Array<{ session_id: string }>).map(({ session_id }) => session_id)

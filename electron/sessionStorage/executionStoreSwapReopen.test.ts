@@ -6,7 +6,11 @@ import { createSessionExecutionStore } from './execution'
 import { createTurnCoordinatorStorage } from './coordinator'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
+import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
+import { createDeferredTodoCapacityController } from '../confirmation/deferredTodoCapacity'
 import { createRemoteAuthorizationEpochStore } from '../remote/remoteAuthorizationEpochStore'
+import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
+import { createDeferredApprovalIngress } from '../remote/deferredApprovalIngress'
 
 /**
  * 压缩换入缺陷回归（评审 B1 红验证）：
@@ -160,6 +164,88 @@ describe('压缩换入后复用 store 跨 reopen（闭包连接现取化回归�
       expect(store.advance('feishu', 'swap-reopen-revoke')).toBe(2)
       expect(store.completeRevocation('feishu', 2)).toBe(true)
       expect(store.pendingRevocations()).toEqual([])
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('deferredExecutionResultStore：复用同一实例跨换入后延期执行结果读写正常', () => {
+    const { db, cleanup } = createTempDatabase('exec-result-swap-')
+    try {
+      const store = createDeferredExecutionResultStore(db)
+      expect(store.listRecoverableSessionIds('feishu')).toEqual([])
+
+      swapConnection(db)
+
+      expect(store.listRecoverableSessionIds('feishu')).toEqual([])
+      expect(store.listCompletionOutbox('missing-todo')).toEqual([])
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('deferredTodoCapacityController：复用同一实例跨换入后预留/释放正常（deferredTodoStore 的 capacity 回调面）', () => {
+    const { db, cleanup } = createTempDatabase('capacity-swap-')
+    try {
+      const capacity = createDeferredTodoCapacityController(db)
+      expect(capacity.reserve({
+        reservationId: 'cap-1', invocationId: 'cap-inv-1', sessionId: 'cap-session-1', identityKey: 'cap-identity-1', state: 'pending'
+      })).toMatchObject({ ok: true, duplicate: false })
+
+      swapConnection(db)
+
+      expect(capacity.releaseByInvocation('cap-inv-1')).toBe(true)
+      expect(capacity.reserve({
+        reservationId: 'cap-2', invocationId: 'cap-inv-2', sessionId: 'cap-session-1', identityKey: 'cap-identity-1', state: 'pending'
+      })).toMatchObject({ ok: true, duplicate: false })
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('deferredApprovalNotificationDelivery：复用同一实例跨换入后通知读写正常', () => {
+    const { db, cleanup } = createTempDatabase('delivery-swap-')
+    try {
+      const delivery = createDeferredApprovalNotificationDelivery({
+        db,
+        todoStore: { get: () => null },
+        intentStore: { authorizeResume: () => false },
+        adapter: { send: async () => undefined },
+        audit: () => {}
+      } as unknown as Parameters<typeof createDeferredApprovalNotificationDelivery>[0])
+      expect(delivery.list('missing-todo')).toEqual([])
+
+      swapConnection(db)
+
+      expect(delivery.list('missing-todo')).toEqual([])
+      expect(delivery.resolveCurrent({ channel: 'feishu', identityKey: 'i', ownerId: 'o', authorizationEpoch: 3, shortCode: '07', now: Date.now() })).toBeNull()
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('deferredApprovalIngress：复用同一实例跨换入后幂等回执查询正常', async () => {
+    const { db, cleanup } = createTempDatabase('ingress-swap-')
+    try {
+      const binding = {
+        channel: 'feishu' as const, identityKey: 'i', ownerId: 'o', todoId: 'todo-1', notificationVersion: 1,
+        currentNotificationVersion: 1, trustedMessageId: 'msg-1', shortCode: '07', expiresAt: Date.now() + 60_000,
+        authorizationEpoch: 3, rule: { ruleId: 'r', factsHash: 'a'.repeat(64) }
+      }
+      const ingress = createDeferredApprovalIngress({
+        db,
+        isEnabled: () => true,
+        resolveNotification: () => [binding],
+        requestResume: async () => ({ status: 'resume_requested' as const, duplicate: false }),
+        audit: () => {}
+      } as unknown as Parameters<typeof createDeferredApprovalIngress>[0])
+      const request = { channel: 'feishu' as const, identityKey: 'i', ownerId: 'o', messageId: 'im-1', replyToMessageId: 'msg-1', text: '批准 07', now: Date.now() }
+      // 无 getTodo 时 handle 走到幂等回执 SELECT 后按 rejected 收尾（注入依赖最小化）
+      expect((await ingress.handle(request)).status).toBe('rejected')
+
+      swapConnection(db)
+
+      expect((await ingress.handle({ ...request, messageId: 'im-2' })).status).toBe('rejected')
     } finally {
       cleanup()
     }

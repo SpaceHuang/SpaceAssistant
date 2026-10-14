@@ -60,7 +60,8 @@ export function createDeferredApprovalIngress(input: {
   getTodo?(todoId: string, binding: NotificationBinding): { status: string; authorizationEpoch: number; rule: { ruleId: string; factsHash: string }; expiresAt: number; invocationId?: string; originSessionId?: string } | null
   audit?(event: SecurityAuditEvent): void
 }) {
-  const conn = getDbConnection(input.db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每函数入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(input.db)
   return {
     async handle(request: { channel: Channel; identityKey: string; ownerId: string; messageId: string; replyToMessageId?: string; text: string; now?: number }) {
       const parsed = parseDeferredApprovalReply(request.text)
@@ -75,7 +76,7 @@ export function createDeferredApprovalIngress(input: {
       if (binding.channel !== request.channel || binding.identityKey !== request.identityKey || binding.ownerId !== request.ownerId ||
         binding.shortCode !== parsed.shortCode || binding.currentNotificationVersion !== binding.notificationVersion ||
         binding.expiresAt <= now || request.replyToMessageId !== binding.trustedMessageId) return { status: 'rejected' as const }
-      const seen = conn.prepare(`SELECT 1 FROM deferred_approval_ingress_receipts WHERE channel=? AND identity_key=? AND message_id=?`)
+      const seen = liveConn().prepare(`SELECT 1 FROM deferred_approval_ingress_receipts WHERE channel=? AND identity_key=? AND message_id=?`)
         .get(request.channel, request.identityKey, request.messageId)
       if (seen) return { status: 'rejected' as const }
       const todo = input.getTodo?.(binding.todoId, binding)
@@ -83,7 +84,7 @@ export function createDeferredApprovalIngress(input: {
       if (!todo) return { status: 'rejected' as const }
       const reasonKey = `${request.channel}:${request.messageId}:${binding.todoId}:${binding.notificationVersion}`
       const commitReceipt = () => {
-        const changed = conn.prepare(`INSERT OR IGNORE INTO deferred_approval_ingress_receipts(channel,identity_key,message_id,created_at) VALUES(?,?,?,?)`)
+        const changed = liveConn().prepare(`INSERT OR IGNORE INTO deferred_approval_ingress_receipts(channel,identity_key,message_id,created_at) VALUES(?,?,?,?)`)
           .run(request.channel, request.identityKey, request.messageId, now)
         return Number(changed.changes) === 1
       }

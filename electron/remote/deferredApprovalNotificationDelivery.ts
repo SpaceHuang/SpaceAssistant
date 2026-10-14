@@ -39,19 +39,20 @@ export function createDeferredApprovalNotificationDelivery(input: {
   allocateShortCode?: (scope: Pick<Scope, 'channel' | 'identityKey' | 'ownerId'>) => string | null
   audit(event: SecurityAuditEvent): void
 }) {
-  const conn = getDbConnection(input.db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每函数入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(input.db)
   const allocate = input.allocateShortCode ?? ((scope: Pick<Scope, 'channel' | 'identityKey' | 'ownerId'>) => allocateDeferredApprovalShortCode(input.db, scope))
-  const rowFor = (todoId: string, version: number) => conn.prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
+  const rowFor = (todoId: string, version: number) => liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
     WHERE todo_id=? AND notification_version=?`).get(todoId, version) as NotificationRow | undefined
-  const list = (todoId: string) => (conn.prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE todo_id=? ORDER BY notification_version`)
+  const list = (todoId: string) => (liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE todo_id=? ORDER BY notification_version`)
     .all(todoId) as NotificationRow[]).map(mapRow)
   const sessionForTodo = (todoId: string): string => {
-    const row = conn.prepare('SELECT origin_session_id FROM deferred_todos WHERE todo_id=?').get(todoId) as { origin_session_id: string } | undefined
+    const row = liveConn().prepare('SELECT origin_session_id FROM deferred_todos WHERE todo_id=?').get(todoId) as { origin_session_id: string } | undefined
     return row?.origin_session_id ?? 'unknown'
   }
 
   function persist(todo: ReturnType<TodoStore['get']> & {}, dto: DeferredApprovalNotificationDto, state: 'undelivered', now: number, messageId: null): void {
-    conn.prepare(`INSERT INTO deferred_approval_notifications(${COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    liveConn().prepare(`INSERT INTO deferred_approval_notifications(${COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       todo.todoId, dto.notificationVersion, todo.invocationId, todo.channel, todo.identityKey, todo.ownerId,
       todo.authorizationEpoch, todo.rule.ruleId, todo.rule.factsHash, dto.shortCode, messageId, todo.expiresAt,
       JSON.stringify(dto), state, now, now
@@ -76,7 +77,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
       const result = await input.adapter.send(mapped.dto, { channel: mapped.channel, identityKey: mapped.identityKey, ownerId: mapped.ownerId })
       const messageId = typeof result === 'string' ? result : result?.messageId
       if (!messageId?.trim()) throw new Error('DEFERRED_NOTIFICATION_MESSAGE_ID_MISSING')
-      const changed = conn.prepare(`UPDATE deferred_approval_notifications SET state='delivered',trusted_message_id=?,updated_at=?
+      const changed = liveConn().prepare(`UPDATE deferred_approval_notifications SET state='delivered',trusted_message_id=?,updated_at=?
         WHERE todo_id=? AND notification_version=? AND state='undelivered'`).run(messageId, Date.now(), todoId, version)
       if (Number(changed.changes) !== 1) return 'undelivered'
       input.db.save()
@@ -107,8 +108,8 @@ export function createDeferredApprovalNotificationDelivery(input: {
     const code = allocate({ channel: todo.channel, identityKey: todo.identityKey, ownerId: todo.ownerId })
     if (!code) return null
     const dto = buildDto(todo, version, code, request)
-    runInTransaction(conn, () => {
-      if (latest?.state === 'undelivered') conn.prepare(`UPDATE deferred_approval_notifications SET state='superseded',updated_at=?
+    runInTransaction(liveConn(), () => {
+      if (latest?.state === 'undelivered') liveConn().prepare(`UPDATE deferred_approval_notifications SET state='superseded',updated_at=?
         WHERE todo_id=? AND notification_version=? AND state='undelivered'`).run(request.now, todo.todoId, latest.notificationVersion)
       persist(todo, dto, 'undelivered', request.now, null)
     })
@@ -137,7 +138,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
 
     async retryForAuthenticatedInbound(request: Scope & { now?: number }): Promise<Array<{ todoId: string; state: 'delivered' | 'undelivered'; notificationVersion: number; messageId?: string }>> {
       const now = request.now ?? Date.now()
-      const rows = conn.prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
+      const rows = liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
         WHERE channel=? AND identity_key=? AND owner_id=? AND authorization_epoch=? AND state='undelivered'
         ORDER BY created_at,todo_id,notification_version`).all(request.channel, request.identityKey, request.ownerId, request.authorizationEpoch) as NotificationRow[]
       const results = []
@@ -148,7 +149,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
           authorizationEpoch: request.authorizationEpoch, rule: mapped.rule
         }, now)
         if (!todo || todo.status !== 'pending' || todo.expiresAt <= now || !input.intentStore.authorizeResume(mapped.invocationId)) {
-          conn.prepare(`UPDATE deferred_approval_notifications SET state='invalidated',updated_at=?
+          liveConn().prepare(`UPDATE deferred_approval_notifications SET state='invalidated',updated_at=?
             WHERE todo_id=? AND notification_version=? AND state='undelivered'`).run(now, mapped.todoId, mapped.notificationVersion)
           input.db.save()
           continue
@@ -178,7 +179,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
     list,
     resolveCurrent(request: Scope & { shortCode: string; now?: number }) {
       const now = request.now ?? Date.now()
-      const row = conn.prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE channel=? AND identity_key=? AND owner_id=?
+      const row = liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE channel=? AND identity_key=? AND owner_id=?
         AND short_code=? AND authorization_epoch=? AND state='delivered' ORDER BY notification_version DESC LIMIT 1`)
         .get(request.channel, request.identityKey, request.ownerId, request.shortCode, request.authorizationEpoch) as NotificationRow | undefined
       if (!row || row.expires_at <= now) return null
