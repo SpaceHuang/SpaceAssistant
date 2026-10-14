@@ -10,7 +10,10 @@ import type { SessionCommands } from './contracts'
 export function createSessionCommands(db: AppDatabase): SessionCommands {
   const commands: SessionCommands = {
     appendNonTurnMessage: (message) => appendMessage(db, message),
-    createSession: (input) => createSession(db, { ...input, metadata: input.metadata ? { ...input.metadata } : undefined }),
+    createSession: (input) => createSession(db, {
+      ...input,
+      metadata: { ...(input.metadata ?? {}), agentsMdEnabled: input.agentsMdEnabled ?? true }
+    }),
     renameSession: (sessionId, name) => {
       const current = getSession(db, sessionId)
       if (!current) return undefined
@@ -22,7 +25,9 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
     },
     updateSettings: ({ sessionId, ...settings }) => {
       if (!getSession(db, sessionId)) return undefined
-      return updateSession(db, sessionId, settings)
+      const { agentsMdEnabled, ...sessionSettings } = settings
+      const updated = updateSession(db, sessionId, sessionSettings)
+      return agentsMdEnabled === undefined ? updated : commands.updateAgentsMdEnabled(sessionId, agentsMdEnabled)
     },
     updateUserMetadata: (sessionId, metadataPatch) => {
       const current = getSession(db, sessionId)
@@ -49,6 +54,12 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
       const current = getSession(db, sessionId)
       if (!current) return undefined
       return updateSession(db, sessionId, { metadata: { ...current.metadata, sessionDirectoryGrants: [...grants] } })
+    },
+    updateAgentsMdEnabled: (sessionId, enabled) => {
+      if (typeof enabled !== 'boolean') throw new Error('AGENTS_MD_ENABLED_MUST_BE_BOOLEAN')
+      const current = getSession(db, sessionId)
+      if (!current) return undefined
+      return updateSession(db, sessionId, { metadata: { ...current.metadata, agentsMdEnabled: enabled } })
     },
     updateTitleSuggestionState: (sessionId, state) => {
       const current = getSession(db, sessionId)

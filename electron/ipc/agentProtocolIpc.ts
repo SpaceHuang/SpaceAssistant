@@ -691,7 +691,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           sessionCommands,
           intent.sessionId,
           'desktop',
-          { projectMemoryEnabled: true },
+          { projectMemoryEnabled: true, agentsMdEnabled: true },
           { requiresVision }
         )
         const credentials = await resolveLlmCredentialsForModel(ctx.db, baseConfig.model!, { serviceId: baseConfig.llmServiceId })

@@ -223,6 +223,7 @@ export type SpaceAssistantApi = {
     temperature?: number
     maxTokens?: number
     metadata?: Record<string, unknown>
+    agentsMdEnabled?: boolean
     /** composer 草稿带入的会话级 Thinking 强度覆盖 */
     thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
   }) => Promise<Session>
@@ -236,6 +237,7 @@ export type SpaceAssistantApi = {
     maxTokens?: number
     skillsState?: SessionSkillsState
     metadata?: Record<string, unknown>
+    agentsMdEnabled?: boolean
     /** 会话级 Thinking 强度覆盖；null = 清除覆盖（回到继承全局） */
     thinkingEffort?: import('./agent/invocation').AgentReasoningEffort | null
   }) => Promise<Session | undefined>

@@ -48,23 +48,23 @@
 
 **阶段完成条件：** 形成经代码核对的调用路径图、请求标识与 History 落点决策；明确每个 provider 请求的创建、底层重试、工具返回、审批恢复及下一请求的边界。阶段提交只记录设计基线，不改变产品行为。
 
-- [ ] **0.1 入口与请求路径盘点**
+- [x] **0.1 入口与请求路径盘点** — 桌面 / IM / automation 共用 `runToolChatSession → hostedTurnHandoff → runHostedAgentTurn`；provider attempt retry 复用同一 logical requestId，tool result 后 modelTurn 新增。证据见 runtime-baseline；commit `f3791a04`。
   - 依赖：无
   - 核查：`electron/claudeStreamHandlers.ts`、`electron/toolChatLoop.ts`、`electron/runtime/invocationAssembler.ts`、Hosted handoff 分支及 IM / 自动化入口。
   - 完成判据：文档化桌面、Feishu、WeChat、automation 如何到达同一逻辑请求装配；列明现有请求重试和再次请求的分界，不把底层 provider retry 误判为新逻辑请求。
-- [ ] **0.2 工作目录动态解析与切换屏障盘点**
+- [x] **0.2 工作目录动态解析与切换屏障盘点** — 解析与 initial/recheck 动态取目录，PermitBinding 仅比较工具自身 initial/recheck；普通批次并发且无 switch 屏障，来源 request binding 未在 executor 前比较。证据见 runtime-baseline；commit `f3791a04`。
   - 依赖：无
   - 核查：`electron/workDirManager.ts`、`electron/workDirSnapshot.ts`、`electron/tools/workDirExecutors.ts`、工具批处理 / dispatch 与 approval resume 路径。
   - 完成判据：记录 `resolveWorkDir` 实际刷新时点、binding / grant 身份比较方式、同批调用当前调度顺序，以及成功 / 失败切换时所有 sibling tool 的现状；特别画出 provider response 校验、队列 / resource lock 等待、SDK `prepareTool(..., recheck)`、最终 claim 和 executor 进入的顺序。明确每个普通 / 只读工具首次准备前绑定变化与准备后变化的现有行为。
   - 结论要求：核实当前 initial/recheck 是否会与来源 provider request 的 binding 身份比较；仅证明工具自身 initial 与 recheck 相同，不足以关闭此任务。
-- [ ] **0.3 History 快照存储与投影盘点**
+- [x] **0.3 History 快照存储与投影盘点** — 复用 `model-request-started` requestId/modelTurn/attempt 与 canonical payload/spill，不建第二历史流。证据见 runtime-baseline；commit `f3791a04`。
   - 依赖：无
   - 核查：`packages/agent-sdk/src/history.ts`、`packages/agent-sdk/src/turn.ts`、`electron/database/agentHistoryStorage*`、`electron/runtime` history 投影及 spill 存储。
   - 完成判据：找出既有通用事件关联 `invocationId`、logical request / model request id、请求尝试和工具调用的字段；决定快照正文应进入现有 canonical History payload 还是已存在的宿主 sidecar。不得新建第二套运行历史。
-- [ ] **0.4 逐请求刷新原型与边界 RED**
+- [x] **0.4 逐请求刷新原型与边界 RED** — 现有 prepareModelRequest 只能观察/投影请求，不能替换冻结请求；R1 / retry-A / R2-B RED 落在阶段 4 捕获回归。缺口与最小通用 hook 决策见 runtime-baseline；commit `f3791a04`。
   - 依赖：0.1、0.3
   - 完成判据：用伪 provider 或最小宿主验证 R1 请求、工具返回后 R2 可由宿主重新装配 system/context，同时 R1 retry 不重新读取；记录现有通用端口能否承载。如现有端口不足，先列出最小可序列化中立契约并评审后再进入实现，不直接扩展产品专用 SDK API。
-- [ ] **0.5 基线记录与阶段提交**
+- [x] **0.5 基线记录与阶段提交** — 仅纳入本计划、需求、评审和 runtime baseline；原工作区其余 5 项未提交改动留在主工作区。定向命令 `npm exec vitest run <受影响文件>`；SDK 门禁 `npm run check:agent-sdk`。commit `f3791a04`。
   - 依赖：0.1–0.4
   - 验收：记录工作区既有改动不纳入本任务；记录可重复的定向测试命令、SDK 边界门禁命令；提交阶段 0 设计基线。
 
@@ -72,18 +72,18 @@
 
 **阶段完成条件：** 新增的 AGENTS 开关与状态具有唯一共享类型和稳定存储语义，旧 `projectMemoryEnabled` 行为不变。
 
-- [ ] **1.1 新增独立 AGENTS 开关类型与默认值**
+- [x] **1.1 新增独立 AGENTS 开关类型与默认值** — `agentsMdEnabled`，session metadata 缺省 true；project memory 独立。commit `f3791a04` + 本阶段提交。
   - 依赖：0.5
   - 文件候选：`src/shared/domainTypes.ts`、现有 session/config domain 类型及其默认值实现。
   - 完成判据：`agentsMdEnabled`（最终命名在本任务内核定）默认开启；旧项目记忆字段仍只控制 `SPACEASSISTANT.md`；类型不重复定义在 renderer / electron。
-- [ ] **1.2 确定会话级持久化位置与迁移策略**
+- [x] **1.2 确定会话级持久化位置与迁移策略** — 复用 Session.metadata JSON，无 schema migration；旧 metadata 无字段时默认 true。
   - 依赖：1.1
   - 文件候选：会话 metadata / profile 存储实现、`electron/database` operations 与 session serializers。
   - 完成判据：开关按会话持久化；旧会话缺字段时回退为开启；切换活动 workDir 不串用开关；既有数据库行无需破坏性迁移，或迁移具备向前兼容测试。
-- [ ] **1.3 接入创建 / 读取 / 更新路径**
+- [x] **1.3 接入创建 / 读取 / 更新路径** — 新会话写 true，可由受信 session update 切换；renderer 通用 metadata patch 不可改此字段；桌面与远端 turn config 同源读取。
   - 依赖：1.2
   - 完成判据：新会话默认开启；会话重载、远程会话与桌面会话均得到同一有效值；配置更新只影响其所属会话。
-- [ ] **1.4 定向验证开关兼容性**
+- [x] **1.4 定向验证开关兼容性** — `npm exec vitest run electron/sessionStorage/sessionStorage.test.ts electron/turnExecutionConfig.test.ts electron/turnExecutionConfig.thinkingEffort.test.ts electron/appIpc.file.test.ts electron/appIpc.sessionUpdate.test.ts`：5 files / 152 tests passed；`npm run typecheck:shared` passed。commit SHA 将在本条更新后阶段提交记录。
   - 依赖：1.3
   - 测试：会话 storage / config resolver / turn configuration 相关定向测试。
   - 完成判据：旧 `projectMemoryEnabled` 测试行为保持；新增字段缺失、true、false、跨重启和双会话隔离用例通过。

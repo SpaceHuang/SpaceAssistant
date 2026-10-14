@@ -210,6 +210,7 @@ export interface SessionCommands {
     name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number
     workDirProfileId?: string; fixedWorkDir?: string; ownership?: SessionOwnership; visibility?: SessionVisibility
     thinkingEffort?: Session['thinkingEffort']; metadata?: Readonly<Record<string, unknown>>
+    agentsMdEnabled?: boolean
   }): Session
   renameSession(sessionId: string, name: string): Session | undefined
   updateSettings(input: {
@@ -221,9 +222,11 @@ export interface SessionCommands {
     skillsState?: Session['skillsState']
     workDirProfileId?: Session['workDirProfileId']
     thinkingEffort?: Session['thinkingEffort'] | null
+    agentsMdEnabled?: boolean
   }): Session | undefined
   updateUserMetadata(sessionId: string, metadataPatch: Readonly<Record<string, unknown>>): Session | undefined
   updateDirectoryGrants(sessionId: string, grants: readonly SessionDirectoryGrantRecord[]): Session | undefined
+  updateAgentsMdEnabled(sessionId: string, enabled: boolean): Session | undefined
   updateTitleSuggestionState(sessionId: string, state: { generated?: boolean; backfillAttempted?: boolean }): Session | undefined
   applyGeneratedTitle(sessionId: string, title: string): Session | undefined
   recordRemoteSessionActivity(sessionId: string, at: number): Session | undefined
