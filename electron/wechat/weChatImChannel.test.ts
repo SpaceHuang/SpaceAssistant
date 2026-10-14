@@ -191,6 +191,16 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     expect(prompt).not.toMatch(/(?:回复|或)\s+Y\/N\b/)
   })
 
+  it('把 run_shell 命令、调用理由和截断状态纳入微信确认文本', () => {
+    const prompt = buildWeChatConfirmPrompt({
+      id: 'shell-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification: '查看目录\n确定项目根路径', _justificationTruncated: true },
+      messageId: 'm1', channel: 'wechat', memoryTiers: [], createdAt: 1, expiresAt: 2
+    })
+    expect(prompt).toContain('命令：pwd')
+    expect(prompt).toContain('调用理由（内容已截断）：\n查看目录\n确定项目根路径')
+  })
+
   it.each([
     ['bot 缺失', {}, 'bot-unavailable'],
     ['发送器缺少消息 ID 能力', { getReplyBot: () => ({ reply, sendTyping: vi.fn() }) }, 'bot-unavailable']

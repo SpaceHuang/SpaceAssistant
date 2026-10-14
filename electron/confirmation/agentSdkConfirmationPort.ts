@@ -81,7 +81,9 @@ export function createAgentSdkConfirmationPort(input: {
     }
     const request: ConfirmRequest = {
       facts: confirmation.context.facts,
-      ...confirmation.context.decision
+      ...confirmation.context.decision,
+      ...(typeof confirmation.context.modelJustification === 'string' ? { modelJustification: confirmation.context.modelJustification } : {}),
+      ...(confirmation.context.modelJustificationTruncated === true ? { modelJustificationTruncated: true } : {})
     }
     const channel = input.createChannel(confirmation.call, confirmation)
     const cancel = () => {

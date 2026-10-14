@@ -21,6 +21,7 @@ import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWr
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, reconcileConfirmationSubmission, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { recordRemoteTrackConfirmationState } from '../database/remoteTrackStore'
+import { runShellJustificationForDisplay } from '../../src/shared/runShellJustification'
 
 export interface FeishuImChannelDeps {
   auditLogger?: FeishuAuditLogger
@@ -228,6 +229,11 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
           ? pending.toolInput.code.trim().split('\n').find((l) => l.trim() && !l.trim().startsWith('#'))?.slice(0, 120) ??
             'run_script'
           : (pending.toolName ?? 'unknown')
+  const rawJustification = pending.toolName === 'run_shell' && typeof pending.toolInput?.justification === 'string'
+    ? pending.toolInput.justification.trim()
+    : ''
+  const justification = rawJustification ? runShellJustificationForDisplay(rawJustification) : ''
+  const truncatedNote = pending.toolInput?._justificationTruncated === true ? '（内容已截断）' : ''
   if (pending.toolName === 'run_script' && typeof pending.toolInput?.code === 'string') {
     const full = pending.toolInput.code
     if (full.length > 4000) {
@@ -236,7 +242,7 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
       cmd = full.slice(0, 2000)
     }
   }
-  return `${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${String(cmd).slice(0, 2000)}\n${footer}（10 分钟内有效）`
+  return `${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${String(cmd).slice(0, 2000)}\n${justification ? `调用理由${truncatedNote}：\n${justification.slice(0, 2000)}\n` : ''}${footer}（10 分钟内有效）`
 }
 
 /** Confirm replies are only accepted from the bound owner in a p2p chat. */

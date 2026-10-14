@@ -156,6 +156,16 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     expect(text).toContain('回复 Y')
   })
 
+  it('把 run_shell 调用理由和截断状态放入同一飞书确认文本', () => {
+    const text = buildFeishuConfirmPromptText({
+      id: 'shell-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification: '<script>检查目录', _justificationTruncated: true },
+      messageId: 'm1', channel: 'feishu', memoryTiers: [], createdAt: 0, expiresAt: 0
+    })
+    expect(text).toContain('命令：pwd')
+    expect(text).toContain('调用理由（内容已截断）：\n<script>检查目录')
+  })
+
   it('includes progress prefix in confirm text', async () => {
     const { updateRemoteProgressSnapshot, clearRemoteProgressSession } = await import('../remote/remoteProgressStore')
     updateRemoteProgressSnapshot('s-progress', {

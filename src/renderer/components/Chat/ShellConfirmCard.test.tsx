@@ -48,6 +48,22 @@ describe('ShellConfirmCard', () => {
     expect(document.querySelector('.shell-tui-fallback')).toBeNull()
   })
 
+  it('shows per-call justification as escaped plain text and marks truncated text', () => {
+    render(<ShellConfirmCard record={record({ input: {
+      command: 'pwd', justification: '<script>\n检查工作目录', _justificationTruncated: true
+    } })} onConfirm={vi.fn()} />)
+    expect(screen.getByText('调用理由')).toBeTruthy()
+    expect(screen.getByText(/内容已截断/)).toBeTruthy()
+    const reasonBlock = screen.getByLabelText('调用理由')
+    expect(reasonBlock.querySelector('div')?.textContent).toBe('<script>\n检查工作目录')
+    expect(document.querySelector('.shell-confirm-card script')).toBeNull()
+  })
+
+  it('omits a blank justification block', () => {
+    render(<ShellConfirmCard record={record({ input: { command: 'pwd', justification: ' \n ' } })} onConfirm={vi.fn()} />)
+    expect(screen.queryByText('调用理由')).toBeNull()
+  })
+
   it('shows security warning for weak deny validators', () => {
     render(
       <ShellConfirmCard

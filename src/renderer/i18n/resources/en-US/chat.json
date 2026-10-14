@@ -227,6 +227,8 @@
       "defaultTitle": "Shell command",
       "executeTitle": "Run shell command",
       "highRisk": "High risk",
+      "justification": "Call justification",
+      "justificationTruncated": "Content truncated",
       "pathSecurityWarning": "Path safety warning"
     },
     "script": {
