@@ -3,8 +3,9 @@
 - 日期：2026-10-15
 - 关联需求：[工作目录 AGENTS.md 指令支持需求](../requirement/agents-md-workdir-instructions-requirement.md)
 - 需求状态：已通过评审，B01–B03 已关闭（依据用户确认）
-- 计划状态：待实施；已按 2026-10-15 开发计划评审修订
+- 计划状态：已完成（阶段 0–8 全部收尾；阶段提交见阶段记录）
 - 版本范围：仅加载当前调用工作目录根部的 `AGENTS.md`；不支持子目录指令；不增加 agent-sdk 产品专用接口；不实现跨进程重启后的 invocation 可执行恢复。
+- 阶段提交：0 `f3791a04`；1 `88a19499`；2 `72520852`；3 `31b83d07`；4 `25c10345`；5 `67e573c6`；6 `fe50f237`；7 `ec952db5`；8 待本次提交后补录。
 - 任务状态：`[ ] 未开始`、`[~] 进行中`、`[x] 完成`、`[-] 不适用/经证据确认无需改动`、`[!] 受阻`。完成任务时补上验证命令 / 结果和提交 SHA；若无需改动，记录核查证据后标 `[-]`。
 - 执行约定：按阶段顺序推进；同阶段可并行的任务须满足依赖并避免同时改同一文件。每阶段完成并验收后单独提交。定向测试按仓库 `AGENTS.md` 纪律合并运行；全量测试仅阶段收尾及最终验收运行。评审依据：[开发计划评审报告](../review/agents-md-workdir-instructions-development-plan-review.md)。
 
@@ -257,24 +258,51 @@
 
 **阶段完成条件：** 自动门禁、全量验证、SDK 边界、打包闭包与文档均通过；所有任务状态已结清。
 
-- [ ] **8.1 对照需求逐条关闭 FR / A 编号**
+- [x] **8.1 对照需求逐条关闭 FR / A 编号**
   - 依赖：阶段 1–7
-  - 完成判据：建立需求 FR-01–06、A01–A19 到实现 / 测试文件的追踪矩阵；每项有 PASS / 不适用依据，不留未解释空项。
-- [ ] **8.2 执行 agent-sdk 边界与依赖门禁**
+  - 完成判据：建立需求 FR-01–06、A01–A19 到实现 / 测试文件的追踪矩阵；每项有 PASS / 不适用依据，不留未解释空项。矩阵见下表。
+- [x] **8.2 执行 agent-sdk 边界与依赖门禁**
   - 依赖：8.1
   - 命令：`npm run check:agent-sdk`
-  - 完成判据：入口、依赖和 package closure 全通过；若为满足能力而试图引入文件系统依赖，退回宿主边界修正。
-- [ ] **8.3 执行最终类型 / i18n / 全量测试**
+  - 完成判据：`npm run check:agent-sdk`、`npm run typecheck:agent-sdk` 均通过；阶段 8 session-storage 修正没有增加 SDK 文件系统依赖。
+- [x] **8.3 执行最终类型 / i18n / 全量测试**
   - 依赖：8.1、8.2
   - 命令：按实际触及范围运行 `npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`，提交前 `npm test`。
-  - 完成判据：全量测试通过；已有无关失败记录基线、归因与处置，不把未运行标成通过。
-- [ ] **8.4 完整构建和打包闭包**
+  - 完成判据：`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check` 通过；最终 `npm test` 为 1043 files passed / 1 skipped，9710 tests passed / 111 skipped。定向修正验证 `npm exec vitest run electron/remote/trackScopedHistoryPort.test.ts electron/ipc/agentInstructionsIpc.test.ts electron/sessionStorage/sessionStorage.test.ts` 为 3 files / 57 tests passed。
+- [x] **8.4 完整构建和打包闭包**
   - 依赖：8.3
   - 命令：最终验收 `npm run build`；若阶段只改 electron，阶段中间最多一次 `npm run build:electron:incremental`。
-  - 完成判据：renderer、electron、tray 全构建成功；SDK package closure 检查通过。
-- [ ] **8.5 更新本计划执行状态与验收记录**
+  - 完成判据：`npm run build` 通过，包含 tray、renderer、pi-ai runtime closure（23 runtime files）、session-storage cleanup / boundary（19 existing exceptions, no additions）、provider 编译及 Electron TypeScript 编译。Renderer 有既存大 chunk 与 ineffective dynamic import 警告，不阻断构建。
+- [x] **8.5 更新本计划执行状态与验收记录**
   - 依赖：8.2–8.4
-  - 完成判据：所有任务改为 `[x]` / `[-]`，记录命令、摘要结果、阶段 commit；记录真实 IM / 三平台真机项是否完成或明确不在本轮发布范围。
+  - 完成判据：本计划所有任务状态已结清；最终门禁和全量测试完成。真实模型抽查、真实 Feishu / WeChat IM 收发、Windows / Linux 真机操作未执行，明确不在本轮本地自动化验收范围内；自动化模拟不宣称替代这些验收。阶段提交：阶段 8 `chore: complete AGENTS.md support acceptance`（commit SHA 在提交后回填）。
+
+#### 需求追踪矩阵
+
+| 需求 | 实现与主要回归证据 | 状态 |
+| --- | --- | --- |
+| FR-01 文件发现 / 根目录 / 有效 workDir | `electron/projectInstructions/projectInstructions.ts`、`electron/workDirSnapshot.test.ts`、`electron/runtime/agentSdkDesktopObserver.test.ts`、`electron/remote/imRemoteAgent.test.ts`、`electron/wechat/weChatRemoteAgent.test.ts` | PASS |
+| FR-02 注入 / 优先级 / 普通文本 | `electron/llmSystemPrompt.ts`、`electron/llmSystemPrompt.test.ts`、`electron/runtime/agentSdkDesktopObserver.test.ts` | PASS |
+| FR-03 独立会话开关 / 项目记忆共存 | `electron/sessionStorage/commands.ts`、`electron/sessionStorage/sessionStorage.test.ts`、`src/renderer/components/Chat/ProjectInstructionsControl.test.tsx` | PASS |
+| FR-04 请求快照 / retry / R1-R2 / binding / restart | `electron/runtime/agentSdkDesktopObserver.test.ts`、`electron/runtime/sqliteAgentHistory.test.ts`、`electron/runtime/invocationAssembler.test.ts`、`electron/workDirBinding.test.ts`、`electron/toolChatLoop.workdir.test.ts`、`packages/agent-sdk/test/turn.test.ts` | PASS |
+| FR-05 预算 / 有界读取 / 失败诊断 | `electron/projectInstructions/projectInstructions.test.ts`、`electron/runtime/agentSdkDesktopObserver.test.ts`、`electron/llmSystemPrompt.test.ts` | PASS |
+| FR-06 UI / IPC / IM 状态 / 隐私 | `electron/ipc/agentInstructionsIpc.test.ts`、`src/renderer/components/Chat/ProjectInstructionsControl.test.tsx`、`electron/remote/remoteProgressHooks.ts`、`electron/toolCallLabel.ts` | PASS |
+
+#### A01–A19 验收矩阵
+
+| 编号 | 证据 | 状态 |
+| --- | --- | --- |
+| A01–A04 | loader 正文格式 / prompt 区块与优先级 / provider 请求捕获：`projectInstructions.test.ts`、`llmSystemPrompt.test.ts`、`agentSdkDesktopObserver.test.ts`。真实模型冲突行为抽查不在本地自动化验证范围，未宣称完成。 | PASS（自动化）；真实模型抽查未执行 |
+| A05–A06 | 会话 workspace snapshot 与入队后有效目录、observer 双工作目录并发捕获：`workDirSnapshot.test.ts`、`invocationAssembler.workspace.test.ts`、`agentSdkDesktopObserver.test.ts`。 | PASS |
+| A07a–A08、A10–A13 | R1/R2、switch 屏障、审批等待 / resource lock 的 A→B 竞态：`agentSdkDesktopObserver.test.ts`、`hostedAgentTurnHost.test.ts`、`approvalAgent.test.ts`、`hostedTurnHandoff.test.ts`、SDK `turn.test.ts`。 | PASS |
+| A09a–A09d | 请求正文历史重建、不可还原投影、restart interrupted：`sqliteAgentHistory.test.ts`、`agentInstructionsIpc.test.ts`。 | PASS |
+| A14 | session setting 持久化与 UI 切换，旧 projectMemory 独立：`sessionStorage.test.ts`、`ProjectInstructionsControl.test.tsx`。 | PASS |
+| A15–A16 | 读取失败 / 预算 / 读取竞态 / symlink / bounded read：`projectInstructions.test.ts`。 | PASS |
+| A17 | 项目文本以普通 Markdown 区块封装并声明工具权限、安全规则优先；安全 Gate / approval / workdir 授权不由 prompt section 写入：`llmSystemPrompt.test.ts`、`workDirExecutors.test.ts`、`approvalAgent.test.ts`。 | PASS |
+| A18 | desktop、Feishu、WeChat、automation 共用 observer 合同；远程缺失/读取失败可见状态由 progress hook 输出：阶段 7 跨入口集成测试。真实 IM 账号收发未执行。 | PASS（模拟）；真实 IM 未执行 |
+| A19 | disabled / missing 与请求失败回退正常；SDK closure / dependencies 无宿主文件系统依赖：`agentSdkDesktopObserver.test.ts`、`check:agent-sdk`。 | PASS |
+
+本轮没有配置可用的真实模型凭据、Feishu / WeChat IM 账号或 Windows / Linux 真机；因此真实模型抽查、IM 实际收发和三平台手工操作未执行。自动化 / 桌面构建证据不等价于这些外部验收。
 
 ## 5. 阶段依赖及提交边界
 

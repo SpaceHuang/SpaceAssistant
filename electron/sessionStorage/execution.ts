@@ -325,6 +325,7 @@ function createSessionHistoryPort(db: AppDatabase, sessionId: string): SessionHi
   if (!sessionId.trim()) throw new Error('SESSION_SCOPE_REQUIRED')
   const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId)
   return Object.freeze({
+    listInvocationIds: () => history.listInvocationIdsForSession(sessionId),
     appendBatch: (events: Parameters<HistoryPort['appendBatch']>[0], expectedVersion: number, transcriptCommit?: Parameters<HistoryPort['appendBatch']>[2]) => history.appendBatch(events, expectedVersion, transcriptCommit),
     read: (invocationId: string) => history.read(invocationId),
     readLatestInvocationForSession: async (requestedSessionId: string, options?: { excludeInvocationId?: string; excludeInvocationIds?: readonly string[] }) => {

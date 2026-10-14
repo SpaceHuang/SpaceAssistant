@@ -31,6 +31,9 @@ describe('AGENTS.md request snapshot IPC', () => {
     await appendRequest(second.id, 'inv-b', 'other session instructions')
 
     const storage = createSqliteSessionStorage(db)
+    const firstHistory = storage.execution.historyFor({ sessionId: first.id })
+    expect(firstHistory.listInvocationIds()).toContain('inv-a')
+    expect(firstHistory.listInvocationIds()).not.toContain('inv-b')
     const ipcHandlers = new Map<string, (event: unknown, payload: unknown) => unknown>()
     const ctx = {
       db, sessionStorage: storage, workDirManager: { listProfiles: () => [], getActiveProfileId: () => undefined, getActiveWorkDir: () => '' },

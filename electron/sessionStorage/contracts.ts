@@ -72,6 +72,7 @@ export type ContinuationSourceRef = Readonly<{
 
 /** Session-scoped History capability needed to safely select a prior Hosted transcript. */
 export type SessionHistoryPort = HistoryPort & Readonly<{
+  listInvocationIds(): string[]
   readLatestInvocationForSession(
     sessionId: string,
     options?: { excludeInvocationId?: string; excludeInvocationIds?: readonly string[] }

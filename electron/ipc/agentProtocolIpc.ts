@@ -70,7 +70,6 @@ import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRul
 import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
 import type { ContinuationIntentAcceptance, ContinuationSourceRef } from '../sessionStorage/contracts'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
-import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { loadAgentsMd } from '../projectInstructions/projectInstructions'
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
@@ -566,8 +565,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const session = sessionQueries.readSession(payload.sessionId)
     if (!session || session.visibility === 'hidden' || session.ownership === 'internal') return { entries: [], current: { status: 'unavailable' } }
     const limit = Number.isInteger(payload.limit) ? Math.min(200, Math.max(1, payload.limit!)) : 50
-    const history = new SqliteAgentHistory(getDbConnection(ctx.db), 1, Date.now, payload.sessionId)
-    const invocationIds = history.listInvocationIdsForSession(payload.sessionId).slice(-limit).reverse()
+    const history = sessionStorage.execution.historyFor({ sessionId: payload.sessionId })
+    const invocationIds = history.listInvocationIds().slice(-limit).reverse()
     const entries: import('../../src/shared/api').AgentsMdRequestSnapshotIndexEntry[] = []
     for (const invocationId of invocationIds) {
       let snapshot: Awaited<ReturnType<typeof history.read>>
