@@ -54,6 +54,7 @@ import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import { buildToolChatPayload } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelThinkingPicker } from './ComposerModelThinkingPicker'
+import { ProjectInstructionsControl } from './ProjectInstructionsControl'
 import { resolveSessionModelBinding, resolveSessionThinkingBinding, resolveAvailableThinkingEfforts } from '../../services/sessionModelBinding'
 import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
@@ -1167,25 +1168,28 @@ export function ChatView() {
         runningElapsed={runningElapsedNode}
         prefsSlot={
           cfg && thinkingBinding ? (
-            <ComposerModelThinkingPicker
-              cfg={cfg}
-              modelName={sessionBinding?.modelName ?? chatModelName}
-              modelServiceName={
-                sessionBinding?.option?.serviceAmbiguous ? sessionBinding.option.serviceName : undefined
-              }
-              modelDisplayName={sessionBinding?.displayName ?? chatModelName}
-              modelUnavailable={Boolean(sessionBinding && !sessionBinding.option)}
-              onSelectModel={(opt) => void handleModelSelect(opt)}
-              effort={thinkingBinding.effort}
-              effortOverridden={thinkingBinding.overridden}
-              globalEffort={thinkingBinding.globalEffort}
-              effortDisabled={currentModelEntry?.supportsThinking === false}
-              effortDisabledReason={
-                currentModelEntry?.supportsThinking === false ? t('composer.thinking.notSupported') : undefined
-              }
-              onSelectEffort={(effort) => void handleThinkingSelect(effort)}
-              availableEfforts={availableEfforts}
-            />
+            <>
+              <ComposerModelThinkingPicker
+                cfg={cfg}
+                modelName={sessionBinding?.modelName ?? chatModelName}
+                modelServiceName={
+                  sessionBinding?.option?.serviceAmbiguous ? sessionBinding.option.serviceName : undefined
+                }
+                modelDisplayName={sessionBinding?.displayName ?? chatModelName}
+                modelUnavailable={Boolean(sessionBinding && !sessionBinding.option)}
+                onSelectModel={(opt) => void handleModelSelect(opt)}
+                effort={thinkingBinding.effort}
+                effortOverridden={thinkingBinding.overridden}
+                globalEffort={thinkingBinding.globalEffort}
+                effortDisabled={currentModelEntry?.supportsThinking === false}
+                effortDisabledReason={
+                  currentModelEntry?.supportsThinking === false ? t('composer.thinking.notSupported') : undefined
+                }
+                onSelectEffort={(effort) => void handleThinkingSelect(effort)}
+                availableEfforts={availableEfforts}
+              />
+              <ProjectInstructionsControl />
+            </>
           ) : null
         }
         onSend={send}

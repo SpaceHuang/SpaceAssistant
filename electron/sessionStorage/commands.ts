@@ -41,7 +41,8 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
         'remoteSessionLastActivityAt',
         'feishuMessageId',
         'wechatMessageId',
-        'wechatMeta'
+        'wechatMeta',
+        'agentsMdEnabled'
       ]
       for (const key of ownedKeys) {
         if (!Object.prototype.hasOwnProperty.call(metadataPatch, key)) continue

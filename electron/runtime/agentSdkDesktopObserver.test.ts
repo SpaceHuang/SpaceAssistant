@@ -21,6 +21,22 @@ import path from 'node:path'
 
 describe('createAgentSdkDesktopObserver', () => {
   afterEach(() => vi.unstubAllEnvs())
+  it('signals remote sessions when the logical request has no usable AGENTS.md snapshot', async () => {
+    const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-remote-status-'))
+    const status = vi.fn()
+    try {
+      const observer = createAgentSdkDesktopObserver({
+        requestId: 'remote-instructions-status', sessionId: 's', turnId: 't', lane: 'feishu',
+        getWorkDir: () => workDir, onAgentsMdNotLoaded: status
+      })
+      await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
+        messages: [{ role: 'user', content: 'hello' }], maxTokens: 100, tools: []
+      } })
+      expect(status).toHaveBeenCalledOnce()
+    } finally {
+      await rm(workDir, { recursive: true, force: true })
+    }
+  })
   it('projects dispatch-stop, slot materialization, and failure attribution diagnostics', async () => {
     const events: unknown[] = []
     const diagnostics = vi.fn()

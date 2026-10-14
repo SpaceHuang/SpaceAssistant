@@ -40,6 +40,8 @@ const api: SpaceAssistantApi = {
   usageDelete: (sessionId) => ipcRenderer.invoke('usage:delete', sessionId),
 
   chatGetMessages: (payload) => ipcRenderer.invoke('chat:get-messages', payload),
+  chatGetAgentsMdRequestSnapshots: (payload) => ipcRenderer.invoke('chat:get-agents-md-request-snapshots', payload),
+  chatGetAgentsMdRequestSnapshot: (payload) => ipcRenderer.invoke('chat:get-agents-md-request-snapshot', payload),
   chatCompactSessionContext: (payload) => ipcRenderer.invoke('chat:compact-session-context', payload),
   chatGetSessionCompactionMarkers: (sessionId) => ipcRenderer.invoke('chat:get-session-compaction-markers', sessionId),
   chatGetApiContextBaseline: (payload) => ipcRenderer.invoke('chat:get-api-context-baseline', payload),

@@ -34,7 +34,7 @@ import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { getSessionEventSink } from '../sessionEvents'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
 import { buildRemoteProgressHookContext } from './buildRemoteProgressContext'
-import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
+import { onAgentsMdNotLoaded, onRemoteTextSegmentClosed } from './remoteProgressHooks'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { createImOrchestrationToolRegistry } from './imOrchestrationTools'
@@ -446,6 +446,7 @@ export async function runImRemoteAgent(args: {
           })) }
         : {}),
       onRemoteTextActivity: (text) => onRemoteTextSegmentClosed(remoteProgressContext, text),
+      onAgentsMdNotLoaded: () => onAgentsMdNotLoaded(remoteProgressContext),
       locale: readAppLocale(args.db),
       ...args.toolChatExtras
       ,emitFactEvent: args.emitFactEvent ?? (() => undefined)

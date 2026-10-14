@@ -140,6 +140,7 @@ export interface AgentInvocationMaterials {
   remoteContext?: import('../tools/types').RemoteContext
   /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
   onRemoteTextActivity?: (text: string) => void
+  onAgentsMdNotLoaded?: () => void
   workDir: string
   workDirManager?: import('../workDirManager').WorkDirManager
   resolveWorkDir?: () => string
@@ -1540,6 +1541,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       turnIdForRetry: runtimeTurnId,
       stageAssistantContentUntilTurnFinished: materials.remoteContext !== undefined,
       onRemoteTextActivity: materials.onRemoteTextActivity,
+      onAgentsMdNotLoaded: materials.onAgentsMdNotLoaded,
       assistantMessageId: materials.assistantMessageId,
       emitSessionEvent: materials.emitSessionEvent,
       onProviderRetry: (retry) => materials.emitSessionEvent({
