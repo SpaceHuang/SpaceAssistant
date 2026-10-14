@@ -39,7 +39,7 @@ import { appendRemoteTrackEvent, createRemoteTrack, mapRemoteTrackMessage } from
 import { formatClarificationHandle } from '../remote/clarificationHandle'
 import { startClarificationSendAttempt, finishClarificationSendAttempt } from '../database/clarificationStore'
 
-vi.mock('../secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') }))
+vi.mock('../secureApiKey', () => ({ encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') , isSecretEncrypted: (value: string) => value.startsWith('enc:'), isLegacySecret: (value: string) => !value.startsWith('enc:'), }))
 vi.mock('../anthropicClientFactory', () => ({ createAnthropicClient: () => ({ messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: '{"scores":[]}' }] })) } }) }))
 
 const mockRunAgent = vi.fn()

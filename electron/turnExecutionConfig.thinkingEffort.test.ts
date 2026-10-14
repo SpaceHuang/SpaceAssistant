@@ -6,7 +6,7 @@ import type { ModelEntry } from '../src/shared/domainTypes'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 vi.mock('./agentLogger/agentLogger', () => ({ logAgentEvent: vi.fn() }))
-vi.mock('./secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), decryptSecret: vi.fn((value: string) => value.replace(/^enc:/, '')) }))
+vi.mock('./secureApiKey', () => ({ decryptSecret: vi.fn((value: string) => value.replace(/^enc:/, '')) , isSecretEncrypted: (value: string) => value.startsWith('enc:'), isLegacySecret: (value: string) => !value.startsWith('enc:'), }))
 
 const SERVICE_ID = 'svc-deepseek'
 

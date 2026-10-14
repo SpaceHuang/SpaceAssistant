@@ -10,9 +10,10 @@ import {
 } from './mcpSecretStore'
 
 vi.mock('../secureApiKey', () => ({
-  isSecretStorageAvailable: () => true,
-  encryptSecret: (plain: string) => `enc:${plain}`,
-  decryptSecret: (b64: string) => b64.replace(/^enc:/, '')
+  encryptSecret: (plain: string) => `aes:${plain}`,
+  decryptSecret: (b64: string) => b64.startsWith('legacy:safe:') ? b64.slice('legacy:safe:'.length) : b64.startsWith('safe:') ? b64.slice(5) : b64.startsWith('aes:') ? b64.slice(4) : b64.replace(/^enc:/, ''),
+  isSecretEncrypted: (value: string) => value.startsWith('aes:'),
+  isLegacySecret: (value: string) => !value.startsWith('aes:')
 }))
 
 describe('mcpSecretStore', () => {
@@ -33,6 +34,14 @@ describe('mcpSecretStore', () => {
     await setSecret(db, 'server-1', 'access-token', 'ghp_abc')
     expect(await getSecret(db, 'server-1', 'access-token')).toBe('ghp_abc')
     expect(hasSecret(db, 'server-1', 'access-token')).toBe(true)
+  })
+
+  it('upgrades a legacy secret after successful decryption', async () => {
+    const { setConfigValue, getConfigValue } = await import('../database')
+    setConfigValue(db, 'secrets.mcp.credentials', JSON.stringify({ 'server-1:access-token': 'safe:old-token' }))
+
+    expect(await getSecret(db, 'server-1', 'access-token')).toBe('old-token')
+    expect(getConfigValue(db, 'secrets.mcp.credentials')).toContain('aes:old-token')
   })
 
   it('isolates secrets by server and kind', async () => {

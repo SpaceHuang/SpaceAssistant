@@ -130,8 +130,7 @@ export const CONFIG_KEYS = {
   activeWorkDirProfileId: 'config.activeWorkDirProfileId',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   browser: 'config.browser',
-  locale: 'config.locale',
-  apiKeyAccessNoticeVersion: 'config.apiKeyAccessNoticeVersion'
+  locale: 'config.locale'
 } as const
 
 export function readAppLocale(db: AppDatabase): AppConfig['locale'] {

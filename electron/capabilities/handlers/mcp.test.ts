@@ -12,9 +12,10 @@ import { CapabilityRegistry } from '../registry'
 import type { CapabilityContext } from '../types'
 
 vi.mock('../../secureApiKey', () => ({
-  isSecretStorageAvailable: () => true,
   encryptSecret: (plain: string) => `enc:${plain}`,
   decryptSecret: (b64: string) => b64.replace(/^enc:/, '')
+  isSecretEncrypted: (value: string) => value.startsWith('enc:'),
+  isLegacySecret: (value: string) => !value.startsWith('enc:'),
 }))
 
 const servers: Array<http.Server> = []

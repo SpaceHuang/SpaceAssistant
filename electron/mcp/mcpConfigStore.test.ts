@@ -17,12 +17,13 @@ import {
   updateServerStatus
 } from './mcpConfigStore'
 import { appendDiagnostic, clearDiagnostics, getDiagnostics } from './mcpDiagnostics'
-import { encryptSecret, isSecretStorageAvailable } from '../secureApiKey'
+import { encryptSecret } from '../secureApiKey'
 
 vi.mock('../secureApiKey', () => ({
-  isSecretStorageAvailable: vi.fn(() => true),
-  encryptSecret: vi.fn((plain: string) => `enc:${plain}`),
-  decryptSecret: vi.fn((b64: string) => b64.replace(/^enc:/, ''))
+  encryptSecret: vi.fn((plain: string) => `aes:${plain}`),
+  decryptSecret: vi.fn((b64: string) => b64.startsWith('aes:') ? b64.slice(4) : b64.replace(/^enc:/, '')),
+  isSecretEncrypted: (value: string) => value.startsWith('aes:'),
+  isLegacySecret: (value: string) => !value.startsWith('aes:')
 }))
 
 function makeWriteInput(overrides: Partial<McpServerWriteInput> = {}): McpServerWriteInput {
@@ -89,7 +90,7 @@ describe('mcpConfigStore', () => {
     expect(listProfiles(db).find((p) => p.id === httpInput.id)?.http?.allowPrivateNetwork).toBeUndefined()
   })
 
-  it('saveProfiles persists profiles and marks secretPresent from stored secrets', async () => {
+  it('saveProfiles stores secrets without requiring system safeStorage', async () => {
     const input = makeWriteInput({
       auth: { mode: 'bearer-token', accessToken: 'ghp_abc' },
       enabled: true
@@ -177,27 +178,17 @@ describe('mcpConfigStore', () => {
 
   it('saveProfiles rolls back metadata when encryption fails (no half-finished state)', async () => {
     vi.mocked(encryptSecret).mockImplementationOnce(() => {
-      throw new Error('safeStorage unavailable')
+      throw new Error('AES-GCM encryption failed')
     })
 
     await expect(
       saveProfiles(db, [
         makeWriteInput({ auth: { mode: 'bearer-token', accessToken: 'token-a' } })
       ])
-    ).rejects.toThrow(/safeStorage/)
+    ).rejects.toThrow(/AES-GCM/)
 
     expect(listProfiles(db)).toEqual([])
     expect(getConfigValue(db, MCP_SECRETS_CONFIG_KEY)).toBeUndefined()
-  })
-
-  it('saveProfiles fails entirely when safe storage is unavailable', async () => {
-    vi.mocked(isSecretStorageAvailable).mockReturnValueOnce(false)
-    await expect(
-      saveProfiles(db, [
-        makeWriteInput({ auth: { mode: 'bearer-token', accessToken: 'token-a' } })
-      ])
-    ).rejects.toThrow(/安全存储/)
-    expect(listProfiles(db)).toEqual([])
   })
 
   it('deleteServer removes profile, secrets, cache and diagnostics', async () => {

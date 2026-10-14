@@ -672,9 +672,7 @@ export function ConfigSettingsPage() {
       llmDrafts.clearKeyDrafts()
       const errorMessage = e instanceof Error ? e.message : ''
       if (errorMessage.includes('LLM_KEY_')) {
-        message.error(errorMessage.includes('LLM_KEY_STORAGE_UNAVAILABLE')
-          ? tConfig('llmService.storageUnavailable')
-          : tConfig('llmService.keyAccessFailed'))
+        message.error(tConfig('llmService.keyAccessFailed'))
       } else {
         message.error(tConfig('messages.saveFailed'))
       }

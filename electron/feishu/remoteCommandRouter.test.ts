@@ -38,7 +38,7 @@ import { attributeAndPersistRemoteMessage } from '../remote/remoteTrackAttributi
 import { appendRemoteTrackEvent, createRemoteTrack, mapRemoteTrackMessage } from '../database/remoteTrackStore'
 import { finishClarificationSendAttempt, startClarificationSendAttempt } from '../database/clarificationStore'
 
-vi.mock('../secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') }))
+vi.mock('../secureApiKey', () => ({ encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') , isSecretEncrypted: (value: string) => value.startsWith('enc:'), isLegacySecret: (value: string) => !value.startsWith('enc:'), }))
 
 const mockRunFeishuRemoteAgent = vi.fn()
 const mockResolveFeishuSession = vi.fn()
