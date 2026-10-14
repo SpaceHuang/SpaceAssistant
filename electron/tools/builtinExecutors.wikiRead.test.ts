@@ -8,7 +8,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileStateCache } from '../fileStateCache'
-import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
+import { DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import type { ToolExecutionContext } from './types'
 import { listDirectoryExecutor, readFileExecutor } from './builtinExecutors'
 import { probeReadPathFact } from '../confirmation/extractors/readPathFacts'
@@ -53,7 +53,9 @@ async function setupWorld(): Promise<World> {
     sendProgress: vi.fn(),
     signal: AbortSignal.timeout(30_000),
     fileStateCache: new FileStateCache(),
-    toolsConfig: { ...DEFAULT_TOOLS_CONFIG }
+    toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
+    // 挂载世界 = 知识库已启用（生产中 enabled 时 ctx.wikiConfig 必有；执行层以此为挂载前提）
+    wikiConfig: { ...DEFAULT_WIKI_CONFIG, enabled: true }
   }
   return { workDir, userDataDir, realBase, ctx }
 }

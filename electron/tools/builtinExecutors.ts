@@ -310,6 +310,7 @@ export const readFileExecutor: ToolExecutor = {
     if (rel === undefined) {
       return { success: false, error: toolErrMissingPath('read_file'), duration: Date.now() - started }
     }
+    if (!ctx.wikiConfig?.enabled && isWikiVocabularyPath(rel)) return wikiVocabularyDisabledResult(rel, started)
     ctx.sendProgress('reading', '正在读取文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
@@ -585,6 +586,7 @@ export const listDirectoryExecutor: ToolExecutor = {
     ctx.sendProgress('listing', '正在读取目录...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     const failedPath = typeof input.path === 'string' && input.path ? input.path : '.'
+    if (!ctx.wikiConfig?.enabled && isWikiVocabularyPath(failedPath)) return wikiVocabularyDisabledResult(failedPath, started)
     try {
       const permitted = await resolveReadPermitTarget('list_directory', input, ctx)
       if (!permitted.ok) return { success: false, error: '目录读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
@@ -769,6 +771,26 @@ function writePathErrorMessage(e: unknown, rel: string): string {
   return msg
 }
 
+/** W3：`llm-wiki/` 词汇前缀指向共享知识库命名空间（与 src/shared/wikiConstants 约定一致）。 */
+export function isWikiVocabularyPath(rawPath: string): boolean {
+  const normalized = rawPath.trim().replace(/\\/g, '/')
+  return normalized === WIKI_VOCABULARY_PREFIX || normalized.startsWith(`${WIKI_VOCABULARY_PREFIX}/`)
+}
+
+/**
+ * W3：知识库未启用时前缀不挂载——write 会落 workDir 普通路径产生误导性成功，
+ * read/list/grep 搜到的也只是同名普通目录。在路径解析入口统一 fail-closed，
+ * 给出与 skill 异常处理一致的引导，不绕行。
+ */
+function wikiVocabularyDisabledResult(rawPath: string, started: number): ToolExecutorResult {
+  return {
+    success: false,
+    error: `共享知识库未启用：「${rawPath}」指向共享知识库（${WIKI_VOCABULARY_PREFIX}/）命名空间。请在 设置 → Wiki 中开启后重试；不要把内容写入工作目录冒充知识库`,
+    diagnostic: { caseId: 'wiki-vocabulary-disabled', retryable: true, category: 'policy' },
+    duration: Date.now() - started
+  }
+}
+
 async function assertRemoteWriteTargetInsideWorkDir(workDir: string, targetPath: string): Promise<void> {
   try {
     if (await classifyWriteTargetScope(targetPath, workDir) !== 'inside-workdir') {
@@ -842,6 +864,7 @@ export const editFileExecutor: ToolExecutor = {
     if (rel === undefined) {
       return { success: false, error: toolErrMissingPath('edit_file'), duration: Date.now() - started }
     }
+    if (!ctx.wikiConfig?.enabled && isWikiVocabularyPath(rel)) return wikiVocabularyDisabledResult(rel, started)
     const oldS = typeof input.old_string === 'string' ? input.old_string : ''
     const newS = typeof input.new_string === 'string' ? input.new_string : ''
     const replaceAll = Boolean(input.replace_all)
@@ -1003,6 +1026,7 @@ export const writeFileExecutor: ToolExecutor = {
     if (rel === undefined) {
       return { success: false, error: toolErrMissingPath('write_file'), duration: Date.now() - started }
     }
+    if (!ctx.wikiConfig?.enabled && isWikiVocabularyPath(rel)) return wikiVocabularyDisabledResult(rel, started)
     const content = typeof input.content === 'string' ? input.content : ''
     ctx.sendProgress('writing', '正在写入文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
@@ -2098,6 +2122,10 @@ export const grepExecutor: ToolExecutor = {
       }
     }
     const gargs: GrepExecArgs = normalized.args
+    const explicitGrepPath = typeof input.path === 'string' ? input.path : ''
+    if (!ctx.wikiConfig?.enabled && explicitGrepPath && isWikiVocabularyPath(explicitGrepPath)) {
+      return wikiVocabularyDisabledResult(explicitGrepPath, started)
+    }
     // T1.11：无 path 全库搜索的 wiki 双根编排（wiki 停用/共享根未初始化/显式 path 时维持单根现状）
     const dualPlan = planWikiDualRootGrep(ctx, input)
     if (dualPlan) {
