@@ -40,6 +40,22 @@ describe('createAgentSdkSafetyPolicy', () => {
     })
   })
 
+  it('拒绝理由变化后沿用旧 run_shell 输入快照绑定', async () => {
+    const toolInput = { command: 'pwd', justification: '核对当前目录' }
+    const staleBinding = {
+      ...binding,
+      capabilityId: 'run_shell',
+      inputSnapshotHash: createHash('sha256').update('{"command":"pwd","justification":"核对之前目录"}').digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'run_shell' }
+    }
+    const policy = createAgentSdkSafetyPolicy({
+      resolveGateArgs: async () => ({ ...baseArgs, toolName: 'run_shell', toolInput } as ToolCallGateArgs),
+      evaluateGate: vi.fn(async () => result({ type: 'auto-allow', ruleId: 'unexpected', reason: 'must not reach gate' }))
+    })
+
+    await expect(policy.evaluate(staleBinding)).resolves.toEqual({ kind: 'deny', reasonCode: 'STALE_AUTHORIZATION' })
+  })
+
   it('把用户明确选择的记忆键传到确认提交回调，未选择则不写入', async () => {
     const key = { kind: 'script-content' as const, digest: 'a'.repeat(64), sessionId: 'session-1' }
     const scriptFacts: ContentFacts = {
