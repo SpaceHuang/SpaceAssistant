@@ -18,6 +18,8 @@
 | 2026-10-08 | `8e3c5d12` | 重试查询返回源 turn | 同上 | 续跑依据明确 |
 | 2026-10-11 | `21ffca26` | 阻止 win32 目录 fsync EPERM 污染维护水位 | — | 维护任务不再因权限错失水位 |
 | 2026-10-13 | `36edb110` | 关闭 Track 隔离与消息 ID 缺口（跨主题：IM） | `2026-10-11-remote-im-intent-track-development-plan.md`（已归档） | 消息 ID 精度与隔离边界收口 |
+| 2026-09-09 | — | `refactor(message-fact): persist turn lifecycle in core` | `message-fact-persistence-core-refactor-plan.md`（已归档） | 原判「在途」，核验更正为已实现；需求侧同名文档同批归档 |
+| 2026-09-11 | `da010dcb` | 新增 prompt cache breakpoints | `message-fact-pipeline-prompt-cache-optimization-plan.md`（已归档） | 同上 |
 
 ## 存疑（文档与记录不一致）
 

@@ -5,7 +5,7 @@ docs/develop/2026-09-30-execution-lifecycle-reliability-convergence-plan.md	agen
 docs/develop/agent-context-token-cost-optimization-implementation.md	agent-sdk	B	实施记录（过程产物）
 docs/develop/agent-context-token-cost-optimization-plan.md	agent-sdk	B	对应实现已在代码（4ce5dc9f 等）
 docs/develop/agent-core-contract-path-refactor-plan.md	agent-sdk	B	自述已实施（v1.3 偏差表回写）；文件名保留旧称
-docs/develop/agent-loop-single-path-refactor-plan.md	agent-sdk	C	待复审后实施
+docs/develop/agent-loop-single-path-refactor-plan.md	agent-sdk	B	核验更正：分支已合入（958f93c8 merge: agent loop single path refactor）；filterBuiltinToolsForApi 见 electron/effectiveTools.ts
 docs/develop/agent-sdk-architecture-development-plan.md	agent-sdk	A	724KB 架构方案，实施中；现状素材
 docs/develop/agent-sdk-architecture-migration-baseline.md	agent-sdk	A	迁移基线
 docs/develop/agent-sdk/runtime/01-positioning.md	agent-sdk	A	原地保留（设计系列）
@@ -39,7 +39,7 @@ docs/develop/interface/safety-approval.md	agent-sdk	A	并入 agent-sdk/
 docs/develop/interface/tool-result-contract.md	agent-sdk	A	并入 agent-sdk/
 docs/develop/interface/turn-loop.md	agent-sdk	A	并入 agent-sdk/
 docs/develop/runtime-admission-sdk-reuse-plan.md	agent-sdk	B	核验更正：分支已合入（22ea8d88）
-docs/develop/tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md	agent-sdk	C	v3 待复审
+docs/develop/tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md	agent-sdk	B	核验更正：已实现（51193571 make tool dispatch aborts and transcript holes safe；requestObservation 见 packages/agent-sdk/src/turn.ts）
 docs/develop/tool-error-recovery-and-turn-continuity-plan.md	agent-sdk	B	阶段 A/B 已落地
 docs/develop/architect/README.md	architect	A	原地保留（更新基准行）
 docs/develop/architect/agent-core-roadmap.md	architect	A	原地（旧称在索引对照）
@@ -109,7 +109,7 @@ docs/develop/approval-agent-shortest-path-plan.md	safety-approval	B	核验更正
 docs/develop/desktop-ask-rule-tier-unification-plan.md	safety-approval	B	已实施并闭环（c96acc2e）
 docs/develop/desktop-auto-approval-plan.md	safety-approval	B	已实施完成
 docs/develop/desktop-fail-open-to-user-plan.md	safety-approval	B	已实现（§10 第 3–6 步）
-docs/develop/run-shell-agent-safe-boundary-hardening-plan.md	safety-approval	C	加固计划在途
+docs/develop/run-shell-agent-safe-boundary-hardening-plan.md	safety-approval	B	核验更正：已实现（redaction / sanitize 链路见 electron/agentLogger/*；文档 34 天未更新）
 docs/develop/script-security-parser-treesitter-upgrade-plan.md	safety-approval	B	P0~P3 全部完成
 docs/develop/script-security-parser-upgrade-golden-review.md	safety-approval	B	金标准评审（过程产物）
 docs/develop/security-approval-experience-improvement-plan.md	safety-approval	B	核验更正：已实现（CallAdmissionGate 见 electron/runtime/callAdmissionGate.ts）
@@ -178,8 +178,8 @@ docs/develop/session-storage-refactorability-improvement-plan.md	storage-session
 docs/develop/spill-reference-index-and-backfill-plan.md	storage-session	B	回填计划（阶段产物）
 docs/develop/storage-settings-profile-latency-analysis-and-optimization-plan.md	storage-session	B	分析+实施计划已落地
 docs/develop/2026-10-10-storage-settings-profile-latency-development-plan-review.md	storage-session	B	评审件
-docs/develop/message-fact-persistence-core-refactor-plan.md	storage-session	C	v2 待复审后实施
-docs/develop/message-fact-pipeline-prompt-cache-optimization-plan.md	storage-session	C	待实施
+docs/develop/message-fact-persistence-core-refactor-plan.md	storage-session	B	核验更正：已实现（2026-09-09 refactor(message-fact): persist turn lifecycle in core）
+docs/develop/message-fact-pipeline-prompt-cache-optimization-plan.md	storage-session	B	核验更正：已实现（da010dcb feat(context): add prompt cache breakpoints）
 docs/develop/message-fact-production-pipeline-local-acceptance-report.md	storage-session	B	验收报告
 docs/develop/message-fact-production-pipeline-owner-audit.md	storage-session	B	owner 审计
 docs/develop/message-fact-production-pipeline-refactor-plan.md	storage-session	B	实施中并已接入主路径
@@ -257,7 +257,7 @@ docs/requirement/scheduled-task-output-directory-model-requirements.md	desktop-u
 docs/requirement/search-results-display-requirement.md	desktop-ui	B	口径进需求基线
 docs/requirement/settings-requirement.md	desktop-ui	B	口径进需求基线
 docs/requirement/settings-ui-refinement-requirement.md	desktop-ui	B	口径进需求基线
-docs/requirement/system-tray.md	desktop-ui	C	自述待实现
+docs/requirement/system-tray.md	desktop-ui	B	核验更正：已实现（2026-05-25 feat: 实现系统托盘，支持关窗后台驻留与托盘唤起）
 docs/requirement/社交图文生成器功能-产品需求说明书_v6.1.md	desktop-ui	B	历史需求，归档
 docs/requirement/社交图文生成器功能-渲染组件体系框架说明_v6.1.md	desktop-ui	B	历史需求，归档
 docs/requirement/通用Agent-Plan模式MVP产品需求文档.md	desktop-ui	D	已废弃（Plan 模式移除）
@@ -289,7 +289,7 @@ docs/requirement/wiki-shared-centralized-storage-requirement.md	knowledge-skills
 docs/requirement/i18n-architecture-requirement.md	platform-eng	A	架构口径，现役
 docs/requirement/remove-background-task-mechanism.md	platform-eng	B	自述已完成
 docs/requirement/confirmation-card-trust-requirement.md	safety-approval	B	口径进需求基线
-docs/requirement/security-approval-concurrency-limits-and-observability-requirement.md	safety-approval	C	v0.1 草案
+docs/requirement/security-approval-concurrency-limits-and-observability-requirement.md	safety-approval	B	核验更正：已实现（2026-09-23 feat(security): improve approval concurrency and recovery）
 docs/requirement/security-policy-single-entry-requirement.md	safety-approval	A	口径仍在生效
 docs/requirement/shell-security-enhancement-requirement.md	safety-approval	B	口径进需求基线
 docs/requirement/tool-confirmation-top-level-design-v2.md	safety-approval	A	确认机制顶层设计，现役
@@ -298,7 +298,7 @@ docs/requirement/session-manual-title-requirement.md	storage-session	B	口径进
 docs/requirement/session-list-pending-confirm-badge-requirement.md	storage-session	B	口径进需求基线
 docs/requirement/session-ced59b41-issue-inventory-requirement.md	storage-session	B	专题需求，归档
 docs/requirement/session-d961cc51-workdir-boundary-and-sandbox-policy-layering-requirement.md	storage-session	B	阶段 A~D 已实施
-docs/requirement/message-fact-production-pipeline-refactor-requirement.md	storage-session	C	待实施
+docs/requirement/message-fact-production-pipeline-refactor-requirement.md	storage-session	B	核验更正：已实现（2026-09-09 refactor(message-fact): persist turn lifecycle in core）
 docs/requirement/browser-act-session-trust-requirement.md	tools-mcp	B	口径进需求基线
 docs/requirement/browser-playwright-install-guide-requirement.md	tools-mcp	B	口径进需求基线
 docs/requirement/cli-subagent-integration-requirement.md	tools-mcp	B	口径进需求基线
@@ -316,6 +316,6 @@ docs/requirement/tool-invocation-reliability-requirement.md	tools-mcp	B	口径�
 docs/requirement/tools-requirement.md	tools-mcp	A	工具总纲，现役
 docs/requirement/web-browser-rate-limit-requirement.md	tools-mcp	B	口径进需求基线
 docs/requirement/web-browser-tools-requirement.md	tools-mcp	B	口径进需求基线
-docs/develop/streaming-ui-performance-analysis.md	desktop-ui	C	分析完成，待实施
+docs/develop/streaming-ui-performance-analysis.md	desktop-ui	B	核验更正：已实现（2026-05-24 feat: Plan 模式 MVP、流式 UI 性能优化与 LLM 多服务配置）
 docs/requirement/remove-plan-mode-requirement.md	desktop-ui	A	Plan 模式移除的现行口径
 docs/requirement/tool-call-card-batch-collapse-design.md	desktop-ui	B	自述已实施

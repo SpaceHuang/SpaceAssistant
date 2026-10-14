@@ -86,7 +86,40 @@ baseline-check-<日期>.md   # §5.2 主题核验记录
 | `scheduled-task-output-directory-model-requirements.md` | `automation_tasks.model_override` |
 | `remote-im-intent-track-requirement-draft.md` | `src/shared/remoteTrack.ts`；`1d4c9bcd`、`36edb110` |
 
-**写入流程的硬规则**：C 类**不得**仅凭文档自述判定；每篇至少要有一条「专属符号命中」或「分支合入提交」的正向证据才可进 `in-flight/`。剩余 in-flight 已按此复核（保留项均标注「实施中」或「需细核」）。
+**写入流程的硬规则**：C 类**不得**仅凭文档自述判定；每篇至少要有一条「专属符号命中」或「分支合入提交」的正向证据才可进 `in-flight/`。
+
+### 3.6 复核触发规则（用户经验，已写入流程）
+
+**若一篇文档的最后更新时间早于 7 天前，却仍被判为 in-flight，必须再核一次状态** —— 多数老文档其实已开发完。
+
+取「最后更新时间」的正确方法（搬迁后当前路径只会显示整理提交，须看搬迁前基线）：
+
+```text
+git log -1 --date=short --format='%ad %s' 17236274 -- docs/develop/<原文件名>
+git log --date=short --format='%ad %h %s' --grep='<方案关键词>'
+```
+
+据此**第二轮又更正 9 篇**（原判 C → B）：
+
+| 文档 | 核验证据 |
+| --- | --- |
+| `agent-loop-single-path-refactor-plan.md` | `958f93c8 merge: agent loop single path refactor` |
+| `tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md` | `51193571 fix(agent-sdk): make tool dispatch aborts and transcript holes safe`（提交信息即文档标题主题）；`requestObservation` 见 `packages/agent-sdk/src/turn.ts` |
+| `streaming-ui-performance-analysis.md` | 2026-05-24 `feat: Plan 模式 MVP、流式 UI 性能优化…` |
+| `run-shell-agent-safe-boundary-hardening-plan.md` | redaction / sanitize 链路见 `electron/agentLogger/*` |
+| `message-fact-persistence-core-refactor-plan.md` | 2026-09-09 `refactor(message-fact): persist turn lifecycle in core` |
+| `message-fact-pipeline-prompt-cache-optimization-plan.md` | `da010dcb feat(context): add prompt cache breakpoints` |
+| `message-fact-production-pipeline-refactor-requirement.md` | 同上 `persist turn lifecycle in core` |
+| `system-tray.md` | 2026-05-25 `feat: 实现系统托盘，支持关窗后台驻留与托盘唤起` |
+| `security-approval-concurrency-limits-and-observability-requirement.md` | 2026-09-23 `feat(security): improve approval concurrency and recovery` |
+
+**两轮合计更正 25 篇**（首轮 inventory 判 C 43 篇 → 现 C 仅 3 篇）。当前 `in-flight/` 只剩 3 篇，均为 7 天内活跃更新、且经核验确有未完成项：
+
+| 文档 | 最后更新 | 判定依据 |
+| --- | --- | --- |
+| `docs/develop/im-remote/in-flight/2026-10-11-im-security-review-improvement-development-plan.md` | 2026-10-12 | `rg 'imPolicy\|imSecurityPolicy' electron/` 无匹配（真在途） |
+| `docs/requirement/im-remote/in-flight/2026-10-11-im-security-review-improvement-requirement.md` | 2026-10-12 | 同上 |
+| `docs/develop/tools-mcp/in-flight/run-shell-dialect-mismatch-…-improvement-plan.md` | 2026-10-13 | 实质实现已落地（`shouldStopToolRetry` 见 `electron/toolErrorRetryPolicy.ts`），文档自述 D-1/D-7/D-8 待重审 —— 属**实施中** |
 
 ## 4. 模板
 

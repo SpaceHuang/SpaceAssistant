@@ -21,6 +21,8 @@
 | 2026-10-13 | `4ce5dc9f` | 放宽模型 turn 预算与循环检查 | `agent-context-token-cost-optimization-plan.md`（已归档） | 长任务不易被预算提前截断 |
 | 2026-10-14 | `a01a6d49` | 超时 turn 的执行隔离：超时不再连累同批其它工具调用 | `mcp-timeout-turn-failure-isolation-plan.md`（已归档） | 计划尚未收口，实现先落地 |
 | 2026-10-14 | `b26bce20` | 强化续跑恢复与 UI 行为 | — | 续跑恢复更稳 |
+| 2026-09-05 | `958f93c8` | Agent Loop 单路径重构分支合入 | `agent-loop-single-path-refactor-plan.md`（已归档） | 原判「在途」，核验更正为已实现 |
+| 2026-10-03 | `51193571` | 工具派发中止与 transcript 空洞安全化 | `tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md`（已归档） | 同上；`requestObservation` 见 `packages/agent-sdk/src/turn.ts` |
 
 ## 存疑（文档与记录不一致）
 

@@ -137,11 +137,11 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 
 ## 在途（in-flight）
 
-- [agent-loop-single-path-refactor-plan.md](./in-flight/agent-loop-single-path-refactor-plan.md) —— v2 复审意见已吸收，待下一轮复审后实施；核验：承诺的 `filterBuiltinToolsForApi` 已在 `electron/effectiveTools.ts`，属**实施中（进度以代码为准）**
-- [tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md](./in-flight/tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md) —— v3 待复审；核验：承诺符号 `NOT_ATTEMPTED_AFTER_SIBLING_STOP` **未命中**，需细核
+**（本次核验后为空）** —— 本主题文档全部经 §3.0 核验确认已实现并合入 main，已移入 `../archive/agent-sdk/`（共 18 件）。
 
-> **2026-10-14 核验更正（原判 C 有误）**：以下四篇经 §3.0 三步核验确认**已实现并合入 main**，已移入 `../archive/agent-sdk/`：
-> `context-injection-refactor-plan.md`（`9dfc46d1`、`91e939ef`、`d96bd70b`、`b5eaada1`；`promptAssembly` / `contextMeter` / `compaction_*` 均在代码）、`runtime-admission-sdk-reuse-plan.md`（`22ea8d88`）、`butler-agent-shortest-path-plan.md`（`4b6f81c4`）、`b344321-current-code-refactor-plan.md`（`7a9b5c05`）。
+> **2026-10-14 两轮核验更正（原判 C 有误）**
+> 第一批（用户点名 `context-injection-refactor-plan` 后复核）：`context-injection-refactor-plan.md`（`9dfc46d1`、`91e939ef`、`d96bd70b`、`b5eaada1`）、`runtime-admission-sdk-reuse-plan.md`（`22ea8d88`）、`butler-agent-shortest-path-plan.md`（`4b6f81c4`）、`b344321-current-code-refactor-plan.md`（`7a9b5c05`）。
+> 第二批（按「最后更新早于 7 天则须复核」规则）：`agent-loop-single-path-refactor-plan.md`（`958f93c8` merge）、`tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md`（`51193571`）。
 
 ## 归档
 

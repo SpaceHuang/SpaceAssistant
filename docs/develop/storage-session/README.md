@@ -15,8 +15,9 @@
 
 ## 在途（in-flight）
 
-- [message-fact-persistence-core-refactor-plan.md](./in-flight/message-fact-persistence-core-refactor-plan.md) —— v2 已吸收阻断性评审，待复审后实施
-- [message-fact-pipeline-prompt-cache-optimization-plan.md](./in-flight/message-fact-pipeline-prompt-cache-optimization-plan.md) —— 待实施（本文仅交付开发设计）
+**（本次核验后为空）** —— 全部移入 `../archive/storage-session/`（共 66 件）。
+
+> **2026-10-14 核验更正（原判 C 有误）**：`message-fact-persistence-core-refactor-plan.md`、`message-fact-pipeline-prompt-cache-optimization-plan.md` —— 证据：2026-09-09 `refactor(message-fact): persist turn lifecycle in core`；`da010dcb feat(context): add prompt cache breakpoints`。
 
 ## 归档（64 件，本主题最大）
 

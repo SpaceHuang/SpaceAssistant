@@ -17,9 +17,9 @@
 
 ## 在途（in-flight）
 
-- [run-shell-agent-safe-boundary-hardening-plan.md](./in-flight/run-shell-agent-safe-boundary-hardening-plan.md) —— 加固计划在途；核验：承诺符号 `redactionFailed` **未命中**，需细核
+**（本次核验后为空）** —— 全部移入 `../archive/safety-approval/`（共 10 件）。
 
-> **2026-10-14 核验更正（原判 C 有误）**：`approval-agent-shortest-path-plan.md`（`c725896e` 分支合入）、`security-approval-skill-v2.1-improvement-plan.md`（`b9b68d74` 合入 + `6db05ab0` Skill v2 双维裁决）、`security-approval-experience-improvement-plan.md`（`CallAdmissionGate` 见 `electron/runtime/callAdmissionGate.ts`）经核验**已实现**，已移入 `../archive/safety-approval/`。
+> **2026-10-14 两轮核验更正（原判 C 有误）**：`approval-agent-shortest-path-plan.md`（`c725896e`）、`security-approval-skill-v2.1-improvement-plan.md`（`b9b68d74` + `6db05ab0`）、`security-approval-experience-improvement-plan.md`（`CallAdmissionGate` 见 `electron/runtime/callAdmissionGate.ts`）、`run-shell-agent-safe-boundary-hardening-plan.md`（redaction/sanitize 链路见 `electron/agentLogger/*`）。
 
 ## 归档（已完成迭代）
 
