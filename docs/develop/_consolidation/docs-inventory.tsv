@@ -1,0 +1,321 @@
+原路径	主题	去向	判定依据与说明
+docs/develop/2026-09-29-driver-runtime-lifecycle-contract-matrix.md	agent-sdk	B	契约矩阵=过程产物；生命周期改进已合并
+docs/develop/2026-09-29-driver-runtime-lifecycle-improvement-plan.md	agent-sdk	B	改进计划已收口（a01a6d49 等隔离修复落地）
+docs/develop/2026-09-30-execution-lifecycle-reliability-convergence-plan.md	agent-sdk	B	收敛计划；阶段件
+docs/develop/agent-context-token-cost-optimization-implementation.md	agent-sdk	B	实施记录（过程产物）
+docs/develop/agent-context-token-cost-optimization-plan.md	agent-sdk	B	对应实现已在代码（4ce5dc9f 等）
+docs/develop/agent-core-contract-path-refactor-plan.md	agent-sdk	B	自述已实施（v1.3 偏差表回写）；文件名保留旧称
+docs/develop/agent-loop-single-path-refactor-plan.md	agent-sdk	C	待复审后实施
+docs/develop/agent-sdk-architecture-development-plan.md	agent-sdk	A	724KB 架构方案，实施中；现状素材
+docs/develop/agent-sdk-architecture-migration-baseline.md	agent-sdk	A	迁移基线
+docs/develop/agent-sdk/runtime/01-positioning.md	agent-sdk	A	原地保留（设计系列）
+docs/develop/agent-sdk/runtime/02-runtime-core.md	agent-sdk	A	原地保留
+docs/develop/agent-sdk/runtime/03-scheduler.md	agent-sdk	A	原地保留
+docs/develop/agent-sdk/runtime/04-quota-and-guards.md	agent-sdk	A	原地保留
+docs/develop/agent-sdk/runtime/05-extension-points.md	agent-sdk	A	原地保留
+docs/develop/agent-sdk/runtime/06-contracts.md	agent-sdk	A	原地保留
+docs/develop/agent-sdk/runtime/07-failure-and-recovery.md	agent-sdk	A	原地保留
+docs/develop/agent-sdk/runtime/08-mapping-and-acceptance.md	agent-sdk	A	原地保留
+docs/develop/agent-sdk/runtime/09-assembly.md	agent-sdk	A	原地保留
+docs/develop/agent-sdk/runtime/10-implementation-plan.md	agent-sdk	A	原地保留（计划稿）
+docs/develop/agent-sdk/runtime/README.md	agent-sdk	A	原地保留（更新基准行）
+docs/develop/agent-thinking-token-exhaustion-recovery-design.md	agent-sdk	DELETE	0 字节空文件（§8-5）
+docs/develop/b344321-current-code-refactor-plan.md	agent-sdk	C	无状态行，重构计划未收口
+docs/develop/batch3-p0-evidence-audit.md	agent-sdk	B	证据审计（过程产物）
+docs/develop/butler-agent-shortest-path-plan.md	agent-sdk	C	v3 待评审
+docs/develop/butler-p0-tray-decision.md	agent-sdk	B	决策记录
+docs/develop/chat-turn-cancel-tool-conduction-fix-plan.md	agent-sdk	B	自述已实施（2026-10-13）
+docs/develop/context-injection-refactor-plan.md	agent-sdk	C	待复审
+docs/develop/driver-authority-refactor-plan.md	agent-sdk	B	偏差表已收口
+docs/develop/failed-turn-continuation-experience-plan.md	agent-sdk	B	实现完成（TDD）
+docs/develop/interface/README.md	agent-sdk	A	并入 agent-sdk，更新基准行为 17236274
+docs/develop/interface/context.md	agent-sdk	A	接口说明，并入 agent-sdk/
+docs/develop/interface/history.md	agent-sdk	A	并入 agent-sdk/
+docs/develop/interface/host-ports.md	agent-sdk	A	并入 agent-sdk/
+docs/develop/interface/lifecycle-capacity-scheduler.md	agent-sdk	A	并入 agent-sdk/
+docs/develop/interface/model-provider.md	agent-sdk	A	并入 agent-sdk/
+docs/develop/interface/runtime.md	agent-sdk	A	并入 agent-sdk/
+docs/develop/interface/safety-approval.md	agent-sdk	A	并入 agent-sdk/
+docs/develop/interface/tool-result-contract.md	agent-sdk	A	并入 agent-sdk/
+docs/develop/interface/turn-loop.md	agent-sdk	A	并入 agent-sdk/
+docs/develop/runtime-admission-sdk-reuse-plan.md	agent-sdk	C	待评审（v1.1）
+docs/develop/tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md	agent-sdk	C	v3 待复审
+docs/develop/tool-error-recovery-and-turn-continuity-plan.md	agent-sdk	B	阶段 A/B 已落地
+docs/develop/architect/README.md	architect	A	原地保留（更新基准行）
+docs/develop/architect/agent-core-roadmap.md	architect	A	原地（旧称在索引对照）
+docs/develop/architect/agent-sdk-architecture-design.architecture.json	architect	A	图产物原地
+docs/develop/architect/agent-sdk-architecture-design.html	architect	A	图产物原地
+docs/develop/architect/agent-sdk-architecture-design.visual-check.json	architect	A	图产物原地
+docs/develop/architect/agent-sdk-shape-decision.md	architect	A	已拍板决策，现役
+docs/develop/architect/claude-code-architecture-comparison-and-learnings.md	architect	A	外部对照研究
+docs/develop/architect/codex-architecture-comparison-and-learnings.md	architect	A	外部对照研究
+docs/develop/architect/confirmation-answerer-and-auto-approval-design.md	architect	A	设计，现役
+docs/develop/architect/dsh-architecture-comparison-and-learnings.md	architect	A	外部对照研究
+docs/develop/architect/product-architecture-design.html	architect	A	图产物原地
+docs/develop/architect/product-architecture-design.md	architect	A	产品架构理想态
+docs/develop/architect/rewrite-vs-refactor-cost-assessment.md	architect	A	决策依据
+docs/develop/architect/three-products-architecture-benchmark-summary.md	architect	A	外部对照
+docs/develop/2026-09-30-queued-task-bar-implementation-plan.md	desktop-ui	B	队列任务栏已实现（8ff4cf06 等）
+docs/develop/chat-abort-latency-verification-and-fix-plan.md	desktop-ui	B	评审修订完成；修复已落地
+docs/develop/chat-markdown-math-delimiter-misfire-diagnosis-and-improvement-plan.md	desktop-ui	C	待评审
+docs/develop/chat-message-list-batch1-remeasure-gate.md	desktop-ui	B	复测门禁（过程产物）
+docs/develop/chat-message-list-batch1-remeasure-results.json	desktop-ui	B	复测结果
+docs/develop/chat-message-list-batch2-remeasure-gate.md	desktop-ui	B	复测门禁
+docs/develop/chat-message-list-batch2-remeasure-results.json	desktop-ui	B	复测结果
+docs/develop/chat-message-list-renderer-performance-audit.md	desktop-ui	B	静态审计（过程产物）
+docs/develop/chat-message-list-renderer-performance-optimization-design.md	desktop-ui	B	第一/二批已落地
+docs/develop/chat-message-list-streaming-jitter-fix-plan.md	desktop-ui	B	J-01~J-04 已实施
+docs/develop/chat-vision-history-full-hydrate-design.md	desktop-ui	A	设计，现役
+docs/develop/chat-vision-image-context-design.md	desktop-ui	A	设计，现役
+docs/develop/composer-model-thinking-entry-acceptance-evidence.md	desktop-ui	B	验收证据
+docs/develop/composer-model-thinking-entry-development-plan.md	desktop-ui	B	已实施（配套验收证据）
+docs/develop/composer-plus-menu-development-plan.md	desktop-ui	B	已实施（810d38e2）
+docs/develop/context-usage-accuracy-issues.md	desktop-ui	B	问题诊断记录
+docs/develop/context-usage-realtime-improvement-design.md	desktop-ui	B	改进已实施
+docs/develop/explicit-output-directory-candidate-technical-design.md	desktop-ui	A	候选技术设计，现役
+docs/develop/multi-session-parallel-execution.md	desktop-ui	B	阶段 1-3 已落地
+docs/develop/multi-workdir-technical-design.md	desktop-ui	A	技术设计，现役
+docs/develop/plan_mode_optimization_design.md	desktop-ui	D	已废弃（首尾状态矛盾，按代码判定）
+docs/develop/scheduled-task-workdir-model-development-plan.md	desktop-ui	C	无状态行，模型方案在途
+docs/develop/会话新建删除卡顿诊断与修改计划.md	desktop-ui	B	诊断已完成
+docs/develop/渲染进程卡顿优化方案.md	desktop-ui	B	v3.25，优化已落地
+docs/develop/2026-10-11-im-security-review-improvement-development-plan.md	im-remote	C	实施方案草案（依赖已就绪，主方案未实施）
+docs/develop/2026-10-11-remote-im-intent-track-development-plan.md	im-remote	B	方案已落地（1d4c9bcd 等）
+docs/develop/artifact-decision-remote-im-technical-design.md	im-remote	A	技术设计 v1.2，现役
+docs/develop/feishu-integration-phase1-design.md	im-remote	A	设计，现役
+docs/develop/feishu-integration-phase2-design.md	im-remote	A	设计，现役
+docs/develop/feishu-integration-phase3-design.md	im-remote	A	设计，现役
+docs/develop/im-architecture-refactor.md	im-remote	A	架构设计 v2.1，现役
+docs/develop/remote-im-async-interaction-design.md	im-remote	C	讨论稿 v0.2
+docs/develop/remote-im-intent-track-operations-runbook.md	im-remote	A	运维手册，现役
+docs/develop/remote-private-chat-security-optimization-development-test-plan.md	im-remote	B	测试计划（过程产物）
+docs/develop/remote-private-chat-security-optimization-release-notes.md	im-remote	B	发布说明
+docs/develop/wechat-confirmation-prompt-delivery-failure-fix-plan-2026-10-10.md	im-remote	C	待实施
+docs/develop/wechat-integration-phase1-design.md	im-remote	A	设计，现役
+docs/develop/automated-test-suite-cleanup-audit.md	platform-eng	B	测试套件清理审计
+docs/develop/dependency-upgrade-plan-2026-08.md	platform-eng	B	依赖升级计划（已执行）
+docs/develop/i18n-sync-guide.md	platform-eng	A	指南，现役
+docs/develop/legacy-workspace-layout-cleanup-plan.md	platform-eng	B	自述 Done（2026-07-24）
+docs/develop/release-guide.md	platform-eng	A	发版指南，现役
+docs/develop/tech_design.md	platform-eng	A	技术设计总纲，现役
+docs/develop/2026-10-01-cloud-main-516-path-audit.tsv	platform-eng	B	历史一次性项目（云 main 恢复）整组归档
+docs/develop/2026-10-01-cloud-main-feature-recovery-audit.md	platform-eng	B	同上
+docs/develop/2026-10-01-cloud-main-feature-recovery-plan.md	platform-eng	B	同上
+docs/develop/2026-10-01-cloud-main-feature-recovery-source-inventory.tsv	platform-eng	B	同上
+docs/develop/2026-10-01-cloud-main-recovery-source-commit-ledger.tsv	platform-eng	B	同上
+docs/develop/2026-10-01-main-divergence-hosted-runtime-integration-execution-record.md	platform-eng	B	分叉接入执行记录（过程产物）
+docs/develop/2026-10-01-main-divergence-hosted-runtime-integration-plan.md	platform-eng	B	分叉接入计划（已合入）
+docs/develop/approval-agent-shortest-path-plan.md	safety-approval	C	v2 修订，未收口
+docs/develop/desktop-ask-rule-tier-unification-plan.md	safety-approval	B	已实施并闭环（c96acc2e）
+docs/develop/desktop-auto-approval-plan.md	safety-approval	B	已实施完成
+docs/develop/desktop-fail-open-to-user-plan.md	safety-approval	B	已实现（§10 第 3–6 步）
+docs/develop/run-shell-agent-safe-boundary-hardening-plan.md	safety-approval	C	加固计划在途
+docs/develop/script-security-parser-treesitter-upgrade-plan.md	safety-approval	B	P0~P3 全部完成
+docs/develop/script-security-parser-upgrade-golden-review.md	safety-approval	B	金标准评审（过程产物）
+docs/develop/security-approval-experience-improvement-plan.md	safety-approval	C	待复评
+docs/develop/security-approval-skill-v2.1-improvement-plan.md	safety-approval	C	待评审
+docs/develop/tool-confirmation-framework-implementation-plan.md	safety-approval	B	自述可进入 P0；框架已落地
+docs/develop/session-ced59b41-acceptance-evidence.md	storage-session	B	验收证据
+docs/develop/session-ced59b41-g3-manual-evidence.md	storage-session	B	人工证据
+docs/develop/session-ced59b41-issue-remediation-technical-plan.md	storage-session	B	专题整改计划（过程产物）
+docs/develop/session-d961cc51-boundary-policy-layering-gap-analysis-and-followup-plan.md	storage-session	B	阶段件
+docs/develop/session-d961cc51-boundary-policy-layering-implementation-matrix.md	storage-session	B	实施矩阵；阶段 A~D 已实施
+docs/develop/session-d961cc51-boundary-policy-layering-technical-plan.md	storage-session	B	专题技术计划
+docs/develop/session-record-eventflow-persistence-redesign-plan.md	storage-session	B	自述已落地（TDD 通过）
+docs/develop/session-record-eventflow-refactor-plan.md	storage-session	B	自述已落地（TDD 通过）
+docs/develop/session-storage-a00-review-input-freeze.md	storage-session	B	阶段件
+docs/develop/session-storage-a01-inventory-census-review.md	storage-session	B	阶段件
+docs/develop/session-storage-a02-durable-run-review.md	storage-session	B	阶段件
+docs/develop/session-storage-a03-worker-fencing-review.md	storage-session	B	阶段件
+docs/develop/session-storage-a04-legacy-queue-candidate-review.md	storage-session	B	阶段件
+docs/develop/session-storage-a05-observation-gate-review.md	storage-session	B	阶段件
+docs/develop/session-storage-a06-profile-estimate-review.md	storage-session	B	阶段件
+docs/develop/session-storage-a07-cleanup-gate-review.md	storage-session	B	阶段件
+docs/develop/session-storage-a08-maintenance-recovery-review.md	storage-session	B	阶段件
+docs/develop/session-storage-a09-integration-scope-review.md	storage-session	B	阶段件
+docs/develop/session-storage-a11-current-state-delta.md	storage-session	B	阶段件
+docs/develop/session-storage-a12-source-review-gate.md	storage-session	B	阶段件
+docs/develop/session-storage-c00-macos-package-manifest-2026-10-06.json	storage-session	B	候选包清单（证据）
+docs/develop/session-storage-c01a-candidate-smoke-manifest-2026-10-06.json	storage-session	B	证据
+docs/develop/session-storage-c01b-compatibility-record-2026-10-06.json	storage-session	B	证据
+docs/develop/session-storage-c01b-compatibility-review.md	storage-session	B	评审件
+docs/develop/session-storage-c01b-x64-state-smoke-manifest-2026-10-06.json	storage-session	B	证据
+docs/develop/session-storage-c01c-package-matrix-2026-10-06.json	storage-session	B	证据
+docs/develop/session-storage-cscope-package-compatibility-record-2026-10-06.json	storage-session	B	证据
+docs/develop/session-storage-cscope-package-compatibility-review-2026-10-06.md	storage-session	B	评审件
+docs/develop/session-storage-cscope-package-matrix-2026-10-06.json	storage-session	B	证据
+docs/develop/session-storage-i00-integration-input-snapshot-2026-10-05.md	storage-session	B	阶段件
+docs/develop/session-storage-i01-schema-migration-integration.md	storage-session	B	阶段件
+docs/develop/session-storage-i02-operations-integration.md	storage-session	B	阶段件
+docs/develop/session-storage-i03-history-integration.md	storage-session	B	阶段件
+docs/develop/session-storage-i04-ipc-lifecycle-integration.md	storage-session	B	阶段件
+docs/develop/session-storage-i05-outbound-integration.md	storage-session	B	阶段件
+docs/develop/session-storage-i06-title-storage-adapter.md	storage-session	B	阶段件
+docs/develop/session-storage-i07-agent-sdk-undispatched-history.md	storage-session	B	阶段件
+docs/develop/session-storage-i08-butler-task-snapshot-integration.md	storage-session	B	阶段件
+docs/develop/session-storage-i09-composer-directory-grant-integration.md	storage-session	B	阶段件
+docs/develop/session-storage-i10-continuation-started-renderer-integration.md	storage-session	B	阶段件
+docs/develop/session-storage-i11-package-build-config-integration.md	storage-session	B	阶段件
+docs/develop/session-storage-m3-execution-runbook.md	storage-session	B	执行手册（过程产物）
+docs/develop/session-storage-public-interface-design.md	storage-session	A	公共接口设计（v26 验收通过），现役接口
+docs/develop/session-storage-r00-r01-clean-tree-manifest-2026-10-06.json	storage-session	B	证据
+docs/develop/session-storage-r02-macos-package-manifest-2026-10-06.json	storage-session	B	证据
+docs/develop/session-storage-r03-v025-rollback-package-manifest-2026-10-06.json	storage-session	B	证据
+docs/develop/session-storage-read-hot-path-perf-improvement-plan.html	storage-session	B	优化实施件
+docs/develop/session-storage-reader-architecture-audit.md	storage-session	B	静态审计
+docs/develop/session-storage-refactor-cleanup-estimate-2026-10-04.json	storage-session	B	估算证据
+docs/develop/session-storage-refactor-cleanup-estimate-2026-10-04.md	storage-session	B	估算说明
+docs/develop/session-storage-refactor-m4-3-status.md	storage-session	B	阶段状态
+docs/develop/session-storage-refactor-maintenance-profile-2026-10-04.json	storage-session	B	profile 采样
+docs/develop/session-storage-refactor-maintenance-profile-2026-10-04.md	storage-session	B	profile 说明
+docs/develop/session-storage-refactor-maintenance-profile-2026-10-05.json	storage-session	B	profile 采样
+docs/develop/session-storage-refactor-maintenance-profile-2026-10-05.md	storage-session	B	profile 说明
+docs/develop/session-storage-refactor-migration-plan.md	storage-session	B	迁移计划（已执行）
+docs/develop/session-storage-refactor-phase5-baseline.md	storage-session	B	phase5 基线（过程产物）
+docs/develop/session-storage-refactor-profile-baseline-2026-10-04.md	storage-session	B	profile 基线
+docs/develop/session-storage-refactor-technical-design.md	storage-session	A	512KB 技术方案，现状素材
+docs/develop/session-storage-refactorability-improvement-plan.md	storage-session	B	v34 验收通过
+docs/develop/spill-reference-index-and-backfill-plan.md	storage-session	B	回填计划（阶段产物）
+docs/develop/storage-settings-profile-latency-analysis-and-optimization-plan.md	storage-session	B	分析+实施计划已落地
+docs/develop/2026-10-10-storage-settings-profile-latency-development-plan-review.md	storage-session	B	评审件
+docs/develop/message-fact-persistence-core-refactor-plan.md	storage-session	C	v2 待复审后实施
+docs/develop/message-fact-pipeline-prompt-cache-optimization-plan.md	storage-session	C	待实施
+docs/develop/message-fact-production-pipeline-local-acceptance-report.md	storage-session	B	验收报告
+docs/develop/message-fact-production-pipeline-owner-audit.md	storage-session	B	owner 审计
+docs/develop/message-fact-production-pipeline-refactor-plan.md	storage-session	B	实施中并已接入主路径
+docs/develop/bash-run-shell-current-state-and-optimization-review.md	tools-mcp	B	现状评审（过程产物）
+docs/develop/cli-subagent-integration-design.md	tools-mcp	A	设计 v1.0，现役
+docs/develop/cli-subagent-integration-verification-plan.md	tools-mcp	B	验证计划
+docs/develop/edit-file-match-failure-diagnosis-and-improvement-plan.md	tools-mcp	B	改进已落地
+docs/develop/golden-data/python-drift-after-switch.json	tools-mcp	A	漂移证据数据，随宿主
+docs/develop/golden-data/shell-drift-after-switch.json	tools-mcp	A	漂移证据数据，随宿主
+docs/develop/grep-recursive-search-capability-release-plan.md	tools-mcp	B	已按 v1+v2 评审整改并发布
+docs/develop/grep-tool-0.1.7-ripgrep-unavailable-investigation.md	tools-mcp	B	调查记录
+docs/develop/grep-tool-large-file-fallback-optimization-plan.md	tools-mcp	B	优化已落地
+docs/develop/mcp-deferred-tool-loading-delivery.md	tools-mcp	B	交付说明（过程产物）
+docs/develop/mcp-im-automation-tools-release-note.md	tools-mcp	B	发布说明
+docs/develop/mcp-integration-development-plan.md	tools-mcp	B	集成计划（已实施）
+docs/develop/mcp-sse-transport-plan.md	tools-mcp	B	SSE 传输已落地
+docs/develop/mcp-timeout-turn-failure-isolation-plan.md	tools-mcp	B	状态滞后：阶段 A-E 已实现（a01a6d49）
+docs/develop/ripgrep-integration-technical-design.md	tools-mcp	A	技术设计，现役
+docs/develop/run-shell-and-tool-execution-lifecycle-optimization-plan.md	tools-mcp	B	已实现并合入 main（1f6e794）
+docs/develop/run-shell-command-failure-diagnosis-and-remediation-plan.md	tools-mcp	B	整改已落地
+docs/develop/run-shell-dialect-mismatch-false-positive-and-fatal-turn-abort-improvement-plan.md	tools-mcp	C	v1.4 待重审
+docs/develop/run-shell-windows-host-init-failure-diagnosis-and-improvement-plan.md	tools-mcp	B	改进已落地
+docs/develop/shell-output-encoding-robustness-implementation-record.md	tools-mcp	B	实施记录
+docs/develop/tool-invocation-reliability-acceptance-evidence.md	tools-mcp	B	验收证据（批 A/B/C）
+docs/develop/tool-invocation-reliability-improvement-technical-design.md	tools-mcp	A	技术设计 v1.4，现役
+docs/develop/tool-path-field-alias-normalization-tdd-plan.md	tools-mcp	B	TDD 计划已实施
+docs/develop/tool-result-invariants-scan-report.md	tools-mcp	B	扫描报告
+docs/develop/web-browser-tools-design.md	tools-mcp	A	设计 v1.1，现役
+docs/develop/web-browser-tools-test-plan.md	tools-mcp	B	测试计划
+docs/requirement/agent-runtime-admission-policy-requirement.md	agent-sdk	A	已决策，口径现役
+docs/requirement/agent-token-usage-analytics-requirement.md	agent-sdk	B	v1.19，已上线；口径进需求基线
+docs/requirement/agent-token-usage-stats-step-accounting-consistency-plan.md	agent-sdk	C	方案待评审，未实施
+docs/requirement/agent-toolkit-capability-gateway-requirement.md	agent-sdk	C	需求提案 v2，未定
+docs/requirement/butler-task-workdir-pinning-plan.md	agent-sdk	C	方案待评审，未实施
+docs/requirement/llm-model-baseline-integration-requirement.md	agent-sdk	B	口径进需求基线
+docs/requirement/llm-multi-service-model-config-requirement.md	agent-sdk	B	口径进需求基线
+docs/requirement/llm-service-model-fetch-requirement.md	agent-sdk	B	口径进需求基线
+docs/requirement/llm-service-profiles-requirement.md	agent-sdk	B	口径进需求基线
+docs/requirement/llm-truncation-and-context-budget-requirement.md	agent-sdk	B	口径进需求基线
+docs/requirement/llm-ui-locale-prompt-requirement.md	agent-sdk	B	口径进需求基线
+docs/requirement/macos-api-key-access-authorization-requirement.md	agent-sdk	B	口径进需求基线
+docs/requirement/thinking-effort-settings-requirement.md	agent-sdk	B	口径进需求基线
+docs/requirement/tool-use-id-pairing-requirement.md	agent-sdk	B	口径进需求基线
+docs/requirement/auto-create-session-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/browser-network-access-settings-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/chat-message-ui-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/chat-scroll-to-latest-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/composer-hint-responsive-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/composer-model-thinking-entry-requirement.md	desktop-ui	B	需求已定稿
+docs/requirement/composer-plus-menu-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/content-viewer-url-support-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/context-usage-estimated-occupancy-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/context-usage-ring-requirement.md	desktop-ui	B	被 v2 取代
+docs/requirement/context-usage-ring-v2-improvements.md	desktop-ui	B	v2.0 现行版本
+docs/requirement/detail-panel-file-list-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/explicit-output-directory-candidate-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/file-content-viewer-auto-reload-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/file-content-viewer-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/file-pane-tree-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/file-tree-auto-refresh-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/file-viewer-markdown-export-docx-pdf-requirement.md	desktop-ui	DELETE	0 字节空文件（§8-5）
+docs/requirement/file-viewer-markdown-table-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/file-write-directory-layout-requirement.md	desktop-ui	D	已被工作产物管理取代
+docs/requirement/global-search-find-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/markitdown-document-import-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/multi-workdir-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/pending-confirm-floating-notification.md	desktop-ui	B	口径进需求基线
+docs/requirement/plan-auto-execution-requirement.md	desktop-ui	D	已废弃（Plan 模式移除）
+docs/requirement/plan-detail-panel-requirement.md	desktop-ui	D	已废弃（Plan 模式移除）
+docs/requirement/plan-resume-button-state-requirement.md	desktop-ui	D	已废弃（Plan 模式移除）
+docs/requirement/product_requirement.md	desktop-ui	A	产品需求总纲，现役
+docs/requirement/queued-task-bar-requirement.md	desktop-ui	B	决策已定并实施
+docs/requirement/referenced-files-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/scheduled-task-output-directory-model-requirements.md	desktop-ui	C	需求说明，未实施
+docs/requirement/search-results-display-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/settings-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/settings-ui-refinement-requirement.md	desktop-ui	B	口径进需求基线
+docs/requirement/system-tray.md	desktop-ui	C	自述待实现
+docs/requirement/社交图文生成器功能-产品需求说明书_v6.1.md	desktop-ui	B	历史需求，归档
+docs/requirement/社交图文生成器功能-渲染组件体系框架说明_v6.1.md	desktop-ui	B	历史需求，归档
+docs/requirement/通用Agent-Plan模式MVP产品需求文档.md	desktop-ui	D	已废弃（Plan 模式移除）
+docs/requirement/2026-10-11-im-security-review-improvement-requirement.md	im-remote	C	真在途（依赖已就绪，主方案未实施）
+docs/requirement/artifact-decision-remote-im-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/feishu-cli-logging-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/feishu-integration-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/feishu-remote-status-sidebar-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/remote-im-async-approval-security-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/remote-im-intent-track-requirement-draft.md	im-remote	C	初稿 v0.3，待讨论
+docs/requirement/remote-im-model-and-thinking-settings-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/remote-private-chat-security-optimization-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/remote-progress-activity-sync-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/remote-session-context-awareness-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/remote-workdir-switch-guard-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/remote-workdir-tools-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/wechat-integration-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/wechat-remote-outbound-confirm-removal-requirement.md	im-remote	B	口径进需求基线
+docs/requirement/browser-setup-skill-requirement.md	knowledge-skills	B	已实施（skill 已提供）
+docs/requirement/llm-wiki-requirement.md	knowledge-skills	B	口径进需求基线
+docs/requirement/project-memory-requirement.md	knowledge-skills	B	口径进需求基线
+docs/requirement/skill-github-nested-directory-discovery-requirement.md	knowledge-skills	B	口径进需求基线
+docs/requirement/skill-install-size-limit-and-cloud-install-requirement.md	knowledge-skills	B	决策已闭环
+docs/requirement/skill-llm-routing-requirement.md	knowledge-skills	B	口径进需求基线
+docs/requirement/skill-management-ui-requirement.md	knowledge-skills	B	口径进需求基线
+docs/requirement/skills-requirement.md	knowledge-skills	A	技能总纲，现役
+docs/requirement/wiki-import-ingest-requirement.md	knowledge-skills	B	口径进需求基线
+docs/requirement/wiki-shared-centralized-storage-requirement.md	knowledge-skills	B	状态滞后：实现已在代码（wikiProjectStore 等）
+docs/requirement/i18n-architecture-requirement.md	platform-eng	A	架构口径，现役
+docs/requirement/remove-background-task-mechanism.md	platform-eng	B	自述已完成
+docs/requirement/confirmation-card-trust-requirement.md	safety-approval	B	口径进需求基线
+docs/requirement/security-approval-concurrency-limits-and-observability-requirement.md	safety-approval	C	v0.1 草案
+docs/requirement/security-policy-single-entry-requirement.md	safety-approval	A	口径仍在生效
+docs/requirement/shell-security-enhancement-requirement.md	safety-approval	B	口径进需求基线
+docs/requirement/tool-confirmation-top-level-design-v2.md	safety-approval	A	确认机制顶层设计，现役
+docs/requirement/session-auto-title-requirement.md	storage-session	B	口径进需求基线
+docs/requirement/session-manual-title-requirement.md	storage-session	B	口径进需求基线
+docs/requirement/session-list-pending-confirm-badge-requirement.md	storage-session	B	口径进需求基线
+docs/requirement/session-ced59b41-issue-inventory-requirement.md	storage-session	B	专题需求，归档
+docs/requirement/session-d961cc51-workdir-boundary-and-sandbox-policy-layering-requirement.md	storage-session	B	阶段 A~D 已实施
+docs/requirement/message-fact-production-pipeline-refactor-requirement.md	storage-session	C	待实施
+docs/requirement/browser-act-session-trust-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/browser-playwright-install-guide-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/cli-subagent-integration-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/mcp-agent-driven-oauth-install-requirement.md	tools-mcp	B	部分被取代，余下口径进基线
+docs/requirement/mcp-deferred-tool-loading-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/mcp-im-automation-tools-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/mcp-integration-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/mcp-tool-call-card-display-requirement.md	tools-mcp	B	状态滞后：已实现（59aae8df）
+docs/requirement/read-file-tail-and-oversized-tool-result-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/shell-command-tool-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/shell-output-display-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/shell-output-encoding-robustness-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/shell-output-terminal-enhancement-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/tool-invocation-reliability-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/tools-requirement.md	tools-mcp	A	工具总纲，现役
+docs/requirement/web-browser-rate-limit-requirement.md	tools-mcp	B	口径进需求基线
+docs/requirement/web-browser-tools-requirement.md	tools-mcp	B	口径进需求基线
+docs/develop/streaming-ui-performance-analysis.md	desktop-ui	C	分析完成，待实施
+docs/requirement/remove-plan-mode-requirement.md	desktop-ui	A	Plan 模式移除的现行口径
+docs/requirement/tool-call-card-batch-collapse-design.md	desktop-ui	B	自述已实施
