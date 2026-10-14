@@ -8,6 +8,7 @@
 
 | 文档 | 类型 | 说明 |
 | --- | --- | --- |
+| [会话与数据-现状.md](./会话与数据-现状.md) | **现状文档** | 存储内核分层、事件流与编解码、持久化与维护、数据库层 |
 | [session-storage-refactor-technical-design.md](./session-storage-refactor-technical-design.md) | 技术方案（512 KB） | canonical 事件流为正文真相源，保留权威消息骨架与流程状态 |
 | [session-storage-public-interface-design.md](./session-storage-public-interface-design.md) | 接口设计（v26） | 原 S0–S4 验收通过；评审 4 项 P1 修复及最终门禁通过 |
 

@@ -8,6 +8,7 @@
 
 | 文档 | 类型 | 说明 |
 | --- | --- | --- |
+| [桌面交互与工作区-现状.md](./桌面交互与工作区-现状.md) | **现状文档** | 渲染组件与服务、工作目录与目录授权、已落地性能优化 |
 | [multi-workdir-technical-design.md](./multi-workdir-technical-design.md) | 技术设计（v1.0） | 多工作目录 |
 | [explicit-output-directory-candidate-technical-design.md](./explicit-output-directory-candidate-technical-design.md) | 候选技术设计 | 显式产出目录（现行「工作产物管理」口径） |
 | [chat-vision-image-context-design.md](./chat-vision-image-context-design.md) | 设计（v1.2） | 聊天视觉上下文（图片附件 → 多模态 API） |

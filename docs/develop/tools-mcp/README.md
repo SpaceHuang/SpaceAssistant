@@ -8,6 +8,7 @@
 
 | 文档 | 类型 | 说明 |
 | --- | --- | --- |
+| [工具能力-现状.md](./工具能力-现状.md) | **现状文档** | shell 执行链、工具注册与派发、MCP、浏览器、工具可靠性 |
 | [web-browser-tools-design.md](./web-browser-tools-design.md) | 设计（v1.1） | 浏览器自动化工具设计 |
 | [cli-subagent-integration-design.md](./cli-subagent-integration-design.md) | 设计（v1.0） | 子代理集成设计 |
 | [ripgrep-integration-technical-design.md](./ripgrep-integration-technical-design.md) | 设计（评审整改版） | rg 集成；本地必做项已完成 |

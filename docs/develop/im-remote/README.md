@@ -8,6 +8,7 @@
 
 | 文档 | 类型 | 说明 |
 | --- | --- | --- |
+| [远程与IM-现状.md](./远程与IM-现状.md) | **现状文档** | 飞书链路、微信链路、远程澄清与延迟审批、出站受理、Track 归因 |
 | [im-architecture-refactor.md](./im-architecture-refactor.md) | 架构设计（v2.1） | IM 架构重构 |
 | [feishu-integration-phase1-design.md](./feishu-integration-phase1-design.md) | 设计 | 飞书集成 Phase 1（MVP） |
 | [feishu-integration-phase2-design.md](./feishu-integration-phase2-design.md) | 设计 | 飞书集成 Phase 2（增强） |
