@@ -72,7 +72,7 @@
 
 **阶段完成条件：** 新增的 AGENTS 开关与状态具有唯一共享类型和稳定存储语义，旧 `projectMemoryEnabled` 行为不变。
 
-- [x] **1.1 新增独立 AGENTS 开关类型与默认值** — `agentsMdEnabled`，session metadata 缺省 true；project memory 独立。commit `f3791a04` + 本阶段提交。
+- [x] **1.1 新增独立 AGENTS 开关类型与默认值** — `agentsMdEnabled`，session metadata 缺省 true；project memory 独立。commit `88a19499`（`feat: persist per-session AGENTS.md setting`）。
   - 依赖：0.5
   - 文件候选：`src/shared/domainTypes.ts`、现有 session/config domain 类型及其默认值实现。
   - 完成判据：`agentsMdEnabled`（最终命名在本任务内核定）默认开启；旧项目记忆字段仍只控制 `SPACEASSISTANT.md`；类型不重复定义在 renderer / electron。
@@ -83,7 +83,7 @@
 - [x] **1.3 接入创建 / 读取 / 更新路径** — 新会话写 true，可由受信 session update 切换；renderer 通用 metadata patch 不可改此字段；桌面与远端 turn config 同源读取。
   - 依赖：1.2
   - 完成判据：新会话默认开启；会话重载、远程会话与桌面会话均得到同一有效值；配置更新只影响其所属会话。
-- [x] **1.4 定向验证开关兼容性** — `npm exec vitest run electron/sessionStorage/sessionStorage.test.ts electron/turnExecutionConfig.test.ts electron/turnExecutionConfig.thinkingEffort.test.ts electron/appIpc.file.test.ts electron/appIpc.sessionUpdate.test.ts`：5 files / 152 tests passed；`npm run typecheck:shared` passed。commit SHA 将在本条更新后阶段提交记录。
+- [x] **1.4 定向验证开关兼容性** — `npm exec vitest run electron/sessionStorage/sessionStorage.test.ts electron/turnExecutionConfig.test.ts electron/turnExecutionConfig.thinkingEffort.test.ts electron/appIpc.file.test.ts electron/appIpc.sessionUpdate.test.ts`：5 files / 152 tests passed；`npm run typecheck:shared` passed。阶段提交 `88a19499`。
   - 依赖：1.3
   - 测试：会话 storage / config resolver / turn configuration 相关定向测试。
   - 完成判据：旧 `projectMemoryEnabled` 测试行为保持；新增字段缺失、true、false、跨重启和双会话隔离用例通过。
@@ -92,29 +92,29 @@
 
 **阶段完成条件：** 纯宿主服务按显式 workDir 加载文件，具备有界读取、失败分类、预算和目录隔离；不触碰 SDK。
 
-- [ ] **2.1 定义请求级状态与读取结果模型**
+- [x] **2.1 定义请求级状态与读取结果模型** — `AgentsMdLoadResult`：状态、相对来源名、正文、字节数、SHA-256、加载时间、token 数与 workDir；无文件句柄或授权对象。
   - 依赖：0.5、1.1
   - 文件候选：`src/shared/domainTypes.ts`（仅纯数据类型）、建议新增 `electron/projectInstructions/`。
   - 完成判据：描述 path/source、content、摘要、字节数、加载状态、截断/超限状态、加载时间、目录绑定标识所需的最小可序列化字段；类型不含 watcher、fs handle、函数或敏感 grant 句柄。
-- [ ] **2.2 实现根文件路径解析与授权边界检查**
+- [x] **2.2 实现根文件路径解析与授权边界检查** — 仅根 `AGENTS.md`，realpath 检查根内符号链接，拒绝越界链接与目录。
   - 依赖：2.1
   - 完成判据：只解析 `<effectiveWorkDir>/AGENTS.md`；不使用 `process.cwd()`；仅允许普通文件和落在 workDir 内的符号链接目标；父目录 / 子目录 / 用户目录不搜索；越界和非普通文件返回结构化状态。
-- [ ] **2.3 实现有界字节读取和 UTF-8 处理**
+- [x] **2.3 实现有界字节读取和 UTF-8 处理** — 32 KiB 上限、fatal UTF-8、BOM/CRLF 规范化；文件版本不稳定最多重读一次，随后 `unstable` 且正文为空。
   - 依赖：2.2
   - 完成判据：检查文件大小 / 普通文件类型并限制实际读取字节，避免无界读取；支持 UTF-8 BOM、CRLF、中文；非法 UTF-8 明确失败；普通并发修改或原子替换导致读取版本不稳定时最多有界重试一次，仍不稳定则返回明确降级状态且不复用旧正文。
   - 安全边界：实施基础路径边界和普通文件检查；不把恶意本地程序竞态替换视为本期威胁模型，不实现父目录防替换、句柄身份强校验或 FIFO 对抗机制。
-- [ ] **2.4 实现内容空白判定与预算策略**
+- [x] **2.4 实现内容空白判定与预算策略** — 空白不注入；token 上限为 `min(8,000, floor(contextWindow × 5%))`，超限整份跳过。
   - 依赖：2.3
   - 完成判据：按需求的 32 KiB 字节限制和 token 预算（`min(8,000, 5% context window)`）；超限整份不注入，不按字符数代替字节数；空白与缺失不产生错误正文。
-- [ ] **2.5 实现跨 workDir 隔离缓存策略（如确有缓存）**
+- [-] **2.5 实现跨 workDir 隔离缓存策略（如确有缓存）** — loader 不设跨请求缓存，每次逻辑请求重新读盘，因此无需缓存 key，也不会复用其他 workDir 或旧正文；同一 modelTurn 的 retry 快照固定由阶段 4 observer 管理。
   - 依赖：2.2–2.4
   - 完成判据：缓存 key 包含规范化目录、绑定版本和文件版本；新逻辑请求会检测变化；任何错误、缺失、禁用都不回退其他目录或旧版本正文。若直接每请求读取更简单，记录证据并标 `[-]`。缓存命中不得改变每个逻辑请求的状态历史。
-- [ ] **2.6 为读取器补齐边界测试**
+- [x] **2.6 为读取器补齐边界测试** — 覆盖缺失、空白、禁用、无效目录、权限失败、UTF-8、字节/token 上限、普通目录、内外符号链接、双目录隔离、原子替换、并发编辑重试与不稳定降级。
   - 依赖：2.2–2.5
   - 测试：新 `electron/projectInstructions/*test.ts`。
   - 完成判据：临时目录测试覆盖存在 / 缺失 / 空白 / 编码 / 上限 / 超限 / 权限 / 普通目录 / 内外符号链接 / 正常并发编辑 / 编辑器式原子替换 / 两目录并发；验证读取有界、内容稳定时取完整版本、不稳定时有界重试后明确降级且不复用旧正文。无测试依赖真实用户目录。
   - 范围边界：不测试刻意卡在路径检查与打开之间的恶意替换，不新增跨平台父目录防替换、复杂句柄身份验证、FIFO 替换对抗要求。正常编辑器原子保存与并发更新属于必须兼容场景。
-- [ ] **2.7 运行读取器定向测试并提交阶段**
+- [x] **2.7 运行读取器定向测试并提交阶段** — 合并阶段 1、2 与当前请求装配回归验证完成；`npm run typecheck:shared`、`npm run check:agent-sdk` 通过。electron incremental build 被 pi-ai closure gate 阻断（缺少预期 `api/anthropic-messages.js`、`utils/transcript.js`，扫描实际为空）。
   - 依赖：2.6
   - 完成判据：一次合并运行阶段 1、2 受影响测试；记录结果与提交 SHA。
 
