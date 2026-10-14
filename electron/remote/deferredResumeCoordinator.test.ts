@@ -8,39 +8,10 @@ import { isRequestLeaseOwner, releaseRemoteSession, resetRunningRemoteAgentRegis
 import { createDeferredResumeCoordinator } from './deferredResumeCoordinator'
 import { getDbConnection } from '../database/sqliteStore'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
-import { getRemoteAsyncApprovalTestRunId, setRemoteAsyncApprovalTestModeEnabled } from '../confirmation/remoteAsyncApprovalTestMode'
 
 describe('deferred resume request boundary', () => {
   afterEach(() => {
     resetRunningRemoteAgentRegistryForTests()
-    setRemoteAsyncApprovalTestModeEnabled(false, false)
-  })
-
-  it('invalidates a persisted development test todo after its process-local run ends', async () => {
-    const db = createMemoryAppDb()
-    const sessionId = createSession(db, { name: 'resume-stale-development-test' }).id
-    const conn = getDbConnection(db)
-    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'stale-test-policy' })
-    setRemoteAsyncApprovalTestModeEnabled(true, false)
-    const runId = getRemoteAsyncApprovalTestRunId()!
-    const todoStore = createDeferredTodoStore(db)
-    const rule = { ruleId: 'write', factsHash: 'a'.repeat(64) }
-    const todo = todoStore.create({ todoId: 'stale-development-test-todo', invocationId: 'stale-development-test-invocation',
-      channel: 'wechat', identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 3, rule, workflowId: 'workflow',
-      taskId: 'task', stepId: 'step', planRevision: 1, originSessionId: sessionId, createdAt: 10,
-      expiresAt: Date.now() + 60_000, policyBehaviorVersion: `im-standard-v2:dev-test:${runId}` }).todo
-    setRemoteAsyncApprovalTestModeEnabled(false, false)
-    const dispatch = vi.fn(async () => ({ dispatched: true }))
-    const coordinator = createDeferredResumeCoordinator({ db, todoStore, envelopeStore: createDeferredEnvelopeStore(db), dispatch,
-      maxParallel: 1, requirePolicyFence: true, recheck: async () => ({ allowed: true }) })
-
-    await expect(coordinator.requestResume({ requestId: 'stale-development-test-request', todoId: todo.todoId, sessionId,
-      channel: 'wechat', identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 3, rule,
-      notificationVersion: 1, messageId: 'trusted-notice', reasonKey: 'approved-reply' })).resolves.toEqual({ status: 'invalidated' })
-    expect(todoStore.get(todo.todoId, { channel: 'wechat', identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 3,
-      originSessionId: sessionId, rule })?.status).toBe('invalidated')
-    expect(dispatch).not.toHaveBeenCalled()
-    db.close()
   })
 
   it('persists an authenticated resume request while the session lease is busy, leaving todo pending without dispatch', async () => {

@@ -1201,7 +1201,6 @@ app.whenReady().then(async () => {
       devRoot: path.join(__dirname, '..', '..')
     }),
     floatingNotificationManager: floatingManager,
-    isPackaged: app.isPackaged,
     isTrayEnabled,
     turnRuntime,
     wakeSourceTruthSpillGc: () => {

@@ -7,8 +7,6 @@ import { allocateDeferredApprovalShortCode } from './deferredApprovalIngress'
 import { buildDeferredApprovalNotification, type DeferredApprovalAttachmentInfo, type DeferredApprovalNotificationDto } from './deferredApprovalNotification'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { buildDeferredApprovalAuditEvent } from '../confirmation/deferredApprovalAudit'
-import { isRemoteAsyncApprovalTestModeEnabled, isRemoteAsyncApprovalTestTodoEnabled,
-  remoteAsyncApprovalTestRunIdFromPolicyVersion } from '../confirmation/remoteAsyncApprovalTestMode'
 
 type TodoStore = ReturnType<typeof createDeferredTodoStore>
 type IntentStore = ReturnType<typeof createSecurityActionIntentStore>
@@ -51,10 +49,6 @@ export function createDeferredApprovalNotificationDelivery(input: {
     const row = conn.prepare('SELECT origin_session_id FROM deferred_todos WHERE todo_id=?').get(todoId) as { origin_session_id: string } | undefined
     return row?.origin_session_id ?? 'unknown'
   }
-  const testRunAllowsTodo = (todo: { policyBehaviorVersion?: string }): boolean => {
-    const isTestTodo = remoteAsyncApprovalTestRunIdFromPolicyVersion(todo.policyBehaviorVersion) !== null
-    return !(isRemoteAsyncApprovalTestModeEnabled() || isTestTodo) || isRemoteAsyncApprovalTestTodoEnabled(todo)
-  }
   const invalidateUndelivered = (todoId: string, version: number, now: number) => {
     conn.prepare(`UPDATE deferred_approval_notifications SET state='invalidated',updated_at=?
       WHERE todo_id=? AND notification_version=? AND state='undelivered'`).run(now, todoId, version)
@@ -86,7 +80,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
     if (!row || row.state !== 'undelivered') return 'undelivered'
     const todo = input.todoStore.get(todoId, { channel: row.channel, identityKey: row.identity_key, ownerId: row.owner_id,
       authorizationEpoch: row.authorization_epoch, originSessionId: sessionForTodo(todoId), rule: { ruleId: row.rule_id, factsHash: row.facts_hash } })
-    if (!todo || !testRunAllowsTodo(todo)) {
+    if (!todo) {
       invalidateUndelivered(todoId, version, Date.now())
       return 'undelivered'
     }
@@ -150,7 +144,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
         channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
         authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(request.todoId), rule: request.rule
       }, now)
-      if (!authorizedTodo || !testRunAllowsTodo(authorizedTodo) || authorizedTodo.invocationId !== request.invocationId || authorizedTodo.status !== 'pending') return { state: 'not_ready' }
+      if (!authorizedTodo || authorizedTodo.invocationId !== request.invocationId || authorizedTodo.status !== 'pending') return { state: 'not_ready' }
       const latest = list(request.todoId).at(-1)
       if (latest) return { state: latest.state === 'delivered' ? 'delivered' : 'undelivered', notificationVersion: latest.notificationVersion }
       const created = createAuthorizedRecord({ ...request, now })
@@ -173,10 +167,6 @@ export function createDeferredApprovalNotificationDelivery(input: {
           channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
           authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(mapped.todoId), rule: mapped.rule
         }, now)
-        if (todo && !testRunAllowsTodo(todo)) {
-          invalidateUndelivered(mapped.todoId, mapped.notificationVersion, now)
-          continue
-        }
         if (!todo || todo.status !== 'pending' || todo.expiresAt <= now || !input.intentStore.authorizeResume(mapped.invocationId)) {
           conn.prepare(`UPDATE deferred_approval_notifications SET state='invalidated',updated_at=?
             WHERE todo_id=? AND notification_version=? AND state='undelivered'`).run(now, mapped.todoId, mapped.notificationVersion)
@@ -218,7 +208,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
       const todo = input.todoStore.get(row.todo_id, { channel: row.channel, identityKey: row.identity_key, ownerId: row.owner_id,
         authorizationEpoch: row.authorization_epoch, originSessionId: sessionForTodo(row.todo_id),
         rule: { ruleId: row.rule_id, factsHash: row.facts_hash } }, now)
-      if (!todo || !testRunAllowsTodo(todo) || (todo.status !== 'pending' && todo.status !== 'consumed')) return null
+      if (!todo || (todo.status !== 'pending' && todo.status !== 'consumed')) return null
       return { ...mapRow(row), originSessionId: todo.originSessionId, todoStatus: todo.status }
     }
   }

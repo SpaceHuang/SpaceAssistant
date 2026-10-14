@@ -11,7 +11,6 @@ import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { buildDeferredApprovalAuditEvent } from '../confirmation/deferredApprovalAudit'
 import { releaseRemoteSession, tryClaimRemoteSession } from './remoteAgentRegistry'
 import { readImPolicySnapshot } from '../confirmation/imPolicyStore'
-import { isRemoteAsyncApprovalTestTodoEnabled, remoteAsyncApprovalTestRunIdFromPolicyVersion } from '../confirmation/remoteAsyncApprovalTestMode'
 
 type TodoStore = {
   get(todoId: string, context: DeferredTodoAuthorization, now?: number): DeferredTodoRecord | null
@@ -67,12 +66,7 @@ export function createDeferredResumeCoordinator(input: {
       const conn = getDbConnection(input.db)
       const snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
       const epoch = conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='im'").get() as { epoch: number } | undefined
-      const testRunId = remoteAsyncApprovalTestRunIdFromPolicyVersion(todo.policyBehaviorVersion)
-      const testRunCurrent = testRunId === null || isRemoteAsyncApprovalTestTodoEnabled(todo)
-      const baseBehaviorVersion = testRunId
-        ? todo.policyBehaviorVersion!.slice(0, todo.policyBehaviorVersion!.lastIndexOf(':dev-test:'))
-        : todo.policyBehaviorVersion
-      return Boolean(testRunCurrent && epoch && snapshot.policyBehaviorVersion === baseBehaviorVersion &&
+      return Boolean(epoch && snapshot.policyBehaviorVersion === todo.policyBehaviorVersion &&
         snapshot.revision === todo.policyRevision && epoch.epoch === todo.policyEpoch)
     } catch { return false }
   }

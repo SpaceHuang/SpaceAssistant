@@ -13,7 +13,7 @@ import type { ContentFacts, PolicyEngineDeps } from '../../src/shared/confirmati
 function registerPolicyHandlers(db: ReturnType<typeof createMemoryAppDb>) {
   const handlers = new Map<string, (...args: unknown[]) => unknown>()
   registerPolicyIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never,
-    db as never, { isPackaged: false })
+    db as never)
   return handlers
 }
 

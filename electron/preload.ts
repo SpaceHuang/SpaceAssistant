@@ -103,8 +103,6 @@ const api: SpaceAssistantApi = {
   // ===== 「安全策略」设置页（§7 五区，P4）=====
   securityGetSettingsModel: () => ipcRenderer.invoke('security:get-settings-model'),
   securityReadPolicyForLane: (payload) => ipcRenderer.invoke('policy:read-for-lane', payload),
-  securitySetImAutoReviewTestMode: (payload) => ipcRenderer.invoke('policy:set-im-auto-review-test-mode', payload),
-  securitySetImAsyncApprovalTestMode: (payload) => ipcRenderer.invoke('policy:set-im-async-approval-test-mode', payload),
   securityWritePolicy: (payload) => ipcRenderer.invoke('policy:write', payload),
   securitySetPolicyPackage: (payload) => ipcRenderer.invoke('security:set-policy-package', payload),
   securitySetRuleOverride: (payload) => ipcRenderer.invoke('security:set-rule-override', payload),

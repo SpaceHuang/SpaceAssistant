@@ -63,8 +63,7 @@ import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
 import { buildSessionDirectoryContextBlock, normalizeDirectoryGrantPath, type SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
 import { listValidSessionDirectoryGrantsSync } from '../sessionDirectoryGrants'
 import { channelFor, type ResolveConfirmChannelArgs } from '../confirmation/channels'
-import { isRemoteAsyncApprovalEnabledForRuntime } from '../confirmation/remoteAsyncApprovalRuntime'
-import { isImAutoReviewTestModeEnabled } from '../confirmation/imAutoReviewTestMode'
+import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
 import { AgentChannel } from '../confirmation/agentChannel'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
@@ -1145,8 +1144,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         toolUseId: call.toolCallId,
         audit: getSecurityAuditLog(),
         answererPolicy: { kind: confirmation.answerer },
-        remoteAsyncApprovalEnabled: (materialsLane === 'feishu' || materialsLane === 'wechat') && isRemoteAsyncApprovalEnabledForRuntime(db),
-        imAutoReviewTestEnabled: (materialsLane === 'feishu' || materialsLane === 'wechat') && isImAutoReviewTestModeEnabled(),
+        remoteAsyncApprovalEnabled: (materialsLane === 'feishu' || materialsLane === 'wechat') && isRemoteAsyncApprovalGateEnabled(db),
         agentChannelFactory: agentChannelFactory ?? hostedAgentChannelFactory,
         ...(materials.remoteContext?.imChannel ? {
           imChannel: materials.remoteContext.imChannel,

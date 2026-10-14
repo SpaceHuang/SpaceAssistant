@@ -32,7 +32,6 @@ import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/im
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { AgentChannel } from '../confirmation/agentChannel'
 import { createRemoteAsyncApprovalGate, CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION, type RemoteAsyncApprovalGateEvidence } from '../confirmation/remoteAsyncApprovalGate'
-import { setImAutoReviewTestModeEnabled } from '../confirmation/imAutoReviewTestMode'
 
 function createImPolicyTestDb(name: string) {
   const db = createMemoryAppDb(name)
@@ -491,7 +490,6 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
 
   afterEach(() => {
     resetDefaultAgentRuntimeForTests()
-    setImAutoReviewTestModeEnabled(false, false)
   })
 
   it.each(['wechat', 'feishu'] as const)('loads the same validated IM policy snapshot for %s runtime gates', async (lane) => {
@@ -1490,8 +1488,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     }
   })
 
-  it('routes policy-selected IM auto-review to the Agent in dev test mode while async human approval stays disabled', async () => {
-    setImAutoReviewTestModeEnabled(true, false)
+  it('routes policy-selected IM auto-review to the Agent while async human approval stays disabled', async () => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: 'im-test-auto-review' })
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-test-auto-review-'))

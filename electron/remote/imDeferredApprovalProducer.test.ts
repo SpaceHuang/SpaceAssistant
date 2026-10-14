@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
@@ -24,15 +24,12 @@ import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPe
 import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
 import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegistry'
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
-import { setRemoteAsyncApprovalTestModeEnabled } from '../confirmation/remoteAsyncApprovalTestMode'
 
 function seedImPolicy(db: ReturnType<typeof createMemoryAppDb>): void {
   commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'producer-policy-seed' })
 }
 
 describe('production IM deferred approval producer', () => {
-  afterEach(() => { setRemoteAsyncApprovalTestModeEnabled(false, false) })
-
   it('reads the authenticated user message from the IM queue scope when resolving task delegation', () => {
     const db = createMemoryAppDb()
     const sessionId = createSession(db, { name: 'im-task-digest' }).id
@@ -437,28 +434,6 @@ describe('production IM deferred approval producer', () => {
     db.close()
   })
 
-  it('reports a disabled WeChat runtime instead of falling back when async approval test mode is switched on', async () => {
-    const db = createMemoryAppDb()
-    seedImPolicy(db)
-    setRemoteAsyncApprovalTestModeEnabled(true, false)
-    const capacity = createDeferredTodoCapacityController(db)
-    const onFallback = vi.fn()
-    const producer = createImDeferredApprovalProducer({ db, channel: 'wechat', todoStore: createDeferredTodoStore(db, { capacity }), capacity,
-      intentStore: createSecurityActionIntentStore(db), envelopeStore: createDeferredEnvelopeStore(db),
-      notificationDelivery: { createAndSend: vi.fn() } as never, isEnabled: () => false,
-      getAuthorizationEpoch: () => 1, resolveTaskDigest: () => 'Create the requested file.', onFallback })
-    const context = { facts: { actionClass: 'write' }, decision: { riskLevel: 'high' as const, memoryTiers: [], timeoutMs: null,
-      answerer: 'user' as const, disposition: 'human-required' as const } }
-    await expect(producer.defer({ invocationId: 'runtime-disabled-invocation', toolCallId: 'call', toolName: 'write_file', input: {} },
-      { kind: 'denied', answerer: 'user', cause: 'human-required' },
-      { call: {} as never, modelTurn: 1, confirmationId: 'call', answerer: 'user', reasonCode: 'im-write-ask', context },
-      context, { kind: 'rejected', cause: 'no-answerer', answererKind: 'user' }, { source: 'wechat', authOwner: 'owner' } as RemoteContext))
-      .resolves.toMatchObject({ kind: 'unavailable', cause: 'unavailable' })
-    expect(onFallback).toHaveBeenCalledWith('runtime-disabled')
-    expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
-    db.close()
-  })
-
   it('keeps an explicit Agent deny terminal even with a valid delegated IM task binding', async () => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
@@ -524,14 +499,11 @@ describe('production IM deferred approval producer', () => {
   })
 
   it.each([
-    { label: 'sensitive script path', language: 'python', code: 'open("/etc/hosts", "r").read()', ruleId: 'script-system-dir-confirm', mode: 'release-gate' as const },
-    { label: 'dynamic execution', language: 'python', code: 'exec("print(1)")', ruleId: 'script-path-unknown-confirm', mode: 'release-gate' as const },
-    { label: 'sensitive script path', language: 'python', code: 'open("/etc/hosts", "r").read()', ruleId: 'script-system-dir-confirm', mode: 'development-test' as const },
-    { label: 'dynamic execution', language: 'python', code: 'exec("print(1)")', ruleId: 'script-path-unknown-confirm', mode: 'development-test' as const }
-  ])('closes the real assembler → human-required producer → trusted reply → fenced dispatcher path for $label ($mode)', async ({ label, language, code, ruleId, mode }) => {
+    { label: 'sensitive script path', language: 'python', code: 'open("/etc/hosts", "r").read()', ruleId: 'script-system-dir-confirm' },
+    { label: 'dynamic execution', language: 'python', code: 'exec("print(1)")', ruleId: 'script-path-unknown-confirm' }
+  ])('closes the real assembler → human-required producer → trusted reply → fenced dispatcher path for $label', async ({ label, language, code, ruleId }) => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
-    if (mode === 'development-test') setRemoteAsyncApprovalTestModeEnabled(true, false)
     const sessionId = createSession(db, { name: 'e2e-session' }).id
     const binding = ensureImTurnTaskControl(db, { sessionId, ownerId: 'owner', requestId: 'request-e2e', userMessageId: 'user-e2e' })
     if (!binding.ok) throw new Error('task binding unavailable')
@@ -576,7 +548,7 @@ describe('production IM deferred approval producer', () => {
     expect(deferred).toMatchObject({ kind: 'deferred' })
     const storedPolicyVersion = (getDbConnection(db).prepare('SELECT policy_behavior_version FROM deferred_todos WHERE todo_id=?')
       .get(deferred!.todoId) as { policy_behavior_version: string }).policy_behavior_version
-    expect(storedPolicyVersion).toMatch(mode === 'development-test' ? /^im-standard-v2:dev-test:/ : /^im-standard-v2$/)
+    expect(storedPolicyVersion).toBe('im-standard-v2')
     expect(channelRequest).not.toHaveBeenCalled()
     expect(agentChannelFactory).not.toHaveBeenCalled()
     expect(envelopeStore.get(call.invocationId)).toMatchObject({ canonicalArgs: call.input,

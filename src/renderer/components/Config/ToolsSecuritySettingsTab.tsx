@@ -71,10 +71,6 @@ function PolicyPackageSection({
   const [imDisabledRuleIds, setImDisabledRuleIds] = useState<string[]>([])
   const [imGateDisabled, setImGateDisabled] = useState(false)
   const [imGateReason, setImGateReason] = useState<string | null>(null)
-  const [imAutoReviewTestAvailable, setImAutoReviewTestAvailable] = useState(false)
-  const [imAutoReviewTestEnabled, setImAutoReviewTestEnabled] = useState(false)
-  const [imAsyncApprovalTestAvailable, setImAsyncApprovalTestAvailable] = useState(false)
-  const [imAsyncApprovalTestEnabled, setImAsyncApprovalTestEnabled] = useState(false)
 
   const actionLabel = (action: PolicyAction): string =>
     action === 'deny'
@@ -121,10 +117,6 @@ function PolicyPackageSection({
     if (isPolicyPackage(snapshot.selectedPackage)) setImPackageOverride(snapshot.selectedPackage)
     setImGateDisabled(snapshot.enabled !== true)
     setImGateReason(typeof snapshot.disabledReason === 'string' ? snapshot.disabledReason : null)
-    setImAutoReviewTestAvailable(snapshot.developmentAutoReviewTestAvailable === true)
-    setImAutoReviewTestEnabled(snapshot.developmentAutoReviewTestEnabled === true)
-    setImAsyncApprovalTestAvailable(snapshot.developmentAsyncApprovalTestAvailable === true)
-    setImAsyncApprovalTestEnabled(snapshot.developmentAsyncApprovalTestEnabled === true)
     setImRuleOverrides(snapshot.ruleOverrides && typeof snapshot.ruleOverrides === 'object' && !Array.isArray(snapshot.ruleOverrides)
       ? snapshot.ruleOverrides as Record<string, string> : {})
     setImDisabledRuleIds(Array.isArray(snapshot.disabledRuleIds)
@@ -500,56 +492,6 @@ function PolicyPackageSection({
                       <Space direction="vertical" align="start">
                         <span>{t('toolsSecurity.policy.currentStandardAvailableHint')}</span>
                         <Button onClick={switchImStandard}>{t('toolsSecurity.policy.switchToCurrentStandard')}</Button>
-                      </Space>
-                    )}
-                  />
-                ) : null}
-                {lane === 'wechat' && imAutoReviewTestAvailable ? (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message={t('toolsSecurity.policy.devAutoReviewTestTitle')}
-                    description={(
-                      <Space direction="vertical" align="start">
-                        <span>{t('toolsSecurity.policy.devAutoReviewTestHint')}</span>
-                        <Switch
-                          checked={imAutoReviewTestEnabled}
-                          checkedChildren={t('toolsSecurity.policy.devAutoReviewTestOn')}
-                          unCheckedChildren={t('toolsSecurity.policy.devAutoReviewTestOff')}
-                          onChange={async (enabled) => {
-                            try {
-                              const result = await window.api.securitySetImAutoReviewTestMode({ enabled })
-                              setImAutoReviewTestEnabled(result.enabled)
-                            } catch {
-                              message.error(t('toolsSecurity.policy.devAutoReviewTestFailed'))
-                            }
-                          }}
-                        />
-                      </Space>
-                    )}
-                  />
-                ) : null}
-                {lane === 'wechat' && imAsyncApprovalTestAvailable ? (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message={t('toolsSecurity.policy.devAsyncApprovalTestTitle')}
-                    description={(
-                      <Space direction="vertical" align="start">
-                        <span>{t('toolsSecurity.policy.devAsyncApprovalTestHint')}</span>
-                        <Switch
-                          checked={imAsyncApprovalTestEnabled}
-                          checkedChildren={t('toolsSecurity.policy.devAutoReviewTestOn')}
-                          unCheckedChildren={t('toolsSecurity.policy.devAutoReviewTestOff')}
-                          onChange={async (enabled) => {
-                            try {
-                              const result = await window.api.securitySetImAsyncApprovalTestMode({ enabled })
-                              setImAsyncApprovalTestEnabled(result.enabled)
-                            } catch {
-                              message.error(t('toolsSecurity.policy.devAsyncApprovalTestFailed'))
-                            }
-                          }}
-                        />
                       </Space>
                     )}
                   />

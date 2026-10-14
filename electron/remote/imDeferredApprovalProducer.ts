@@ -12,7 +12,6 @@ import type { createDeferredApprovalNotificationDelivery } from './deferredAppro
 import { createDeferredTodoAdmission } from '../confirmation/deferredTodoAdmission'
 import { createDeferredApprovalAdapter } from '../confirmation/deferredApprovalAdapter'
 import { resolveImAsyncApprovalDisposition } from '../confirmation/imAsyncApprovalPolicy'
-import { getRemoteAsyncApprovalTestRunId } from '../confirmation/remoteAsyncApprovalTestMode'
 import { commitDeferredTaskCheckpoint } from '../database/taskControl'
 import { getDbConnection } from '../database/sqliteStore'
 import { readImPolicySnapshot } from '../confirmation/imPolicyStore'
@@ -115,15 +114,14 @@ export function createImDeferredApprovalProducer(input: {
       remoteContext: RemoteContext
     ): Promise<ToolConfirmationResult | undefined> {
       const humanRequired = context.decision.disposition === 'human-required'
-      const testModeEnabled = getRemoteAsyncApprovalTestRunId() !== null
       const asyncEnabled = input.isEnabled()
       const cannotDefer = (reason: string): ToolConfirmationResult | undefined => {
         try { input.onFallback?.(reason) } catch { /* diagnostics must not affect authorization */ }
-        if (!humanRequired || (!asyncEnabled && !testModeEnabled)) return undefined
+        if (!humanRequired) return undefined
         return { kind: 'unavailable', cause: 'unavailable', userMessage: '异步审批暂时无法创建，请稍后重试。' }
       }
       if (((outcome as { answerer?: unknown }).answerer !== 'agent' && !humanRequired) || remoteContext.source !== input.channel) return undefined
-      if (!asyncEnabled) return testModeEnabled && humanRequired ? cannotDefer('runtime-disabled') : undefined
+      if (!asyncEnabled) return undefined
       const binding = remoteContext.taskBinding
       const identityKey = input.channel === 'feishu' ? remoteContext.chatId : remoteContext.userId
       const ownerId = remoteContext.authOwner
@@ -190,9 +188,8 @@ export function createImDeferredApprovalProducer(input: {
         const snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
         const epoch = conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='im'").get() as { epoch?: number } | undefined
         if (Number.isSafeInteger(epoch?.epoch)) {
-          const testRunId = getRemoteAsyncApprovalTestRunId()
           policyBinding = {
-            policyBehaviorVersion: testRunId ? `${snapshot.policyBehaviorVersion}:dev-test:${testRunId}` : snapshot.policyBehaviorVersion,
+            policyBehaviorVersion: snapshot.policyBehaviorVersion,
             policyRevision: snapshot.revision, policyEpoch: epoch!.epoch!
           }
         }

@@ -181,8 +181,6 @@ export interface ResolveConfirmChannelArgs {
   answererPolicy?: ConfirmAnswererPolicy
   /** Async IM approval rollout is independently default-off; only affects an unpinned IM answerer. */
   remoteAsyncApprovalEnabled?: boolean
-  /** Process-local dev test switch for policy-selected Agent auto-review; never opens async human approval. */
-  imAutoReviewTestEnabled?: boolean
   /** kind='agent' 的通道工厂（P2 注入 AgentChannel 构造；未注入而配置了 agent → fail-closed）。 */
   agentChannelFactory?: (deps: {
     lane: ExecutionLane
@@ -214,11 +212,7 @@ export function resolveConfirmChannel(args: ResolveConfirmChannelArgs): Confirma
     lane: args.lane,
     remoteAsyncApprovalEnabled: args.remoteAsyncApprovalEnabled
   })
-  const isLaneWithImTransport = args.lane === 'wechat' || args.lane === 'feishu'
-  const answerer = isLaneWithImTransport && args.remoteAsyncApprovalEnabled !== true &&
-    args.imAutoReviewTestEnabled !== true && configuredAnswerer.kind === 'agent'
-    ? { kind: 'user' as const }
-    : configuredAnswerer
+  const answerer = configuredAnswerer
 
   // 配置损坏：kind 非法 → deny + 告警（无人值守上下文不回退 user；有人值守链路的失败去向由链路策略决定）
   if (answerer.kind !== 'user' && answerer.kind !== 'agent' && answerer.kind !== 'deny') {

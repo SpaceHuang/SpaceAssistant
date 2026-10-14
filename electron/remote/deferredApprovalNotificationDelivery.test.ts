@@ -1,12 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
-import { getDbConnection } from '../database/sqliteStore'
-import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
-import { getRemoteAsyncApprovalTestRunId, setRemoteAsyncApprovalTestModeEnabled } from '../confirmation/remoteAsyncApprovalTestMode'
 
 function seed(db: ReturnType<typeof openDatabase>) {
   const todoStore = createDeferredTodoStore(db)
@@ -28,43 +25,6 @@ const safeContent = { safeActionSummary: '更新项目说明', safeTargetSummary
 const scope = { channel: 'feishu' as const, identityKey: 'delivery-chat', ownerId: 'delivery-owner', authorizationEpoch: 8 }
 
 describe('deferred approval notification delivery reconciliation contract', () => {
-  afterEach(() => { setRemoteAsyncApprovalTestModeEnabled(false, false) })
-
-  it('never retries an undelivered notification from a previous development test run', async () => {
-    const temp = createTempDatabase('approval-notification-test-run-')
-    const conn = getDbConnection(temp.db)
-    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1,
-      eventId: 'approval-notification-test-run-policy' })
-    setRemoteAsyncApprovalTestModeEnabled(true, false)
-    const runId = getRemoteAsyncApprovalTestRunId()!
-    const todoStore = createDeferredTodoStore(temp.db)
-    const now = Date.now()
-    const todo = todoStore.create({ todoId: 'stale-test-notification-todo', invocationId: 'stale-test-notification-invocation',
-      channel: 'feishu', identityKey: scope.identityKey, ownerId: scope.ownerId, authorizationEpoch: scope.authorizationEpoch,
-      rule: { ruleId: 'write', factsHash: 'b'.repeat(64) }, workflowId: 'workflow', taskId: 'task', stepId: 'step', planRevision: 3,
-      originSessionId: 'stale-test-notification-session', createdAt: now, expiresAt: now + 60_000,
-      policyBehaviorVersion: `im-standard-v2:dev-test:${runId}` }).todo
-    const intentStore = createSecurityActionIntentStore(temp.db)
-    intentStore.prepare({ invocationId: todo.invocationId, envelopeInvocationId: todo.invocationId, sessionId: todo.originSessionId,
-      workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: todo.planRevision })
-    intentStore.linkTodo(todo.invocationId, todo.todoId)
-    intentStore.commitCheckpoint(todo.invocationId, { checkpointId: 'stale-test-notification-checkpoint', workflowRevision: 4 })
-    const adapter = { send: vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ messageId: 'must-not-send' }) }
-    const delivery = createDeferredApprovalNotificationDelivery({ db: temp.db, todoStore, intentStore, adapter,
-      allocateShortCode: () => '21', audit: vi.fn() })
-
-    await expect(delivery.createAndSend({ todoId: todo.todoId, invocationId: todo.invocationId, ...scope, rule: todo.rule, ...safeContent }))
-      .resolves.toMatchObject({ state: 'undelivered', notificationVersion: 1 })
-    setRemoteAsyncApprovalTestModeEnabled(false, false)
-    setRemoteAsyncApprovalTestModeEnabled(true, false)
-
-    await expect(delivery.retryForAuthenticatedInbound({ ...scope, now: now + 1 })).resolves.toEqual([])
-    expect(delivery.list(todo.todoId)).toMatchObject([{ state: 'invalidated', notificationVersion: 1 }])
-    expect(adapter.send).toHaveBeenCalledTimes(1)
-    temp.db.close()
-    temp.cleanup()
-  })
-
   it('recovers an undelivered notification after database reopen without changing todo scope or expiry', async () => {
     const temp = createTempDatabase('approval-notification-reopen-')
     const stores = seed(temp.db)

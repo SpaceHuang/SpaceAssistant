@@ -233,32 +233,27 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     expect(factory).toHaveBeenCalledOnce()
   })
 
-  it('IM explicit agent policy is fenced by the independent rollout switch', () => {
-    const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
+  it('honors an explicit Agent answerer selected by policy regardless of async human-approval rollout', () => {
     const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
-    const closed = resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, imChannel: im,
-      buildImPending: () => ({ sessionId: 's-rcc', messageId: 'm1', matchKey: 'u1' }) })
-    expect(closed).toBeInstanceOf(ImRequestChannel)
-    expect(factory).not.toHaveBeenCalled()
-    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, remoteAsyncApprovalEnabled: true, agentChannelFactory: factory })
+    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, remoteAsyncApprovalEnabled: false, agentChannelFactory: factory })
     expect(factory).toHaveBeenCalledOnce()
   })
 
-  it('keeps human-required IM actions on the user confirmation channel even when development auto-review is enabled', () => {
+  it('keeps human-required IM actions on the user confirmation channel when async approval is disabled', () => {
     const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
     const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
     const channel = resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'user' },
-      imAutoReviewTestEnabled: true, remoteAsyncApprovalEnabled: false, imChannel: im, buildImPending: buildPending,
+      remoteAsyncApprovalEnabled: false, imChannel: im, buildImPending: buildPending,
       agentChannelFactory: factory })
     expect(channel).toBeInstanceOf(ImRequestChannel)
     expect(factory).not.toHaveBeenCalled()
   })
 
-  it('allows Agent auto-review in an explicitly enabled development test session without opening the async approval gate', () => {
+  it('allows policy-selected Agent auto-review without opening the async human-approval gate', () => {
     const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
     const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
     resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, imChannel: im,
-      imAutoReviewTestEnabled: true, buildImPending: buildPending, agentChannelFactory: factory })
+      remoteAsyncApprovalEnabled: false, buildImPending: buildPending, agentChannelFactory: factory })
     expect(factory).toHaveBeenCalledOnce()
   })
 

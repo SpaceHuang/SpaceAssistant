@@ -118,8 +118,6 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
         domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5, snapshot: { selectedPackage: 'standard' }
       }),
       securityWritePolicy: vi.fn().mockResolvedValue({ status: 'committed', revision: 6 }),
-      securitySetImAutoReviewTestMode: vi.fn().mockImplementation(async ({ enabled }) => ({ enabled })),
-      securitySetImAsyncApprovalTestMode: vi.fn().mockImplementation(async ({ enabled }) => ({ enabled })),
       securitySetPolicyPackage: vi.fn().mockResolvedValue({ ok: true }),
       securitySetRuleOverride: vi.fn().mockResolvedValue({ ok: true }),
       securitySetRuleEnabled: vi.fn().mockResolvedValue({ ok: true }),
@@ -206,32 +204,6 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     expect(within(panel).getByText('正式渠道的安全关闭或回退状态仍生效。')).toBeTruthy()
   })
 
-  it('开发实例显示自动审核测试开关并将选择写入主进程', { timeout: 20000 }, async () => {
-    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
-      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
-      snapshot: { selectedPackage: 'standard', enabled: false, developmentAutoReviewTestAvailable: true, developmentAutoReviewTestEnabled: false }
-    })
-    renderTab()
-    const panel = await openLaneTab('IM 远程')
-    expect(within(panel).getByText('开发测试：自动审核')).toBeTruthy()
-    fireEvent.click(within(panel).getAllByRole('switch')[0]!)
-    await waitFor(() => expect(window.api.securitySetImAutoReviewTestMode).toHaveBeenCalledWith({ enabled: true }))
-  })
-
-  it('开发实例显示独立的异步审批测试开关并将选择写入主进程', { timeout: 20000 }, async () => {
-    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
-      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
-      snapshot: { selectedPackage: 'standard', enabled: false,
-        developmentAsyncApprovalTestAvailable: true, developmentAsyncApprovalTestEnabled: false }
-    })
-    renderTab()
-    const panel = await openLaneTab('IM 远程')
-    expect(within(panel).getByText('开发测试：异步审批往返')).toBeTruthy()
-    fireEvent.click(within(panel).getAllByRole('switch')[0]!)
-    await waitFor(() => expect(window.api.securitySetImAsyncApprovalTestMode).toHaveBeenCalledWith({ enabled: true }))
-    expect(within(panel).getByText('异步人工审批通知尚未启用')).toBeTruthy()
-  })
-
   it('普通 gate 关闭时只说明当前审批仍由用户确认', { timeout: 20000 }, async () => {
     window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
       domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 8,
@@ -239,7 +211,7 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     })
     renderTab()
     const panel = await openLaneTab('IM 远程')
-    expect(await within(panel).findByText(/需要人工确认的操作仍会发给你批准/)).toBeTruthy()
+    expect(await within(panel).findByText(/需要人工确认的操作会在当前微信或飞书会话中等待你同步确认/)).toBeTruthy()
     expect(within(panel).queryByText(/灰度账号范围/)).toBeNull()
     expect(within(panel).queryByText(/引用\/短码匹配验证/)).toBeNull()
   })

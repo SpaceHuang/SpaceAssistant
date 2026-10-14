@@ -6,7 +6,6 @@ import { openDatabase } from '../database'
 import { createDeferredTodoStore, DEFAULT_DEFERRED_TODO_TTL_MS } from './deferredTodoStore'
 import { applyRemoteTrackLifecycleEvent, createRemoteTrack } from '../database/remoteTrackStore'
 import { commitImPolicySnapshot } from './imPolicyStore'
-import { getRemoteAsyncApprovalTestRunId, setRemoteAsyncApprovalTestModeEnabled } from './remoteAsyncApprovalTestMode'
 
 const trustedTodo = {
   todoId: 'todo-store-1',
@@ -27,28 +26,6 @@ const trustedTodo = {
 }
 
 describe('deferred todo authorization binding', () => {
-  it('persists a process-local async approval test fence only for the active development run', () => {
-    const db = createMemoryAppDb()
-    const conn = getDbConnection(db)
-    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'test-run-policy-seed' })
-    try {
-      setRemoteAsyncApprovalTestModeEnabled(true, false)
-      const runId = getRemoteAsyncApprovalTestRunId()!
-      const store = createDeferredTodoStore(db)
-      const current = store.create({ ...trustedTodo, todoId: 'test-run-current', invocationId: 'test-run-current-inv',
-        policyBehaviorVersion: `im-standard-v2:dev-test:${runId}` }).todo
-      expect(current.policyBehaviorVersion).toBe(`im-standard-v2:dev-test:${runId}`)
-
-      setRemoteAsyncApprovalTestModeEnabled(false, false)
-      setRemoteAsyncApprovalTestModeEnabled(true, false)
-      expect(() => store.create({ ...trustedTodo, todoId: 'test-run-stale', invocationId: 'test-run-stale-inv',
-        policyBehaviorVersion: `im-standard-v2:dev-test:${runId}` })).toThrow('DEFERRED_TEST_POLICY_FENCE_INVALID')
-    } finally {
-      setRemoteAsyncApprovalTestModeEnabled(false, false)
-      db.close()
-    }
-  })
-
   it('persists the shared IM policy version, revision, and epoch captured at todo creation', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
