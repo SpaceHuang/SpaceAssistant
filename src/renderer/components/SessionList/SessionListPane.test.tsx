@@ -16,6 +16,8 @@ vi.mock('../../services/chatRunnerService', () => ({
   abortSessionRun: vi.fn()
 }))
 
+import { abortSessionRun } from '../../services/chatRunnerService'
+
 vi.mock('../../hooks/usePendingConfirmSnapshot', () => ({
   usePendingConfirmSnapshot: () => pendingItems.current
 }))
@@ -145,6 +147,38 @@ describe('SessionListPane rename', () => {
     expect(screen.getAllByText('待确认')).toHaveLength(2)
     fireEvent.click(screen.getByRole('button', { name: '会话 A，2 项待确认' }))
     expect(store.getState().chat.confirmFocusToolUseId).toBe('earliest')
+  })
+})
+
+describe('SessionListPane stopRun', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    store.dispatch(setSessions([]))
+    store.dispatch(setSession(null))
+    pendingItems.current = []
+    await changeAppLocale('zh-CN')
+    window.api = { ...window.api } as typeof window.api
+  })
+
+  it('accepted=true：取消被接受，提示已中止', async () => {
+    vi.mocked(abortSessionRun).mockResolvedValue(true)
+    store.dispatch(setChatStatus({ status: 'streaming', sessionId: 's1', requestId: 'r1', turnId: 't1' }))
+    renderPane([stubSession('s1', '会话 A')])
+
+    fireEvent.click(screen.getByRole('button', { name: '中止「会话 A」的执行' }))
+
+    await waitFor(() => expect(screen.getByText('已中止该会话的执行')).toBeDefined())
+  })
+
+  it('accepted=false：任务已结束，提示无需中止且不再谎报已中止', async () => {
+    vi.mocked(abortSessionRun).mockResolvedValue(false)
+    store.dispatch(setChatStatus({ status: 'streaming', sessionId: 's1', requestId: 'r1', turnId: 't1' }))
+    renderPane([stubSession('s1', '会话 A')])
+
+    fireEvent.click(screen.getByRole('button', { name: '中止「会话 A」的执行' }))
+
+    await waitFor(() => expect(screen.getByText('该任务已结束，无需中止')).toBeDefined())
+    expect(screen.queryByText('已中止该会话的执行')).toBeNull()
   })
 })
 

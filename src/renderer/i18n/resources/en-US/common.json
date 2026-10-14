@@ -64,6 +64,7 @@
   },
   "session": {
     "aborted": "Stopped execution for this session",
+    "alreadyEnded": "This task has already ended; nothing to stop",
     "createFailed": "Could not create session. Try again later.",
     "created": "Session created",
     "defaultName": "Session {{index}}",

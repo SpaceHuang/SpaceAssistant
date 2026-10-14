@@ -492,7 +492,8 @@ export function ChatView() {
   )
 
   const abort = useCallback(() => {
-    if (sessionId) abortSessionRun(sessionId)
+    // 输入区按钮静默止血：反馈就是按钮态变化本身，不弹提示（accepted 分支只归列表按钮）
+    if (sessionId) void abortSessionRun(sessionId)
   }, [sessionId])
 
   const persistSkillHintSystemMessage = useCallback(

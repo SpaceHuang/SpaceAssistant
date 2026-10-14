@@ -64,6 +64,7 @@
   },
   "session": {
     "aborted": "已中止该会话的执行",
+    "alreadyEnded": "该任务已结束，无需中止",
     "createFailed": "创建会话失败，请稍后重试",
     "created": "已创建会话",
     "defaultName": "会话 {{index}}",

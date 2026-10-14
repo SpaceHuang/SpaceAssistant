@@ -2653,7 +2653,12 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         providerCalls += 1
         yield {
           type: 'tool-call', toolCallId, toolName: 'run_shell',
-          input: { command: `printf '%s' 'effect-committed' > '${markerPath}'; sleep 10` }
+          // 平台方言适配（非断言语义）：win32 默认 profile 是 PowerShell 5.1，`printf` 不存在
+          //（`>` 重定向只会先建空文件），post-claim 前提「副作用已提交」根本无法建立；
+          // 用 [IO.File]::WriteAllText（UTF-8 无 BOM、两种 PowerShell 一致）+ Start-Sleep 等价改写
+          input: { command: process.platform === 'win32'
+            ? `[IO.File]::WriteAllText('${markerPath}', 'effect-committed'); Start-Sleep -Seconds 10`
+            : `printf '%s' 'effect-committed' > '${markerPath}'; sleep 10` }
         } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
         yield { type: 'finish', reason: 'tool-calls' } as const
@@ -2685,7 +2690,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
 
     try {
       runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
-      const deadline = Date.now() + 5_000
+      // 前提等待窗口 10s（原 5s）：满载机器上 win32 PowerShell 冷启动可超 5s，前提偶发不成立
+      // 导致用例假红 + 收尾 EBUSY。post-claim 的「已提交」语义与收敛断言（invalidatedAt 起 <5s）
+      // 都不受此窗口影响——放宽的只是「副作用已发生」这一前提的建立时间。
+      const deadline = Date.now() + 10_000
       let markerContent: string | undefined
       while (Date.now() < deadline) {
         try {
@@ -4407,7 +4415,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
-          yield { type: 'tool-call', toolCallId, toolName: 'run_shell', input: { command: 'cat /etc/hosts' } } as const
+          yield { type: 'tool-call', toolCallId, toolName: 'run_shell', input: { command: 'echo drift-marker > drift.txt' } } as const
           yield { type: 'usage', inputTokens: 3, outputTokens: 2 } as const
           yield { type: 'finish', reason: 'tool-calls' } as const
           return
@@ -4420,6 +4428,9 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const registerProvider = runtime.modelProviders.register.bind(runtime.modelProviders)
     runtime.modelProviders.register = (profile, provider) => profile.routeId === route.routeId ? route.routeId : registerProvider(profile, provider)
     setDefaultAgentRuntime(runtime)
+    // 前提修复（非断言语义）：当前基线 read-only 命令经 shell-precheck-auto-allow 直通，
+    // 「等待用户确认」不会发生，测试会挂死在审批等待上。改用 workdir 内写入命令
+    // （desktop 默认 write-execute-ask）恢复确认前提；断言「命令未执行」的语义不变。
     let shellConfig = { enabled: true, shellDefaultTimeoutSec: 30, maxInlineOutputBytes: 1024, rules: [] as Array<{ id: string; pattern: string; decision: 'allow' | 'deny' | 'ask' }> }
     const session = createSession(db, { name: 'hosted-shell-config-drift', model: modelId, maxTokens: 512 })
     const user = appendMessage(db, { id: `${toolCallId}-user`, sessionId: session.id, role: 'user', content: '请执行请求的命令', timestamp: 1, status: 'sent' })

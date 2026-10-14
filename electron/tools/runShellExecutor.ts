@@ -392,9 +392,16 @@ export async function executePreparedShellExecution(
       void supervisor.terminate().then((result) => { terminationResult = result })
     }, timeoutSec * 1000)
 
+    let abortTermination: Promise<void> | undefined
     const onAbort = () => {
       interrupted = true
-      void supervisor.terminate().then((result) => { terminationResult = result })
+      // 1c① 收尾：abort 分支锚定 terminate 完成（supervisor 内置 3s 截止；taskkill 失败时
+      // killer 内部已升级 proc.kill 强杀，不新写终止逻辑）。结果回写 terminationResult，
+      // close 路径经 supervisor 的同一 pending 复用，不重复杀树。
+      abortTermination = supervisor.terminate().then(
+        (result) => { terminationResult = result },
+        () => undefined
+      )
     }
     ctx.signal.addEventListener('abort', onAbort)
 
@@ -464,7 +471,10 @@ export async function executePreparedShellExecution(
       const contractConflict = stderrMeta.contractConflict ?? stdoutMeta.contractConflict
 
       void (async () => {
-        if (interrupted && !terminationResult) {
+        if (abortTermination) {
+          // abort/超时已发起终止：等它收尾完成再结算，保证结果落库时进程树已终结
+          await abortTermination
+        } else if (interrupted && !terminationResult) {
           terminationResult = await supervisor.terminate()
         }
         let persistedOutputPath: string | undefined

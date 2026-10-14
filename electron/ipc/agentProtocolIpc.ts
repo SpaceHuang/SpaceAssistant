@@ -943,6 +943,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const turn = typeof turnRuntime.getTurn === 'function' ? turnRuntime.getTurn(turnId) : undefined
     getCallAdmissionGate().cancelByTurnId(turnId)
     const cancelled = turnRuntime.cancel(turnId)
+    // turn.cancel：「取消被没被接受」的权威记录（accepted = coordinator 是否受理）。
+    // turn 取不到时省略 requestId 字段，不编造。
+    logAgentEvent('warn', 'turn.cancel', {
+      turnId,
+      ...(turn ? { requestId: turn.requestId } : {}),
+      accepted: cancelled
+    })
     if (cancelled && controller) {
       controller.abort()
       configuringAbortControllers.delete(turnId)
