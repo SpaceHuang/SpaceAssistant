@@ -2,7 +2,7 @@
 
 `packages/agent-sdk`（包名 `@spaceassistant/agent-sdk`）是 SpaceAssistant 的 **SDK 面**：契约类型 + 端口接口 + 纯 runtime 核。本目录按模块梳理它对外暴露的接口，供宿主（electron 主进程）装配方与 SDK 维护者查阅。
 
-> **基准**：本目录对齐 `main` 提交 `8e3c5d12`。文档首版落在 `e5801089`；此后并入的第一批是 `c76c7aab`、`fa796649`（turn 超时语义（`AgentTurnTimedOutError` / `TURN_TIMED_OUT` / `REQUEST_TIMEOUT`）、审批获批后才激活应用运行槽、执行端口在派发声明之后的 abort 复检、`InvocationRuntime` 的 park 家族下线）与 `ae092513`（provider 取消结算：`CollectedModelStream` 的 cancelled 分支允许缺 `usage`、取消尝试先投影 usage 并写 `model-attempt-discarded` 再抛取消 / 超时、非 cancelled 尝试缺 usage 视为流非法）。
+> **基准**：本目录对齐 `main` 提交 `17236274`（2026-10-14 更新；原为 `8e3c5d12`）。核对窗口 `git log 8e3c5d12..17236274 -- packages/agent-sdk/src`。文档首版落在 `e5801089`；此后并入的第一批是 `c76c7aab`、`fa796649`（turn 超时语义（`AgentTurnTimedOutError` / `TURN_TIMED_OUT` / `REQUEST_TIMEOUT`）、审批获批后才激活应用运行槽、执行端口在派发声明之后的 abort 复检、`InvocationRuntime` 的 park 家族下线）与 `ae092513`（provider 取消结算：`CollectedModelStream` 的 cancelled 分支允许缺 `usage`、取消尝试先投影 usage 并写 `model-attempt-discarded` 再抛取消 / 超时、非 cancelled 尝试缺 usage 视为流非法）。
 >
 > 第二批（本次核对，基准从 `4e3d44fd` 推进到 `8e3c5d12`）主要集中在**会话存储重构**及其连带修复：
 >
@@ -50,7 +50,7 @@
 | [model-provider.md](./model-provider.md) | `src/model.ts`、`src/provider.ts` | 模型流契约（`StreamChunk`）、canonical 消息、provider 路由注册表与校验 |
 | [turn-loop.md](./turn-loop.md) | `src/turn.ts` | 单回合主循环：模型轮次、工具阶段、输出上限恢复、终态结算 |
 | [safety-approval.md](./safety-approval.md) | `capability.ts`、`safetyPermit.ts`、`safetyGate.ts`、`executionAdmission.ts`、`toolExecutionPort.ts`、`approval.ts`、`confirmationCommit.ts` | 能力投影 → 策略决策 → 许可签发 → 执行准入 → 审批容量与提交状态机 |
-| [history.md](./history.md) | `src/history.ts` | 调用级事件流：追加、校验、幂等、重启状态重建 |
+| [history-port.md](./history-port.md) | `src/history.ts` | 调用级事件流：追加、校验、幂等、重启状态重建 |
 | [context.md](./context.md) | `src/context.ts`、`src/contextIdentity.ts` | 会话 / 调用上下文端口：无损材料、fence / evidence 能力模型、单一 writer 提交 |
 | [lifecycle-capacity-scheduler.md](./lifecycle-capacity-scheduler.md) | `lifecycle.ts`、`capacity.ts`、`scheduler.ts`、`resourceLock.ts` | 调用生命周期账本、容量共享账本、依赖调度器、资源互斥锁 |
 | [host-ports.md](./host-ports.md) | `src/invocation.ts` | Agent 调用契约与宿主端口集合（装配方主入口） |
@@ -117,3 +117,38 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 2. **导出面自检**：比对 `src/**/*.ts` 的 `export` 与本文档正文，确认新增 / 删除的符号都已覆盖（易漏点：`turn.ts` 的未导出错误类与 `@internal` 的 `contextFrameFromMessages`、`context.ts` 的内部面（`ContextRegistrar` / 适配器 / `CONTEXT_*` 错误码）、`contextIdentity.ts` 的不经入口导出、`scheduler.ts` 的联合类型与已下线的 park 家族）。
 3. **行为自检**：`turn.ts`（阶段顺序、`planContextReplacement` 的三个调用点与 reasonCode）、`context.ts`（登记表校验与 `committed` / `stale` / `no-op` / `commit-uncertain` 判定）、`toolExecutionPort.ts`（派发前后的边界判定）、`scheduler.ts`（并发 / 预留 / 资源冲突）、`history.ts`（事件 kind、transcript 提交意图与终态集合）最易与文档漂移。
 4. 基准提交更新后，同步修改上方「基准」行。
+
+## 主题定位与命名沿革
+
+本目录是 `agent-sdk` 主题的入口（Agent SDK：内核、契约与模型接入）。它同时承载 SDK 接口说明与 runtime 设计：
+
+- **命名沿革**：**Agent Core / Core / agent-core 是 Agent SDK（`packages/agent-sdk`）的早期称呼**。新增与改写文档一律用现役术语；历史文件名保留原名。核验：`rg -n 'agentCore|agent-core' electron/` 无匹配。
+- **主要代码域**：`packages/agent-sdk/src/*`、`electron/toolChatLoop.ts`、`electron/driver/`、`electron/butler/`、`electron/llmServiceResolver.ts`、`electron/usageStats/`。
+- 本目录另有 [`runtime/`](./runtime/)（01–10 + README，**原地不动**）：Runtime 形状与契约的设计系列（设计稿，未实施），迁移路径骨架见第八篇 §5。
+
+## 本主题现状与设计文档（汇总）
+
+| 文档 | 类型 |
+| --- | --- |
+| [agent-sdk-architecture-development-plan.md](./agent-sdk-architecture-development-plan.md) | 方案（实施中，724 KB；架构落地主线） |
+| [agent-sdk-architecture-migration-baseline.md](./agent-sdk-architecture-migration-baseline.md) | 迁移前形态冻结基线 |
+| [runtime/](./runtime/)（11 篇） | 设计系列（未开工） |
+| 本 README + 10 篇接口说明 | SDK 接口现状 |
+
+## 在途（in-flight）
+
+- [agent-loop-single-path-refactor-plan.md](./in-flight/agent-loop-single-path-refactor-plan.md) —— v2 复审意见已吸收，待下一轮复审后实施
+- [context-injection-refactor-plan.md](./in-flight/context-injection-refactor-plan.md) —— 待复审
+- [tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md](./in-flight/tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md) —— v3 待复审
+- [runtime-admission-sdk-reuse-plan.md](./in-flight/runtime-admission-sdk-reuse-plan.md) —— v1.1 待评审
+- [butler-agent-shortest-path-plan.md](./in-flight/butler-agent-shortest-path-plan.md) —— v3 待评审
+- [b344321-current-code-refactor-plan.md](./in-flight/b344321-current-code-refactor-plan.md) —— 无状态行
+
+## 归档
+
+已完成迭代原件见 [`../archive/agent-sdk/`](../archive/agent-sdk/)（12 件），含生命周期改进与契约矩阵、上下文 token 成本优化、`agent-core-contract-path-refactor-plan.md`（旧称，文件名保留）、驱动权限重构、失败 turn 续跑、工具错误恢复与 turn 连续性、`batch3-p0-evidence-audit.md`。映射见 [`../archive/INDEX.md`](../archive/INDEX.md)。
+
+## 迭代历史
+
+见 [history.md](./history.md)。
+
