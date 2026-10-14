@@ -242,7 +242,7 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
       cmd = full.slice(0, 2000)
     }
   }
-  return `${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${String(cmd).slice(0, 2000)}\n${justification ? `调用理由${truncatedNote}：\n${justification.slice(0, 2000)}\n` : ''}${footer}（10 分钟内有效）`
+  return `${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${String(cmd).slice(0, 2000)}\n${justification ? `调用理由${truncatedNote}：\n${justification}\n` : ''}${footer}（10 分钟内有效）`
 }
 
 /** Confirm replies are only accepted from the bound owner in a p2p chat. */

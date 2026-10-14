@@ -10,6 +10,31 @@ import type { Message } from '../../src/shared/domainTypes'
 
 describe('createAgentSdkDesktopObserver', () => {
   afterEach(() => vi.unstubAllEnvs())
+  it('persists the committed run_shell input snapshot instead of the raw streamed chunk', async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const facts: unknown[] = []
+    const observer = createAgentSdkDesktopObserver({
+      requestId: 'normalized-shell-reason', sessionId: 's', turnId: 't',
+      emitSessionEvent: (event) => events.push(event as { type: string; payload: Record<string, unknown> }),
+      emitFactEvent: (event) => facts.push(event)
+    })
+    const rawInput = { command: 'pwd', justification: `  ${'x'.repeat(2_001)}  ` }
+    const committedInput = { command: 'pwd', justification: 'x'.repeat(2_000), _justificationTruncated: true }
+
+    await observer.onModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
+      messages: [{ role: 'user', content: 'check current directory' }], maxTokens: 100, tools: []
+    } })
+    await observer.onModelChunk?.({ type: 'tool-call', toolCallId: 'shell-1', toolName: 'run_shell', input: rawInput })
+    await observer.onModelResponseCommitted?.({
+      modelTurn: 1, finishReason: 'tool-calls', usage: { type: 'usage', inputTokens: 3, outputTokens: 2 },
+      message: { role: 'assistant', toolCalls: [{ id: 'shell-1', name: 'run_shell', input: committedInput }] }
+    })
+
+    expect(events.find((event) => event.type === 'tool_call')?.payload.args).toEqual(committedInput)
+    expect(facts.find((fact) => (fact as { type?: string }).type === 'tool-use')).toMatchObject({
+      type: 'tool-use', id: 'shell-1', input: committedInput
+    })
+  })
   it('projects dispatch-stop, slot materialization, and failure attribution diagnostics', async () => {
     const events: unknown[] = []
     const diagnostics = vi.fn()

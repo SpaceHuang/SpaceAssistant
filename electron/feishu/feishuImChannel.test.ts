@@ -166,6 +166,17 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     expect(text).toContain('调用理由（内容已截断）：\n<script>检查目录')
   })
 
+  it('飞书确认文本完整保留 2,000 个 Unicode 码点的合法理由', () => {
+    const justification = '😀'.repeat(1_500)
+    const text = buildFeishuConfirmPromptText({
+      id: 'shell-unicode-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification },
+      messageId: 'm1', channel: 'feishu', memoryTiers: [], createdAt: 0, expiresAt: 0
+    })
+    expect(text).toContain(`调用理由：\n${justification}\n`)
+    expect(text).not.toContain('调用理由（内容已截断）')
+  })
+
   it('并行 run_shell 确认通过真实飞书发送入口保留各自命令和调用理由', async () => {
     const { replyFeishuTextWithId: sendPrompt } = await import('./feishuReply')
     vi.mocked(sendPrompt).mockClear()

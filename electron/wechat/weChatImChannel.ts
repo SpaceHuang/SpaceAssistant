@@ -213,7 +213,7 @@ export function buildWeChatConfirmPrompt(pending: ImPendingConfirm, progressPref
   })
   const command = tool === 'run_shell' && typeof pending.toolInput?.command === 'string' ? pending.toolInput.command.slice(0, 2000) : ''
   const rawJustification = tool === 'run_shell' && typeof pending.toolInput?.justification === 'string' ? pending.toolInput.justification.trim() : ''
-  const justification = rawJustification ? runShellJustificationForDisplay(rawJustification).slice(0, 2000) : ''
+  const justification = rawJustification ? runShellJustificationForDisplay(rawJustification) : ''
   const truncatedNote = pending.toolInput?._justificationTruncated === true ? '（内容已截断）' : ''
   const summary = `该操作需在确认后执行：\n工具：${tool}${command ? `\n命令：${command}` : ''}${justification ? `\n调用理由${truncatedNote}：\n${justification}` : ''}\n${footer}`
   const prefix = progressPrefix.trim() || `【进度】等待确认：${tool}`

@@ -201,6 +201,17 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     expect(prompt).toContain('调用理由（内容已截断）：\n查看目录\n确定项目根路径')
   })
 
+  it('微信确认文本完整保留 2,000 个 Unicode 码点的合法理由', () => {
+    const justification = '😀'.repeat(1_500)
+    const prompt = buildWeChatConfirmPrompt({
+      id: 'shell-unicode-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification },
+      messageId: 'm1', channel: 'wechat', memoryTiers: [], createdAt: 1, expiresAt: 2
+    })
+    expect(prompt).toContain(`调用理由：\n${justification}\n`)
+    expect(prompt).not.toContain('调用理由（内容已截断）')
+  })
+
   it('并行 run_shell 确认通过微信发送入口保留各自命令和调用理由', async () => {
     const im = new WeChatImChannel({ getReplyBot })
     const start = (suffix: string) => im.request(req('run_shell'), {
