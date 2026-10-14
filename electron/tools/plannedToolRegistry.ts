@@ -19,8 +19,9 @@ export interface ToolExecutionContext extends InvocationContext {
   toolName?: string
   /** 仅供兼容 planned adapter 传递执行所需 IO 能力；不用于重新计划。 */
   runtimeContext?: RuntimeToolExecutionContext
-  /** Present only after the host rechecked a concrete user confirmation receipt. */
+  /** Present only after the host rechecked a concrete confirmation receipt. */
   userConfirmationReceipt?: string
+  userConfirmationAnswerer?: 'user' | 'agent'
 }
 
 export interface PreparedInvocation {

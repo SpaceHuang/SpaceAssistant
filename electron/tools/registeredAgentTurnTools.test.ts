@@ -12,7 +12,7 @@ import { ResourceLockRegistry } from '../../packages/agent-sdk/src/resourceLock'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { ModelProviderRegistry, type StreamChunk } from '../../packages/agent-sdk/src/model'
 import { defineDirectTool, definePlannedTool, TypedToolRegistry } from './plannedToolRegistry'
-import { createRegisteredAgentTurnTools } from './registeredAgentTurnTools'
+import { createRegisteredAgentTurnTools, DeferredToolPreDispatchError } from './registeredAgentTurnTools'
 import { createReadRegisteredTools } from './readRegisteredTools'
 import { buildReadExecutionPermit } from '../confirmation/readExecutionPermit'
 import { createWriteFileRegisteredTools } from './writeFileRegisteredTools'
@@ -85,6 +85,23 @@ describe('createRegisteredAgentTurnTools', () => {
       invocationId: 'deferred-invocation', toolCallId: 'deferred-tool-call', phase: 'recheck' })
     expect(execute).toHaveBeenCalledOnce()
     expect(result).toMatchObject({ output: { success: true, data: 'approved execution' }, isError: false })
+  })
+
+  it('classifies approval recheck denial before dispatch as a known non-execution', async () => {
+    const execute = vi.fn(async () => ({ success: true }))
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw, execute }))
+    const tools = createRegisteredAgentTurnTools({
+      requestId: 'deferred-predispatch-request', turnId: 'deferred-predispatch-turn', registry,
+      permits: new InMemorySafetyPermitStore(), admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ sessionId: 'deferred-predispatch-session', lane: 'wechat' }),
+      resolveAuthorizationVersion: () => 'policy-v2'
+    })
+    await expect(tools.executeDeferred({ invocationId: 'deferred-predispatch-invocation', toolCallId: 'deferred-predispatch-call',
+      toolName: 'write_file', input: { path: 'report.txt', content: 'approved' } }, {
+      confirmationReceipt: 'approval:reply-predispatch', authorize: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+    })).rejects.toBeInstanceOf(DeferredToolPreDispatchError)
+    expect(execute).not.toHaveBeenCalled()
   })
 
   it('IM 异步审批持久化待办并 park invocation，不继续模型循环或执行原工具', async () => {
@@ -378,7 +395,7 @@ describe('createRegisteredAgentTurnTools', () => {
       requestId, turnId, registry, permits, admission: new InMemoryExecutionAdmissionCoordinator(),
       createExecutionContext: () => ({ workDir: '/workspace/initial', toolUserConfirmed: false }),
       refreshExecutionContext: (_call, stage, current) => {
-        expect(stage).toEqual({ kind: 'recheck', confirmation: { receipt: 'approved' } })
+        expect(stage).toEqual({ kind: 'recheck', confirmation: { receipt: 'approved', answerer: 'user' } })
         current.readExecutionPermit = 'mutated-in-place'
         return { workDir: '/workspace/current', toolUserConfirmed: true, readExecutionPermit: 'spoofed-replacement' }
       },

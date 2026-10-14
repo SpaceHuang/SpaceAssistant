@@ -36,6 +36,7 @@ import { scheduleStartupWakeRecovery } from '../remote/startupWakeRecovery'
 import { createDeferredImBundleRuntime } from '../remote/deferredImBundleRuntime'
 import { recheckDeferredTaskControl } from '../remote/deferredImDispatch'
 import { executeDeferredImTool } from '../remote/imDeferredToolExecutor'
+import { DeferredToolPreDispatchError } from '../tools/registeredAgentTurnTools'
 import { createImDeferredApprovalProducer, createImDeferredConfirmationAdapter, resolveImTaskDigest } from '../remote/imDeferredApprovalProducer'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createDeferredResumeRequestStore } from '../confirmation/deferredResumeRequestStore'
@@ -166,13 +167,15 @@ export function createFeishuBundle(deps: {
       const storage = deps.sessionStorage
       if (!storage || typeof context.confirmationReceipt !== 'string' || !context.confirmationReceipt.trim() ||
         typeof context.messageId !== 'string' || typeof context.providerRouteId !== 'string' || typeof context.model !== 'string') {
-        return { dispatched: false }
+        return { dispatched: false, failureReason: '审批待办缺少恢复所需材料，本次操作未执行。' }
       }
       const resolved = resolveWorkDirForSession(storage.queries, todo.originSessionId,
         () => deps.workDirManager.listProfiles(), () => deps.workDirManager.getActiveProfileId(), () => deps.workDirManager.getActiveWorkDir())
-      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return { dispatched: false }
+      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return { dispatched: false, failureReason: '原工作目录不可用或已变化，本次操作未执行。' }
       const config = readCfg()
-      const result = await executeDeferredImTool({
+      let result: unknown
+      try {
+        result = await executeDeferredImTool({
         db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
         requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
         toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs,
@@ -188,7 +191,14 @@ export function createFeishuBundle(deps: {
         workDirManager: deps.workDirManager, getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
         getShellConfig: () => readShellConfigFromDb(deps.db), toolChatExtras: { feishuConfig: config, larkCliRunner: runner }
       })
-      return { dispatched: result !== undefined, result }
+      } catch (error) {
+        if (error instanceof DeferredToolPreDispatchError) {
+          return { dispatched: false, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
+        }
+        throw error
+      }
+      if (result === undefined) throw new Error('DEFERRED_EXECUTOR_RESULT_MISSING_AFTER_DISPATCH')
+      return { dispatched: true, result }
     },
     onCompletionWake: (sessionId) => dispatchCompletionWake?.(sessionId),
     audit: (event) => getSecurityAuditLog().record(event)

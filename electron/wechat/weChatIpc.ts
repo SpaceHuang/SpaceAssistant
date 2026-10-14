@@ -38,6 +38,8 @@ import { scheduleStartupWakeRecovery } from '../remote/startupWakeRecovery'
 import { createDeferredImBundleRuntime } from '../remote/deferredImBundleRuntime'
 import { recheckDeferredTaskControl } from '../remote/deferredImDispatch'
 import { executeDeferredImTool } from '../remote/imDeferredToolExecutor'
+import { DeferredToolPreDispatchError } from '../tools/registeredAgentTurnTools'
+import { verifyDeferredWeChatAttachment } from '../tools/weChatAttachmentBinding'
 import { createImDeferredApprovalProducer, createImDeferredConfirmationAdapter, resolveImTaskDigest } from '../remote/imDeferredApprovalProducer'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createDeferredResumeRequestStore } from '../confirmation/deferredResumeRequestStore'
@@ -136,18 +138,39 @@ export function createWeChatBundle(deps: {
       return config.remoteEnabled && config.loggedIn && (config.remoteSenderAllowlist ?? []).includes(todo.ownerId)
     },
     recheckTask: (todo, envelope) => recheckDeferredTaskControl(deps.db, todo, envelope),
+    recheckAttachment: async (todo, envelope) => {
+      const context = envelope.executionContext
+      const toolInput = envelope.canonicalArgs
+      const attachmentPath = typeof toolInput.imagePath === 'string' ? toolInput.imagePath
+        : typeof toolInput.filePath === 'string' ? toolInput.filePath : undefined
+      const expectedHash = envelope.contentVersions.attachmentSha256
+      if (!attachmentPath || typeof expectedHash !== 'string' || !deps.sessionStorage) return false
+      const resolved = resolveWorkDirForSession(deps.sessionStorage.queries, todo.originSessionId,
+        () => deps.workDirManager.listProfiles(), () => deps.workDirManager.getActiveProfileId(), () => deps.workDirManager.getActiveWorkDir())
+      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return false
+      return Boolean(await verifyDeferredWeChatAttachment(resolved.workDir, attachmentPath, expectedHash))
+    },
     dispatch: async ({ todo, envelope }) => {
       const context = envelope.executionContext
       const storage = deps.sessionStorage
       if (!storage || typeof context.confirmationReceipt !== 'string' || !context.confirmationReceipt.trim() ||
         typeof context.messageId !== 'string' || typeof context.providerRouteId !== 'string' || typeof context.model !== 'string') {
-        return { dispatched: false }
+        return { dispatched: false, failureReason: '审批待办缺少恢复所需材料，本次操作未执行。' }
       }
       const resolved = resolveWorkDirForSession(storage.queries, todo.originSessionId,
         () => deps.workDirManager.listProfiles(), () => deps.workDirManager.getActiveProfileId(), () => deps.workDirManager.getActiveWorkDir())
-      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return { dispatched: false }
+      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return { dispatched: false, failureReason: '原工作目录不可用或已变化，本次操作未执行。' }
+      const approvedAttachmentHash = envelope.contentVersions.attachmentSha256
+      const requestedAttachmentPath = typeof envelope.canonicalArgs.imagePath === 'string' ? envelope.canonicalArgs.imagePath
+        : typeof envelope.canonicalArgs.filePath === 'string' ? envelope.canonicalArgs.filePath : undefined
+      const deferredAttachmentApproval = requestedAttachmentPath && typeof approvedAttachmentHash === 'string'
+        ? await verifyDeferredWeChatAttachment(resolved.workDir, requestedAttachmentPath, approvedAttachmentHash) : null
+      if (requestedAttachmentPath && !deferredAttachmentApproval) return { dispatched: false, failureReason: '审批后的附件与原文件不一致，本次操作未执行，请重新审批。' }
+      if (!requestedAttachmentPath && approvedAttachmentHash !== undefined) return { dispatched: false, failureReason: '审批附件材料不完整，本次操作未执行。' }
       const config = readCfg()
-      const result = await executeDeferredImTool({
+      let result: unknown
+      try {
+        result = await executeDeferredImTool({
         db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
         requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
         toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs,
@@ -158,6 +181,10 @@ export function createWeChatBundle(deps: {
           workDirProfileId: resolved.profileId, requestId: envelope.requestId,
           authorizationGeneration: remoteAuthorizationRegistry.getGeneration('wechat'),
           ...(typeof context.contextToken === 'string' ? { contextToken: context.contextToken } : {}),
+          ...(typeof context.currentUserMessageId === 'string' ? { currentUserMessageId: context.currentUserMessageId } : {}),
+          taskBinding: { workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId,
+            planRevision: todo.planRevision, revision: Number.isSafeInteger(context.taskRevision) ? context.taskRevision as number : todo.planRevision },
+          ...(deferredAttachmentApproval ? { deferredAttachmentApproval } : {}),
           wechatConfig: config
         },
         model: context.model, toolsConfig: deps.getToolsConfig(), workDir: resolved.workDir,
@@ -165,7 +192,14 @@ export function createWeChatBundle(deps: {
         workDirManager: deps.workDirManager, getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
         getShellConfig: () => readShellConfigFromDb(deps.db), toolChatExtras: { wechatConfig: config }
       })
-      return { dispatched: result !== undefined, result }
+      } catch (error) {
+        if (error instanceof DeferredToolPreDispatchError) {
+          return { dispatched: false, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
+        }
+        throw error
+      }
+      if (result === undefined) throw new Error('DEFERRED_EXECUTOR_RESULT_MISSING_AFTER_DISPATCH')
+      return { dispatched: true, result }
     },
     onCompletionWake: (sessionId) => dispatchCompletionWake?.(sessionId),
     audit: (event) => getSecurityAuditLog().record(event)

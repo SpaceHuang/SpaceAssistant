@@ -21,7 +21,7 @@ type NotificationBinding = {
 type ParsedReply = { action: 'approve' | 'reject'; shortCode: string }
 
 export function parseDeferredApprovalReply(text: string): ParsedReply | null {
-  const match = /^(批准|拒绝) (0[1-9]|[1-9][0-9])$/.exec(text)
+  const match = /^(批准|拒绝)\s*(0[1-9]|[1-9][0-9])$/.exec(text)
   if (!match) return null
   return { action: match[1] === '批准' ? 'approve' : 'reject', shortCode: match[2]! }
 }

@@ -22,6 +22,8 @@ export interface ImOutboundFacts {
   contentCompleteness: 'complete' | 'unknown'
   hasAttachment: boolean
   attachmentAuthorized: boolean
+  /** Host inspection says a binary attachment needs a human decision for this prepared call. */
+  attachmentApprovalRequired?: boolean
   attachmentContentVersion?: string
   checkedAttachmentContentVersion?: string
   attachmentPath?: string
@@ -115,5 +117,13 @@ export function assertImOutboundAllowed(facts: ImOutboundFacts, actual: { channe
   const confirmedActiveSend = facts.purpose === 'active-send' && Boolean(facts.userConfirmationReceipt?.trim()) &&
     bound && facts.recipient === actual.recipient && facts.contentAssessment?.content === actual.body &&
     facts.contentAssessment.source === 'host' && facts.contentAssessment.classification !== 'sensitive'
-  if (!bound || (!controlledTaskReply && !controlledSystemReply && !confirmedActiveSend)) throw new Error('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+  const confirmedTaskReply = facts.purpose === 'task-reply' && Boolean(facts.userConfirmationReceipt?.trim()) && bound &&
+    !facts.modelRecipient && facts.identityKey && facts.ownerId && facts.trustedRecipient === facts.identityKey &&
+    facts.recipient === facts.trustedRecipient && actual.recipient === facts.trustedRecipient && facts.chatType === 'p2p' &&
+    facts.contentCompleteness === 'unknown' && facts.contentAssessment?.source === 'host' &&
+    facts.contentAssessment.content === actual.body && facts.contentAssessment.classification !== 'sensitive' &&
+    (!facts.hasAttachment || (facts.attachmentAuthorized && Boolean(facts.attachmentContentVersion) &&
+      facts.attachmentContentVersion === facts.checkedAttachmentContentVersion && Boolean(facts.attachmentPath) &&
+      facts.attachmentPath === facts.checkedAttachmentPath))
+  if (!bound || (!controlledTaskReply && !controlledSystemReply && !confirmedActiveSend && !confirmedTaskReply)) throw new Error('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
 }

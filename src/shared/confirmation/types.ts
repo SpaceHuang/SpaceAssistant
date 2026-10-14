@@ -122,6 +122,8 @@ export type FactSignal =
   | { kind: 'wiki-raw-target' }
   | { kind: 'feishu-media-target'; boundary: 'inside' | 'outside' | 'unknown' }
   | { kind: 'wechat-media-target'; boundary: 'inside-workdir' | 'outside-workdir' | 'unknown'; zone?: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown' }
+  /** Host-measured exact attachment version, included in confirmation and deferred-approval facts. */
+  | { kind: 'wechat-media-content'; sha256: string; byteSize: number; fileName: string; displayPath: string }
   | { kind: 'workdir-profile-target'; status: 'normal' | 'sensitive' | 'unknown' }
   | { kind: 'write-target-unsupported' }
   | { kind: 'write-target-new' }

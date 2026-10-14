@@ -68,6 +68,8 @@ export interface RemoteContext {
   deferredContinuation?: Readonly<{ todoId: string; invocationId: string; workflowId: string; taskId: string; stepId: string;
     planRevision: number; checkpointId?: string; dispatchKey: string; toolCallId: string; toolName: string;
     canonicalArgs: Record<string, unknown>; result: Record<string, unknown>; outputRef: string }>
+  /** Trusted, content-addressed attachment permit restored from a deferred human approval. */
+  deferredAttachmentApproval?: Readonly<{ path: string; sha256: string }>
 }
 
 /** Gradual-migration aliases — prefer RemoteContext going forward. */
@@ -122,6 +124,8 @@ export interface ToolExecutionContext {
   outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
   toolUserConfirmed?: boolean
+  /** Host-confirmed provenance for the receipt attached to the current prepared invocation. */
+  userConfirmationAnswerer?: 'user' | 'agent'
   /** MCP 工具快照（装配期冻结）；tool_search 检索域（需求：MCP 工具延迟加载 §6.3）。 */
   mcpToolSnapshot?: import('../mcp/mcpToolRegistry').McpToolSnapshot
   getBrowserDetectContext?: () => BrowserDetectContext

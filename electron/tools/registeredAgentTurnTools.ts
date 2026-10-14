@@ -16,6 +16,14 @@ import { toToolUserError } from './toolUserErrors'
 
 export type ExecutorUnhandledSettlement = { rethrow: true; error: unknown } | { rethrow: false; result: Record<string, unknown> }
 
+/** A deferred call was rejected before the executor dispatch claim, so no tool side effect started. */
+export class DeferredToolPreDispatchError extends Error {
+  constructor(cause: unknown) {
+    super('DEFERRED_TOOL_PRE_DISPATCH_REJECTED', { cause })
+    this.name = 'DeferredToolPreDispatchError'
+  }
+}
+
 /**
  * Executor 进入后抛出的漏网异常的结算决策：Uncertain（副作用不确定）、取消/中断，以及
  * 写/执行类工具（write/execute/未声明——动作可能已发生）都必须穿透继续向上，整轮按
@@ -60,6 +68,7 @@ type PreparedRecord = {
   unregisterActiveCancellation?: () => void
   binding: PermitBinding
   userConfirmationReceipt?: string
+  userConfirmationAnswerer?: 'user' | 'agent'
   cleaned?: boolean
 }
 
@@ -167,6 +176,7 @@ export function createRegisteredAgentTurnTools(input: {
     if (!record || !sameCall(record.call, call)) throw new Error('PREPARED_CALL_MISMATCH')
     if (stage.confirmation && !stage.confirmation.receipt.trim()) throw new Error('CONFIRMATION_RECEIPT_REQUIRED')
     record.userConfirmationReceipt = stage.confirmation?.receipt
+    record.userConfirmationAnswerer = stage.confirmation?.answerer
     try {
       if (input.refreshExecutionContext) {
         const currentContext = record.runtimeContext
@@ -289,14 +299,17 @@ export function createRegisteredAgentTurnTools(input: {
     authorize(initial: PermitBinding, recheck: PermitBinding): Promise<{ kind: 'allow'; permitId: string } | { kind: 'deny'; reasonCode?: string }>
   }): Promise<TurnToolResult> => {
     if (!request.confirmationReceipt.trim()) throw new Error('DEFERRED_CONFIRMATION_RECEIPT_REQUIRED')
-    let initial: PermitBinding | undefined
+    let dispatchClaimed = false
     try {
-      initial = await prepareTool(call, { kind: 'initial' })
-      const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt } })
+      const initial = await prepareTool(call, { kind: 'initial' })
+      const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt, answerer: 'user' } })
       if (!sameRecheckSubject(initial, recheck)) throw new Error('DEFERRED_RECHECK_BINDING_CHANGED')
       const authorization = await request.authorize(initial, recheck)
       if (authorization.kind !== 'allow') throw new Error(`DEFERRED_SAFETY_RECHECK_DENIED:${authorization.reasonCode ?? 'POLICY_DENY'}`)
-      return await toolExecution.execute(call, authorization.permitId)
+      return await toolExecution.execute(call, authorization.permitId, () => { dispatchClaimed = true })
+    } catch (error) {
+      if (!dispatchClaimed) throw new DeferredToolPreDispatchError(error)
+      throw error
     } finally {
       discardPreparedTool(call)
     }
@@ -381,6 +394,7 @@ function executionContextFor(record: PreparedRecord, signal: AbortSignal): ToolE
     toolName: record.handle.prepared.toolName,
     runtimeContext: record.runtimeContext as ToolExecutionContext['runtimeContext'],
     ...(record.userConfirmationReceipt ? { userConfirmationReceipt: record.userConfirmationReceipt } : {}),
+    ...(record.userConfirmationAnswerer ? { userConfirmationAnswerer: record.userConfirmationAnswerer } : {}),
     signal
   }
 }

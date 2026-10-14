@@ -30,7 +30,8 @@ export function createDeferredImBundleRuntime(input: {
   maxParallel: number
   isOwnerAuthorized(todo: DeferredTodoRecord): boolean
   recheckTask(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean
-  dispatch(input: DispatchInput): Promise<{ dispatched: boolean; result?: unknown }>
+  recheckAttachment?(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean | Promise<boolean>
+  dispatch(input: DispatchInput): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string }>
   onCompletionWake?(sessionId: string): void | Promise<void>
   scheduleRetry?: (delayMs: number, callback: () => void) => void
   recoverCompletionWake?: (sessionId: string) => void | Promise<void>
@@ -55,6 +56,7 @@ export function createDeferredImBundleRuntime(input: {
     isEnabled: input.isEnabled,
     isOwnerAuthorized: input.isOwnerAuthorized,
     recheckTask: input.recheckTask,
+    ...(input.recheckAttachment ? { recheckAttachment: input.recheckAttachment } : {}),
     dispatch: async (request, todo, envelope) => {
       const dispatchKey = request.requestId
       const started = executionResults.beginDispatch({ todoId: todo.todoId, invocationId: todo.invocationId, dispatchKey })
@@ -62,8 +64,17 @@ export function createDeferredImBundleRuntime(input: {
       try {
         const outcome = await input.dispatch({ request, todo, envelope })
         if (!outcome.dispatched) {
-          executionResults.markOutcomeUnknown(todo.todoId)
-          return { dispatched: false }
+          // The dispatch port explicitly reports that it did not enter the executor. This is
+          // a known non-execution, not an uncertain side effect: persist a failure receipt and
+          // wake the conversation so the owner is told the approved action did not run.
+          const value = outcome.result === undefined
+            ? { success: false, error: outcome.failureReason ?? '本次操作未能启动，因此没有执行。' }
+            : outcome.result
+          executionResults.commitResult(todo.todoId, {
+            kind: 'failed', outputRef: `deferred-result:${todo.invocationId}`, value
+          })
+          input.onCompletionWake?.(todo.originSessionId)
+          return { dispatched: true }
         }
         const raw = outcome.result === undefined ? null : outcome.result
         const failed = Boolean(raw && typeof raw === 'object' &&

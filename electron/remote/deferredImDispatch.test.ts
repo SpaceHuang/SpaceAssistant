@@ -3,6 +3,11 @@ import { createDeferredImDispatchPorts } from './deferredImDispatch'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { verifyDeferredWeChatAttachment } from '../tools/weChatAttachmentBinding'
 
 describe('deferred IM production dispatch ports', () => {
   it('rejects stale authorization epochs before dispatch', async () => {
@@ -45,6 +50,36 @@ describe('deferred IM production dispatch ports', () => {
     expect(dispatch).toHaveBeenCalledOnce()
   })
 
+  it('blocks a deferred WeChat dispatch when the approved attachment bytes changed after approval', async () => {
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'deferred-wechat-attachment-'))
+    try {
+      const filePath = path.join(workDir, 'report.pdf')
+      const approvedBytes = Buffer.from('%PDF-original approved bytes')
+      await fs.writeFile(filePath, approvedBytes)
+      const approvedHash = createHash('sha256').update(approvedBytes).digest('hex')
+      const dispatch = vi.fn(async () => ({ dispatched: true }))
+      const ports = createDeferredImDispatchPorts({ channel: 'wechat', getAuthorizationEpoch: () => 9, isEnabled: () => true,
+        isOwnerAuthorized: () => true, recheckTask: () => true,
+        recheckAttachment: async (_todo, envelope) => {
+          const input = envelope.canonicalArgs as { filePath: string }
+          return Boolean(await verifyDeferredWeChatAttachment(workDir, input.filePath, String(envelope.contentVersions.attachmentSha256)))
+        }, dispatch })
+      const todo = { channel: 'wechat', originSessionId: 'session', ownerId: 'owner', identityKey: 'owner', authorizationEpoch: 9,
+        invocationId: 'invocation' } as never
+      const envelope = { invocationId: 'invocation', requestId: 'request', turnId: 'turn', toolCallId: 'call', toolName: 'wechat_reply',
+        canonicalArgs: { text: 'Here is the report', filePath: 'report.pdf' }, contentVersions: { attachmentSha256: approvedHash },
+        executionContext: { channel: 'wechat', sessionId: 'session', ownerId: 'owner', identityKey: 'owner', authorizationEpoch: 9,
+          invocationId: 'invocation', toolName: 'wechat_reply', toolInput: { text: 'Here is the report', filePath: 'report.pdf' },
+          requestId: 'request', turnId: 'turn', toolCallId: 'call', providerRouteId: 'route' } } as never
+
+      await fs.writeFile(filePath, '%PDF-modified after approval')
+      await expect(ports.dispatch({} as never, todo, envelope)).resolves.toMatchObject({ dispatched: false })
+      expect(dispatch).not.toHaveBeenCalled()
+    } finally {
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
   it.each([
     ['owner', (context: Record<string, unknown>) => ({ ...context, ownerId: 'different-owner' })],
     ['identity', (context: Record<string, unknown>) => ({ ...context, identityKey: 'different-chat' })],
@@ -63,7 +98,7 @@ describe('deferred IM production dispatch ports', () => {
     const envelope = { invocationId: 'invocation', requestId: 'request', turnId: 'turn', toolCallId: 'call', toolName: 'write_file',
       canonicalArgs: { path: 'doc.md' }, executionContext: changeContext(context) } as never
 
-    await expect(ports.dispatch({} as never, todo, envelope)).resolves.toEqual({ dispatched: false })
+    await expect(ports.dispatch({} as never, todo, envelope)).resolves.toMatchObject({ dispatched: false, failureReason: expect.any(String) })
     expect(dispatch).not.toHaveBeenCalled()
   })
 
@@ -115,7 +150,7 @@ describe('deferred IM production dispatch ports', () => {
     const ports = createDeferredImDispatchPorts({ db, channel: 'feishu', getAuthorizationEpoch: () => 9, isEnabled: () => true,
       isOwnerAuthorized: () => true, recheckTask: () => true, dispatch })
 
-    await expect(ports.dispatch({} as never, todo, envelope)).resolves.toEqual({ dispatched: false })
+    await expect(ports.dispatch({} as never, todo, envelope)).resolves.toMatchObject({ dispatched: false, failureReason: expect.any(String) })
     expect(dispatch).not.toHaveBeenCalled()
     db.close()
   })

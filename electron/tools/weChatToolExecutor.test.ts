@@ -17,6 +17,7 @@ import { executeWeChatReply, executeWeChatSend, inspectWeChatTaskReplyAttachment
 import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
 import { createWeChatOutboundRegisteredTools } from './wechatOutboundRegisteredTools'
 import { executeRegisteredTool } from './toolInvocationCoordinator'
+import { verifyDeferredWeChatAttachment } from './weChatAttachmentBinding'
 
 const confirmedSendFacts = (body: string, recipient = 'u1', sessionId = 'session-current') => ({
   channel: 'wechat' as const, purpose: 'active-send' as const, originSessionId: sessionId, activeSessionId: sessionId,
@@ -299,6 +300,23 @@ describe('executeWeChatSend', () => {
     expect(mockBot.reply).not.toHaveBeenCalled()
   })
 
+  it('sends a deferred user-approved reply directly to its bound owner after the platform reply object expires', async () => {
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => undefined } })
+    mockBot.send.mockReset().mockResolvedValue(undefined)
+    const facts = { ...confirmedReplyFacts('approved deferred reply'), contentCompleteness: 'unknown' as const,
+      contentAssessment: { source: 'host' as const, content: 'approved deferred reply', classification: 'unknown' as const, classifierVersion: 'host-v1' },
+      userConfirmationReceipt: 'confirmation:deferred', currentUserMessageId: 'original-user-message' }
+    const result = await executeWeChatReply({ text: 'approved deferred reply' }, {
+      workDir, botService: { getRawBot: () => mockBot } as never,
+      sessionQueries: { readSession: () => ({ metadata: { source: 'wechat' } }) } as never,
+      sessionId: 'session-current', expectedMessageId: 'original-platform-message', outboundDeliveryFacts: facts as never
+    })
+    expect(result).toMatchObject({ success: true })
+    expect(mockBot.send).toHaveBeenCalledOnce()
+    expect(mockBot.send).toHaveBeenCalledWith('wx-user', 'approved deferred reply')
+    expect(mockBot.reply).not.toHaveBeenCalled()
+  })
+
   it('wechat_reply refuses the side effect when the main process did not bind outbound delivery facts', async () => {
     const inbound = { userId: 'wx-user', timestamp: new Date(1_000), raw: { client_id: 'message-approved' } }
     getBundle.mockReturnValue({
@@ -458,6 +476,152 @@ describe('executeWeChatSend', () => {
     expect(mockBot.reply).toHaveBeenCalledWith(inbound, expect.objectContaining({
       file: expect.any(Buffer), fileName, caption: expect.stringContaining('Here is the requested report.')
     }))
+  })
+
+  it.each([
+    ['png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+    ['pdf', Buffer.from('%PDF-1.7\napproved attachment')]
+  ])('sends a %s only after the registered prepared invocation carries its human receipt', async (extension, bytes) => {
+    mockBot.reply.mockResolvedValue(undefined)
+    const fileName = `approved.${extension}`
+    await fs.writeFile(path.join(workDir, fileName), bytes)
+    const inbound = { userId: 'wx-owner', timestamp: new Date(1_000), raw: { client_id: 'inbound-task-message' } }
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => inbound } })
+    const runtime = {
+      workDir, sessionId: 'session-current', lane: 'wechat',
+      remoteContext: { source: 'wechat' as const, messageId: 'inbound-task-message', userId: 'wx-owner', authOwner: 'wx-owner',
+        chatType: 'p2p' as const, originSessionId: 'session-current', currentUserMessageId: 'current-user-message',
+        taskBinding: { workflowId: 'task-workflow', taskId: 'current-task', stepId: 'deliver-file', planRevision: 1, revision: 1 } }
+    }
+    const replyTool = createWeChatOutboundRegisteredTools({
+      send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: async (input, context) => {
+        expect(context.outboundDeliveryFacts).toMatchObject({ attachmentApprovalRequired: true, attachmentAuthorized: true,
+          attachmentContentVersion: expect.any(String), checkedAttachmentContentVersion: expect.any(String) })
+        return executeWeChatReply({ text: String(input.text), filePath: String(input.filePath) }, {
+          workDir: context.workDir, botService: { getRawBot: () => mockBot } as never,
+          sessionQueries: { readSession: vi.fn() } as never, sessionId: context.sessionId,
+          expectedMessageId: context.remoteContext?.messageId, outboundDeliveryFacts: context.outboundDeliveryFacts
+        })
+      } } as never
+    }).find(({ name }) => name === 'wechat_reply')!
+
+    const result = await executeRegisteredTool(replyTool, { text: 'Here is the file you requested.', filePath: fileName }, {
+      requestId: `task-${extension}-approval`, toolUseId: `call-${extension}-approval`, signal: new AbortController().signal,
+      userConfirmationReceipt: `human-approved-${extension}`,
+      userConfirmationAnswerer: 'user',
+      executionContext: runtime as never
+    } as never, { confirm: async () => true })
+
+    expect(result).toMatchObject({ success: true })
+    expect(mockBot.reply).toHaveBeenCalledOnce()
+    const sent = mockBot.reply.mock.calls[0]?.[1] as { image?: Buffer; file?: Buffer }
+    expect(sent.image ?? sent.file).toEqual(bytes)
+  })
+
+  it.each([
+    ['png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+    ['pdf', Buffer.from('%PDF-1.7\nrequires approval')]
+  ])('never sends a %s when the prepared invocation has no human receipt', async (extension, bytes) => {
+    const fileName = `unapproved.${extension}`
+    await fs.writeFile(path.join(workDir, fileName), bytes)
+    const send = vi.fn(async () => ({ success: true }))
+    const replyTool = createWeChatOutboundRegisteredTools({ send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: send } as never }).find(({ name }) => name === 'wechat_reply')!
+    const runtime = { workDir, sessionId: 'session-current', remoteContext: { source: 'wechat' as const, messageId: 'm',
+      userId: 'wx-owner', authOwner: 'wx-owner', originSessionId: 'session-current', currentUserMessageId: 'u',
+      taskBinding: { workflowId: 'w', taskId: 't', stepId: 's', planRevision: 1, revision: 1 } } }
+    await expect(executeRegisteredTool(replyTool, { text: 'send', filePath: fileName }, {
+      requestId: `no-receipt-${extension}`, toolUseId: `no-receipt-call-${extension}`, signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, { confirm: async () => true })).rejects.toThrow('WECHAT_ATTACHMENT_HUMAN_APPROVAL_BINDING_REQUIRED')
+    expect(send).not.toHaveBeenCalled()
+    expect(mockBot.reply).not.toHaveBeenCalled()
+  })
+
+  it('does not treat an Agent approval receipt as human approval for a binary attachment', async () => {
+    const fileName = 'agent-approved.png'
+    await fs.writeFile(path.join(workDir, fileName), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    const send = vi.fn(async () => ({ success: true }))
+    const replyTool = createWeChatOutboundRegisteredTools({ send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: send } as never }).find(({ name }) => name === 'wechat_reply')!
+    const runtime = { workDir, sessionId: 'session-current', remoteContext: { source: 'wechat' as const, messageId: 'm',
+      userId: 'wx-owner', authOwner: 'wx-owner', originSessionId: 'session-current', currentUserMessageId: 'u',
+      taskBinding: { workflowId: 'w', taskId: 't', stepId: 's', planRevision: 1, revision: 1 } } }
+    await expect(executeRegisteredTool(replyTool, { text: 'send', filePath: fileName }, {
+      requestId: 'agent-does-not-approve-binary', toolUseId: 'agent-does-not-approve-binary-call', signal: new AbortController().signal,
+      userConfirmationReceipt: 'agent:approved', userConfirmationAnswerer: 'agent', executionContext: runtime as never
+    } as never, { confirm: async () => true })).rejects.toThrow('WECHAT_ATTACHMENT_HUMAN_APPROVAL_BINDING_REQUIRED')
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('sends a deferred PDF when the signed path and original approval hash still match', async () => {
+    mockBot.reply.mockResolvedValue(undefined)
+    const fileName = 'deferred-approved.pdf'
+    const bytes = Buffer.from('%PDF-original approved bytes')
+    const filePath = path.join(workDir, fileName)
+    await fs.writeFile(filePath, bytes)
+    const { createHash } = await import('node:crypto')
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    const inbound = { userId: 'wx-owner', timestamp: new Date(1_000), raw: { client_id: 'deferred-origin-message' } }
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => inbound } })
+    const runtime = { workDir, sessionId: 'session-current', lane: 'wechat', userConfirmationReceipt: 'deferred:approved',
+      remoteContext: { source: 'wechat' as const, messageId: 'deferred-origin-message', userId: 'wx-owner', authOwner: 'wx-owner',
+        originSessionId: 'session-current', currentUserMessageId: 'current-user-message',
+        taskBinding: { workflowId: 'w', taskId: 't', stepId: 's', planRevision: 1, revision: 1 },
+        deferredAttachmentApproval: { path: await fs.realpath(filePath), sha256: digest } } }
+    const replyTool = createWeChatOutboundRegisteredTools({ send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: async (input, context) => executeWeChatReply({
+        text: String(input.text), filePath: String(input.filePath)
+      }, { workDir: context.workDir, botService: { getRawBot: () => mockBot } as never,
+        sessionQueries: { readSession: vi.fn() } as never, sessionId: context.sessionId,
+        expectedMessageId: context.remoteContext?.messageId, outboundDeliveryFacts: context.outboundDeliveryFacts }) } } as never)
+      .find(({ name }) => name === 'wechat_reply')!
+    const result = await executeRegisteredTool(replyTool, { text: 'Here is the approved file.', filePath: fileName }, {
+      requestId: 'deferred-pdf-approved', toolUseId: 'deferred-pdf-approved-call', signal: new AbortController().signal,
+      userConfirmationReceipt: 'deferred:approved', userConfirmationAnswerer: 'user', executionContext: runtime as never
+    } as never, { confirm: async () => true })
+    expect(result).toMatchObject({ success: true })
+    expect(mockBot.reply).toHaveBeenCalledOnce()
+    expect((mockBot.reply.mock.calls[0]?.[1] as { file?: Buffer }).file).toEqual(bytes)
+  })
+
+  it('rejects a deferred approved attachment that differs from the binding before prepare or send', async () => {
+    mockBot.reply.mockResolvedValue(undefined)
+    const fileName = 'deferred-approved.pdf'
+    const sameBytes = '%PDF-content same but path differs'
+    await fs.writeFile(path.join(workDir, fileName), sameBytes)
+    const otherFilePath = path.join(workDir, 'different-target.pdf')
+    await fs.writeFile(otherFilePath, sameBytes)
+    const { createHash } = await import('node:crypto')
+    const sameHash = createHash('sha256').update(sameBytes).digest('hex')
+    const inbound = { userId: 'wx-owner', timestamp: new Date(1_000), raw: { client_id: 'inbound-task-message' } }
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => inbound } })
+    const toolExecutor = vi.fn(async () => ({ success: true }))
+    const replyTool = createWeChatOutboundRegisteredTools({ send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: toolExecutor } as never }).find(({ name }) => name === 'wechat_reply')!
+    const runtime = { workDir, sessionId: 'session-current', remoteContext: { source: 'wechat' as const,
+      messageId: 'inbound-task-message', userId: 'wx-owner', authOwner: 'wx-owner', originSessionId: 'session-current',
+      currentUserMessageId: 'current-user-message', taskBinding: { workflowId: 'w', taskId: 't', stepId: 's', planRevision: 1, revision: 1 },
+      deferredAttachmentApproval: { path: await fs.realpath(otherFilePath), sha256: sameHash } } }
+    await expect(executeRegisteredTool(replyTool, { text: 'send', filePath: fileName }, {
+      requestId: 'deferred-attachment-changed', toolUseId: 'deferred-attachment-changed-call', signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, { confirm: async () => true })).rejects.toThrow('WECHAT_DEFERRED_ATTACHMENT_APPROVAL_MISMATCH')
+    expect(toolExecutor).not.toHaveBeenCalled()
+    expect(mockBot.reply).not.toHaveBeenCalled()
+  })
+
+  it('uses only the approved content-addressed path when verifying a deferred attachment', async () => {
+    const bytes = Buffer.from('%PDF-approved')
+    await fs.writeFile(path.join(workDir, 'approved.pdf'), bytes)
+    const { createHash } = await import('node:crypto')
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    await expect(verifyDeferredWeChatAttachment(workDir, 'approved.pdf', digest)).resolves.toMatchObject({
+      path: await fs.realpath(path.join(workDir, 'approved.pdf')), sha256: digest
+    })
+    await expect(verifyDeferredWeChatAttachment(workDir, '../outside.pdf', digest)).resolves.toBeNull()
+    await expect(verifyDeferredWeChatAttachment(workDir, 'approved.pdf', 'f'.repeat(64))).resolves.toBeNull()
   })
 
   it('rejects a task attachment changed after planning and before confirmation completes', async () => {

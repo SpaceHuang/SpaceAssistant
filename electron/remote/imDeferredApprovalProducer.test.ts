@@ -142,7 +142,8 @@ describe('production IM deferred approval producer', () => {
     const hosted = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']), hostHistory: new MemoryHistory() })
     try {
       await expect(hosted.executeDeferred({ invocationId: 'malformed-input-request', toolCallId: 'malformed-input-call',
-        toolName: 'write_file', input: { path: '../outside', content: 42 } }, 'malformed-input-resume')).rejects.toThrow('INVALID_WRITE_INPUT')
+        toolName: 'write_file', input: { path: '../outside', content: 42 } }, 'malformed-input-resume'))
+        .rejects.toMatchObject({ name: 'DeferredToolPreDispatchError', cause: expect.objectContaining({ message: 'INVALID_WRITE_INPUT' }) })
       expect(executor).not.toHaveBeenCalled()
       expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
     } finally {
@@ -266,7 +267,8 @@ describe('production IM deferred approval producer', () => {
         policyBehaviorVersion: 'im-standard-v2', policyRevision: 1, policyEpoch: 1,
         ruleId: 'locked-confirm-every-time', factsHash: storedFactsHash,
         evidenceReferences: ['host-fact:workspace-file-version-7'],
-        toolInput: call.input, toolCallId: call.toolCallId, invocationId: call.invocationId
+        toolInput: call.input, toolCallId: call.toolCallId, invocationId: call.invocationId,
+        currentUserMessageId: 'user-human', taskRevision: binding.taskBinding.revision
       }
     })
     expect(notificationDelivery.list(deferred!.todoId)).toMatchObject([{ state: 'delivered', trustedMessageId: 'human-notice' }])

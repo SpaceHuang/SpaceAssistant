@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import fsPromises from 'node:fs/promises'
 import path from 'node:path'
 import { decide } from '../../src/shared/policy/policyEngine'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
@@ -33,6 +34,7 @@ import { probeReadPathFact, ReadPathProbeError, type ReadPathFact } from './extr
 import { probeFeishuMediaTarget, type FeishuMediaTargetFact } from './extractors/feishuMediaFacts'
 import { classifyWriteTargetScope, probeWritePathFact, WritePathProbeError, type WritePathFact } from './extractors/writePathFacts'
 import { extractPathField } from '../toolPathField'
+import { resolveSafeWorkDirPath } from '../pathSecurity'
 import { buildReadExecutionPermit, readInputDigest, type ReadExecutionPermit, type ReadPermitScope } from './readExecutionPermit'
 import type { WriteExecutionPermit } from './writeExecutionPermit'
 import { readConfirmationRegistry, type ReadConfirmationRegistry } from './readConfirmationRegistry'
@@ -748,6 +750,23 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
               ? 'unknown'
               : workdirScope === 'inside-workdir' ? 'inside-workdir' : 'outside-workdir'
             facts.signals.push({ kind: 'wechat-media-target', boundary, zone: wechatMediaPathFact.zone, targetKind: wechatMediaPathFact.targetKind })
+            if (boundary === 'inside-workdir' && wechatMediaPathFact.targetKind === 'file') {
+              const resolvedMediaPath = await resolveSafeWorkDirPath(args.workDir, mediaPath)
+              const mediaStat = await fsPromises.stat(resolvedMediaPath)
+              const extension = path.extname(resolvedMediaPath).toLowerCase()
+              const imageRequest = typeof args.toolInput.imagePath === 'string'
+              // Hashing is needed to bind human approval to the exact attachment. This is
+              // not the transport limit; avoid silently treating an unbound file as approved.
+              const maxBytes = imageRequest || ['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)
+                ? 10 * 1024 * 1024 : 512 * 1024 * 1024
+              if (mediaStat.isFile() && mediaStat.size <= maxBytes) {
+                const mediaBytes = await fsPromises.readFile(resolvedMediaPath)
+                facts.signals.push({ kind: 'wechat-media-content',
+                  sha256: createHash('sha256').update(mediaBytes).digest('hex'), byteSize: mediaBytes.length,
+                  fileName: path.basename(resolvedMediaPath),
+                  displayPath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/') })
+              }
+            }
           } catch (error) {
             if (!(error instanceof ReadPathProbeError)) throw error
             facts.signals.push({ kind: 'wechat-media-target', boundary: 'unknown', targetKind: 'unknown' })

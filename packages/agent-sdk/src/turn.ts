@@ -227,7 +227,7 @@ type CanonicalToolExecutionCall = { invocationId: string; toolCallId: string; to
 type CanonicalToolExecutionResult = { output: unknown; replayContent?: unknown; isError?: boolean; auditRef?: string }
 export type ToolPreparationStage =
   | Readonly<{ kind: 'initial' }>
-  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string }> }>
+  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }> }>
 export type ToolConfirmationResult = Readonly<{
   answerer?: 'user' | 'agent'
   cause?: string
@@ -1596,7 +1596,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         const initialDecision = await input.safetyGate.evaluate(initialBinding, input.request.signal)
       throwIfAborted(input.request.signal)
 
-      let confirmation: Readonly<{ receipt: string }> | undefined
+      let confirmation: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }> | undefined
       if (initialDecision.kind === 'deny') {
         await markNotDispatched(tool, initialDecision.reasonCode)
         // FR12②：deny 决策可携带模型可见的区分文案（预算未注入 vs 服务不可用）
@@ -1708,7 +1708,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
           throwIfAborted(input.request.signal)
         }
-        confirmation = { receipt: result.receipt }
+        confirmation = { receipt: result.receipt, answerer: result.answerer ?? initialDecision.answerer }
       }
 
       let resourceLease: { release(): void } | undefined
@@ -1801,7 +1801,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             await markNotDispatched(tool, reason, renewed.userMessage)
             throw new ToolDeniedError(reason, renewed.userMessage)
           }
-          confirmation = { receipt: renewed.receipt }
+          confirmation = { receipt: renewed.receipt, answerer: renewed.answerer ?? authorization.answerer }
           try {
             recheckBinding = await input.prepareTool(executionCall, { kind: 'recheck', confirmation })
           } catch (error) {

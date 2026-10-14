@@ -90,12 +90,23 @@ export function createAgentSdkConfirmationPort(input: {
       facts: confirmation.context.facts,
       ...confirmation.context.decision
     }
-    if (confirmation.answerer === 'user' && confirmation.context.decision.disposition === 'human-required' && input.defer) {
-      const deferred = await input.defer(confirmation.call,
-        { kind: 'denied', answerer: 'user', cause: 'human-required' }, confirmation,
-        confirmation.context as GateConfirmationContext,
-        { kind: 'rejected', cause: 'no-answerer', answererKind: 'user' })
-      if (deferred) return deferred
+    const lane = confirmation.context.lane
+    const imHumanApproval = confirmation.answerer === 'user' && confirmation.context.decision.disposition === 'human-required' &&
+      (lane === 'wechat' || lane === 'feishu' || Boolean(input.defer))
+    if (imHumanApproval) {
+      try {
+        const deferred = await input.defer?.(confirmation.call,
+          { kind: 'denied', answerer: 'user', cause: 'human-required' }, confirmation,
+          confirmation.context as GateConfirmationContext,
+          { kind: 'rejected', cause: 'no-answerer', answererKind: 'user' })
+        // A durable todo (or explicit unavailable result) means async approval is enabled.
+        // Undefined means the production gate is off, so retain the authenticated sync channel.
+        if (deferred) return deferred
+      } catch {
+        // A failed attempt to create a human approval must not fall through to a second path.
+        return { kind: 'unavailable', cause: 'unavailable', answerer: 'user',
+          userMessage: '当前无法创建安全的异步审批待办，本次操作未执行。请稍后重试。' }
+      }
     }
     const channel = input.createChannel(confirmation.call, confirmation)
     const cancel = () => {

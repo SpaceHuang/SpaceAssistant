@@ -156,6 +156,13 @@ export function createImDeferredApprovalProducer(input: {
       const actionClass = facts.actionClass
       if (actionClass !== 'read' && actionClass !== 'write' && actionClass !== 'execute' && actionClass !== 'outbound') return cannotDefer('action-class-invalid')
       const typedActionClass: 'read' | 'write' | 'execute' | 'outbound' = actionClass
+      const mediaSignal = facts.signals?.find((signal) => signal.kind === 'wechat-media-content')
+      const attachmentInfo = input.channel === 'wechat' && mediaSignal?.kind === 'wechat-media-content'
+        ? { fileName: mediaSignal.fileName, displayPath: mediaSignal.displayPath, sha256: mediaSignal.sha256, byteSize: mediaSignal.byteSize }
+        : undefined
+      const requestedMediaPath = typeof call.input.imagePath === 'string' ? call.input.imagePath
+        : typeof call.input.filePath === 'string' ? call.input.filePath : undefined
+      if (input.channel === 'wechat' && requestedMediaPath && !attachmentInfo) return cannotDefer('attachment-content-binding-unavailable')
       const pathTarget = facts.signals?.find((signal) => signal.kind === 'path-target')
       const outboundTarget = facts.signals?.find((signal) => signal.kind === 'outbound-target')
       const safeTargetSummary = pathTarget?.kind === 'path-target'
@@ -200,13 +207,14 @@ export function createImDeferredApprovalProducer(input: {
         toolCallId: call.toolCallId,
         toolName: call.toolName,
         canonicalArgs: structuredClone(call.input),
-        contentVersions: { authorizationEpoch, taskRevision: binding.revision, planRevision: binding.planRevision },
+        contentVersions: { authorizationEpoch, taskRevision: binding.revision, planRevision: binding.planRevision,
+          ...(attachmentInfo ? { attachmentSha256: attachmentInfo.sha256 } : {}) },
         executionContext: {
           channel: input.channel, sessionId: remoteContext.originSessionId, ownerId, identityKey, authorizationEpoch,
           invocationId, requestId, turnId, toolCallId: call.toolCallId, toolName: call.toolName,
           toolInput: structuredClone(call.input), providerRouteId, model, messageId, currentUserMessageId: remoteContext.currentUserMessageId,
           workDirProfileId, confirmationReceipt: receipt, workflowId: binding.workflowId, taskId: binding.taskId,
-          stepId: binding.stepId, planRevision: binding.planRevision,
+          stepId: binding.stepId, planRevision: binding.planRevision, taskRevision: binding.revision,
           evidenceReferences: [...new Set(evidenceReferences)],
           ...(policyBinding ? { ...policyBinding, ruleId: rule.ruleId, factsHash: rule.factsHash } : {}),
           ...(remoteContext.contextToken ? { contextToken: remoteContext.contextToken } : {})
@@ -275,7 +283,7 @@ export function createImDeferredApprovalProducer(input: {
         safeTargetSummary,
         impactSummary: `${facts.actionClass}, ${facts.baseRiskLevel ?? context.decision.riskLevel ?? 'unknown'} impact`,
         reasonSummary: confirmation.reasonCode,
-        userDelegation: taskDigest, untrustedMaterial: '', now
+        userDelegation: taskDigest, untrustedMaterial: '', ...(attachmentInfo ? { attachmentInfo } : {}), now
       })
       if (delivered.state === 'not_ready') {
         await rollback()

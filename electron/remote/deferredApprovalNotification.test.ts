@@ -36,6 +36,23 @@ describe('deferred approval notification security contract', () => {
     expect(dto.text).toContain('待审查材料')
   })
 
+  it('shows attachment metadata for approval without sending or persisting a local path', () => {
+    const dto = buildDeferredApprovalNotification({
+      channel: 'wechat', todoId: 'todo-file', notificationVersion: 1, shortCode: '19', expiresAt: 10_000,
+      toolName: 'wechat_reply', safeActionSummary: '向本人发送文件', safeTargetSummary: '微信单聊本人',
+      userDelegation: '把报告发给我', untrustedMaterial: '',
+      attachmentInfo: { fileName: '报告.pdf', displayPath: 'exports/报告.pdf', byteSize: 200 * 1024 * 1024,
+        sha256: 'a'.repeat(64) }
+    })
+    expect(dto.text).toContain('待发送文件：报告.pdf，位于 exports/报告.pdf（209715200 字节）')
+    expect(dto.text).not.toContain('SHA-256')
+    expect(dto.text).not.toContain('a'.repeat(64))
+    expect(dto.text).toContain('审批阶段不会传输文件')
+    expect(dto).not.toHaveProperty('path')
+    expect(dto.attachmentInfo?.sha256).toBe('a'.repeat(64))
+    expect(JSON.stringify(dto)).not.toContain('209715200'.repeat(3))
+  })
+
   it.each(['feishu', 'wechat'] as const)('passes the same reviewed safe DTO to %s and retry adapters', async (channel) => {
     const dto = { ...build(), channel }
     const adapter = { send: vi.fn().mockResolvedValue(undefined) }

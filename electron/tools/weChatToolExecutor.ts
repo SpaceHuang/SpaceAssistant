@@ -3,6 +3,7 @@ import path from 'path'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import type { SessionQueries } from '../sessionStorage/contracts'
 import { resolveSafeWorkDirPath } from '../pathSecurity'
+import { verifyDeferredWeChatAttachment } from './weChatAttachmentBinding'
 import type { WeChatBotService } from '../wechat/weChatBotService'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import { createHash } from 'node:crypto'
@@ -18,8 +19,11 @@ import { formatWeChatSummary } from '../wechat/weChatReplyService'
 import { getWeChatBundle } from '../wechat/weChatIpc'
 
 const IMAGE_MAX = 10 * 1024 * 1024
+// Keep the current WeChat SDK/channel transport ceiling. Approval can bind larger files,
+// but dispatch still fails clearly until the channel's upload capability supports them.
 const FILE_MAX = 25 * 1024 * 1024
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp'])
+export { verifyDeferredWeChatAttachment } from './weChatAttachmentBinding'
 
 async function readMedia(
   workDir: string,
@@ -71,12 +75,23 @@ async function attachmentHasSensitiveMaterial(media: Awaited<ReturnType<typeof r
 
 /** Host inspection for the prepared reply path; binary and non-reviewable attachments stay unapproved. */
 export async function inspectWeChatTaskReplyAttachment(workDir: string, imagePath?: string, filePath?: string): Promise<Pick<ImOutboundFacts,
-  'attachmentAuthorized' | 'attachmentPath' | 'checkedAttachmentPath' | 'attachmentContentVersion' | 'checkedAttachmentContentVersion'>> {
+  'attachmentAuthorized' | 'attachmentApprovalRequired' | 'attachmentPath' | 'checkedAttachmentPath' | 'attachmentContentVersion' | 'checkedAttachmentContentVersion'>> {
   const requestedPath = imagePath ?? filePath
   const media = await readMedia(workDir, imagePath, filePath)
   const denied = { attachmentAuthorized: false, ...(requestedPath ? { attachmentPath: requestedPath } : {}) }
   if (!requestedPath || media.error || !media.buffer || !media.fileName || !media.resolvedPath || !media.contentVersion) return denied
-  if (!['.txt', '.md'].includes(path.extname(media.fileName).toLowerCase()) || media.buffer.length > 20_000) return denied
+  const extension = path.extname(media.fileName).toLowerCase()
+  const reviewableText = ['.txt', '.md'].includes(extension) && media.buffer.length <= 20_000
+  const humanReviewBinary = IMAGE_EXT.has(extension) || extension === '.pdf'
+  if (!reviewableText && !humanReviewBinary) return denied
+  if (humanReviewBinary) {
+    if (await attachmentHasSensitiveMaterial(media, workDir)) return denied
+    // The immutable bytes are measured now, but binary media is never auto-authorized.
+    // The registered tool promotes this exact binding only after a concrete user receipt.
+    return { attachmentAuthorized: false, attachmentApprovalRequired: true,
+      attachmentPath: media.resolvedPath, checkedAttachmentPath: media.resolvedPath,
+      attachmentContentVersion: media.contentVersion, checkedAttachmentContentVersion: media.contentVersion }
+  }
   let content: string
   try { content = new TextDecoder('utf-8', { fatal: true }).decode(media.buffer) }
   catch { return denied }
@@ -150,23 +165,33 @@ export async function executeWeChatReply(
   if (!bot) return { success: false, error: '微信 Bot 未就绪' }
 
   let inboundRaw: IncomingMessage | undefined
+  let deferredOwner: string | undefined
   if (ctx.sessionId) {
     inboundRaw = getWeChatBundle()?.router?.getInboundForSession(ctx.sessionId)
     if (!inboundRaw) {
       const session = ctx.sessionQueries.readSession(ctx.sessionId)
       const meta = session?.metadata as { source?: string } | undefined
-      if (meta?.source !== 'wechat') {
-        return { success: false, error: '当前会话无有效微信上下文，无法回复' }
+      const facts = ctx.outboundDeliveryFacts
+      const approvedOwner = facts?.trustedRecipient
+      if (meta?.source !== 'wechat') return { success: false, error: '当前会话无有效微信上下文，无法回复' }
+      if (!facts || facts.purpose !== 'task-reply' || !facts.userConfirmationReceipt?.trim() ||
+        !approvedOwner || facts.identityKey !== approvedOwner || facts.ownerId !== approvedOwner || facts.recipient !== approvedOwner ||
+        facts.modelRecipient || facts.chatType !== 'p2p') {
+        return { success: false, error: '微信入站上下文已过期，请重新发送指令' }
       }
-      return { success: false, error: '微信入站上下文已过期，请重新发送指令' }
+      // A deferred human approval outlives the platform reply object. The approved facts
+      // still bind the owner, session, body, and attachment, so send directly to that owner.
+      deferredOwner = approvedOwner
     }
   } else {
     return { success: false, error: '缺少会话上下文' }
   }
 
-  const currentMessageId = inboundRaw.raw.client_id || `${inboundRaw.userId}-${inboundRaw.timestamp.getTime()}`
-  if (ctx.expectedMessageId && currentMessageId !== ctx.expectedMessageId) {
-    return { success: false, error: '微信入站消息已变化，请重新授权回复' }
+  if (inboundRaw) {
+    const currentMessageId = inboundRaw.raw.client_id || `${inboundRaw.userId}-${inboundRaw.timestamp.getTime()}`
+    if (ctx.expectedMessageId && currentMessageId !== ctx.expectedMessageId) {
+      return { success: false, error: '微信入站消息已变化，请重新授权回复' }
+    }
   }
 
   const media = await readMedia(ctx.workDir, input.imagePath, input.filePath)
@@ -180,17 +205,23 @@ export async function executeWeChatReply(
       facts.checkedAttachmentPath !== media.resolvedPath || await attachmentHasSensitiveMaterial(media, ctx.workDir))) {
     return { success: false, error: '微信外发缺少主进程最终检查事实' }
   }
-  assertImOutboundAllowed(facts, { channel: 'wechat', body: input.text, sessionId: ctx.sessionId ?? '', recipient: inboundRaw.userId })
+  assertImOutboundAllowed(facts, { channel: 'wechat', body: input.text, sessionId: ctx.sessionId ?? '', recipient: deferredOwner ?? inboundRaw!.userId })
   try {
-    if (media.buffer && media.fileName) {
+    if (deferredOwner) {
+      if (media.buffer && media.fileName) {
+        const ext = path.extname(media.fileName).toLowerCase()
+        if (IMAGE_EXT.has(ext)) await bot.send(deferredOwner, { image: media.buffer, caption: text })
+        else await bot.send(deferredOwner, { file: media.buffer, fileName: media.fileName, caption: text })
+      } else await bot.send(deferredOwner, text)
+    } else if (media.buffer && media.fileName) {
       const ext = path.extname(media.fileName).toLowerCase()
       if (IMAGE_EXT.has(ext)) {
-        await bot.reply(inboundRaw, { image: media.buffer, caption: text })
+        await bot.reply(inboundRaw!, { image: media.buffer, caption: text })
       } else {
-        await bot.reply(inboundRaw, { file: media.buffer, fileName: media.fileName, caption: text })
+        await bot.reply(inboundRaw!, { file: media.buffer, fileName: media.fileName, caption: text })
       }
     } else {
-      await bot.reply(inboundRaw, text)
+      await bot.reply(inboundRaw!, text)
     }
   } catch {
     throw new WeChatOutboundExecutionUncertainError('reply')

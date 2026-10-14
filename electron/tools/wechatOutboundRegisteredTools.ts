@@ -8,7 +8,7 @@ import { inspectWeChatTaskReplyAttachment } from './weChatToolExecutor'
 
 const REMOTE_BINDING_KEYS = [
   'source', 'messageId', 'chatId', 'userId', 'outboundSessionId', 'authOwner',
-  'authorizationGeneration', 'workDirProfileId', 'requestId', 'originSessionId'
+  'authorizationGeneration', 'workDirProfileId', 'requestId', 'originSessionId', 'deferredAttachmentApproval'
 ] as const
 
 type RemoteBinding = Readonly<Record<string, unknown>>
@@ -56,6 +56,13 @@ async function deliveryFacts(name: 'wechat_send' | 'wechat_reply', input: Record
     ? await inspectWeChatTaskReplyAttachment(runtime.workDir, typeof input.imagePath === 'string' ? input.imagePath : undefined,
       typeof input.filePath === 'string' ? input.filePath : undefined)
     : { attachmentAuthorized: false }
+  if (remote?.deferredAttachmentApproval) {
+    const binding = remote.deferredAttachmentApproval
+    if (!requestedAttachment || !attachment.attachmentPath || attachment.attachmentPath !== binding.path ||
+      attachment.attachmentContentVersion !== binding.sha256 || attachment.checkedAttachmentContentVersion !== binding.sha256) {
+      throw new Error('WECHAT_DEFERRED_ATTACHMENT_APPROVAL_MISMATCH')
+    }
+  }
   const textAssessment = text === undefined ? 'unknown' : assessImOutboundContent(text)
   const taskReplyBindingValid = name === 'wechat_reply' && !modelRecipient && remote?.source === 'wechat' &&
     Boolean(remote.userId && remote.authOwner === remote.userId && remote.originSessionId === runtime.sessionId &&
@@ -125,6 +132,20 @@ function registerOutbound(name: 'wechat_send' | 'wechat_reply', executor: ToolEx
       const remoteContext = runtime.remoteContext && prepared.remoteBinding
         ? { ...runtime.remoteContext, ...prepared.remoteBinding } as RemoteContext
         : runtime.remoteContext
+      const outboundDeliveryFacts = structuredClone(prepared.outboundDeliveryFacts)
+      if (outboundDeliveryFacts.attachmentApprovalRequired) {
+        const receipt = execution.userConfirmationReceipt?.trim()
+        const exactPreparedAttachment = outboundDeliveryFacts.attachmentPath &&
+          outboundDeliveryFacts.attachmentPath === outboundDeliveryFacts.checkedAttachmentPath &&
+          outboundDeliveryFacts.attachmentContentVersion &&
+          outboundDeliveryFacts.attachmentContentVersion === outboundDeliveryFacts.checkedAttachmentContentVersion
+        const deferredBinding = remoteContext?.deferredAttachmentApproval
+        if (!receipt || execution.userConfirmationAnswerer !== 'user' || !exactPreparedAttachment || (deferredBinding &&
+          (deferredBinding.path !== outboundDeliveryFacts.attachmentPath || deferredBinding.sha256 !== outboundDeliveryFacts.attachmentContentVersion))) {
+          throw new Error('WECHAT_ATTACHMENT_HUMAN_APPROVAL_BINDING_REQUIRED')
+        }
+        outboundDeliveryFacts.attachmentAuthorized = true
+      }
       return executor.execute(prepared.input, {
         ...runtime,
         workDir: prepared.workDir,
@@ -133,7 +154,7 @@ function registerOutbound(name: 'wechat_send' | 'wechat_reply', executor: ToolEx
         ...(remoteContext ? { remoteContext } : {}),
         ...(prepared.wechatConfig ? { wechatConfig: structuredClone(prepared.wechatConfig) } : {}),
         outboundDeliveryFacts: {
-          ...structuredClone(prepared.outboundDeliveryFacts),
+          ...outboundDeliveryFacts,
           ...(execution.userConfirmationReceipt ? { userConfirmationReceipt: execution.userConfirmationReceipt } : {})
         },
         requestId: execution.requestId,

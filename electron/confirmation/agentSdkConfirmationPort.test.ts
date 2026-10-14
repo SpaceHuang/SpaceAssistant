@@ -54,6 +54,35 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(publish).not.toHaveBeenCalled()
   })
 
+  it('fails closed without waiting when an IM human approval cannot be durably parked', async () => {
+    const channel = { request: vi.fn(async () => ({ kind: 'approved' as const, cause: 'user-approved' as const, answererKind: 'user' as const })), cancel: vi.fn() }
+    const defer = vi.fn(async () => ({ kind: 'unavailable' as const, cause: 'unavailable' as const, answerer: 'user' as const, userMessage: '当前无法创建安全的异步审批待办，本次操作未执行。请稍后重试。' }))
+    const publish = vi.fn()
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish, cancel: vi.fn(), defer })
+    const result = await port({ call: { invocationId: 'im-no-park-inv', toolCallId: 'im-no-park-call', toolName: 'write_file', input: { path: 'a' } },
+      modelTurn: 1, confirmationId: 'im-no-park-call', answerer: 'user', reasonCode: 'locked-confirm-every-time',
+      context: { ...context, lane: 'wechat', decision: { ...context.decision, answerer: 'user', disposition: 'human-required' } } })
+
+    expect(result).toMatchObject({ kind: 'unavailable', cause: 'unavailable', answerer: 'user',
+      userMessage: expect.stringContaining('本次操作未执行') })
+    expect(defer).toHaveBeenCalledOnce()
+    expect(channel.request).not.toHaveBeenCalled()
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('keeps the existing IM human confirmation channel when async approval is disabled', async () => {
+    const channel = { request: vi.fn(async () => ({ kind: 'approved' as const, cause: 'user-approved' as const, answererKind: 'user' as const })), cancel: vi.fn() }
+    const defer = vi.fn(async () => undefined)
+    const publish = vi.fn()
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish, cancel: vi.fn(), defer })
+    const result = await port({ call: { invocationId: 'im-gate-off', toolCallId: 'im-gate-off-call', toolName: 'write_file', input: { path: 'a' } },
+      modelTurn: 1, confirmationId: 'im-gate-off-call', answerer: 'user', reasonCode: 'locked-confirm-every-time',
+      context: { ...context, lane: 'wechat', decision: { ...context.decision, answerer: 'user', disposition: 'human-required' } } })
+    expect(result).toMatchObject({ kind: 'approved', answerer: 'user', cause: 'user-approved' })
+    expect(channel.request).toHaveBeenCalledOnce()
+    expect(publish).toHaveBeenCalledOnce()
+  })
+
   it('offers agent-approved outcomes to policy so insufficient direct delegation can still defer', async () => {
     const channel = { request: vi.fn(async () => ({ kind: 'approved', cause: 'agent-approved', answererKind: 'agent' })), cancel: vi.fn() }
     const defer = vi.fn(async () => ({ kind: 'deferred' as const, todoId: 'todo-low-evidence', invocationId: 'inv-2', cause: 'insufficient-delegation-evidence' as const,

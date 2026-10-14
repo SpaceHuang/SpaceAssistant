@@ -39,6 +39,21 @@ describe('classifyImOutbound', () => {
     expect(classifyImOutbound({ ...base, ...override })).not.toMatchObject({ kind: 'controlled-reply' })
   })
 
+  it('allows a user-approved deferred reply only when the exact owner, body, and attachment facts are bound', () => {
+    const approved = { ...base, contentCompleteness: 'unknown' as const,
+      contentAssessment: { source: 'host' as const, content: base.content, classification: 'unknown' as const, classifierVersion: 'host-outbound-v1' },
+      hasAttachment: true, attachmentAuthorized: true, attachmentContentVersion: 'sha256:exact',
+      checkedAttachmentContentVersion: 'sha256:exact', attachmentPath: '/work/report.pdf', checkedAttachmentPath: '/work/report.pdf',
+      userConfirmationReceipt: 'confirmation:deferred-user-approval' }
+    expect(() => assertImOutboundAllowed(approved, { channel: 'feishu', body: base.content, sessionId: 'session-1', recipient: 'chat-1' })).not.toThrow()
+    expect(() => assertImOutboundAllowed(approved, { channel: 'feishu', body: 'changed body', sessionId: 'session-1', recipient: 'chat-1' }))
+      .toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+    expect(() => assertImOutboundAllowed({ ...approved, recipient: 'other-user' },
+      { channel: 'feishu', body: base.content, sessionId: 'session-1', recipient: 'other-user' })).toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+    expect(() => assertImOutboundAllowed({ ...approved, contentAssessment: { ...approved.contentAssessment, classification: 'sensitive' } },
+      { channel: 'feishu', body: base.content, sessionId: 'session-1', recipient: 'chat-1' })).toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+  })
+
   it('does not trust a model recipient for a system reply', () => {
     expect(classifyImOutbound({ ...base, purpose: 'system-reply', modelRecipient: 'other-user' })).toMatchObject({
       kind: 'active-outbound', reason: 'untrusted-recipient'

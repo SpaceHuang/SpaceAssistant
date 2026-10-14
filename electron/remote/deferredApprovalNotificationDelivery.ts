@@ -4,7 +4,7 @@ import { runInTransaction } from '../database/transaction'
 import type { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import type { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { allocateDeferredApprovalShortCode } from './deferredApprovalIngress'
-import { buildDeferredApprovalNotification, type DeferredApprovalNotificationDto } from './deferredApprovalNotification'
+import { buildDeferredApprovalNotification, type DeferredApprovalAttachmentInfo, type DeferredApprovalNotificationDto } from './deferredApprovalNotification'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { buildDeferredApprovalAuditEvent } from '../confirmation/deferredApprovalAudit'
 import { isRemoteAsyncApprovalTestModeEnabled, isRemoteAsyncApprovalTestTodoEnabled,
@@ -73,6 +73,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
   function buildDto(todo: NonNullable<ReturnType<TodoStore['get']>>, version: number, code: string, safeContent: {
     safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string; reasonSummary?: string
     userDelegation: string; untrustedMaterial: string
+    attachmentInfo?: DeferredApprovalAttachmentInfo
   }): DeferredApprovalNotificationDto {
     return buildDeferredApprovalNotification({
       channel: todo.channel, todoId: todo.todoId, notificationVersion: version, shortCode: code,
@@ -111,7 +112,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
   function createAuthorizedRecord(request: {
     todoId: string; invocationId: string; channel: Scope['channel']; identityKey: string; ownerId: string; authorizationEpoch: number
     rule: { ruleId: string; factsHash: string }; safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string
-    reasonSummary?: string; userDelegation: string; untrustedMaterial: string; now: number
+    reasonSummary?: string; userDelegation: string; untrustedMaterial: string; attachmentInfo?: DeferredApprovalAttachmentInfo; now: number
   }): { todo: NonNullable<ReturnType<TodoStore['get']>>; dto: DeferredApprovalNotificationDto } | null {
     const intent = input.intentStore.get(request.invocationId)
     if (!intent || intent.todoId !== request.todoId || !input.intentStore.authorizeResume(request.invocationId)) return null
@@ -142,7 +143,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
     async createAndSend(request: {
       todoId: string; invocationId: string; channel: Scope['channel']; identityKey: string; ownerId: string; authorizationEpoch: number
       rule: { ruleId: string; factsHash: string }; safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string
-      reasonSummary?: string; userDelegation: string; untrustedMaterial: string; now?: number
+      reasonSummary?: string; userDelegation: string; untrustedMaterial: string; attachmentInfo?: DeferredApprovalAttachmentInfo; now?: number
     }): Promise<{ state: 'not_ready' | 'undelivered' | 'delivered'; notificationVersion?: number }> {
       const now = request.now ?? Date.now()
       const authorizedTodo = input.todoStore.get(request.todoId, {
@@ -189,7 +190,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
           impactSummary: prior?.dto.sections.find(({ kind }) => kind === 'impact-summary')?.text ?? '（影响摘要不可用）',
           reasonSummary: prior?.dto.sections.find(({ kind }) => kind === 'reason-summary')?.text ?? '（策略要求人工确认）',
           userDelegation: prior?.dto.sections.find(({ kind }) => kind === 'user-delegation')?.text ?? '（未提供安全摘要）',
-          untrustedMaterial: ''
+          untrustedMaterial: '', attachmentInfo: prior?.dto.attachmentInfo
         }
         const created = createAuthorizedRecord({
           todoId: todo.todoId, invocationId: todo.invocationId, channel: todo.channel, identityKey: todo.identityKey,

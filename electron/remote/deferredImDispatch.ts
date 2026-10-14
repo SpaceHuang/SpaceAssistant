@@ -34,7 +34,8 @@ export function createDeferredImDispatchPorts(input: {
   isEnabled(): boolean
   isOwnerAuthorized(todo: DeferredTodoRecord): boolean
   recheckTask(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean
-  dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ dispatched: boolean }>
+  recheckAttachment?(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean | Promise<boolean>
+  dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string }>
 }) {
   const recheck = async (_request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope) => {
     const context = envelope.executionContext
@@ -67,9 +68,18 @@ export function createDeferredImDispatchPorts(input: {
       ? true
       : context.policyBehaviorVersion === todo.policyBehaviorVersion && context.policyRevision === todo.policyRevision &&
         context.policyEpoch === todo.policyEpoch && context.ruleId === todo.rule.ruleId && context.factsHash === todo.rule.factsHash
+    const toolInput = context.toolInput && typeof context.toolInput === 'object' ? context.toolInput as Record<string, unknown> : {}
+    const mediaPath = typeof toolInput.imagePath === 'string' ? toolInput.imagePath
+      : typeof toolInput.filePath === 'string' ? toolInput.filePath : undefined
+    const expectedAttachmentHash = envelope.contentVersions?.attachmentSha256
+    const needsAttachmentBinding = todo.channel === 'wechat' && (envelope.toolName === 'wechat_send' || envelope.toolName === 'wechat_reply') && Boolean(mediaPath)
+    const attachmentMatches = needsAttachmentBinding
+      ? typeof expectedAttachmentHash === 'string' && /^[a-f0-9]{64}$/i.test(expectedAttachmentHash) &&
+        Boolean(input.recheckAttachment && await input.recheckAttachment(todo, envelope))
+      : expectedAttachmentHash === undefined
     const allowed = input.isEnabled() && testRunMatches && todo.channel === input.channel &&
       todo.authorizationEpoch === input.getAuthorizationEpoch() && input.isOwnerAuthorized(todo) &&
-      policyMatches && identityMatches && approvalMatches && input.recheckTask(todo, envelope)
+      policyMatches && identityMatches && approvalMatches && attachmentMatches && input.recheckTask(todo, envelope)
     return { allowed }
   }
 
@@ -80,9 +90,9 @@ export function createDeferredImDispatchPorts(input: {
         const closure = getDbConnection(input.db).prepare(`SELECT state,authorization_epoch FROM deferred_approval_closures
           WHERE channel=? AND identity_key=? AND owner_id=? AND session_id=?`)
           .get(todo.channel, todo.identityKey, todo.ownerId, todo.originSessionId) as { state: string; authorization_epoch: number } | undefined
-        if (closure && closure.state !== 'closed') return { dispatched: false }
+        if (closure && closure.state !== 'closed') return { dispatched: false, failureReason: '授权关闭流程正在处理中，本次操作未执行。' }
       }
-      if (!(await recheck(request, todo, envelope)).allowed) return { dispatched: false }
+      if (!(await recheck(request, todo, envelope)).allowed) return { dispatched: false, failureReason: '审批后安全复检未通过，本次操作未执行。' }
       return input.dispatch(request, todo, envelope)
     }
   }

@@ -100,7 +100,7 @@ describe('deferred IM bundle runtime', () => {
         toolCallId: todo.invocationId, providerRouteId: 'unknown-provider', workflowId: todo.workflowId, taskId: todo.taskId,
         stepId: todo.stepId, planRevision: todo.planRevision, policyBehaviorVersion: todo.policyBehaviorVersion,
         policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch, ruleId: rule.ruleId, factsHash: rule.factsHash } })
-    const dispatch = vi.fn(async () => ({ dispatched: false }))
+    const dispatch = vi.fn(async () => { throw new Error('executor entered, outcome not reported') })
     const runtime = createDeferredImBundleRuntime({ db, channel: 'feishu', todoStore,
       notificationDelivery: { resolveCurrent: vi.fn(() => null) } as never, isEnabled: () => true,
       getAuthorizationEpoch: () => 3, maxParallel: 1, isOwnerAuthorized: () => true, recheckTask: () => true,
@@ -119,6 +119,49 @@ describe('deferred IM bundle runtime', () => {
     await expect(restarted.resume.dispatchPending(sessionId)).resolves.toEqual([])
     expect(dispatch).toHaveBeenCalledTimes(1)
     expect(restarted.resume.getResumeRequest('unknown-request')?.state).toBe('outcome_unknown')
+    db.close()
+  })
+
+  it('records a pre-dispatch rejection as a failed result and wakes the user instead of marking outcome unknown', async () => {
+    const db = createMemoryAppDb()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1,
+      eventId: 'bundle-policy-not-dispatched' })
+    const sessionId = createSession(db, { name: 'bundle-not-dispatched' }).id
+    const todoStore = createDeferredTodoStore(db)
+    const rule = { ruleId: 'write', factsHash: 'f'.repeat(64) }
+    const todo = todoStore.create({ todoId: 'not-dispatched-todo', invocationId: 'not-dispatched-invocation', channel: 'feishu',
+      identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 3, rule, workflowId: 'workflow', taskId: 'task', stepId: 'step',
+      planRevision: 1, originSessionId: sessionId, createdAt: Date.now(), expiresAt: Date.now() + 60_000 }).todo
+    const intents = createSecurityActionIntentStore(db)
+    intents.prepare({ invocationId: todo.invocationId, envelopeInvocationId: todo.invocationId, sessionId,
+      workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: 1 })
+    intents.linkTodo(todo.invocationId, todo.todoId)
+    intents.commitCheckpoint(todo.invocationId, { checkpointId: 'not-dispatched-checkpoint', workflowRevision: 1 })
+    putTaskControlRecord(db, { sessionId, ownerId: todo.ownerId, workflowId: todo.workflowId, taskId: todo.taskId,
+      planRevision: todo.planRevision, expectedRevision: null, data: { steps: [{ stepId: todo.stepId }],
+        outstandingInvocations: [{ invocationId: todo.invocationId, todoId: todo.todoId, stepId: todo.stepId }] } })
+    createDeferredEnvelopeStore(db).put({ invocationId: todo.invocationId, toolName: 'write_file', canonicalArgs: {}, contentVersions: {},
+      executionContext: { channel: 'feishu', sessionId, ownerId: todo.ownerId, identityKey: todo.identityKey, authorizationEpoch: 3,
+        invocationId: todo.invocationId, toolName: 'write_file', toolInput: {}, requestId: todo.invocationId, turnId: todo.invocationId,
+        toolCallId: todo.invocationId, providerRouteId: 'known-provider', workflowId: todo.workflowId, taskId: todo.taskId,
+        stepId: todo.stepId, planRevision: todo.planRevision, policyBehaviorVersion: todo.policyBehaviorVersion,
+        policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch, ruleId: rule.ruleId, factsHash: rule.factsHash } })
+    const dispatch = vi.fn(async () => ({ dispatched: false, failureReason: 'approved work directory is unavailable' }))
+    const onCompletionWake = vi.fn()
+    const runtime = createDeferredImBundleRuntime({ db, channel: 'feishu', todoStore,
+      notificationDelivery: { resolveCurrent: vi.fn(() => null) } as never, isEnabled: () => true,
+      getAuthorizationEpoch: () => 3, maxParallel: 1, isOwnerAuthorized: () => true, recheckTask: () => true,
+      dispatch, audit: vi.fn(), onCompletionWake })
+    await runtime.resume.requestResume({ requestId: 'not-dispatched-request', todoId: todo.todoId, sessionId, channel: 'feishu',
+      identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch, rule,
+      notificationVersion: 1, messageId: 'trusted', reasonKey: 'reply' })
+    await expect(runtime.resume.dispatchPending(sessionId)).resolves.toEqual([{ requestId: 'not-dispatched-request', status: 'dispatched' }])
+    expect(createDeferredExecutionResultStore(db).getByTodo(todo.todoId)).toMatchObject({
+      state: 'completion_outboxed', result: { kind: 'failed', value: { success: false, error: 'approved work directory is unavailable' } }
+    })
+    expect(createDeferredExecutionResultStore(db).listCompletionOutbox(todo.todoId)).toHaveLength(1)
+    expect(onCompletionWake).toHaveBeenCalledWith(sessionId)
+    expect(runtime.resume.getResumeRequest('not-dispatched-request')?.state).toBe('completed')
     db.close()
   })
 
