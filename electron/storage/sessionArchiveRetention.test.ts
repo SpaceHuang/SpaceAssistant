@@ -197,6 +197,8 @@ describe('session archive retention', () => {
       // 受害目录保留，其余照常清理；函数整体不向上抛。
       expect(result.removed).toEqual([oldest!])
       expect(result.kept).toBe(newest!)
+      // freedBytes 只计成功删除的目录：失败的 victim 未释放，不得计入（遥测不虚高）。
+      expect(result.freedBytes).toBe(PAYLOAD_BYTES)
       expect(await fsp.readdir(archiveRoot)).toEqual([newest!, victim!].sort())
       expect(await prunedEvents()).toContainEqual(expect.objectContaining(
         { level: 'warn', removedCount: 1, kept: newest!, errorCode: 'EBUSY' }))

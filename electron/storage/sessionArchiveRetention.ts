@@ -5,7 +5,12 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 
 export const SESSION_ARCHIVE_KEEP_COUNT = 1
 export const SESSION_ARCHIVE_RETENTION_DAYS = 14
-/** 宽限期：比一次压缩的最长耗时高一个量级，用于避开「进行中压缩」的半成品归档。 */
+/**
+ * 宽限期：比一次压缩的最长耗时高一个量级，用于避开「进行中压缩」的半成品归档。
+ * 假设单次压缩（含超大库的进程内降级路径）在该窗口内完成；若压缩实际超过宽限期，期间并发的
+ * 另一次成功收口 prune 可能删掉仍在写入的归档——该残余风险与「并发压缩」同级（runSafeDbMaintenance
+ * 绕过租约的既有事实，见 sessionStorageMaintenance.ts），不在此用更长的宽限期兜底。
+ */
 export const SESSION_ARCHIVE_PRUNE_GRACE_MS = 5 * 60_000
 
 const RETENTION_MS = SESSION_ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 * 1000
@@ -103,8 +108,10 @@ export async function pruneSessionArchives(
     }
     const directory = path.join(archiveRoot, entry.name)
     try {
-      freedBytes += await directoryBytes(directory)
+      const bytes = await directoryBytes(directory)
       await fsp.rm(directory, { recursive: true, force: true })
+      // 只有删除成功才计入释放量：rm 失败（可能已部分删除）按 0 报，遥测宁可虚低不虚高。
+      freedBytes += bytes
       removed.push(entry.name)
     } catch (error) {
       firstErrorCode ??= (error as NodeJS.ErrnoException)?.code ?? (error instanceof Error ? error.name : 'UNKNOWN_ERROR')
