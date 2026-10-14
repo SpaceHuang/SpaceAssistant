@@ -118,7 +118,8 @@ export function createSkillManager(ctx: SkillManagerContext) {
         baseUrl: args.baseUrl,
         getApiKey: args.getApiKey,
         sessionId: args.sessionId,
-        signal: args.signal
+        signal: args.signal,
+        wikiConfig
       })
 
       if (wikiConfig && !wikiConfig.enabled) {

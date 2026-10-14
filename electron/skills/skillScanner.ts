@@ -4,12 +4,13 @@ import type { SkillDefinition } from '../../src/shared/domainTypes'
 import { getBundledBrowserSetupGuideSkill } from './bundled/browserSetupGuideSkill'
 import { getBundledShellSetupGuideSkill } from './bundled/shellSetupGuideSkill'
 import { getBundledImTaskOrchestrationSkill } from './bundled/imTaskOrchestrationSkill'
+import { getBundledLlmWikiSkill } from './bundled/llmWikiSkill'
 import { assertInsideDir, getProjectSkillsDir, getUserSkillsDir } from './skillPaths'
 import { readSkillFromDirectory } from './skillParser'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 
 function getBundledSkills(): SkillDefinition[] {
-  return [getBundledBrowserSetupGuideSkill(), getBundledShellSetupGuideSkill(), getBundledImTaskOrchestrationSkill()]
+  return [getBundledBrowserSetupGuideSkill(), getBundledShellSetupGuideSkill(), getBundledImTaskOrchestrationSkill(), getBundledLlmWikiSkill()]
 }
 
 export type SkippedSkill = { dirName: string; scope: 'project' | 'user'; reason: string }

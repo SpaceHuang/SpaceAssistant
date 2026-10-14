@@ -2,13 +2,16 @@ import type Anthropic from '@anthropic-ai/sdk'
 import { createAnthropicClient } from '../anthropicClientFactory'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { normalizeToolLoopMaxTokens } from '../../src/shared/llm/toolLoopMaxTokens'
+import { keywordMatch } from '../../src/shared/skillTriggerMatch'
+import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import type {
   SessionSkillsState,
   SkillActivationSource,
   SkillDefinition,
   SkillRouteRecentMessage,
   SkillRouteResult,
-  SkillsConfig
+  SkillsConfig,
+  WikiConfig
 } from '../../src/shared/domainTypes'
 import { isLlmRoutingExcludedSkill } from '../../src/shared/domainTypes'
 import {
@@ -19,11 +22,12 @@ import {
   parseRoutingResponse
 } from './skillRoutingPrompt'
 
-const SOURCE_SCORE: Record<SkillActivationSource, number> = {
+export const SOURCE_SCORE: Record<SkillActivationSource, number> = {
   manual: 1.0,
   alwaysLoad: 0.95,
   feishu: 0.95,
   llm: 0.9,
+  'wiki-trigger': 0.9,
   legacy: 0.85
 }
 
@@ -50,8 +54,10 @@ export function collectHardRuleSkills(args: {
   config: SkillsConfig
   sessionState: SessionSkillsState
   sessionMetadata?: Record<string, unknown>
+  userInput?: string
+  wikiConfig?: WikiConfig
 }): Map<string, ScoredSkill> {
-  const { available, config, sessionState, sessionMetadata } = args
+  const { available, config, sessionState, sessionMetadata, userInput, wikiConfig } = args
   const scored = new Map<string, ScoredSkill>()
 
   const upsert = (skill: SkillDefinition, source: SkillActivationSource) => {
@@ -81,6 +87,13 @@ export function collectHardRuleSkills(args: {
       (s) => /lark|feishu|飞书/i.test(s.meta.name) || /lark|feishu|飞书/i.test(s.meta.description)
     )
     if (feishuSkill) upsert(feishuSkill, 'feishu')
+  }
+
+  // W1-a 确定性激活：llm 路由模式不做 keywordMatch 且 triggers 不进 catalog，
+  // 「提及即激活」必须由硬规则保证，不依赖路由 LLM 概率；仅在知识库启用时生效。
+  if (wikiConfig?.enabled && userInput) {
+    const wikiSkill = available.find((s) => s.meta.name === WIKI_VOCABULARY_PREFIX)
+    if (wikiSkill && keywordMatch(userInput, wikiSkill.meta.triggers)) upsert(wikiSkill, 'wiki-trigger')
   }
 
   return scored
@@ -174,6 +187,7 @@ export async function routeSkills(args: {
   getApiKey: () => Promise<string | null>
   sessionId?: string
   signal?: AbortSignal
+  wikiConfig?: WikiConfig
 }): Promise<SkillRouteResult> {
   const start = Date.now()
   const routingRequestId = crypto.randomUUID()
@@ -188,12 +202,13 @@ export async function routeSkills(args: {
     baseUrl,
     getApiKey,
     sessionId,
-    signal
+    signal,
+    wikiConfig
   } = args
 
   const routing = config.routing
   const available = getAvailableSkills(skills, config, sessionState)
-  const scored = collectHardRuleSkills({ available, config, sessionState, sessionMetadata })
+  const scored = collectHardRuleSkills({ available, config, sessionState, sessionMetadata, userInput, wikiConfig })
 
   const shouldCallLlm =
     config.autoDetect &&

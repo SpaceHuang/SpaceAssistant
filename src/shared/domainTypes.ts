@@ -343,7 +343,7 @@ export function mergeSkillsConfig(partial?: Partial<SkillsConfig> | null): Skill
   }
 }
 
-export type SkillActivationSource = 'manual' | 'alwaysLoad' | 'llm' | 'feishu' | 'legacy'
+export type SkillActivationSource = 'manual' | 'alwaysLoad' | 'llm' | 'feishu' | 'legacy' | 'wiki-trigger'
 
 export interface SkillRouteRecentMessage {
   role: 'user' | 'assistant'
