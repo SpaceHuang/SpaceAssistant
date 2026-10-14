@@ -8,17 +8,17 @@ docs/develop/agent-core-contract-path-refactor-plan.md	agent-sdk	B	自述已实�
 docs/develop/agent-loop-single-path-refactor-plan.md	agent-sdk	B	核验更正：分支已合入（958f93c8 merge: agent loop single path refactor）；filterBuiltinToolsForApi 见 electron/effectiveTools.ts
 docs/develop/agent-sdk-architecture-development-plan.md	agent-sdk	A	724KB 架构方案，实施中；现状素材
 docs/develop/agent-sdk-architecture-migration-baseline.md	agent-sdk	A	迁移基线
-docs/develop/agent-sdk/runtime/01-positioning.md	agent-sdk	A	原地保留（设计系列）
-docs/develop/agent-sdk/runtime/02-runtime-core.md	agent-sdk	A	原地保留
-docs/develop/agent-sdk/runtime/03-scheduler.md	agent-sdk	A	原地保留
-docs/develop/agent-sdk/runtime/04-quota-and-guards.md	agent-sdk	A	原地保留
-docs/develop/agent-sdk/runtime/05-extension-points.md	agent-sdk	A	原地保留
-docs/develop/agent-sdk/runtime/06-contracts.md	agent-sdk	A	原地保留
-docs/develop/agent-sdk/runtime/07-failure-and-recovery.md	agent-sdk	A	原地保留
-docs/develop/agent-sdk/runtime/08-mapping-and-acceptance.md	agent-sdk	A	原地保留
-docs/develop/agent-sdk/runtime/09-assembly.md	agent-sdk	A	原地保留
-docs/develop/agent-sdk/runtime/10-implementation-plan.md	agent-sdk	A	原地保留（计划稿）
-docs/develop/agent-sdk/runtime/README.md	agent-sdk	A	原地保留（更新基准行）
+docs/develop/agent-sdk/runtime/01-positioning.md	agent-sdk	C	草稿（未实施）：Runtime 目标设计系列第一篇；按 §2.2 原地保留
+docs/develop/agent-sdk/runtime/02-runtime-core.md	agent-sdk	C	草稿（未实施）；原地保留
+docs/develop/agent-sdk/runtime/03-scheduler.md	agent-sdk	C	草稿（未实施）；原地保留
+docs/develop/agent-sdk/runtime/04-quota-and-guards.md	agent-sdk	C	草稿（未实施）；原地保留
+docs/develop/agent-sdk/runtime/05-extension-points.md	agent-sdk	C	草稿（未实施）；原地保留
+docs/develop/agent-sdk/runtime/06-contracts.md	agent-sdk	C	草稿（未实施）；原地保留
+docs/develop/agent-sdk/runtime/07-failure-and-recovery.md	agent-sdk	C	草稿（未实施）；原地保留
+docs/develop/agent-sdk/runtime/08-mapping-and-acceptance.md	agent-sdk	C	草稿（未实施）；原地保留
+docs/develop/agent-sdk/runtime/09-assembly.md	agent-sdk	C	草稿（未实施）；原地保留
+docs/develop/agent-sdk/runtime/10-implementation-plan.md	agent-sdk	C	草稿（未实施）：实施计划，未开工；原地保留
+docs/develop/agent-sdk/runtime/README.md	agent-sdk	C	草稿（未实施）：核验 2026-10-14 —— wake_one/bWaitAll/namedQuota/quotaLease/callStateMachine 全部 0 命中；原地保留
 docs/develop/agent-thinking-token-exhaustion-recovery-design.md	agent-sdk	DELETE	0 字节空文件（§8-5）
 docs/develop/b344321-current-code-refactor-plan.md	agent-sdk	B	核验更正：已落地（7a9b5c05 feat(remote): 落地 b344321 重构…）
 docs/develop/batch3-p0-evidence-audit.md	agent-sdk	B	证据审计（过程产物）

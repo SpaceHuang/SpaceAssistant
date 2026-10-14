@@ -132,14 +132,16 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 | --- | --- |
 | [agent-sdk-architecture-development-plan.md](./agent-sdk-architecture-development-plan.md) | 方案（实施中，724 KB；架构落地主线） |
 | [agent-sdk-architecture-migration-baseline.md](./agent-sdk-architecture-migration-baseline.md) | 迁移前形态冻结基线 |
-| [runtime/](./runtime/)（11 篇） | 设计系列（未开工） |
+| [runtime/](./runtime/)（11 篇） | **草稿（未实施）**：核验独有符号 0 命中 |
 | 本 README + 10 篇接口说明 | SDK 接口现状 |
 
-## 在途（in-flight）
+## 在途 / 草稿箱（in-flight）
 
-**（本次核验后为空）** —— 本主题文档全部经 §3.0 核验确认已实现并合入 main，已移入 `../archive/agent-sdk/`（共 18 件）。
+`in-flight/` 目录**为空**，但本主题**有一个未开工的大规划**（按 §2.2 约定原地保留，未搬入 `in-flight/`）：
 
-> **2026-10-14 两轮核验更正（原判 C 有误）**
+- [runtime/](./runtime/)（01–10 + README，11 篇）—— **草稿（未实施）**：Runtime 目标形态设计与实施计划。核验（2026-10-14）：独有符号 `wake_one`、`bWaitAll`、`namedQuota`、`quotaLease`、`callStateMachine` **全部 0 命中**，无实现提交 → 真正在途。
+
+> **2026-10-14 两轮核验更正（原判 C 有误，均已移入 `../archive/agent-sdk/`，共 18 件）**
 > 第一批（用户点名 `context-injection-refactor-plan` 后复核）：`context-injection-refactor-plan.md`（`9dfc46d1`、`91e939ef`、`d96bd70b`、`b5eaada1`）、`runtime-admission-sdk-reuse-plan.md`（`22ea8d88`）、`butler-agent-shortest-path-plan.md`（`4b6f81c4`）、`b344321-current-code-refactor-plan.md`（`7a9b5c05`）。
 > 第二批（按「最后更新早于 7 天则须复核」规则）：`agent-loop-single-path-refactor-plan.md`（`958f93c8` merge）、`tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md`（`51193571`）。
 

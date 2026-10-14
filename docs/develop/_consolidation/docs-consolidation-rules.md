@@ -121,6 +121,17 @@ git log --date=short --format='%ad %h %s' --grep='<方案关键词>'
 | `docs/requirement/im-remote/in-flight/2026-10-11-im-security-review-improvement-requirement.md` | 2026-10-12 | 同上 |
 | `docs/develop/tools-mcp/in-flight/run-shell-dialect-mismatch-…-improvement-plan.md` | 2026-10-13 | 实质实现已落地（`shouldStopToolRetry` 见 `electron/toolErrorRetryPolicy.ts`），文档自述 D-1/D-7/D-8 待重审 —— 属**实施中** |
 
+### 3.7 特例：原地保留的草稿（`agent-sdk/runtime/`）
+
+`agent-sdk/runtime/`（01–10 + README，共 11 篇）是**唯一一处「原地保留 + 按 C 管理」**的组合：
+
+- §2.2 约定它是完整的设计系列，**零搬迁**（不搬入 `in-flight/`）；
+- §3.0 核验结论（2026-10-14）：目标设计独有符号 `wake_one`、`bWaitAll`、`namedQuota`、`quotaLease`、`callStateMachine` 在代码中**全部 0 命中**，且无实现提交（`git log --grep='调用分片' / --grep='named quota'` 为空）→ 它是**未开工的大规划**，属 C（草稿箱）语义。
+
+处置：状态口径按 C（[`../../agent-sdk/runtime/README.md`](../../agent-sdk/runtime/README.md) 头部统一声明「草稿（未实施）」，01–10 各篇不再逐篇标注）；`docs-inventory.tsv` 中这 11 篇记为 **C**（说明列标注「原地保留」）。**判断依据是核验证据，不是目录位置。**
+
+> **教训**：不要因为「原地保留」就把它当 A（现状素材）。A 的判据是「目标形态今天仍成立**且代码可对照**」；本系列**代码不可对照**（符号 0 命中），故只能是 C。反过来，`in-flight/` 里的文档也不能因为「在 in-flight」就免于核验（§3.5/§3.6 的 25 篇更正即是教训）。
+
 ## 4. 模板
 
 ### 4.1 现状文档（develop 侧）
