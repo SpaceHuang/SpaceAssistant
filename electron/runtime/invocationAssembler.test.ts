@@ -30,6 +30,16 @@ import { RunShellPlanError } from '../tools/runShellPlan'
 import { PlanRejectedError } from '../../packages/agent-sdk/src/turn'
 
 describe('AcceptedTurn propagation', () => {
+  it('preserves the per-session AGENTS.md setting in the invocation profile', () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'agents-md-setting' })
+    const { invocation } = assembleInvocation({ requestId: 'agents-md-disabled', sessionId: session.id, model: 'test', locale: 'zh-CN',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', agentsMdEnabled: false,
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    expect(invocation.profile.agentsMdEnabled).toBe(false)
+    db.close()
+  })
+
   it('does not associate IM confirmations with a Track while the confirmation-link gate is off', async () => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: 'track-confirmation-link-disabled' })

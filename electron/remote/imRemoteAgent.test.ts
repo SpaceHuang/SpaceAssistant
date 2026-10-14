@@ -358,10 +358,10 @@ describe('runImRemoteAgent', () => {
     const acceptedTurn = createAcceptedTurn({
       turnId: 'exact-service-turn', requestId: 'exact-service-request', sessionId: session.id, lane: 'feishu',
       startToken: 'exact-service-token', currentUserMessageId: 'exact-service-user', transcriptVersion: 0,
-      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-frozen', thinkingEffort: 'low' }
+      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-frozen', thinkingEffort: 'low', agentsMdEnabled: false }
     })
     acceptTurnContext(db, acceptedTurn)
-    let captured: { profile: { baseUrl?: string }; ports: { credentials: { resolveApiKey: () => Promise<string | null> } } } = {} as never
+    let captured: { invocation: { profile: { baseUrl?: string; agentsMdEnabled?: boolean } }; ports: { credentials: { resolveApiKey: () => Promise<string | null> } } } = {} as never
     mockRunToolChatSession.mockImplementation(async (invocation: never, ports: never) => {
       captured = { invocation, ports } as never
       return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
@@ -371,6 +371,7 @@ describe('runImRemoteAgent', () => {
 
     expect(mockResolveLlmCredentialsForPair).toHaveBeenCalledWith(db, 'catalog-model', 'svc-frozen')
     expect(captured.ports.credentials.networkTarget?.baseUrl).toBe('https://creds.example.com')
+    expect(captured.invocation.profile.agentsMdEnabled).toBe(false)
     expect(await captured.ports.credentials.resolveApiKey()).toBe('creds-key')
     db.close()
   })

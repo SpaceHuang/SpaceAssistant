@@ -1496,6 +1496,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       lane: materialsLane,
       model: materials.model,
       contextWindow: materials.contextWindow,
+      getWorkDir: () => materials.resolveWorkDir?.() ?? materials.workDir,
+      agentsMdEnabled: materials.agentsMdEnabled ?? true,
       windowId: materials.windowId,
       ...(materials.sessionEventLocation ? { sessionEventLocation: materials.sessionEventLocation } : {}),
       turnIdForRetry: runtimeTurnId,

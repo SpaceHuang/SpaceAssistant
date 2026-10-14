@@ -1170,9 +1170,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       requestTemplate = { ...requestTemplate, ...(recovery.requestPatch ?? {}) }
       baseRequestTemplate = { ...baseRequestTemplate, ...(recovery.requestPatch ?? {}) }
         recoveredAttempt = true
-        let retryRequestObservation = { modelTurn: modelTurns, attempt: 2, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
+        const retryBaseCall = prepareRequest()
+        let retryRequestObservation = { modelTurn: modelTurns, attempt: 2, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: retryBaseCall.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
         const retryProjection = await input.observer?.prepareModelRequest?.(retryRequestObservation)
-        const retryCall = prepareRequest(retryProjection?.requestPatch)
+        const retryCall = prepareRequest(retryProjection?.requestPatch ?? preparedRequestProjection?.requestPatch)
         retryRequestObservation = { ...retryRequestObservation, request: retryCall.request }
         const retryProvider = input.registry.getProvider(retryCall)
         if (!sameRouteIdentity(retryCall.route, call.route) || retryProvider !== provider) throw new ModelRouteChangedError(input.routeId)

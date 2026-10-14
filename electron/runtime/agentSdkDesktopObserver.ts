@@ -10,7 +10,9 @@ import type { ExecutionLane } from '../../src/shared/confirmation/types'
 import { buildRequestContextPayload, buildRequestHeaderPayload, computeAnthropicCacheBreakpointPositions } from '../../src/shared/requestContext'
 import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { computeContextPressure } from '../../src/shared/contextMeter'
-import { projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
+import { estimateTokensFromUtf8Text, projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
+import { loadAgentsMd, type AgentsMdLoadResult } from '../projectInstructions/projectInstructions'
+import { renderAgentsMdSection } from '../llmSystemPrompt'
 import { accumulateDeferredDimension, accumulateToolDeclarationSnapshot, accumulateToolResultVolume, buildStepAttribution, emptyTurnToolDimension, estimateDeferredSavings, summarizeToolDeclarations, type DeferredToolDimension, type TurnToolDimension } from '../../src/shared/usageAttribution'
 
 type ObserverChunk = Exclude<import('../../packages/agent-sdk/src/model').StreamChunk, { type: 'finish' }>
@@ -45,6 +47,8 @@ export function createAgentSdkDesktopObserver(input: {
   /** FR8：节省量按轮日志出口（assembler 落 agentLogger；事件面不进 wire 面与会话事件流）。 */
   onDeferredSavings?(input: { modelTurn: number; toolCount: number; eagerEquivalentTokens: number; indexTokens: number; savedTokens: number }): void
   onDispatchDiagnostic?(event: Readonly<Record<string, unknown>>): void
+  getWorkDir?(): string
+  agentsMdEnabled?: boolean
 }): AgentTurnObserver {
   let pendingChunks: ObserverChunk[] = []
   let streamedText = ''
@@ -85,6 +89,7 @@ export function createAgentSdkDesktopObserver(input: {
     request: NonNullable<ReturnType<typeof requestContexts.get>>
   }>()
   const projectedToolUsage = new Map<number, ContextUsageRaw>()
+  const agentsMdSnapshots = new Map<number, AgentsMdLoadResult>()
   const stepId = (modelTurn: number) => `${input.requestId}:model:${modelTurn}`
   const emitFact = (event: AssistantFactEvent) => input.emitFactEvent?.(event)
   const emitSessionEvent = (event: SessionEventInput) => input.emitSessionEvent?.({
@@ -109,9 +114,29 @@ export function createAgentSdkDesktopObserver(input: {
       notDispatchedCount: notDispatchedToolCallIds.size
     })
   }
-  const prepareRequestProjection = (request: Parameters<NonNullable<AgentTurnObserver['onModelRequest']>>[0]) => {
-    const system = request.request.messages.filter((message) => message.role === 'system').map((message) => typeof message.content === 'string' ? message.content : '').join('\n') || ''
-    const canonicalMessages = request.request.messages.filter((message) => message.role !== 'system')
+  const prepareRequestProjection = async (request: Parameters<NonNullable<AgentTurnObserver['onModelRequest']>>[0]) => {
+    let agentsMdSnapshot = agentsMdSnapshots.get(request.modelTurn)
+    if (!agentsMdSnapshot) {
+      agentsMdSnapshot = await loadAgentsMd(input.getWorkDir?.() ?? '', { enabled: input.agentsMdEnabled, contextWindow: input.contextWindow, promptOverheadTokens: estimateTokensFromUtf8Text(renderAgentsMdSection('')) })
+      agentsMdSnapshots.set(request.modelTurn, agentsMdSnapshot)
+    }
+    const agentsMdSection = agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content
+      ? renderAgentsMdSection(agentsMdSnapshot.content)
+      : undefined
+    let requestPatch: Partial<import('../../packages/agent-sdk/src/model').PreparedModelCall['request']> | undefined
+    if (agentsMdSection) {
+      let appended = false
+      const patchedMessages = request.request.messages.map((message) => {
+        if (message.role !== 'system' || appended) return message
+        appended = true
+        return { ...message, content: `${typeof message.content === 'string' ? message.content : ''}\n\n${agentsMdSection}` }
+      })
+      if (!appended) patchedMessages.unshift({ role: 'system', content: agentsMdSection })
+      requestPatch = { messages: patchedMessages }
+    }
+    const requestMessages = requestPatch?.messages ?? request.request.messages
+    const system = requestMessages.filter((message) => message.role === 'system').map((message) => typeof message.content === 'string' ? message.content : '').join('\n') || ''
+    const canonicalMessages = requestMessages.filter((message) => message.role !== 'system')
     const requiredMessage = request.requiredUserMessage
     const messages = canonicalMessages.map((message) => message.role === 'user' && requiredMessage && JSON.stringify(message) === JSON.stringify(requiredMessage.message)
       ? { ...message, id: requiredMessage.id }
@@ -211,6 +236,17 @@ export function createAgentSdkDesktopObserver(input: {
     const requestContextPayload = { ...context, turnId: input.turnId, attempt: request.attempt }
     requestContexts.set(request.modelTurn, { requestId, messages, header, context, requestHeaderPayload, requestContextPayload })
     return {
+      requestMetadata: { agentsMdSnapshot: {
+        status: agentsMdSnapshot.status,
+        ...(agentsMdSnapshot.digest ? { digest: agentsMdSnapshot.digest } : {}),
+        byteLength: agentsMdSnapshot.byteLength,
+        loadedAt: agentsMdSnapshot.loadedAt,
+        tokenCount: agentsMdSnapshot.tokenCount,
+        source: 'AGENTS.md', scope: 'workdir-root',
+        workDir: agentsMdSnapshot.workDir,
+        ...(agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content !== null ? { content: agentsMdSnapshot.content } : {})
+      } },
+      ...(requestPatch ? { requestPatch } : {}),
       ...(input.sessionEventLocation ? { sessionLedger: {
         location: input.sessionEventLocation,
         requestHeader: stripUndefinedProperties({ ...requestHeaderPayload, invocationRequestId: input.requestId, ...(input.lane ? { lane: input.lane } : {}) }),
@@ -395,7 +431,11 @@ export function createAgentSdkDesktopObserver(input: {
     },
     async onModelRequest(request) {
       activeModelTurn = request.modelTurn
-      const prepared = requestContexts.get(request.modelTurn) ?? (prepareRequestProjection(request), requestContexts.get(request.modelTurn)!)
+      let prepared = requestContexts.get(request.modelTurn)
+      if (!prepared) {
+        await prepareRequestProjection(request)
+        prepared = requestContexts.get(request.modelTurn)!
+      }
       const projectedUsage = projectedToolUsage.get(request.modelTurn)
       if (projectedUsage) emitFact({ type: 'usage-updated', usage: projectedUsage, projected: true })
       await emitSessionEvent({ type: 'request_header', payload: prepared.requestHeaderPayload })

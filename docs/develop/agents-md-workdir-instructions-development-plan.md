@@ -140,7 +140,7 @@
 - [x] **3.6 补齐 History / spill / interrupted 回归测试** — SQLite 回归写入两个不同 digest/body 后重建 adapter 读取，且重启仅生成 interrupted 终态；SDK 回归验证 retry / tool 来源关联。
   - 依赖：3.3–3.5
   - 完成判据：同 invocation 两个请求有不同 snapshot 可分别还原；缺旧正文时状态明确；审批与工具关联请求来源；重启不重新派发工具；历史正文不进入日志。
-- [x] **3.7 运行定向测试并提交阶段** — `npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/sqliteAgentHistory.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/projectInstructions/projectInstructions.test.ts electron/llmSystemPrompt.test.ts`：5 files / 369 tests passed；`npm run check:agent-sdk`、`npm run typecheck:agent-sdk` passed。包含中立 requestMetadata / requestPatch SDK 合同扩展；阶段提交将由后续阶段记录 SHA。
+- [x] **3.7 运行定向测试并提交阶段** — `npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/sqliteAgentHistory.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/projectInstructions/projectInstructions.test.ts electron/llmSystemPrompt.test.ts`：5 files / 369 tests passed；`npm run check:agent-sdk`、`npm run typecheck:agent-sdk` passed。仅扩展中立可序列化事件合同；阶段提交：`31b83d07`。
   - 依赖：3.6
   - 完成判据：一次合并运行 SDK history 与 electron history storage 相关测试；若触及 SDK 代码，阶段内运行 `npm run check:agent-sdk`；记录是否仅扩展中立可序列化事件合同和提交 SHA。
 
@@ -148,33 +148,33 @@
 
 **阶段完成条件：** 每个逻辑请求由宿主读取并装配恰好一份项目指令区块；provider 底层 retry 复用请求已冻结内容；各入口没有旁路拼接。
 
-- [ ] **4.1 定义独立 prompt section 与冲突优先级说明**
+- [x] **4.1 定义独立 prompt section 与冲突优先级说明**
   - 依赖：1.1、2.1
   - 文件候选：`electron/llmSystemPrompt.ts`、`src/shared/promptAssembly.ts`。
   - 完成判据：新增独立 AGENTS section，不复用 `<project_memory>` 标签；注明项目来源 / root scope；安全规则和用户指令优先级清楚；UI locale 仍是默认提示而非覆盖项目 / 用户语言。
-- [ ] **4.2 把首次请求读取放在有效 workDir 解析后**
+- [x] **4.2 把首次请求读取放在有效 workDir 解析后**
   - 依赖：2.6、3.3、0.4
   - 文件候选：`electron/runtime/invocationAssembler.ts` 及实际请求准备入口。
   - 完成判据：首个 logical request 从该 session effective workDir 加载；排队开始时重新解析；请求快照在 dispatch 前被冻结并绑定对应 request id。
-- [ ] **4.3 把后续逻辑请求重新加载接入统一宿主边界**
+- [x] **4.3 把后续逻辑请求重新加载接入统一宿主边界**
   - 依赖：4.2、3.3
   - 文件候选：`electron/toolChatLoop.ts`、request loop / context preparation。
   - 完成判据：tool result 后的新 logical request 再读磁盘；R1 的 provider retry 使用 R1 原装配；同 invocation R2 可用文件新版本；刷新通过现有通用 request/context / History 边界，禁止直接改写循环内 messages 绕过契约。
-- [ ] **4.4 保持 hosted handoff 使用同一快照合同**
+- [x] **4.4 保持 hosted handoff 使用同一快照合同**
   - 依赖：4.2、4.3
   - 完成判据：`onHostedTurnHandoff`、provider 托管路径与直连请求对同一 request ID 使用相同 prompt / snapshot metadata；没有因 handoff 再次读取造成同一逻辑请求内容漂移。
-- [ ] **4.5 合并两个项目文件及 Skills 的最终装配**
+- [x] **4.5 合并两个项目文件及 Skills 的最终装配**
   - 依赖：4.1–4.4
   - 完成判据：`AGENTS.md` 与 `SPACEASSISTANT.md` 可并存；旧项目记忆开关语义不变；AGENTS 独立开关关闭时不读取正文；skills 与工具目录只有一套 buildFinalSystemPrompt 路径。
-- [ ] **4.6 计入上下文预算与 token usage**
+- [x] **4.6 计入上下文预算与 token usage**
   - 依赖：4.5
   - 完成判据：系统提示预算 / context meter 以真实最终请求为准；超限显式失败，不仅 UI 估算；每逻辑请求成本不重复累计历史快照。
-- [ ] **4.7 编写真实装配捕获测试**
+- [x] **4.7 编写真实装配捕获测试**
   - 依赖：4.2–4.6
   - 完成判据：伪 provider 捕获完整 provider 请求，覆盖缺文件、并存、优先级文字、首请求、R1 retry、R2 文件更新、开关关闭、超限失败、各入口材料相同。
-- [ ] **4.8 验收阶段 4 并提交**
+- [x] **4.8 验收阶段 4 并提交**
   - 依赖：4.7
-  - 完成判据：合并运行 toolChatLoop / prompt assembly / invocation assembler 定向测试；涉及共享类型时跑 `npm run typecheck:shared`，涉及 renderer 类型时按阶段 6 执行；提交 SHA 写回本计划。
+  - 完成判据：真实 provider 捕获验证首请求、底层 retry 复用 R1 快照、工具结果后 R2 读取更新内容及 History 元数据；合并运行 `npm exec vitest run electron/llmSystemPrompt.test.ts electron/projectInstructions/projectInstructions.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/runtime/invocationAssembler.test.ts electron/remote/imRemoteAgent.test.ts electron/butler/butlerInvoker.test.ts electron/confirmation/approvalAgent.test.ts packages/agent-sdk/test/turn.test.ts`（8 文件 / 500 项通过）。`npx tsc -p tsconfig.electron.json --noEmit`、`npm run check:agent-sdk`、`npm run typecheck:agent-sdk`、`npm run typecheck:shared`、`npm run typecheck:renderer` 通过。提交 SHA 写回本计划。
 
 ### 阶段 5：目录绑定变化、switch_work_dir 屏障与审批校验
 

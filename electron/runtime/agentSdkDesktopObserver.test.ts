@@ -1,12 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentTurnObserver } from '../../packages/agent-sdk/src/turn'
 import { createAgentSdkDesktopObserver } from './agentSdkDesktopObserver'
+import { runAgentTurn } from '../../packages/agent-sdk/src/turn'
+import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
+import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
+import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
+import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
+import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
+import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
+import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 import { buildRequestHeaderPayload } from '../../src/shared/requestContext'
 import { estimateTokensFromToolResults } from '../../src/shared/contextUsageEstimate'
 import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { reduceAssistantFact, type AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivityTimeline'
 import type { Message } from '../../src/shared/domainTypes'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 describe('createAgentSdkDesktopObserver', () => {
   afterEach(() => vi.unstubAllEnvs())
@@ -104,6 +115,92 @@ describe('createAgentSdkDesktopObserver', () => {
     })
     expect(emitSessionEvent.mock.calls.map(([event]) => event.type)).toEqual(['request_header', 'request_context', 'request_header', 'request_context'])
     expect(emitSessionEvent.mock.calls[3]?.[0].payload).toMatchObject({ requestId: 'r:round:2', model: 'claude-test', contextWindow: { tokens: 1000, source: 'config' } })
+  })
+
+  it('freezes one AGENTS.md snapshot for a logical request and reloads after the tool boundary', async () => {
+    const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-observer-'))
+    try {
+      const filePath = path.join(workDir, 'AGENTS.md')
+      await writeFile(filePath, 'instruction version one', 'utf8')
+      const observer = createAgentSdkDesktopObserver({ requestId: 'agents-request', sessionId: 's', turnId: 't',
+        getWorkDir: () => workDir, agentsMdEnabled: true, contextWindow: 100_000
+      })
+      const request = { messages: [{ role: 'system' as const, content: 'system' }, { role: 'user' as const, content: 'hello' }], maxTokens: 32 }
+      const first = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request })
+      await writeFile(filePath, 'instruction version two', 'utf8')
+      const retry = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 2, routeId: 'route', request })
+      const next = await observer.prepareModelRequest?.({ modelTurn: 2, attempt: 1, routeId: 'route', request })
+      const systemText = (projection: typeof first) => (projection?.requestPatch?.messages?.[0]?.content as string) ?? ''
+      expect(systemText(first)).toContain('instruction version one')
+      expect(systemText(retry)).toContain('instruction version one')
+      expect(systemText(retry)).not.toContain('instruction version two')
+      expect(systemText(next)).toContain('instruction version two')
+      expect(first).toMatchObject({ requestMetadata: { agentsMdSnapshot: { status: 'loaded', byteLength: 23, content: 'instruction version one', source: 'AGENTS.md', scope: 'workdir-root', workDir } } })
+    } finally {
+      await rm(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('captures the workdir instruction at each actual provider request and keeps retries frozen', async () => {
+    const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-provider-capture-'))
+    const filePath = path.join(workDir, 'AGENTS.md')
+    await writeFile(filePath, 'instruction A', 'utf8')
+    try {
+      const invocationId = 'agents-provider-capture'
+      const route = { routeId: 'agents-capture', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }
+      const registry = new ModelProviderRegistry()
+      const captured: import('../../packages/agent-sdk/src/model').CanonicalModelMessage[][] = []
+      let providerAttempts = 0
+      registry.register(route, { providerId: invocationId, stream: async function* (call) {
+        providerAttempts += 1
+        captured.push(structuredClone([...call.request.messages]))
+        if (providerAttempts === 1) throw new Error('temporary provider error')
+        if (providerAttempts === 2) {
+          yield { type: 'tool-call', toolCallId: 'capture-tool', toolName: 'lookup', input: {} }
+          yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+          yield { type: 'finish', reason: 'tool-calls' }
+          return
+        }
+        yield { type: 'text-delta', text: 'done' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      } })
+      const capabilities = new CapabilityRegistry()
+      capabilities.define(invocationId, ['lookup'])
+      const permits = new InMemorySafetyPermitStore()
+      const binding = { requestId: invocationId, turnId: 'agents-turn', invocationId, toolCallId: 'capture-tool', capabilityId: 'lookup',
+        inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth-v1' }
+      const history = new MemoryHistory()
+      const result = await runAgentTurn({
+        registry, routeId: route.routeId, invocationId, history,
+        request: { messages: [{ role: 'system', content: 'base prompt\n\n<project_memory>memory</project_memory>\n\n## Skills\nskill fragment' }, { role: 'user', content: 'hello' }], maxTokens: 100 },
+        observer: createAgentSdkDesktopObserver({ requestId: invocationId, sessionId: 'session', turnId: 'agents-turn',
+          getWorkDir: () => workDir, agentsMdEnabled: true, contextWindow: 100_000 }),
+        recoverProviderAttempt: async ({ error, messages }) => error ? ({ kind: 'retry', reasonCode: 'TEMPORARY_PROVIDER_ERROR', messages }) : undefined,
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (value) => ({ kind: 'allow', authorizationVersion: value.authorizationVersion }) } }),
+        prepareTool: async (call, stage) => ({ ...binding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName,
+          phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+        toolExecution: createPermitBoundToolExecutionPort({ permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+          resolveExpected: async (call) => ({ ...binding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
+          execute: async () => ({ output: 'tool done' }) }),
+        afterToolResult: async () => { await writeFile(filePath, 'instruction B', 'utf8') },
+        recordProviderAttemptUsage: vi.fn(),
+        maxModelTurns: 2
+      })
+      expect(result.modelTurns).toBe(2)
+      const systems = captured.map((messages) => messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n'))
+      expect(systems.every((system) => system.includes('<project_memory>memory</project_memory>') && system.includes('skill fragment'))).toBe(true)
+      expect(systems[0]).toContain('instruction A')
+      expect(systems[1]).toContain('instruction A')
+      expect(systems[2]).toContain('instruction B')
+      expect(systems[1]).not.toContain('instruction B')
+      expect(systems.map((system) => system.match(/<project_instructions /g)?.length ?? 0)).toEqual([1, 1, 1])
+      const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
+      expect(requestEvents.map((event) => (event.payload as { requestMetadata: { agentsMdSnapshot: { content?: string } } }).requestMetadata.agentsMdSnapshot.content))
+        .toEqual(['instruction A', 'instruction A', 'instruction B'])
+    } finally {
+      await rm(workDir, { recursive: true, force: true })
+    }
   })
 
   it('records no cache breakpoints when the provider cache retention is disabled', async () => {

@@ -110,4 +110,12 @@ describe('loadAgentsMd', () => {
     expect(result).toMatchObject({ status: 'token-budget-exceeded', content: null, byteLength: Buffer.byteLength('规则'.repeat(40), 'utf8') })
     expect(result).toMatchObject({ digest: expect.stringMatching(/^[a-f0-9]{64}$/), loadedAt: expect.any(Number), sourcePath: 'AGENTS.md' })
   })
+
+  it('reserves prompt wrapper tokens from the configured instruction budget', async () => {
+    const root = await makeRoot()
+    const content = 'rule '.repeat(20)
+    await fs.writeFile(path.join(root, 'AGENTS.md'), content)
+    await expect(loadAgentsMd(root, { contextWindow: 1_000, promptOverheadTokens: 40 }))
+      .resolves.toMatchObject({ status: 'token-budget-exceeded', content: null })
+  })
 })

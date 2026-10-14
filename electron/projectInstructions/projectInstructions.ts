@@ -27,6 +27,8 @@ export type AgentsMdLoadResult = Readonly<{
 export type LoadAgentsMdOptions = Readonly<{
   enabled?: boolean
   contextWindow?: number
+  /** Tokens reserved for the surrounding prompt wrapper. */
+  promptOverheadTokens?: number
   maxBytes?: number
   /** Test seam for normal concurrent edits; at most one retry is made. */
   beforeRead?: (attempt: number, filePath: string) => void | Promise<void>
@@ -101,7 +103,7 @@ export async function loadAgentsMd(workDir: string, options: LoadAgentsMdOptions
       const digest = createHash('sha256').update(buffer).digest('hex')
       if (!content.trim()) return result({ status: 'empty', content: null, byteLength: buffer.length, digest, loadedAt, tokenCount: 0, workDir: rootPath })
       const tokenCount = estimateTokensFromUtf8Text(content)
-      const tokenBudget = Math.min(AGENTS_MD_MAX_TOKENS, Math.floor((options.contextWindow ?? 200_000) * 0.05))
+      const tokenBudget = Math.max(0, Math.min(AGENTS_MD_MAX_TOKENS, Math.floor((options.contextWindow ?? 200_000) * 0.05)) - Math.max(0, options.promptOverheadTokens ?? 0))
       if (tokenCount > tokenBudget) return result({ status: 'token-budget-exceeded', content: null, byteLength: buffer.length, digest, loadedAt, tokenCount, workDir: rootPath })
       return result({ status: 'loaded', content, byteLength: buffer.length, digest, loadedAt, tokenCount, workDir: rootPath })
     } catch (error) {

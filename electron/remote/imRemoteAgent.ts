@@ -413,6 +413,7 @@ export async function runImRemoteAgent(args: {
       baseUrl,
       messages,
       system: appendix,
+      agentsMdEnabled: frozenConfig.agentsMdEnabled ?? true,
       options: { maxTokens: 8192 },
       currentUserMessageId,
       toolsConfig,
