@@ -120,7 +120,8 @@ vi.mock('../remote/remoteProgressCoordinator', () => ({
 }))
 
 vi.mock('../remote/remoteProgressStore', () => ({
-  clearRemoteProgressSession: vi.fn()
+  clearRemoteProgressSession: vi.fn(),
+  updateRemoteProgressSnapshot: vi.fn()
 }))
 
 vi.mock('../windowRef', () => ({

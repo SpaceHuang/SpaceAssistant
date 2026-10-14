@@ -78,6 +78,14 @@ export function renderAgentsMdSection(content: string): string {
   return renderPrompt(buildPromptAssembly({ sections: [buildAgentsMdSection(content)] }))
 }
 
+export function renderAgentsMdStatusSection(status: import('./projectInstructions/projectInstructions').AgentsMdLoadStatus): string {
+  return [
+    '<project_instructions_status source="AGENTS.md" scope="workdir-root">',
+    `AGENTS.md was not loaded (${status}). Do not claim that its instructions were followed. Continue using product safety rules, tool permissions, and the current user request.`,
+    '</project_instructions_status>'
+  ].join('\n')
+}
+
 export function buildToolConventionSection(locale: AppLocale): PromptSection {
   return { name: 'system:tool-conventions', order: 20, text: buildToolConventionHint(locale) }
 }

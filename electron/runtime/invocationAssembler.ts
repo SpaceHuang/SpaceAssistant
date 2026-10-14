@@ -843,7 +843,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const turnId = runtimeTurnId
       const fileStateCache = new FileStateCache()
       const createExecutionContext = input.createExecutionContext ?? ((call) => ({
-        workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+        workDir: (workspacePorts.snapshot() as { rootPath?: string }).rootPath || materials.resolveWorkDir?.() || materials.workDir,
         userDataDir: materials.userDataDir,
         requestId: materials.requestId,
         toolUseId: call.toolCallId,

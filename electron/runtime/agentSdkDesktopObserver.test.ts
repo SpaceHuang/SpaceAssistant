@@ -37,6 +37,44 @@ describe('createAgentSdkDesktopObserver', () => {
       await rm(workDir, { recursive: true, force: true })
     }
   })
+  it('tells the model when AGENTS.md failed to load so it cannot claim it followed the file', async () => {
+    const observer = createAgentSdkDesktopObserver({ requestId: 'failed-instructions', sessionId: 's', turnId: 't', getWorkDir: () => '' })
+    const prepared = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
+        messages: [{ role: 'user', content: 'hello' }], maxTokens: 100, tools: []
+      } })
+      const system = prepared?.requestPatch?.messages?.filter((message) => message.role === 'system').map((message) => message.content).join('\n') ?? ''
+      expect(system).toContain('AGENTS.md was not loaded (invalid-workdir)')
+      expect(system).toContain('Do not claim that its instructions were followed')
+  })
+  it('uses the same request snapshot contract across desktop, IM, automation, and concurrent work directories', async () => {
+    const roots = await Promise.all(['desktop', 'feishu', 'wechat', 'automation'].map(async (name) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'agents-md-' + name + '-'))
+      await writeFile(path.join(root, 'AGENTS.md'), 'rules for ' + name, 'utf8')
+      return { name, root }
+    }))
+    try {
+      const results = await Promise.all(roots.map(async ({ name, root }) => {
+        const lane = name as 'desktop' | 'feishu' | 'wechat' | 'automation'
+        const observer = createAgentSdkDesktopObserver({
+          requestId: 'request-' + name, sessionId: 'session-' + name, turnId: 'turn-' + name,
+          lane, getWorkDir: () => root, agentsMdEnabled: true
+        })
+        return observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
+          messages: [{ role: 'user', content: 'hello' }], maxTokens: 100, tools: []
+        } })
+      }))
+      for (const [index, result] of results.entries()) {
+        expect(result?.requestMetadata?.agentsMdSnapshot).toMatchObject({
+          status: 'loaded', source: 'AGENTS.md', scope: 'workdir-root',
+          content: 'rules for ' + roots[index].name, workDir: roots[index].root
+        })
+      }
+      expect(results.map((result) => (result?.requestMetadata?.agentsMdSnapshot as { content?: string }).content))
+        .toEqual(roots.map(({ name }) => 'rules for ' + name))
+    } finally {
+      await Promise.all(roots.map(({ root }) => rm(root, { recursive: true, force: true })))
+    }
+  })
   it('projects dispatch-stop, slot materialization, and failure attribution diagnostics', async () => {
     const events: unknown[] = []
     const diagnostics = vi.fn()

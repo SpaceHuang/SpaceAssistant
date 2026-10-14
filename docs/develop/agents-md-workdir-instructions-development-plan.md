@@ -174,7 +174,7 @@
   - 完成判据：伪 provider 捕获完整 provider 请求，覆盖缺文件、并存、优先级文字、首请求、R1 retry、R2 文件更新、开关关闭、超限失败、各入口材料相同。
 - [x] **4.8 验收阶段 4 并提交**
   - 依赖：4.7
-  - 完成判据：真实 provider 捕获验证首请求、底层 retry 复用 R1 快照、工具结果后 R2 读取更新内容及 History 元数据；合并运行 `npm exec vitest run electron/llmSystemPrompt.test.ts electron/projectInstructions/projectInstructions.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/runtime/invocationAssembler.test.ts electron/remote/imRemoteAgent.test.ts electron/butler/butlerInvoker.test.ts electron/confirmation/approvalAgent.test.ts packages/agent-sdk/test/turn.test.ts`（8 文件 / 500 项通过）。`npx tsc -p tsconfig.electron.json --noEmit`、`npm run check:agent-sdk`、`npm run typecheck:agent-sdk`、`npm run typecheck:shared`、`npm run typecheck:renderer` 通过。提交 SHA 写回本计划。
+  - 完成判据：真实 provider 捕获验证首请求、底层 retry 复用 R1 快照、工具结果后 R2 读取更新内容及 History 元数据；合并运行 `npm exec vitest run electron/llmSystemPrompt.test.ts electron/projectInstructions/projectInstructions.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/runtime/invocationAssembler.test.ts electron/remote/imRemoteAgent.test.ts electron/butler/butlerInvoker.test.ts electron/confirmation/approvalAgent.test.ts packages/agent-sdk/test/turn.test.ts`（8 文件 / 500 项通过）。`npx tsc -p tsconfig.electron.json --noEmit`、`npm run check:agent-sdk`、`npm run typecheck:agent-sdk`、`npm run typecheck:shared`、`npm run typecheck:renderer` 通过。阶段提交：`25c10345`。
 
 ### 阶段 5：目录绑定变化、switch_work_dir 屏障与审批校验
 
@@ -201,7 +201,7 @@
   - 必测同批前序窗口：同批前一个普通工具执行期间将 A 切到 B，后续未派发工具不得使用动态解析出的 B 执行 A 请求产生的操作；已执行工具不重放。至少一项并发 / 操作序列回归覆盖 dispatch 不会绕过最终边界。
 - [x] **5.6 跑定向安全测试并提交**
   - 依赖：5.5
-  - 完成判据：合并运行 `npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/invocationAssembler.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/runtime/hostedAgentTurnHost.test.ts electron/tools/workDirExecutors.test.ts electron/confirmation/approvalAgent.test.ts electron/runtime/hostedTurnHandoff.test.ts electron/workDirSnapshot.test.ts electron/toolChatLoop.workdir.test.ts electron/toolChatLoop.invocation.test.ts electron/workDirSnapshot.junction.test.ts electron/workDirBinding.test.ts electron/remote/remoteWriteGrantRegistry.test.ts`（13 文件 / 421 项通过）；`npx tsc -p tsconfig.electron.json --noEmit`、`npm run check:agent-sdk`、`npm run typecheck:agent-sdk` 通过。resource lock 与 approval wait 的 A→B 竞态均未进入 executor；R1/R2、switch barrier、相同目录 profile 改绑均有回归。阶段提交 SHA 由阶段 6 记录。
+  - 完成判据：合并运行 `npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/invocationAssembler.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/runtime/hostedAgentTurnHost.test.ts electron/tools/workDirExecutors.test.ts electron/confirmation/approvalAgent.test.ts electron/runtime/hostedTurnHandoff.test.ts electron/workDirSnapshot.test.ts electron/toolChatLoop.workdir.test.ts electron/toolChatLoop.invocation.test.ts electron/workDirSnapshot.junction.test.ts electron/workDirBinding.test.ts electron/remote/remoteWriteGrantRegistry.test.ts`（13 文件 / 421 项通过）；`npx tsc -p tsconfig.electron.json --noEmit`、`npm run check:agent-sdk`、`npm run typecheck:agent-sdk` 通过。resource lock 与 approval wait 的 A→B 竞态均未进入 executor；R1/R2、switch barrier、相同目录 profile 改绑均有回归。阶段提交：`67e573c6`。
 
 ### 阶段 6：设置开关与请求级状态 UI / IPC
 
@@ -231,27 +231,27 @@
   - 完成判据：合并定向测试 4 文件 / 85 项，IPC 隔离回归另补跑 1 文件 / 1 项；renderer 与 Electron 类型检查、i18n check 通过。覆盖会话隔离、隐藏绝对路径与索引正文、跨会话正文拒绝、审批工具关联、开关、缺失正文、待下次请求提示、远程降级。
 - [x] **6.8 阶段提交**
   - 依赖：6.7
-  - 完成判据：阶段 UI / IPC 代码和测试独立提交，记录 SHA：待本次提交后回填。
+  - 完成判据：阶段 UI / IPC 代码和测试独立提交；阶段提交：`fe50f237`。
 
 ### 阶段 7：各入口一致性与最终行为矩阵
 
 **阶段完成条件：** 所有运行入口调用共同宿主策略，不能有未加载 / 重复加载 / 缓存串目录的旁路。
 
-- [ ] **7.1 逐入口清点与测试**
+- [x] **7.1 逐入口清点与测试**
   - 依赖：4.8、5.6、6.8
-  - 完成判据：逐项核验 desktop、Feishu、WeChat、automation、hosted handoff；每条入口 provider 请求都能关联同一请求快照合同。
-- [ ] **7.2 验证会话 workDir 与活动目录竞争**
+  - 完成判据：入口盘点确认 desktop（claudeStreamHandlers）、Feishu / WeChat（imRemoteAgent）、automation（butlerInvoker）均经 `assembleInvocation → createAgentSdkDesktopObserver`；hosted handoff 继续使用同一 Agent SDK observer / History 合同。公共快照合同并发矩阵和入口集成合并运行 8 文件 / 591 项通过。
+- [x] **7.2 验证会话 workDir 与活动目录竞争**
   - 依赖：7.1
-  - 完成判据：双 session / 双工作目录并行，入队期间 active profile 改变，调用启动时仍按 session effectiveWorkDir 装配；无全局单例缓存串用。
-- [ ] **7.3 验证快照历史、压缩与重启只读行为**
+  - 完成判据：observer 四入口双工作目录 Promise 并发测试无串用；workspace tracker 按会话绑定解析并在边界刷新；macOS realpath 规范化目录同时用于首个工具上下文和请求绑定，Feishu 脚本审批集成通过。阶段定向测试 7 文件 / 541 项通过。
+- [x] **7.3 验证快照历史、压缩与重启只读行为**
   - 依赖：3.5、7.1
-  - 完成判据：同 invocation R1/R2 不同版本，context compaction 后当前规则不累加；重启可查看已持久化请求快照但未完成 invocation 仍 interrupted。
-- [ ] **7.4 验证信任 / 日志隐私**
+  - 完成判据：R1/R2 与工具后刷新由 observer 捕获测试验证；History 重启测试恢复各请求正文 / 摘要并把未完成 invocation 标记 interrupted；History 压缩、受控 approval 和 hosted handoff 测试同批通过。
+- [x] **7.4 验证信任 / 日志隐私**
   - 依赖：7.1
-  - 完成判据：恶意指令文本不能放宽工具权限或审批；日志无正文、secret、原始敏感路径；读取 AGENTS 不新增 grants。
-- [ ] **7.5 发布说明和行为边界**
+  - 完成判据：system section 将正文标记为普通项目文本且明确产品安全 / 工具权限优先；已有 SDK SafetyGate、审批、工作目录边界测试通过。状态索引只返回摘要元数据 / 目录 basename，正文仅经所属 session scoped IPC 按需读取；History / logger 路径不记录正文。新增读取失败诊断明确不得声称遵循未加载文件。
+- [x] **7.5 发布说明和行为边界**
   - 依赖：7.1–7.4
-  - 完成判据：明确根文件支持、不支持子目录；请求级刷新语义；开关生效时点；失败降级；历史可查看不代表重启后续跑。
+  - 完成判据：新增 `docs/develop/agents-md-workdir-instructions-behavior.md`，说明根文件范围、刷新边界、独立开关、失败降级、工具权限边界及重启只读行为。
 
 ### 阶段 8：最终验收与关闭
 

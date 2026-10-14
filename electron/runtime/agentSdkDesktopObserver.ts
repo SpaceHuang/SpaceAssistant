@@ -12,7 +12,7 @@ import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { computeContextPressure } from '../../src/shared/contextMeter'
 import { estimateTokensFromUtf8Text, projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
 import { loadAgentsMd, type AgentsMdLoadResult } from '../projectInstructions/projectInstructions'
-import { renderAgentsMdSection } from '../llmSystemPrompt'
+import { renderAgentsMdSection, renderAgentsMdStatusSection } from '../llmSystemPrompt'
 import { accumulateDeferredDimension, accumulateToolDeclarationSnapshot, accumulateToolResultVolume, buildStepAttribution, emptyTurnToolDimension, estimateDeferredSavings, summarizeToolDeclarations, type DeferredToolDimension, type TurnToolDimension } from '../../src/shared/usageAttribution'
 
 type ObserverChunk = Exclude<import('../../packages/agent-sdk/src/model').StreamChunk, { type: 'finish' }>
@@ -131,7 +131,9 @@ export function createAgentSdkDesktopObserver(input: {
     }
     const agentsMdSection = agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content
       ? renderAgentsMdSection(agentsMdSnapshot.content)
-      : undefined
+      : !input.getWorkDir && !input.getWorkDirSnapshot || agentsMdSnapshot.status === 'missing' || agentsMdSnapshot.status === 'empty' || agentsMdSnapshot.status === 'disabled'
+        ? undefined
+        : renderAgentsMdStatusSection(agentsMdSnapshot.status)
     let requestPatch: Partial<import('../../packages/agent-sdk/src/model').PreparedModelCall['request']> | undefined
     if (agentsMdSection) {
       let appended = false
