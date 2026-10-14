@@ -24,26 +24,30 @@ import { claimAgentContinuation, createOrGetAgentContinuation, setAgentContinuat
 
 /** Narrow SQLite execution adapter for prepared acceptance and validated context loading. */
 export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQueries, options: { getTurnRuntime?: () => import('../turnRuntime').TurnRuntime } = {}): SessionExecutionStore {
-  const conn = getDbConnection(db)
+  // 压缩换入（reopenDatabaseConnection）会整体替换底层 DatabaseSync，门面身份不变；
+  // 工厂期捕获连接会在换入后永久失效（database is not open），必须每方法入口现取。
+  const liveConn = () => getDbConnection(db)
   const coordinator = createTurnCoordinatorStorage(db)
   const execution: SessionExecutionStore = {
     coordinator,
     continuations: Object.freeze({
       createOrGet: ({ sessionId, sourceInvocationId, requestIdempotencyKey, createdBy, frozenConfig }: Parameters<SessionExecutionStore['continuations']['createOrGet']>[0]) => {
         if (!sessionId.trim() || !sourceInvocationId.trim()) throw new Error('CONTINUATION_IDENTITY_REQUIRED')
+        const conn = liveConn()
         const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
         const snapshot = history.readSync(sourceInvocationId)
         return createOrGetAgentContinuation({ conn, snapshot, sessionId, requestIdempotencyKey, createdBy, frozenConfig })
       },
-      claim: ({ continuationId, revalidatedFrozenConfig }: Parameters<SessionExecutionStore['continuations']['claim']>[0]) => claimAgentContinuation(conn, continuationId, revalidatedFrozenConfig),
-      settle: ({ continuationId, status }: Parameters<SessionExecutionStore['continuations']['settle']>[0]) => setAgentContinuationStatus(conn, continuationId, status),
-      settleForTurn: ({ targetTurnId, status }: Parameters<SessionExecutionStore['continuations']['settleForTurn']>[0]) => setAgentContinuationStatusForTurn(conn, targetTurnId, status)
+      claim: ({ continuationId, revalidatedFrozenConfig }: Parameters<SessionExecutionStore['continuations']['claim']>[0]) => claimAgentContinuation(liveConn(), continuationId, revalidatedFrozenConfig),
+      settle: ({ continuationId, status }: Parameters<SessionExecutionStore['continuations']['settle']>[0]) => setAgentContinuationStatus(liveConn(), continuationId, status),
+      settleForTurn: ({ targetTurnId, status }: Parameters<SessionExecutionStore['continuations']['settleForTurn']>[0]) => setAgentContinuationStatusForTurn(liveConn(), targetTurnId, status)
     }),
     continuationLaunch: Object.freeze({
       prepareAndClaim: async (input: Parameters<SessionExecutionStore['continuationLaunch']['prepareAndClaim']>[0]) => {
         if (input.source.sessionId !== input.payload.sessionId || input.source.invocationId.trim() === '' || input.source.turnId.trim() === '') throw new Error('CONTINUATION_SOURCE_IDENTITY_REQUIRED')
         const runtime = options.getTurnRuntime?.()
         if (!runtime) throw new Error('CONTINUATION_RUNTIME_REQUIRED')
+        const conn = liveConn()
         const history = new SqliteAgentHistory(conn, 1, Date.now, input.payload.sessionId)
         const snapshot = history.readSync(input.source.invocationId)
         if (snapshot.version !== input.source.expectedHistoryVersion) throw new Error('CONTINUATION_SOURCE_STALE')
@@ -90,7 +94,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       const continuationSource = turn.executionConfig?.continuationSource
       if (!continuationSource) return undefined
       if (!turn.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
-      const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId).readSync(turn.requestId)
+      const history = new SqliteAgentHistory(liveConn(), 1, Date.now, sessionId).readSync(turn.requestId)
       const contextMarkers = history.events.filter((event) => event.kind === 'invocation-context-committed')
       const marker = contextMarkers[0]
       const payload = marker?.payload && typeof marker.payload === 'object' ? marker.payload as Record<string, unknown> : undefined
@@ -143,6 +147,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       if (intent.rawText !== enqueue.content || intent.attachments?.length && JSON.stringify(intent.attachments) !== JSON.stringify(enqueue.attachments ?? [])) throw new Error('CONTINUATION_ENQUEUE_PAYLOAD_MISMATCH')
       if (intent.source && (!intent.source.invocationId.trim() || !intent.source.turnId.trim())) throw new Error('CONTINUATION_SOURCE_IDENTITY_REQUIRED')
       if (!/^[a-f0-9]{64}$/.test(intent.payloadSha256)) throw new Error('CONTINUATION_PAYLOAD_FINGERPRINT_INVALID')
+      const conn = liveConn()
       return runInTransaction(conn, () => {
         const prior = conn.prepare('SELECT session_id,payload_sha256,status FROM continuation_intents WHERE request_id=?').get(enqueue.requestId) as { session_id: string; payload_sha256: string; status: string } | undefined
         if (prior && (prior.session_id !== enqueue.sessionId || prior.payload_sha256 !== intent.payloadSha256)) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
@@ -158,7 +163,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       })
     },
     readContinuationIntent: ({ requestId, sessionId }) => {
-      const row = conn.prepare(`SELECT request_id,session_id,payload_sha256,route,target_id,status,rejection_reason
+      const row = liveConn().prepare(`SELECT request_id,session_id,payload_sha256,route,target_id,status,rejection_reason
         FROM continuation_intents WHERE request_id=? AND session_id=?`).get(requestId, sessionId) as {
           request_id: string; session_id: string; payload_sha256: string; route: string; target_id: string | null; status: string; rejection_reason: string | null
         } | undefined
@@ -174,87 +179,103 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       }
     },
     enqueueAndRecordContinuation: ({ enqueue, intent }) => execution.enqueueContinuation({ enqueue, intent }),
-    requireContinuationSourceSelection: (input) => writeContinuationIntentState(conn, input, { route: 'needs-source-selection', status: 'needs_source_selection' }),
-    selectOrdinaryContinuation: (input) => writeContinuationIntentState(conn, input, { route: 'ordinary-selected', status: 'ordinary_fallback_pending' }),
-    rejectContinuationIntent: (input) => writeContinuationIntentState(conn, input, { route: 'ordinary', status: input.status }, input.reason),
-    beginContinuationIntent: (input) => runInTransaction(conn, () => {
-      const prior = execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })
-      if (prior) {
-        if (prior.payloadSha256 !== input.payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
-        if (prior.targetId || ['accepted_turn', 'accepted_continuation'].includes(prior.status)) return prior
-      }
-      const now = Date.now()
-      conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET route='continuation',source_invocation_id=excluded.source_invocation_id,source_turn_id=excluded.source_turn_id,source_sequence=excluded.source_sequence,status='starting_continuation',updated_at=excluded.updated_at`)
-        .run(input.requestId, input.sessionId, input.payloadSha256, input.text, JSON.stringify(input.attachments ?? []), input.intentKind, 'continuation', input.source.invocationId, input.source.turnId, input.source.checkpointSequence, 'starting_continuation', now, now)
-      return execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })!
-    }),
-    finalizeContinuationAcceptance: ({ requestId, sessionId, payloadSha256, continuationId }) => runInTransaction(conn, () => {
-      const receipt = execution.readContinuationIntent({ requestId, sessionId })
-      if (!receipt || receipt.payloadSha256 !== payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
-      if (receipt.targetId && receipt.targetId !== continuationId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
-      if (!['starting_continuation', 'accepted_continuation'].includes(receipt.status)) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
-      const continuation = conn.prepare(`SELECT t.session_id,ac.source_invocation_id,ac.source_turn_id,ac.checkpoint_sequence,ac.request_idempotency_key,ac.status
-        FROM agent_continuations ac JOIN turns t ON t.turn_id=ac.source_turn_id WHERE ac.continuation_id=?`).get(continuationId) as {
-          session_id?: string; source_invocation_id: string; source_turn_id: string; checkpoint_sequence: number; request_idempotency_key: string; status: string
-        } | undefined
-      if (!continuation || continuation.request_idempotency_key !== requestId || continuation.session_id !== sessionId) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
-      const sourceMatches = conn.prepare(`SELECT 1 FROM continuation_intents WHERE request_id=? AND session_id=? AND source_invocation_id=? AND source_turn_id=? AND source_sequence=?`)
-        .get(requestId, sessionId, continuation.source_invocation_id, continuation.source_turn_id, continuation.checkpoint_sequence)
-      if (!sourceMatches) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
-      const statusMessage = execution.ensureContinuationStatusMessage({ requestId, sessionId })
-      conn.prepare("UPDATE continuation_intents SET route='continuation',target_id=?,status='accepted_continuation',updated_at=? WHERE request_id=? AND session_id=?")
-        .run(continuationId, Date.now(), requestId, sessionId)
-      return { receipt: execution.readContinuationIntent({ requestId, sessionId })!, statusMessage }
-    }),
-    bindStartedContinuationTurn: (input) => runInTransaction(conn, () => {
-      const existing = conn.prepare('SELECT session_id,payload_sha256,target_id,status FROM continuation_intents WHERE request_id=?')
-        .get(input.requestId) as { session_id: string; payload_sha256: string; target_id: string | null; status: string } | undefined
-      if (existing?.target_id && existing.target_id !== input.turnId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
-      const turn = getTurnByRequestId(db, input.sessionId, input.requestId)
-      if (!turn || turn.turnId !== input.turnId) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
-      if (!existing || existing.session_id !== input.sessionId || existing.payload_sha256 !== input.payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
-      if (existing.target_id && existing.target_id !== input.turnId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
-      if (!['ordinary_fallback_pending', 'needs_source_selection', 'starting_continuation', 'accepted_turn'].includes(existing.status)) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
-      conn.prepare(`UPDATE continuation_intents SET route=?,source_invocation_id=?,source_turn_id=?,source_sequence=?,target_id=?,status='accepted_turn',updated_at=? WHERE request_id=?`)
-        .run(input.route, input.source?.invocationId ?? null, input.source?.turnId ?? null, input.source?.sequence ?? null, input.turnId, Date.now(), input.requestId)
-      if (input.retrySource) conn.prepare('UPDATE turns SET retry_of_message_id=?,retry_of_invocation_id=? WHERE turn_id=? AND session_id=?')
-        .run(input.retrySource.assistantMessageId, input.retrySource.invocationId ?? null, input.turnId, input.sessionId)
-      return execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })!
-    }),
-    bindExactContinueTurn: (input) => runInTransaction(conn, () => {
-      const existing = conn.prepare('SELECT session_id,payload_sha256,target_id,status FROM continuation_intents WHERE request_id=?')
-        .get(input.requestId) as { session_id: string; payload_sha256: string; target_id: string | null; status: string } | undefined
-      if (!existing || existing.session_id !== input.sessionId || existing.payload_sha256 !== input.payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
-      if (existing.target_id && existing.target_id !== input.turnId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
-      const turn = getTurnByRequestId(db, input.sessionId, input.requestId)
-      if (!turn || turn.turnId !== input.turnId) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
-      if (!['accepted_turn', 'accepted_continuation'].includes(existing.status)) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
-      conn.prepare(`UPDATE continuation_intents SET route='continuation',target_id=?,status='accepted_continuation',updated_at=? WHERE request_id=?`)
-        .run(input.turnId, Date.now(), input.requestId)
-      return execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })!
-    }),
-    repairPreparedContinuationAcceptance: (input) => runInTransaction(conn, () => {
-      const turn = getTurnByRequestId(db, input.sessionId, input.requestId)
-      if (!turn || turn.turnId !== input.turnId || !turn.userMessageId) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
-      const user = queries?.readMessage({ sessionId: input.sessionId, messageId: turn.userMessageId })
-      if (!user || input.text !== user.content || JSON.stringify(input.attachments ?? []) !== JSON.stringify(user.attachments ?? [])) throw new Error('CONTINUATION_ENQUEUE_PAYLOAD_MISMATCH')
-      const prior = execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })
-      if (prior) {
-        if (prior.payloadSha256 !== input.payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
-        if (prior.targetId && prior.targetId !== input.turnId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
-        return prior
-      }
-      conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-        .run(input.requestId, input.sessionId, input.payloadSha256, input.text, JSON.stringify(input.attachments ?? []), input.intentKind,
-          input.route, input.source?.invocationId ?? null, input.source?.turnId ?? null, input.source?.sequence ?? null,
-          input.turnId, 'accepted_turn', Date.now(), Date.now())
-      if (input.retrySource) conn.prepare('UPDATE turns SET retry_of_message_id=?,retry_of_invocation_id=? WHERE turn_id=? AND session_id=?')
-        .run(input.retrySource.assistantMessageId, input.retrySource.invocationId ?? null, input.turnId, input.sessionId)
-      return execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })!
-    }),
+    requireContinuationSourceSelection: (input) => writeContinuationIntentState(liveConn(), input, { route: 'needs-source-selection', status: 'needs_source_selection' }),
+    selectOrdinaryContinuation: (input) => writeContinuationIntentState(liveConn(), input, { route: 'ordinary-selected', status: 'ordinary_fallback_pending' }),
+    rejectContinuationIntent: (input) => writeContinuationIntentState(liveConn(), input, { route: 'ordinary', status: input.status }, input.reason),
+    beginContinuationIntent: (input) => {
+      const conn = liveConn()
+      return runInTransaction(conn, () => {
+        const prior = execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })
+        if (prior) {
+          if (prior.payloadSha256 !== input.payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
+          if (prior.targetId || ['accepted_turn', 'accepted_continuation'].includes(prior.status)) return prior
+        }
+        const now = Date.now()
+        conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,status,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET route='continuation',source_invocation_id=excluded.source_invocation_id,source_turn_id=excluded.source_turn_id,source_sequence=excluded.source_sequence,status='starting_continuation',updated_at=excluded.updated_at`)
+          .run(input.requestId, input.sessionId, input.payloadSha256, input.text, JSON.stringify(input.attachments ?? []), input.intentKind, 'continuation', input.source.invocationId, input.source.turnId, input.source.checkpointSequence, 'starting_continuation', now, now)
+        return execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })!
+      })
+    },
+    finalizeContinuationAcceptance: ({ requestId, sessionId, payloadSha256, continuationId }) => {
+      const conn = liveConn()
+      return runInTransaction(conn, () => {
+        const receipt = execution.readContinuationIntent({ requestId, sessionId })
+        if (!receipt || receipt.payloadSha256 !== payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
+        if (receipt.targetId && receipt.targetId !== continuationId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
+        if (!['starting_continuation', 'accepted_continuation'].includes(receipt.status)) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
+        const continuation = conn.prepare(`SELECT t.session_id,ac.source_invocation_id,ac.source_turn_id,ac.checkpoint_sequence,ac.request_idempotency_key,ac.status
+          FROM agent_continuations ac JOIN turns t ON t.turn_id=ac.source_turn_id WHERE ac.continuation_id=?`).get(continuationId) as {
+            session_id?: string; source_invocation_id: string; source_turn_id: string; checkpoint_sequence: number; request_idempotency_key: string; status: string
+          } | undefined
+        if (!continuation || continuation.request_idempotency_key !== requestId || continuation.session_id !== sessionId) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
+        const sourceMatches = conn.prepare(`SELECT 1 FROM continuation_intents WHERE request_id=? AND session_id=? AND source_invocation_id=? AND source_turn_id=? AND source_sequence=?`)
+          .get(requestId, sessionId, continuation.source_invocation_id, continuation.source_turn_id, continuation.checkpoint_sequence)
+        if (!sourceMatches) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
+        const statusMessage = execution.ensureContinuationStatusMessage({ requestId, sessionId })
+        conn.prepare("UPDATE continuation_intents SET route='continuation',target_id=?,status='accepted_continuation',updated_at=? WHERE request_id=? AND session_id=?")
+          .run(continuationId, Date.now(), requestId, sessionId)
+        return { receipt: execution.readContinuationIntent({ requestId, sessionId })!, statusMessage }
+      })
+    },
+    bindStartedContinuationTurn: (input) => {
+      const conn = liveConn()
+      return runInTransaction(conn, () => {
+        const existing = conn.prepare('SELECT session_id,payload_sha256,target_id,status FROM continuation_intents WHERE request_id=?')
+          .get(input.requestId) as { session_id: string; payload_sha256: string; target_id: string | null; status: string } | undefined
+        if (existing?.target_id && existing.target_id !== input.turnId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
+        const turn = getTurnByRequestId(db, input.sessionId, input.requestId)
+        if (!turn || turn.turnId !== input.turnId) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
+        if (!existing || existing.session_id !== input.sessionId || existing.payload_sha256 !== input.payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
+        if (existing.target_id && existing.target_id !== input.turnId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
+        if (!['ordinary_fallback_pending', 'needs_source_selection', 'starting_continuation', 'accepted_turn'].includes(existing.status)) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
+        conn.prepare(`UPDATE continuation_intents SET route=?,source_invocation_id=?,source_turn_id=?,source_sequence=?,target_id=?,status='accepted_turn',updated_at=? WHERE request_id=?`)
+          .run(input.route, input.source?.invocationId ?? null, input.source?.turnId ?? null, input.source?.sequence ?? null, input.turnId, Date.now(), input.requestId)
+        if (input.retrySource) conn.prepare('UPDATE turns SET retry_of_message_id=?,retry_of_invocation_id=? WHERE turn_id=? AND session_id=?')
+          .run(input.retrySource.assistantMessageId, input.retrySource.invocationId ?? null, input.turnId, input.sessionId)
+        return execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })!
+      })
+    },
+    bindExactContinueTurn: (input) => {
+      const conn = liveConn()
+      return runInTransaction(conn, () => {
+        const existing = conn.prepare('SELECT session_id,payload_sha256,target_id,status FROM continuation_intents WHERE request_id=?')
+          .get(input.requestId) as { session_id: string; payload_sha256: string; target_id: string | null; status: string } | undefined
+        if (!existing || existing.session_id !== input.sessionId || existing.payload_sha256 !== input.payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
+        if (existing.target_id && existing.target_id !== input.turnId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
+        const turn = getTurnByRequestId(db, input.sessionId, input.requestId)
+        if (!turn || turn.turnId !== input.turnId) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
+        if (!['accepted_turn', 'accepted_continuation'].includes(existing.status)) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
+        conn.prepare(`UPDATE continuation_intents SET route='continuation',target_id=?,status='accepted_continuation',updated_at=? WHERE request_id=?`)
+          .run(input.turnId, Date.now(), input.requestId)
+        return execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })!
+      })
+    },
+    repairPreparedContinuationAcceptance: (input) => {
+      const conn = liveConn()
+      return runInTransaction(conn, () => {
+        const turn = getTurnByRequestId(db, input.sessionId, input.requestId)
+        if (!turn || turn.turnId !== input.turnId || !turn.userMessageId) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
+        const user = queries?.readMessage({ sessionId: input.sessionId, messageId: turn.userMessageId })
+        if (!user || input.text !== user.content || JSON.stringify(input.attachments ?? []) !== JSON.stringify(user.attachments ?? [])) throw new Error('CONTINUATION_ENQUEUE_PAYLOAD_MISMATCH')
+        const prior = execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })
+        if (prior) {
+          if (prior.payloadSha256 !== input.payloadSha256) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
+          if (prior.targetId && prior.targetId !== input.turnId) throw new Error('CONTINUATION_INTENT_TARGET_CONFLICT')
+          return prior
+        }
+        conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+          .run(input.requestId, input.sessionId, input.payloadSha256, input.text, JSON.stringify(input.attachments ?? []), input.intentKind,
+            input.route, input.source?.invocationId ?? null, input.source?.turnId ?? null, input.source?.sequence ?? null,
+            input.turnId, 'accepted_turn', Date.now(), Date.now())
+        if (input.retrySource) conn.prepare('UPDATE turns SET retry_of_message_id=?,retry_of_invocation_id=? WHERE turn_id=? AND session_id=?')
+          .run(input.retrySource.assistantMessageId, input.retrySource.invocationId ?? null, input.turnId, input.sessionId)
+        return execution.readContinuationIntent({ requestId: input.requestId, sessionId: input.sessionId })!
+      })
+    },
     resolveContinuationAcceptance: ({ requestId, sessionId, payloadSha256 }) => {
+      const conn = liveConn()
       const receipt = execution.readContinuationIntent({ requestId, sessionId })
       if (!receipt) return { kind: 'absent' }
       if (receipt.payloadSha256 !== payloadSha256) return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT' }
@@ -303,16 +324,19 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       }
       return { kind: 'unresolved', receipt, reason: receipt.rejectionReason ?? receipt.status }
     },
-    ensureContinuationStatusMessage: ({ requestId, sessionId }) => runInTransaction(conn, () => {
-      const messageId = `continuation-status-${createHash('sha256').update(`${sessionId}\0${requestId}`).digest('hex')}`
-      const existing = conn.prepare('SELECT sequence FROM messages WHERE session_id=? AND id=?').get(sessionId, messageId) as { sequence: number } | undefined
-      if (existing?.sequence != null) {
-        const message = queries?.readMessage({ sessionId, messageId })
-        if (!message) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
-        return { message, sequence: existing.sequence }
-      }
-      return appendMessage(db, createContinuationStartedSystemMessage(sessionId, messageId))
-    }),
+    ensureContinuationStatusMessage: ({ requestId, sessionId }) => {
+      const conn = liveConn()
+      return runInTransaction(conn, () => {
+        const messageId = `continuation-status-${createHash('sha256').update(`${sessionId}\0${requestId}`).digest('hex')}`
+        const existing = conn.prepare('SELECT sequence FROM messages WHERE session_id=? AND id=?').get(sessionId, messageId) as { sequence: number } | undefined
+        if (existing?.sequence != null) {
+          const message = queries?.readMessage({ sessionId, messageId })
+          if (!message) throw new Error('CONTINUATION_INTENT_COMMIT_UNCERTAIN')
+          return { message, sequence: existing.sequence }
+        }
+        return appendMessage(db, createContinuationStartedSystemMessage(sessionId, messageId))
+      })
+    },
     loadAcceptedMessages: ({ sessionId, turnId }) => {
       const turn = getPersistedTurnInSession(db, sessionId, turnId)
       return loadAcceptedMessagesForTurn(db, turn, queries)

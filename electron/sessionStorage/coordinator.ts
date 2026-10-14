@@ -29,7 +29,6 @@ import { getProjectedMessage } from '../runtime/sessionTranscriptProjection'
 
 /** 将 coordinator 的持久化端口绑定到 SQLite；requestId 幂等必须跨进程重启由 turns 表保证。 */
 export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
-  const history = new SqliteAgentHistory(getDbConnection(db))
   return {
     findByRequestId: (sessionId, requestId) => {
       const persisted = getTurnByRequestId(db, sessionId, requestId)
@@ -78,6 +77,8 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
       .filter((turn) => turn.state === 'configuring' || turn.state === 'prepared' || turn.state === 'executing' || turn.state === 'waiting-confirm')
     .map((turn) => ({ turnId: turn.turnId, assistantMessageId: turn.assistantMessageId })),
     recoverTurn: (turnId, assistantMessageId) => {
+      // 连接现取：压缩换入会替换底层 DatabaseSync，工厂期捕获的 history 会永久失效
+      const history = new SqliteAgentHistory(getDbConnection(db))
       const turn = getPersistedTurn(db, turnId)
       let sessionInvocationIds: string[] = []
       let historyInvocationId: string | undefined

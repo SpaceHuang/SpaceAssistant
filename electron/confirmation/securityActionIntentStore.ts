@@ -39,8 +39,10 @@ const INTENT_COLUMNS = `invocation_id,session_id,workflow_id,task_id,step_id,pla
   todo_id,checkpoint_id,checkpoint_workflow_revision,state,created_at,updated_at`
 
 export function createSecurityActionIntentStore(db: AppDatabase) {
-  const conn = getDbConnection(db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每函数入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(db)
   const get = (invocationId: string): SecurityActionIntent | null => {
+    const conn = liveConn()
     const row = conn.prepare(`SELECT ${INTENT_COLUMNS} FROM security_action_intents WHERE invocation_id=?`)
       .get(invocationId) as IntentRow | undefined
     return row ? rowToIntent(row) : null
@@ -57,6 +59,7 @@ export function createSecurityActionIntentStore(db: AppDatabase) {
       if (input.invocationId !== input.envelopeInvocationId) throw new Error('SECURITY_ACTION_ENVELOPE_BINDING_MISMATCH')
       if (!Number.isInteger(input.planRevision) || input.planRevision <= 0) throw new TypeError('SECURITY_ACTION_PLAN_REVISION_INVALID')
       const now = input.now ?? Date.now()
+      const conn = liveConn()
       return runInTransaction(conn, () => {
         const existing = get(input.invocationId)
         if (existing) {
@@ -80,6 +83,7 @@ export function createSecurityActionIntentStore(db: AppDatabase) {
 
     linkTodo(invocationId: string, todoId: string, now = Date.now()): SecurityActionIntent {
       if (!todoId.trim()) throw new TypeError('SECURITY_ACTION_TODO_ID_REQUIRED')
+      const conn = liveConn()
       return runInTransaction(conn, () => {
         const current = get(invocationId)
         if (!current) throw new Error('SECURITY_ACTION_INTENT_NOT_FOUND')
@@ -100,6 +104,7 @@ export function createSecurityActionIntentStore(db: AppDatabase) {
       if (!checkpoint.checkpointId.trim() || !Number.isInteger(checkpoint.workflowRevision) || checkpoint.workflowRevision <= 0) {
         throw new TypeError('SECURITY_ACTION_CHECKPOINT_INVALID')
       }
+      const conn = liveConn()
       return runInTransaction(conn, () => {
         const current = get(invocationId)
         if (!current) throw new Error('SECURITY_ACTION_INTENT_NOT_FOUND')
@@ -116,6 +121,7 @@ export function createSecurityActionIntentStore(db: AppDatabase) {
     },
 
     markNotified(invocationId: string, now = Date.now()): { ok: true; intent: SecurityActionIntent } | { ok: false; reason: 'checkpoint_not_committed' } {
+      const conn = liveConn()
       return runInTransaction(conn, () => {
         const current = get(invocationId)
         if (!current || (current.state !== 'checkpoint_committed' && current.state !== 'notified')) {
@@ -141,20 +147,20 @@ export function createSecurityActionIntentStore(db: AppDatabase) {
     },
 
     listRecoverable(): SecurityActionIntent[] {
-      return (conn.prepare(`SELECT ${INTENT_COLUMNS} FROM security_action_intents
+      return (liveConn().prepare(`SELECT ${INTENT_COLUMNS} FROM security_action_intents
         WHERE state IN ('prepared','todo_linked') AND EXISTS (
           SELECT 1 FROM security_action_intent_outbox o WHERE o.invocation_id=security_action_intents.invocation_id AND o.state='pending'
         ) ORDER BY created_at,invocation_id`).all() as IntentRow[]).map(rowToIntent)
     },
 
     discardPendingOutbox(invocationId: string, now = Date.now()): void {
-      conn.prepare("UPDATE security_action_intent_outbox SET state='discarded',updated_at=? WHERE invocation_id=? AND state='pending'")
+      liveConn().prepare("UPDATE security_action_intent_outbox SET state='discarded',updated_at=? WHERE invocation_id=? AND state='pending'")
         .run(now, invocationId)
       db.save()
     },
 
     listOutbox(invocationId: string): Array<{ action: 'link_todo' | 'commit_checkpoint'; state: 'pending' | 'applied' | 'discarded' }> {
-      return conn.prepare('SELECT action,state FROM security_action_intent_outbox WHERE invocation_id=? ORDER BY action')
+      return liveConn().prepare('SELECT action,state FROM security_action_intent_outbox WHERE invocation_id=? ORDER BY action')
         .all(invocationId) as Array<{ action: 'link_todo' | 'commit_checkpoint'; state: 'pending' | 'applied' | 'discarded' }>
     },
 

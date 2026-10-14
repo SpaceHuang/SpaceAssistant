@@ -19,9 +19,12 @@ type CloseRow = {
 }
 
 export function createDeferredApprovalCloseCoordinator(input: { db: AppDatabase; port: ClosePort; advanceAuthorizationEpoch?: (channel: Scope['channel'], reason: string) => number }) {
-  const conn = getDbConnection(input.db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每函数入口现取，禁止工厂期捕获进闭包
+  //（epochStore 为薄包装对象，其内部连接已现取化，可安全持有）
+  const liveConn = () => getDbConnection(input.db)
   const epochStore = createRemoteAuthorizationEpochStore(input.db)
   function get(scope: Scope): CloseRow | null {
+    const conn = liveConn()
     return (conn.prepare(`SELECT authorization_epoch,tombstone,state FROM deferred_approval_closures
       WHERE channel=? AND identity_key=? AND owner_id=? AND session_id=?`)
       .get(scope.channel, scope.identityKey, scope.ownerId, scope.sessionId) as CloseRow | undefined) ?? null
@@ -31,6 +34,7 @@ export function createDeferredApprovalCloseCoordinator(input: { db: AppDatabase;
     return epochStore.advance(scope.channel, reason)
   }
   function persist(scope: Scope, row: CloseRow, now: number): void {
+    const conn = liveConn()
     conn.prepare(`INSERT INTO deferred_approval_closures(channel,identity_key,owner_id,session_id,authorization_epoch,tombstone,state,updated_at)
       VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(channel,identity_key,owner_id,session_id) DO UPDATE SET
         authorization_epoch=excluded.authorization_epoch,tombstone=excluded.tombstone,state=excluded.state,updated_at=excluded.updated_at`)
@@ -85,6 +89,7 @@ export function createDeferredApprovalCloseCoordinator(input: { db: AppDatabase;
       return row ? { authorizationEpoch: row.authorization_epoch, tombstone: row.tombstone, state: row.state } : null
     },
     async reconcilePending(): Promise<Array<{ scope: Scope; result: Awaited<ReturnType<typeof close>> }>> {
+      const conn = liveConn()
       const rows = conn.prepare(`SELECT channel,identity_key,owner_id,session_id FROM deferred_approval_closures
         WHERE state!='closed' ORDER BY updated_at`).all() as Array<{ channel: Scope['channel']; identity_key: string; owner_id: string; session_id: string }>
       const results = []

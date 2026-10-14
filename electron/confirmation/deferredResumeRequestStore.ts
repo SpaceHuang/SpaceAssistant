@@ -41,8 +41,10 @@ function mapRow(row: RequestRow): DeferredResumeRequest {
 }
 
 export function createDeferredResumeRequestStore(db: AppDatabase) {
-  const conn = getDbConnection(db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每函数入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(db)
   const get = (requestId: string): DeferredResumeRequest | null => {
+    const conn = liveConn()
     const row = conn.prepare(`SELECT ${COLUMNS} FROM deferred_resume_requests WHERE request_id=?`).get(requestId) as RequestRow | undefined
     return row ? mapRow(row) : null
   }
@@ -55,6 +57,7 @@ export function createDeferredResumeRequestStore(db: AppDatabase) {
       if (!Number.isSafeInteger(input.authorizationEpoch) || input.authorizationEpoch <= 0 ||
         !Number.isInteger(input.notificationVersion) || input.notificationVersion <= 0) throw new TypeError('DEFERRED_RESUME_VERSION_INVALID')
       const now = input.now ?? Date.now()
+      const conn = liveConn()
       return runInTransaction(conn, () => {
         const consumed = conn.prepare(`SELECT request_id FROM deferred_resume_requests WHERE todo_id=? AND notification_version=?
           AND state IN ('pending','dispatching','completed','outcome_unknown')`).get(input.todoId, input.notificationVersion) as { request_id: string } | undefined
@@ -81,29 +84,32 @@ export function createDeferredResumeRequestStore(db: AppDatabase) {
     },
     get,
     listPending(sessionId: string, channel?: 'feishu' | 'wechat'): DeferredResumeRequest[] {
-      return (conn.prepare(`SELECT ${COLUMNS} FROM deferred_resume_requests WHERE session_id=? AND state='pending'
+      return (liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_resume_requests WHERE session_id=? AND state='pending'
         AND (? IS NULL OR channel=?) ORDER BY created_at,request_id`).all(sessionId, channel ?? null, channel ?? null) as RequestRow[]).map(mapRow)
     },
     listPendingSessionIds(channel?: 'feishu' | 'wechat'): string[] {
-      return (conn.prepare(`SELECT DISTINCT session_id FROM deferred_resume_requests WHERE state='pending'
+      return (liveConn().prepare(`SELECT DISTINCT session_id FROM deferred_resume_requests WHERE state='pending'
         AND (? IS NULL OR channel=?) ORDER BY session_id`).all(channel ?? null, channel ?? null) as Array<{ session_id: string }>).map(({ session_id }) => session_id)
     },
     list(sessionId: string): DeferredResumeRequest[] {
-      return (conn.prepare(`SELECT ${COLUMNS} FROM deferred_resume_requests WHERE session_id=? ORDER BY created_at,request_id`).all(sessionId) as RequestRow[]).map(mapRow)
+      return (liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_resume_requests WHERE session_id=? ORDER BY created_at,request_id`).all(sessionId) as RequestRow[]).map(mapRow)
     },
     setState(requestId: string, from: DeferredResumeRequest['state'], to: DeferredResumeRequest['state'], now = Date.now()): boolean {
+      const conn = liveConn()
       const changed = conn.prepare('UPDATE deferred_resume_requests SET state=?,updated_at=? WHERE request_id=? AND state=?')
         .run(to, now, requestId, from)
       if (Number(changed.changes) === 1) db.save()
       return Number(changed.changes) === 1
     },
     invalidateByTodo(todoId: string, now = Date.now()): number {
+      const conn = liveConn()
       const changed = conn.prepare(`UPDATE deferred_resume_requests SET state='invalidated',updated_at=?
         WHERE todo_id=? AND state='pending'`).run(now, todoId)
       if (Number(changed.changes) > 0) db.save()
       return Number(changed.changes)
     },
     invalidateByScope(scope: { channel: 'feishu' | 'wechat'; identityKey: string; ownerId: string; sessionId: string }, now = Date.now()): { invalidated: number; dispatching: number } {
+      const conn = liveConn()
       const dispatching = conn.prepare(`SELECT count(*) AS count FROM deferred_resume_requests WHERE channel=? AND identity_key=? AND owner_id=? AND session_id=? AND state='dispatching'`)
         .get(scope.channel, scope.identityKey, scope.ownerId, scope.sessionId) as { count: number }
       const changed = conn.prepare(`UPDATE deferred_resume_requests SET state='invalidated',updated_at=?
@@ -114,6 +120,7 @@ export function createDeferredResumeRequestStore(db: AppDatabase) {
     },
     invalidateOlderAuthorizationEpochs(channel: 'feishu' | 'wechat', currentEpoch: number, now = Date.now()): { invalidated: number; dispatching: number } {
       if (!Number.isSafeInteger(currentEpoch) || currentEpoch <= 0) throw new TypeError('REMOTE_AUTHORIZATION_EPOCH_INVALID')
+      const conn = liveConn()
       const dispatching = conn.prepare(`SELECT count(*) AS count FROM deferred_resume_requests WHERE channel=? AND authorization_epoch<? AND state='dispatching'`)
         .get(channel, currentEpoch) as { count: number }
       const changed = conn.prepare(`UPDATE deferred_resume_requests SET state='invalidated',updated_at=?

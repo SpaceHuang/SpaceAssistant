@@ -80,10 +80,12 @@ function isIntact(envelope: DeferredCallEnvelope): boolean {
 }
 
 export function createDeferredEnvelopeStore(db: AppDatabase) {
-  const conn = getDbConnection(db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每方法入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(db)
   return {
     put(input: DeferredCallEnvelopeInput): DeferredCallEnvelope {
       if (!input.invocationId.trim() || !input.toolName.trim()) throw new TypeError('DEFERRED_ENVELOPE_IDENTITY_REQUIRED')
+      const conn = liveConn()
       const snapshot = structuredClone(input)
       const unsigned: Omit<DeferredCallEnvelope, 'integrityHash'> = {
         invocationId: snapshot.invocationId,
@@ -119,7 +121,7 @@ export function createDeferredEnvelopeStore(db: AppDatabase) {
     },
 
     get(invocationId: string): DeferredCallEnvelope | null {
-      const row = conn.prepare('SELECT envelope_json FROM deferred_call_envelopes WHERE invocation_id=?')
+      const row = liveConn().prepare('SELECT envelope_json FROM deferred_call_envelopes WHERE invocation_id=?')
         .get(invocationId) as { envelope_json: string } | undefined
       if (!row) return null
       try {
