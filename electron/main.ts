@@ -62,6 +62,7 @@ import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
 import { createSpillStore, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance, scheduleSourceTruthSpillGcMaintenance } from './storage/spillStore'
 import { isSafeDbMaintenanceRequested, runSafeDbMaintenance } from './storage/safeDbMaintenance'
 import { reconcileInterruptedCompaction } from './storage/sessionStorageMaintenance'
+import { pruneSessionArchives } from './storage/sessionArchiveRetention'
 import { schedulePeriodicSqliteMaintenance } from './storage/periodicSqliteMaintenance'
 import { archiveLegacyDatabaseJsonBackup } from './storage/legacyDatabaseBackup'
 import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
@@ -1502,6 +1503,10 @@ app.whenReady().then(async () => {
       console.warn('[main] main window creation failed; post-window maintenance remains deferred:', error instanceof Error ? error.message : String(error))
     })
   setupAppMenu(createHostTranslator({ locale: readAppLocale(db) }))
+  // 归档保留策略（B1/N5）：放 whenReady 尾部而非 reconcile 旁——此时 initAgentLogger 已执行（否则
+  // logAgentEvent 静默 no-op，删除完全无可观测性）；fire-and-forget，不占启动关键路径。
+  // 无 protect：若 --safe-db-maintenance 的压缩仍在飞行，按宽限期整体延后。
+  void pruneSessionArchives(app.getPath('userData'))
 }).catch((err) => {
   console.error('[main] whenReady failed:', err instanceof Error ? err.stack ?? err.message : err)
 })

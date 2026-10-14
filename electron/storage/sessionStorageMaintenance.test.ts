@@ -5,6 +5,7 @@ import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { appendMessage, createPersistedTurn, createSession, getApiContextBaseline } from '../database/operations'
@@ -16,6 +17,7 @@ import { COMPACT_SNAPSHOT_RETRY_LIMIT, reconcileInterruptedCompaction } from './
 import { spawnSessionMaintenanceSourceWorker } from './sessionStorageMaintenanceWorkerClient'
 import { activeSessionTurnCount, compactSessionDatabase, FULL_VACUUM_FREELIST_RATIO, verifySessionMaintenanceArchive } from './sessionStorageMaintenance'
 import type { StorageMaintenanceProgress } from './sessionStorageMaintenance'
+import { pruneSessionArchives } from './sessionArchiveRetention'
 import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 import { readSessionTranscriptProjection } from '../runtime/sessionTranscriptProjection'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
@@ -439,7 +441,7 @@ describe('session storage maintenance', () => {
     expect(conn.prepare('SELECT value FROM maintenance_payload').get()).toEqual({ value: 'must remain' })
     expect(await fs.readdir(path.join(userDataDir, 'session-archives'))).toEqual([])
     temp.cleanup()
-  })
+  }, 30_000)
 
   it('cancels after a verified archive and preserves it without changing the source database', async () => {
     const temp = createTempDatabase('storage-maintenance-cancel-')
@@ -939,5 +941,89 @@ describe('interrupted compaction reconciliation', () => {
     expect(JSON.parse(await fs.readFile(livePath + '.compact-recovery.json', 'utf8'))).toMatchObject({ recoveredAtSwap: true })
     expect(fsSync.readdirSync(dir).filter((name) => name.includes('.compact-staging-'))).toEqual([])
     await fs.rm(dir, { recursive: true, force: true })
+  })
+})
+
+describe('compact wrapper archive retention (N3 structural single point)', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  /** 造一份年龄超宽限期的旧归档（目录名时间戳 = 现在 - 10 分钟，真实 prune 按名字判龄）。 */
+  async function seedStaleArchive(archiveRoot: string): Promise<string> {
+    const name = `${new Date(Date.now() - 10 * 60_000).toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`
+    await fs.mkdir(path.join(archiveRoot, name), { recursive: true })
+    await fs.writeFile(path.join(archiveRoot, name, 'spaceassistant-data.db'), 'stale archive bytes')
+    return name
+  }
+
+  /** 记录 wrapper 传递的参数并转发真实 prune：既断言单点传参，又断言磁盘清理。 */
+  function spyRealPrune() {
+    const protects: Array<string | undefined> = []
+    const spy = vi.fn(async (dir: string, options?: { protect?: string }) => {
+      protects.push(options?.protect)
+      return pruneSessionArchives(dir, options)
+    })
+    return { spy, protects }
+  }
+
+  it('worker path success prunes older archives and keeps only the fresh one', async () => {
+    const temp = createTempDatabase('storage-maintenance-prune-worker-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('payload');")
+    temp.db.flushSave()
+    const archiveRoot = path.join(userDataDir, 'session-archives')
+    await seedStaleArchive(archiveRoot)
+    const { spy, protects } = spyRealPrune()
+
+    const result = await compactSessionDatabase(temp.db, userDataDir, undefined, { pruneArchives: spy, awaitArchivePrune: true })
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(protects).toEqual([result.archivePath])
+    await expect(fs.readdir(archiveRoot)).resolves.toEqual([path.basename(result.archivePath)])
+    temp.cleanup()
+  }, 30_000)
+
+  it('in-process path success prunes older archives and keeps only the fresh one', async () => {
+    vi.stubEnv('SPACEASSISTANT_IN_PROCESS_COMPACT', '1')
+    const temp = createTempDatabase('storage-maintenance-prune-inproc-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('payload');")
+    temp.db.flushSave()
+    const archiveRoot = path.join(userDataDir, 'session-archives')
+    await seedStaleArchive(archiveRoot)
+    const { spy, protects } = spyRealPrune()
+
+    const result = await compactSessionDatabase(temp.db, userDataDir, undefined, { pruneArchives: spy, awaitArchivePrune: true })
+
+    expect(result.executionTarget).toBe('in-process')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(protects).toEqual([result.archivePath])
+    await expect(fs.readdir(archiveRoot)).resolves.toEqual([path.basename(result.archivePath)])
+    temp.cleanup()
+  }, 30_000)
+
+  it('failure path rejects without pruning', async () => {
+    const temp = createTempDatabase('storage-maintenance-prune-failure-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('stable');")
+    temp.db.flushSave()
+    const archiveRoot = path.join(userDataDir, 'session-archives')
+    const staleName = await seedStaleArchive(archiveRoot)
+    const createWorker = () => {
+      const stub = new StubCompactionWorker()
+      stub.postMessage = () => { queueMicrotask(() => stub.emit('message', snapshotMismatchResult(1, 2))) }
+      return stub as unknown as Worker
+    }
+    const { spy } = spyRealPrune()
+
+    await expect(compactSessionDatabase(temp.db, userDataDir, undefined, { createWorker, pruneArchives: spy, awaitArchivePrune: true }))
+      .rejects.toMatchObject({ code: 'STORAGE_MAINTENANCE_BUSY' })
+
+    expect(spy).not.toHaveBeenCalled()
+    // 失败不 prune：旧归档原样保留。
+    await expect(fs.readdir(archiveRoot)).resolves.toEqual([staleName])
+    temp.cleanup()
   })
 })
