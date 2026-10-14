@@ -5,7 +5,7 @@
 - 需求状态：已通过评审，B01–B03 已关闭（依据用户确认）
 - 计划状态：已完成（阶段 0–8 全部收尾；阶段提交见阶段记录）
 - 版本范围：仅加载当前调用工作目录根部的 `AGENTS.md`；不支持子目录指令；不增加 agent-sdk 产品专用接口；不实现跨进程重启后的 invocation 可执行恢复。
-- 阶段提交：0 `f3791a04`；1 `88a19499`；2 `72520852`；3 `31b83d07`；4 `25c10345`；5 `67e573c6`；6 `fe50f237`；7 `ec952db5`；8 待本次提交后补录。
+- 阶段提交：0 `f3791a04`；1 `88a19499`；2 `72520852`；3 `31b83d07`；4 `25c10345`；5 `67e573c6`；6 `fe50f237`；7 `ec952db5`；8 `efacd3a2`（验收实现）；文档 SHA 回填提交见 Git 历史。
 - 任务状态：`[ ] 未开始`、`[~] 进行中`、`[x] 完成`、`[-] 不适用/经证据确认无需改动`、`[!] 受阻`。完成任务时补上验证命令 / 结果和提交 SHA；若无需改动，记录核查证据后标 `[-]`。
 - 执行约定：按阶段顺序推进；同阶段可并行的任务须满足依赖并避免同时改同一文件。每阶段完成并验收后单独提交。定向测试按仓库 `AGENTS.md` 纪律合并运行；全量测试仅阶段收尾及最终验收运行。评审依据：[开发计划评审报告](../review/agents-md-workdir-instructions-development-plan-review.md)。
 
@@ -275,7 +275,7 @@
   - 完成判据：`npm run build` 通过，包含 tray、renderer、pi-ai runtime closure（23 runtime files）、session-storage cleanup / boundary（19 existing exceptions, no additions）、provider 编译及 Electron TypeScript 编译。Renderer 有既存大 chunk 与 ineffective dynamic import 警告，不阻断构建。
 - [x] **8.5 更新本计划执行状态与验收记录**
   - 依赖：8.2–8.4
-  - 完成判据：本计划所有任务状态已结清；最终门禁和全量测试完成。真实模型抽查、真实 Feishu / WeChat IM 收发、Windows / Linux 真机操作未执行，明确不在本轮本地自动化验收范围内；自动化模拟不宣称替代这些验收。阶段提交：阶段 8 `chore: complete AGENTS.md support acceptance`（commit SHA 在提交后回填）。
+  - 完成判据：本计划所有任务状态已结清；最终门禁和全量测试完成。真实模型抽查、真实 Feishu / WeChat IM 收发、Windows / Linux 真机操作未执行，明确不在本轮本地自动化验收范围内；自动化模拟不宣称替代这些验收。阶段提交：实现 `efacd3a2`，该任务状态 / SHA 回填由紧随其后的文档提交记录。
 
 #### 需求追踪矩阵
 
