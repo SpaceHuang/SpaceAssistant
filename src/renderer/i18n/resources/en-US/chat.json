@@ -33,7 +33,7 @@
     "failureReason": "Reason",
     "retry": "Retry from the beginning",
     "continueFromCheckpoint": "Continue previous run",
-    "retrySourceLabel": "Retry source",
+    "continuationSourceLink": "View where the previous run stopped",
     "openModelSettings": "Open model service settings"
   },
   "scrollToLatest": {

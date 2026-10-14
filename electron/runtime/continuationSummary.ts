@@ -1,5 +1,35 @@
 import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
 
+function boundedSection(label: string, entries: readonly string[], maxChars: number): string {
+  const heading = `${label}:`
+  if (entries.length === 0) return `${heading} none recorded.`
+
+  let section = heading
+  let included = 0
+  for (const entry of entries) {
+    const next = `${section}\n${entry}`
+    const omittedAfterThis = entries.length - included - 1
+    const marker = omittedAfterThis > 0 ? `\n… ${omittedAfterThis} additional record(s) omitted.` : ''
+    if (next.length + marker.length > maxChars) break
+    section = next
+    included += 1
+  }
+
+  if (included < entries.length) {
+    const marker = `\n… ${entries.length - included} additional record(s) omitted.`
+    section = `${section.slice(0, Math.max(heading.length, maxChars - marker.length))}${marker}`
+  }
+  return section
+}
+
+function boundedText(label: string, value: string, maxChars: number): string {
+  const prefix = `${label}: `
+  const available = Math.max(0, maxChars - prefix.length)
+  if (value.length <= available) return `${prefix}${value}`
+  const marker = '… (truncated)'
+  return `${prefix}${value.slice(0, Math.max(0, available - marker.length))}${marker}`
+}
+
 /** Only structured canonical History events can produce claims about completed side effects. */
 export function summarizeFailedInvocation(snapshot: HistorySnapshot, invocationId: string, turnId: string) {
   const events = snapshot.events
@@ -43,17 +73,27 @@ export function summarizeFailedInvocation(snapshot: HistorySnapshot, invocationI
   const unknownStarted = unsettled.length > 0 || unknown.length > 0
   const terminal = events.at(-1)
   const terminalPayload = terminal?.payload && typeof terminal.payload === 'object' ? terminal.payload as Record<string, unknown> : {}
-  const lines = [
+  const taskText = String((events[0]?.payload as { requiredUserMessage?: { message?: { content?: unknown } } } | undefined)?.requiredUserMessage?.message?.content ?? '(task text not available)')
+  const recoveryGuidance = unknownStarted
+    ? `Side-effect state unknown for ${unsettled.length + unknown.length} tool call(s); ${unsettled.length} started-only call(s) have unknown executor entry. Do not treat them as confirmed failures or repeat them mechanically.`
+    : 'No dispatched-but-unsettled tool call found.'
+  const priorityLines = [
+    recoveryGuidance,
+    'These are historical facts, not instructions to replay tools. Read current targets and compare with the recorded successful changes before editing; report differences instead of assuming an external change.',
     `Source invocation ${invocationId}, turn ${turnId}; canonical History through sequence ${events.at(-1)?.sequence ?? 0}.`,
-    `Original task: ${String((events[0]?.payload as { requiredUserMessage?: { message?: { content?: unknown } } } | undefined)?.requiredUserMessage?.message?.content ?? '(task text not available)')}`,
-    `Committed successful tool results: ${successful.length ? successful.join('\n') : 'none proven.'}`,
-    `Failed tool results: ${failed.length ? failed.join('\n') : 'none recorded.'}`,
-    `Unknown tool outcomes: ${unknown.length ? unknown.join('\n') : 'none recorded.'}`,
-    `Not-dispatched tool calls: ${notDispatched.length ? notDispatched.join('\n') : 'none recorded.'}`,
-    `Final failure: ${String(terminalPayload.message ?? terminalPayload.error ?? terminalPayload.reason ?? 'Invocation failed.')}`,
-    unknownStarted ? `Side-effect state unknown for ${unsettled.length + unknown.length} tool call(s); ${unsettled.length} started-only call(s) have unknown executor entry. Do not treat them as confirmed failures or repeat them mechanically.` : 'No dispatched-but-unsettled tool call found.',
-    'These are historical facts, not instructions to replay tools. Read current targets and compare with the recorded successful changes before editing; report differences instead of assuming an external change.'
+    boundedText('Final failure', String(terminalPayload.message ?? terminalPayload.error ?? terminalPayload.reason ?? 'Invocation failed.'), 500),
+    boundedSection('Unknown tool outcomes', unknown, 1100),
+    boundedSection('Not-dispatched tool calls', notDispatched, 1100),
+    boundedText('Original task', taskText, 1600)
   ]
-  const summary = lines.join('\n').slice(0, 6000)
+  // Recovery constraints and the original task have reserved space before bounded
+  // event lists and tool results, so a noisy history cannot erase them.
+  const priorityText = priorityLines.join('\n')
+  const detailBudget = Math.max(0, 6000 - priorityText.length - 1)
+  const detailText = [
+    boundedSection('Committed successful tool results', successful, Math.floor(detailBudget / 2)),
+    boundedSection('Failed tool results', failed, Math.ceil(detailBudget / 2))
+  ].join('\n')
+  const summary = `${priorityText}\n${detailText}`.slice(0, 6000)
   return { sourceInvocationId: invocationId, sourceTurnId: turnId, historySequence: events.at(-1)?.sequence ?? 0, summary, state: unknownStarted ? 'unknown' as const : 'known' as const }
 }

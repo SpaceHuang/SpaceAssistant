@@ -21,13 +21,13 @@ export function ShikiHighlightedCodeBody({
   const requestIdRef = useRef(0)
 
   useEffect(() => {
+    const requestId = ++requestIdRef.current
     const cached = getCachedHighlight(code, language, surface)
     if (cached) {
       setHtml(cached)
       return
     }
 
-    const requestId = ++requestIdRef.current
     void highlightCode(code, language, surface).then((result) => {
       if (requestId !== requestIdRef.current || !result) return
       setHtml(result)

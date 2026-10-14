@@ -193,6 +193,23 @@ describe('ChatBubble streaming render', () => {
     expect(buttons).toEqual(['继续上次执行', '从头重试'])
   })
 
+  it('shows a quiet continuation source link instead of the upstream message id', () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
+    const source = document.createElement('div')
+    source.dataset.messageId = 'source-message-1'
+    document.body.append(source)
+
+    render(<ChatBubble message={assistantMessage({ status: 'completed' })} retryOfMessageId="source-message-1" />)
+
+    const link = screen.getByRole('button', { name: '查看上次中断的位置' })
+    expect(link.closest('.chat-message-source')).not.toBeNull()
+    expect(screen.queryByText('source-message-1')).toBeNull()
+    fireEvent.click(link)
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' })
+    source.remove()
+  })
+
   it('失败气泡在拿到失败原因时展示真实原因，而不是只留通用提示', () => {
     render(
       <ChatBubble

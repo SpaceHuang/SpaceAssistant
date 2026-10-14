@@ -33,7 +33,7 @@
     "failureReason": "失败原因",
     "retry": "从头重试",
     "continueFromCheckpoint": "继续上次执行",
-    "retrySourceLabel": "重试来源",
+    "continuationSourceLink": "查看上次中断的位置",
     "openModelSettings": "打开模型服务设置"
   },
   "scrollToLatest": {

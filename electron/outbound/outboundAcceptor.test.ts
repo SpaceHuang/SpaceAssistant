@@ -237,8 +237,10 @@ describe('canonical History failure summary', () => {
       evt(3, 'tool-call-finished', { toolCallId: 'w1', success: false, result: { success: true, message: 'preview generated' } }),
       evt(4, 'invocation-failed', { message: 'write failed' })
     ] } as never, 'inv-failed', 'turn-failed')
-    expect(summary.summary).toContain('Failed tool results: history#3 write_file:')
-    expect(summary.summary).not.toContain('Committed successful tool results: history#3')
+    const successfulResults = summary.summary.split('Committed successful tool results:')[1]?.split('\nFailed tool results:')[0] ?? ''
+    const failedResults = summary.summary.split('Failed tool results:')[1] ?? ''
+    expect(failedResults).toContain('history#3 write_file:')
+    expect(successfulResults).not.toContain('history#3 write_file:')
   })
 
   it('treats a completed invocation after a historical failure as a newer accepted task boundary', async () => {
