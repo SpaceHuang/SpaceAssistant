@@ -166,6 +166,34 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     expect(text).toContain('调用理由（内容已截断）：\n<script>检查目录')
   })
 
+  it('并行 run_shell 确认通过真实飞书发送入口保留各自命令和调用理由', async () => {
+    const { replyFeishuTextWithId: sendPrompt } = await import('./feishuReply')
+    vi.mocked(sendPrompt).mockClear()
+    const im = new FeishuImChannel({ runner: {} as LarkCliRunner })
+    const start = (suffix: string) => im.request(req('run_shell'), {
+      sessionId: `s-parallel-${suffix}`, toolName: 'run_shell',
+      toolInput: { command: `echo ${suffix}`, justification: `用户要求检查 ${suffix}` },
+      messageId: `m-${suffix}`, matchKey: `chat-${suffix}`
+    })
+    const first = start('alpha')
+    const second = start('beta')
+    await vi.waitFor(() => expect(im.listPending()).toHaveLength(2))
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(2))
+
+    const sent = vi.mocked(sendPrompt).mock.calls.map((call) => call[2])
+    expect(sent).toEqual(expect.arrayContaining([
+      expect.stringContaining('命令：echo alpha\n调用理由：\n用户要求检查 alpha'),
+      expect.stringContaining('命令：echo beta\n调用理由：\n用户要求检查 beta')
+    ]))
+    const pendingByCommand = new Map(im.listPending().map((entry) => [String(entry.toolInput?.command), entry]))
+    for (const command of ['echo alpha', 'echo beta']) {
+      const entry = pendingByCommand.get(command)!
+      expect(im.tryResolveFromInboundMessage(p2p({ chatId: entry.matchKey, content: `Y ${entry.confirmId}` }), confirmOpts)).toBe(true)
+    }
+    await expect(first).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
+    await expect(second).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
+  })
+
   it('includes progress prefix in confirm text', async () => {
     const { updateRemoteProgressSnapshot, clearRemoteProgressSession } = await import('../remote/remoteProgressStore')
     updateRemoteProgressSnapshot('s-progress', {
