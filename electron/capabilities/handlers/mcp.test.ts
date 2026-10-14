@@ -13,7 +13,7 @@ import type { CapabilityContext } from '../types'
 
 vi.mock('../../secureApiKey', () => ({
   encryptSecret: (plain: string) => `enc:${plain}`,
-  decryptSecret: (b64: string) => b64.replace(/^enc:/, '')
+  decryptSecret: (b64: string) => b64.replace(/^enc:/, ''),
   isSecretEncrypted: (value: string) => value.startsWith('enc:'),
   isLegacySecret: (value: string) => !value.startsWith('enc:'),
 }))

@@ -20,7 +20,7 @@ import { persistLlmServices } from '../llmServiceResolver'
 vi.mock('../appIpc', () => ({ readAppLocale: () => 'zh-CN' }))
 vi.mock('../secureApiKey', () => ({
   encryptSecret: (plain: string) => `enc:${plain}`,
-  decryptSecret: (stored: string) => stored.replace(/^enc:/, '')
+  decryptSecret: (stored: string) => stored.replace(/^enc:/, ''),
   isSecretEncrypted: (value: string) => value.startsWith('enc:'),
   isLegacySecret: (value: string) => !value.startsWith('enc:'),
 }))
