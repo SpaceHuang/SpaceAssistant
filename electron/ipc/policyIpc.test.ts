@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { getDbConnection } from '../database'
+import { getDbConnection, setConfigValue } from '../database'
 import { registerPolicyIpc } from './policyIpc'
 import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { afterEach } from 'vitest'
 import { setImAutoReviewTestModeEnabled } from '../confirmation/imAutoReviewTestMode'
 import { isRemoteAsyncApprovalTestModeEnabled, setRemoteAsyncApprovalTestModeEnabled } from '../confirmation/remoteAsyncApprovalTestMode'
+import { resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
+import { decide } from '../../src/shared/policy/policyEngine'
 
 function registeredHandlers(db = createMemoryAppDb('policy-ipc-contract'), isPackaged = false) {
   const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -91,6 +93,78 @@ describe('policy domain read IPC contract', () => {
     await expect(read({}, { lane: 'automation' })).rejects.toThrow('POLICY_LANE_UNSUPPORTED')
     await expect(read({}, { lane: 'wechat', domain: 'desktop' })).rejects.toThrow('POLICY_DOMAIN_MUST_NOT_BE_SPECIFIED')
     await expect(read({}, { lane: 'desktop', domain: 'unknown' })).rejects.toThrow('POLICY_DOMAIN_MUST_NOT_BE_SPECIFIED')
+    db.close()
+  })
+
+  it('executes the unified IM snapshot overrides and package selection written through policy IPC', async () => {
+    const { db, handlers } = registeredHandlers()
+    const conn = getDbConnection(db)
+    setConfigValue(db, 'config.policyPackages', JSON.stringify({ desktop: 'standard', wechat: 'strict', feishu: 'strict', automation: 'standard' }))
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'runtime-snapshot-seed' })
+    const write = handlers.get('policy:write')!
+    let snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })
+    await write({}, { lane: 'wechat', expectedRevision: snapshot.revision,
+      change: { kind: 'rule-override', ruleId: 'mcp-tool-ask', action: 'deny' } })
+    let rules = resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat')
+    expect(rules.rules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe('deny')
+    expect(rules.origins['mcp-tool-ask']?.source).toBe('user-override')
+    expect(rules.rules.find((rule) => rule.id === 'im-low-risk-create')?.action).toBe('auto-evaluator')
+
+    snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })
+    await write({}, { lane: 'wechat', expectedRevision: snapshot.revision,
+      change: { kind: 'package', package: 'custom' } })
+    expect(resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat').rules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe('deny')
+
+    await write({}, { lane: 'wechat', expectedRevision: 3,
+      change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: false } })
+    let effective = resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat')
+    expect(effective.rules.some((rule) => rule.id === 'remote-shell-disabled')).toBe(false)
+    expect(effective.disabledRuleIds).toContain('remote-shell-disabled')
+
+    await write({}, { lane: 'wechat', expectedRevision: 4,
+      change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: true } })
+    effective = resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat')
+    expect(effective.rules.some((rule) => rule.id === 'remote-shell-disabled')).toBe(true)
+    expect(effective.disabledRuleIds).not.toContain('remote-shell-disabled')
+    db.close()
+  })
+
+  it('applies the same explicit IM deny override to a legacy behavior snapshot', async () => {
+    const { db, handlers } = registeredHandlers()
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'legacy-runtime-seed' })
+    const write = handlers.get('policy:write')!
+    await write({}, { lane: 'wechat', expectedRevision: 1,
+      change: { kind: 'package', package: 'loose' } })
+    await write({}, { lane: 'wechat', expectedRevision: 2,
+      change: { kind: 'rule-override', ruleId: 'mcp-tool-ask', action: 'deny' } })
+
+    const rules = resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat')
+    expect(rules.rules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe('deny')
+    expect(rules.rules.find((rule) => rule.id === 'scope-loose-browser-navigate-ask-remote')?.action).toBe('allow')
+    expect(rules.origins['mcp-tool-ask']?.source).toBe('user-override')
+    db.close()
+  })
+
+  it('explicit deny override removes the original browser confirmation condition', async () => {
+    const { db, handlers } = registeredHandlers()
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'custom' }, updatedAt: 1, eventId: 'custom-condition-seed' })
+    await handlers.get('policy:write')!({}, { lane: 'wechat', expectedRevision: 1,
+      change: { kind: 'rule-override', ruleId: 'browser-act-allow-unconfigured', action: 'deny' } })
+
+    const rule = resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat').rules.find((entry) => entry.id === 'browser-act-allow-unconfigured')
+    expect(rule).toMatchObject({ action: 'deny' })
+    expect(rule?.configRequires).toBeUndefined()
+    expect(rule?.askUnless).toBeUndefined()
+    expect(rule?.requiresContext).toBeUndefined()
+    expect(decide({ toolName: 'browser', actionClass: 'write', baseRiskLevel: 'medium',
+      signals: [{ kind: 'browser-action', action: 'act', dangerous: false, sideEffect: 'read', completeness: 'complete' }],
+      summary: { text: 'ordinary browser action' } },
+    { lane: 'wechat', origin: { kind: 'direct-owner' }, sessionId: 'custom-deny-session' },
+    resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat').rules,
+    { cache: { lookup: () => null }, config: { actRequiresConfirm: true, remoteActSkipConfirm: false }, migrationComplete: false }))
+      .toMatchObject({ type: 'deny', ruleId: 'browser-act-allow-unconfigured' })
     db.close()
   })
 

@@ -1,5 +1,8 @@
 import { parseFrozenLegacyPolicyBehavior, FROZEN_LEGACY_POLICY_BEHAVIOR_VERSION } from './legacyPolicyBehavior'
 
+/** Bump when the startup backfill learns to import additional snapshot-owned legacy policy data. */
+export const LEGACY_IM_POLICY_MIGRATION_VERSION = 2 as const
+
 interface LegacyChannelConfig {
   remoteConfirmPolicy?: string
   remoteAllowLocalWrite?: boolean

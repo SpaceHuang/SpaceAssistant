@@ -11,6 +11,7 @@ import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApp
 import { isRemoteAsyncApprovalTestModeEnabled, setRemoteAsyncApprovalTestModeEnabled } from '../confirmation/remoteAsyncApprovalTestMode'
 import { isImAutoReviewTestModeEnabled, setImAutoReviewTestModeEnabled } from '../confirmation/imAutoReviewTestMode'
 import type { PolicyAction } from '../../src/shared/confirmation/types'
+import { LEGACY_IM_POLICY_MIGRATION_VERSION } from '../../src/shared/policy/legacyPolicyMigration'
 import '../capabilities/registerBuiltinCapabilities'
 import { capabilityRegistry } from '../capabilities/registry'
 
@@ -104,6 +105,11 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase, options: { 
         ? snapshot.ruleOverrides as Record<string, unknown> : {}
       overrides[change.ruleId] = change.action as PolicyAction
       snapshot.ruleOverrides = overrides
+      const resetIds = new Set(Array.isArray(snapshot.legacyRuleResetIds)
+        ? snapshot.legacyRuleResetIds.filter((id): id is string => typeof id === 'string') : [])
+      resetIds.delete(change.ruleId)
+      if (resetIds.size > 0) snapshot.legacyRuleResetIds = [...resetIds]
+      else delete snapshot.legacyRuleResetIds
     } else if (change.kind === 'rule-reset') {
       if (typeof change.ruleId !== 'string' || !change.ruleId) throw new Error('POLICY_RULE_ID_INVALID')
       if (!DEFAULT_POLICY_RULES.some((rule) => rule.id === change.ruleId && !rule.locked)) throw new Error('POLICY_RULE_IMMUTABLE')
@@ -111,6 +117,12 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase, options: { 
         ? snapshot.ruleOverrides as Record<string, unknown> : {}
       delete overrides[change.ruleId]
       snapshot.ruleOverrides = overrides
+      if (snapshot.legacyPolicyMigrationVersion !== LEGACY_IM_POLICY_MIGRATION_VERSION) {
+        const resetIds = new Set(Array.isArray(snapshot.legacyRuleResetIds)
+          ? snapshot.legacyRuleResetIds.filter((id): id is string => typeof id === 'string') : [])
+        resetIds.add(change.ruleId)
+        snapshot.legacyRuleResetIds = [...resetIds]
+      }
     } else if (change.kind === 'rule-enabled') {
       const rule = DEFAULT_POLICY_RULES.find((entry) => entry.id === change.ruleId)
       if (!rule?.locked || rule.action !== 'deny' || typeof change.enabled !== 'boolean') throw new Error('POLICY_RULE_ENABLE_INVALID')

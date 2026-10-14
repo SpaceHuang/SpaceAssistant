@@ -4,12 +4,16 @@ import {
   DEFAULT_POLICY_PACKAGES,
   normalizePolicyPackages,
   resolvePolicyRules,
+  resolveImPolicyRulesForVersion,
+  isPolicyPackage,
+  validateRuleOverride,
   type PolicyPackage,
   type PolicyPackageMap
 } from '../../src/shared/policy/policyPackages'
 import { getConfigValue, setConfigValue, type AppDatabase } from '../database'
 import { getDbConnection } from '../database'
 import { PolicyRuleStore } from './policyRuleStore'
+import { readImPolicySnapshot } from './imPolicyStore'
 
 /** 套餐映射持久化 key（configs 表 key-value，JSON）。 */
 export const POLICY_PACKAGES_CONFIG_KEY = 'config.policyPackages'
@@ -105,6 +109,57 @@ export function resolveEffectivePolicyRulesWithOrigin(
   lane: ExecutionLane
 ): { rules: PolicyRule[]; origins: Record<string, PolicyRuleOrigin>; disabledRuleIds: string[] } {
   const origins: Record<string, PolicyRuleOrigin> = {}
+  if (lane === 'wechat' || lane === 'feishu') {
+    try {
+      const snapshot = readImPolicySnapshot(getDbConnection(db), { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+      if (snapshot.policyBehaviorVersion === 'im-standard-v2' || snapshot.policyBehaviorVersion === 'im-v1.6') {
+        const toggleableDenyIds = new Set(DEFAULT_POLICY_RULES
+          .filter((rule) => rule.locked && rule.action === 'deny').map((rule) => rule.id))
+        const imDisabledRuleIds = Array.isArray(snapshot.snapshot.disabledRuleIds)
+          ? [...new Set(snapshot.snapshot.disabledRuleIds.filter((id): id is string =>
+            typeof id === 'string' && toggleableDenyIds.has(id)))]
+          : []
+        const baseRules = DEFAULT_POLICY_RULES.filter((rule) => !imDisabledRuleIds.includes(rule.id)) as PolicyRule[]
+        const legacyPackages = snapshot.snapshot.legacySelectedPackages && typeof snapshot.snapshot.legacySelectedPackages === 'object' &&
+          !Array.isArray(snapshot.snapshot.legacySelectedPackages)
+          ? snapshot.snapshot.legacySelectedPackages as Record<string, unknown> : {}
+        const selectedPackage = isPolicyPackage(snapshot.snapshot.selectedPackage)
+          ? snapshot.snapshot.selectedPackage
+          : isPolicyPackage(legacyPackages[lane]) ? legacyPackages[lane] as PolicyPackage
+            : 'standard'
+        const rawOverrides = snapshot.snapshot.ruleOverrides
+        const overrides = rawOverrides && typeof rawOverrides === 'object' && !Array.isArray(rawOverrides)
+          ? rawOverrides as Record<string, unknown> : {}
+        const validatedOverrides = Object.entries(overrides).flatMap(([ruleId, action]) => {
+          const validation = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, action, lane)
+          return validation.ok ? [{ ruleId, action: action as PolicyRule['action'] }] : []
+        })
+        const rules = snapshot.policyBehaviorVersion === 'im-standard-v2'
+          ? resolveImPolicyRulesForVersion({ policyBehaviorVersion: snapshot.policyBehaviorVersion,
+            pkg: selectedPackage, rules: baseRules })
+          : resolvePolicyRules({ lane, packages: { ...DEFAULT_POLICY_PACKAGES, [lane]: selectedPackage },
+            overrides: [], rules: baseRules })
+        const origins: Record<string, PolicyRuleOrigin> = Object.fromEntries(rules.map((rule) => [rule.id,
+          { source: rule.action !== DEFAULT_POLICY_RULES.find((base) => base.id === rule.id)?.action ? 'package' : 'builtin',
+            ...(rule.action !== DEFAULT_POLICY_RULES.find((base) => base.id === rule.id)?.action ? { shadowed: [{ source: 'builtin' as const }] } : {}) }]))
+        // Reuse the custom policy resolver so an explicit user action removes the old
+        // rule's conditional gates (configRequires / askUnless / requiresContext).
+        const withOverrides = resolvePolicyRules({ lane, packages: { ...DEFAULT_POLICY_PACKAGES, [lane]: 'custom' },
+          overrides: validatedOverrides, rules })
+        for (let index = 0; index < rules.length; index += 1) {
+          rules[index] = withOverrides[index]!
+        }
+        for (const [ruleId, action] of Object.entries(overrides)) {
+          const validation = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, action, lane)
+          if (!validation.ok) continue
+          origins[ruleId] = { source: 'user-override', shadowed: [{ source: 'builtin' }] }
+        }
+        return { rules, origins, disabledRuleIds: imDisabledRuleIds }
+      }
+    } catch {
+      // Legacy installations continue through the legacy policy sources below.
+    }
+  }
   const packages = readPolicyPackages(db)
   const disabledRuleIds = readDisabledPolicyRuleIds(db)
   const nonToggleableLockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked && rule.action !== 'deny').map((rule) => rule.id))
