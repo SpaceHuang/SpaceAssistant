@@ -594,16 +594,16 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     const lifecycleInvalidated = error instanceof AgentTurnLifecycleInvalidatedError
     const status = error instanceof AgentTurnCancelledError
       ? 'cancelled' as const
-      : resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated
+      : error instanceof AgentTurnTimedOutError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated
         ? 'interrupted' as const
         : error instanceof ToolDeniedError ? 'denied' as const : 'failed' as const
     if (!(error instanceof AgentTurnHistoryAlreadyTerminalError)) {
       try {
-        const terminalKind = error instanceof AgentTurnCancelledError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated ? 'invocation-interrupted' : 'invocation-failed'
+        const terminalKind = error instanceof AgentTurnCancelledError || error instanceof AgentTurnTimedOutError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated ? 'invocation-interrupted' : 'invocation-failed'
         const terminalPayload = error instanceof AgentTurnCancelledError
             ? { status: 'cancelled', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : error instanceof AgentTurnTimedOutError
-              ? { status: 'failed', reason: 'timeout', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+              ? { status: 'interrupted', reason: 'timeout', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : lifecycleInvalidated
               ? { status: 'interrupted', reason: error.reason === 'revoked' ? 'authorization-revoked' : 'authorization-changed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : hostProjectionFailed

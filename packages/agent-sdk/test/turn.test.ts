@@ -505,8 +505,8 @@ describe('runAgentTurn', () => {
       toolCallId: 'race-tool', executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered'
     }) }))
     expect(events.at(-1)).toMatchObject({
-      kind: scenario === 'timeout' ? 'invocation-failed' : 'invocation-interrupted',
-      payload: scenario === 'timeout' ? { reason: 'timeout' } : { status: 'interrupted' }
+      kind: 'invocation-interrupted',
+      payload: scenario === 'timeout' ? { status: 'interrupted', reason: 'timeout' } : { status: 'interrupted' }
     })
   })
 
@@ -932,7 +932,7 @@ describe('runAgentTurn', () => {
 
     await expect(running).rejects.toMatchObject({ code: 'TURN_TIMED_OUT' })
     expect((await backing.read('hosted-timeout')).events.at(-1)).toMatchObject({
-      kind: 'invocation-failed', payload: { status: 'failed', reason: 'timeout' }
+      kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'timeout' }
     })
     expect(transcriptCommits).toHaveLength(1)
     expect(transcriptCommits[0]).toMatchObject({ outcome: 'timed_out', messageMirror: {
@@ -4323,6 +4323,53 @@ describe('runAgentTurn', () => {
     expect(interruptedSnapshot.events.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'invocation-interrupted'])
     expect(interruptedSnapshot.events.at(-2)?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'cancelled' })
     expect(rebuildInvocationStates(interruptedSnapshot).get('inv')).toMatchObject({ state: 'cancelled' })
+  })
+
+  it.each(['revoked', 'authorization-changed'] as const)('lifecycle invalidation wins over an ordinary executor failure: %s', async (reason) => {
+    const registry = new ModelProviderRegistry()
+    let modelCalls = 0
+    registry.register(route, { providerId: 'lifecycle-priority', stream: () => {
+      modelCalls += 1
+      return stream({ type: 'tool-call', toolCallId: `lifecycle-priority-${reason}`, toolName: 'lookup', input: {} },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' })
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('lifecycle-priority', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const history = new MemoryHistory()
+    let invalidateRevocation!: () => void
+    let invalidateAuthorization!: () => void
+    let resolveInvalidated!: () => void
+    const invalidated = new Promise<void>((resolve) => { resolveInvalidated = resolve })
+    let authorizationVersion = 'auth-v1'
+    const execution = createPermitBoundToolExecutionPort({
+      permits, admission, allowedPhase: 'recheck',
+      resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
+      currentAuthorizationVersion: () => authorizationVersion,
+      subscribeRevocation: (_call, listener) => { invalidateRevocation = listener; return () => undefined },
+      subscribeAuthorizationChange: (_call, listener) => { invalidateAuthorization = listener; return () => undefined },
+      execute: async () => {
+        if (reason === 'revoked') invalidateRevocation()
+        else { authorizationVersion = 'auth-v2'; invalidateAuthorization() }
+        await invalidated
+        throw new Error('ordinary transport failure')
+      }
+    })
+    const running = runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'lifecycle-priority', history,
+      request: { messages: [], maxTokens: 20 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+      toolExecution: execution, maxModelTurns: 2
+    })
+    await expect(running).rejects.toMatchObject({ name: 'AgentTurnLifecycleInvalidatedError', reason })
+    expect(modelCalls).toBe(1)
+    const events = (await history.read('lifecycle-priority')).events
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted' } })
+    expect(events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'authorization-invalidated' })
+    resolveInvalidated()
+    await vi.waitFor(() => expect(admission.activeLeaseCount('req', 'lifecycle-priority')).toBe(0))
   })
 
   it('fails closed and never executes when policy denies a tool', async () => {
