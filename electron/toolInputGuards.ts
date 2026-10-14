@@ -4,6 +4,7 @@
 
 import { READ_FILE_MAX_CHARS, READ_FILE_MAX_LINE_LIMIT } from '../src/shared/toolResultLimits'
 import { extractPathField } from './toolPathField'
+import { RUN_SHELL_JUSTIFICATION_MAX_CODE_POINTS } from '../packages/agent-sdk/src/runShellJustification'
 
 const PATH_OR_GLOB_MAX = 8192
 const STRING_FIELD_MAX = 8192
@@ -120,6 +121,16 @@ export function assertSafeToolInput(toolName: string, input: Record<string, unkn
     case 'run_shell': {
       reqStringLen(input.command, 'command', STRING_FIELD_MAX)
       optStringLen(input.description, 'description', 512)
+      if (input.justification !== undefined && typeof input.justification !== 'string') {
+        throw new Error('工具参数无效：justification 须为字符串')
+      }
+      optStringLen(input.justification, 'justification', Number.MAX_SAFE_INTEGER)
+      if (typeof input.justification === 'string' && Array.from(input.justification.normalize('NFC')).length > RUN_SHELL_JUSTIFICATION_MAX_CODE_POINTS) {
+        throw new Error(`工具参数无效：justification 超过 ${RUN_SHELL_JUSTIFICATION_MAX_CODE_POINTS} 个 Unicode 码点`)
+      }
+      if (input._justificationTruncated !== undefined && input._justificationTruncated !== true) {
+        throw new Error('工具参数无效：justification 截断元数据无效')
+      }
       const to = input.timeout
       if (to !== undefined && to !== null) {
         if (typeof to !== 'number' || !Number.isFinite(to) || to < 1 || to > RUN_SCRIPT_TIMEOUT_MAX_SEC) {

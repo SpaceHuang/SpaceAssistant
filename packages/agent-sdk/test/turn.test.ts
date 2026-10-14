@@ -25,6 +25,42 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('normalizes run_shell justification before hashing, persisting, and dispatching the call', async () => {
+    const registry = new ModelProviderRegistry()
+    let modelCalls = 0
+    registry.register(route, { providerId: 'shell-justification', stream: () => ++modelCalls === 1
+      ? stream(
+        { type: 'tool-call', toolCallId: 'shell-1', toolName: 'run_shell', input: { command: 'pwd', justification: '  e\u0301  ' } },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+      )
+      : stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }) })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv', ['run_shell'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const preparedInputs: Record<string, unknown>[] = []
+    const executedInputs: Record<string, unknown>[] = []
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'inv', history,
+      request: { messages: [{ role: 'user', content: 'check current directory' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => {
+        preparedInputs.push(call.input)
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }
+      },
+      toolExecution: toolExecutionPort(permits, async (call) => { executedInputs.push((call as typeof call & { input: Record<string, unknown> }).input); return { output: 'ok' } }),
+      maxModelTurns: 2
+    })
+    const expected = { command: 'pwd', justification: 'é' }
+    expect(preparedInputs[0]).toEqual(expected)
+    expect(executedInputs[0]).toEqual(expected)
+    expect((await history.read('inv')).events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'model-response-committed', payload: expect.objectContaining({
+        message: expect.objectContaining({ toolCalls: [expect.objectContaining({ id: 'shell-1', input: expected })] })
+      }) })
+    ]))
+  })
+
   it('rechecks authorization after asynchronous model request projection', async () => {
     const registry = new ModelProviderRegistry()
     const provider = vi.fn(async function* () {
