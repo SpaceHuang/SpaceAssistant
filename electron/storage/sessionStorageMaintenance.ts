@@ -13,6 +13,7 @@ import { copyFileWithHash, copyTreeWithManifest } from './streamingCopy'
 import type { CopyTreeWithManifestResult } from './streamingCopy'
 import { runSessionMaintenanceWorker, COMPACTION_WORKER_ENTRY_UNAVAILABLE } from './sessionStorageMaintenanceWorkerClient'
 import { logAgentEvent } from '../agentLogger/agentLogger'
+import { pruneSessionArchives } from './sessionArchiveRetention'
 
 export { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 export { StorageMaintenanceError } from './storageMaintenanceError'
@@ -225,11 +226,24 @@ export function reconcileInterruptedCompaction(dbPath: string): { recoveredAtSwa
   return { recoveredAtSwap: false, removedStaleStaging: stagingPaths.length }
 }
 
-export async function compactSessionDatabase(
+export type CompactSessionDatabaseOptions = {
+  clearProjectionCachesAfterArchive?: boolean
+  signal?: AbortSignal
+  availableBytes?: () => number
+  createWorker?: (workerPath: string) => Worker
+  workerPath?: string
+  watchdogTimeoutMs?: number
+  /** 测试注入：归档 prune 实现（生产用 pruneSessionArchives）。 */
+  pruneArchives?: (userDataDir: string, options: { protect?: string }) => Promise<unknown>
+  /** 测试注入：wrapper 等待 prune 完成以保证断言确定性；生产路径 fire-and-forget 不等待。 */
+  awaitArchivePrune?: boolean
+}
+
+async function compactSessionDatabaseImpl(
   db: AppDatabase,
   userDataDir: string,
   onProgress?: (progress: StorageMaintenanceProgress) => void,
-  options: { clearProjectionCachesAfterArchive?: boolean; signal?: AbortSignal; availableBytes?: () => number; createWorker?: (workerPath: string) => Worker; workerPath?: string; watchdogTimeoutMs?: number } = {}
+  options: CompactSessionDatabaseOptions = {}
 ): Promise<CompactSessionDatabaseResult> {
   // 发布保底开关：置位时走 P4 的进程内路径（会阻塞主进程但行为完全已知）。
   if (process.env.SPACEASSISTANT_IN_PROCESS_COMPACT === '1') {
@@ -502,6 +516,26 @@ export async function compactSessionDatabase(
     }
     throw error
   }
+}
+
+/**
+ * 压缩入口（归档保留策略的结构性单点，N3）：三条成功路径（worker / 降级 / 进程内）都从 impl 返回
+ * 含 archivePath 的结果，wrapper 在成功后 fire-and-forget prune（rejected 不 prune）。
+ * 同时覆盖两个调用方：IPC storage:compact（withMaintenance 租约内）与 runSafeDbMaintenance
+ * （直调、绕过租约——并发安全由 sessionArchiveRetention 的宽限期设计兜住，不依赖租约）。
+ */
+export async function compactSessionDatabase(
+  db: AppDatabase,
+  userDataDir: string,
+  onProgress?: (progress: StorageMaintenanceProgress) => void,
+  options: CompactSessionDatabaseOptions = {}
+): Promise<CompactSessionDatabaseResult> {
+  const result = await compactSessionDatabaseImpl(db, userDataDir, onProgress, options)
+  const prune = options.pruneArchives ?? pruneSessionArchives
+  // pruneSessionArchives 本身不抛错；catch 防御注入实现的意外失败成为未处理拒绝。
+  const pending = Promise.resolve().then(() => prune(userDataDir, { protect: result.archivePath })).catch(() => undefined)
+  if (options.awaitArchivePrune) await pending
+  return result
 }
 
 async function compactSessionDatabaseInProcess(

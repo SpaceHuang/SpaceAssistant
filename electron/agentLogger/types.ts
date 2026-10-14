@@ -19,6 +19,7 @@ export type AgentLogEventName =
   | 'storage.spill.source_truth_gc_failed'
   | 'storage.maintenance.compact'
   | 'storage.maintenance.compact_failed'
+  | 'storage.archives.pruned'
   | 'storage.profile.request_failed'
   | 'agent.tools.trim_widen_denied'
   | 'driver.deferred.invalidated'
