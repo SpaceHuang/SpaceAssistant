@@ -10,7 +10,7 @@
 - [plan-detail-panel-requirement.md](../archive/desktop-ui/plan-detail-panel-requirement.md)
 - [plan-auto-execution-requirement.md](../archive/desktop-ui/plan-auto-execution-requirement.md)
 - [plan-resume-button-state-requirement.md](../archive/desktop-ui/plan-resume-button-state-requirement.md)
-- [feishu-integration-requirement.md](./feishu-integration-requirement.md)
+- [feishu-integration-requirement.md](../archive/im-remote/feishu-integration-requirement.md)
 - [remove-plan-mode-requirement-review.md](../review/remove-plan-mode-requirement-review.md)
 
 ---
