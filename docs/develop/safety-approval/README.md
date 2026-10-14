@@ -6,10 +6,11 @@
 
 ## 现状与设计文档（留主题目录）
 
-本主题的现役设计口径分布在三处（跨目录引用一律带路径）：
+本主题有**一份现状文档** + 三处现役设计口径（跨目录引用一律带路径）：
 
 | 文档 | 位置 | 说明 |
 | --- | --- | --- |
+| [确认与审批-现状.md](./确认与审批-现状.md) | **本目录** | **现状文档**：策略内核（`decide` / package / floor）、工具闸门与调用准入、审批回答者（3 轮 · haiku · 授权上限 low）、通道与延迟/异步审批、执行许可（读/写 permit + 路径租约）、决策缓存与安全审计、迁移收口 |
 | `tool-confirmation-top-level-design-v2.md` | `docs/requirement/safety-approval/` | 确认与授权机制顶层设计（四轮评审，可进入 P0） |
 | `security-policy-single-entry-requirement.md` | `docs/requirement/safety-approval/` | 安全策略单一入口（口径仍在生效） |
 | `confirmation-answerer-and-auto-approval-design.md` | `docs/develop/architect/` | 回答者与自动审批设计 |
