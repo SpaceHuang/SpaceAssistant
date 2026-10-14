@@ -25,6 +25,57 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('freezes request patches and metadata across provider retry, then refreshes them for the next model turn', async () => {
+    const registry = new ModelProviderRegistry()
+    const providerRequests: CanonicalModelMessage[][] = []
+    let providerCall = 0
+    registry.register(route, { providerId: 'request-snapshot-patch', stream: async function* (call) {
+      providerCall += 1
+      providerRequests.push(structuredClone([...call.request.messages]))
+      if (providerCall === 1) throw new Error('temporary provider failure')
+      if (providerCall === 2) {
+        yield { type: 'tool-call', toolCallId: 'request-patch-tool', toolName: 'lookup', input: {} }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+        return
+      }
+      yield { type: 'text-delta', text: 'done' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'request-snapshot-patch'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      observer: { prepareModelRequest: ({ modelTurn }) => ({
+        requestPatch: { messages: [{ role: 'system', content: `snapshot-${modelTurn}` }, { role: 'user', content: 'go' }] },
+        requestMetadata: { snapshot: `snapshot-${modelTurn}` }
+      }) },
+      recoverProviderAttempt: async ({ error, messages }) => error ? ({ kind: 'retry', reasonCode: 'TEMPORARY_PROVIDER_FAILURE', messages }) : undefined,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) =>
+        ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion })
+      } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'step complete' })),
+      maxModelTurns: 3
+    })
+    expect(result.modelTurns).toBe(2)
+    expect(providerRequests.map((messages) => messages.find((message) => message.role === 'system')?.content)).toEqual([
+      'snapshot-1', 'snapshot-1', 'snapshot-2'
+    ])
+    const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
+    expect(requestEvents.map((event) => (event.payload as { requestMetadata?: unknown }).requestMetadata)).toEqual([
+      { snapshot: 'snapshot-1' }, { snapshot: 'snapshot-1' }, { snapshot: 'snapshot-2' }
+    ])
+    expect((await history.read(invocationId)).events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({
+      sourceRequestId: `${invocationId}:round:1`, modelTurn: 1
+    })
+  })
   it('rechecks authorization after asynchronous model request projection', async () => {
     const registry = new ModelProviderRegistry()
     const provider = vi.fn(async function* () {

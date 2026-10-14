@@ -119,7 +119,7 @@ export type AgentTurnObserver = Readonly<{
   criticalToolProjection?: boolean
   onModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): void | Promise<void>
   prepareUsageAttribution?(input: Readonly<{ modelTurn: number; request: PreparedModelCall['request'] }>): Record<string, unknown> | void
-  prepareModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Readonly<{ sessionLedger?: unknown; requestProjection?: unknown }> | void | Promise<Readonly<{ sessionLedger?: unknown; requestProjection?: unknown }> | void>
+  prepareModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Readonly<{ sessionLedger?: unknown; requestProjection?: unknown; requestMetadata?: Readonly<Record<string, unknown>>; requestPatch?: Partial<PreparedModelCall['request']> }> | void | Promise<Readonly<{ sessionLedger?: unknown; requestProjection?: unknown; requestMetadata?: Readonly<Record<string, unknown>>; requestPatch?: Partial<PreparedModelCall['request']> }> | void>
   onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
   onModelAttemptDiscarded?(attempt: Readonly<{ attempt: number; modelTurn: number; reasonCode: string }>): void | Promise<void>
   prepareProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void | Promise<Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void>
@@ -866,7 +866,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   let cacheCreationInputTokens = 0
   let outputRecoveryAttempts = 0
   let dispatchedToolRounds = 0
-  let requestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...input.request }
+  let baseRequestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...input.request }
   let activeWindowId = input.windowId ?? ''
   let contextEpoch = 0
   let contextPhase: 'preflight' | 'boundary' = 'preflight'
@@ -902,17 +902,27 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   let pinnedProvider: ModelProvider | undefined
 
   for (let modelTurns = 1; modelTurns <= input.maxModelTurns; modelTurns += 1) {
+    // Request-local patches (for example, workdir instructions) persist across provider retries,
+    // but must not leak into the next logical model request.
+    let requestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...baseRequestTemplate }
     throwIfAborted(input.request.signal)
     const completedModelTurns = modelTurns - 1
     const loopCheckMessage = completedModelTurns > 0 && completedModelTurns % MODEL_TURN_LOOP_CHECK_INTERVAL === 0
       ? modelTurnLoopCheckMessage(completedModelTurns)
       : undefined
     const messagesForModelTurn = () => loopCheckMessage ? [...messages, loopCheckMessage] : messages
-    let call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
+    const prepareRequest = (patch?: Partial<PreparedModelCall['request']>) => input.registry.prepare(input.routeId, {
+      ...requestTemplate, ...patch, messages: patch?.messages ?? messagesForModelTurn()
+    })
+    let call = prepareRequest()
     await ensureInitialHistoryContext(input, call, appendHistory)
     const initialResponse = modelTurns === 1 ? input.initialResponse : undefined
     let requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
     let preparedRequestProjection = !initialResponse ? await input.observer?.prepareModelRequest?.(requestObservation) : undefined
+    if (preparedRequestProjection?.requestPatch) {
+      call = prepareRequest(preparedRequestProjection.requestPatch)
+      requestObservation = { ...requestObservation, request: call.request }
+    }
     if (!initialResponse && input.planContextReplacement) {
       const requestExceedsBudget = (projection: unknown): boolean => {
         if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return false
@@ -1008,6 +1018,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           attempt: 1,
           routeId: input.routeId,
           requestSnapshot: canonicalRequestSnapshot(call),
+          ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {}),
           ...(preparedRequestProjection?.sessionLedger !== undefined ? { sessionLedger: preparedRequestProjection.sessionLedger } : {})
         }
       }])
@@ -1157,12 +1168,14 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       throwIfAborted(input.request.signal)
       messages.splice(0, messages.length, ...recoveredMessages)
       requestTemplate = { ...requestTemplate, ...(recovery.requestPatch ?? {}) }
-        const retryCall = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
+      baseRequestTemplate = { ...baseRequestTemplate, ...(recovery.requestPatch ?? {}) }
+        recoveredAttempt = true
+        let retryRequestObservation = { modelTurn: modelTurns, attempt: 2, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
+        const retryProjection = await input.observer?.prepareModelRequest?.(retryRequestObservation)
+        const retryCall = prepareRequest(retryProjection?.requestPatch)
+        retryRequestObservation = { ...retryRequestObservation, request: retryCall.request }
         const retryProvider = input.registry.getProvider(retryCall)
         if (!sameRouteIdentity(retryCall.route, call.route) || retryProvider !== provider) throw new ModelRouteChangedError(input.routeId)
-        recoveredAttempt = true
-        const retryRequestObservation = { modelTurn: modelTurns, attempt: 2, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: retryCall.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
-        const retryProjection = await input.observer?.prepareModelRequest?.(retryRequestObservation)
         await appendHistory([{
           kind: 'model-request-started',
           payload: {
@@ -1171,6 +1184,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             attempt: 2,
             routeId: input.routeId,
             requestSnapshot: canonicalRequestSnapshot(retryCall),
+            ...(retryProjection?.requestMetadata ? { requestMetadata: retryProjection.requestMetadata } : {}),
             ...(retryProjection?.sessionLedger !== undefined ? { sessionLedger: retryProjection.sessionLedger } : {})
           }
         }])
@@ -1342,6 +1356,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           kind: 'tool-call-not-dispatched',
           payload: {
             toolCallId: tool.toolCallId,
+            sourceRequestId: `${invocationId}:round:${modelTurns}`,
+            modelTurn: modelTurns,
             reason,
             replayContent,
             isError: true,
@@ -1663,6 +1679,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           kind: 'approval-waiting',
           payload: {
             toolCallId: tool.toolCallId,
+            sourceRequestId: `${invocationId}:round:${modelTurns}`,
+            modelTurn: modelTurns,
             approvalId: initialDecision.confirmationId,
             answerer: initialDecision.answerer,
             reasonCode: initialDecision.reasonCode,
@@ -1785,6 +1803,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
               kind: 'tool-call-started',
               payload: {
                 toolCallId: tool.toolCallId,
+                sourceRequestId: `${invocationId}:round:${modelTurns}`,
+                modelTurn: modelTurns,
                 toolName: tool.toolName,
                 executorEntry: 'unknown',
                 inputHash: createHash('sha256').update(JSON.stringify(tool.input)).digest('hex'),
@@ -1824,6 +1844,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         kind: 'tool-call-finished',
         payload: {
           toolCallId: tool.toolCallId,
+          sourceRequestId: `${invocationId}:round:${modelTurns}`,
+          modelTurn: modelTurns,
           success: !(executionResult.isError ?? false),
           result: executionResult.output,
           replayContent,
@@ -1951,6 +1973,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         kind: 'tool-call-finished',
         payload: {
           toolCallId: tool.toolCallId,
+          sourceRequestId: `${invocationId}:round:${modelTurns}`,
+          modelTurn: modelTurns,
           success: false,
           result: result.output,
           replayContent: result.replayContent,

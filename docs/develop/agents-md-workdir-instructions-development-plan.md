@@ -114,7 +114,7 @@
   - 测试：新 `electron/projectInstructions/*test.ts`。
   - 完成判据：临时目录测试覆盖存在 / 缺失 / 空白 / 编码 / 上限 / 超限 / 权限 / 普通目录 / 内外符号链接 / 正常并发编辑 / 编辑器式原子替换 / 两目录并发；验证读取有界、内容稳定时取完整版本、不稳定时有界重试后明确降级且不复用旧正文。无测试依赖真实用户目录。
   - 范围边界：不测试刻意卡在路径检查与打开之间的恶意替换，不新增跨平台父目录防替换、复杂句柄身份验证、FIFO 替换对抗要求。正常编辑器原子保存与并发更新属于必须兼容场景。
-- [x] **2.7 运行读取器定向测试并提交阶段** — 合并阶段 1、2 与当前请求装配回归验证完成；`npm run typecheck:shared`、`npm run check:agent-sdk` 通过。electron incremental build 被 pi-ai closure gate 阻断（缺少预期 `api/anthropic-messages.js`、`utils/transcript.js`，扫描实际为空）。
+- [x] **2.7 运行读取器定向测试并提交阶段** — commit `72520852`；合并阶段 1、2 与当前请求装配回归验证完成；`npm run typecheck:shared`、`npm run check:agent-sdk` 通过。electron incremental build 被 pi-ai closure gate 阻断（缺少预期 `api/anthropic-messages.js`、`utils/transcript.js`，扫描实际为空）。
   - 依赖：2.6
   - 完成判据：一次合并运行阶段 1、2 受影响测试；记录结果与提交 SHA。
 
@@ -122,25 +122,25 @@
 
 **阶段完成条件：** 每个 logical provider request 有稳定关联的快照记录；底层 retry / approval tool 关联旧请求；下一请求新读；重启后仅只读还原。
 
-- [ ] **3.1 定义 logical request 标识映射**
+- [x] **3.1 定义 logical request 标识映射** — `invocationId:round:modelTurn` 为 logical requestId，attempt 在同 request 下递增；tool / approval 携带 `sourceRequestId` 与 `modelTurn`。
   - 依赖：0.3
   - 完成判据：明确区分 invocation、logical model request、provider retry attempt、tool call、approval。快照按 logical request 关联；同一 logical request retry attempt 共享该标识。
-- [ ] **3.2 确定 canonical History 事件挂载方式**
+- [x] **3.2 确定 canonical History 事件挂载方式** — 沿用 `model-request-started.requestMetadata.agentsMdSnapshot`，含可序列化状态 / digest / workDir / 正文；loader 正文上限 32 KiB，加包装后低于既有 History spill 的 64 KiB 阈值，故 inline 持久化，无新增表或事件流。
   - 依赖：3.1
   - 完成判据：复用既有通用 context / request event payload 的扩展位保存可序列化 snapshot metadata 与必要正文；记录载荷大小上限与正文 spill 方案。不可只存摘要后承诺完整历史查看；不新增专用数据库表 / 第二 event stream，除非阶段 0 证明现有结构无法承载并单独评审。
-- [ ] **3.3 将 request snapshot 与模型请求事实绑定**
+- [x] **3.3 将 request snapshot 与模型请求事实绑定** — attempt 1/2 各自写入对应 model-request-started；同一逻辑请求读取缓存固定元数据，下一 modelTurn 独立加载并记录。
   - 依赖：3.2
   - 完成判据：history 重建能把请求的目录、digest、加载结果与该次 provider request 一一对应；多次请求在同一 invocation 内不会覆盖前一条快照。
-- [ ] **3.4 将工具 / 审批来源请求关联到 History**
+- [x] **3.4 将工具 / 审批来源请求关联到 History** — approval-waiting、tool-call-started / finished / not-dispatched 写入来源 requestId 与 modelTurn，不覆盖 invocation requestId。
   - 依赖：3.3
   - 完成判据：tool-call-started / approval 等既有事实可追溯其来源 logical request；审批通过后执行旧操作时读取来源快照 metadata，不把它重新标成新请求。
-- [ ] **3.5 实现重启后只读历史快照投影**
+- [x] **3.5 实现重启后只读历史快照投影** — History 重启读取保留逐请求正文；缺失旧正文时调用方可据状态标记不可还原；`recoverInterruptedInvocations` 仍将未完成请求关闭为 interrupted，不重放。
   - 依赖：3.3、3.4
   - 完成判据：已持久化正文按原 digest 展示；正文缺失 / spill 丢失显示不可还原；绝不以磁盘当前文件补旧历史；未完成 invocation 仍为 `interrupted`，没有执行恢复逻辑。
-- [ ] **3.6 补齐 History / spill / interrupted 回归测试**
+- [x] **3.6 补齐 History / spill / interrupted 回归测试** — SQLite 回归写入两个不同 digest/body 后重建 adapter 读取，且重启仅生成 interrupted 终态；SDK 回归验证 retry / tool 来源关联。
   - 依赖：3.3–3.5
   - 完成判据：同 invocation 两个请求有不同 snapshot 可分别还原；缺旧正文时状态明确；审批与工具关联请求来源；重启不重新派发工具；历史正文不进入日志。
-- [ ] **3.7 运行定向测试并提交阶段**
+- [x] **3.7 运行定向测试并提交阶段** — `npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/sqliteAgentHistory.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/projectInstructions/projectInstructions.test.ts electron/llmSystemPrompt.test.ts`：5 files / 369 tests passed；`npm run check:agent-sdk`、`npm run typecheck:agent-sdk` passed。包含中立 requestMetadata / requestPatch SDK 合同扩展；阶段提交将由后续阶段记录 SHA。
   - 依赖：3.6
   - 完成判据：一次合并运行 SDK history 与 electron history storage 相关测试；若触及 SDK 代码，阶段内运行 `npm run check:agent-sdk`；记录是否仅扩展中立可序列化事件合同和提交 SHA。
 
