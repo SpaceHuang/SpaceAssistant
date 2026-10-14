@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, ToolDeniedError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
 import { ModelProviderRegistry, type CanonicalModelMessage, type StreamChunk } from '../src/model'
 import { CapabilityRegistry } from '../src/capability'
@@ -1087,6 +1088,7 @@ describe('runAgentTurn', () => {
     const permits = new InMemorySafetyPermitStore()
     const oldMessage = { role: 'user' as const, content: 'old context' }
     const currentMessage = { role: 'user' as const, content: 'current question' }
+    const instructionMessage = { role: 'system' as const, content: 'AGENTS_SENTINEL' }
     const planContextReplacement = vi.fn(async (input: import('../src/turn').ContextReplacementPlanInput) => input.phase === 'preflight' ? ({
       messages: [currentMessage], windowId: 'window-reset'
     }) : undefined)
@@ -1100,12 +1102,24 @@ describe('runAgentTurn', () => {
       request: { messages: [oldMessage, currentMessage], maxTokens: 32 },
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })), maxModelTurns: 1,
+      observer: { prepareModelRequest: ({ request }) => ({
+        requestPatch: { messages: [instructionMessage, ...request.messages] },
+        requestMetadata: { agentsMdSnapshot: { status: 'loaded', content: 'AGENTS_SENTINEL' } }
+      }) },
       planContextReplacement, contextProjectionCommitter
     })
 
     expect(planContextReplacement.mock.calls.map(([call]) => call.phase)).toEqual(['preflight', 'turn-boundary'])
     expect(contextProjectionCommitter).toHaveBeenCalledOnce()
-    expect(providerRequests).toEqual([[currentMessage]])
+    expect(providerRequests).toEqual([[instructionMessage, currentMessage]])
+    const requestStarted = (await history.read('preflight-request')).events.find(({ kind }) => kind === 'model-request-started')!
+    expect(requestStarted.payload).toMatchObject({
+      requestMetadata: { agentsMdSnapshot: { status: 'loaded', content: 'AGENTS_SENTINEL' } },
+      requestSnapshot: {
+        messagesCount: 2,
+        messagesSha256: createHash('sha256').update(JSON.stringify([instructionMessage, currentMessage]), 'utf8').digest('hex')
+      }
+    })
     expect((await history.read('preflight-request')).events.map(({ kind }) => kind)).toEqual([
       'invocation-context-committed', 'transcript-compacted', 'model-request-started', 'model-response-committed', 'invocation-completed'
     ])

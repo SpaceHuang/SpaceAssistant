@@ -988,15 +988,13 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           reason: output.windowId !== base.frame.windowId ? 'window-transition' : 'auto-compact', candidate
         })
         if (result.status === 'commit-uncertain') throw new AgentTurnBoundaryProjectionError(result.error)
-        if (result.status === 'committed') {
-          requestTemplate = { ...requestTemplate }
-          call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
-          requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
-          preparedRequestProjection = await input.observer?.prepareModelRequest?.(requestObservation)
-        }
         call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
         requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
         preparedRequestProjection = await input.observer?.prepareModelRequest?.(requestObservation)
+        if (preparedRequestProjection?.requestPatch) {
+          call = prepareRequest(preparedRequestProjection.requestPatch)
+          requestObservation = { ...requestObservation, request: call.request }
+        }
       }
       if (overBudgetBeforeRecovery && (!didRecover || requestExceedsBudget(preparedRequestProjection?.requestProjection))) {
         throw new ModelPreflightRejectedError('OVER_BUDGET')

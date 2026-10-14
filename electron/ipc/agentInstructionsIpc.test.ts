@@ -22,8 +22,14 @@ describe('AGENTS.md request snapshot IPC', () => {
         kind: 'model-request-started', payload: { requestId: `${invocationId}-request`, modelTurn: 1, attempt: 1,
           requestMetadata: { agentsMdSnapshot: { status: 'loaded', digest: invocationId.padEnd(64, '0'), content, byteLength: content.length, tokenCount: 1, loadedAt: 10, workDir: '/private/workspace/secret-project' } } }
       },
-      { invocationId, turnId: invocationId, sequence: 2, schemaVersion: 1, eventId: `${invocationId}-tool`, idempotencyKey: `${invocationId}-tool`, kind: 'tool-call-started', payload: { toolCallId: `${invocationId}-call`, toolName: 'write_file' } },
-      { invocationId, turnId: invocationId, sequence: 3, schemaVersion: 1, eventId: `${invocationId}-approval`, idempotencyKey: `${invocationId}-approval`, kind: 'approval-waiting', payload: { toolCallId: `${invocationId}-call`, modelTurn: 1, sourceRequestId: `${invocationId}-request` } }
+      { invocationId, turnId: invocationId, sequence: 2, schemaVersion: 1, eventId: `${invocationId}-response`, idempotencyKey: `${invocationId}-response`, kind: 'model-response-committed', payload: { requestId: `${invocationId}-request`, modelTurn: 1, attempt: 1, message: { role: 'assistant', content: '', toolCalls: [
+        { id: `${invocationId}-call`, name: 'write_file', input: {} }, { id: `${invocationId}-denied-call`, name: 'delete_file', input: {} }
+      ] } } },
+      { invocationId, turnId: invocationId, sequence: 3, schemaVersion: 1, eventId: `${invocationId}-approval`, idempotencyKey: `${invocationId}-approval`, kind: 'approval-waiting', payload: { toolCallId: `${invocationId}-call`, modelTurn: 1, sourceRequestId: `${invocationId}-request` } },
+      { invocationId, turnId: invocationId, sequence: 4, schemaVersion: 1, eventId: `${invocationId}-resolved`, idempotencyKey: `${invocationId}-resolved`, kind: 'approval-resolved', payload: { toolCallId: `${invocationId}-call`, approved: true } },
+      { invocationId, turnId: invocationId, sequence: 5, schemaVersion: 1, eventId: `${invocationId}-tool`, idempotencyKey: `${invocationId}-tool`, kind: 'tool-call-started', payload: { toolCallId: `${invocationId}-call`, toolName: 'write_file' } },
+      { invocationId, turnId: invocationId, sequence: 6, schemaVersion: 1, eventId: `${invocationId}-denied-approval`, idempotencyKey: `${invocationId}-denied-approval`, kind: 'approval-waiting', payload: { toolCallId: `${invocationId}-denied-call`, modelTurn: 1, sourceRequestId: `${invocationId}-request` } },
+      { invocationId, turnId: invocationId, sequence: 7, schemaVersion: 1, eventId: `${invocationId}-denied-resolved`, idempotencyKey: `${invocationId}-denied-resolved`, kind: 'approval-resolved', payload: { toolCallId: `${invocationId}-denied-call`, approved: false } }
       ], 0)
       return user
     }
@@ -44,7 +50,7 @@ describe('AGENTS.md request snapshot IPC', () => {
 
     const index = await ipcHandlers.get('chat:get-agents-md-request-snapshots')!({}, { sessionId: first.id }) as { entries: Array<Record<string, unknown>> }
     expect(index.entries).toHaveLength(1)
-    expect(index.entries[0]).toMatchObject({ invocationId: 'inv-a', bodyAvailable: true, workDirName: 'secret-project', approvalTools: ['write_file'] })
+    expect(index.entries[0]).toMatchObject({ invocationId: 'inv-a', bodyAvailable: true, workDirName: 'secret-project', approvalTools: ['write_file', 'delete_file'] })
     expect(JSON.stringify(index)).not.toContain('/private/workspace')
     expect(JSON.stringify(index)).not.toContain('private instructions')
 

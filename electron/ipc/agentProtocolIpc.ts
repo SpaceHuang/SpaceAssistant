@@ -579,6 +579,20 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         if (candidate.kind === 'tool-call-started' && typeof eventPayload.toolCallId === 'string' && typeof eventPayload.toolName === 'string') {
           toolNames.set(eventPayload.toolCallId, eventPayload.toolName)
         }
+        if (candidate.kind === 'model-response-committed') {
+          const message = eventPayload.message && typeof eventPayload.message === 'object' && !Array.isArray(eventPayload.message)
+            ? eventPayload.message as Record<string, unknown>
+            : undefined
+          for (const toolCall of Array.isArray(message?.toolCalls) ? message.toolCalls : []) {
+            if (!toolCall || typeof toolCall !== 'object' || Array.isArray(toolCall)) continue
+            const call = toolCall as Record<string, unknown>
+            if (typeof call.id === 'string' && typeof call.name === 'string') toolNames.set(call.id, call.name)
+          }
+        }
+      }
+      for (const candidate of snapshot.events) {
+        if (!candidate.payload || typeof candidate.payload !== 'object' || Array.isArray(candidate.payload)) continue
+        const eventPayload = candidate.payload as Record<string, unknown>
         if (candidate.kind === 'approval-waiting' && typeof eventPayload.modelTurn === 'number' && typeof eventPayload.toolCallId === 'string') {
           const set = approvalToolsByModelTurn.get(eventPayload.modelTurn) ?? new Set<string>()
           const toolName = toolNames.get(eventPayload.toolCallId)
@@ -780,7 +794,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           sessionCommands,
           intent.sessionId,
           'desktop',
-          { projectMemoryEnabled: true, agentsMdEnabled: true },
+          { projectMemoryEnabled: true },
           { requiresVision }
         )
         const credentials = await resolveLlmCredentialsForModel(ctx.db, baseConfig.model!, { serviceId: baseConfig.llmServiceId })

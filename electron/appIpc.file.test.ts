@@ -588,7 +588,7 @@ describe('file IPC handlers', () => {
       expect.objectContaining({ updateSettings: expect.any(Function) }),
       'session-1',
       'desktop',
-      { projectMemoryEnabled: true, agentsMdEnabled: true },
+      { projectMemoryEnabled: true },
       { requiresVision: true }
     )
   })
@@ -1236,7 +1236,7 @@ describe('file IPC handlers', () => {
     expect(turnExecutionConfig.resolveTrustedTurnExecutionConfig).toHaveBeenCalledWith(
       reopened, expect.objectContaining({ readSession: expect.any(Function) }),
       expect.objectContaining({ updateSettings: expect.any(Function) }),
-      session.id, 'desktop', { projectMemoryEnabled: true, agentsMdEnabled: true }, { requiresVision: true }
+      session.id, 'desktop', { projectMemoryEnabled: true }, { requiresVision: true }
     )
     expect(getActualDbConnection(reopened).prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get(reused.id))
       .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
