@@ -14,6 +14,8 @@
 | 2026-10-11 | `9c34f7a4` | Wiki 迁移失败上浮 + 迁移 UI 对齐设计系统 | — | 失败可见 |
 | 2026-10-13 | `86d613cf` | 列表停止按钮提示按 accepted 分支说真话（Phase 3） | `chat-turn-cancel-tool-conduction-fix-plan.md`（已归档） | 提示与实际取消语义一致 |
 | 2026-10-13 | `6fe55d43` | 清理 7 个零引用死文件及孤儿 i18n key | `main-dead-code-cleanup-audit-and-plan-2026-10-14.md` | 渲染层死代码收敛 |
+| 2026-10-14 | — | 核验更正：`chat-markdown-math-delimiter-misfire-diagnosis-and-improvement-plan.md` 已实现 | 同上（已归档） | 证据：`src/shared/markdownMathNormalize.ts` + `ChatMarkdown` 集成 |
+| 2026-10-14 | — | 核验更正：`scheduled-task-workdir-model-development-plan.md` 已实现 | 同上（已归档） | 证据：`automation-write-deny` 策略（`src/shared/policy/defaultRules.ts`）+ butler `modelOverride` / `workDirProfileId` |
 
 ## 存疑
 

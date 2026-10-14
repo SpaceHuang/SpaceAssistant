@@ -6,7 +6,10 @@
 
 | 日期 | 提交 | 变更 | 出处 | 影响与结果 |
 | --- | --- | --- | --- | --- |
-| 2026-09-17 | — | 审批回答者最短路径 v2 修订（吸收评审 B1/B2 与 N1–N8） | `in-flight/approval-agent-shortest-path-plan.md` | 待评审 |
+| 2026-09-17 | — | 审批回答者最短路径 v2 修订（吸收评审 B1/B2 与 N1–N8） | `approval-agent-shortest-path-plan.md`（已归档） | 原判「在途」；核验更正：分支已合入（`c725896e`，2026-09-18） |
+| 2026-09-18 | `6db05ab0` | 确认 Skill v2：双维裁决 + 防误拒 + 注入举证 + 解析安全默认 | `security-approval-skill-v2.1-improvement-plan.md`（已归档） | `parseApprovalVerdict` 见 `src/shared/confirmation/approvalVerdict.ts` |
+| 2026-09-25 | `b9b68d74` | security-approval-skill-v2.1 分支合入 | 同上 | 原判「在途」，核验更正为已实现 |
+| 2026-10-14 | — | 核验更正：`security-approval-experience-improvement-plan.md` 已实现 | 同上（已归档） | 证据：`CallAdmissionGate` 见 `electron/runtime/callAdmissionGate.ts` |
 | 2026-09-19 | `c96acc2e` | ask 档位统一实施并闭环（Q1–Q11 决策落地） | `desktop-ask-rule-tier-unification-plan.md`（已归档） | 档位语义统一，仅 desktop lane |
 | 2026-09-20 | — | 脚本安全 parser 升级 P0–P3 全部 29 项任务完成 | `script-security-parser-treesitter-upgrade-plan.md`（已归档） | 解析器口径收敛 |
 | 2026-09-24 | — | 桌面 fail-open 到用户（§10 第 3–6 步全部落地） | `desktop-fail-open-to-user-plan.md`（已归档） | 服务故障时的降级策略定型 |

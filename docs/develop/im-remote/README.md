@@ -19,10 +19,10 @@
 ## 在途（in-flight）
 
 - [2026-10-11-im-security-review-improvement-development-plan.md](./in-flight/2026-10-11-im-security-review-improvement-development-plan.md) —— 实施方案草案：本文的新类型/字段/模块名是建议设计，**当前仓库尚未实现**（核验：`rg -n 'imPolicy|imSecurityPolicy' electron/` 无匹配；但依赖能力已落地：`1d4c9bcd` intent tracking、`8f1a21fc` 远程确认渠道归属、`71efa790` durable async IM approvals、`36edb110` Track isolation）
-- [remote-im-async-interaction-design.md](./in-flight/remote-im-async-interaction-design.md) —— v0.2 讨论稿
-- [wechat-confirmation-prompt-delivery-failure-fix-plan-2026-10-10.md](./in-flight/wechat-confirmation-prompt-delivery-failure-fix-plan-2026-10-10.md) —— 待实施
 
-## 归档（3 件）
+> **2026-10-14 核验更正（原判 C 有误）**：`remote-im-async-interaction-design.md`（`8148f307` 分支合入）、`wechat-confirmation-prompt-delivery-failure-fix-plan-2026-10-10.md`（`CONFIRMATION_UNAVAILABLE` 见 `electron/remote/imRemoteAgent.test.ts`）经核验**已实现**，已移入 `../archive/im-remote/`。
+
+## 归档（5 件）
 
 见 [`../archive/im-remote/`](../archive/im-remote/)：`2026-10-11-remote-im-intent-track-development-plan.md`（方案已落地：`1d4c9bcd` 等）、`remote-private-chat-security-optimization-development-test-plan.md`、`remote-private-chat-security-optimization-release-notes.md`。
 

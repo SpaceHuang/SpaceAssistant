@@ -137,16 +137,15 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 
 ## 在途（in-flight）
 
-- [agent-loop-single-path-refactor-plan.md](./in-flight/agent-loop-single-path-refactor-plan.md) —— v2 复审意见已吸收，待下一轮复审后实施
-- [context-injection-refactor-plan.md](./in-flight/context-injection-refactor-plan.md) —— 待复审
-- [tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md](./in-flight/tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md) —— v3 待复审
-- [runtime-admission-sdk-reuse-plan.md](./in-flight/runtime-admission-sdk-reuse-plan.md) —— v1.1 待评审
-- [butler-agent-shortest-path-plan.md](./in-flight/butler-agent-shortest-path-plan.md) —— v3 待评审
-- [b344321-current-code-refactor-plan.md](./in-flight/b344321-current-code-refactor-plan.md) —— 无状态行
+- [agent-loop-single-path-refactor-plan.md](./in-flight/agent-loop-single-path-refactor-plan.md) —— v2 复审意见已吸收，待下一轮复审后实施；核验：承诺的 `filterBuiltinToolsForApi` 已在 `electron/effectiveTools.ts`，属**实施中（进度以代码为准）**
+- [tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md](./in-flight/tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md) —— v3 待复审；核验：承诺符号 `NOT_ATTEMPTED_AFTER_SIBLING_STOP` **未命中**，需细核
+
+> **2026-10-14 核验更正（原判 C 有误）**：以下四篇经 §3.0 三步核验确认**已实现并合入 main**，已移入 `../archive/agent-sdk/`：
+> `context-injection-refactor-plan.md`（`9dfc46d1`、`91e939ef`、`d96bd70b`、`b5eaada1`；`promptAssembly` / `contextMeter` / `compaction_*` 均在代码）、`runtime-admission-sdk-reuse-plan.md`（`22ea8d88`）、`butler-agent-shortest-path-plan.md`（`4b6f81c4`）、`b344321-current-code-refactor-plan.md`（`7a9b5c05`）。
 
 ## 归档
 
-已完成迭代原件见 [`../archive/agent-sdk/`](../archive/agent-sdk/)（12 件），含生命周期改进与契约矩阵、上下文 token 成本优化、`agent-core-contract-path-refactor-plan.md`（旧称，文件名保留）、驱动权限重构、失败 turn 续跑、工具错误恢复与 turn 连续性、`batch3-p0-evidence-audit.md`。映射见 [`../archive/INDEX.md`](../archive/INDEX.md)。
+已完成迭代原件见 [`../archive/agent-sdk/`](../archive/agent-sdk/)（16 件），含生命周期改进与契约矩阵、上下文 token 成本优化、`agent-core-contract-path-refactor-plan.md`（旧称，文件名保留）、驱动权限重构、失败 turn 续跑、工具错误恢复与 turn 连续性、`batch3-p0-evidence-audit.md`。映射见 [`../archive/INDEX.md`](../archive/INDEX.md)。
 
 ## 迭代历史
 

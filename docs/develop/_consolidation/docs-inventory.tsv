@@ -20,12 +20,12 @@ docs/develop/agent-sdk/runtime/09-assembly.md	agent-sdk	A	原地保留
 docs/develop/agent-sdk/runtime/10-implementation-plan.md	agent-sdk	A	原地保留（计划稿）
 docs/develop/agent-sdk/runtime/README.md	agent-sdk	A	原地保留（更新基准行）
 docs/develop/agent-thinking-token-exhaustion-recovery-design.md	agent-sdk	DELETE	0 字节空文件（§8-5）
-docs/develop/b344321-current-code-refactor-plan.md	agent-sdk	C	无状态行，重构计划未收口
+docs/develop/b344321-current-code-refactor-plan.md	agent-sdk	B	核验更正：已落地（7a9b5c05 feat(remote): 落地 b344321 重构…）
 docs/develop/batch3-p0-evidence-audit.md	agent-sdk	B	证据审计（过程产物）
-docs/develop/butler-agent-shortest-path-plan.md	agent-sdk	C	v3 待评审
+docs/develop/butler-agent-shortest-path-plan.md	agent-sdk	B	核验更正：分支已合入（4b6f81c4）
 docs/develop/butler-p0-tray-decision.md	agent-sdk	B	决策记录
 docs/develop/chat-turn-cancel-tool-conduction-fix-plan.md	agent-sdk	B	自述已实施（2026-10-13）
-docs/develop/context-injection-refactor-plan.md	agent-sdk	C	待复审
+docs/develop/context-injection-refactor-plan.md	agent-sdk	B	核验更正：已全量实现并合入（9dfc46d1、91e939ef、d96bd70b、b5eaada1）
 docs/develop/driver-authority-refactor-plan.md	agent-sdk	B	偏差表已收口
 docs/develop/failed-turn-continuation-experience-plan.md	agent-sdk	B	实现完成（TDD）
 docs/develop/interface/README.md	agent-sdk	A	并入 agent-sdk，更新基准行为 17236274
@@ -38,7 +38,7 @@ docs/develop/interface/runtime.md	agent-sdk	A	并入 agent-sdk/
 docs/develop/interface/safety-approval.md	agent-sdk	A	并入 agent-sdk/
 docs/develop/interface/tool-result-contract.md	agent-sdk	A	并入 agent-sdk/
 docs/develop/interface/turn-loop.md	agent-sdk	A	并入 agent-sdk/
-docs/develop/runtime-admission-sdk-reuse-plan.md	agent-sdk	C	待评审（v1.1）
+docs/develop/runtime-admission-sdk-reuse-plan.md	agent-sdk	B	核验更正：分支已合入（22ea8d88）
 docs/develop/tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md	agent-sdk	C	v3 待复审
 docs/develop/tool-error-recovery-and-turn-continuity-plan.md	agent-sdk	B	阶段 A/B 已落地
 docs/develop/architect/README.md	architect	A	原地保留（更新基准行）
@@ -57,7 +57,7 @@ docs/develop/architect/rewrite-vs-refactor-cost-assessment.md	architect	A	决策
 docs/develop/architect/three-products-architecture-benchmark-summary.md	architect	A	外部对照
 docs/develop/2026-09-30-queued-task-bar-implementation-plan.md	desktop-ui	B	队列任务栏已实现（8ff4cf06 等）
 docs/develop/chat-abort-latency-verification-and-fix-plan.md	desktop-ui	B	评审修订完成；修复已落地
-docs/develop/chat-markdown-math-delimiter-misfire-diagnosis-and-improvement-plan.md	desktop-ui	C	待评审
+docs/develop/chat-markdown-math-delimiter-misfire-diagnosis-and-improvement-plan.md	desktop-ui	B	核验更正：已实现（src/shared/markdownMathNormalize.ts + ChatMarkdown 集成）
 docs/develop/chat-message-list-batch1-remeasure-gate.md	desktop-ui	B	复测门禁（过程产物）
 docs/develop/chat-message-list-batch1-remeasure-results.json	desktop-ui	B	复测结果
 docs/develop/chat-message-list-batch2-remeasure-gate.md	desktop-ui	B	复测门禁
@@ -76,7 +76,7 @@ docs/develop/explicit-output-directory-candidate-technical-design.md	desktop-ui	
 docs/develop/multi-session-parallel-execution.md	desktop-ui	B	阶段 1-3 已落地
 docs/develop/multi-workdir-technical-design.md	desktop-ui	A	技术设计，现役
 docs/develop/plan_mode_optimization_design.md	desktop-ui	D	已废弃（首尾状态矛盾，按代码判定）
-docs/develop/scheduled-task-workdir-model-development-plan.md	desktop-ui	C	无状态行，模型方案在途
+docs/develop/scheduled-task-workdir-model-development-plan.md	desktop-ui	B	核验更正：已实现（automation-write-deny 策略 + butler modelOverride/workDirProfileId）
 docs/develop/会话新建删除卡顿诊断与修改计划.md	desktop-ui	B	诊断已完成
 docs/develop/渲染进程卡顿优化方案.md	desktop-ui	B	v3.25，优化已落地
 docs/develop/2026-10-11-im-security-review-improvement-development-plan.md	im-remote	C	实施方案草案（依赖已就绪，主方案未实施）
@@ -86,11 +86,11 @@ docs/develop/feishu-integration-phase1-design.md	im-remote	A	设计，现役
 docs/develop/feishu-integration-phase2-design.md	im-remote	A	设计，现役
 docs/develop/feishu-integration-phase3-design.md	im-remote	A	设计，现役
 docs/develop/im-architecture-refactor.md	im-remote	A	架构设计 v2.1，现役
-docs/develop/remote-im-async-interaction-design.md	im-remote	C	讨论稿 v0.2
+docs/develop/remote-im-async-interaction-design.md	im-remote	B	核验更正：分支已合入（8148f307 Merge branch 'codex/remote-im-async-interaction-tdd'）
 docs/develop/remote-im-intent-track-operations-runbook.md	im-remote	A	运维手册，现役
 docs/develop/remote-private-chat-security-optimization-development-test-plan.md	im-remote	B	测试计划（过程产物）
 docs/develop/remote-private-chat-security-optimization-release-notes.md	im-remote	B	发布说明
-docs/develop/wechat-confirmation-prompt-delivery-failure-fix-plan-2026-10-10.md	im-remote	C	待实施
+docs/develop/wechat-confirmation-prompt-delivery-failure-fix-plan-2026-10-10.md	im-remote	B	核验更正：已实现（CONFIRMATION_UNAVAILABLE 出现在 electron/remote/imRemoteAgent.test.ts）
 docs/develop/wechat-integration-phase1-design.md	im-remote	A	设计，现役
 docs/develop/automated-test-suite-cleanup-audit.md	platform-eng	B	测试套件清理审计
 docs/develop/dependency-upgrade-plan-2026-08.md	platform-eng	B	依赖升级计划（已执行）
@@ -105,15 +105,15 @@ docs/develop/2026-10-01-cloud-main-feature-recovery-source-inventory.tsv	platfor
 docs/develop/2026-10-01-cloud-main-recovery-source-commit-ledger.tsv	platform-eng	B	同上
 docs/develop/2026-10-01-main-divergence-hosted-runtime-integration-execution-record.md	platform-eng	B	分叉接入执行记录（过程产物）
 docs/develop/2026-10-01-main-divergence-hosted-runtime-integration-plan.md	platform-eng	B	分叉接入计划（已合入）
-docs/develop/approval-agent-shortest-path-plan.md	safety-approval	C	v2 修订，未收口
+docs/develop/approval-agent-shortest-path-plan.md	safety-approval	B	核验更正：分支已合入（c725896e）
 docs/develop/desktop-ask-rule-tier-unification-plan.md	safety-approval	B	已实施并闭环（c96acc2e）
 docs/develop/desktop-auto-approval-plan.md	safety-approval	B	已实施完成
 docs/develop/desktop-fail-open-to-user-plan.md	safety-approval	B	已实现（§10 第 3–6 步）
 docs/develop/run-shell-agent-safe-boundary-hardening-plan.md	safety-approval	C	加固计划在途
 docs/develop/script-security-parser-treesitter-upgrade-plan.md	safety-approval	B	P0~P3 全部完成
 docs/develop/script-security-parser-upgrade-golden-review.md	safety-approval	B	金标准评审（过程产物）
-docs/develop/security-approval-experience-improvement-plan.md	safety-approval	C	待复评
-docs/develop/security-approval-skill-v2.1-improvement-plan.md	safety-approval	C	待评审
+docs/develop/security-approval-experience-improvement-plan.md	safety-approval	B	核验更正：已实现（CallAdmissionGate 见 electron/runtime/callAdmissionGate.ts）
+docs/develop/security-approval-skill-v2.1-improvement-plan.md	safety-approval	B	核验更正：已实现（b9b68d74 合入 + 6db05ab0 Skill v2 双维裁决/parseApprovalVerdict）
 docs/develop/tool-confirmation-framework-implementation-plan.md	safety-approval	B	自述可进入 P0；框架已落地
 docs/develop/session-ced59b41-acceptance-evidence.md	storage-session	B	验收证据
 docs/develop/session-ced59b41-g3-manual-evidence.md	storage-session	B	人工证据
@@ -211,9 +211,9 @@ docs/develop/web-browser-tools-design.md	tools-mcp	A	设计 v1.1，现役
 docs/develop/web-browser-tools-test-plan.md	tools-mcp	B	测试计划
 docs/requirement/agent-runtime-admission-policy-requirement.md	agent-sdk	A	已决策，口径现役
 docs/requirement/agent-token-usage-analytics-requirement.md	agent-sdk	B	v1.19，已上线；口径进需求基线
-docs/requirement/agent-token-usage-stats-step-accounting-consistency-plan.md	agent-sdk	C	方案待评审，未实施
-docs/requirement/agent-toolkit-capability-gateway-requirement.md	agent-sdk	C	需求提案 v2，未定
-docs/requirement/butler-task-workdir-pinning-plan.md	agent-sdk	C	方案待评审，未实施
+docs/requirement/agent-token-usage-stats-step-accounting-consistency-plan.md	agent-sdk	B	核验更正：已实现（toolSkippedCount 见 electron/usageStats 与 database/operations.ts）
+docs/requirement/agent-toolkit-capability-gateway-requirement.md	agent-sdk	B	核验更正：分支已合入（5e5bbd61 + 45d407e5 v2 评审修复）
+docs/requirement/butler-task-workdir-pinning-plan.md	agent-sdk	B	核验更正：已实现（workDirProfileId / modelOverride 见 electron/butler/butlerInvoker.ts）
 docs/requirement/llm-model-baseline-integration-requirement.md	agent-sdk	B	口径进需求基线
 docs/requirement/llm-multi-service-model-config-requirement.md	agent-sdk	B	口径进需求基线
 docs/requirement/llm-service-model-fetch-requirement.md	agent-sdk	B	口径进需求基线
@@ -253,7 +253,7 @@ docs/requirement/plan-resume-button-state-requirement.md	desktop-ui	D	已废弃�
 docs/requirement/product_requirement.md	desktop-ui	A	产品需求总纲，现役
 docs/requirement/queued-task-bar-requirement.md	desktop-ui	B	决策已定并实施
 docs/requirement/referenced-files-requirement.md	desktop-ui	B	口径进需求基线
-docs/requirement/scheduled-task-output-directory-model-requirements.md	desktop-ui	C	需求说明，未实施
+docs/requirement/scheduled-task-output-directory-model-requirements.md	desktop-ui	B	核验更正：已实现（automation_tasks.model_override / modelOverride 见 butler 相关代码）
 docs/requirement/search-results-display-requirement.md	desktop-ui	B	口径进需求基线
 docs/requirement/settings-requirement.md	desktop-ui	B	口径进需求基线
 docs/requirement/settings-ui-refinement-requirement.md	desktop-ui	B	口径进需求基线
@@ -267,7 +267,7 @@ docs/requirement/feishu-cli-logging-requirement.md	im-remote	B	口径进需求�
 docs/requirement/feishu-integration-requirement.md	im-remote	B	口径进需求基线
 docs/requirement/feishu-remote-status-sidebar-requirement.md	im-remote	B	口径进需求基线
 docs/requirement/remote-im-async-approval-security-requirement.md	im-remote	B	口径进需求基线
-docs/requirement/remote-im-intent-track-requirement-draft.md	im-remote	C	初稿 v0.3，待讨论
+docs/requirement/remote-im-intent-track-requirement-draft.md	im-remote	B	核验更正：已实现（src/shared/remoteTrack.ts + typeTests/remoteTrack.typecheck.ts；1d4c9bcd/36edb110）
 docs/requirement/remote-im-model-and-thinking-settings-requirement.md	im-remote	B	口径进需求基线
 docs/requirement/remote-private-chat-security-optimization-requirement.md	im-remote	B	口径进需求基线
 docs/requirement/remote-progress-activity-sync-requirement.md	im-remote	B	口径进需求基线

@@ -17,14 +17,13 @@
 
 ## 在途（in-flight）
 
-- [approval-agent-shortest-path-plan.md](./in-flight/approval-agent-shortest-path-plan.md) —— v2 修订
-- [security-approval-experience-improvement-plan.md](./in-flight/security-approval-experience-improvement-plan.md) —— 待复评
-- [security-approval-skill-v2.1-improvement-plan.md](./in-flight/security-approval-skill-v2.1-improvement-plan.md) —— 待评审
-- [run-shell-agent-safe-boundary-hardening-plan.md](./in-flight/run-shell-agent-safe-boundary-hardening-plan.md) —— 加固计划在途
+- [run-shell-agent-safe-boundary-hardening-plan.md](./in-flight/run-shell-agent-safe-boundary-hardening-plan.md) —— 加固计划在途；核验：承诺符号 `redactionFailed` **未命中**，需细核
+
+> **2026-10-14 核验更正（原判 C 有误）**：`approval-agent-shortest-path-plan.md`（`c725896e` 分支合入）、`security-approval-skill-v2.1-improvement-plan.md`（`b9b68d74` 合入 + `6db05ab0` Skill v2 双维裁决）、`security-approval-experience-improvement-plan.md`（`CallAdmissionGate` 见 `electron/runtime/callAdmissionGate.ts`）经核验**已实现**，已移入 `../archive/safety-approval/`。
 
 ## 归档（已完成迭代）
 
-见 [`../archive/safety-approval/`](../archive/safety-approval/)（6 件）：
+见 [`../archive/safety-approval/`](../archive/safety-approval/)（9 件）：
 
 | 文档 | 结论 |
 | --- | --- |

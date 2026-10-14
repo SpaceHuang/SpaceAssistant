@@ -15,11 +15,11 @@
 
 ## 在途（in-flight）
 
-- [scheduled-task-workdir-model-development-plan.md](./in-flight/scheduled-task-workdir-model-development-plan.md) —— 定时任务独立工作目录与模型配置；无状态行
-- [streaming-ui-performance-analysis.md](./in-flight/streaming-ui-performance-analysis.md) —— 流式生成界面卡顿分析（v1.0「分析完成，待实施」）
-- [chat-markdown-math-delimiter-misfire-diagnosis-and-improvement-plan.md](./in-flight/chat-markdown-math-delimiter-misfire-diagnosis-and-improvement-plan.md) —— 待评审
+- [streaming-ui-performance-analysis.md](./in-flight/streaming-ui-performance-analysis.md) —— 流式生成界面卡顿分析（v1.0「分析完成，待实施」）；核验：其提到的 `chatRunnerService` 已在 `src/renderer/services/`，但优化项是否全部落地**需细核**
 
-## 归档（18 件）
+> **2026-10-14 核验更正（原判 C 有误）**：`chat-markdown-math-delimiter-misfire-diagnosis-and-improvement-plan.md`（`src/shared/markdownMathNormalize.ts` + `ChatMarkdown` 集成）、`scheduled-task-workdir-model-development-plan.md`（`automation-write-deny` 策略 + butler `modelOverride`/`workDirProfileId`）经核验**已实现**，已移入 `../archive/desktop-ui/`。
+
+## 归档（20 件）
 
 见 [`../archive/desktop-ui/`](../archive/desktop-ui/)：
 

@@ -10,6 +10,8 @@
 | 2026-10-09 | `71efa790` | 落地 durable async IM approvals | `remote-im-async-approval-security-requirement.md`（已归档） | 远程审批不因进程重启丢失 |
 | 2026-10-10 | `09e74809` | 关闭异步审批恢复缺口 | 同上 | 恢复路径补齐 |
 | 2026-10-10 | `b042897e` | 释放唤醒重试派发器 | — | 资源泄漏修复 |
+| 2026-10-10 | `8148f307` | 远程 IM 异步交互分支合入（`codex/remote-im-async-interaction-tdd`） | `remote-im-async-interaction-design.md`（已归档） | 原判「在途（讨论稿）」，核验更正为已实现；`queueScope` / `turnCoordinator` 已在 `src/shared/` |
+| 2026-10-14 | — | 核验更正：`wechat-confirmation-prompt-delivery-failure-fix-plan-2026-10-10.md` 已实现 | 同上（已归档） | 证据：`CONFIRMATION_UNAVAILABLE` 见 `electron/remote/imRemoteAgent.test.ts` |
 | 2026-10-12 | `708270a9` | 微信保留确认消息 ID 精度 | — | ID 不再被截断 |
 | 2026-10-12 | `1d4c9bcd` | 新增 IM 会话意图追踪（intent tracking） | `2026-10-11-remote-im-intent-track-development-plan.md`（已归档） | 意图归属与 Track 可查 |
 | 2026-10-13 | `36edb110` | 关闭 Track 隔离与消息 ID 缺口 | 同上 | 隔离边界收口 |

@@ -61,6 +61,33 @@ baseline-check-<日期>.md   # §5.2 主题核验记录
 
 规则化判定对「头部无状态行」「状态写在正文中段」的文档不敏感，可能判成偏向 A/B 的保守值。处置：逐主题复核时以 `baseline-check-<日期>.md` 的断言表为准；发现误判即改 `docs-inventory.tsv` 并记入该主题 `history.md` 的「存疑」小节。
 
+### 3.5 核验教训（2026-10-14 更正，必读）
+
+**首轮判定把 16 篇「文档自述待评审/待实施」的文档误判为 C（草稿箱），经代码核验其实已实现并合入 main。** 根因：C 的判定过度依赖文档头部状态行，未逐篇跑 §3.0 三步核验——这正是计划 §8-① 明确禁止的（「自述状态滞后的不进草稿箱，直接按 A/B 处理」）。
+
+更正清单（原判 C → 实为 B，均已 `git mv` 进归档）：
+
+| 文档 | 核验证据 |
+| --- | --- |
+| `context-injection-refactor-plan.md` | `9dfc46d1`（合入）、`91e939ef`/`d96bd70b`/`b5eaada1`；`promptAssembly`、`contextMeter`、`compaction_*` 均在代码 |
+| `runtime-admission-sdk-reuse-plan.md` | `22ea8d88` 分支合入 |
+| `butler-agent-shortest-path-plan.md` | `4b6f81c4` 分支合入 |
+| `b344321-current-code-refactor-plan.md` | `7a9b5c05` |
+| `remote-im-async-interaction-design.md` | `8148f307` 分支合入 |
+| `wechat-confirmation-prompt-delivery-failure-fix-plan-2026-10-10.md` | `CONFIRMATION_UNAVAILABLE` 见 `electron/remote/imRemoteAgent.test.ts` |
+| `approval-agent-shortest-path-plan.md` | `c725896e` 分支合入 |
+| `security-approval-skill-v2.1-improvement-plan.md` | `b9b68d74` + `6db05ab0` |
+| `security-approval-experience-improvement-plan.md` | `CallAdmissionGate` 见 `electron/runtime/callAdmissionGate.ts` |
+| `chat-markdown-math-delimiter-misfire-diagnosis-and-improvement-plan.md` | `src/shared/markdownMathNormalize.ts` |
+| `scheduled-task-workdir-model-development-plan.md` | `automation-write-deny` 策略 + butler `modelOverride`/`workDirProfileId` |
+| `agent-token-usage-stats-step-accounting-consistency-plan.md` | `toolSkippedCount` 见 `electron/usageStats/` |
+| `agent-toolkit-capability-gateway-requirement.md` | `5e5bbd61` + `45d407e5` |
+| `butler-task-workdir-pinning-plan.md` | `workDirProfileId` / `modelOverride` 见 `butlerInvoker.ts` |
+| `scheduled-task-output-directory-model-requirements.md` | `automation_tasks.model_override` |
+| `remote-im-intent-track-requirement-draft.md` | `src/shared/remoteTrack.ts`；`1d4c9bcd`、`36edb110` |
+
+**写入流程的硬规则**：C 类**不得**仅凭文档自述判定；每篇至少要有一条「专属符号命中」或「分支合入提交」的正向证据才可进 `in-flight/`。剩余 in-flight 已按此复核（保留项均标注「实施中」或「需细核」）。
+
 ## 4. 模板
 
 ### 4.1 现状文档（develop 侧）
