@@ -15,6 +15,7 @@ const SOURCE_ROOTS = ['electron', 'src', 'packages']
 const WHITELIST_FILES = new Set([
   'src/shared/wikiConstants.ts', // 常量定义处（唯一定义点）
   'electron/wiki/wikiTemplates.ts', // 模板正文（天然含词汇）
+  'electron/skills/bundled/llmWikiSkill.ts', // 内置 llm-wiki skill 正文（教学词汇路径约定，天然含词汇）
   'src/shared/domainTypes.ts', // DEFAULT_WIKI_CONFIG 默认值 / PRODUCT_BUILTIN_SKILL_NAMES 数据
   'src/shared/wikiImportPaths.ts' // 默认参数等数据值（与配置缺省一致的常量数据）
 ])
