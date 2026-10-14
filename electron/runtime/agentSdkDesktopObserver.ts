@@ -500,6 +500,8 @@ export function createAgentSdkDesktopObserver(input: {
         return
       }
       const requestContext = requestContexts.get(response.modelTurn)
+      const committedToolCalls = response.message.role === 'assistant' ? response.message.toolCalls ?? [] : []
+      const committedToolCallsById = new Map(committedToolCalls.map((call) => [call.id, call]))
       if (requestContext) {
         const prepared = responseContextProjections.get(response.modelTurn) ?? (() => {
           prepareResponseContextProjection(response)
@@ -536,6 +538,8 @@ export function createAgentSdkDesktopObserver(input: {
         }
         else if (chunk.type === 'tool-call') {
           closeActiveBlock()
+          const committedCall = committedToolCallsById.get(chunk.toolCallId)
+          if (!committedCall) throw new Error(`missing committed input for tool call ${chunk.toolCallId}`)
           const index = nextBlockIndex++
           const compatName = toolIdToOpenAiCompatibleApiToolName(normalizeExternalToolName(chunk.toolName).canonicalName)
           pushDelta({ type: 'block_start', index, blockType: 'tool_use', id: chunk.toolCallId, name: compatName })
@@ -543,7 +547,9 @@ export function createAgentSdkDesktopObserver(input: {
           pushDelta({ type: 'tool_call_delta', index, partialJson: '' })
           pushDelta({ type: 'block_end', index })
           const isToolkitCall = compatName === 'toolkit_call' || compatName === 'toolkit.call'
-          const args = structuredClone(chunk.input)
+          // Persist only the same committed snapshot consumed by SDK history, preparation and review.
+          // Stream chunks are retained for presentation order; their raw inputs may predate normalization.
+          const args = structuredClone(committedCall.input)
           toolCallEvents.push({ type: 'tool_call', payload: { turnId: input.turnId, stepId: stepId(response.modelTurn), toolUseId: chunk.toolCallId, name: compatName, args: isToolkitCall ? sanitizeCapabilityParamsForDisplay(args) : args } })
         }
         else if (chunk.type === 'usage') pushDelta({ type: 'usage', usage: { input_tokens: chunk.inputTokens, output_tokens: chunk.outputTokens, ...(chunk.cacheReadInputTokens !== undefined ? { cache_read_input_tokens: chunk.cacheReadInputTokens } : {}), ...(chunk.cacheCreationInputTokens !== undefined ? { cache_creation_input_tokens: chunk.cacheCreationInputTokens } : {}) } })
@@ -560,7 +566,6 @@ export function createAgentSdkDesktopObserver(input: {
         if (streamedText !== committedText && committedText) emitFact({ type: 'content-reconciled', text: committedText })
         if (streamedThinking !== committedThinking && committedThinking) emitFact({ type: 'thinking-reconciled', text: committedThinking })
       }
-      const committedToolCalls = response.message.role === 'assistant' ? response.message.toolCalls ?? [] : []
       for (const call of committedToolCalls) {
         proposedToolCallIds.add(call.id)
         toolCallStepIds.set(call.id, stepId(response.modelTurn))

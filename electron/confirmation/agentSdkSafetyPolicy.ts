@@ -104,6 +104,12 @@ export function createAgentSdkSafetyPolicy(input: {
             kind: 'ask', confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId,
             context: {
               toolName: gateArgs.toolName,
+              ...(gateArgs.toolName === 'run_shell' && typeof gateArgs.toolInput.justification === 'string'
+                ? { modelJustification: gateArgs.toolInput.justification }
+                : {}),
+              ...(gateArgs.toolName === 'run_shell' && gateArgs.toolInput._justificationTruncated === true
+                ? { modelJustificationTruncated: true }
+                : {}),
               ...(gateArgs.lane ? { lane: gateArgs.lane } : {}),
               ...(args.currentPageUrl ? { currentPageUrl: args.currentPageUrl } : {}),
               ...(args.dangerAssessment ? { dangerAssessment: args.dangerAssessment } : {}),

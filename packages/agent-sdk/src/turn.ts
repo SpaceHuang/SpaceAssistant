@@ -9,6 +9,7 @@ import { createContextRegistrar, createInvocationContextPort, type ContextFrame,
 import { ResourceLockRegistry } from './resourceLock'
 import { CapacityLedger, type CapacityReservation } from './capacity'
 import { Semaphore } from './runtime/semaphore'
+import { normalizeRunShellJustification } from './runShellJustification'
 
 export type AgentTurnPorts = Readonly<{
   registry: ModelProviderRegistry
@@ -1275,14 +1276,17 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     }
     if (!collected.usage) throw new InvalidModelStreamError('non-cancelled model attempt completed without usage')
     throwIfAborted(input.request.signal)
-    const toolCalls = collected.chunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'tool-call' }> => chunk.type === 'tool-call')
+    const acceptedChunks = collected.chunks.map((chunk) => !initialResponse && chunk.type === 'tool-call' && chunk.toolName === 'run_shell'
+      ? { ...chunk, input: normalizeRunShellJustification(chunk.input) }
+      : chunk)
+    const toolCalls = acceptedChunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'tool-call' }> => chunk.type === 'tool-call')
     inputTokens += collected.usage.inputTokens
     outputTokens += collected.usage.outputTokens
     cacheReadInputTokens += collected.usage.cacheReadInputTokens ?? 0
     cacheCreationInputTokens += collected.usage.cacheCreationInputTokens ?? 0
-    const textDelta = collected.chunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'text-delta' }> => chunk.type === 'text-delta').map((chunk) => chunk.text).join('')
+    const textDelta = acceptedChunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'text-delta' }> => chunk.type === 'text-delta').map((chunk) => chunk.text).join('')
     const assistantContent: CanonicalContentBlock[] = []
-    for (const chunk of collected.chunks) {
+    for (const chunk of acceptedChunks) {
       if (chunk.type === 'text-delta') {
         const previous = assistantContent.at(-1)
         if (previous?.type === 'text') assistantContent[assistantContent.length - 1] = { type: 'text', text: previous.text + chunk.text }

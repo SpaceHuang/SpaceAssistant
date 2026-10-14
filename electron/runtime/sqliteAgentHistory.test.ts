@@ -46,6 +46,26 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it('persists and restores the exact bounded run_shell justification in the canonical response snapshot', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const input = { command: 'pwd', justification: '核对工作目录', _justificationTruncated: true }
+    await history.appendBatch([{
+      ...event('shell-justification-response', 1),
+      kind: 'model-response-committed',
+      payload: {
+        modelTurn: 1,
+        finishReason: 'tool-calls',
+        usage: { type: 'usage', inputTokens: 1, outputTokens: 1 },
+        message: { role: 'assistant', toolCalls: [{ id: 'shell-call', name: 'run_shell', input }] }
+      }
+    }], 0)
+    await expect(history.read('inv-1')).resolves.toMatchObject({
+      events: [{ kind: 'model-response-committed', payload: { message: { toolCalls: [{ id: 'shell-call', input }] } } }]
+    })
+    conn.close()
+  })
+
   it('commits a real SDK parked terminal and transcript participant atomically to SQLite', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'sqlite-sdk-parked-transcript', model: 'test-model' })

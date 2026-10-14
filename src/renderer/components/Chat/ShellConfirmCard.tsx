@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
+import { runShellJustificationForDisplay } from '../../../shared/runShellJustification'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { MemoryTierSelect } from './MemoryTierSelect'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -27,6 +28,8 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
   const command = typeof record.input.command === 'string' ? record.input.command : ''
   const description = typeof record.input.description === 'string' ? record.input.description.trim() : ''
   const timeout = typeof record.input.timeout === 'number' ? record.input.timeout : undefined
+  const justification = typeof record.input.justification === 'string' ? runShellJustificationForDisplay(record.input.justification.trim()) : ''
+  const justificationTruncated = record.input._justificationTruncated === true
   const hints = record.shellSecurityHints
   const requiresRiskAck = hints?.requiresRiskAck === true
   const securityWarning = hints?.securityWarning?.trim()
@@ -107,6 +110,13 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
                 </ul>
               </div>
             </div>
+          ) : null}
+          {justification ? (
+            <section className="shell-confirm-card__justification" aria-label={t('confirm.shell.justification')}>
+              <strong>{t('confirm.shell.justification')}</strong>
+              {justificationTruncated ? <span> · {t('confirm.shell.justificationTruncated')}</span> : null}
+              <div style={{ whiteSpace: 'pre-wrap' }}>{justification}</div>
+            </section>
           ) : null}
           <pre className="write-confirm-card__subject-value write-confirm-card__subject-value--code shell-confirm-card__command">
             {commandLines.map((line, i) => (

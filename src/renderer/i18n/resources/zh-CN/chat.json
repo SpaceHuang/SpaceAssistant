@@ -227,6 +227,8 @@
       "defaultTitle": "Shell 命令",
       "executeTitle": "执行 Shell 命令",
       "highRisk": "高风险",
+      "justification": "调用理由",
+      "justificationTruncated": "内容已截断",
       "pathSecurityWarning": "路径安全警示"
     },
     "script": {

@@ -3472,6 +3472,25 @@
   word-break: break-word;
 }
 
+.shell-confirm-card__justification {
+  margin-block: 12px;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--sa-chat-card-border);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.shell-confirm-card__justification > strong,
+.shell-confirm-card__justification > span {
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+}
+
+.shell-confirm-card__justification > div {
+  margin-block-start: 4px;
+}
+
 .script-confirm-card__code--highlighted {
   position: relative;
 }

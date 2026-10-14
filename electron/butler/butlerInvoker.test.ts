@@ -1074,6 +1074,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         name: 'locked shell deny', schedule: { kind: 'interval', intervalMinutes: 30 },
         prompt: 'do not execute unauthorized shell commands', deliveryPref: 'none'
       })
+      const justification = '核对自动化任务的工作目录，以便生成运行状态摘要。'
       let providerCalls = 0
       mockCreateAnthropicClient.mockReturnValue({
         messages: {
@@ -1083,7 +1084,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
               providerCalls += 1
               return providerCalls === 1
                 ? {
-                    content: [{ type: 'tool_use', id: 'butler-shell-denied', name: 'run_shell', input: { command: `printf denied > '${sentinelPath}'` } }],
+                    content: [{ type: 'tool_use', id: 'butler-shell-denied', name: 'run_shell', input: { command: `printf denied > '${sentinelPath}'`, justification } }],
                     stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 4 }
                   }
                 : {
@@ -1107,6 +1108,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       const history = await new SqliteAgentHistory(getDbConnection(db)).read('req-butler-hosted-shell-deny')
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
         toolCallId: 'butler-shell-denied', reason: 'POLICY_DENY'
+      })
+      expect(history.events.find((event) => event.kind === 'model-response-committed')?.payload).toMatchObject({
+        message: { toolCalls: [{ id: 'butler-shell-denied', input: { command: `printf denied > '${sentinelPath}'`, justification } }] }
       })
       expect(history.events.map((event) => event.kind)).not.toContain('tool-call-started')
       expect(history.events.map((event) => event.kind)).not.toContain('tool-call-finished')

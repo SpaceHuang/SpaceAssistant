@@ -229,8 +229,9 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => undefined })
     expect(resolveConfirmChannel({ ...baseArgs, lane: 'wechat', imChannel: im, buildImPending: buildPending })).toBeInstanceOf(ImRequestChannel)
     const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
-    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', remoteAsyncApprovalEnabled: true, agentChannelFactory: factory })
+    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', toolUseId: 'outer-tool-use', remoteAsyncApprovalEnabled: true, agentChannelFactory: factory })
     expect(factory).toHaveBeenCalledOnce()
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({ toolUseId: 'outer-tool-use' }))
   })
 
   it('IM explicit agent policy is fenced by the independent rollout switch', () => {
