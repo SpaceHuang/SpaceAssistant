@@ -18,7 +18,10 @@
 
 ## 存疑（文档与记录不一致）
 
-- `mcp-timeout-turn-failure-isolation-plan.md` 自述「复评修订版尚未复评」，但 `a01a6d49`/`e6f1c510`（2026-10-14）显示阶段 A–E 已实现并合入 —— **状态滞后，以代码为准**（已在主题 README 标注）。
+- **`mcp-timeout-turn-failure-isolation-plan.md`（已归档）的头部状态被上游剥离了实施记录**（main `88abc9ed`，2026-10-15）：状态由「阶段 A-E 实现完成」改为「复评 v3 提出阻断；修订版尚未复评」，且 **§13「实施进度」整节被删除**。
+  - **实际实现状态以代码为准**：`a01a6d49`（2026-10-14）已落地超时 turn 的执行隔离、`e6f1c510` 已合入 —— 与头部自述相反，属**状态滞后**（已在主题 README 标注）。
+  - **被删的 §13 原文可取回**（含阶段 A–E 完成情况与验证数据：SDK Turn/执行租约 154/154、observer 21/21、Hosted 集成核心 120/120；全量 9604 通过 / 41 失败均属本机沙箱限制）：
+    `git show 88abc9ed^:docs/develop/mcp-timeout-turn-failure-isolation-plan.md`
 
 ## 取证命令
 
