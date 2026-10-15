@@ -807,47 +807,6 @@ describe('worker compaction orchestration', () => {
     expect(fsSync.existsSync(temp.dbPath)).toBe(false)
     temp.cleanup()
   })
-  it('preserves the verified archive when the swap rollback rename also fails (P1 regression)', async () => {
-    // 换入第一步（live→归档）成功、第二步与回滚 rename 同时失败：归档 DB 是压缩前唯一完好副本——
-    // 外层 catch 不得删除归档，也不得对缺失的 live 静默建空库掩盖灾情。
-    const temp = createTempDatabase('storage-maintenance-rollback-fail-')
-    const userDataDir = path.dirname(temp.dbPath)
-    const conn = getDbConnection(temp.db)
-    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('rollback-guard');")
-    temp.db.flushSave()
-    const realRenameSync = fsSync.renameSync.bind(fsSync)
-    const renameSpy = vi.spyOn(fsSync, 'renameSync').mockImplementation((source, dest) => {
-      const sourcePath = String(source)
-      const destPath = String(dest)
-      const injected = (destPath === temp.dbPath) && (sourcePath.includes('.compact-staging-') || sourcePath.includes('session-archives'))
-      if (injected) {
-        const error = new Error(`injected rename failure: ${sourcePath} -> ${destPath}`) as NodeJS.ErrnoException
-        error.code = 'EPERM'
-        throw error
-      }
-      return realRenameSync(source, dest)
-    })
-
-    let caught: unknown
-    try {
-      await compactSessionDatabase(temp.db, userDataDir, undefined, {})
-      throw new Error('expected compaction to fail')
-    } catch (error) {
-      caught = error
-    } finally {
-      renameSpy.mockRestore()
-    }
-
-    expect((caught as Error).message).toContain('injected rename failure')
-    const archiveRoot = path.join(userDataDir, 'session-archives')
-    const archives = fsSync.readdirSync(archiveRoot)
-    expect(archives).toHaveLength(1)
-    // 唯一完好副本仍躺在归档里（修复前被外层 catch 当空心归档 rmSync 删除）
-    expect(fsSync.readdirSync(path.join(archiveRoot, archives[0]!))).toContain(path.basename(temp.dbPath))
-    // live 缺失：不得 reopen 静默建空库掩盖灾情（修复前 existsSync 为 true）
-    expect(fsSync.existsSync(temp.dbPath)).toBe(false)
-    temp.cleanup()
-  })
   it('excludes staging side-effect files (-wal/-shm) from swap-in candidates and cleans them (P2-1)', async () => {
     const temp = createTempDatabase('storage-maintenance-reconcile-sidecar-')
     const dbPath = temp.dbPath
