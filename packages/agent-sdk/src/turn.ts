@@ -244,7 +244,7 @@ type CanonicalToolExecutionResult = {
 }
 export type ToolPreparationStage =
   | Readonly<{ kind: 'initial'; requestMetadata?: Readonly<Record<string, unknown>> }>
-  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }>; requestMetadata?: Readonly<Record<string, unknown>> }>
+  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }>; replanAfterFreshApproval?: true; requestMetadata?: Readonly<Record<string, unknown>> }>
 export type ToolConfirmationResult = Readonly<{
   answerer?: 'user' | 'agent'
   cause?: string
@@ -1905,8 +1905,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           }
           confirmation = { receipt: freshConfirmation.receipt, answerer: freshConfirmation.answerer ?? 'user' }
           try {
+            // The first recheck asked again because the previous approval no longer covered current facts.
+            // Let the host rebuild its prepared plan against this fresh user decision before authorizing it.
             recheckBinding = await input.prepareTool(executionCall, {
-              kind: 'recheck', confirmation,
+              kind: 'recheck', confirmation, replanAfterFreshApproval: true,
               ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {})
             })
           } catch (error) {
@@ -1917,7 +1919,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             await markNotDispatched(tool, reasonCode)
             throw new ToolDeniedError(reasonCode)
           }
-          if (!matchesRecheckBinding(initialBinding, recheckBinding)) {
+          if (!matchesRecheckBinding(initialBinding, recheckBinding, true)) {
             await markNotDispatched(tool, 'STALE_AUTHORIZATION')
             throw new ToolDeniedError('STALE_AUTHORIZATION')
           }
@@ -2405,15 +2407,16 @@ async function projectModelAttemptUsage(input: RunAgentTurnInput, usage: Record<
   }
 }
 
-function matchesRecheckBinding(initial: PermitBinding, recheck: PermitBinding): boolean {
-  return recheck.phase === 'recheck' &&
+function matchesRecheckBinding(initial: PermitBinding, recheck: PermitBinding, allowFreshPlanRevision = false): boolean {
+  const sameCallAuthorization = recheck.phase === 'recheck' &&
     initial.requestId === recheck.requestId &&
     initial.turnId === recheck.turnId &&
     initial.invocationId === recheck.invocationId &&
     initial.toolCallId === recheck.toolCallId &&
     initial.capabilityId === recheck.capabilityId &&
     initial.inputSnapshotHash === recheck.inputSnapshotHash &&
-    initial.planDigest === recheck.planDigest &&
-    initial.factsDigest === recheck.factsDigest &&
     initial.authorizationVersion === recheck.authorizationVersion
+  // A newly approved plan can have different plan/facts digests; only its caller after fresh approval opts into that revision.
+  return sameCallAuthorization && (allowFreshPlanRevision ||
+    initial.planDigest === recheck.planDigest && initial.factsDigest === recheck.factsDigest)
 }

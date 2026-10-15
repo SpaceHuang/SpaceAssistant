@@ -167,6 +167,31 @@ export function createRegisteredAgentTurnTools(input: {
         if (!isRecord(refreshed)) throw new Error('REFRESHED_EXECUTION_CONTEXT_INVALID')
         record.runtimeContext = { ...refreshed, ...safetyOwned }
       }
+      if (stage.replanAfterFreshApproval) {
+        if (!stage.confirmation?.receipt.trim()) throw new Error('FRESH_APPROVAL_REQUIRED_FOR_REPLAN')
+        const planningContext = {
+          requestId: input.requestId,
+          toolUseId: call.toolCallId,
+          signal: record.signal,
+          executionContext: record.runtimeContext as ToolExecutionContext['runtimeContext']
+        } as Parameters<RegisteredTool['beginPlanning']>[1] & { signal: AbortSignal }
+        const planning = record.registeredTool.beginPlanning(call.input, planningContext)
+        const replannedHandle = await planning.result
+        if (record.signal.aborted) {
+          replannedHandle.fail()
+          replannedHandle.release()
+          throw new Error('REQUEST_CANCELLED')
+        }
+        if (replannedHandle.prepared.requestId !== input.requestId || replannedHandle.prepared.toolUseId !== call.toolCallId || replannedHandle.prepared.toolName !== record.registeredTool.name) {
+          replannedHandle.fail()
+          replannedHandle.release()
+          throw new Error('PREPARED_TOOL_IDENTITY_MISMATCH')
+        }
+        const supersededHandle = record.handle
+        record.handle = replannedHandle
+        if (supersededHandle.state !== 'settled' && supersededHandle.state !== 'failed') supersededHandle.fail()
+        supersededHandle.release()
+      }
       if (record.handle.state === 'planned') record.handle.awaitConfirmation()
       if (record.handle.state === 'awaiting-confirm') record.handle.confirm()
       else if (record.handle.state !== 'confirmed') throw new Error('PREPARED_TOOL_NOT_AWAITING_CONFIRMATION')
