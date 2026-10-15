@@ -19,7 +19,6 @@ import {
 import { getSessionUsage, type AppDatabase } from '../database'
 import { readStoredModels } from '../llmServiceResolver'
 import { createHash } from 'node:crypto'
-import { summarizeFailedInvocation } from '../runtime/continuationSummary'
 export { summarizeFailedInvocation } from '../runtime/continuationSummary'
 import type { SessionCommands, SessionExecutionStore } from '../sessionStorage/contracts'
 import type { ContinuationSourceRef, SessionQueries } from '../sessionStorage/contracts'
