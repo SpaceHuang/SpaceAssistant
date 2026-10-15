@@ -372,6 +372,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'ask',
     reason: '浏览器高危操作需确认'
   },
+  {
+    id: 'im-browser-act-danger-human',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act-dangerous'] },
+    denyClass: 'insufficient-info',
+    action: 'ask', locked: true, humanRequired: true,
+    reason: 'IM 浏览器高危操作需真人逐次确认'
+  },
   // act 确认总开关关闭 → 免确认（等价现 browserActionNeedsConfirmation: !actRequiresConfirm → false，
   // 桌面/远程同一开关；configRequires 门控不满足即不命中，可先于 ask 条目）。
   // 评审 B2：allow 动作必须带 lane 限定——automation 无人类应答者，不消费该放行。
@@ -388,11 +396,21 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'browser-act-ask-remote',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act'] },
+    match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act'], excludeSignals: ['browser-act-dangerous'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    configRequires: { config: 'actRequiresConfirm', equals: true },
     askUnless: { config: 'remoteActSkipConfirm', equals: true },
     reason: '远程浏览器 act 默认需确认'
+  },
+  {
+    id: 'im-browser-act-review',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act-low-risk'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    configRequires: { config: 'actRequiresConfirm', equals: true },
+    reason: '低影响浏览器读取/导航动作进入 standard 审核候选'
   },
   {
     id: 'browser-act-ask-desktop',
@@ -429,6 +447,24 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   // high_impact/unknown 不消费开关）；写类按开关；读类免确认。
   // 三条 fail-closed 兜底规则标 locked：任何套餐不得调松、不可覆盖（评审中等项）。
   {
+    id: 'lark-message-group-human',
+    when: 'invocation',
+    match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-message-target:group-or-multiple'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    locked: true,
+    reason: '飞书消息发送到群或多人，需真人逐次确认'
+  },
+  {
+    id: 'lark-message-target-unknown-human',
+    when: 'invocation',
+    match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-message-target:unknown'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    locked: true,
+    reason: '无法验证飞书消息接收对象，需真人逐次确认'
+  },
+  {
     id: 'lark-high-impact-ask',
     when: 'invocation',
     match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-high_impact'] },
@@ -456,6 +492,30 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     reason: 'lark-cli 写类子命令需确认'
   },
   {
+    id: 'im-lark-low-write-review',
+    when: 'invocation',
+    match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-standard-low-write'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    reason: '已分类的普通飞书文档或个人日历写入进入 standard 审核候选'
+  },
+  {
+    id: 'im-lark-message-self-review',
+    when: 'invocation',
+    match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-message-target:self'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    reason: '发送给已验证的本人账号，进入 standard 审核候选'
+  },
+  {
+    id: 'im-lark-message-direct-review',
+    when: 'invocation',
+    match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-message-target:direct-other'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    reason: '发送给一位已明确的个人接收者，进入 standard 审核候选'
+  },
+  {
     id: 'lark-read-allow',
     when: 'invocation',
     match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-read'] },
@@ -474,6 +534,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     reason: '能力集合只读能力免确认'
   },
   {
+    id: 'im-time-query-review',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], toolName: 'toolkit.call', signals: ['toolkit-capability:env.time'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    reason: 'IM 报时调用属于 standard 审核候选'
+  },
+  {
     id: 'toolkit-act-ask',
     when: 'invocation',
     match: { lane: ['desktop'], toolName: 'toolkit.call', signals: ['toolkit-act'] },
@@ -490,11 +558,28 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   // B5：annotations 是 server 单方面声明的不可信输入，放行仅限桌面 lane——远程链路（wechat/feishu）
   // 不消费该豁免，只读工具一样可能把本地数据带回 IM 会话，落 mcp-tool-ask 确认。
   {
+    id: 'mcp-account-unauthorized-deny',
+    when: 'invocation',
+    match: { signals: ['mcp-account-unauthorized'] },
+    denyClass: 'forbidden',
+    action: 'deny',
+    locked: true,
+    reason: 'MCP account is not authorized for the requested data scope'
+  },
+  {
     id: 'mcp-readonly-allow',
     when: 'invocation',
     match: { lane: ['desktop'], signals: ['mcp-readonly'] },
     action: 'allow',
     reason: 'MCP 只读注解工具默认免确认'
+  },
+  {
+    id: 'im-mcp-public-read-review',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], signals: ['mcp-public-read'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    reason: '经宿主验证的公开只读 MCP 调用进入审核 Agent 候选'
   },
   // MCP 工具默认确认（总是产 mcp-tool 信号）；会话信任经缓存命中放行（步骤 2）。
   {
@@ -506,12 +591,36 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     reason: 'MCP 工具调用需确认'
   },
   {
-    id: 'im-write-ask',
+    id: 'im-low-risk-create',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], actionClass: 'write' },
+    match: { lane: ['wechat', 'feishu'], toolName: 'write_file', signals: ['write-target-new'] },
     denyClass: 'insufficient-info',
     action: 'ask',
-    reason: '远程链路写本地文件默认需要确认'
+    reason: '普通工作区新建文件属于 IM standard 审核候选'
+  },
+  {
+    id: 'im-low-risk-edit',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], toolName: 'edit_file', signals: ['write-target-existing', 'write-target-scope:inside-workdir', 'path-target:workdir-normal'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    reason: '普通工作区内既有文件编辑属于 IM standard 审核候选'
+  },
+  // 高危路径具有人审底线，独立于 IM standard 的兜底自动审核，且在任何缓存/审核器之前执行。
+  {
+    id: 'im-write-sensitive-path-confirm',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], actionClass: 'write', signals: ['path-target:sensitive-file'] },
+    action: 'confirm-every-time', locked: true, humanRequired: true,
+    reason: 'IM 写入敏感位置需真人逐次确认'
+  },
+  {
+    id: 'im-write-ask',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], actionClass: 'write', excludeSignals: ['write-target-new', 'write-target-existing'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    reason: '未被低风险分类或人工确认底线覆盖的 IM 写入，交由标准档审核 Agent 评估'
   },
 
   // ===== automation lane（偏差 21/22：无人值守链路的显式规则集，§P2-4）=====

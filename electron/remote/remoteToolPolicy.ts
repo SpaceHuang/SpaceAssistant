@@ -10,27 +10,31 @@
  * until the security migration completes, all confirm-skips below are forced OFF (ask).
  */
 import { commandHasShellMetasyntax } from '../shell/shellCommandTrust'
-import { CURRENT_REMOTE_SECURITY_CONFIG_VERSION } from '../../src/shared/imTypes'
-
-export { CURRENT_REMOTE_SECURITY_CONFIG_VERSION }
+const SUPPORTED_POLICY_BEHAVIOR_VERSIONS = new Set(['im-v1.6', 'im-standard-v2'])
 
 /** Subset of RemoteImCommonConfig (+ feishu larkCli field) the policy reads. */
 export interface RemoteSecurityPolicyConfig {
-  remoteSecurityConfigVersion?: number
-  remoteAllowLocalWrite?: boolean
-  remoteScriptRequiresConfirm?: boolean
-  remoteBrowserNavigateRequiresConfirm?: boolean
-  remoteBrowserActRequiresConfirm?: boolean
-  /** @deprecated combined field, only for conservative migration */
-  remoteBrowserRequiresConfirm?: boolean
-  larkCliWriteRequiresConfirm?: boolean
+  policySnapshot?: {
+    domain: 'im'
+    policyBehaviorVersion: string
+    revision: number
+    snapshot: Record<string, unknown>
+  }
 }
 
-/** True only when the persisted config version equals the current schema version. */
+function currentSnapshot(config?: RemoteSecurityPolicyConfig | null): Record<string, unknown> | null {
+  const current = config?.policySnapshot
+  if (!current || current.domain !== 'im' || typeof current.policyBehaviorVersion !== 'string' ||
+      !SUPPORTED_POLICY_BEHAVIOR_VERSIONS.has(current.policyBehaviorVersion) ||
+      !Number.isSafeInteger(current.revision) || current.revision < 0) return null
+  return current.snapshot && typeof current.snapshot === 'object' && !Array.isArray(current.snapshot) ? current.snapshot : null
+}
+
+/** True only when a structurally valid, versioned shared IM policy snapshot is present. */
 export function isRemoteSecurityMigrationComplete(
-  config?: { remoteSecurityConfigVersion?: number } | null
+  config?: RemoteSecurityPolicyConfig | null
 ): boolean {
-  return config?.remoteSecurityConfigVersion === CURRENT_REMOTE_SECURITY_CONFIG_VERSION
+  return currentSnapshot(config) !== null
 }
 
 /**
@@ -48,7 +52,8 @@ export interface RemoteConfirmOverlay {
 export function applyMigrationConservativeOverlay(
   config?: RemoteSecurityPolicyConfig | null
 ): RemoteConfirmOverlay {
-  if (!isRemoteSecurityMigrationComplete(config)) {
+  const snapshot = currentSnapshot(config)
+  if (!snapshot) {
     return {
       fileWriteRequiresConfirm: true,
       scriptAllowRequiresConfirm: true,
@@ -58,10 +63,10 @@ export function applyMigrationConservativeOverlay(
   }
   return {
     // When migrated, follow the per-tool switches (conservative where unset).
-    fileWriteRequiresConfirm: (config?.remoteAllowLocalWrite ?? true) === false,
-    scriptAllowRequiresConfirm: config?.remoteScriptRequiresConfirm !== false,
-    browserActRequiresConfirm: (config?.remoteBrowserActRequiresConfirm ?? true) !== false,
-    larkWriteRequiresConfirm: config?.larkCliWriteRequiresConfirm !== false
+    fileWriteRequiresConfirm: snapshot.denyWrite === true || snapshot.remoteAllowLocalWrite !== true,
+    scriptAllowRequiresConfirm: snapshot.remoteScriptRequiresConfirm !== false,
+    browserActRequiresConfirm: snapshot.remoteBrowserActRequiresConfirm !== false,
+    larkWriteRequiresConfirm: snapshot.larkCliWriteRequiresConfirm !== false
   }
 }
 
@@ -79,8 +84,7 @@ export function applyMigrationConservativeOverlay(
  * upstream regardless of this config switch.
  */
 export function shouldSkipRemoteScriptConfirmOnAllow(config?: RemoteSecurityPolicyConfig | null): boolean {
-  if (!isRemoteSecurityMigrationComplete(config)) return false
-  return config?.remoteScriptRequiresConfirm === false
+  return currentSnapshot(config)?.remoteScriptRequiresConfirm === false
 }
 
 /**
@@ -90,22 +94,23 @@ export function shouldSkipRemoteScriptConfirmOnAllow(config?: RemoteSecurityPoli
 export function shouldSkipRemoteBrowserNavigateConfirm(
   config?: RemoteSecurityPolicyConfig | null
 ): boolean {
-  const requires =
-    config?.remoteBrowserNavigateRequiresConfirm ?? config?.remoteBrowserRequiresConfirm ?? false
+  const snapshot = currentSnapshot(config)
+  if (!snapshot) return false
+  const requires = snapshot.remoteBrowserNavigateRequiresConfirm
   return requires === false
 }
 
 /** browser act: gated by migration; default effective is require-confirm. */
 export function shouldSkipRemoteBrowserActConfirm(config?: RemoteSecurityPolicyConfig | null): boolean {
-  if (!isRemoteSecurityMigrationComplete(config)) return false
-  const requires = config?.remoteBrowserActRequiresConfirm ?? true
+  const snapshot = currentSnapshot(config)
+  if (!snapshot) return false
+  const requires = snapshot.remoteBrowserActRequiresConfirm
   return requires === false
 }
 
 /** Feishu lark write: gated by migration; skip only when explicitly disabled. */
 export function shouldSkipRemoteLarkWriteConfirm(config?: RemoteSecurityPolicyConfig | null): boolean {
-  if (!isRemoteSecurityMigrationComplete(config)) return false
-  return config?.larkCliWriteRequiresConfirm === false
+  return currentSnapshot(config)?.larkCliWriteRequiresConfirm === false
 }
 
 /** Shell meta never-trust helper (re-exported for policy consumers). */

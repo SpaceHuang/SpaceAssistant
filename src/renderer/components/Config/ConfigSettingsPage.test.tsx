@@ -185,9 +185,27 @@ describe('ConfigSettingsPage 优选默认模型', () => {
 })
 
 describe('ConfigSettingsPage 远程操作导航', () => {
+  it('将安全策略作为独立顶层设置入口显示', async () => {
+    store.dispatch(setConfig(cfg))
+    store.dispatch(setSettingsActiveTab('models'))
+    store.dispatch(setSettingsOpen(true))
+    renderPage()
+    const security = screen.getByRole('button', { name: '安全策略' })
+    const toolsGroup = screen.getByRole('group', { name: '工具' })
+    expect(toolsGroup.contains(security)).toBe(false)
+    expect(security.className).not.toContain('config-settings-page__nav-item--sub')
+    fireEvent.click(security)
+    await waitFor(() => expect(screen.getByRole('heading', { name: '安全策略' })).toBeTruthy())
+  })
+
   it('将远程通用设置、飞书和微信收进远程操作分组并可切换', async () => {
     expect(REMOTE_SETTINGS_KEYS).toEqual(['remoteIm', 'feishu', 'wechat'])
     expect(REMOTE_SETTINGS_KEYS.every(isRemoteSettingsKey)).toBe(true)
     expect(isRemoteSettingsKey('tools')).toBe(false)
+  })
+
+  it('安全策略是独立的全局设置页，不属于工具或远程操作分组', () => {
+    expect(REMOTE_SETTINGS_KEYS).not.toContain('security' as never)
+    expect(isRemoteSettingsKey('security')).toBe(false)
   })
 })

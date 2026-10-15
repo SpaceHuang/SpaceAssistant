@@ -1,4 +1,5 @@
 import type { SessionSkillsState, SkillDefinition, SkillsConfig } from '../../src/shared/domainTypes'
+import { keywordMatch } from '../../src/shared/skillTriggerMatch'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 
 export const DESCRIPTION_MATCH_THRESHOLD = 0.4
@@ -39,11 +40,6 @@ function descriptionSimilarity(userInput: string, description: string): number {
 
   const union = new Set([...inputTokens, ...descTokens]).size
   return union === 0 ? 0 : overlap / union
-}
-
-function keywordMatch(userInput: string, triggers: string[]): boolean {
-  const lower = userInput.toLowerCase()
-  return triggers.some((t) => t.length > 0 && lower.includes(t.toLowerCase()))
 }
 
 const FEISHU_KEYWORDS = ['飞书', 'lark', 'feishu', '群消息', '日历', '多维表格', '妙记']

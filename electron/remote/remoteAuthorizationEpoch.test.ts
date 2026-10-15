@@ -4,6 +4,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { openDatabase } from '../database'
 import { createRemoteAuthorizationEpochStore } from './remoteAuthorizationEpochStore'
 import { runMigrations } from '../database/migrations'
+import { DB_SCHEMA_VERSION } from '../database/schema'
 
 describe('persistent remote authorization epoch', () => {
   it('increments monotonically per channel and survives database reopen', () => {
@@ -52,7 +53,7 @@ describe('persistent remote authorization epoch', () => {
     const conn = getDbConnection(db)
     conn.exec('DROP TABLE remote_authorization_revocations; DROP TABLE remote_authorization_epochs; UPDATE schema_meta SET value=\'73\' WHERE key=\'schema_version\'')
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '95' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare('SELECT channel,epoch FROM remote_authorization_epochs ORDER BY channel').all()).toEqual([
       { channel: 'feishu', epoch: 1 }, { channel: 'wechat', epoch: 1 }
     ])

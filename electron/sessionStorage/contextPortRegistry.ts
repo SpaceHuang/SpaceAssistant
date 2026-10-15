@@ -1,6 +1,5 @@
 import type { ContextPort, ContextScope } from '../../packages/agent-sdk/src/context'
 import { createContextPortRouter } from '../../packages/agent-sdk/src/context'
-import { createStorageSessionContextAdapter } from './contextAdapter'
 import type { SessionContextSurfaceMessage } from '../sessionContextCompaction'
 
 export type BoundSessionContext = Readonly<{ adapter: import('../../packages/agent-sdk/src/context').SessionContextAdapter; messages: SessionContextSurfaceMessage[]; windowId: string }>

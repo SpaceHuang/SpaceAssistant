@@ -17,7 +17,7 @@ import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
 import { WikiConfig, WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
-import { getConfigValue, getNextQueuedMessage, getTurnByRequestId, listPersistedTurns, listTurnErrorsByAssistantMessageIds, setConfigValue } from '../database'
+import { getConfigValue, getNextQueuedMessage, listTurnErrorsByAssistantMessageIds, setConfigValue } from '../database'
 import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { classifyWikiPath } from '../wiki/wikiPaths'
@@ -45,14 +45,14 @@ import { notifyFileTreeChanged } from '../fileTreeSyncNotify'
 import { createHash, randomUUID } from 'node:crypto'
 import { readActiveLlmServiceId, readLlmServices, resolveFastPreferredModelName, resolveLanguagePreferredModelName, resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { readBrowserConfigFromDb, persistBrowserConfig } from '../browser/browserConfigDb'
-import { recordUserAnswerFromMemoryTiers, clearSystemManagedCacheEntry, readSystemManagedCacheEntry, restoreSystemManagedCacheEntry } from '../confirmation/decisionCacheWriter'
+import { recordUserAnswerFromMemoryTiers, readSystemManagedCacheEntry, restoreSystemManagedCacheEntry } from '../confirmation/decisionCacheWriter'
 import { canonicalKeyJson } from '../confirmation/sqliteDecisionCache'
 import { revokeLegacyTrustForCacheKey } from '../confirmation/legacyTrustRevocation'
 import { resolveSafePath } from '../pathSecurity'
 import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
 import { scanSkillsWithSkipped } from '../skills/skillScanner'
 import { spawn } from 'child_process'
-import { submitToolConfirmResponse, reserveToolConfirmResponse, restoreReservedToolConfirm, isToolConfirmCommitAllowed, signalToolCancel, isPendingMemoryTier, getPendingMemoryTiers, isPendingConfirm, getPendingConfirmToolName, getPendingConfirmSessionId, getPendingConfirmGeneration, getPendingConfirmRevision, getPendingMcpTrust, isPendingTrust } from '../toolConfirmRegistry'
+import { submitToolConfirmResponse, reserveToolConfirmResponse, restoreReservedToolConfirm, isToolConfirmCommitAllowed, signalToolCancel, getPendingMemoryTiers, isPendingConfirm, getPendingConfirmToolName, getPendingConfirmSessionId, getPendingConfirmGeneration, getPendingConfirmRevision, getPendingMcpTrust, isPendingTrust } from '../toolConfirmRegistry'
 import { cancelActiveAgentTool } from '../activeAgentToolCancellation'
 import { toConfirmationSnapshot, turnToDisplay } from '../../src/shared/turnDisplayProtocol'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
@@ -70,6 +70,7 @@ import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRul
 import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
 import type { ContinuationIntentAcceptance, ContinuationSourceRef } from '../sessionStorage/contracts'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
+import { loadAgentsMd } from '../projectInstructions/projectInstructions'
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
   const workDir = ctx.sessionStorage ? resolveWorkDirForSession(ctx.sessionStorage.queries, sessionId,
@@ -272,7 +273,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'tool:confirm-response',
     async (
-      event,
+      _event,
       payload: {
         requestId: string
         toolUseId: string
@@ -422,11 +423,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         })
         writtenCacheKeys.push(payload.memoryTier)
       }
-      const trustAllowed = (kind: 'command' | 'domain' | 'act-domain' | 'mcp') => {
-        if (kind === 'command') return true
-        if (kind === 'domain' || kind === 'act-domain') return true
-        return true
-      }
       if (payload.approved && pendingConfirm && payload.trustCommand?.trim()) {
         if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId, ownerSessionId)) throw new Error('confirmation-missing')
         if (!commandTrustAllowed) throw new Error('confirmation-missing')
@@ -559,6 +555,108 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       return sessionQueries.readMessages(payload)
     }
   )
+
+  ipcMain.handle('chat:get-agents-md-request-snapshots', async (_event, payload: { sessionId: string; limit?: number }) => {
+    const session = sessionQueries.readSession(payload.sessionId)
+    if (!session || session.visibility === 'hidden' || session.ownership === 'internal') return { entries: [], current: { status: 'unavailable' } }
+    const limit = Number.isInteger(payload.limit) ? Math.min(200, Math.max(1, payload.limit!)) : 50
+    const history = sessionStorage.execution.historyFor({ sessionId: payload.sessionId })
+    const invocationIds = history.listInvocationIds().slice(-limit).reverse()
+    const entries: import('../../src/shared/api').AgentsMdRequestSnapshotIndexEntry[] = []
+    for (const invocationId of invocationIds) {
+      let snapshot: Awaited<ReturnType<typeof history.read>>
+      try { snapshot = await history.read(invocationId) } catch { continue }
+      const toolNames = new Map<string, string>()
+      const approvalToolsByModelTurn = new Map<number, Set<string>>()
+      for (const candidate of snapshot.events) {
+        if (!candidate.payload || typeof candidate.payload !== 'object' || Array.isArray(candidate.payload)) continue
+        const eventPayload = candidate.payload as Record<string, unknown>
+        if (candidate.kind === 'tool-call-started' && typeof eventPayload.toolCallId === 'string' && typeof eventPayload.toolName === 'string') {
+          toolNames.set(eventPayload.toolCallId, eventPayload.toolName)
+        }
+        if (candidate.kind === 'model-response-committed') {
+          const message = eventPayload.message && typeof eventPayload.message === 'object' && !Array.isArray(eventPayload.message)
+            ? eventPayload.message as Record<string, unknown>
+            : undefined
+          for (const toolCall of Array.isArray(message?.toolCalls) ? message.toolCalls : []) {
+            if (!toolCall || typeof toolCall !== 'object' || Array.isArray(toolCall)) continue
+            const call = toolCall as Record<string, unknown>
+            if (typeof call.id === 'string' && typeof call.name === 'string') toolNames.set(call.id, call.name)
+          }
+        }
+      }
+      for (const candidate of snapshot.events) {
+        if (!candidate.payload || typeof candidate.payload !== 'object' || Array.isArray(candidate.payload)) continue
+        const eventPayload = candidate.payload as Record<string, unknown>
+        if (candidate.kind === 'approval-waiting' && typeof eventPayload.modelTurn === 'number' && typeof eventPayload.toolCallId === 'string') {
+          const set = approvalToolsByModelTurn.get(eventPayload.modelTurn) ?? new Set<string>()
+          const toolName = toolNames.get(eventPayload.toolCallId)
+          if (toolName) set.add(toolName)
+          approvalToolsByModelTurn.set(eventPayload.modelTurn, set)
+        }
+      }
+      for (const event of snapshot.events) {
+        if (event.kind !== 'model-request-started') continue
+        const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : undefined
+        const requestMetadata = payload?.requestMetadata && typeof payload.requestMetadata === 'object' && !Array.isArray(payload.requestMetadata)
+          ? payload.requestMetadata as Record<string, unknown>
+          : undefined
+        const agentsMdSnapshot = requestMetadata?.agentsMdSnapshot && typeof requestMetadata.agentsMdSnapshot === 'object' && !Array.isArray(requestMetadata.agentsMdSnapshot)
+          ? requestMetadata.agentsMdSnapshot as Record<string, unknown>
+          : undefined
+        if (!agentsMdSnapshot || typeof payload?.requestId !== 'string' || typeof payload.modelTurn !== 'number') continue
+        const workDir = typeof agentsMdSnapshot.workDir === 'string' ? agentsMdSnapshot.workDir : undefined
+        entries.push({
+          invocationId,
+          requestId: payload.requestId,
+          modelTurn: payload.modelTurn,
+          attempt: typeof payload.attempt === 'number' ? payload.attempt : 1,
+          status: typeof agentsMdSnapshot.status === 'string' ? agentsMdSnapshot.status : 'unavailable',
+          ...(typeof agentsMdSnapshot.digest === 'string' ? { digest: agentsMdSnapshot.digest } : {}),
+          byteLength: typeof agentsMdSnapshot.byteLength === 'number' ? agentsMdSnapshot.byteLength : 0,
+          tokenCount: typeof agentsMdSnapshot.tokenCount === 'number' ? agentsMdSnapshot.tokenCount : 0,
+          loadedAt: typeof agentsMdSnapshot.loadedAt === 'number' ? agentsMdSnapshot.loadedAt : 0,
+          source: 'AGENTS.md',
+          scope: 'workdir-root',
+          ...(workDir ? { workDirName: path.basename(workDir) || workDir } : {}),
+          ...(approvalToolsByModelTurn.get(payload.modelTurn)?.size
+            ? { approvalTools: [...approvalToolsByModelTurn.get(payload.modelTurn)!] } : {}),
+          bodyAvailable: typeof agentsMdSnapshot.content === 'string'
+        })
+      }
+    }
+    const resolvedWorkDir = resolveWorkDirForSession(sessionQueries, payload.sessionId,
+      () => ctx.workDirManager.listProfiles(), () => ctx.workDirManager.getActiveProfileId(), () => ctx.workDirManager.getActiveWorkDir())
+    const currentSnapshot = await loadAgentsMd(resolvedWorkDir?.workDir ?? '', { enabled: session.metadata.agentsMdEnabled !== false })
+    return {
+      entries: entries.sort((a, b) => b.loadedAt - a.loadedAt || b.modelTurn - a.modelTurn).slice(0, limit),
+      current: { status: currentSnapshot.status, ...(currentSnapshot.digest ? { digest: currentSnapshot.digest } : {}) }
+    }
+  })
+
+  ipcMain.handle('chat:get-agents-md-request-snapshot', async (_event, payload: { sessionId: string; invocationId: string; modelTurn: number }) => {
+    const session = sessionQueries.readSession(payload.sessionId)
+    if (!session || session.visibility === 'hidden' || session.ownership === 'internal' || !Number.isInteger(payload.modelTurn)) return undefined
+    const history = sessionStorage.execution.historyFor({ sessionId: payload.sessionId })
+    let snapshot: Awaited<ReturnType<typeof history.read>>
+    try { snapshot = await history.read(payload.invocationId) } catch { return undefined }
+    const event = [...snapshot.events].reverse().find((candidate) => candidate.kind === 'model-request-started' &&
+      candidate.payload && typeof candidate.payload === 'object' && !Array.isArray(candidate.payload) &&
+      (candidate.payload as Record<string, unknown>).modelTurn === payload.modelTurn)
+    if (!event || !event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return undefined
+    const requestMetadata = (event.payload as Record<string, unknown>).requestMetadata
+    if (!requestMetadata || typeof requestMetadata !== 'object' || Array.isArray(requestMetadata)) return undefined
+    const agentsMdSnapshot = (requestMetadata as Record<string, unknown>).agentsMdSnapshot
+    if (!agentsMdSnapshot || typeof agentsMdSnapshot !== 'object' || Array.isArray(agentsMdSnapshot)) return undefined
+    const metadata = agentsMdSnapshot as Record<string, unknown>
+    return {
+      invocationId: payload.invocationId,
+      modelTurn: payload.modelTurn,
+      status: typeof metadata.status === 'string' ? metadata.status : 'unavailable',
+      ...(typeof metadata.digest === 'string' ? { digest: metadata.digest } : {}),
+      ...(typeof metadata.content === 'string' ? { content: metadata.content } : {})
+    }
+  })
 
   ipcMain.handle(
     'chat:get-api-context-baseline',

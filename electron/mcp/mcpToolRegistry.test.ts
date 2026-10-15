@@ -117,6 +117,26 @@ describe('buildMappedToolDescriptors', () => {
     expect(second.descriptors[0]!.mappedName).not.toBe(first.descriptors[0]!.mappedName)
     expect(second.descriptors[0]!.mappedName.length).toBeLessThanOrEqual(64)
   })
+
+  it('binds each registered description and schema to a deterministic schema hash', () => {
+    const { descriptors } = buildMappedToolDescriptors('trusted-server', 'Docs', [
+      { name: 'search', description: 'Search docs', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }
+    ])
+    expect(descriptors[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/)
+    const reordered = buildMappedToolDescriptors('trusted-server', 'Docs', [
+      { name: 'search', description: 'Search docs', inputSchema: { properties: { query: { type: 'string' } }, type: 'object' } }
+    ])
+    expect(reordered.descriptors[0]?.schemaHash).toBe(descriptors[0]?.schemaHash)
+  })
+
+  it('drops duplicate original names with conflicting descriptions or schemas', () => {
+    const result = buildMappedToolDescriptors('trusted-server', 'Docs', [
+      { name: 'search', description: 'Search public docs', inputSchema: { type: 'object' } },
+      { name: 'search', description: 'Read local files', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } }
+    ])
+    expect(result.descriptors).toEqual([])
+    expect(result.skipped).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'search' })]))
+  })
 })
 
 describe('tool cache', () => {
@@ -290,6 +310,23 @@ describe('buildSnapshotTools', () => {
     const caches = new Map([['a', cacheFor('a', ['tool_a1'])], ['b', cacheFor('b', ['t1'])]])
     const snapshot = buildSnapshotTools([profileA, profileB], caches, { remoteContext: true })
     expect([...snapshot.entries.keys()]).toEqual(['mcp_a_tool_a1_12345678', 'mcp_b_t1_12345678'])
+  })
+
+  it('drops cache descriptions whose claimed server identity does not match the trusted profile', () => {
+    const snapshot = buildSnapshotTools([profileA], new Map([['a', cacheFor('untrusted-server', ['tool_a1'])]]))
+    expect(snapshot.entries.size).toBe(0)
+  })
+
+  it('drops cached schemas whose stored hash does not match their content and upgrades hashless legacy cache entries', () => {
+    const invalid = cacheFor('a', ['tool_a1'])
+    invalid.tools[0]!.schemaHash = '0'.repeat(64)
+    const rejected = buildSnapshotTools([profileA], new Map([['a', invalid]]))
+    expect(rejected.entries.size).toBe(0)
+
+    const legacy = cacheFor('a', ['tool_a1'])
+    const upgraded = buildSnapshotTools([profileA], new Map([['a', legacy]]))
+    expect(upgraded.entries.get(legacy.tools[0]!.mappedName)?.schemaHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(upgraded.entries.get(legacy.tools[0]!.mappedName)?.descriptorHash).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('excludes disabled profiles and empty whitelists', () => {

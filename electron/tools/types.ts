@@ -1,6 +1,5 @@
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
-import type { ImConfirmPolicy } from '../../src/shared/imTypes'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { BrowserDetectContext } from '../../src/shared/browserTypes'
@@ -18,7 +17,6 @@ import type { RemoteTrackContext, TrackModelInputViewRef } from '../../src/share
 export interface RemoteContext {
   source: 'feishu' | 'wechat'
   messageId: string
-  confirmPolicy: ImConfirmPolicy
   /**
    * IM outbound target session: reply suffix, idle-touch and follow-up routing. Initialized to
    * the origin session and reassigned in place by `switch_session`; never used for assistant
@@ -27,6 +25,7 @@ export interface RemoteContext {
    */
   outboundSessionId?: string
   chatId?: string
+  chatType?: 'p2p' | 'group' | 'unknown'
   userId?: string
   contextToken?: string
   inboundRaw?: IncomingMessage
@@ -69,6 +68,8 @@ export interface RemoteContext {
   deferredContinuation?: Readonly<{ todoId: string; invocationId: string; workflowId: string; taskId: string; stepId: string;
     planRevision: number; checkpointId?: string; dispatchKey: string; toolCallId: string; toolName: string;
     canonicalArgs: Record<string, unknown>; result: Record<string, unknown>; outputRef: string }>
+  /** Trusted, content-addressed attachment permit restored from a deferred human approval. */
+  deferredAttachmentApproval?: Readonly<{ path: string; sha256: string }>
 }
 
 /** Gradual-migration aliases — prefer RemoteContext going forward. */
@@ -119,8 +120,12 @@ export interface ToolExecutionContext {
   /** Host-prepared executable for run_lark_cli; pins the target selected before confirmation. */
   preparedLarkCliExecutable?: string
   remoteContext?: RemoteContext
+  /** 主进程在 planned outbound adapter 中冻结的发送用途与目标事实。 */
+  outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
   toolUserConfirmed?: boolean
+  /** Host-confirmed provenance for the receipt attached to the current prepared invocation. */
+  userConfirmationAnswerer?: 'user' | 'agent'
   /** MCP 工具快照（装配期冻结）；tool_search 检索域（需求：MCP 工具延迟加载 §6.3）。 */
   mcpToolSnapshot?: import('../mcp/mcpToolRegistry').McpToolSnapshot
   getBrowserDetectContext?: () => BrowserDetectContext

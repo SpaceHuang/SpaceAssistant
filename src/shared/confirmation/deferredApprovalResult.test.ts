@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { ApprovalInvocationResult } from './types'
+import type { ToolConfirmationResult } from '../../../packages/agent-sdk/src/turn'
 import { mapDeferredApprovalResult, parseDeferredApprovalResult, type DeferredApprovalResult, type DeferredApprovalEligibility } from './deferredApprovalResult'
 
 const eligible: DeferredApprovalEligibility = { kind: 'eligible', todoId: 'todo-contract-1' }
@@ -22,7 +23,20 @@ describe('shared deferred approval result contract', () => {
     }
     expect(mapDeferredApprovalResult(
       { ok: true, verdict: { kind: 'approve', reason: { summary: 'approved' } } }, eligible
-    )).toEqual({ kind: 'deferred', todoId: 'todo-contract-1' })
+    )).toEqual({ kind: 'deferred', todoId: 'todo-contract-1', cause: 'insufficient-delegation-evidence',
+      executionState: 'not-executed', retryable: false, nextStep: 'await-user' })
+  })
+
+  it('requires structured execution state, retryability, and next step on tool and shared deferred results', () => {
+    type SharedDeferred = Extract<DeferredApprovalResult, { kind: 'deferred' }>
+    type ToolDeferred = Extract<ToolConfirmationResult, { kind: 'deferred' }>
+    expectTypeOf<SharedDeferred>().toHaveProperty('executionState')
+    expectTypeOf<SharedDeferred>().toHaveProperty('retryable')
+    expectTypeOf<SharedDeferred>().toHaveProperty('nextStep')
+    expectTypeOf<ToolDeferred>().toHaveProperty('cause')
+    expectTypeOf<ToolDeferred>().toHaveProperty('executionState')
+    expectTypeOf<ToolDeferred>().toHaveProperty('retryable')
+    expectTypeOf<ToolDeferred>().toHaveProperty('nextStep')
   })
 
   it('never maps config error, locked or critical policy, or recursion block to deferred', () => {
@@ -36,8 +50,21 @@ describe('shared deferred approval result contract', () => {
   })
 
   it('round-trips deferred cause across the shared JSON boundary and rejects unknown causes', () => {
-    expect(parseDeferredApprovalResult({ kind: 'deferred', todoId: 'todo-1', cause: 'agent-undetermined' }))
-      .toEqual({ kind: 'deferred', todoId: 'todo-1', cause: 'agent-undetermined' })
+    expect(parseDeferredApprovalResult({ kind: 'deferred', todoId: 'todo-1', cause: 'agent-undetermined',
+      executionState: 'not-executed', retryable: false, nextStep: 'await-user' }))
+      .toEqual({ kind: 'deferred', todoId: 'todo-1', cause: 'agent-undetermined',
+        executionState: 'not-executed', retryable: false, nextStep: 'await-user' })
     expect(parseDeferredApprovalResult({ kind: 'deferred', todoId: 'todo-1', cause: 'locked' })).toBeNull()
+    expect(parseDeferredApprovalResult({ kind: 'deferred', todoId: 'todo-1', cause: 'agent-undetermined' })).toBeNull()
+    expect(parseDeferredApprovalResult({ kind: 'deferred', todoId: 'todo-1', cause: 'agent-undetermined',
+      executionState: 'executed', retryable: false, nextStep: 'await-user' })).toBeNull()
+  })
+
+  it.each(['agent-deny', 'unparsable', 'config-error'] as const)('round-trips terminal deny cause %s', (cause) => {
+    expect(parseDeferredApprovalResult({ kind: 'deny', cause })).toEqual({ kind: 'deny', cause })
+  })
+
+  it('rejects an unknown terminal denial cause', () => {
+    expect(parseDeferredApprovalResult({ kind: 'deny', cause: 'future-unknown-cause' })).toBeNull()
   })
 })

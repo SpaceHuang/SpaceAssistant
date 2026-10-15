@@ -26,6 +26,9 @@ describe('deferred immutable call envelope', () => {
     expect(store.verify(envelope, { toolName: 'write_file', canonicalArgs: { ...canonicalArgs, content: 'changed bytes' }, contentVersions, executionContext })).toMatchObject({ ok: false })
     expect(store.verify(envelope, { toolName: 'write_file', canonicalArgs, contentVersions: { document: 4, attachment: 1 }, executionContext })).toMatchObject({ ok: false })
     expect(store.verify(envelope, { toolName: 'write_file', canonicalArgs, contentVersions, executionContext: { ...executionContext, workDir: '/workspace/other' } })).toMatchObject({ ok: false })
+    expect(store.verify(envelope, { toolName: 'write_file', canonicalArgs, contentVersions,
+      executionContext: { ...executionContext, evidenceReferences: ['host-fact:substituted'] } }))
+      .toEqual({ ok: false, reason: 'context_changed' })
     db.close()
   })
 

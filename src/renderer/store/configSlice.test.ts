@@ -5,6 +5,7 @@ import { DEFAULT_FEISHU_CONFIG } from '../../shared/feishuTypes'
 import { DEFAULT_WECHAT_CONFIG } from '../../shared/wechatTypes'
 import configReducer, {
   applyRemoteImCommonPatch,
+  openSettings,
   setConfig,
   updateRemoteImCommon
 } from './configSlice'
@@ -43,22 +44,57 @@ describe('applyRemoteImCommonPatch', () => {
   })
 })
 
+describe('legacy settings deep links', () => {
+  it('routes old remote security links to the global security settings page', () => {
+    const store = configureStore({ reducer: { config: configReducer } })
+    store.dispatch(openSettings({ tab: 'remote-security' }))
+    expect(store.getState().config).toMatchObject({
+      settingsOpen: true,
+      settingsActiveTab: 'security',
+      settingsToolsSubTab: undefined
+    })
+  })
+
+  it('routes the former Tools > Security Policy subtab to the global page', () => {
+    const store = configureStore({ reducer: { config: configReducer } })
+    store.dispatch(openSettings({ tab: 'tools', toolsSubTab: 'security' }))
+    expect(store.getState().config).toMatchObject({
+      settingsOpen: true,
+      settingsActiveTab: 'security',
+      settingsToolsSubTab: undefined
+    })
+  })
+})
+
 describe('updateRemoteImCommon', () => {
-  it('dual-writes into Redux config.feishu and config.wechat', () => {
+  it('drops legacy channel policy fields from stale config imports and settings cache actions', () => {
+    const store = configureStore({ reducer: { config: configReducer } })
+    const legacyConfig = makeMinimalConfig({
+      feishu: { ...DEFAULT_FEISHU_CONFIG, remoteDenyOutbound: true, remoteConfirmPolicy: 'remote_read_only' } as never,
+      wechat: { ...DEFAULT_WECHAT_CONFIG, remoteAllowLocalWrite: false, remoteWechatConfirm: true } as never
+    })
+    store.dispatch(setConfig(legacyConfig))
+    store.dispatch(updateRemoteImCommon({ remoteAllowLocalWrite: false, remoteDenyOutbound: true } as never))
+
+    const cfg = store.getState().config.config!
+    expect(cfg.feishu).not.toHaveProperty('remoteDenyOutbound')
+    expect(cfg.feishu).not.toHaveProperty('remoteConfirmPolicy')
+    expect(cfg.wechat).not.toHaveProperty('remoteAllowLocalWrite')
+    expect(cfg.wechat).not.toHaveProperty('remoteWechatConfirm')
+  })
+
+  it('dual-writes non-policy shared fields and ignores stale security keys', () => {
     const store = configureStore({ reducer: { config: configReducer } })
     store.dispatch(setConfig(makeMinimalConfig()))
     store.dispatch(
       updateRemoteImCommon({
-        remoteConfirmPolicy: 'im_confirm',
         remoteAllowLocalWrite: false,
         remoteProgressMode: 'off'
-      })
+      } as never)
     )
     const cfg = store.getState().config.config!
-    expect(cfg.feishu.remoteConfirmPolicy).toBe('im_confirm')
-    expect(cfg.wechat.remoteConfirmPolicy).toBe('im_confirm')
-    expect(cfg.feishu.remoteAllowLocalWrite).toBe(false)
-    expect(cfg.wechat.remoteAllowLocalWrite).toBe(false)
+    expect(cfg.feishu).not.toHaveProperty('remoteAllowLocalWrite')
+    expect(cfg.wechat).not.toHaveProperty('remoteAllowLocalWrite')
     expect(cfg.feishu.remoteProgressMode).toBe('off')
     expect(cfg.wechat.remoteProgressMode).toBe('off')
   })

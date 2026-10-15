@@ -8,13 +8,14 @@ import type {
   ConfirmationPromptSendFailure,
   ConfirmRequest,
   MemoryTier,
-  OriginInfo,
   RiskLevel
 } from '../../src/shared/confirmation/types'
 import type { PromptSendErrorCategory, PromptSendNotAttemptedErrorCategory, PromptSendResult } from './promptSend'
 import type { AuditSink } from './channels'
 
 export interface ImPendingConfirm {
+  /** Friendly metadata copied from the host MCP snapshot for user-facing confirmation only. */
+  mcp?: import('./mcpConfirmPrompt').McpConfirmPromptMetadata
   id: string
   sessionId: string
   toolName?: string
@@ -32,6 +33,11 @@ export interface ImPendingConfirm {
   toolUseId?: string
   trackId?: string
   trackAttributionEventId?: string
+  envelopeHash?: string
+  factsHash?: string
+  policyBehaviorVersion?: string
+  policySnapshotRevision?: number
+  policyRevision?: string
   createdAt: number
   expiresAt: number
   memoryTiers: MemoryTier[]
@@ -143,7 +149,7 @@ function logPromptDiagnostic(log: ImChannelDeps['log'], event: string, fields: R
   try { log?.(event, fields) } catch { /* Diagnostics must never change fail-closed settlement. */ }
 }
 
-function toOutcome(decision: PendingDecision, memoryTiers: MemoryTier[], memory?: MemoryTier): ConfirmOutcome {
+function toOutcome(decision: PendingDecision, _memoryTiers: MemoryTier[], memory?: MemoryTier): ConfirmOutcome {
   if (decision === 'y') {
     return { kind: 'approved', ...(memory ? { memory: memory.key } : {}), cause: 'user-approved' }
   }
@@ -239,7 +245,11 @@ export class ImChannel {
       expiresAt: now + this.deps.timeoutMs
     }
     if (entry.trackId) {
-      if (!entry.trackAttributionEventId || !entry.requestId || !entry.turnId || !entry.toolUseId || !this.deps.onTrackConfirmationChild) {
+      if (!entry.trackAttributionEventId || !entry.requestId || !entry.turnId || !entry.toolUseId ||
+        !entry.envelopeHash || !entry.factsHash || !entry.policyBehaviorVersion ||
+        !Number.isSafeInteger(entry.policySnapshotRevision) || !entry.policyRevision ||
+        !Number.isSafeInteger(entry.authorizationGeneration) || entry.authorizationGeneration! < 0 ||
+        !this.deps.onTrackConfirmationChild) {
         if (this.deps.confirmIds) this.deps.confirmIds.release(lease)
         else releaseConfirmId(lease)
         return Promise.resolve({ kind: 'rejected', cause: 'unavailable' })

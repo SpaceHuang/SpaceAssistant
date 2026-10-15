@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module'
 import { importEsmModule } from '../esmDynamicImport'
 import { logAgentError } from '../agentLogger/agentLogger'
 import type { BrowserConfig } from '../../src/shared/domainTypes'
@@ -18,8 +17,6 @@ import {
 } from './browserDependencyDetect'
 import { launchPlaywrightBrowserHost } from './playwrightBrowserHost'
 import type { StagehandInitModel } from './stagehandModelInit'
-const nodeRequire = createRequire(__filename)
-
 export interface StagehandCredentials {
   model: StagehandInitModel
 }

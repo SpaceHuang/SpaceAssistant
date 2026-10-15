@@ -40,6 +40,8 @@ const api: SpaceAssistantApi = {
   usageDelete: (sessionId) => ipcRenderer.invoke('usage:delete', sessionId),
 
   chatGetMessages: (payload) => ipcRenderer.invoke('chat:get-messages', payload),
+  chatGetAgentsMdRequestSnapshots: (payload) => ipcRenderer.invoke('chat:get-agents-md-request-snapshots', payload),
+  chatGetAgentsMdRequestSnapshot: (payload) => ipcRenderer.invoke('chat:get-agents-md-request-snapshot', payload),
   chatCompactSessionContext: (payload) => ipcRenderer.invoke('chat:compact-session-context', payload),
   chatGetSessionCompactionMarkers: (sessionId) => ipcRenderer.invoke('chat:get-session-compaction-markers', sessionId),
   chatGetApiContextBaseline: (payload) => ipcRenderer.invoke('chat:get-api-context-baseline', payload),
@@ -101,6 +103,8 @@ const api: SpaceAssistantApi = {
 
   // ===== 「安全策略」设置页（§7 五区，P4）=====
   securityGetSettingsModel: () => ipcRenderer.invoke('security:get-settings-model'),
+  securityReadPolicyForLane: (payload) => ipcRenderer.invoke('policy:read-for-lane', payload),
+  securityWritePolicy: (payload) => ipcRenderer.invoke('policy:write', payload),
   securitySetPolicyPackage: (payload) => ipcRenderer.invoke('security:set-policy-package', payload),
   securitySetRuleOverride: (payload) => ipcRenderer.invoke('security:set-rule-override', payload),
   securitySetRuleEnabled: (payload) => ipcRenderer.invoke('security:set-rule-enabled', payload),
@@ -277,8 +281,6 @@ const api: SpaceAssistantApi = {
   feishuOwnerRebind: () => ipcRenderer.invoke('feishu:owner-rebind'),
   feishuOwnerBindCancel: () => ipcRenderer.invoke('feishu:owner-bind-cancel'),
   feishuOwnerClear: () => ipcRenderer.invoke('feishu:owner-clear'),
-  remoteSecurityPlan: () => ipcRenderer.invoke('remote-security:plan'),
-  remoteSecurityCommit: (patch) => ipcRenderer.invoke('remote-security:commit', patch),
   feishuOnOwnerBound: (cb) => {
     const fn = (_e: unknown, data: { maskedOwnerOpenId?: string; boundAt?: number }) => cb(data)
     ipcRenderer.on('feishu:owner-bound', fn)
@@ -319,7 +321,6 @@ const api: SpaceAssistantApi = {
   wechatPollStart: () => ipcRenderer.invoke('wechat:poll-start'),
   wechatPollStop: () => ipcRenderer.invoke('wechat:poll-stop'),
   wechatPendingConfirms: () => ipcRenderer.invoke('wechat:pending-confirms'),
-  wechatConfirmResponse: (payload) => ipcRenderer.invoke('wechat:confirm-response', payload),
   wechatAuditTail: (limit) => ipcRenderer.invoke('wechat:audit-tail', limit),
   wechatAuditQuery: (opts) => ipcRenderer.invoke('wechat:audit-query', opts),
   wechatSend: (payload) => ipcRenderer.invoke('wechat:send', payload),

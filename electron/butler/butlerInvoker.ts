@@ -8,6 +8,7 @@ import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../s
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import { readAppLocale } from '../appIpc'
+import { readWikiConfig } from '../wiki/wikiConfigReader'
 import { resolveLlmCredentialsForPair, resolveLlmCredentialsForModel, readActiveLlmServiceIds, readLlmServices, readStoredModels } from '../llmServiceResolver'
 import { logHistoryOversizedToolResult } from '../oversizedToolResultLog'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -374,6 +375,8 @@ async function runButlerModelTurn(
   const workDir = args.runConfig.workDir!
 
   const { invocation, ports, agentSdk } = assembleInvocation({
+    // W3 lane 对齐：未透传会被执行层按「未启用」误拒（桌面/IM 链路均注入）
+    wikiConfig: readWikiConfig(db),
     requestId: args.requestId,
     sessionId: args.sessionId,
     turnId: args.turnId,
@@ -392,6 +395,7 @@ async function runButlerModelTurn(
     baseUrl: creds.baseUrl,
     messages,
     system,
+    agentsMdEnabled: args.acceptedTurn.config.agentsMdEnabled ?? session.metadata.agentsMdEnabled !== false,
     options: { maxTokens: 8192 },
     effort: args.runConfig.effectiveEffort ?? 'off',
     currentUserMessageId: args.currentUserMessageId,

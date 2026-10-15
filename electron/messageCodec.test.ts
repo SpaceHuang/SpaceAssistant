@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deserializeSkillHintsFromDb, deserializeToolCallsFromDb, serializeSkillHintsForDb, serializeToolCallsForDb } from './messageCodec'
 
+vi.hoisted(() => vi.resetModules())
+
 vi.mock('./agentLogger/agentLogger', () => ({
   logAgentEvent: vi.fn()
 }))

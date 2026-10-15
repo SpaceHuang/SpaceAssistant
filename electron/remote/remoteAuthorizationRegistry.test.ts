@@ -303,9 +303,11 @@ describe('RemoteAuthorizationRegistry', () => {
       invalidateByOriginSession: (sessionId) => { reopenedTodos.invalidateByOriginSession(sessionId) }
     }, 'reopened-real-todos')
     reopenedRegistry.recoverPendingRevocations()
-    const context = { channel: 'feishu' as const, identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1, rule }
-    expect(reopenedTodos.claimForDispatch('stale-session-todo', context)).toBeNull()
-    expect(reopenedTodos.get('other-session-todo', context)?.status).toBe('pending')
+    const staleContext = { channel: 'feishu' as const, identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1,
+      originSessionId: 'deleted-session', rule }
+    const keepContext = { ...staleContext, originSessionId: 'keep-session' }
+    expect(reopenedTodos.claimForDispatch('stale-session-todo', staleContext)).toBeNull()
+    expect(reopenedTodos.get('other-session-todo', keepContext)?.status).toBe('pending')
     expect(reopenedRegistry.getAuthorizationEpoch('feishu')).toBe(2)
     reopenedDb.close()
     temp.cleanup()
@@ -324,9 +326,16 @@ describe('RemoteAuthorizationRegistry', () => {
       workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: todo.planRevision })
     intents.linkTodo(todo.invocationId, todo.todoId)
     intents.commitCheckpoint(todo.invocationId, { checkpointId: 'cascade-checkpoint', workflowRevision: 1 })
-    const resume = createDeferredResumeCoordinator({ db: temp.db, todoStore, envelopeStore: createDeferredEnvelopeStore(temp.db), maxParallel: 1,
+    const envelopeStore = createDeferredEnvelopeStore(temp.db)
+    envelopeStore.put({ invocationId: todo.invocationId, requestId: 'cascade-source-request', turnId: 'cascade-source-turn',
+      toolCallId: 'cascade-source-tool', toolName: 'write_file', canonicalArgs: { path: 'cascade.md', content: 'pending' },
+      contentVersions: {}, executionContext: { sessionId, channel: 'wechat', ownerId: todo.ownerId, identityKey: todo.identityKey,
+        authorizationEpoch: todo.authorizationEpoch, invocationId: todo.invocationId, toolName: 'write_file',
+        toolInput: { path: 'cascade.md', content: 'pending' }, requestId: 'cascade-source-request', turnId: 'cascade-source-turn',
+        toolCallId: 'cascade-source-tool' } })
+    const resume = createDeferredResumeCoordinator({ db: temp.db, todoStore, envelopeStore, maxParallel: 1,
       recheck: async () => ({ allowed: true }), dispatch: async () => ({ dispatched: true }) })
-    resume.requestResume({ requestId: 'cascade-request', todoId: todo.todoId, channel: 'wechat', identityKey: 'identity', ownerId: 'owner',
+    resume.requestResume({ requestId: 'cascade-request', todoId: todo.todoId, sessionId, channel: 'wechat', identityKey: 'identity', ownerId: 'owner',
       authorizationEpoch: 1, rule, notificationVersion: 1, messageId: 'trusted', reasonKey: 'cascade-reason' })
     createRemoteAuthorizationEpochStore(temp.db).advance('wechat', 'remote_disabled')
     temp.db.close()
@@ -348,7 +357,8 @@ describe('RemoteAuthorizationRegistry', () => {
     }, 'reopened-real-resume-cascade')
     expect(() => reopenedRegistry.getAuthorizationEpoch('wechat')).toThrow(/RECOVERY_REQUIRED|DISPATCH_FENCED/)
     reopenedRegistry.recoverPendingRevocations()
-    expect(reopenedTodos.get(todo.todoId, { channel: 'wechat', identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1, rule })?.status).toBe('invalidated')
+    expect(reopenedTodos.get(todo.todoId, { channel: 'wechat', identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1,
+      originSessionId: sessionId, rule })?.status).toBe('invalidated')
     expect(reopenedRequests.get('cascade-request')?.state).toBe('invalidated')
     expect(reopenedRegistry.getAuthorizationEpoch('wechat')).toBe(2)
     reopenedDb.close()
@@ -359,7 +369,7 @@ describe('RemoteAuthorizationRegistry', () => {
     const db = createMemoryAppDb()
     const epochStore = createRemoteAuthorizationEpochStore(db)
     const todos = createDeferredTodoStore(db)
-    const context = { channel: 'wechat' as const, identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1,
+    const context = { channel: 'wechat' as const, identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1, originSessionId: 'deleted-session',
       rule: { ruleId: 'rule', factsHash: 'a'.repeat(64) } }
     todos.create({ ...context, todoId: 'dispatching-session-todo', invocationId: 'dispatching-session-inv', workflowId: 'wf',
       taskId: 'task', stepId: 'step', planRevision: 1, originSessionId: 'deleted-session', createdAt: 1, expiresAt: Date.now() + 60_000 })

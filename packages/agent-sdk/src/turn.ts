@@ -9,6 +9,7 @@ import { createContextRegistrar, createInvocationContextPort, type ContextFrame,
 import { ResourceLockRegistry } from './resourceLock'
 import { CapacityLedger, type CapacityReservation } from './capacity'
 import { Semaphore } from './runtime/semaphore'
+import { normalizeRunShellJustification } from './runShellJustification'
 
 export type AgentTurnPorts = Readonly<{
   registry: ModelProviderRegistry
@@ -119,7 +120,7 @@ export type AgentTurnObserver = Readonly<{
   criticalToolProjection?: boolean
   onModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): void | Promise<void>
   prepareUsageAttribution?(input: Readonly<{ modelTurn: number; request: PreparedModelCall['request'] }>): Record<string, unknown> | void
-  prepareModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Readonly<{ sessionLedger?: unknown; requestProjection?: unknown }> | void | Promise<Readonly<{ sessionLedger?: unknown; requestProjection?: unknown }> | void>
+  prepareModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Readonly<{ sessionLedger?: unknown; requestProjection?: unknown; requestMetadata?: Readonly<Record<string, unknown>>; requestPatch?: Partial<PreparedModelCall['request']> }> | void | Promise<Readonly<{ sessionLedger?: unknown; requestProjection?: unknown; requestMetadata?: Readonly<Record<string, unknown>>; requestPatch?: Partial<PreparedModelCall['request']> }> | void>
   onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
   onModelAttemptDiscarded?(attempt: Readonly<{ attempt: number; modelTurn: number; reasonCode: string }>): void | Promise<void>
   prepareProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void | Promise<Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void>
@@ -242,8 +243,8 @@ type CanonicalToolExecutionResult = {
   invocationDisposition?: 'cancelled' | 'timed-out' | 'authorization-invalidated'
 }
 export type ToolPreparationStage =
-  | Readonly<{ kind: 'initial' }>
-  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string }> }>
+  | Readonly<{ kind: 'initial'; requestMetadata?: Readonly<Record<string, unknown>> }>
+  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }>; replanAfterFreshApproval?: true; requestMetadata?: Readonly<Record<string, unknown>> }>
 export type ToolConfirmationResult = Readonly<{
   answerer?: 'user' | 'agent'
   cause?: string
@@ -257,7 +258,7 @@ export type ToolConfirmationResult = Readonly<{
     | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'binding-unavailable'; sendCall: 'fulfilled'; delivery: 'unavailable'; errorCategory: 'message-binding-unavailable' }>
 }> & (
   | Readonly<{ kind: 'approved'; receipt: string }>
-  | Readonly<{ kind: 'deferred'; todoId: string; invocationId: string; checkpointRef: Readonly<{ checkpointId: string; workflowRevision: number }> }>
+  | Readonly<{ kind: 'deferred'; todoId: string; invocationId: string; checkpointRef: Readonly<{ checkpointId: string; workflowRevision: number }>; cause?: string; executionState?: 'not-executed'; retryable?: boolean; nextStep?: 'await-user' }>
   | Readonly<{ kind: 'denied' | 'timeout' | 'unavailable' | 'cancelled' }>
 )
 export type ConfirmationPort = (input: {
@@ -593,16 +594,16 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     const lifecycleInvalidated = error instanceof AgentTurnLifecycleInvalidatedError
     const status = error instanceof AgentTurnCancelledError
       ? 'cancelled' as const
-      : resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated
+      : error instanceof AgentTurnTimedOutError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated
         ? 'interrupted' as const
         : error instanceof ToolDeniedError ? 'denied' as const : 'failed' as const
     if (!(error instanceof AgentTurnHistoryAlreadyTerminalError)) {
       try {
-        const terminalKind = error instanceof AgentTurnCancelledError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated ? 'invocation-interrupted' : 'invocation-failed'
+        const terminalKind = error instanceof AgentTurnCancelledError || error instanceof AgentTurnTimedOutError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated ? 'invocation-interrupted' : 'invocation-failed'
         const terminalPayload = error instanceof AgentTurnCancelledError
             ? { status: 'cancelled', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : error instanceof AgentTurnTimedOutError
-              ? { status: 'failed', reason: 'timeout', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+              ? { status: 'interrupted', reason: 'timeout', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : lifecycleInvalidated
               ? { status: 'interrupted', reason: error.reason === 'revoked' ? 'authorization-revoked' : 'authorization-changed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : hostProjectionFailed
@@ -866,7 +867,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   let cacheCreationInputTokens = 0
   let outputRecoveryAttempts = 0
   let dispatchedToolRounds = 0
-  let requestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...input.request }
+  let baseRequestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...input.request }
   let activeWindowId = input.windowId ?? ''
   let contextEpoch = 0
   let contextPhase: 'preflight' | 'boundary' = 'preflight'
@@ -902,17 +903,27 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
   let pinnedProvider: ModelProvider | undefined
 
   for (let modelTurns = 1; modelTurns <= input.maxModelTurns; modelTurns += 1) {
+    // Request-local patches (for example, workdir instructions) persist across provider retries,
+    // but must not leak into the next logical model request.
+    let requestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...baseRequestTemplate }
     throwIfAborted(input.request.signal)
     const completedModelTurns = modelTurns - 1
     const loopCheckMessage = completedModelTurns > 0 && completedModelTurns % MODEL_TURN_LOOP_CHECK_INTERVAL === 0
       ? modelTurnLoopCheckMessage(completedModelTurns)
       : undefined
     const messagesForModelTurn = () => loopCheckMessage ? [...messages, loopCheckMessage] : messages
-    let call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
+    const prepareRequest = (patch?: Partial<PreparedModelCall['request']>) => input.registry.prepare(input.routeId, {
+      ...requestTemplate, ...patch, messages: patch?.messages ?? messagesForModelTurn()
+    })
+    let call = prepareRequest()
     await ensureInitialHistoryContext(input, call, appendHistory)
     const initialResponse = modelTurns === 1 ? input.initialResponse : undefined
     let requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
     let preparedRequestProjection = !initialResponse ? await input.observer?.prepareModelRequest?.(requestObservation) : undefined
+    if (preparedRequestProjection?.requestPatch) {
+      call = prepareRequest(preparedRequestProjection.requestPatch)
+      requestObservation = { ...requestObservation, request: call.request }
+    }
     if (!initialResponse && input.planContextReplacement) {
       const requestExceedsBudget = (projection: unknown): boolean => {
         if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return false
@@ -978,15 +989,13 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           reason: output.windowId !== base.frame.windowId ? 'window-transition' : 'auto-compact', candidate
         })
         if (result.status === 'commit-uncertain') throw new AgentTurnBoundaryProjectionError(result.error)
-        if (result.status === 'committed') {
-          requestTemplate = { ...requestTemplate }
-          call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
-          requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
-          preparedRequestProjection = await input.observer?.prepareModelRequest?.(requestObservation)
-        }
         call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
         requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
         preparedRequestProjection = await input.observer?.prepareModelRequest?.(requestObservation)
+        if (preparedRequestProjection?.requestPatch) {
+          call = prepareRequest(preparedRequestProjection.requestPatch)
+          requestObservation = { ...requestObservation, request: call.request }
+        }
       }
       if (overBudgetBeforeRecovery && (!didRecover || requestExceedsBudget(preparedRequestProjection?.requestProjection))) {
         throw new ModelPreflightRejectedError('OVER_BUDGET')
@@ -1008,6 +1017,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           attempt: 1,
           routeId: input.routeId,
           requestSnapshot: canonicalRequestSnapshot(call),
+          ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {}),
           ...(preparedRequestProjection?.sessionLedger !== undefined ? { sessionLedger: preparedRequestProjection.sessionLedger } : {})
         }
       }])
@@ -1157,12 +1167,15 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       throwIfAborted(input.request.signal)
       messages.splice(0, messages.length, ...recoveredMessages)
       requestTemplate = { ...requestTemplate, ...(recovery.requestPatch ?? {}) }
-        const retryCall = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
+      baseRequestTemplate = { ...baseRequestTemplate, ...(recovery.requestPatch ?? {}) }
+        recoveredAttempt = true
+        const retryBaseCall = prepareRequest()
+        let retryRequestObservation = { modelTurn: modelTurns, attempt: 2, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: retryBaseCall.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
+        const retryProjection = await input.observer?.prepareModelRequest?.(retryRequestObservation)
+        const retryCall = prepareRequest(retryProjection?.requestPatch ?? preparedRequestProjection?.requestPatch)
+        retryRequestObservation = { ...retryRequestObservation, request: retryCall.request }
         const retryProvider = input.registry.getProvider(retryCall)
         if (!sameRouteIdentity(retryCall.route, call.route) || retryProvider !== provider) throw new ModelRouteChangedError(input.routeId)
-        recoveredAttempt = true
-        const retryRequestObservation = { modelTurn: modelTurns, attempt: 2, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: retryCall.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
-        const retryProjection = await input.observer?.prepareModelRequest?.(retryRequestObservation)
         await appendHistory([{
           kind: 'model-request-started',
           payload: {
@@ -1171,6 +1184,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             attempt: 2,
             routeId: input.routeId,
             requestSnapshot: canonicalRequestSnapshot(retryCall),
+            ...(retryProjection?.requestMetadata ? { requestMetadata: retryProjection.requestMetadata } : {}),
             ...(retryProjection?.sessionLedger !== undefined ? { sessionLedger: retryProjection.sessionLedger } : {})
           }
         }])
@@ -1262,14 +1276,17 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     }
     if (!collected.usage) throw new InvalidModelStreamError('non-cancelled model attempt completed without usage')
     throwIfAborted(input.request.signal)
-    const toolCalls = collected.chunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'tool-call' }> => chunk.type === 'tool-call')
+    const acceptedChunks = collected.chunks.map((chunk) => !initialResponse && chunk.type === 'tool-call' && chunk.toolName === 'run_shell'
+      ? { ...chunk, input: normalizeRunShellJustification(chunk.input) }
+      : chunk)
+    const toolCalls = acceptedChunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'tool-call' }> => chunk.type === 'tool-call')
     inputTokens += collected.usage.inputTokens
     outputTokens += collected.usage.outputTokens
     cacheReadInputTokens += collected.usage.cacheReadInputTokens ?? 0
     cacheCreationInputTokens += collected.usage.cacheCreationInputTokens ?? 0
-    const textDelta = collected.chunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'text-delta' }> => chunk.type === 'text-delta').map((chunk) => chunk.text).join('')
+    const textDelta = acceptedChunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'text-delta' }> => chunk.type === 'text-delta').map((chunk) => chunk.text).join('')
     const assistantContent: CanonicalContentBlock[] = []
-    for (const chunk of collected.chunks) {
+    for (const chunk of acceptedChunks) {
       if (chunk.type === 'text-delta') {
         const previous = assistantContent.at(-1)
         if (previous?.type === 'text') assistantContent[assistantContent.length - 1] = { type: 'text', text: previous.text + chunk.text }
@@ -1342,6 +1359,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           kind: 'tool-call-not-dispatched',
           payload: {
             toolCallId: tool.toolCallId,
+            sourceRequestId: `${invocationId}:round:${modelTurns}`,
+            modelTurn: modelTurns,
             reason,
             replayContent,
             isError: true,
@@ -1600,8 +1619,18 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     const approvalSlots = new Semaphore(2)
     let parkRequested = false
     let parkedTodoId: string | undefined
-    const settledTools = await mapWithConcurrency(toolCalls, input.maxConcurrentTools ?? 2, async (tool) => {
+    const primaryWorkDirSwitchId = toolCalls.find((tool) => tool.toolName === 'switch_work_dir')?.toolCallId
+    const hasWorkDirSwitch = primaryWorkDirSwitchId !== undefined
+    const dispatchToolCalls = primaryWorkDirSwitchId
+      ? [toolCalls.find((tool) => tool.toolCallId === primaryWorkDirSwitchId)!, ...toolCalls.filter((tool) => tool.toolCallId !== primaryWorkDirSwitchId)]
+      : toolCalls
+    const settledInDispatchOrder = await mapWithConcurrency(dispatchToolCalls, hasWorkDirSwitch ? 1 : input.maxConcurrentTools ?? 2, async (tool) => {
       if (parkRequested) throw new DeferredTurnParkedError()
+      if (hasWorkDirSwitch && tool.toolCallId !== primaryWorkDirSwitchId) {
+        const message = 'This tool was not executed because the same model response requested a work directory switch. Re-evaluate the operation in a new model request after the switch result.'
+        await markNotDispatched(tool, 'WORKDIR_SWITCH_BARRIER', message)
+        return { role: 'tool', toolCallId: tool.toolCallId, content: message, isError: true } satisfies CanonicalTurnMessage
+      }
       const executionCall = {
         invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName,
         input: structuredClone(tool.input),
@@ -1620,7 +1649,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       releaseCandidate = approvalCandidate ? await candidateSlots.acquire(invocationId, input.request.signal) : undefined
       const initialBinding = await (async () => {
         try {
-          return await input.prepareTool(executionCall, { kind: 'initial' })
+          return await input.prepareTool(executionCall, { kind: 'initial', ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {}) })
         } catch (error) {
           // FR12②：host 侧 prepareTool 可抛 ToolDeniedError（如 REGISTERED_TOOL_NOT_FOUND → 结构化拒绝）；
           // 与 safetyGate deny 路径一致，先解除 pending 再抛，避免 invocation 终态校验挂起。
@@ -1640,7 +1669,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         const initialDecision = await input.safetyGate.evaluate(initialBinding, input.request.signal)
       throwIfAborted(input.request.signal)
 
-      let confirmation: Readonly<{ receipt: string }> | undefined
+      let confirmation: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }> | undefined
       if (initialDecision.kind === 'deny') {
         await markNotDispatched(tool, initialDecision.reasonCode)
         // FR12②：deny 决策可携带模型可见的区分文案（预算未注入 vs 服务不可用）
@@ -1663,6 +1692,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           kind: 'approval-waiting',
           payload: {
             toolCallId: tool.toolCallId,
+            sourceRequestId: `${invocationId}:round:${modelTurns}`,
+            modelTurn: modelTurns,
             approvalId: initialDecision.confirmationId,
             answerer: initialDecision.answerer,
             reasonCode: initialDecision.reasonCode,
@@ -1711,7 +1742,11 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           }
           await appendHistory([{ kind: 'approval-deferred', payload: {
             toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, todoId: result.todoId, invocationId: result.invocationId,
-            checkpointId: result.checkpointRef.checkpointId, workflowRevision: result.checkpointRef.workflowRevision
+            checkpointId: result.checkpointRef.checkpointId, workflowRevision: result.checkpointRef.workflowRevision,
+            ...(result.cause ? { cause: result.cause } : {}),
+            ...(result.executionState ? { executionState: result.executionState } : {}),
+            ...(result.retryable !== undefined ? { retryable: result.retryable } : {}),
+            ...(result.nextStep ? { nextStep: result.nextStep } : {})
           } }])
           toolDispatchStates.set(tool.toolCallId, 'finished')
           parkRequested = true
@@ -1744,7 +1779,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
           throwIfAborted(input.request.signal)
         }
-        confirmation = { receipt: result.receipt }
+        confirmation = { receipt: result.receipt, answerer: result.answerer ?? initialDecision.answerer }
       }
 
       let resourceLease: { release(): void } | undefined
@@ -1756,11 +1791,13 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         // Match the host lifecycle: resource ownership is acquired before the final policy/facts recheck.
         let recheckBinding: PermitBinding
         try {
-          recheckBinding = await input.prepareTool(executionCall, { kind: 'recheck', ...(confirmation ? { confirmation } : {}) })
+          recheckBinding = await input.prepareTool(executionCall, { kind: 'recheck', ...(confirmation ? { confirmation } : {}), ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {}) })
         } catch (error) {
           throwIfAborted(input.request.signal)
           const message = error instanceof Error ? error.message : ''
-          const reasonCode = /^[A-Z0-9_]{1,64}$/.test(message) ? message : 'PREPARED_RECHECK_FAILED'
+          const reasonCode = error instanceof ToolDeniedError
+            ? error.reasonCode
+            : /^[A-Z0-9_]{1,64}$/.test(message) ? message : 'PREPARED_RECHECK_FAILED'
           await markNotDispatched(tool, reasonCode)
           throw new ToolDeniedError(reasonCode)
         }
@@ -1769,11 +1806,126 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           await markNotDispatched(tool, 'STALE_AUTHORIZATION')
           throw new ToolDeniedError('STALE_AUTHORIZATION')
         }
-        const authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
+        let authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
         if (input.request.signal?.aborted && authorization.kind === 'allow') {
           input.safetyGate.discardPermit(authorization.permitId)
         }
         throwIfAborted(input.request.signal)
+        if (authorization.kind === 'ask') {
+          const askContext = authorization.context && typeof authorization.context === 'object'
+            ? authorization.context as { decision?: { disposition?: unknown } }
+            : undefined
+          if (authorization.answerer !== 'user' || askContext?.decision?.disposition !== 'human-required' || !input.confirmation) {
+            const reason = authorization.answerer !== 'user' || askContext?.decision?.disposition !== 'human-required'
+              ? 'RECHECK_REQUIRES_CONFIRMATION' : 'CONFIRMATION_REQUIRED'
+            await markNotDispatched(tool, reason)
+            throw new ToolDeniedError(reason)
+          }
+          if (!approvalPermitHeld) {
+            try {
+              await approvalSlots.acquire(input.request.signal ? { signal: input.request.signal } : {})
+              approvalPermitHeld = true
+            } catch (error) {
+              await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'CONFIRMATION_CAPACITY_UNAVAILABLE')
+              throw error
+            }
+          }
+          await appendHistory([{
+            kind: 'approval-waiting',
+            payload: {
+              toolCallId: tool.toolCallId,
+              sourceRequestId: `${invocationId}:round:${modelTurns}`,
+              modelTurn: modelTurns,
+              approvalId: authorization.confirmationId,
+              answerer: authorization.answerer,
+              reasonCode: authorization.reasonCode,
+              requestId: input.invocationId,
+              requestedAt: Date.now()
+            }
+          }])
+          let freshConfirmation: ToolConfirmationResult
+          try {
+            freshConfirmation = await input.confirmation({
+              call: executionCall,
+              modelTurn: modelTurns,
+              confirmationId: authorization.confirmationId,
+              answerer: authorization.answerer,
+              reasonCode: authorization.reasonCode,
+              ...(authorization.context !== undefined ? { context: structuredClone(authorization.context) } : {}),
+              ...(input.request.signal ? { signal: input.request.signal } : {})
+            })
+          } catch (error) {
+            await appendHistory([{ kind: 'approval-resolved', payload: {
+              toolCallId: tool.toolCallId, approvalId: authorization.confirmationId, approved: false,
+              outcome: 'unavailable', settledAt: Date.now()
+            } }])
+            throw error
+          }
+          if (freshConfirmation.kind === 'deferred') {
+            if (!freshConfirmation.todoId.trim() || freshConfirmation.invocationId !== input.invocationId ||
+              !freshConfirmation.checkpointRef.checkpointId.trim() || !Number.isInteger(freshConfirmation.checkpointRef.workflowRevision) ||
+              freshConfirmation.checkpointRef.workflowRevision <= 0) {
+              await markNotDispatched(tool, 'DEFERRED_CHECKPOINT_INVALID')
+              throw new ToolDeniedError('DEFERRED_CHECKPOINT_INVALID')
+            }
+            await appendHistory([{ kind: 'approval-deferred', payload: {
+              toolCallId: tool.toolCallId, approvalId: authorization.confirmationId, todoId: freshConfirmation.todoId,
+              invocationId: freshConfirmation.invocationId, checkpointId: freshConfirmation.checkpointRef.checkpointId,
+              workflowRevision: freshConfirmation.checkpointRef.workflowRevision,
+              ...(freshConfirmation.cause ? { cause: freshConfirmation.cause } : {}),
+              ...(freshConfirmation.executionState ? { executionState: freshConfirmation.executionState } : {}),
+              ...(freshConfirmation.retryable !== undefined ? { retryable: freshConfirmation.retryable } : {}),
+              ...(freshConfirmation.nextStep ? { nextStep: freshConfirmation.nextStep } : {})
+            } }])
+            toolDispatchStates.set(tool.toolCallId, 'finished')
+            parkRequested = true
+            parkedTodoId = freshConfirmation.todoId
+            throw new DeferredTurnParkedError()
+          }
+          const freshApproved = freshConfirmation.kind === 'approved' && Boolean(freshConfirmation.receipt.trim())
+          await appendHistory([{ kind: 'approval-resolved', payload: {
+            toolCallId: tool.toolCallId,
+            approvalId: authorization.confirmationId,
+            approved: freshApproved,
+            outcome: freshApproved ? 'approved' : freshConfirmation.kind === 'approved' ? 'denied' : freshConfirmation.kind,
+            ...(freshConfirmation.answerer ? { answerer: freshConfirmation.answerer } : {}),
+            ...(freshConfirmation.cause ? { cause: freshConfirmation.cause } : {}),
+            ...(freshConfirmation.promptSendFailure ? { promptSendFailure: freshConfirmation.promptSendFailure } : {}),
+            settledAt: Date.now()
+          } }])
+          if (input.request.signal?.aborted) {
+            await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
+            throwIfAborted(input.request.signal)
+          }
+          if (freshConfirmation.kind !== 'approved' || !freshConfirmation.receipt.trim()) {
+            const reason = `CONFIRMATION_${freshConfirmation.kind.toUpperCase()}`
+            await markNotDispatched(tool, reason, freshConfirmation.userMessage,
+              freshConfirmation.promptSendFailure ? { promptSendFailure: freshConfirmation.promptSendFailure } : undefined)
+            throw new ToolDeniedError(reason, freshConfirmation.userMessage)
+          }
+          confirmation = { receipt: freshConfirmation.receipt, answerer: freshConfirmation.answerer ?? 'user' }
+          try {
+            // The first recheck asked again because the previous approval no longer covered current facts.
+            // Let the host rebuild its prepared plan against this fresh user decision before authorizing it.
+            recheckBinding = await input.prepareTool(executionCall, {
+              kind: 'recheck', confirmation, replanAfterFreshApproval: true,
+              ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {})
+            })
+          } catch (error) {
+            throwIfAborted(input.request.signal)
+            const message = error instanceof Error ? error.message : ''
+            const reasonCode = error instanceof ToolDeniedError ? error.reasonCode
+              : /^[A-Z0-9_]{1,64}$/.test(message) ? message : 'PREPARED_RECHECK_FAILED'
+            await markNotDispatched(tool, reasonCode)
+            throw new ToolDeniedError(reasonCode)
+          }
+          if (!matchesRecheckBinding(initialBinding, recheckBinding, true)) {
+            await markNotDispatched(tool, 'STALE_AUTHORIZATION')
+            throw new ToolDeniedError('STALE_AUTHORIZATION')
+          }
+          authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
+          throwIfAborted(input.request.signal)
+        }
         if (authorization.kind !== 'allow') {
           const reason = authorization.kind === 'deny' ? authorization.reasonCode : 'RECHECK_REQUIRES_CONFIRMATION'
           await markNotDispatched(tool, reason)
@@ -1785,6 +1937,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
               kind: 'tool-call-started',
               payload: {
                 toolCallId: tool.toolCallId,
+                sourceRequestId: `${invocationId}:round:${modelTurns}`,
+                modelTurn: modelTurns,
                 toolName: tool.toolName,
                 executorEntry: 'unknown',
                 inputHash: createHash('sha256').update(JSON.stringify(tool.input)).digest('hex'),
@@ -1824,6 +1978,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         kind: 'tool-call-finished',
         payload: {
           toolCallId: tool.toolCallId,
+          sourceRequestId: `${invocationId}:round:${modelTurns}`,
+          modelTurn: modelTurns,
           success: !(executionResult.isError ?? false),
           result: executionResult.output,
           replayContent,
@@ -1858,6 +2014,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       shouldDrain: (reason) => reason instanceof ToolDeniedError || reason instanceof PlanRejectedError,
       shouldStop: (reason) => reason instanceof ToolExecutionAfterDispatchError
     })
+    const settledTools = toolCalls.map((tool) => settledInDispatchOrder[dispatchToolCalls.findIndex((candidate) => candidate.toolCallId === tool.toolCallId)])
     const isLifecycleFailure = (reason: unknown): boolean =>
       reason instanceof AgentTurnCancelledError || reason instanceof AgentTurnTimedOutError ||
       reason instanceof AgentTurnLifecycleInvalidatedError ||
@@ -1951,6 +2108,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         kind: 'tool-call-finished',
         payload: {
           toolCallId: tool.toolCallId,
+          sourceRequestId: `${invocationId}:round:${modelTurns}`,
+          modelTurn: modelTurns,
           success: false,
           result: result.output,
           replayContent: result.replayContent,
@@ -2248,15 +2407,16 @@ async function projectModelAttemptUsage(input: RunAgentTurnInput, usage: Record<
   }
 }
 
-function matchesRecheckBinding(initial: PermitBinding, recheck: PermitBinding): boolean {
-  return recheck.phase === 'recheck' &&
+function matchesRecheckBinding(initial: PermitBinding, recheck: PermitBinding, allowFreshPlanRevision = false): boolean {
+  const sameCallAuthorization = recheck.phase === 'recheck' &&
     initial.requestId === recheck.requestId &&
     initial.turnId === recheck.turnId &&
     initial.invocationId === recheck.invocationId &&
     initial.toolCallId === recheck.toolCallId &&
     initial.capabilityId === recheck.capabilityId &&
     initial.inputSnapshotHash === recheck.inputSnapshotHash &&
-    initial.planDigest === recheck.planDigest &&
-    initial.factsDigest === recheck.factsDigest &&
     initial.authorizationVersion === recheck.authorizationVersion
+  // A newly approved plan can have different plan/facts digests; only its caller after fresh approval opts into that revision.
+  return sameCallAuthorization && (allowFreshPlanRevision ||
+    initial.planDigest === recheck.planDigest && initial.factsDigest === recheck.factsDigest)
 }

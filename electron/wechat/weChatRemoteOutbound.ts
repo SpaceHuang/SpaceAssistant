@@ -1,4 +1,5 @@
 import type { IncomingMessage } from '@wechatbot/wechatbot'
+import { assertImOutboundAllowed, createHostImOutboundFacts, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import type { SessionCommands } from '../sessionStorage/contracts'
 import { formatRemoteOutboundMessage, sessionSuffixLength } from '../../src/shared/remoteOutboundFormat'
 import { maybeTouchOutboundActivity } from '../remote/imRemoteOutbound'
@@ -15,8 +16,16 @@ export async function sendWeChatRemoteOutbound(args: {
   sessionId?: string
   touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
   trackDelivery?: RemoteTrackOutboundDeliveryContext
+  outboundDeliveryFacts?: ImOutboundFacts
+  ownerId?: string
 }): Promise<void> {
   const { bot, inbound, body, sessionId, touch } = args
+  const destinationId = inbound.raw?.client_id || (inbound.userId && inbound.timestamp ? `${inbound.userId}-${inbound.timestamp.getTime()}` : 'inbound-message')
+  if (!sessionId) throw new Error('WECHAT_OUTBOUND_FINAL_CHECK_REQUIRED')
+  const outboundFacts = args.outboundDeliveryFacts ?? (args.ownerId ? createHostImOutboundFacts({ channel: 'wechat', purpose: 'system-reply',
+    body, sessionId, identityKey: inbound.userId, ownerId: args.ownerId, recipient: inbound.userId, chatType: 'p2p', destinationId }) : undefined)
+  if (!outboundFacts) throw new Error('WECHAT_OUTBOUND_FINAL_CHECK_REQUIRED')
+  assertImOutboundAllowed(outboundFacts, { channel: 'wechat', body, sessionId, recipient: inbound.userId, destinationId })
   const base = formatWeChatSummary(body)
   let text: string
 
@@ -24,12 +33,10 @@ export async function sendWeChatRemoteOutbound(args: {
     const suffixLen = sessionSuffixLength(sessionId)
     if (base.length + suffixLen > WECHAT_SUMMARY_MAX) {
       const maxBase = WECHAT_SUMMARY_MAX - suffixLen
-      const footer = '\n\n完整过程请查看 SpaceAssistant 桌面会话'
-      const stripped = base.endsWith(footer) ? base.slice(0, -footer.length) : base
-      let truncated = stripped.slice(0, Math.max(0, maxBase - footer.length - 1))
+      let truncated = base.slice(0, Math.max(0, maxBase - 1))
       const lastPara = truncated.lastIndexOf('\n\n')
       if (lastPara > truncated.length * 0.6) truncated = truncated.slice(0, lastPara)
-      const rebuilt = `${truncated}…${footer}`
+      const rebuilt = `${truncated}…`
       text = formatRemoteOutboundMessage(rebuilt, sessionId)
     } else {
       text = formatRemoteOutboundMessage(base, sessionId)

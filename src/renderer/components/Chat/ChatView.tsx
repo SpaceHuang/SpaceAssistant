@@ -19,10 +19,7 @@ import {
   setSession
 } from '../../store/chatSlice'
 import { openSettings } from '../../store/configSlice'
-import type { LastUsage } from '../../store/chatSlice'
 import {
-  clearLiveSession,
-  getLiveMessages,
   initLiveSessionFromStore,
   abortSessionRun,
   routeAddMessage,
@@ -30,7 +27,6 @@ import {
 import { ackApiContextMessagePersisted } from '../../services/apiContextService'
 import {
   commitMessageDelete,
-  commitMessagePatch,
   commitQueuedMessageEdit,
   commitQueuedMessageReorder,
 } from '../../services/messageMutationGateway'
@@ -50,10 +46,9 @@ import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { registerMessagesReloadHandler } from '../../services/invalidationService'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
-import { resolveChatLocale } from '../../utils/resolveChatLocale'
-import { buildToolChatPayload } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelThinkingPicker } from './ComposerModelThinkingPicker'
+import { ProjectInstructionsControl } from './ProjectInstructionsControl'
 import { resolveSessionModelBinding, resolveSessionThinkingBinding, resolveAvailableThinkingEfforts } from '../../services/sessionModelBinding'
 import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
@@ -62,14 +57,11 @@ import type { ChatModelOption } from '../../../shared/llmModelConfig'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
 import { appendArchivedQuery } from '../../../shared/wikiSessionState'
 import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
-import { activateBrowserRecoverySkillIfNeeded } from '../../services/browserRecoverySkillService'
-import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../../../shared/browserDependencyRecovery'
+import { activateRecoverySkillInState } from '../../../shared/browserDependencyRecovery'
 import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
-import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
-import { getCachedToolExposure, subscribeToolExposure } from '../../services/toolExposureService'
-import { appendSkillHintRecord, createContinuationStartedSystemMessage, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
+import { createContinuationStartedSystemMessage, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
 import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
-import { DEFAULT_WIKI_CONFIG, type SessionSkillsState } from '../../../shared/domainTypes'
+import type { SessionSkillsState } from '../../../shared/domainTypes'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatMessageList } from './ChatMessageList'
 import { CompactionMarker } from './CompactionMarker'
@@ -77,7 +69,6 @@ import type { ChatMessageActions } from './ChatMessageActions'
 import { ChatMessageViewport, type ChatMessageViewportHandle } from './ChatMessageViewport'
 import { ChatRunningElapsed, resolveChatRunningLabels } from './ChatRunningStatus'
 import { MessageInput, type MessageInputHandle } from './MessageInput'
-import { CHAT_CANCELLED_MESSAGE } from '../../../shared/chatCancel'
 import { throttle } from '../../utils/throttle'
 import arrowDownLineRaw from '../../assets/arrow_down_line.svg?raw'
 import { patchSvg } from '../../utils/patchSvg'
@@ -85,7 +76,7 @@ import { patchSvg } from '../../utils/patchSvg'
 const scrollToLatestIconSvg = patchSvg(arrowDownLineRaw, 16)
 import { useChatMessageEnter } from '../../hooks/useChatMessageEnter'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import { filterMessagesForChatApi, filterOutQueuedUserMessages, listQueuedUserMessages } from '../../../shared/chatMessageQueue'
+import { filterOutQueuedUserMessages, listQueuedUserMessages } from '../../../shared/chatMessageQueue'
 import { QueuedTaskBar } from './QueuedTaskBar'
 import { runtimeText } from '../../i18n/runtimeText'
 import type { OutboundContextIntent } from '../../../shared/outboundProtocol'
@@ -101,19 +92,10 @@ type SendInternalOptions = {
   sourceSelection?: import('../../../shared/outboundProtocol').OutboundSubmitIntent['sourceSelection']
 }
 
-function buildClaudePayload(history: Message[]) {
-  return filterMessagesForChatApi(history).map((m) => ({
-    role: m.role as 'user' | 'assistant',
-    content: typeof m.content === 'string' ? m.content : ''
-  }))
-}
-
 export function ChatView() {
   const { message } = App.useApp()
   const messageApi = message
   const { t } = useTypedTranslation('chat')
-  const { t: tErrors } = useTypedTranslation('errors')
-  const { t: tContextUsage } = useTypedTranslation('contextUsage')
   const { openFile } = useDetailPanel()
   const dispatch = useAppDispatch()
   const openModelSettings = useCallback(() => dispatch(openSettings({ tab: 'models' })), [dispatch])
@@ -164,15 +146,6 @@ export function ChatView() {
     () => (cfg && chatModelName ? cfg.models.find((m) => m.name === chatModelName) : undefined),
     [cfg, chatModelName]
   )
-  const chatBaseUrl = useMemo(() => {
-    if (!cfg) return undefined
-    const svc = cfg.llmServices.find((s) => s.id === chatLlmServiceId)
-    return svc?.baseUrl || cfg.baseUrl || undefined
-  }, [cfg, chatLlmServiceId])
-  // exposure 清单由主进程下发；空窗（null）内不启用工具（避免清单闪空，§5.2 启动时序定稿）
-  const [exposureTools, setExposureTools] = useState<string[] | null>(() => getCachedToolExposure())
-  useEffect(() => subscribeToolExposure(setExposureTools), [])
-  // 工具能力由主进程按请求计算；该状态仅用于界面显示。
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const viewportRef = useRef<ChatMessageViewportHandle>(null)
   const stickToBottomRef = useRef(true)
@@ -1167,25 +1140,28 @@ export function ChatView() {
         runningElapsed={runningElapsedNode}
         prefsSlot={
           cfg && thinkingBinding ? (
-            <ComposerModelThinkingPicker
-              cfg={cfg}
-              modelName={sessionBinding?.modelName ?? chatModelName}
-              modelServiceName={
-                sessionBinding?.option?.serviceAmbiguous ? sessionBinding.option.serviceName : undefined
-              }
-              modelDisplayName={sessionBinding?.displayName ?? chatModelName}
-              modelUnavailable={Boolean(sessionBinding && !sessionBinding.option)}
-              onSelectModel={(opt) => void handleModelSelect(opt)}
-              effort={thinkingBinding.effort}
-              effortOverridden={thinkingBinding.overridden}
-              globalEffort={thinkingBinding.globalEffort}
-              effortDisabled={currentModelEntry?.supportsThinking === false}
-              effortDisabledReason={
-                currentModelEntry?.supportsThinking === false ? t('composer.thinking.notSupported') : undefined
-              }
-              onSelectEffort={(effort) => void handleThinkingSelect(effort)}
-              availableEfforts={availableEfforts}
-            />
+            <>
+              <ComposerModelThinkingPicker
+                cfg={cfg}
+                modelName={sessionBinding?.modelName ?? chatModelName}
+                modelServiceName={
+                  sessionBinding?.option?.serviceAmbiguous ? sessionBinding.option.serviceName : undefined
+                }
+                modelDisplayName={sessionBinding?.displayName ?? chatModelName}
+                modelUnavailable={Boolean(sessionBinding && !sessionBinding.option)}
+                onSelectModel={(opt) => void handleModelSelect(opt)}
+                effort={thinkingBinding.effort}
+                effortOverridden={thinkingBinding.overridden}
+                globalEffort={thinkingBinding.globalEffort}
+                effortDisabled={currentModelEntry?.supportsThinking === false}
+                effortDisabledReason={
+                  currentModelEntry?.supportsThinking === false ? t('composer.thinking.notSupported') : undefined
+                }
+                onSelectEffort={(effort) => void handleThinkingSelect(effort)}
+                availableEfforts={availableEfforts}
+              />
+              <ProjectInstructionsControl />
+            </>
           ) : null
         }
         onSend={send}

@@ -89,7 +89,7 @@ export async function resolveTrustedTurnExecutionConfig(
   sessionCommands: Pick<SessionCommands, 'updateSettings'>,
   sessionId: string,
   lane: TurnExecutionLane,
-  derived: Pick<TurnExecutionConfig, 'system' | 'projectMemoryEnabled' | 'effectiveModelForUsage'> = {},
+  derived: Pick<TurnExecutionConfig, 'system' | 'projectMemoryEnabled' | 'agentsMdEnabled' | 'effectiveModelForUsage'> = {},
   options: { requiresVision?: boolean } = {}
 ): Promise<TurnExecutionConfig> {
   const session = sessionQueries.readSession(sessionId)
@@ -229,6 +229,7 @@ export async function resolveTrustedTurnExecutionConfig(
     ...(thinkingEffort !== requestedThinkingEffort ? { requestedThinkingEffort } : {}),
     enableThinking: thinkingEffort !== 'off',
     ...(locale && isAppLocale(locale) ? { locale } : {}),
+    agentsMdEnabled: session.metadata.agentsMdEnabled !== false,
     ...derived,
     ...(effectiveModelForUsage ? { effectiveModelForUsage } : {})
   })

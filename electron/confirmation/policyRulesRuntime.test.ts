@@ -3,11 +3,13 @@ import { getConfigValue, openSqliteDatabase, setConfigValue, type AppDatabase } 
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { PolicyRuleStore } from './policyRuleStore'
 import { getDbConnection } from '../database'
+import { commitImPolicySnapshot } from './imPolicyStore'
 import {
   DEFAULT_SECURITY_AUDIT_RETENTION_DAYS,
   DISABLED_POLICY_RULE_IDS_CONFIG_KEY,
   listPolicyRulesWithOverrides,
   loadEffectivePolicyRules,
+  resolveEffectivePolicyRulesWithOrigin,
   readDisabledPolicyRuleIds,
   readPolicyPackages,
   readSecurityAuditRetentionDays,
@@ -26,6 +28,24 @@ function db(): AppDatabase {
 }
 
 describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
+  it('marks only validated persisted MCP actions as user overrides, leaving legacy defaults unmarked', () => {
+    const legacyDb = db()
+    commitImPolicySnapshot(getDbConnection(legacyDb), {
+      policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'legacy-default-mcp'
+    })
+    const legacyRule = resolveEffectivePolicyRulesWithOrigin(legacyDb, 'wechat').rules.find((rule) => rule.id === 'mcp-tool-ask')
+    expect(legacyRule).toMatchObject({ action: 'ask' })
+    expect(legacyRule?.userOverride).toBeUndefined()
+
+    const overriddenDb = db()
+    commitImPolicySnapshot(getDbConnection(overriddenDb), {
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard', ruleOverrides: { 'mcp-tool-ask': 'ask' } },
+      updatedAt: 1, eventId: 'explicit-mcp-ask'
+    })
+    const explicitRule = resolveEffectivePolicyRulesWithOrigin(overriddenDb, 'wechat').rules.find((rule) => rule.id === 'mcp-tool-ask')
+    expect(explicitRule).toMatchObject({ action: 'ask', userOverride: true })
+  })
+
   it('未配置时各 lane 规则集恒等返回 DEFAULT_POLICY_RULES 引用（「自动」在引擎产出层变换）', () => {
     const d = db()
     expect(loadEffectivePolicyRules(d, 'desktop')).toBe(DEFAULT_POLICY_RULES)
@@ -33,6 +53,18 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(loadEffectivePolicyRules(d, 'feishu')).toBe(DEFAULT_POLICY_RULES)
     expect(loadEffectivePolicyRules(d, 'automation')).toBe(DEFAULT_POLICY_RULES)
     expect(readPolicyPackages(d).desktop).toBe('standard')
+  })
+
+  it('新版 IM 标准将 im-write-ask 解析为审核 Agent 候选，但敏感路径仍是人工确认底线', () => {
+    const d = db()
+    commitImPolicySnapshot(getDbConnection(d), {
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'standard-im-write-auto-review'
+    })
+    const rules = resolveEffectivePolicyRulesWithOrigin(d, 'wechat').rules
+    expect(rules.find((rule) => rule.id === 'im-write-ask')?.action).toBe('auto-evaluator')
+    expect(rules.find((rule) => rule.id === 'im-write-sensitive-path-confirm'))
+      .toMatchObject({ action: 'confirm-every-time', locked: true, humanRequired: true })
   })
 
   it('strict 范围档：lark-read-allow 被 scope-strict ask 条目取代（S1，偏差 15）；locked 不动', () => {

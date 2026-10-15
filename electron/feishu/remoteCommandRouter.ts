@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto'
 import type { AppDatabase } from '../database'
-import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { FeishuConfig, FeishuInboundMessage, WorkDirProfile } from '../../src/shared/feishuTypes'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
 import { readRemoteSessionIdleMinutes } from '../../src/shared/remoteSessionResolve'
@@ -10,8 +9,7 @@ import { FeishuImChannel } from './feishuImChannel'
 import { shouldAcceptInbound } from './feishuInboundParser'
 import { registerInboundFeishuAttachments } from './feishuAttachmentRegistry'
 import type { LarkCliRunner } from './larkCliRunner'
-import { replyFeishuText } from './feishuReply'
-import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
+import { sendFeishuRemoteOutbound as sendFeishuRemoteOutboundRaw } from './feishuRemoteOutbound'
 import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
 import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
@@ -21,7 +19,7 @@ import type { SessionStorage } from '../sessionStorage/contracts'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { resolveClarificationControlMessage, type ClarificationResolverInput, type ClarificationResolverResult } from '../remote/clarificationInbound'
-import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSession, isRequestLeaseOwner, getRemoteAgentLease } from '../remote/remoteAgentRegistry'
+import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSession, getRemoteAgentLease } from '../remote/remoteAgentRegistry'
 import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
@@ -37,7 +35,7 @@ import type { WorkDirManager } from '../workDirManager'
 import { bindSessionWorkDir, SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
-import { FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
+const FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE = '飞书确认超时（10分钟），工具调用已取消。如需重试，请重新发送原指令。'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
 import { resolveFrozenImTurnExecutionConfig, resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
 import { readAcceptedTurn } from '../database/acceptedTurnStorage'
@@ -55,6 +53,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { expireDuePendingClarifications, finishClarificationSendAttempt, listPendingClarificationNotices,
   listRecoverableClarificationPrompts, startClarificationSendAttempt, hasPendingClarificationForScope } from '../database/clarificationStore'
 import { createImLifecycleOutbox } from '../remote/imLifecycleOutbox'
+import { createHostImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import { sendFeishuTextToTarget } from './feishuReply'
 import { formatRemoteOutboundMessage } from '../../src/shared/remoteOutboundFormat'
 import { buildClarificationPrompt } from '../remote/clarificationPrompt'
@@ -136,6 +135,7 @@ export type RemoteCommandRouterDeps = {
   handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string; replyToMessageId?: string }) => Promise<void>
   handleClarificationReply?: (input: ClarificationResolverInput) => Promise<ClarificationResolverResult>
   createDeferredConfirmationAdapter?: (remoteContext: import('../tools/types').RemoteContext) => NonNullable<Parameters<typeof runFeishuRemoteAgent>[0]['confirmationAdapter']>
+  resolveAgentSdkGateSupplement?: import('../runtime/invocationAssembler').AgentInvocationMaterials['resolveAgentSdkGateSupplement']
   taskControlSafetyPort?: ImTaskSafetyPort
 }
 
@@ -157,7 +157,8 @@ export class RemoteCommandRouter {
       for (const notice of listPendingClarificationNotices(this.deps.db, 'feishu')) {
         await outbox.deliver(notice, (text) => sendFeishuTextToTarget(
           this.deps.runner, notice.ownerId, formatRemoteOutboundMessage(text, notice.sessionId)
-        ))
+        ), () => createHostImOutboundFacts({ channel: 'feishu', body: notice.text, sessionId: notice.sessionId,
+          identityKey: notice.identityKey, ownerId: notice.ownerId, recipient: notice.ownerId, chatType: 'p2p' }))
       }
       for (const prompt of listRecoverableClarificationPrompts(this.deps.db, 'feishu', now)) {
         if (this.activeClarificationSends.has(prompt.clarificationId)) continue
@@ -228,9 +229,10 @@ export class RemoteCommandRouter {
         })
         if (recovery.kind === 'recovery-pending') throw new Error('FEISHU_COMPLETION_WAKE_RECOVERY_PENDING')
         if (recovery.kind === 'notify-interrupted') {
+          const ownerId = metadata.feishuSenderOpenId as string
           await deliverInterruptedDeferredCompletionNotice(this.deps.db, { todoId: event.payloadRef.approvalId, sessionId: input.sessionId,
-            send: (text) => sendFeishuTextToTarget(this.deps.runner, metadata.feishuSenderOpenId as string,
-              formatRemoteOutboundMessage(text, input.sessionId)) })
+            channel: 'feishu', identityKey: metadata.feishuChatId as string, ownerId, recipient: ownerId,
+            send: (text) => sendFeishuTextToTarget(this.deps.runner, ownerId, formatRemoteOutboundMessage(text, input.sessionId)) })
           continue
         }
         if (recovery.kind === 'start') {
@@ -301,7 +303,7 @@ export class RemoteCommandRouter {
         if (priorTurn.state === 'terminal') {
           if (clarificationWork) {
             if (!settleRemoteTrackWorkFromTurn(this.deps.db, { claim: clarificationWork, outcome: priorTurn.outcome, now: Date.now(),
-              noticeText: '原始消息未重新执行，以避免重复操作；此前进度或外部调用结果无法确认，请检查桌面会话后再重发。' })) {
+              noticeText: '原始消息未重新执行，以避免重复操作；此前进度或外部调用结果无法确认。请先不要重发，可在此聊天说明要核对的内容。' })) {
               throw new Error('FEISHU_CLARIFICATION_WORK_SETTLE_FAILED')
             }
           }
@@ -384,10 +386,10 @@ export class RemoteCommandRouter {
       modelViewVersion: trackModelInputView?.viewVersion ?? 'track-model-view-unavailable', now: Date.now() })
     if (!bindRemoteSessionExecutionId(input.sessionId, input.leaseRequestId, prepared.turnId)) throw new Error('REMOTE_SESSION_LEASE_LOST')
     const remoteContext = {
-      source: 'feishu' as const, messageId: input.messageId, confirmPolicy: input.config.remoteConfirmPolicy,
+      source: 'feishu' as const, messageId: input.messageId,
       feishuConfig: input.config, feishuAttachments: [], imChannel: this.deps.imChannel,
       confirmTimeoutMessage: FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE, larkCliRunner: this.deps.runner,
-      chatId: input.chatId, userId: input.authSnapshot.owner, authOwner: input.authSnapshot.owner,
+      chatId: input.chatId, chatType: 'p2p' as const, userId: input.authSnapshot.owner, authOwner: input.authSnapshot.owner,
       originSessionId: input.sessionId, outboundSessionId: input.sessionId,
       workDirProfileId: input.profile?.id ?? this.deps.workDirManager.getActiveProfileId(),
       ...(input.deferredContinuation ? { deferredContinuation: input.deferredContinuation } : {}),
@@ -411,6 +413,7 @@ export class RemoteCommandRouter {
         getBrowserConfig: this.deps.getBrowserConfig, getWikiConfig: this.deps.getWikiConfig, getShellConfig: this.deps.getShellConfig,
         userDataDir: this.deps.getUserDataPath(), remoteContext,
         confirmationAdapter: this.deps.createDeferredConfirmationAdapter?.(remoteContext),
+        resolveAgentSdkGateSupplement: this.deps.resolveAgentSdkGateSupplement,
         taskControlSafetyPort: this.deps.taskControlSafetyPort,
         emitFactEvent: (event) => { if (!['source-completed', 'source-failed', 'source-cancelled', 'source-timeout'].includes(event.type)) this.deps.turnRuntime!.consumeForRequest(input.requestId, event, prepared.turnId) }
       }) }
@@ -419,8 +422,13 @@ export class RemoteCommandRouter {
     const outcome = getTurnByRequestId(this.deps.db, input.sessionId, input.requestId)?.outcome
     if (result.parked && outcome === 'parked') return
     if (outcome !== 'completed') throw new Error('FEISHU_WAKE_TURN_NOT_DURABLY_COMPLETED')
-    await sendFeishuRemoteOutbound({ runner: this.deps.runner, messageId: input.messageId, body: result.summary,
-      sessionId: input.sessionId, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: input.sessionId },
+    const wakeFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body: result.summary,
+      sessionId: input.sessionId, identityKey: input.chatId, ownerId: input.authSnapshot.owner,
+      recipient: input.authSnapshot.owner, chatType: 'p2p', destinationId: input.messageId })
+    await sendFeishuRemoteOutboundRaw({ runner: this.deps.runner, messageId: input.messageId, body: result.summary,
+      sessionId: input.sessionId, recipient: input.authSnapshot.owner,
+      outboundIdentity: { identityKey: input.chatId, ownerId: input.authSnapshot.owner, chatType: 'p2p' },
+      outboundDeliveryFacts: wakeFacts, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: input.sessionId },
       ...(input.trackContext ? { trackDelivery: { db: this.deps.db, track: input.trackContext, requestId: input.requestId, turnId: prepared.turnId } } : {}) })
   }
 
@@ -522,6 +530,17 @@ export class RemoteCommandRouter {
     logFeishuCliEvent('info', 'feishu.inbound.received', inboundSummaryForLog(msg))
 
     const ownerOpenId = readOwnerOpenIdFromAllowlist(config.remoteSenderAllowlist)
+    const sendScopedReply = (message: FeishuInboundMessage, ownerId: string | undefined, body: string, sessionId = `inbound:${message.messageId}`) => {
+      if (!ownerId) return Promise.resolve(undefined)
+      const outboundDeliveryFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body,
+        sessionId, identityKey: message.chatId, ownerId, recipient: message.senderOpenId,
+        chatType: message.chatType === 'p2p' ? 'p2p' : message.chatType === 'group' ? 'group' : 'unknown',
+        destinationId: message.messageId })
+      return sendFeishuRemoteOutboundRaw({ runner: this.deps.runner, messageId: message.messageId, body,
+        sessionId, recipient: message.senderOpenId,
+        outboundIdentity: { identityKey: message.chatId, ownerId, chatType: message.chatType === 'p2p' ? 'p2p' : message.chatType === 'group' ? 'group' : 'unknown' },
+        outboundDeliveryFacts })
+    }
     if (this.deps.imChannel.tryResolveFromInboundMessage(msg, { ownerOpenId })) return
 
     const bindingActive = Boolean(this.deps.ownerBind?.isBindingActive())
@@ -538,24 +557,16 @@ export class RemoteCommandRouter {
     if (!accept.accept) {
       logFeishuCliEvent('info', 'feishu.inbound.reject', { reason: accept.reason })
       if (accept.reason === 'too_long') {
-        await replyFeishuText(this.deps.runner, msg.messageId, '消息过长，请控制在 4000 字以内')
+        await sendScopedReply(msg, ownerOpenId, '消息过长，请控制在 4000 字以内')
       } else if (accept.reason === 'group_disabled') {
         logFeishuCliEvent('info', 'feishu.reject.group', { chatId: msg.chatId })
-        await replyFeishuText(
-          this.deps.runner,
-          msg.messageId,
-          '飞书远程仅支持私聊。请向 Bot 发送私聊消息。'
-        )
+        await sendScopedReply(msg, ownerOpenId, '飞书远程仅支持私聊。请向 Bot 发送私聊消息。')
       } else if (accept.reason === 'non_owner') {
         logFeishuCliEvent('warn', 'feishu.reject.non_owner', { senderOpenId: msg.senderOpenId })
-        await replyFeishuText(this.deps.runner, msg.messageId, '您不是已绑定的远程使用者，无法发送指令。')
+        await sendScopedReply(msg, ownerOpenId, '您不是已绑定的远程使用者，无法发送指令。')
       } else if (accept.reason === 'unbound') {
         logFeishuCliEvent('warn', 'feishu.reject.unbound', { senderOpenId: msg.senderOpenId })
-        await replyFeishuText(
-          this.deps.runner,
-          msg.messageId,
-          '远程尚未完成身份绑定。请在电脑端开启远程监听并完成绑定。'
-        )
+        await sendScopedReply(msg, ownerOpenId, '远程尚未完成身份绑定。请在电脑端开启远程监听并完成绑定。')
       }
       return
     }
@@ -568,11 +579,7 @@ export class RemoteCommandRouter {
       if (!parsed) {
         // Not a bind command. Reply generic usage hint; do not leak pairing state, no attempt spent.
         logFeishuCliEvent('info', 'feishu.bind.non_protocol', { senderOpenId: msg.senderOpenId })
-        await replyFeishuText(
-          this.deps.runner,
-          msg.messageId,
-          '远程尚未完成身份绑定。请在电脑端查看配对码，并发送「绑定 <配对码>」（英文 bind <code>）完成绑定。'
-        )
+        await sendScopedReply(msg, ownerOpenId, '远程尚未完成身份绑定。请在电脑端查看配对码，并发送「绑定 <配对码>」（英文 bind <code>）完成绑定。')
         return
       }
 
@@ -594,27 +601,19 @@ export class RemoteCommandRouter {
           maskedOwnerOpenId: msg.senderOpenId ? maskOpenId(msg.senderOpenId) : undefined,
           boundAt: Date.now()
         })
-        await replyFeishuText(
-          this.deps.runner,
-          msg.messageId,
-          '已绑定为远程控制者。本条仅用于绑定，请重新发送指令。之后仅你可向 Bot 发送指令。'
-        )
+        await sendScopedReply(msg, msg.senderOpenId, '已绑定为远程控制者。本条仅用于绑定，请重新发送指令。之后仅你可向 Bot 发送指令。')
         return
       }
 
       if (result === 'wrong_code') {
         logFeishuCliEvent('warn', 'feishu.bind.wrong_code', { senderOpenId: msg.senderOpenId })
-        await replyFeishuText(this.deps.runner, msg.messageId, '配对码错误。请核对电脑端显示的配对码后重试。')
+        await sendScopedReply(msg, ownerOpenId, '配对码错误。请核对电脑端显示的配对码后重试。')
         return
       }
 
       if (result === 'exhausted') {
         logFeishuCliEvent('warn', 'feishu.bind.exhausted', { senderOpenId: msg.senderOpenId })
-        await replyFeishuText(
-          this.deps.runner,
-          msg.messageId,
-          '配对码尝试次数过多，绑定窗口已关闭，远程已停用。请在电脑端重新发起绑定。'
-        )
+        await sendScopedReply(msg, ownerOpenId, '配对码尝试次数过多，绑定窗口已关闭，远程已停用。请在电脑端重新发起绑定。')
         return
       }
 
@@ -623,11 +622,7 @@ export class RemoteCommandRouter {
         senderOpenId: msg.senderOpenId,
         reason: result
       })
-      await replyFeishuText(
-        this.deps.runner,
-        msg.messageId,
-        '远程尚未完成身份绑定或配对窗口已失效。请在电脑端重新发起绑定。'
-      )
+      await sendScopedReply(msg, ownerOpenId, '远程尚未完成身份绑定或配对窗口已失效。请在电脑端重新发起绑定。')
       return
     }
 
@@ -641,7 +636,7 @@ export class RemoteCommandRouter {
     if (!rateLimiter.check(msg.senderOpenId, config.remoteRateLimitPerMinute)) {
       await this.deps.auditLogger.append({ type: 'rate_limit', senderOpenId: msg.senderOpenId })
       logFeishuCliEvent('warn', 'feishu.inbound.rate_limit', { senderOpenId: msg.senderOpenId })
-      await replyFeishuText(this.deps.runner, msg.messageId, '指令过于频繁，请稍后再试。')
+      await sendScopedReply(msg, ownerOpenId, '指令过于频繁，请稍后再试。')
       return
     }
 
@@ -731,7 +726,7 @@ export class RemoteCommandRouter {
       }
       logFeishuCliEvent('info', 'feishu.inbound.clarification_reply', { messageId: msg.messageId, result: clarificationControl.resultKind })
       try {
-        await replyFeishuText(this.deps.runner, msg.messageId, clarificationControl.reply)
+        await sendScopedReply(msg, guard.snapshot.owner, clarificationControl.reply)
       } finally {
         await this.deps.processedStore.markCompleted(msg.messageId, claimResult.claimId, `clarification_${clarificationControl.resultKind}`)
       }
@@ -767,11 +762,7 @@ export class RemoteCommandRouter {
           pendingSender: pending.senderOpenId,
           reason: 'identity_or_expired'
         })
-        await replyFeishuText(
-          this.deps.runner,
-          msg.messageId,
-          '工作目录选择已失效（身份变更或超时）。请重新发送指令。'
-        )
+        await sendScopedReply(msg, freshOwner, '工作目录选择已失效（身份变更或超时）。请重新发送指令。')
         return
       }
       const chosen = resolveDisambiguationChoice(msg.content, pending.profiles)
@@ -826,7 +817,7 @@ export class RemoteCommandRouter {
       }
       this.armDisambiguationTimeout(disambigKey, nextPending)
       this.pendingDisambiguation.set(disambigKey, nextPending)
-      await replyFeishuText(this.deps.runner, msg.messageId, buildDisambiguationReply(workDirResult.ambiguous))
+      await sendScopedReply(msg, guard.snapshot.owner, buildDisambiguationReply(workDirResult.ambiguous))
       return
     }
 
@@ -839,7 +830,7 @@ export class RemoteCommandRouter {
       })
       if (profile.sensitive) {
         await this.deps.processedStore.markCompleted(msg.messageId, claimResult.claimId, 'sensitive_blocked')
-        await replyFeishuText(this.deps.runner, msg.messageId, '该项目为敏感项目，不允许远程访问')
+        await sendScopedReply(msg, guard.snapshot.owner, '该项目为敏感项目，不允许远程访问')
         return
       }
     }
@@ -886,6 +877,18 @@ export class RemoteCommandRouter {
       logFeishuCliEvent('warn', 'feishu.inbound.guard_revalidate_fail', { reason })
       await claimFinalizer.complete('authorization_revoked')
     }
+    const sendCommandReply = (body: string, sessionId: string) => {
+      if (!authSnapshot) return Promise.resolve(undefined)
+      const outboundDeliveryFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body,
+        sessionId, identityKey: msg.chatId, ownerId: authSnapshot.owner, recipient: msg.senderOpenId,
+        chatType: msg.chatType === 'p2p' ? 'p2p' : msg.chatType === 'group' ? 'group' : 'unknown',
+        destinationId: msg.messageId })
+      return sendFeishuRemoteOutboundRaw({ runner: this.deps.runner, messageId: msg.messageId, body, sessionId,
+        recipient: msg.senderOpenId,
+        outboundIdentity: { identityKey: msg.chatId, ownerId: authSnapshot.owner,
+          chatType: msg.chatType === 'p2p' ? 'p2p' : msg.chatType === 'group' ? 'group' : 'unknown' },
+        outboundDeliveryFacts, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
+    }
 
     try {
       if (!authSnapshot) {
@@ -916,13 +919,7 @@ export class RemoteCommandRouter {
         const resolved = await resolveSession()
         sessionId = resolved.sessionId
         isNew = resolved.isNew
-        await sendFeishuRemoteOutbound({
-          runner: this.deps.runner,
-          messageId: msg.messageId,
-          body: '该项目为敏感项目，不允许远程访问',
-          sessionId,
-          touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
-        })
+        await sendCommandReply('该项目为敏感项目，不允许远程访问', sessionId)
         await claimFinalizer.complete('sensitive_blocked')
         return
       }
@@ -931,9 +928,7 @@ export class RemoteCommandRouter {
       let trackContext: RemoteTrackContext | undefined
       if (trackGates.execution && !this.deps.wakeEventDispatcher) {
         const resolved = await resolveSession()
-        await sendFeishuRemoteOutbound({ runner: this.deps.runner, messageId: msg.messageId,
-          body: '远程任务恢复通道暂不可用，本次未执行，请稍后重发。', sessionId: resolved.sessionId,
-          touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: resolved.sessionId } })
+        await sendCommandReply('远程任务恢复通道暂不可用，本次未执行，请稍后重发。', resolved.sessionId)
         await claimFinalizer.complete('track_execution_recovery_unavailable')
         return
       }
@@ -981,9 +976,7 @@ export class RemoteCommandRouter {
               return candidate ? [{ trackId, option: index + 1, label: candidate.summary.trim().slice(0, 120) || '未命名任务', stateAtIssue: candidate.state }] : []
             })
             if (candidates.length !== attribution.decision.candidateTrackIds.length || candidates.length === 0) {
-              await sendFeishuRemoteOutbound({ runner: this.deps.runner, messageId: msg.messageId,
-                body: '目前无法安全确认这条消息的任务归属，请重新描述完整指令。', sessionId,
-                touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
+              await sendCommandReply('目前无法安全确认这条消息的任务归属，请重新描述完整指令。', sessionId)
               await claimFinalizer.complete('track_attribution_ambiguous_candidates_unavailable')
               return
             }
@@ -1000,8 +993,7 @@ export class RemoteCommandRouter {
             const prompt = buildClarificationPrompt(handle, candidates)
             this.activeClarificationSends.add(clarificationId)
             try {
-              await sendFeishuRemoteOutbound({ runner: this.deps.runner, messageId: msg.messageId, body: prompt, sessionId,
-                touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
+              await sendCommandReply(prompt, sessionId)
               finishClarificationSendAttempt(this.deps.db, { sendAttemptId, state: 'send-fulfilled', finishedAt: Date.now() })
             } catch (error) {
               finishClarificationSendAttempt(this.deps.db, { sendAttemptId, state: 'send-outcome-unknown', finishedAt: Date.now() })
@@ -1017,11 +1009,9 @@ export class RemoteCommandRouter {
           const resolved = await resolveSession()
           sessionId = resolved.sessionId
           isNew = resolved.isNew
-          await sendFeishuRemoteOutbound({ runner: this.deps.runner, messageId: msg.messageId,
-            body: attribution.decision.kind === 'ambiguous'
+          await sendCommandReply(attribution.decision.kind === 'ambiguous'
               ? '暂时无法确定这条消息属于哪项任务。为避免接错任务，本次没有执行；请引用相关提示后重发。'
-              : '这条消息引用的任务已失效，本次没有执行。请重新描述要处理的事项。', sessionId,
-            touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
+              : '这条消息引用的任务已失效，本次没有执行。请重新描述要处理的事项。', sessionId)
           await claimFinalizer.complete(`track_attribution_${attribution.decision.kind}`)
           return
         }
@@ -1033,9 +1023,7 @@ export class RemoteCommandRouter {
             const resolved = await resolveSession()
             sessionId = resolved.sessionId
             isNew = resolved.isNew
-            await sendFeishuRemoteOutbound({ runner: this.deps.runner, messageId: msg.messageId,
-              body: '这项任务原来的会话已不可用。为避免丢失上下文，本次没有执行，请重新发送完整指令。', sessionId,
-              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
+            await sendCommandReply('这项任务原来的会话已不可用。为避免丢失上下文，本次没有执行，请重新发送完整指令。', sessionId)
             await claimFinalizer.complete('track_origin_session_unavailable')
             return
           }
@@ -1078,10 +1066,7 @@ export class RemoteCommandRouter {
           }
           await claimFinalizer.complete('durably_accepted')
           if (isNew || config.remoteNotifyOnReceive) {
-            await sendFeishuRemoteOutbound({
-              runner: this.deps.runner, messageId: msg.messageId, body: '已收到，正在处理…', sessionId,
-              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
-            })
+            await sendCommandReply('已收到，正在处理…', sessionId)
           }
           void this.deps.wakeEventDispatcher.dispatchSession(sessionId).catch((error) => {
             logFeishuCliEvent('error', 'feishu.inbound.dispatch_failed', {
@@ -1097,13 +1082,7 @@ export class RemoteCommandRouter {
             maxParallel: appCfg.maxParallelChatSessions
           })
         }
-        await sendFeishuRemoteOutbound({
-          runner: this.deps.runner,
-          messageId: msg.messageId,
-          body: claim.message,
-          sessionId,
-          touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
-        })
+        await sendCommandReply(claim.message, sessionId)
         await claimFinalizer.complete(claim.reason)
         return
       }
@@ -1117,7 +1096,6 @@ export class RemoteCommandRouter {
             remoteContext: {
               source: 'feishu',
               messageId: msg.messageId,
-              confirmPolicy: config.remoteConfirmPolicy
             },
             source: 'inbound',
             appendAudit: (profileId, profileName) =>
@@ -1132,13 +1110,7 @@ export class RemoteCommandRouter {
             }
           }
           if (!bindResult.success) {
-            await sendFeishuRemoteOutbound({
-              runner: this.deps.runner,
-              messageId: msg.messageId,
-              body: bindResult.error ?? SENSITIVE_WORKDIR_ERROR,
-              sessionId,
-              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
-            })
+            await sendCommandReply(bindResult.error ?? SENSITIVE_WORKDIR_ERROR, sessionId)
             await claimFinalizer.complete('workdir_bind_failed')
             return
           }
@@ -1169,13 +1141,7 @@ export class RemoteCommandRouter {
           }
           await claimFinalizer.complete('durably_accepted')
           if (isNew || config.remoteNotifyOnReceive) {
-            await sendFeishuRemoteOutbound({
-              runner: this.deps.runner,
-              messageId: msg.messageId,
-              body: '已收到，正在处理…',
-              sessionId,
-              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
-            })
+            await sendCommandReply('已收到，正在处理…', sessionId)
           }
           try {
             claim?.release()
@@ -1195,13 +1161,7 @@ export class RemoteCommandRouter {
         }
 
         if (isNew || config.remoteNotifyOnReceive) {
-          await sendFeishuRemoteOutbound({
-            runner: this.deps.runner,
-            messageId: msg.messageId,
-            body: '已收到，正在处理…',
-            sessionId,
-            touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
-          })
+          await sendCommandReply('已收到，正在处理…', sessionId)
           const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
           if (!re.ok) {
             await failAuth(re.reason)
@@ -1260,7 +1220,6 @@ export class RemoteCommandRouter {
         if (!bindRemoteSessionExecutionId(sessionId, requestId, prepared.turnId)) {
           throw new Error('REMOTE_SESSION_LEASE_LOST')
         }
-        const assistantMessageId = prepared.assistantMessage.id
         let trackModelInputView: TrackModelInputViewRef | undefined
         if (trackContext) {
           if (!prepared.userMessage) throw new Error('FEISHU_TRACK_ACCEPTED_USER_MESSAGE_MISSING')
@@ -1278,7 +1237,6 @@ export class RemoteCommandRouter {
         const remoteContext = {
           source: 'feishu' as const,
           messageId: msg.messageId,
-          confirmPolicy: config.remoteConfirmPolicy,
           feishuConfig: config,
           feishuAttachments: registerInboundFeishuAttachments(msg),
           imChannel: this.deps.imChannel,
@@ -1335,6 +1293,7 @@ export class RemoteCommandRouter {
             userDataDir: this.deps.getUserDataPath(),
             remoteContext,
             confirmationAdapter: this.deps.createDeferredConfirmationAdapter?.(remoteContext),
+            resolveAgentSdkGateSupplement: this.deps.resolveAgentSdkGateSupplement,
             taskControlSafetyPort: this.deps.taskControlSafetyPort,
             emitFactEvent: this.deps.turnRuntime && prepared ? (event) => {
               if (event.type === 'source-completed' || event.type === 'source-failed' || event.type === 'source-cancelled' || event.type === 'source-timeout') return
@@ -1343,9 +1302,8 @@ export class RemoteCommandRouter {
             })
           })
         } catch (e) {
-          const err = e instanceof Error ? e.message : String(e)
           result = {
-            summary: `执行失败：${err}\n请打开 SpaceAssistant 查看详情`,
+            summary: '执行未完成，当前结果无法确认。请先不要直接重复操作；可以在此聊天说明要核对的内容。',
             pendingConfirm: false,
             ok: false
           }
@@ -1358,11 +1316,19 @@ export class RemoteCommandRouter {
         const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
         touchRemoteSessionActivity(this.deps.sessionStorage!.commands, outboundSessionId)
 
-        await sendFeishuRemoteOutbound({
+        const outboundFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body: result.summary,
+          sessionId: outboundSessionId, identityKey: msg.chatId, ownerId: authSnapshot.owner,
+          recipient: msg.senderOpenId, chatType: msg.chatType === 'p2p' ? 'p2p' : msg.chatType === 'group' ? 'group' : 'unknown',
+          destinationId: msg.messageId })
+        await sendFeishuRemoteOutboundRaw({
           runner: this.deps.runner,
           messageId: msg.messageId,
           body: result.summary,
           sessionId: outboundSessionId,
+          recipient: msg.senderOpenId,
+          outboundIdentity: { identityKey: msg.chatId, ownerId: authSnapshot.owner,
+            chatType: msg.chatType === 'p2p' ? 'p2p' : msg.chatType === 'group' ? 'group' : 'unknown' },
+          outboundDeliveryFacts: outboundFacts,
           touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: outboundSessionId }
         })
         this.lastReplyAt = Date.now()

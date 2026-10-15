@@ -6,7 +6,7 @@ import {
   matchWorkDirProfile
 } from '../workDirBinding'
 import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
-import type { ToolExecutionContext, ToolExecutor } from './types'
+import type { ToolExecutor } from './types'
 
 const REMOTE_ONLY_ERROR = '该工具仅在远程会话中可用'
 const MISSING_CONTEXT_ERROR = '缺少必要的上下文信息'

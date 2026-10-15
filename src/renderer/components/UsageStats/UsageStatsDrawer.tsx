@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import dayjs, { type Dayjs } from 'dayjs'
+import type { Dayjs } from 'dayjs'
 import { Alert, Button, DatePicker, Drawer, Radio, Select, Space, Spin, Tabs, Typography } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'

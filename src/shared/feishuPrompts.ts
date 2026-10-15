@@ -1,9 +1,9 @@
-import type { FeishuRemoteConfirmPolicy } from './feishuTypes'
 import type { FeishuBrowserRemoteHint } from './browserRemotePolicy'
+import type { ImPolicyPromptSnapshot } from './policy/policyPromptContext'
+import { formatImPolicyPromptContext } from './policy/policyPromptContext'
 
 export function buildFeishuRemoteSystemAppendix(opts: {
-  messageId: string
-  confirmPolicy: FeishuRemoteConfirmPolicy
+  policySnapshot?: ImPolicyPromptSnapshot
   browserRemoteHint?: FeishuBrowserRemoteHint
 }): string {
   let browserHint = ''
@@ -17,8 +17,8 @@ export function buildFeishuRemoteSystemAppendix(opts: {
   return `
 <feishu_remote_command>
 来源：飞书 Bot 远程指令。
-完成后：用 run_lark_cli 向 message_id=${opts.messageId} 回复摘要（api POST .../reply --as bot）。
-写操作：当前 remoteConfirmPolicy=${opts.confirmPolicy}，禁止未确认的飞书写操作。${browserHint}
+完成后：直接给出用户可理解的任务摘要；系统会将结果发回当前飞书聊天。不要输出内部编号，也不要要求用户在当前聊天之外查看结果。
+安全：${formatImPolicyPromptContext(opts.policySnapshot)}${browserHint}
 </feishu_remote_command>`
 }
 

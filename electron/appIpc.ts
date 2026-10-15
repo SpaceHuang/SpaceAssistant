@@ -16,6 +16,7 @@ import { registerSearchIpc } from './ipc/searchIpc'
 import { registerSecurityIpc } from './ipc/securityIpc'
 import { registerSessionIpc } from './ipc/sessionIpc'
 import { registerStorageMaintenanceIpc } from './ipc/storageMaintenanceIpc'
+import { registerPolicyIpc } from './ipc/policyIpc'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
 import { runStorageProfileWorker } from './storageProfile/storageProfileWorkerClient'
@@ -61,6 +62,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): St
   registerFileIpc(ipcMain, context)
   registerSearchIpc(ipcMain, context)
   registerConfigIpc(ipcMain, context)
+  registerPolicyIpc(ipcMain, context.db)
   registerSecurityIpc(ipcMain, context)
   registerMcpIpcHandlers(ipcMain, context)
   return storageProfileCoordinator

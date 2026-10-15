@@ -4,7 +4,7 @@ import {
   MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL,
   MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL,
   MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL,
-  MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL,
+  MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL,
   MIGRATION_V19_AGENT_HISTORY_SQL, MIGRATION_V20_AGENT_HISTORY_SESSION_SQL, MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL,
   MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL, MIGRATION_V23_DRIVER_DELIVERY_SQL, MIGRATION_V24_SESSION_TRANSCRIPT_SQL,
   MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL, MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL,
@@ -20,7 +20,7 @@ import {
   MIGRATION_V44_SESSION_CONTENT_WRITE_STOPPED_STATE_SQL, MIGRATION_V45_SESSION_CONTENT_COMPLETE_LEDGER_SQL,
   MIGRATION_V46_CANONICAL_ONLY_MESSAGE_CONTENT_IMMUTABLE_SQL, MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_SQL,
   MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_TRIGGERS_SQL, MIGRATION_V47_SESSION_PROJECTION_MIGRATION_SQL,
-  MIGRATION_V48_SESSION_PROJECTION_LEGACY_POLICY_SQL, MIGRATION_V49_SESSION_PROJECTION_SCOPE_SQL,
+  MIGRATION_V48_SESSION_PROJECTION_LEGACY_POLICY_SQL,
   MIGRATION_V50_HISTORY_RECOVERY_WORK_SQL, MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL,
   MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL,
   MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
@@ -1487,6 +1487,7 @@ export function runMigrations(conn: DatabaseSync): void {
       singleton INTEGER PRIMARY KEY CHECK(singleton=1),
       state TEXT NOT NULL CHECK(state IN ('disabled','enabled','closing')),
       close_required INTEGER NOT NULL DEFAULT 0 CHECK(close_required IN (0,1)),
+      behavior_version TEXT NOT NULL DEFAULT '',
       updated_at INTEGER NOT NULL
     );
     INSERT OR IGNORE INTO remote_async_approval_gate_state(singleton,state,close_required,updated_at) VALUES(1,'disabled',0,0);`)
@@ -1793,8 +1794,7 @@ export function runMigrations(conn: DatabaseSync): void {
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   if (version === 94) runInTransaction(conn, () => {
-    // Reconcile the other schema branch's v83–v86 migrations without reusing their version
-    // numbers, which already identify Track migrations in local databases.
+    // Reconcile storage migrations from the parallel main branch before applying policy migrations.
     conn.exec(WIKI_PROJECTS_TABLE_SQL)
     conn.exec(MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL)
     conn.exec(MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL)
@@ -1802,6 +1802,81 @@ export function runMigrations(conn: DatabaseSync): void {
       conn.exec(MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL)
     }
     version = 95
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 95) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS policy_behavior_snapshots (
+      domain TEXT PRIMARY KEY NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      policy_behavior_version TEXT NOT NULL CHECK(length(policy_behavior_version) > 0),
+      revision INTEGER NOT NULL CHECK(revision >= 0),
+      snapshot_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
+    );
+    CREATE INDEX IF NOT EXISTS idx_policy_behavior_domain_revision
+      ON policy_behavior_snapshots(domain,revision);`)
+    conn.exec(`CREATE TABLE IF NOT EXISTS policy_behavior_snapshot_history (
+      history_id TEXT PRIMARY KEY NOT NULL,
+      domain TEXT NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      policy_behavior_version TEXT NOT NULL CHECK(length(policy_behavior_version) > 0),
+      snapshot_json TEXT NOT NULL,
+      archived_at INTEGER NOT NULL CHECK(archived_at >= 0)
+    );`)
+    conn.exec(`CREATE TABLE IF NOT EXISTS policy_authorization_epochs (
+      domain TEXT PRIMARY KEY NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      epoch INTEGER NOT NULL CHECK(epoch >= 0)
+    );
+    CREATE TABLE IF NOT EXISTS policy_deferred_todos (
+      todo_id TEXT PRIMARY KEY NOT NULL,
+      domain TEXT NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      status TEXT NOT NULL CHECK(status IN ('active','invalidated','completed'))
+    );
+    CREATE TABLE IF NOT EXISTS policy_authorizations (
+      authorization_id TEXT PRIMARY KEY NOT NULL,
+      domain TEXT NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      status TEXT NOT NULL CHECK(status IN ('active','revoked','consumed'))
+    );
+    CREATE TABLE IF NOT EXISTS policy_audit_events (
+      event_id TEXT PRIMARY KEY NOT NULL,
+      domain TEXT NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      event_json TEXT NOT NULL
+    );`)
+    version = 96
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 96) runInTransaction(conn, () => {
+    if (hasTable(conn, 'deferred_todos')) {
+      const columns: Array<[string, string]> = [
+        ['policy_behavior_version', 'TEXT'],
+        ['policy_revision', 'INTEGER'],
+        ['policy_epoch', 'INTEGER']
+      ]
+      for (const [name, declaration] of columns) {
+        if (!hasColumn(conn, 'deferred_todos', name)) {
+          conn.exec(`ALTER TABLE deferred_todos ADD COLUMN ${name} ${declaration}`)
+        }
+      }
+    }
+    version = 97
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 97) runInTransaction(conn, () => {
+    if (hasTable(conn, 'remote_async_approval_gate_state') && !hasColumn(conn, 'remote_async_approval_gate_state', 'behavior_version')) {
+      conn.exec("ALTER TABLE remote_async_approval_gate_state ADD COLUMN behavior_version TEXT NOT NULL DEFAULT ''")
+    }
+    version = 98
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 98) runInTransaction(conn, () => {
+    if (hasTable(conn, 'remote_async_approval_gate_state')) conn.exec('DROP TABLE remote_async_approval_gate_state')
+    // Databases from the former IM-policy branch may already report v98, having applied policy
+    // migrations but not main's storage reconciliation; these statements are idempotent.
+    conn.exec(WIKI_PROJECTS_TABLE_SQL)
+    conn.exec(MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL)
+    conn.exec(MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL)
+    if (hasTable(conn, 'canonical_projection_repairs') && !hasColumn(conn, 'canonical_projection_repairs', 'terminal_failed')) {
+      conn.exec(MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL)
+    }
+    version = 99
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

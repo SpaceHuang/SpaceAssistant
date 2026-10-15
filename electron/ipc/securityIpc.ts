@@ -8,7 +8,6 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { makeRecordSettings, makePushExposureToolsChanged } from './ipcShared'
 import { readSecurityAuditRetentionDays } from '../confirmation/policyRulesRuntime'
 import { readToolsConfig } from './ipcShared'
-import { recordSettingsChange } from '../confirmation/settingsAudit'
 import { revokeAllLegacyTrust, revokeLegacyTrustForCacheKey } from '../confirmation/legacyTrustRevocation'
 import { shell } from 'electron'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
@@ -74,7 +73,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
   ipcMain.handle(
     'shell:test-executable',
     async (
-      event,
+      _event,
       payload: { executable?: string; argsPrefix?: string[] }
     ): Promise<{ ok: boolean; error?: string }> => {
       const { testShellExecutable } = await import('../tools/runShellExecutor')

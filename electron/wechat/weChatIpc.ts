@@ -8,7 +8,6 @@ import { getDbConnection } from '../database'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import {
   mergeWeChatConfig,
-  weChatConfigNeedsPolicyMigration,
   type WeChatConfig,
   type WeChatConnectionStatus
 } from '../../src/shared/wechatTypes'
@@ -16,7 +15,7 @@ import { WeChatProcessedStore } from './weChatProcessedStore'
 import { WeChatAuditLogger } from './weChatAuditLogger'
 import { WeChatImChannel } from './weChatImChannel'
 import { WeChatBotService, detectWeChatSdk } from './weChatBotService'
-import { requireWeChatSentMessageId } from './weChatReplyService'
+import { sendWeChatTextToUserWithReceipt } from './weChatReplyService'
 import { WeChatCommandRouter, dispatchWeChatSdkInbound } from './weChatCommandRouter'
 import type { WorkDirManager } from '../workDirManager'
 import { resolveWorkDirForSession } from '../workDirManager'
@@ -33,13 +32,14 @@ import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
-import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { scheduleStartupWakeRecovery } from '../remote/startupWakeRecovery'
 import { createDeferredImBundleRuntime } from '../remote/deferredImBundleRuntime'
 import { recheckDeferredTaskControl } from '../remote/deferredImDispatch'
 import { executeDeferredImTool } from '../remote/imDeferredToolExecutor'
-import { createImDeferredApprovalProducer, createImDeferredConfirmationAdapter } from '../remote/imDeferredApprovalProducer'
+import { DeferredToolPreDispatchError } from '../tools/registeredAgentTurnTools'
+import { verifyDeferredWeChatAttachment } from '../tools/weChatAttachmentBinding'
+import { createImDeferredApprovalProducer, createImDeferredConfirmationAdapter, resolveImTaskDigest } from '../remote/imDeferredApprovalProducer'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createDeferredResumeRequestStore } from '../confirmation/deferredResumeRequestStore'
 import { createDeferredTodoTaskControlSafetyPort } from '../remote/deferredTodoTaskControlAdapter'
@@ -47,6 +47,7 @@ import { flushWeChatCliLogger, logWeChatCliEvent } from './weChatCliLogger'
 import { isTrayEnabled } from '../tray'
 import type { TurnRuntime } from '../turnRuntime'
 import { ensureRemoteImModelConfigMigrated } from '../remote/remoteImModelConfigDb'
+import { migrateLegacyImConfigBeforeChannelWrite, stripChannelPolicyFields } from '../confirmation/legacyImConfigBoundary'
 
 const WECHAT_CONFIG_KEY = 'config.wechat'
 
@@ -73,13 +74,6 @@ export function readWeChatConfigFromDb(db: AppDatabase): WeChatConfig {
   try {
     const stored = JSON.parse(raw) as Partial<WeChatConfig>
     const merged = mergeWeChatConfig(stored)
-    if (weChatConfigNeedsPolicyMigration(stored, merged)) {
-      setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(merged))
-      logWeChatCliEvent('info', 'wechat.config.migrated', {
-        from: stored.remoteConfirmPolicy,
-        to: merged.remoteConfirmPolicy
-      })
-    }
     return merged
   } catch {
     return mergeWeChatConfig(null)
@@ -117,10 +111,9 @@ export function createWeChatBundle(deps: {
     adapter: {
       send: async (dto, recipient) => {
         if (recipient.channel !== 'wechat') throw new Error('WECHAT_NOTIFICATION_CHANNEL_MISMATCH')
-        const bot = botService.getRawBot()
+        const bot = botService.getBot()
         if (!bot) throw new Error('WECHAT_DELIVERY_UNAVAILABLE')
-        const send = bot.send as unknown as (userId: string, text: string) => Promise<unknown>
-        return requireWeChatSentMessageId(await send.call(bot, recipient.ownerId, dto.text))
+        return sendWeChatTextToUserWithReceipt(bot, recipient.ownerId, dto.text)
       }
     },
     audit: (event) => getSecurityAuditLog().record(event)
@@ -129,16 +122,14 @@ export function createWeChatBundle(deps: {
   const deferredProducer = createImDeferredApprovalProducer({ db: deps.db, channel: 'wechat', todoStore: deferredTodos,
     capacity: deferredTodoCapacity, intentStore: deferredIntentStore, envelopeStore: createDeferredEnvelopeStore(deps.db),
     notificationDelivery: deferredNotificationDelivery,
-    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled && readCfg().loggedIn,
+    isEnabled: () => readCfg().remoteEnabled && readCfg().loggedIn,
+    onFallback: (reason) => logWeChatCliEvent('error', 'wechat.async_approval.defer_failed', { reason }),
     getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('wechat'),
-    resolveTaskDigest: (context) => {
-      if (!deps.sessionStorage || !context.currentUserMessageId || !context.originSessionId) return undefined
-      return deps.sessionStorage.queries.readMessages({ sessionId: context.originSessionId }).find((message) => message.id === context.currentUserMessageId)?.content
-    }
+    resolveTaskDigest: (context) => resolveImTaskDigest(deps.sessionStorage, context)
   })
   const deferredApprovalRuntime = createDeferredImBundleRuntime({
     db: deps.db, channel: 'wechat', todoStore: deferredTodos, notificationDelivery: deferredNotificationDelivery,
-    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled && readCfg().loggedIn,
+    isEnabled: () => readCfg().remoteEnabled && readCfg().loggedIn,
     getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('wechat'),
     maxParallel: deps.getMaxParallel(),
     isOwnerAuthorized: (todo) => {
@@ -146,28 +137,53 @@ export function createWeChatBundle(deps: {
       return config.remoteEnabled && config.loggedIn && (config.remoteSenderAllowlist ?? []).includes(todo.ownerId)
     },
     recheckTask: (todo, envelope) => recheckDeferredTaskControl(deps.db, todo, envelope),
+    recheckAttachment: async (todo, envelope) => {
+      const context = envelope.executionContext
+      const toolInput = envelope.canonicalArgs
+      const attachmentPath = typeof toolInput.imagePath === 'string' ? toolInput.imagePath
+        : typeof toolInput.filePath === 'string' ? toolInput.filePath : undefined
+      const expectedHash = envelope.contentVersions.attachmentSha256
+      if (!attachmentPath || typeof expectedHash !== 'string' || !deps.sessionStorage) return false
+      const resolved = resolveWorkDirForSession(deps.sessionStorage.queries, todo.originSessionId,
+        () => deps.workDirManager.listProfiles(), () => deps.workDirManager.getActiveProfileId(), () => deps.workDirManager.getActiveWorkDir())
+      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return false
+      return Boolean(await verifyDeferredWeChatAttachment(resolved.workDir, attachmentPath, expectedHash))
+    },
     dispatch: async ({ todo, envelope }) => {
       const context = envelope.executionContext
       const storage = deps.sessionStorage
       if (!storage || typeof context.confirmationReceipt !== 'string' || !context.confirmationReceipt.trim() ||
         typeof context.messageId !== 'string' || typeof context.providerRouteId !== 'string' || typeof context.model !== 'string') {
-        return { dispatched: false }
+        return { dispatched: false, failureReason: '审批待办缺少恢复所需材料，本次操作未执行。' }
       }
       const resolved = resolveWorkDirForSession(storage.queries, todo.originSessionId,
         () => deps.workDirManager.listProfiles(), () => deps.workDirManager.getActiveProfileId(), () => deps.workDirManager.getActiveWorkDir())
-      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return { dispatched: false }
+      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return { dispatched: false, failureReason: '原工作目录不可用或已变化，本次操作未执行。' }
+      const approvedAttachmentHash = envelope.contentVersions.attachmentSha256
+      const requestedAttachmentPath = typeof envelope.canonicalArgs.imagePath === 'string' ? envelope.canonicalArgs.imagePath
+        : typeof envelope.canonicalArgs.filePath === 'string' ? envelope.canonicalArgs.filePath : undefined
+      const deferredAttachmentApproval = requestedAttachmentPath && typeof approvedAttachmentHash === 'string'
+        ? await verifyDeferredWeChatAttachment(resolved.workDir, requestedAttachmentPath, approvedAttachmentHash) : null
+      if (requestedAttachmentPath && !deferredAttachmentApproval) return { dispatched: false, failureReason: '审批后的附件与原文件不一致，本次操作未执行，请重新审批。' }
+      if (!requestedAttachmentPath && approvedAttachmentHash !== undefined) return { dispatched: false, failureReason: '审批附件材料不完整，本次操作未执行。' }
       const config = readCfg()
-      const result = await executeDeferredImTool({
+      let result: unknown
+      try {
+        result = await executeDeferredImTool({
         db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
         requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
         toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs,
         confirmationReceipt: context.confirmationReceipt, lane: 'wechat', providerRouteId: context.providerRouteId,
         remoteContext: {
-          source: 'wechat', messageId: context.messageId, confirmPolicy: config.remoteConfirmPolicy,
+          source: 'wechat', messageId: context.messageId,
           userId: todo.ownerId, authOwner: todo.ownerId, originSessionId: todo.originSessionId,
           workDirProfileId: resolved.profileId, requestId: envelope.requestId,
           authorizationGeneration: remoteAuthorizationRegistry.getGeneration('wechat'),
           ...(typeof context.contextToken === 'string' ? { contextToken: context.contextToken } : {}),
+          ...(typeof context.currentUserMessageId === 'string' ? { currentUserMessageId: context.currentUserMessageId } : {}),
+          taskBinding: { workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId,
+            planRevision: todo.planRevision, revision: Number.isSafeInteger(context.taskRevision) ? context.taskRevision as number : todo.planRevision },
+          ...(deferredAttachmentApproval ? { deferredAttachmentApproval } : {}),
           wechatConfig: config
         },
         model: context.model, toolsConfig: deps.getToolsConfig(), workDir: resolved.workDir,
@@ -175,7 +191,14 @@ export function createWeChatBundle(deps: {
         workDirManager: deps.workDirManager, getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
         getShellConfig: () => readShellConfigFromDb(deps.db), toolChatExtras: { wechatConfig: config }
       })
-      return { dispatched: result !== undefined, result }
+      } catch (error) {
+        if (error instanceof DeferredToolPreDispatchError) {
+          return { dispatched: false, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
+        }
+        throw error
+      }
+      if (result === undefined) throw new Error('DEFERRED_EXECUTOR_RESULT_MISSING_AFTER_DISPATCH')
+      return { dispatched: true, result }
     },
     onCompletionWake: (sessionId) => dispatchCompletionWake?.(sessionId),
     audit: (event) => getSecurityAuditLog().record(event)
@@ -262,7 +285,7 @@ export function createWeChatBundle(deps: {
     getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
     getShellConfig: () => readShellConfigFromDb(deps.db),
     turnRuntime: deps.turnRuntime,
-    isRemoteAsyncApprovalEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db),
+    isRemoteAsyncApprovalEnabled: () => readCfg().remoteEnabled && readCfg().loggedIn,
     retryDeferredApprovalNotifications: ({ identityKey, ownerId }) => deferredNotificationDelivery.retryForAuthenticatedInbound({
       channel: 'wechat', identityKey, ownerId, authorizationEpoch: remoteAuthorizationRegistry.getAuthorizationEpoch('wechat')
     }),
@@ -495,8 +518,8 @@ export function registerWeChatIpcHandlers(
   ipcMain.handle('wechat:pending-confirms', async () => b.imChannel.listPending())
 
   ipcMain.handle('wechat:confirm-response', async (_e, payload: { requestId: string; approved: boolean }) => {
-    const ok = b.imChannel.resolveFromDesktop(payload.requestId, payload.approved)
-    return { ok }
+    void payload
+    return { ok: false, error: 'desktop_remote_confirmation_forbidden' }
   })
 
   ipcMain.handle(
@@ -530,6 +553,7 @@ export function persistWeChatConfig(
   partial: Partial<WeChatConfig>,
   options: { allowlist?: 'preserve' | 'replace' } = {}
 ): WeChatConfig {
+  migrateLegacyImConfigBeforeChannelWrite(db)
   const prev = readWeChatConfigFromDb(db)
   const allowlist = options.allowlist === 'replace'
     ? partial.remoteSenderAllowlist ?? []
@@ -544,7 +568,7 @@ export function persistWeChatConfig(
     : prev.loggedIn && !next.loggedIn ? 'logout' : allowlistChanged ? 'allowlist_changed' : null
   if (reason) {
     const coordinator = createRemoteAuthorizationRevocationCoordinator({
-      writeConfig: () => { setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(next)); return next },
+      writeConfig: () => { setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(stripChannelPolicyFields(next as unknown as Record<string, unknown>))); return next },
       advanceEpoch: (channel, why) => remoteAuthorizationRegistry.advanceAuthorizationEpoch(channel, why),
       cascade: (channel, epoch, why) => remoteAuthorizationRegistry.cascadeAuthorizationRevocation(channel, epoch, why),
       completeRevocation: (channel, epoch) => remoteAuthorizationRegistry.completeAuthorizationRevocation(channel, epoch),
@@ -552,7 +576,7 @@ export function persistWeChatConfig(
       markChannelsReady: (channels) => remoteAuthorizationRegistry.markChannelsReady(channels)
     })
     coordinator.commit({ channels: ['wechat'], reason, config: next })
-  } else setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(next))
+  } else setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(stripChannelPolicyFields(next as unknown as Record<string, unknown>)))
   logWeChatCliEvent('info', 'wechat.config.persist', { keys: Object.keys(partial) })
   return next
 }

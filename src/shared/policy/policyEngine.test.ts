@@ -6,8 +6,10 @@ import type {
   PolicyEngineDeps
 } from '../confirmation/types'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
-import { buildMemoryTiers, decide, decideIngress, deriveInvocationPolicyConstraints, signalTokenSet } from './policyEngine'
+import { buildMemoryTiers, decide, decideIngress, deriveInvocationPolicyConstraints, resolvePolicyOutcome, signalTokenSet } from './policyEngine'
 import { effectiveActionFor, resolvePolicyRules } from './policyPackages'
+import { imEffectiveActionFor } from './policyPackages'
+import { resolveImPolicyRulesForVersion } from './policyPackages'
 import type { PolicyAction } from '../confirmation/types'
 
 function mkFacts(
@@ -219,6 +221,196 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
   })
 })
 
+describe('decide：统一策略结果优先级契约', () => {
+  const facts = mkFacts('protected-tool', 'write', [], 'high')
+  const context = mkContext('wechat')
+  const rule = (id: string, action: PolicyAction, extra: Partial<import('../confirmation/types').PolicyRule> = {}) => ({
+    id, when: 'invocation' as const,
+    match: { toolName: 'protected-tool' }, action, reason: id,
+    ...extra
+  })
+
+  it('hard deny outranks human-required regardless of rule order', () => {
+    const forbidden = rule('forbidden', 'deny', { denyClass: 'forbidden' })
+    const human = rule('human-required', 'ask', { humanRequired: true })
+    for (const rules of [[human, forbidden], [forbidden, human]]) {
+      expect(decide(facts, context, rules, deps())).toMatchObject({ type: 'deny', ruleId: 'forbidden' })
+    }
+  })
+
+  it('critical forbidden deny outranks human-required regardless of rule order', () => {
+    const critical = rule('critical', 'deny', { denyClass: 'forbidden' })
+    const human = rule('human-required', 'ask', { humanRequired: true })
+    for (const rules of [[human, critical], [critical, human]]) {
+      expect(decide(facts, context, rules, deps())).toMatchObject({ type: 'deny', ruleId: 'critical' })
+    }
+  })
+
+  it('human-required ask outranks automatic review', () => {
+    const human = rule('human-required', 'ask', { humanRequired: true })
+    const automatic = rule('automatic-review', 'auto-evaluator')
+    for (const rules of [[automatic, human], [human, automatic]]) {
+      expect(decide(facts, context, rules, deps())).toMatchObject({
+        type: 'require-confirm', ruleId: 'human-required', answerer: 'user'
+      })
+    }
+  })
+
+  it('locked metadata does not change the action outcome', () => {
+    const lockedAsk = rule('ask', 'ask', { locked: true })
+    const editableAsk = rule('ask', 'ask', { locked: false })
+    const lockedDeny = rule('deny', 'deny', { locked: true })
+    const editableDeny = rule('deny', 'deny', { locked: false })
+    expect(decide(facts, context, [lockedAsk], deps())).toMatchObject({ type: 'require-confirm' })
+    expect(decide(facts, context, [editableAsk], deps())).toMatchObject({ type: 'require-confirm' })
+    expect(decide(facts, context, [lockedDeny], deps())).toMatchObject({ type: 'deny' })
+    expect(decide(facts, context, [editableDeny], deps())).toMatchObject({ type: 'deny' })
+  })
+
+  it('returns a unified disposition, cause, and reason for deny, human, and automatic outcomes', () => {
+    const hardDeny = decide(facts, context, [rule('forbidden', 'deny', { denyClass: 'forbidden' })], deps())
+    const human = decide(facts, context, [rule('human', 'ask', { humanRequired: true })], deps())
+    const automatic = decide(facts, context, [rule('automatic', 'auto-evaluator')], deps())
+    expect(hardDeny).toMatchObject({ disposition: 'forbidden', cause: 'hard-deny', reason: 'forbidden', ruleId: 'forbidden' })
+    expect(human).toMatchObject({ disposition: 'human-required', cause: 'human-required', reason: 'human', ruleId: 'human' })
+    expect(automatic).toMatchObject({ disposition: 'auto-eligible', reason: 'automatic', ruleId: 'automatic' })
+    expect(resolvePolicyOutcome(rule('forbidden', 'deny', { denyClass: 'forbidden' }))).toEqual({
+      disposition: 'forbidden', cause: 'forbidden', reason: 'forbidden'
+    })
+    expect(resolvePolicyOutcome(rule('human', 'ask', { humanRequired: true }))).toEqual({
+      disposition: 'human-required', cause: 'human-required', reason: 'human'
+    })
+    expect(resolvePolicyOutcome(rule('automatic', 'auto-evaluator'))).toEqual({
+      disposition: 'auto-eligible', cause: 'automatic', reason: 'automatic'
+    })
+  })
+})
+
+describe('decide：IM effective action 覆盖契约', () => {
+  const facts = mkFacts('write_file', 'write', [], 'low')
+  const context = mkContext('wechat')
+  const lowRiskCreate = {
+    id: 'im-low-risk-create', when: 'invocation' as const,
+    match: { toolName: 'write_file' }, action: 'ask' as const, reason: '低风险新建'
+  }
+
+  it('effective IM action honors strict and loose scopes', () => {
+    expect(decide(facts, context, [lowRiskCreate], deps({ transform: (rule) => imEffectiveActionFor('im', 'strict', rule) }))).toMatchObject({ type: 'require-confirm' })
+    expect(decide(facts, context, [lowRiskCreate], deps({ transform: (rule) => imEffectiveActionFor('im', 'loose', rule) }))).toMatchObject({ type: 'auto-allow' })
+  })
+
+  it('custom explicit ask is not transformed by package mapping', () => {
+    expect(decide(facts, context, [lowRiskCreate], deps({ transform: (rule) => imEffectiveActionFor('im', 'custom', rule, 'ask') }))).toMatchObject({ type: 'require-confirm' })
+  })
+
+  it('maps the registered env.time capability into the shared IM standard review candidate', () => {
+    const timeCall = mkFacts('toolkit.call', 'execute', [
+      { kind: 'toolkit-capability', capabilityId: 'env.time', risk: 'read' }
+    ], 'low')
+    const standardTransform = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
+    expect(decide(timeCall, context, DEFAULT_POLICY_RULES, deps({ transform: standardTransform })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'im-time-query-review', answerer: 'agent' })
+  })
+
+  it('routes an ordinary new IM workspace file through the dedicated low risk rule', () => {
+    const imRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const transform = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
+    const result = decide(mkFacts('write_file', 'write', [
+      { kind: 'path-target', path: '/work/new.md', zone: 'workdir-normal' },
+      { kind: 'write-target-scope', scope: 'inside-workdir' },
+      { kind: 'write-target-new' }
+    ]), context, imRules, deps({ transform }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'im-low-risk-create', answerer: 'agent' })
+  })
+
+  it('routes ordinary browser actions and classified Feishu writes to Agent, while dangerous actions and message sends stay with the user', () => {
+    const imRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const transform = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
+    const browserDeps = deps({ transform, config: { actRequiresConfirm: true, remoteActSkipConfirm: false } })
+    const browserRead = decide(mkFacts('browser', 'execute', [
+      { kind: 'browser-action', action: 'act', dangerous: false, sideEffect: 'read', completeness: 'complete' }
+    ], 'low'), context, imRules, browserDeps)
+    const browserDanger = decide(mkFacts('browser', 'execute', [
+      { kind: 'browser-action', action: 'act', dangerous: true, sideEffect: 'delete', completeness: 'complete' }
+    ], 'high'), context, imRules, browserDeps)
+    const browserUnclassified = decide(mkFacts('browser', 'execute', [
+      { kind: 'browser-action', action: 'act', dangerous: false, sideEffect: 'unknown', completeness: 'partial' }
+    ], 'medium'), context, imRules, browserDeps)
+    const larkDocWrite = decide(mkFacts('run_lark_cli', 'execute', [
+      { kind: 'lark-subcommand', impact: 'low_write', category: 'doc_write', completeness: 'complete' }
+    ], 'medium'), mkContext('feishu'), imRules, deps({ transform }))
+    const larkSelf = decide(mkFacts('run_lark_cli', 'execute', [
+      { kind: 'lark-subcommand', impact: 'low_write', category: 'message', completeness: 'complete', messageTarget: 'self' }
+    ], 'medium'), mkContext('feishu'), imRules, deps({ transform }))
+    const larkDirect = decide(mkFacts('run_lark_cli', 'execute', [
+      { kind: 'lark-subcommand', impact: 'low_write', category: 'message', completeness: 'complete', messageTarget: 'direct-other' }
+    ], 'medium'), mkContext('feishu'), imRules, deps({ transform }))
+    const larkGroup = decide(mkFacts('run_lark_cli', 'execute', [
+      { kind: 'lark-subcommand', impact: 'high_impact', category: 'group_message', completeness: 'complete', messageTarget: 'group-or-multiple' }
+    ], 'high'), mkContext('feishu'), imRules, deps({ transform }))
+    const larkMessageUnknown = decide(mkFacts('run_lark_cli', 'execute', [
+      { kind: 'lark-subcommand', impact: 'low_write', category: 'message', completeness: 'complete', messageTarget: 'unknown' }
+    ], 'medium'), mkContext('feishu'), imRules, deps({ transform }))
+
+    expect(browserRead).toMatchObject({ type: 'require-confirm', ruleId: 'im-browser-act-review', answerer: 'agent' })
+    expect(browserDanger).toMatchObject({ type: 'require-confirm', ruleId: 'im-browser-act-danger-human', answerer: 'user' })
+    expect(browserUnclassified).toMatchObject({ type: 'require-confirm', ruleId: 'browser-act-ask-remote', answerer: 'agent' })
+    expect(larkDocWrite).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-low-write-review', answerer: 'agent' })
+    expect(larkSelf).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
+    expect(larkDirect).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-direct-review', answerer: 'agent' })
+    expect(larkGroup).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-group-human', answerer: 'user' })
+    expect(larkMessageUnknown).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-target-unknown-human', answerer: 'user' })
+    const larkUnknown = decide(mkFacts('run_lark_cli', 'execute', [
+      { kind: 'lark-subcommand', impact: 'unknown', category: 'unknown', completeness: 'partial' }
+    ], 'high'), mkContext('feishu'), imRules, deps({ transform }))
+    const larkHigh = decide(mkFacts('run_lark_cli', 'execute', [
+      { kind: 'lark-subcommand', impact: 'high_impact', category: 'delete', completeness: 'complete' }
+    ], 'high'), mkContext('feishu'), imRules, deps({ transform }))
+    expect(larkUnknown).toMatchObject({ type: 'require-confirm', ruleId: 'lark-unknown-ask', answerer: 'user' })
+    expect(larkHigh).toMatchObject({ type: 'require-confirm', ruleId: 'lark-high-impact-ask', answerer: 'user' })
+  })
+
+  it('preserves explicit browser confirmation bypass settings after IM rules become Agent-review candidates', () => {
+    const imRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const transform = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
+    const lowRiskAct = mkFacts('browser', 'execute', [
+      { kind: 'browser-action', action: 'act', dangerous: false, sideEffect: 'read', completeness: 'complete' }
+    ], 'low')
+    const remoteSkip = decide(lowRiskAct, mkContext('wechat'), imRules, deps({
+      transform,
+      config: { actRequiresConfirm: true, remoteActSkipConfirm: true }
+    }))
+    expect(remoteSkip).toMatchObject({ type: 'auto-allow', ruleId: 'browser-act-ask-remote' })
+
+    const globalSkip = decide(lowRiskAct, mkContext('wechat'), imRules, deps({
+      transform,
+      config: { actRequiresConfirm: false, remoteActSkipConfirm: false }
+    }))
+    expect(globalSkip).toMatchObject({ type: 'auto-allow', ruleId: 'browser-act-allow-unconfigured' })
+  })
+
+  it('keeps shared candidate outcomes identical for the same facts in wechat and feishu', () => {
+    const candidateRules = [
+      { id: 'im-low-risk-create', when: 'invocation' as const, action: 'ask' as const, reason: 'new file' },
+      { id: 'browser-navigate-ask-remote', when: 'invocation' as const, action: 'ask' as const, reason: 'navigation' },
+      { id: 'im-mcp-public-read-review', when: 'invocation' as const, action: 'ask' as const, reason: 'public search' },
+      { id: 'im-time-query-review', when: 'invocation' as const, action: 'ask' as const, reason: 'time' }
+    ]
+    const facts = mkFacts('write_file', 'write', [], 'low')
+    for (const pkg of ['strict', 'standard', 'loose', 'custom'] as const) {
+      const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg, rules: candidateRules })
+      const channelResults = (['wechat', 'feishu'] as const).map((lane) => {
+        const decision = decide(facts, mkContext(lane), rules, deps())
+        return decision.type === 'require-confirm'
+          ? [decision.type, decision.ruleId, decision.answerer, decision.disposition]
+          : [decision.type, decision.ruleId]
+      })
+      expect(channelResults[0]).toEqual(channelResults[1])
+    }
+  })
+
+})
+
 describe('decide：脚本规则作用域不外溢', () => {
   it('桌面 run_shell 携带通用 network-egress 不被脚本规则卷入（按 execute 默认走确认）', () => {
     const d = decide(
@@ -246,6 +438,36 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
   // P1 生效语义：desktop standard 规则集经 LANE_PROFILES 变换后喂给引擎（等价 runtime 装配）
   const desktopStandard = () => resolvePolicyRules({ lane: 'desktop', rules: DEFAULT_POLICY_RULES })
   const standardTransform = (r: { action: PolicyAction; locked?: boolean }) => effectiveActionFor('desktop', 'standard', r)
+
+  it('4.1.1: auto-evaluator fallback selects Agent; explicit and human-required asks stay user-owned', () => {
+    const auto = decide(mkFacts('write_file', 'write', []), mkContext('desktop'), [
+      { id: 'review-candidate', when: 'invocation', action: 'auto-evaluator', reason: 'review' }
+    ], deps())
+    const explicit = decide(mkFacts('write_file', 'write', []), mkContext('wechat'), [
+      { id: 'explicit-human', when: 'invocation', action: 'ask', reason: 'human' }
+    ], deps())
+    const floor = decide(mkFacts('write_file', 'write', []), mkContext('feishu'), [
+      { id: 'human-floor', when: 'invocation', action: 'ask', humanRequired: true, reason: 'floor' }
+    ], deps())
+    expect(auto).toMatchObject({ type: 'require-confirm', answerer: 'agent' })
+    expect(explicit).toMatchObject({ type: 'require-confirm', answerer: 'user' })
+    expect(floor).toMatchObject({ type: 'require-confirm', answerer: 'user' })
+  })
+
+  it('IM standard auto-evaluator candidates route to Agent while explicit asks and human floors stay user-owned', () => {
+    const imRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const candidate = decide(mkFacts('toolkit.call', 'execute', [
+      { kind: 'toolkit-capability', capabilityId: 'env.time', risk: 'read' }
+    ], 'low'), mkContext('feishu'), imRules, deps())
+    const explicit = decide(mkFacts('run_lark_cli', 'execute', [{ kind: 'lark-subcommand', impact: 'unknown' }]),
+      mkContext('feishu'), [{ id: 'explicit-human', when: 'invocation', action: 'ask', reason: 'human' }], deps())
+    const floor = decide(mkFacts('run_script', 'execute', []), mkContext('feishu'), [
+      { id: 'human-floor', when: 'invocation', action: 'auto-evaluator', humanRequired: true, reason: 'floor' }
+    ], deps())
+    expect(candidate).toMatchObject({ type: 'require-confirm', ruleId: 'im-time-query-review', answerer: 'agent', disposition: 'auto-eligible' })
+    expect(explicit).toMatchObject({ type: 'require-confirm', ruleId: 'explicit-human', answerer: 'user', disposition: 'human-required' })
+    expect(floor).toMatchObject({ type: 'require-confirm', ruleId: 'human-floor', answerer: 'user', disposition: 'human-required' })
+  })
 
   it('write_file 快通道批准 → 自动放行（default-write-execute-ask 经 transform 变 auto）', () => {
     const d = decide(
@@ -302,6 +524,40 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
       expect(d.ruleId).toBe('mcp-tool-ask')
       expect(d.answerer).toBe('agent')
     }
+  })
+
+  it('persisted IM MCP ask override takes precedence over generic automatic write review', () => {
+    const facts = mkFacts('mcp__srv__create', 'write', [
+      { kind: 'mcp-tool', serverId: 'srv', toolName: 'create' },
+      { kind: 'mcp-invocation', serverId: 'srv', toolName: 'create', actionClass: 'write', completeness: 'complete' }
+    ])
+    const rules = [
+      { id: 'mcp-tool-ask', when: 'invocation' as const, match: { signals: ['mcp-tool'] }, action: 'ask' as const, userOverride: true as const, reason: 'MCP confirmation' },
+      { id: 'im-write-ask', when: 'invocation' as const, match: { lane: ['wechat', 'feishu'] as const, actionClass: 'write' as const, excludeSignals: ['write-target-new', 'write-target-existing'] }, action: 'auto-evaluator' as const, reason: 'Generic write review' }
+    ]
+    const lookup = vi.fn(() => ({ id: 'stale-session-allow', key: { kind: 'mcp-tool', serverId: 'srv', toolName: 'create', sessionId: 's1' },
+      decision: 'allow' as const, lane: 'wechat' as const, scope: 'session' as const, createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' as const }))
+    const decision = decide(facts, mkContext('wechat'), rules, deps({ cache: { lookup },
+      transform: (rule) => rule.id === 'mcp-tool-ask' ? 'ask' : rule.action,
+      autoEvaluator: () => ({ approve: true as const, reason: 'generic reviewer approved' })
+    }))
+    expect(decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'mcp-tool-ask', disposition: 'human-required' })
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
+  it('legacy default MCP ask still honors an existing session allow cache', () => {
+    const lookup = vi.fn((key: import('../confirmation/types').CacheKey) => ({
+      id: 'session-mcp-allow', key, decision: 'allow' as const, lane: 'wechat' as const, scope: 'session' as const,
+      createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' as const
+    }))
+    const decision = decide(
+      mkFacts('mcp__srv__query', 'read', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
+      mkContext('wechat'),
+      [{ id: 'mcp-tool-ask', when: 'invocation', match: { signals: ['mcp-tool'] }, action: 'ask', reason: 'MCP tool call requires confirmation' }],
+      deps({ cache: { lookup } })
+    )
+    expect(decision).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
+    expect(lookup).toHaveBeenCalledOnce()
   })
 
   it('read_file 不被评估器截胡（默认放行）', () => {
@@ -408,6 +664,22 @@ describe('decide：远程写会话信任（decision_cache remote-write）', () =
     if (d.type === 'require-confirm') expect(d.ruleId).toBe('im-write-ask')
   })
 
+  it('新版 IM 标准将普通未分类写入交审核 Agent，敏感路径仍由 humanRequired 底线拦截', () => {
+    const standardRules = resolveImPolicyRulesForVersion({
+      policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES
+    })
+    const transform = (candidate: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', candidate)
+    const ordinary = decide(mkFacts('write_file', 'write', []), mkContext('wechat'), standardRules,
+      deps({ transform, autoEvaluator: () => ({ approve: false, reason: 'needs review' }) }))
+    expect(ordinary).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'agent', disposition: 'auto-eligible' })
+
+    const sensitive = decide(mkFacts('write_file', 'write', [
+      { kind: 'path-target', path: '.env', zone: 'sensitive-file' }
+    ]), mkContext('wechat'), standardRules,
+      deps({ transform, autoEvaluator: () => ({ approve: true }) }))
+    expect(sensitive).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-sensitive-path-confirm', answerer: 'user' })
+  })
+
   it('会话写信任（remote-write allow 缓存）→ 远程写免确认（cache-hit 先于 im-write-ask）', () => {
     const cache: DecisionCacheView = {
       lookup: () => ({
@@ -492,14 +764,15 @@ describe('decideIngress：消息入口准入', () => {
     expect(r.action).toBe('allow')
   })
 
-  it('数组顺序首条命中即返回：allow 条目先于同域 deny 时会掩盖 deny（依赖顺序自律）', () => {
+  it('deny ingress 约束优先于 allow，且不依赖规则数组顺序', () => {
     const rules = [
       { id: 'allow-any', when: 'ingress', match: { lane: ['feishu'] }, action: 'allow', reason: 'r' },
       { id: 'deny-group', when: 'ingress', match: { lane: ['feishu'], origin: 'group' }, action: 'deny', reason: 'r' }
     ]
     const r = decideIngress({ lane: 'feishu', origin: { kind: 'group' } }, rules)
-    expect(r.ruleId).toBe('allow-any')
-    expect(r.action).toBe('allow')
+    expect(r.ruleId).toBe('deny-group')
+    expect(r.action).toBe('deny')
+    expect(decideIngress({ lane: 'feishu', origin: { kind: 'group' } }, [...rules].reverse())).toMatchObject({ action: 'deny', ruleId: 'deny-group' })
   })
 })
 
@@ -623,6 +896,43 @@ describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）',
       )
       expect(d.type).toBe('require-confirm')
       expect(d.type === 'require-confirm' && d.ruleId).toBe('mcp-tool-ask')
+    }
+  })
+
+  it('IM standard 将其他 MCP 调用默认交给审核 Agent，拒绝规则仍优先', () => {
+    const imStandard = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
+    const unknownMcp = mkFacts('mcp__srv__fetch', 'write', [
+      { kind: 'mcp-tool', serverId: 'srv', toolName: 'fetch' }
+    ])
+    for (const lane of ['wechat', 'feishu'] as const) {
+      expect(decide(unknownMcp, mkContext(lane), DEFAULT_POLICY_RULES, deps({ transform: imStandard })))
+        .toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'agent' })
+      const unauthorized = decide(mkFacts('mcp__srv__fetch', 'write', [
+        { kind: 'mcp-tool', serverId: 'srv', toolName: 'fetch' },
+        { kind: 'mcp-invocation', serverId: 'srv', toolName: 'fetch', actionClass: 'write',
+          classificationBasis: 'schema-heuristic', sideEffect: 'read', dataSources: [], dataDestinations: [],
+          querySource: 'public', accountAuthorization: 'unauthorized', completeness: 'complete', missingFacts: [],
+          argNames: ['url'], argsDigest: 'digest', argsTruncated: false }
+      ]), mkContext(lane), DEFAULT_POLICY_RULES, deps({ transform: imStandard }))
+      expect(unauthorized).toMatchObject({ type: 'deny', ruleId: 'mcp-account-unauthorized-deny' })
+    }
+  })
+
+  it('远程只把带齐主进程来源与授权事实的只读 MCP 调用交给 standard 审核 Agent', () => {
+    const trustedFacts = mkFacts('mcp__srv__search', 'read', [
+      { kind: 'mcp-tool', serverId: 'srv', toolName: 'search' },
+      { kind: 'mcp-readonly', serverId: 'srv', toolName: 'search' },
+      {
+        kind: 'mcp-invocation', serverId: 'srv', toolName: 'search', actionClass: 'read',
+        classificationBasis: 'annotations-readonly', sideEffect: 'read', dataSources: [], dataDestinations: [],
+        queryText: 'public documentation', querySource: 'public', accountAuthorization: 'authorized',
+        completeness: 'complete', missingFacts: [], argNames: ['query'], argsDigest: 'digest', argsTruncated: false
+      }
+    ])
+    const imStandard = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
+    for (const lane of ['wechat', 'feishu'] as const) {
+      expect(decide(trustedFacts, mkContext(lane), DEFAULT_POLICY_RULES, deps({ transform: imStandard })))
+        .toMatchObject({ type: 'require-confirm', ruleId: 'im-mcp-public-read-review', answerer: 'agent' })
     }
   })
 

@@ -9,6 +9,8 @@ import {
   setSecret
 } from './mcpSecretStore'
 
+vi.hoisted(() => vi.resetModules())
+
 vi.mock('../secureApiKey', () => ({
   encryptSecret: (plain: string) => `aes:${plain}`,
   decryptSecret: (b64: string) => b64.startsWith('legacy:safe:') ? b64.slice('legacy:safe:'.length) : b64.startsWith('safe:') ? b64.slice(5) : b64.startsWith('aes:') ? b64.slice(4) : b64.replace(/^enc:/, ''),

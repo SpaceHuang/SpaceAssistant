@@ -194,9 +194,9 @@ describe('IM task control coordinator', () => {
     } })
     const request = { sessionId, ownerId: 'owner-outbox', workflowId: 'workflow-outbox', taskId: 'task-outbox', expectedRevision: 1, operationId: 'outbox-cancel' }
     expect(await coordinator.cancel(request)).toMatchObject({ status: 'reconciliation_required' })
-    expect(todos.get('outbox-todo', { channel: 'feishu', identityKey: 'identity', ownerId: 'owner-outbox', authorizationEpoch: 1, rule })?.status).toBe('pending')
+    expect(todos.get('outbox-todo', { channel: 'feishu', identityKey: 'identity', ownerId: 'owner-outbox', authorizationEpoch: 1, originSessionId: sessionId, rule })?.status).toBe('pending')
     expect(await coordinator.recoverPendingOperations()).toEqual([{ operationId: 'outbox-cancel', status: 'cancelled' }])
-    expect(todos.get('outbox-todo', { channel: 'feishu', identityKey: 'identity', ownerId: 'owner-outbox', authorizationEpoch: 1, rule })?.status).toBe('invalidated')
+    expect(todos.get('outbox-todo', { channel: 'feishu', identityKey: 'identity', ownerId: 'owner-outbox', authorizationEpoch: 1, originSessionId: sessionId, rule })?.status).toBe('invalidated')
     expect(getDbConnection(db).prepare('SELECT state FROM im_task_control_operations WHERE operation_id=?').get('outbox-cancel')).toEqual({ state: 'applied' })
     expect(await coordinator.recoverPendingOperations()).toEqual([])
     db.close()
@@ -251,15 +251,15 @@ describe('IM task control coordinator', () => {
     } })
     expect(await firstCoordinator.cancel({ sessionId, ownerId: 'owner-reopen', workflowId: 'workflow-reopen', taskId: 'task-reopen', expectedRevision: 1, operationId: 'cancel-reopen' }))
       .toMatchObject({ status: 'reconciliation_required' })
-    expect(firstTodos.get('reopen-todo', { channel: 'feishu', identityKey: 'identity', ownerId: 'owner-reopen', authorizationEpoch: 1, rule })?.status).toBe('pending')
-    expect(firstTodos.claimForDispatch('reopen-todo', { channel: 'feishu', identityKey: 'identity', ownerId: 'owner-reopen', authorizationEpoch: 1, rule })).toBeNull()
+    expect(firstTodos.get('reopen-todo', { channel: 'feishu', identityKey: 'identity', ownerId: 'owner-reopen', authorizationEpoch: 1, originSessionId: sessionId, rule })?.status).toBe('pending')
+    expect(firstTodos.claimForDispatch('reopen-todo', { channel: 'feishu', identityKey: 'identity', ownerId: 'owner-reopen', authorizationEpoch: 1, originSessionId: sessionId, rule })).toBeNull()
     temp.db.close()
 
     const reopenedDb = openDatabase(temp.dbPath)
     const reopenedTodos = createDeferredTodoStore(reopenedDb)
     const reopenedPort = createDeferredTodoTaskControlSafetyPort({ todoStore: reopenedTodos, dispatchDeferred: async () => ({ dispatched: false }) })
     const reopenedCoordinator = createImTaskControlCoordinator({ db: reopenedDb, safetyPort: reopenedPort })
-    const context = { channel: 'feishu' as const, identityKey: 'identity', ownerId: 'owner-reopen', authorizationEpoch: 1, rule }
+    const context = { channel: 'feishu' as const, identityKey: 'identity', ownerId: 'owner-reopen', authorizationEpoch: 1, originSessionId: sessionId, rule }
     expect(reopenedTodos.get('reopen-todo', context)?.status).toBe('pending')
     const recovering = reopenedCoordinator.recoverPendingOperations()
     expect(reopenedTodos.claimForDispatch('reopen-todo', context)).toBeNull()
@@ -294,7 +294,7 @@ describe('IM task control coordinator', () => {
       expectedRevision: 1, newRevision: 2, newSteps: [{ stepId: 'scope-v2', instruction: 'same' }, { stepId: 'new', instruction: 'new' }],
       stepMapping: [{ fromStepId: 'scope', toStepId: 'scope-v2' }], operationId: 'revise-reopen' }
     expect(await firstCoordinator.revisePlan(request)).toMatchObject({ status: 'reconciliation_required' })
-    const pendingContext = { channel: 'wechat' as const, identityKey: 'identity', ownerId: 'owner-revise-reopen', authorizationEpoch: 1, rule }
+    const pendingContext = { channel: 'wechat' as const, identityKey: 'identity', ownerId: 'owner-revise-reopen', authorizationEpoch: 1, originSessionId: sessionId, rule }
     expect(firstTodos.claimForDispatch('keep-todo', pendingContext)).toBeNull()
     expect(firstTodos.claimForDispatch('remove-todo', pendingContext)).toBeNull()
     temp.db.close()
@@ -304,7 +304,7 @@ describe('IM task control coordinator', () => {
     const reopenedPort = createDeferredTodoTaskControlSafetyPort({ todoStore: reopenedTodos, dispatchDeferred: async () => ({ dispatched: false }) })
     const reopenedCoordinator = createImTaskControlCoordinator({ db: reopenedDb, safetyPort: reopenedPort })
     expect(await reopenedCoordinator.recoverPendingOperations()).toEqual([{ operationId: 'revise-reopen', status: 'revised' }])
-    const keepContext = { channel: 'wechat' as const, identityKey: 'identity', ownerId: 'owner-revise-reopen', authorizationEpoch: 1, rule }
+    const keepContext = { channel: 'wechat' as const, identityKey: 'identity', ownerId: 'owner-revise-reopen', authorizationEpoch: 1, originSessionId: sessionId, rule }
     expect(reopenedTodos.get('remove-todo', keepContext)?.status).toBe('invalidated')
     expect(reopenedTodos.get('keep-todo', keepContext)?.status).toBe('pending')
     expect(getDbConnection(reopenedDb).prepare('SELECT revision,plan_revision FROM im_task_control WHERE session_id=? AND task_id=?')

@@ -7,9 +7,11 @@ import { listProfiles } from './mcpConfigStore'
 import { addMcpServer, writeProfileFromInput } from './mcpService'
 import type { McpOAuthClientPreset } from './oauthClientPresets'
 
+vi.hoisted(() => vi.resetModules())
+
 vi.mock('../secureApiKey', () => ({
   encryptSecret: (plain: string) => `enc:${plain}`,
-  decryptSecret: (b64: string) => b64.replace(/^enc:/, '')
+  decryptSecret: (b64: string) => b64.replace(/^enc:/, ''),
   isSecretEncrypted: (value: string) => value.startsWith('enc:'),
   isLegacySecret: (value: string) => !value.startsWith('enc:'),
 }))

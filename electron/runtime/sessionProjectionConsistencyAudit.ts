@@ -122,7 +122,7 @@ function readLegacyRequiredException(
   session: SessionRow
 ): SessionProjectionConsistencySession {
   const conn = getDbConnection(db)
-  const messages = getMessages(db, session.id, Number.MAX_SAFE_INTEGER)
+  getMessages(db, session.id, Number.MAX_SAFE_INTEGER)
   const eligibility = conn.prepare(`SELECT session_generation FROM canonical_session_projection_eligibility WHERE session_id=?`)
     .get(session.id) as { session_generation: string } | undefined
   const projectionCache = conn.prepare(`SELECT 1 AS present FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'`)

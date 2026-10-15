@@ -150,6 +150,18 @@ describe('mcpTypes write input schema', () => {
     expect(() => McpServerWriteInputSchema.parse({ ...baseWriteInput, secrets: { x: 1 } })).toThrow()
   })
 
+  it('accepts descriptor-bound public read trust and rejects malformed hashes', () => {
+    const parsed = McpServerWriteInputSchema.parse({
+      ...baseWriteInput,
+      publicReadOnlyTools: { search: 'a'.repeat(64) }
+    })
+    expect(parsed.publicReadOnlyTools).toEqual({ search: 'a'.repeat(64) })
+    expect(() => McpServerWriteInputSchema.parse({
+      ...baseWriteInput,
+      publicReadOnlyTools: { search: 'not-a-sha256' }
+    })).toThrow()
+  })
+
   it('accepts a legacy SSE write input with an http endpoint', () => {
     const parsed = McpServerWriteInputSchema.parse({
       ...baseWriteInput,

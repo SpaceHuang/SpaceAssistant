@@ -25,6 +25,11 @@ vi.mock('electron', () => ({
     removeHandler: vi.fn((channel: string) => handlers.delete(channel))
   }
 }))
+vi.mock('./secureApiKey', () => ({
+  isSecretStorageAvailable: vi.fn(() => true),
+  encryptSecret: vi.fn((plain: string) => `enc:${plain}`),
+  decryptSecret: vi.fn((value: string) => value.replace(/^enc:/, ''))
+}))
 vi.mock('./agentLogger/agentLogger', () => ({ logAgentEvent: vi.fn() }))
 vi.mock('./safeWebContentsSend', () => ({ safeWebContentsSend: vi.fn() }))
 vi.mock('./toolConfirmRegistry', async (importOriginal) => ({

@@ -3,19 +3,16 @@ import { describe, expect, it } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './confirmation/toolCallGate'
-import { DEFAULT_WECHAT_CONFIG, type WeChatConfig } from '../src/shared/wechatTypes'
+import { DEFAULT_WECHAT_CONFIG } from '../src/shared/wechatTypes'
 import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../src/shared/domainTypes'
 import type { RemoteContext } from './tools/types'
 
-function wechatCtx(
-  confirmPolicy: WeChatConfig['remoteConfirmPolicy'] = 'always'
-): RemoteContext {
+function wechatCtx(): RemoteContext {
   return {
     source: 'wechat',
     messageId: 'm1',
     userId: 'u1',
-    contextToken: 'c',
-    confirmPolicy
+    contextToken: 'c'
   }
 }
 
@@ -35,6 +32,9 @@ function gate(
     toolsConfig,
     audit: { record: () => undefined },
     ...gateDefaultMaterials(),
+    ...(overrides.remoteContext?.source === 'wechat' || overrides.lane === 'wechat' ? {
+      imPolicySnapshot: { domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: {} }
+    } : {}),
     ...overrides
   })
 }
@@ -70,39 +70,15 @@ describe('wechat outbound confirm removal（经 toolCallGate + 规则表）', ()
     expect(r.decision.type).toBe('auto-allow')
   })
 
-  it('remoteDenyOutbound blocks wechat_reply and wechat_send', async () => {
-    const cfg = { ...DEFAULT_WECHAT_CONFIG, remoteDenyOutbound: true }
+  it('shared IM deny outbound blocks wechat_reply and wechat_send', async () => {
     for (const [name, input] of [
       ['wechat_reply', { text: 'hi' }],
       ['wechat_send', { userId: 'u1', text: 'hi' }]
     ] as const) {
-      const r = await gate(name, input, { remoteContext: wechatCtx(), wechatConfig: cfg })
+      const r = await gate(name, input, { remoteContext: wechatCtx(), wechatConfig: DEFAULT_WECHAT_CONFIG,
+        imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { denyOutbound: true } } })
       expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'remote-deny-wechat-outbound' })
       expect(r.decision.type === 'deny' && r.decision.reason).toBe('远程策略禁止此类写操作。')
-    }
-  })
-
-  it('legacy remote_read_only policy alone no longer blocks outbound without deny flag', async () => {
-    const r = await gate(
-      'wechat_reply',
-      { text: 'hi' },
-      { remoteContext: wechatCtx('remote_read_only'), wechatConfig: DEFAULT_WECHAT_CONFIG }
-    )
-    expect(r.decision.type).not.toBe('deny')
-  })
-
-  it('always / im_confirm / inherit allow outbound without remote block', async () => {
-    for (const policy of ['always', 'im_confirm', 'inherit'] as const) {
-      for (const [name, input] of [
-        ['wechat_reply', { text: 'hi' }],
-        ['wechat_send', { userId: 'u1', text: 'hi' }]
-      ] as const) {
-        const r = await gate(name, input, {
-          remoteContext: wechatCtx(policy),
-          wechatConfig: DEFAULT_WECHAT_CONFIG
-        })
-        expect(r.decision.type).not.toBe('deny')
-      }
     }
   })
 

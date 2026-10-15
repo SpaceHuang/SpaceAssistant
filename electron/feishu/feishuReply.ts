@@ -98,7 +98,8 @@ export async function replyFeishuText(
 export async function replyFeishuTextWithId(
   runner: LarkCliRunner,
   messageId: string,
-  text: string
+  text: string,
+  binding: { sessionId: string; recipient: string; outboundDeliveryFacts: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }
 ): Promise<{ messageId: string }> {
-  return sendFeishuRemoteOutboundWithId({ runner, messageId, body: text })
+  return sendFeishuRemoteOutboundWithId({ runner, messageId, body: text, ...binding })
 }

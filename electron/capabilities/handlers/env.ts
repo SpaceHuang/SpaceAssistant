@@ -110,7 +110,7 @@ const systemCapability: CapabilityDescriptor = {
   handler: makeSystemHandler(defaultDeps)
 }
 
-async function detectSystemLanguage(os: string, handlerDeps: EnvHandlerDeps, ctx: CapabilityContext): Promise<string> {
+async function detectSystemLanguage(os: string, _handlerDeps: EnvHandlerDeps, ctx: CapabilityContext): Promise<string> {
   if (os === 'Windows_NT') {
     const probe = ctx.runProbe ?? runProbe
     const out = await probe(['powershell', '-NoProfile', '-Command', '(Get-Culture).Name'], WSL_PROBE_TIMEOUT_MS)

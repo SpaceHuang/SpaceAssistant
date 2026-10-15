@@ -431,7 +431,6 @@ export function createDeliveryHub(options: { now?: () => number; recordLimit?: n
           ? await deliverToDriver(driver, preference, payload, ts)
           : emitRecord({ kind: payload.kind, driverId: target, supersedeKey: preference.supersedeKey, outcome: 'failed', error: `DELIVERY_UNKNOWN_DRIVER(${target})` }))
       }
-      const last = outcomes.at(-1)
       if (preference.supersedeKey) {
         for (const outcome of outcomes) if (outcome.driverId && outcome.outcome === 'delivered') {
           setSupersedeOutcomeIfLatest(outcome.driverId, preference.supersedeKey, preference.deliveryId, true, outcome.seq)

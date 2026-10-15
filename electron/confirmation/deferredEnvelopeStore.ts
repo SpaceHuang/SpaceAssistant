@@ -14,7 +14,7 @@ export type DeferredCallEnvelope = {
   toolName: string
   canonicalArgs: Record<string, unknown>
   canonicalArgsHash: string
-  contentVersions: Record<string, number>
+  contentVersions: Record<string, number | string>
   contentVersionsHash: string
   executionContext: Record<string, unknown>
   executionContextHash: string
@@ -29,7 +29,7 @@ export type DeferredCallEnvelopeInput = {
   toolCallId?: string
   toolName: string
   canonicalArgs: Record<string, unknown>
-  contentVersions: Record<string, number>
+  contentVersions: Record<string, number | string>
   executionContext: Record<string, unknown>
   now?: number
 }
@@ -80,10 +80,12 @@ function isIntact(envelope: DeferredCallEnvelope): boolean {
 }
 
 export function createDeferredEnvelopeStore(db: AppDatabase) {
-  const conn = getDbConnection(db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每方法入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(db)
   return {
     put(input: DeferredCallEnvelopeInput): DeferredCallEnvelope {
       if (!input.invocationId.trim() || !input.toolName.trim()) throw new TypeError('DEFERRED_ENVELOPE_IDENTITY_REQUIRED')
+      const conn = liveConn()
       const snapshot = structuredClone(input)
       const unsigned: Omit<DeferredCallEnvelope, 'integrityHash'> = {
         invocationId: snapshot.invocationId,
@@ -119,7 +121,7 @@ export function createDeferredEnvelopeStore(db: AppDatabase) {
     },
 
     get(invocationId: string): DeferredCallEnvelope | null {
-      const row = conn.prepare('SELECT envelope_json FROM deferred_call_envelopes WHERE invocation_id=?')
+      const row = liveConn().prepare('SELECT envelope_json FROM deferred_call_envelopes WHERE invocation_id=?')
         .get(invocationId) as { envelope_json: string } | undefined
       if (!row) return null
       try {
@@ -137,7 +139,7 @@ export function createDeferredEnvelopeStore(db: AppDatabase) {
       toolCallId?: string
       toolName: string
       canonicalArgs: Record<string, unknown>
-      contentVersions: Record<string, number>
+      contentVersions: Record<string, number | string>
       executionContext: Record<string, unknown>
     }): { ok: true } | { ok: false; reason: 'integrity_mismatch' | 'call_changed' | 'tool_changed' | 'content_changed' | 'args_changed' | 'context_changed' } {
       validateVersion(envelope)

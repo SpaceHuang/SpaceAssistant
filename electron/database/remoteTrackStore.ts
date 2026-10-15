@@ -476,7 +476,7 @@ export function bindRemoteTrackToTurn(
 
 export function recordRemoteTrackConfirmationState(
   db: AppDatabase,
-  input: { trackId: string; confirmationId: string; attributionEventId: string; state: 'pending' | 'settled'; occurredAt: number; requestId?: string; turnId?: string; toolUseId?: string; toolName?: string }
+  input: { trackId: string; confirmationId: string; attributionEventId: string; state: 'pending' | 'settled'; occurredAt: number; requestId?: string; turnId?: string; toolUseId?: string; toolName?: string; envelopeHash?: string; factsHash?: string; policyBehaviorVersion?: string; policySnapshotRevision?: number; policyRevision?: string; authorizationGeneration?: number }
 ): void {
   const conn = getDbConnection(db)
   runInTransaction(conn, () => {
@@ -498,7 +498,9 @@ export function recordRemoteTrackConfirmationState(
       VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(
       `event:${idempotencyKey}`, input.trackId, eventKind, input.attributionEventId, idempotencyKey,
       input.requestId ?? null, input.turnId ?? null, input.toolUseId ?? null, input.confirmationId,
-      JSON.stringify({ toolName: input.toolName ?? null }), input.occurredAt
+      JSON.stringify({ toolName: input.toolName ?? null, envelopeHash: input.envelopeHash ?? null, factsHash: input.factsHash ?? null,
+        policyBehaviorVersion: input.policyBehaviorVersion ?? null, policySnapshotRevision: input.policySnapshotRevision ?? null,
+        policyRevision: input.policyRevision ?? null, authorizationGeneration: input.authorizationGeneration ?? null }), input.occurredAt
     )
     const current = conn.prepare('SELECT state FROM remote_tracks WHERE track_id=?').get(input.trackId) as { state: TrackState }
     const hasOtherPendingConfirmations = Boolean(conn.prepare(`SELECT 1 FROM remote_track_children

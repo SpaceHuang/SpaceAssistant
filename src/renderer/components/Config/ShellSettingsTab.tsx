@@ -1,4 +1,4 @@
-import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Table, Tooltip } from 'antd'
+import { Alert, Button, Form, Input, InputNumber, Select, Space, Table, Tooltip } from 'antd'
 import { useEffect, useState } from 'react'
 import { ConfigSettingsStack } from './ConfigField'
 import { Info } from 'lucide-react'

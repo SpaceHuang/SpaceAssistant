@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDeferredTodoAdmission } from './deferredTodoAdmission'
 import { createMemoryAppDb } from '../database/testHelpers'
+import { getDbConnection } from '../database/sqliteStore'
+import { commitImPolicySnapshot } from './imPolicyStore'
 import { createPersistentDeferredTodoAdmission } from './deferredTodoAdmission'
 
 describe('deferred approval capacity admission', () => {
@@ -43,6 +45,7 @@ describe('deferred approval capacity admission', () => {
 
   it('connects real capacity, todo creation, and terminal release without exceeding configured limits', async () => {
     const db = createMemoryAppDb()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-v1.6', snapshot: {}, updatedAt: 100, eventId: 'capacity-admission' })
     const receipts: Array<{ code: string }> = []
     const dispatch = vi.fn()
     const admission = createPersistentDeferredTodoAdmission(db, {
@@ -73,7 +76,7 @@ describe('deferred approval capacity admission', () => {
     expect(admission.capacity.counts({ identityKey: 'capacity-identity', now: 100 }).identity).toBe(1)
 
     const authorization = {
-      channel: 'feishu' as const, identityKey: 'capacity-identity', ownerId: 'capacity-owner', authorizationEpoch: 1,
+      channel: 'feishu' as const, identityKey: 'capacity-identity', ownerId: 'capacity-owner', authorizationEpoch: 1, originSessionId: 'capacity-session',
       rule: first.todo.rule
     }
     expect(admission.todoStore.claimForDispatch(first.todo.todoId, authorization, 200)).not.toBeNull()

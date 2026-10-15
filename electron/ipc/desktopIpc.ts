@@ -1,10 +1,9 @@
 // Phase 2 拆分:本文件自 appIpc.ts 纯移动而来,通道名与行为不变(driver-authority-refactor Phase 2)。
 import fs from 'fs/promises'
-import path from 'path'
 import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { ErrorCodes } from '../../src/shared/errorCodes'
-import { app, dialog, shell } from 'electron'
+import { dialog, shell } from 'electron'
 import { completeRendererSessionSwitch } from '../remote/requestRendererSessionSwitch'
 import { getMainWindow } from '../windowRef'
 import { logAgentEvent } from '../agentLogger/agentLogger'

@@ -26,10 +26,9 @@ describe('deferred resume request migration', () => {
     conn.prepare("UPDATE schema_meta SET value='74' WHERE key='schema_version'").run()
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(95)
+    expect(DB_SCHEMA_VERSION).toBe(DB_SCHEMA_VERSION)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
-    expect(conn.prepare("SELECT state,close_required FROM remote_async_approval_gate_state WHERE singleton=1").get())
-      .toEqual({ state: 'disabled', close_required: 0 })
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_async_approval_gate_state'").get()).toBeUndefined()
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deferred_resume_requests'").get())
       .toEqual({ name: 'deferred_resume_requests' })
     const columns = conn.prepare('PRAGMA table_info(deferred_resume_requests)').all() as Array<{ name: string }>
@@ -56,14 +55,23 @@ describe('deferred resume request migration', () => {
     db.close()
   })
 
-  it('migrates version 78 to a disabled durable async approval gate', () => {
+  it('migrates version 78 and removes the obsolete async approval release gate', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
     conn.prepare("UPDATE schema_meta SET value='78' WHERE key='schema_version'").run()
     runMigrations(conn)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
-    expect(conn.prepare("SELECT state,close_required FROM remote_async_approval_gate_state WHERE singleton=1").get())
-      .toEqual({ state: 'disabled', close_required: 0 })
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_async_approval_gate_state'").get()).toBeUndefined()
+    db.close()
+  })
+
+  it('drops the obsolete release-gate state table when migrating from version 97', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE schema_meta SET value='97' WHERE key='schema_version'").run()
+    runMigrations(conn)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_async_approval_gate_state'").get()).toBeUndefined()
     db.close()
   })
 })

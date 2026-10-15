@@ -15,6 +15,10 @@ function deferred<T>() {
 }
 
 describe('WeChatConfirmationPromptAdapter protocol', () => {
+  it('records the verified real-client quote round trip contract', () => {
+    expect(WECHAT_CONFIRMATION_QUOTE_CONTRACT.platformQuoteRoundTripVerified).toBe(true)
+  })
+
   it('preserves int64 sendmessage message_id digits as a string before the SDK JSON parser runs', async () => {
     const exactId = '17917655126112345'
     const fetchImpl = vi.fn(async () => new Response(`{"ret":0,"message_id":${exactId}}`))

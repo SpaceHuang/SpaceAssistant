@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import fsPromises from 'node:fs/promises'
 import path from 'node:path'
 import { decide } from '../../src/shared/policy/policyEngine'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
@@ -33,6 +34,7 @@ import { probeReadPathFact, ReadPathProbeError, type ReadPathFact } from './extr
 import { probeFeishuMediaTarget, type FeishuMediaTargetFact } from './extractors/feishuMediaFacts'
 import { classifyWriteTargetScope, probeWritePathFact, WritePathProbeError, type WritePathFact } from './extractors/writePathFacts'
 import { extractPathField } from '../toolPathField'
+import { resolveSafeWorkDirPath } from '../pathSecurity'
 import { buildReadExecutionPermit, readInputDigest, type ReadExecutionPermit, type ReadPermitScope } from './readExecutionPermit'
 import type { WriteExecutionPermit } from './writeExecutionPermit'
 import { readConfirmationRegistry, type ReadConfirmationRegistry } from './readConfirmationRegistry'
@@ -105,6 +107,7 @@ import type { MountAnchor } from './extractors/mountAnchors'
 import { DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
 import { buildSafetyDiagnostics, type SafetyDiagnostics } from '../../src/shared/confirmation/diagnostics'
 import { extractMcpInvocationSignal } from './extractors/mcpPayloadExtractor'
+import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { approvalPayloadDeclForMcp, assertApprovalPayloadComplete } from './extractors/approvalPayloadDecl'
 import type { WorkspaceSnapshot } from '../../src/shared/agent/workspace'
 import { sanitizeAgentText } from '../../src/shared/agentSafeText'
@@ -142,6 +145,12 @@ export interface ToolCallGateArgs {
   browserConfig?: BrowserConfig | null
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
+  /** Canonical shared IM policy snapshot loaded from the main-process policy store. */
+  imPolicySnapshot?: import('../remote/remoteToolPolicy').RemoteSecurityPolicyConfig['policySnapshot']
+  /** Host-resolved provenance for the MCP query/data scope; never read from model arguments. */
+  mcpQuerySource?: 'public' | 'local-sensitive' | 'unknown'
+  /** Host-resolved permission for the configured MCP account and referenced data scope. */
+  mcpAccountAuthorization?: 'authorized' | 'unauthorized' | 'unknown'
   wikiConfig?: WikiConfig
   /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退内置默认规则）。 */
   effectiveRules: PolicyRule[]
@@ -266,11 +275,6 @@ function laneOf(remoteContext: RemoteContext | undefined, explicitLane?: Executi
 export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<ToolCallGateResult> {
   const lane = laneOf(args.remoteContext, args.lane)
   const origin: OriginInfo = { kind: 'direct-owner' }
-  const channelConfig = args.remoteContext
-    ? args.remoteContext.source === 'feishu'
-      ? args.feishuConfig
-      : args.wechatConfig
-    : undefined
   const audit = args.audit ?? getSecurityAuditLog()
   const result: ToolCallGateResult = {
     decision: undefined as unknown as Decision,
@@ -304,6 +308,22 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     })
     throw new Error(`TOOL_GATE_MATERIALS_MISSING(${materialsMissing.join(',')})`)
   }
+  if (lane === 'wechat' || lane === 'feishu') {
+    const snapshot = args.imPolicySnapshot
+    const supported = snapshot?.domain === 'im' &&
+      ['im-v1.6', 'im-standard-v2'].includes(snapshot.policyBehaviorVersion) &&
+      Number.isSafeInteger(snapshot.revision) && snapshot.revision >= 0 &&
+      !!snapshot.snapshot && typeof snapshot.snapshot === 'object' && !Array.isArray(snapshot.snapshot)
+    if (!supported) {
+      audit.record({
+        ts: Date.now(), event: 'policy.decision', lane, origin, sessionId: args.sessionId,
+        requestId: args.requestId, toolUseId: args.toolUseId, toolName: args.toolName,
+        riskLevel: 'high', factsSummary: args.toolName, signals: [], decision: 'deny',
+        ruleId: 'im-policy-snapshot-missing', reason: 'IM_POLICY_SNAPSHOT_REQUIRED', cause: 'gate-materials-missing', actor: 'system'
+      })
+      throw new Error('IM_POLICY_SNAPSHOT_REQUIRED')
+    }
+  }
 
   // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
   // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
@@ -312,7 +332,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     result.decision = {
       type: 'deny',
       ruleId: 'rules-violated',
-      reason: `POLICY_RULES_FLOOR_VIOLATED(${floorCheck.violations.join(',')})`
+      reason: `POLICY_RULES_FLOOR_VIOLATED(${floorCheck.violations.join(',')})`,
+      disposition: 'forbidden', cause: 'rules-violated'
     }
     result.facts = {
       toolName: args.toolName,
@@ -386,7 +407,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         ...(precheck.validatorId ? { validatorId: precheck.validatorId } : {}),
         ...(precheck.denyType ? { denyType: precheck.denyType } : {})
       }
-      result.decision = { type: 'deny', ruleId: 'shell-precheck-deny', reason: precheck.error }
+      result.decision = { type: 'deny', ruleId: 'shell-precheck-deny', reason: precheck.error, disposition: 'forbidden', cause: 'shell-precheck-deny' }
       result.facts = {
         toolName: args.toolName,
         actionClass: 'execute',
@@ -428,10 +449,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
   // ===== 生效规则集（§4 第 1 区 + §2.1「自动」语义）：装配期解析注入（B1，门控不持库）=====
-  // 规则集由装配期按 lane+档位解析（resolveEffectivePolicyRulesWithOrigin），引擎合成规则的
-  // 档位变换经 lanePackage 同源注入（desktop standard 非 locked ask→auto-evaluator）。
-  const rules = args.effectiveRules
+  // IM 的套餐动作与持久化用户覆盖已由 resolveEffectivePolicyRulesWithOrigin 合并；这里直接消费最终规则，
+  // 避免按套餐再次映射覆盖动作。lanePackage 仍用于引擎合成规则及桌面「自动」动作变换。
   const lanePackage = args.lanePackage ?? 'standard'
+  const rules = args.effectiveRules
 
   // ===== 环境事实 =====
   const env: EnvFacts = {
@@ -471,20 +492,40 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   let wikiRawTargetFailure = false
   let writePathInputFailure = false
   if (args.mcpEntry) {
-    // MCP：事实提取为纯信号——总是产 mcp-tool（落 mcp-tool-ask 默认确认，会话信任经缓存命中放行）；
-    // 注解安全（server 声明 readOnlyHint:true 且 destructiveHint≠true）时额外产 mcp-readonly，
-    // 由 mcp-readonly-allow 规则放行（strict 套餐自动上调为 ask）。actionClass：注解安全 → read，否则 write。
-    const annotationsSafe =
+    // MCP：总是产 mcp-tool；只读自动通道还要求当前 descriptor 有效、必填参数完整、没有写目的，
+    // 且宿主已证明数据源为 public、账号权限有效。server 注解单独不能建立只读事实。
+    const schemaHashValid = typeof args.mcpEntry.schemaHash === 'string' &&
+      args.mcpEntry.schemaHash === hashMcpToolSchema(args.mcpEntry.inputSchema)
+    const descriptorHashValid = schemaHashValid && typeof args.mcpEntry.descriptorHash === 'string' &&
+      args.mcpEntry.descriptorHash === hashMcpToolDescription({
+        serverId: args.mcpEntry.serverId,
+        originalName: args.mcpEntry.originalName,
+        description: args.mcpEntry.description,
+        inputSchema: args.mcpEntry.inputSchema,
+        ...(args.mcpEntry.annotations ? { annotations: args.mcpEntry.annotations } : {})
+      })
+    const readOnlyHintValid = descriptorHashValid &&
       args.mcpEntry.annotations?.readOnlyHint === true && args.mcpEntry.annotations.destructiveHint !== true
-    const mcpActionClass = annotationsSafe ? ('read' as const) : ('write' as const)
-    const mcpInvocation = extractMcpInvocationSignal({
+    const initialMcpInvocation = extractMcpInvocationSignal({
       serverId: args.mcpEntry.serverId,
       toolName: args.mcpEntry.originalName,
       toolInput: args.toolInput,
-      annotationsSafe,
-      actionClass: mcpActionClass,
+      annotationsSafe: readOnlyHintValid,
+      actionClass: 'write',
+      querySource: args.mcpQuerySource ?? 'unknown',
+      accountAuthorization: args.mcpAccountAuthorization ?? 'unknown',
+      descriptorValid: descriptorHashValid,
       inputSchema: args.mcpEntry.inputSchema
     })
+    const safeForAutoRead = readOnlyHintValid &&
+      args.mcpQuerySource === 'public' && args.mcpAccountAuthorization === 'authorized' &&
+      initialMcpInvocation.kind === 'mcp-invocation' &&
+      initialMcpInvocation.sideEffect === 'read' && initialMcpInvocation.completeness === 'complete'
+    const annotationsSafe = safeForAutoRead
+    const mcpActionClass = safeForAutoRead ? ('read' as const) : ('write' as const)
+    const mcpInvocation = initialMcpInvocation.kind === 'mcp-invocation'
+      ? { ...initialMcpInvocation, actionClass: mcpActionClass }
+      : initialMcpInvocation
     // R3：载荷完整性（声明来自 server inputSchema.required；未声明不误报）
     const payloadDecl = approvalPayloadDeclForMcp(args.mcpEntry.inputSchema)
     const payloadCheck = assertApprovalPayloadComplete(payloadDecl, args.toolInput)
@@ -569,7 +610,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         ? { unknownReason: scriptPaths.unknownReason ?? 'dynamic-execution' }
         : {}),
       contentDigest: createHash('sha256').update(code, 'utf8').digest('hex'),
-      workdirDigest: createHash('sha256').update(path.resolve(args.workDir), 'utf8').digest('hex')
+      workdirDigest: createHash('sha256').update(path.resolve(args.workDir), 'utf8').digest('hex'),
+      parametersDigest: createHash('sha256').update(JSON.stringify({ ...args.toolInput, code }), 'utf8').digest('hex'),
+      environmentDigest: createHash('sha256').update(JSON.stringify({ workDir: path.resolve(args.workDir), userDataDir: path.resolve(args.userDataDir), lane }), 'utf8').digest('hex'),
+      authenticationVersion: 'script-certifier-v1'
     })
     let scriptPathHint: string | undefined
     if (scriptPaths.completeness === 'unknown') {
@@ -646,6 +690,12 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           ],
           summary: { text: `${args.toolName} 写入目标已检查` }
         }
+        if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
+          && args.toolName === 'write_file' && writePathFact.targetKind === 'missing' && writePathFact.zone === 'workdir-normal'
+          && writeScope === 'inside-workdir') facts.signals.push({ kind: 'write-target-new' })
+        if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
+          && args.toolName === 'edit_file' && writePathFact.targetKind === 'file' && writePathFact.zone === 'workdir-normal'
+          && writeScope === 'inside-workdir') facts.signals.push({ kind: 'write-target-existing' })
         if (writePathFact.targetKind !== 'file' && writePathFact.targetKind !== 'missing') facts.signals.push({ kind: 'write-target-unsupported' })
         if (isWikiRawSignalTarget(args, rawPath)) {
           facts.signals.push({ kind: 'wiki-raw-target' })
@@ -666,7 +716,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         }
       }
     } else {
-      facts = descriptor ? runExtractors(descriptor, args.toolInput, env) : {
+      facts = descriptor ? runExtractors(descriptor, args.toolInput, env, {
+        ...(lane === 'feishu' && args.remoteContext?.authOwner ? { trustedFeishuActorOpenId: args.remoteContext.authOwner } : {})
+      }) : {
         toolName: args.toolName, actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: args.toolName }
       }
     }
@@ -747,6 +799,23 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
               ? 'unknown'
               : workdirScope === 'inside-workdir' ? 'inside-workdir' : 'outside-workdir'
             facts.signals.push({ kind: 'wechat-media-target', boundary, zone: wechatMediaPathFact.zone, targetKind: wechatMediaPathFact.targetKind })
+            if (boundary === 'inside-workdir' && wechatMediaPathFact.targetKind === 'file') {
+              const resolvedMediaPath = await resolveSafeWorkDirPath(args.workDir, mediaPath)
+              const mediaStat = await fsPromises.stat(resolvedMediaPath)
+              const extension = path.extname(resolvedMediaPath).toLowerCase()
+              const imageRequest = typeof args.toolInput.imagePath === 'string'
+              // Hashing is needed to bind human approval to the exact attachment. This is
+              // not the transport limit; avoid silently treating an unbound file as approved.
+              const maxBytes = imageRequest || ['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)
+                ? 10 * 1024 * 1024 : 512 * 1024 * 1024
+              if (mediaStat.isFile() && mediaStat.size <= maxBytes) {
+                const mediaBytes = await fsPromises.readFile(resolvedMediaPath)
+                facts.signals.push({ kind: 'wechat-media-content',
+                  sha256: createHash('sha256').update(mediaBytes).digest('hex'), byteSize: mediaBytes.length,
+                  fileName: path.basename(resolvedMediaPath),
+                  displayPath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/') })
+              }
+            }
           } catch (error) {
             if (!(error instanceof ReadPathProbeError)) throw error
             facts.signals.push({ kind: 'wechat-media-target', boundary: 'unknown', targetKind: 'unknown' })
@@ -754,7 +823,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           }
         }
       } else {
-        facts = runExtractors(descriptor, args.toolInput, env)
+        facts = runExtractors(descriptor, args.toolInput, env, {
+          ...(lane === 'feishu' && args.remoteContext?.authOwner ? { trustedFeishuActorOpenId: args.remoteContext.authOwner } : {})
+        })
       }
     } else {
       // 未注册工具：信息不足，默认表兜底（execute/write → ask）
@@ -804,18 +875,15 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   const config: Record<string, unknown> = {
     deniedTools: args.toolsConfig.deniedTools,
     allowDeclaredPathScopeScripts: args.toolsConfig.allowDeclaredPathScopeScripts === true,
-    remoteDenyOutbound: channelConfig?.remoteDenyOutbound ?? false,
+    remoteDenyOutbound: args.imPolicySnapshot?.snapshot.remoteDenyOutbound === true || args.imPolicySnapshot?.snapshot.denyOutbound === true,
     // 现状仅在 browserConfig 存在且未开放远程会话时阻断；无配置等价放行
     allowRemoteSessions: args.browserConfig ? (args.browserConfig.allowRemoteSessions ?? false) : true,
-    remoteScriptRequiresConfirm: channelConfig?.remoteScriptRequiresConfirm ?? true,
+    remoteScriptRequiresConfirm: args.imPolicySnapshot?.snapshot.remoteScriptRequiresConfirm !== false,
     navigateRequiresConfirm: args.browserConfig?.navigateRequiresConfirm ?? true,
-    remoteNavigateRequiresConfirm:
-      channelConfig?.remoteBrowserNavigateRequiresConfirm ??
-      channelConfig?.remoteBrowserRequiresConfirm ??
-      false,
+    remoteNavigateRequiresConfirm: args.imPolicySnapshot?.snapshot.remoteBrowserNavigateRequiresConfirm !== false,
     actRequiresConfirm: args.browserConfig?.actRequiresConfirm ?? true,
-    remoteActSkipConfirm: shouldSkipRemoteBrowserActConfirm(channelConfig),
-    larkCliWriteRequiresConfirm: args.feishuConfig?.larkCliWriteRequiresConfirm ?? true
+    remoteActSkipConfirm: shouldSkipRemoteBrowserActConfirm({ policySnapshot: args.imPolicySnapshot }),
+    larkCliWriteRequiresConfirm: args.imPolicySnapshot?.snapshot.larkCliWriteRequiresConfirm !== false
   }
 
   // ===== 决策（缓存走 AuditedDecisionCache，落 cache.hit 审计）=====
@@ -856,7 +924,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   const deps: PolicyEngineDeps = {
     cache,
     config,
-    migrationComplete: isRemoteSecurityMigrationComplete(channelConfig),
+    migrationComplete: isRemoteSecurityMigrationComplete({ policySnapshot: args.imPolicySnapshot }),
     // 档位动作变换（§2.1）：引擎合成规则（default-write-execute-ask）经同源变换参与「自动」
     transform: (r) => effectiveActionFor(lane, lanePackage, r),
     autoEvaluator: (f) => {
@@ -907,7 +975,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         input: args.toolInput,
         ...(writePathFact ? { writePathFact } : {})
       })
-      const targetMayUseFastTrack = writePathFact?.zone === 'workdir-normal' && (writePathFact.targetKind === 'file' || writePathFact.targetKind === 'missing')
+      const targetMayUseFastTrack = args.toolName === 'write_file' && writePathFact?.zone === 'workdir-normal' && writePathFact.targetKind === 'missing'
       fileAutoApprove = autoEval.approve && targetMayUseFastTrack
       if (!fileAutoApprove) {
         const outOfWorkDir = writePathFact !== undefined && writePathFact.zone !== 'workdir-normal'
@@ -956,7 +1024,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     readPathFact.zone === 'outside-workdir' && isPermitReadTool
     ? await matchSessionDirectoryGrant({ grants: args.sessionDirectoryGrants, sessionId: args.sessionId, lane, targetPath: readPathFact.normalizedPath })
     : undefined
-  let decision = writePathInputFailure
+  let decision: Decision = writePathInputFailure
     ? { type: 'deny' as const, ruleId: 'write-path-input-invalid', reason: '缺少有效的路径参数，已阻止写入' }
     : wikiRawTargetFailure
     ? { type: 'deny' as const, ruleId: 'wiki-raw-write-deny', reason: 'Wiki 原始文件目标禁止由模型直接写入' }
@@ -975,20 +1043,20 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     : desktopReadValidation
     ? desktopReadValidation
     : lane === 'automation' && isReadTool && (!readPathFact || readHasUnsupportedPattern)
-      ? { type: 'deny' as const, ruleId: 'automation-read-target-unsupported', reason: 'automation lane 仅支持显式、单目标文件或目录读取' }
+      ? { type: 'deny' as const, ruleId: 'automation-read-target-unsupported', reason: 'automation lane 仅支持显式、单目标文件或目录读取', disposition: 'forbidden' as const, cause: 'automation-read-target-unsupported' }
       : decide(facts, context, rules, deps)
 
   // 目录外只读是安全边界例外，只能细化已放行的结果，不能覆盖套餐或自定义规则要求的确认。
   // 保留其原规则结论也让后续审批会话递归守卫继续看到 require-confirm。
   if (shellOutsideReadOnly && decision.type === 'auto-allow') {
-    decision = { type: 'auto-allow', ruleId: 'shell-outside-readonly-allow', reason: '工作目录外的只读 shell 命令免确认' }
+    decision = { type: 'auto-allow', ruleId: 'shell-outside-readonly-allow', reason: '工作目录外的只读 shell 命令免确认', disposition: 'auto-eligible', cause: 'shell-outside-readonly-allow' }
   }
 
   // 写路径离开 workdir 时，不能继承泛化策略/缓存的自动放行；走既有人工确认路径。
   if (writePathFact && writePathFact.zone !== 'workdir-normal' && decision.type === 'auto-allow') {
     decision = lane === 'automation'
-      ? { type: 'deny', ruleId: 'automation-outside-write-deny', reason: 'automation lane 不允许工作目录外写入' }
-      : { type: 'require-confirm', ruleId: 'write-outside-confirm', answerer: lane === 'desktop' ? 'agent' : 'user', riskLevel: facts.baseRiskLevel, facts, memoryTiers: [], timeoutMs: null }
+      ? { type: 'deny', ruleId: 'automation-outside-write-deny', reason: 'automation lane 不允许工作目录外写入', disposition: 'forbidden', cause: 'automation-outside-write-deny' }
+      : { type: 'require-confirm', ruleId: 'write-outside-confirm', answerer: lane === 'desktop' ? 'agent' : 'user', riskLevel: facts.baseRiskLevel, facts, memoryTiers: [], timeoutMs: null, disposition: lane === 'desktop' ? 'auto-eligible' : 'human-required', cause: 'write-outside-confirm', reason: '工作目录外写入需要确认' }
   }
 
   // ===== P2-4 递归守卫（I5）：审批会话内的 require-confirm 一律 fail-closed =====
@@ -996,7 +1064,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   // 不可进规则集：进规则集就会被 custom/loose 改坏，收紧致自动审批静默停摆（不可变集，非 locked 底线集）。
   if (decision.type === 'require-confirm' && args.internalConfirmExemption === 'approval-agent') {
     const reason = '安全策略无法完成裁决：审批会话内不允许再进入确认流程（递归守卫）'
-    decision = { type: 'deny', ruleId: 'recursion-guard', reason }
+    decision = { type: 'deny', ruleId: 'recursion-guard', reason, disposition: 'forbidden', cause: 'recursion-guard' }
   }
 
   if (args.phase === 'recheck' && decision.type === 'require-confirm' && !args.previouslyConfirmed) decision = { type: 'deny', ruleId: 'recheck-requires-confirm', reason: '确认后复检不得发起第二次确认' }
@@ -1109,10 +1177,26 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       actor: 'system'
     })
   }
+  const reportedCompleteness = facts.signals.flatMap((signal) => {
+    if (signal.kind === 'mcp-invocation') return [signal.completeness]
+    if (signal.kind === 'browser-action' || signal.kind === 'lark-subcommand') return signal.completeness ? [signal.completeness] : []
+    return []
+  })
+  const factsCompleteness = reportedCompleteness.includes('missing') ? 'missing'
+    : reportedCompleteness.includes('partial') ? 'partial'
+      : reportedCompleteness.includes('capability-description-stale') ? 'capability-description-stale'
+        : reportedCompleteness.length > 0 && reportedCompleteness.every((value) => value === 'complete') ? 'complete' : 'unknown'
   audit.record({
     ts: Date.now(),
     event: 'policy.decision',
     lane,
+    ...(lane === 'wechat' || lane === 'feishu' ? { policyDomain: 'im' as const } : { policyDomain: 'desktop' as const }),
+    ...(args.imPolicySnapshot ? { policyBehaviorVersion: args.imPolicySnapshot.policyBehaviorVersion, policyRevision: args.imPolicySnapshot.revision } : {}),
+    factsCompleteness,
+    reviewPath: decision.type === 'require-confirm'
+      ? decision.answerer === 'agent' ? 'approval-agent' : 'user-confirmation'
+      : 'deterministic-policy',
+    ...(decision.type === 'require-confirm' && decision.cause ? { fallbackCause: decision.cause } : {}),
     origin,
     sessionId: args.sessionId,
     requestId: args.requestId,

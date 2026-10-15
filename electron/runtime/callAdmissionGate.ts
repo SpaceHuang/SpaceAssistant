@@ -33,7 +33,7 @@ export type AdmissionTicket = {
 export type ParkedAdmission = { request: AdmissionRequest; token: object }
 
 /** release 幂等守卫(P2,评审):双释放会吞掉其他活跃调用的计数。 */
-function onceRelease(request: AdmissionRequest, release: () => boolean | void): () => boolean {
+function onceRelease(_request: AdmissionRequest, release: () => boolean | void): () => boolean {
   let released = false
   return () => {
     if (released) return true

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
+import { getDbConnection } from '../database/sqliteStore'
+import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
@@ -11,6 +13,7 @@ import { runImWorkflowSkillFlow } from './imWorkflowSkillHarness'
 describe('IM end-to-end recovery acceptance', () => {
   it('persists a plan, waits with new inbox work, resumes the exact deferred call, and records completion once', async () => {
     const db = createMemoryAppDb()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-v1.6', snapshot: {}, updatedAt: Date.now(), eventId: 'im-e2e-recovery' })
     const sessionId = createSession(db, { name: 'full-im-recovery' }).id
     const plan = await runImWorkflowSkillFlow({ db, sessionId, workflowId: 'workflow', message: 'prepare and publish',
       model: { decide: async () => ({ kind: 'plan', summary: 'publish update', steps: ['prepare', 'publish'], assumptions: ['approval required'] }) } })
@@ -28,14 +31,16 @@ describe('IM end-to-end recovery acceptance', () => {
     intents.commitCheckpoint(todo.invocationId, { checkpointId: 'publish-checkpoint', workflowRevision: plan.kind === 'waiting-confirmation' ? plan.state.revision : 1 })
     const envelopeStore = createDeferredEnvelopeStore(db)
     envelopeStore.put({ invocationId: todo.invocationId, toolName: 'publish_update', canonicalArgs: { documentId: 'doc-1', revision: 3 },
-      contentVersions: { document: 3 }, executionContext: { sessionId, workflowId: 'workflow', taskId: 'task', stepId: 'publish' } })
+      contentVersions: { document: 3 }, executionContext: { sessionId, workflowId: 'workflow', taskId: 'task', stepId: 'publish', toolName: 'publish_update',
+        toolInput: { documentId: 'doc-1', revision: 3 }, ruleId: rule.ruleId, factsHash: rule.factsHash,
+        policyBehaviorVersion: todo.policyBehaviorVersion, policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch } })
 
     const dispatch = vi.fn(async (_request, _todo, envelope) => ({ dispatched: envelope.invocationId === todo.invocationId }))
     const coordinator = createDeferredResumeCoordinator({ db, todoStore, envelopeStore, dispatch, maxParallel: 1, recheck: async () => ({ allowed: true }) })
     const ingress = createDeferredApprovalIngress({ db, isEnabled: () => true,
       resolveNotification: () => [{ channel: 'feishu', identityKey: 'user', ownerId: 'owner', todoId: todo.todoId,
         notificationVersion: 1, currentNotificationVersion: 1, trustedMessageId: 'notice-1', shortCode: '07', expiresAt: todo.expiresAt }],
-      getTodo: (id) => { const record = todoStore.get(id, { channel: 'feishu', identityKey: 'user', ownerId: 'owner', authorizationEpoch: 2, rule });
+      getTodo: (id) => { const record = todoStore.get(id, { channel: 'feishu', identityKey: 'user', ownerId: 'owner', authorizationEpoch: 2, originSessionId: sessionId, rule });
         return record ? { ...record, status: record.status } : null },
       requestResume: (request) => coordinator.requestResume(request) })
     await expect(ingress.handle({ channel: 'feishu', identityKey: 'user', ownerId: 'owner', messageId: 'reply-1',
@@ -44,7 +49,7 @@ describe('IM end-to-end recovery acceptance', () => {
     expect(await coordinator.dispatchPending(sessionId)).toMatchObject([{ status: 'dispatched' }])
     expect(dispatch).toHaveBeenCalledOnce()
     expect(dispatch.mock.calls[0]?.[2]).toMatchObject({ invocationId: 'publish-invocation', toolName: 'publish_update', canonicalArgs: { revision: 3 } })
-    expect(todoStore.get(todo.todoId, { channel: 'feishu', identityKey: 'user', ownerId: 'owner', authorizationEpoch: 2, rule })?.status).toBe('consumed')
+    expect(todoStore.get(todo.todoId, { channel: 'feishu', identityKey: 'user', ownerId: 'owner', authorizationEpoch: 2, originSessionId: sessionId, rule })?.status).toBe('consumed')
     db.close()
   })
 })

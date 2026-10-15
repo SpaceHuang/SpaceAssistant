@@ -84,6 +84,19 @@ describe('AgentChannel（P2-3）', () => {
     expect('memory' in outcome).toBe(false)
   })
 
+  it('将当前外层 toolUseId 和理由一起绑定到审批线索包', async () => {
+    const { ch, invokeApproval } = channel({ toolName: 'run_shell', toolUseId: 'outer-shell-call-9' })
+    const request = req({ modelJustification: '核对当前目录', modelJustificationTruncated: true })
+    request.facts.toolName = 'run_shell'
+    await ch.request(request)
+    expect(invokeApproval).toHaveBeenCalledWith(expect.objectContaining({
+      clue: expect.objectContaining({
+        toolName: 'run_shell', toolUseId: 'outer-shell-call-9',
+        modelJustification: '核对当前目录', modelJustificationTruncated: true
+      })
+    }))
+  })
+
   it('deny 裁决 → rejected + cause=agent-deny，reason.summary 保留（理由回传）', async () => {
     const ch2 = new AgentChannel({
       lane: 'automation',

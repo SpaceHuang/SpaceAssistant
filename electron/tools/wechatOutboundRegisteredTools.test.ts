@@ -14,6 +14,7 @@ import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { executeWeChatSend, WeChatOutboundExecutionUncertainError } from './weChatToolExecutor'
+import { assertImOutboundAllowed, classifyImOutbound } from '../../src/shared/confirmation/outboundClassification'
 
 function makeRuntime() {
   return {
@@ -33,6 +34,152 @@ function makeRuntime() {
 }
 
 describe('WeChat outbound prepared registrations', () => {
+  it('sends a user-approved desktop wechat_send after binding it to the active desktop session', async () => {
+    const sessionId = 'desktop-active-send-session'
+    const workDir = '/tmp'
+    const config = { ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true }
+    const platformSend = vi.fn(async () => undefined)
+    const executor = {
+      name: 'wechat_send',
+      execute: (input: Record<string, unknown>, context: { workDir: string; sessionId: string; signal?: AbortSignal;
+        outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) =>
+        executeWeChatSend(input as { userId: string; text: string }, {
+          workDir: context.workDir, sessionId: context.sessionId, signal: context.signal,
+          outboundDeliveryFacts: context.outboundDeliveryFacts,
+          botService: { getRawBot: () => ({ send: platformSend }) } as never,
+          getWeChatConfig: () => config
+        })
+    }
+    const [sendTool] = createWeChatOutboundRegisteredTools({ send: executor as never, reply: { name: 'wechat_reply', execute: vi.fn() } as never })
+
+    const result = await executeRegisteredTool(sendTool!, { userId: 'recipient', text: 'hello from desktop' }, {
+      requestId: 'desktop-active-send-request', toolUseId: 'desktop-active-send-call', signal: new AbortController().signal,
+      userConfirmationReceipt: 'confirmation:user-approved', userConfirmationAnswerer: 'user',
+      executionContext: { workDir, sessionId, lane: 'desktop', wechatConfig: config } as never
+    }, { confirm: async () => true, dispatch: async (_handle, _context, execute) => execute(new AbortController().signal) })
+
+    expect(result).toMatchObject({ success: true })
+    expect(platformSend).toHaveBeenCalledOnce()
+    expect(platformSend).toHaveBeenCalledWith('recipient', 'hello from desktop')
+  })
+
+  it('classifies an ordinary text reply for the authenticated current task as controlled without requiring an attachment', async () => {
+    const runtime = {
+      ...makeRuntime(),
+      remoteContext: { ...makeRuntime().remoteContext, authOwner: 'wechat-user-approved', currentUserMessageId: 'current-message',
+        taskBinding: { workflowId: 'im:request-text-reply', taskId: 'turn:request-text-reply', stepId: 'request', planRevision: 1, revision: 1 } }
+    }
+    const reply = vi.fn(async (_input: unknown, context: { outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) => ({
+      success: context.outboundDeliveryFacts ? classifyImOutbound(context.outboundDeliveryFacts).kind === 'controlled-reply' : false
+    }))
+    const [, replyTool] = createWeChatOutboundRegisteredTools({
+      send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: reply } as never
+    })
+
+    const result = await executeRegisteredTool(replyTool!, { text: 'Approved reply text' }, {
+      requestId: 'request-text-reply', toolUseId: 'reply-text-only', signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, { confirm: async () => true, dispatch: async (_handle, _context, execute) => execute(new AbortController().signal) })
+
+    expect(result).toMatchObject({ success: true })
+    expect(reply.mock.calls[0]?.[1].outboundDeliveryFacts).toMatchObject({
+      purpose: 'task-reply', chatType: 'p2p', contentCompleteness: 'complete',
+      contentAssessment: { source: 'host', classification: 'ordinary', content: 'Approved reply text' },
+      hasAttachment: false
+    })
+  })
+
+  it('a cached allow and user approval still cannot turn a sensitive attachment into a task reply', async () => {
+    const runtime = makeRuntime()
+    let preparedClassification: ReturnType<typeof classifyImOutbound> | undefined
+    const sideEffect = vi.fn(async () => undefined)
+    const sendExecutor = vi.fn(async (_input: unknown, context: { outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) => {
+      preparedClassification = context.outboundDeliveryFacts ? classifyImOutbound(context.outboundDeliveryFacts) : undefined
+      if (preparedClassification?.kind !== 'controlled-reply') return { success: false, error: 'ACTIVE_OUTBOUND_REQUIRES_SEPARATE_AUTHORIZATION' }
+      await sideEffect()
+      return { success: true }
+    })
+    const [sendTool] = createWeChatOutboundRegisteredTools({
+      send: { name: 'wechat_send', execute: sendExecutor } as never,
+      reply: { name: 'wechat_reply', execute: vi.fn() } as never
+    })
+    const input = { userId: 'wechat-user-approved', text: 'send report', filePath: 'private-export.txt' }
+    let gateCalls = 0
+    const result = await executeRegisteredTool(sendTool!, input, {
+      requestId: 'cached-allow-sensitive-outbound', toolUseId: 'cached-allow-sensitive-outbound-call', signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, {
+      decide: async () => { gateCalls += 1; return true },
+      confirm: async () => true,
+      dispatch: async (_handle, _context, execute) => execute(new AbortController().signal)
+    })
+
+    expect(gateCalls).toBe(1)
+    expect(sendExecutor).toHaveBeenCalledOnce()
+    expect(preparedClassification).toMatchObject({ kind: 'active-outbound' })
+    expect(sideEffect).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ success: false, error: 'ACTIVE_OUTBOUND_REQUIRES_SEPARATE_AUTHORIZATION' })
+  })
+
+  it.each(['wechat_send', 'wechat_reply'] as const)(
+    'does not send a host-classified sensitive body through confirmed %s', async (toolName) => {
+      const body = 'api_key=sk-00000000000000000000000000000000'
+      const runtime = {
+        ...makeRuntime(),
+        remoteContext: { ...makeRuntime().remoteContext, authOwner: 'wechat-user-approved', currentUserMessageId: 'current-message',
+          taskBinding: { workflowId: 'im:request-sensitive', taskId: 'turn:request-sensitive', stepId: 'request', planRevision: 1, revision: 1 } }
+      }
+      const platformSend = vi.fn(async () => undefined)
+      const execute = vi.fn(async (input: Record<string, unknown>, context: { outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) => {
+        const facts = context.outboundDeliveryFacts!
+        expect(facts.contentAssessment?.classification).toBe('sensitive')
+        assertImOutboundAllowed(facts, { channel: 'wechat', body: String(input.text), sessionId: runtime.sessionId,
+          recipient: toolName === 'wechat_send' ? String(input.userId) : runtime.remoteContext.userId })
+        await platformSend()
+        return { success: true }
+      })
+      const [send, reply] = createWeChatOutboundRegisteredTools({
+        send: { name: 'wechat_send', execute } as never,
+        reply: { name: 'wechat_reply', execute } as never
+      })
+      const tool = toolName === 'wechat_send' ? send! : reply!
+      const input = toolName === 'wechat_send' ? { userId: 'third-party', text: body } : { text: body }
+
+      await expect(executeRegisteredTool(tool, input, {
+        requestId: `confirmed-sensitive-${toolName}`, toolUseId: `confirmed-sensitive-${toolName}-call`,
+        signal: new AbortController().signal, executionContext: runtime as never,
+        userConfirmationReceipt: 'confirmation:user-approved', userConfirmationAnswerer: 'user'
+      }, { confirm: async () => true, dispatch: async (_handle, _context, dispatch) => dispatch(new AbortController().signal) }))
+        .rejects.toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+      expect(platformSend).not.toHaveBeenCalled()
+    }
+  )
+
+  it('binds reply purpose, origin session and recipient from authenticated host context, never from model input', async () => {
+    const runtime = makeRuntime()
+    const reply = vi.fn(async () => ({ success: true }))
+    const [, replyTool] = createWeChatOutboundRegisteredTools({
+      send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: reply } as never
+    })
+    await executeRegisteredTool(replyTool!, { text: 'hello', userId: 'attacker-recipient' }, {
+      requestId: 'request-delivery-binding', toolUseId: 'reply-delivery-binding', signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, {
+      confirm: async () => true,
+      dispatch: async (_handle, _context, execute) => execute(new AbortController().signal)
+    })
+
+    const context = reply.mock.calls[0]?.[1] as { outboundDeliveryFacts?: Record<string, unknown> }
+    expect(context.outboundDeliveryFacts).toMatchObject({
+      purpose: 'task-reply', channel: 'wechat', originSessionId: 'session-approved',
+      trustedRecipient: 'wechat-user-approved', modelRecipient: 'attacker-recipient',
+      content: 'hello', contentAssessment: { source: 'host', content: 'hello', classification: 'ordinary' }
+    })
+    expect(classifyImOutbound(context.outboundDeliveryFacts as never)).toMatchObject({ kind: 'active-outbound', reason: 'untrusted-recipient' })
+  })
+
   it.each(['wechat_send', 'wechat_reply'] as const)(
     '真实 %s adapter 在 claim barrier 中授权版本变化时不触发出站执行器',
     async (toolName) => {
@@ -114,6 +261,32 @@ describe('WeChat outbound prepared registrations', () => {
     expect(dispatched).toBe(false)
     expect(reply).not.toHaveBeenCalled()
     expect(send).toBeDefined()
+  })
+
+  it('拒绝已切换到旧会话的 reply，派发前不调用发送器', async () => {
+    const runtime = makeRuntime()
+    const reply = vi.fn(async () => ({ success: true }))
+    const [, replyTool] = createWeChatOutboundRegisteredTools({
+      send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: reply } as never
+    })
+    let dispatched = false
+    await expect(executeRegisteredTool(replyTool!, { text: 'hello' }, {
+      requestId: 'request-stale-reply-session', toolUseId: 'reply-stale-session', signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, {
+      confirm: async () => {
+        runtime.sessionId = 'session-stale-target'
+        return true
+      },
+      dispatch: async (_handle, _context, execute) => {
+        dispatched = true
+        return execute(new AbortController().signal)
+      }
+    })).rejects.toThrow('WECHAT_OUTBOUND_PREPARED_BINDING_CHANGED')
+
+    expect(dispatched).toBe(false)
+    expect(reply).not.toHaveBeenCalled()
   })
 
   it('Hosted wechat_reply 在用户确认期间入站 messageId 改变时不派发且不重试回复', async () => {

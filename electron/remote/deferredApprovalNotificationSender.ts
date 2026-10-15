@@ -1,4 +1,5 @@
 import type { AppDatabase } from '../database/sqliteStore'
+import { getDbConnection } from '../database/sqliteStore'
 import type { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import type { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { buildDeferredApprovalNotification, type DeferredApprovalNotificationDto } from './deferredApprovalNotification'
@@ -16,6 +17,9 @@ type SendInput = {
   notificationVersion: number
   shortCode: string
   safeActionSummary: string
+  safeTargetSummary?: string
+  impactSummary?: string
+  reasonSummary?: string
   userDelegation: string
   untrustedMaterial: string
 }
@@ -27,6 +31,7 @@ export function createDeferredApprovalNotificationSender(input: {
   adapter: { send(dto: DeferredApprovalNotificationDto): Promise<unknown> }
   audit(event: { kind: 'deferred-approval-notification'; state: 'delivery_failed' | 'delivered'; todoId: string; invocationId: string; notificationVersion: number }): void
 }) {
+  const conn = getDbConnection(input.db)
   const reviewed = new Map<string, { contentKey: string; dto: DeferredApprovalNotificationDto }>()
   return {
     async send(request: SendInput): Promise<{ status: 'not_ready' | 'invalidated' | 'delivery_pending' | 'delivered' }> {
@@ -34,7 +39,9 @@ export function createDeferredApprovalNotificationSender(input: {
       if (!intent || intent.todoId !== request.todoId || !input.intentStore.authorizeResume(request.invocationId)) return { status: 'not_ready' }
       const scopedTodo = input.todoStore.get(request.todoId, {
         channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
-        authorizationEpoch: request.authorizationEpoch, rule: request.rule
+        authorizationEpoch: request.authorizationEpoch,
+        originSessionId: (conn.prepare('SELECT origin_session_id FROM deferred_todos WHERE todo_id=?').get(request.todoId) as { origin_session_id: string } | undefined)?.origin_session_id ?? '',
+        rule: request.rule
       })
       if (!scopedTodo || scopedTodo.invocationId !== request.invocationId || scopedTodo.status !== 'pending') return { status: 'invalidated' }
       const key = `${request.todoId}:${request.notificationVersion}`
@@ -47,7 +54,8 @@ export function createDeferredApprovalNotificationSender(input: {
           dto: buildDeferredApprovalNotification({
             channel: scopedTodo.channel, todoId: scopedTodo.todoId, notificationVersion: request.notificationVersion,
             shortCode: request.shortCode, expiresAt: scopedTodo.expiresAt, toolName: 'deferred-action',
-            safeActionSummary: request.safeActionSummary, userDelegation: request.userDelegation,
+            safeActionSummary: request.safeActionSummary, safeTargetSummary: request.safeTargetSummary,
+            impactSummary: request.impactSummary, reasonSummary: request.reasonSummary, userDelegation: request.userDelegation,
             untrustedMaterial: request.untrustedMaterial
           })
         }

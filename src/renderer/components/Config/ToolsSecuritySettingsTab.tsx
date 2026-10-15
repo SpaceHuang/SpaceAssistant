@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, App, Button, Collapse, Form, Input, InputNumber, Radio, Select, Space, Switch, Table, Tabs, Tag } from 'antd'
+import { Alert, App, Button, Collapse, Form, Input, InputNumber, Select, Space, Switch, Table, Tabs, Tag } from 'antd'
 import type { BrowserConfig } from '../../../shared/domainTypes'
 import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
-import type { FeishuConfig } from '../../../shared/feishuTypes'
 import type {
   DecisionCacheEntry,
   ExecutionLane,
+  PolicyAction,
   SecurityAuditEvent
 } from '../../../shared/confirmation/types'
 import type {
@@ -13,7 +13,8 @@ import type {
   SecuritySettingsRuleView
 } from '../../../shared/confirmation/settingsCenter'
 import type { PolicyPackage } from '../../../shared/policy/policyPackages'
-import { LANE_PROFILES, effectiveActionFor, resolvePolicyRules } from '../../../shared/policy/policyPackages'
+import { IM_STANDARD_BEHAVIOR_DIFF_IDS } from '../../../shared/policy/imPolicyBehavior'
+import { LANE_PROFILES, effectiveActionFor, imEffectiveActionFor, isPolicyPackage, resolvePolicyRules } from '../../../shared/policy/policyPackages'
 import type { PolicyRule } from '../../../shared/confirmation/types'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
@@ -26,12 +27,10 @@ type Props = {
   /** act 会话级信任开关（R6：自网络访问页迁入区 4，仍读写 browser 配置）。 */
   browser: BrowserConfig
   onBrowserChange: (next: BrowserConfig) => void
-  /** 飞书写确认开关（R6：自飞书设置页迁入区 1，仍读写 feishu 配置）。 */
-  feishu: FeishuConfig
-  onFeishuChange: (next: FeishuConfig) => void
 }
 
-const LANES: Array<'desktop' | 'wechat' | 'feishu'> = ['desktop', 'wechat', 'feishu']
+/** IM 是共享策略域；微信 lane 仅作为现有规则目录的兼容视图键。 */
+const LANES: Array<'desktop' | 'wechat'> = ['desktop', 'wechat']
 
 const AUDIT_EVENT_KINDS = [
   'policy.decision',
@@ -58,27 +57,155 @@ function formatTs(ts: number): string {
 /** 区 1：策略套餐 + 规则覆盖（规则行展示当前档位生效动作；custom 档动作域按 lane；系统保护规则以「启用/不启用」开关控制）。 */
 function PolicyPackageSection({
   model,
-  onModelChange,
-  feishu,
-  onFeishuChange
+  onModelChange
 }: {
   model: SecuritySettingsModelPayload | null
   onModelChange: () => void
-  feishu: FeishuConfig
-  onFeishuChange: (next: FeishuConfig) => void
 }) {
   const { message, modal } = App.useApp()
   const { t } = useTypedTranslation('config')
+  const [imPackageOverride, setImPackageOverride] = useState<PolicyPackage | null>(null)
+  const [imPolicyVersion, setImPolicyVersion] = useState<string | null>(null)
+  const [imRuleOverrides, setImRuleOverrides] = useState<Record<string, string>>({})
+  const [imDisabledRuleIds, setImDisabledRuleIds] = useState<string[]>([])
+
+  const actionLabel = (action: PolicyAction): string =>
+    action === 'deny'
+      ? t('toolsSecurity.policy.actionDeny')
+      : action === 'allow'
+        ? t('toolsSecurity.policy.actionAllow')
+        : action === 'auto-evaluator'
+          ? t('toolsSecurity.policy.actionAutoShort')
+          : t('toolsSecurity.policy.actionAsk')
+
+  const effectiveImAction = (
+    pkg: PolicyPackage,
+    rule: Pick<PolicyRule, 'id' | 'action' | 'locked'>,
+    override?: PolicyAction
+  ): PolicyAction => imPolicyVersion === 'im-standard-v2'
+    ? imEffectiveActionFor('im', pkg, rule, override)
+    : (override as PolicyAction | undefined) ?? rule.action
+
+  const applyImSnapshot = (snapshot: Record<string, unknown>) => {
+    if (isPolicyPackage(snapshot.selectedPackage)) setImPackageOverride(snapshot.selectedPackage)
+    setImRuleOverrides(snapshot.ruleOverrides && typeof snapshot.ruleOverrides === 'object' && !Array.isArray(snapshot.ruleOverrides)
+      ? snapshot.ruleOverrides as Record<string, string> : {})
+    setImDisabledRuleIds(Array.isArray(snapshot.disabledRuleIds)
+      ? snapshot.disabledRuleIds.filter((id): id is string => typeof id === 'string')
+      : [])
+  }
+
+  const refreshImPolicy = async () => {
+    const latest = await window.api.securityReadPolicyForLane({ lane: 'wechat' })
+    setImPolicyVersion(latest.policyBehaviorVersion)
+    applyImSnapshot(latest.snapshot)
+    return latest
+  }
+
+  const switchImStandard = () => {
+    const behaviorDiffLabels = {
+      'mcp-public-read-auto': t('toolsSecurity.policy.behaviorDiffs.mcpPublicReadAuto'),
+      'low-risk-browser-and-feishu-auto': t('toolsSecurity.policy.behaviorDiffs.lowRiskBrowserAndFeishuAuto'),
+      'sensitive-write-and-external-outbound-manual': t('toolsSecurity.policy.behaviorDiffs.sensitiveWriteAndExternalOutboundManual')
+    }
+    modal.confirm({
+      title: t('toolsSecurity.policy.switchToCurrentStandardTitle'),
+      content: (
+        <div>
+          <p>{t('toolsSecurity.policy.switchToCurrentStandardIntro')}</p>
+          <ul>
+            {IM_STANDARD_BEHAVIOR_DIFF_IDS.map((id) => (
+              <li key={id}>{behaviorDiffLabels[id]}</li>
+            ))}
+          </ul>
+          <p>{t('toolsSecurity.policy.switchToCurrentStandardGateNote')}</p>
+        </div>
+      ),
+      okText: t('toolsSecurity.policy.switchToCurrentStandardConfirm'),
+      cancelText: t('toolsSecurity.policy.switchToCurrentStandardCancel'),
+      onOk: async () => {
+        try {
+          const current = await window.api.securityReadPolicyForLane({ lane: 'wechat' })
+          const result = await window.api.securityWritePolicy({
+            lane: 'wechat', expectedRevision: current.revision,
+            change: { kind: 'switch-to-standard', userChoiceConfirmed: true, displayedDiffs: IM_STANDARD_BEHAVIOR_DIFF_IDS }
+          })
+          if (result.status === 'conflict') {
+            await refreshImPolicy()
+            message.error(t('toolsSecurity.policy.saveConflict'))
+            return
+          }
+          if (result.status !== 'committed') {
+            message.error(t('toolsSecurity.policy.saveFailed'))
+            return
+          }
+          await refreshImPolicy()
+          onModelChange()
+          message.success(t('toolsSecurity.policy.switchToCurrentStandardSuccess'))
+        } catch {
+          message.error(t('toolsSecurity.policy.saveFailed'))
+        }
+      }
+    })
+  }
+
+  useEffect(() => {
+    let current = true
+    void refreshImPolicy().catch(() => {
+      // Keep the legacy read-only model visible if snapshot loading fails.
+    })
+    return () => { current = false }
+  }, [])
+
+  const writePolicy = async (
+    lane: 'desktop' | 'wechat',
+    change:
+      | { kind: 'package'; package: PolicyPackage }
+      | { kind: 'rule-override'; ruleId: string; action: 'deny' | 'allow' | 'ask' | 'auto-evaluator' }
+      | { kind: 'rule-reset'; ruleId: string }
+      | { kind: 'rule-enabled'; ruleId: string; enabled: boolean }
+  ): Promise<boolean> => {
+    if (lane === 'desktop') return false
+    try {
+      const current = await window.api.securityReadPolicyForLane({ lane })
+      const result = await window.api.securityWritePolicy({ lane, expectedRevision: current.revision, change })
+      if (result.status === 'conflict') {
+        await refreshImPolicy()
+        onModelChange()
+        message.error(t('toolsSecurity.policy.saveConflict'))
+        return false
+      }
+      if (result.status !== 'committed' && result.status !== 'already-migrated') return false
+      if (change.kind === 'package') setImPackageOverride(change.package)
+      if (change.kind === 'rule-override') setImRuleOverrides((current) => ({ ...current, [change.ruleId]: change.action }))
+      if (change.kind === 'rule-reset') setImRuleOverrides((current) => {
+        const next = { ...current }
+        delete next[change.ruleId]
+        return next
+      })
+      if (change.kind === 'rule-enabled') setImDisabledRuleIds((current) => change.enabled
+        ? current.filter((id) => id !== change.ruleId)
+        : current.includes(change.ruleId) ? current : [...current, change.ruleId])
+      return true
+    } catch {
+      message.error(t('toolsSecurity.policy.saveFailed'))
+      return false
+    }
+  }
 
   const laneLabel = (lane: (typeof LANES)[number]): string =>
     lane === 'desktop'
       ? t('toolsSecurity.policy.laneDesktop')
-      : lane === 'wechat'
-        ? t('toolsSecurity.policy.laneWechat')
-        : t('toolsSecurity.policy.laneFeishu')
+      : t('toolsSecurity.policy.laneImRemote')
 
   const changePackage = (lane: (typeof LANES)[number], pkg: PolicyPackage) => {
     const apply = async () => {
+      if (lane === 'wechat') {
+        if (!(await writePolicy(lane, { kind: 'package', package: pkg }))) return
+        setImPackageOverride(pkg)
+        onModelChange()
+        return
+      }
       const res = await window.api.securitySetPolicyPackage({ lane, package: pkg })
       if (!res.ok) {
         message.error(t('toolsSecurity.policy.saveFailed'))
@@ -105,6 +232,11 @@ function PolicyPackageSection({
     action: 'deny' | 'allow' | 'ask' | 'auto-evaluator'
   ) => {
     void (async () => {
+      if (lane === 'wechat') {
+        if (!(await writePolicy(lane, { kind: 'rule-override', ruleId: rule.id, action }))) return
+        onModelChange()
+        return
+      }
       const res = await window.api.securitySetRuleOverride({ ruleId: rule.id, action, lane })
       if (!res.ok) {
         message.error(t('toolsSecurity.policy.saveFailed'))
@@ -138,16 +270,26 @@ function PolicyPackageSection({
     changeRuleAction(lane, rule, action)
   }
 
-  const resetRule = (rule: SecuritySettingsRuleView) => {
+  const resetRule = (lane: (typeof LANES)[number], rule: SecuritySettingsRuleView) => {
     void (async () => {
+      if (lane === 'wechat') {
+        if (!(await writePolicy(lane, { kind: 'rule-reset', ruleId: rule.id }))) return
+        onModelChange()
+        return
+      }
       await window.api.securityRemoveRuleOverride({ ruleId: rule.id })
       onModelChange()
     })()
   }
 
   /** 系统保护规则「启用/不启用」：写 security:set-rule-enabled，成功后重载模型。 */
-  const toggleRuleEnabled = (rule: SecuritySettingsRuleView, enabled: boolean) => {
+  const toggleRuleEnabled = (lane: (typeof LANES)[number], rule: SecuritySettingsRuleView, enabled: boolean) => {
     void (async () => {
+      if (lane === 'wechat') {
+        if (!(await writePolicy(lane, { kind: 'rule-enabled', ruleId: rule.id, enabled }))) return
+        onModelChange()
+        return
+      }
       const res = await window.api.securitySetRuleEnabled({ ruleId: rule.id, enabled })
       if (!res.ok) {
         message.error(t('toolsSecurity.policy.saveFailed'))
@@ -182,9 +324,20 @@ function PolicyPackageSection({
    * 无 lane 限定的通用规则对每个链路都适用。 */
   const rulesForLane = (lane: (typeof LANES)[number]): SecuritySettingsRuleView[] => {
     const views = model?.rules ?? []
-    const effective = resolvePolicyRules({ lane, packages: model?.packages, rules: views as PolicyRule[] })
+    const packages = lane === 'wechat'
+      ? { ...model?.packages, wechat: imPackageOverride ?? model?.packages.wechat ?? 'standard' }
+      : model?.packages
+    const effective = resolvePolicyRules({ lane, packages, rules: views as PolicyRule[] })
     return effective
-      .map((r) => views.find((v) => v.id === r.id) ?? scopeView(r, lane))
+      .map((r) => {
+        const view = views.find((v) => v.id === r.id) ?? scopeView(r, lane)
+        if (lane !== 'wechat') return view
+        return {
+          ...view,
+          action: (imRuleOverrides[r.id] ?? view.action) as SecuritySettingsRuleView['action'],
+          enabled: !imDisabledRuleIds.includes(r.id)
+        }
+      })
       .filter((r) => !r.lanes || r.lanes.includes(lane))
   }
 
@@ -201,6 +354,11 @@ function PolicyPackageSection({
             <span>
               <code className="config-tool-row__id">{r.id}</code>
               <div className="config-field__hint">{r.reason}</div>
+              {r.capabilities?.length ? (
+                <div className="config-field__hint">
+                  {t('toolsSecurity.policy.applicableCapabilities')}: {r.capabilities.join(', ')}
+                </div>
+              ) : null}
             </span>
           )
         },
@@ -218,29 +376,24 @@ function PolicyPackageSection({
           title: t('toolsSecurity.policy.actionColumn'),
           width: 140,
           render: (_, r) => {
-            const actionLabel = (v: 'deny' | 'allow' | 'ask' | 'auto-evaluator' | 'confirm-every-time') =>
-              v === 'deny'
-                ? t('toolsSecurity.policy.actionDeny')
-                : v === 'allow'
-                  ? t('toolsSecurity.policy.actionAllow')
-                  : v === 'ask'
-                    ? t('toolsSecurity.policy.actionAsk')
-                    : v === 'auto-evaluator'
-                      ? t('toolsSecurity.policy.actionAutoShort')
-                      : t('toolsSecurity.policy.actionAsk')
             // 生效动作（显示=实际）：按当前链路 + 档位经 LANE_PROFILES 计算（standard 桌面「询问」→「自动」）；
             // locked 条目不参与档位变换，原样展示
-            const pkg = model?.packages[lane] ?? 'standard'
+            const pkg = lane === 'wechat'
+              ? imPackageOverride ?? model?.packages.wechat ?? 'standard'
+              : model?.packages[lane] ?? 'standard'
+            const imAction = lane === 'wechat'
+              ? effectiveImAction(pkg, { id: r.id, action: r.action, locked: r.locked }, imRuleOverrides[r.id] as PolicyRule['action'] | undefined)
+              : null
             if (r.locked) {
               return (
                 <span className={r.enabled ? undefined : 'config-field__hint'}>
-                  {actionLabel(effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}
+                  {actionLabel(imAction ?? effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}
                 </span>
               )
             }
             if (pkg !== 'custom') {
               // 非 custom 档只读：展示当前档位下的生效动作
-              return <span>{actionLabel(effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}</span>
+              return <span>{actionLabel(imAction ?? effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}</span>
             }
             // custom 档：动作域按 lane（B2）——desktop 4 态（deny/allow/ask/auto-evaluator）、
             // wechat/feishu 3 态；覆盖动作即最终动作
@@ -266,14 +419,14 @@ function PolicyPackageSection({
                 <Switch
                   size="small"
                   checked={r.enabled}
-                  onChange={(v) => toggleRuleEnabled(r, v)}
+                  onChange={(v) => toggleRuleEnabled(lane, r, v)}
                   checkedChildren={t('toolsSecurity.policy.enabledTag')}
                   unCheckedChildren={t('toolsSecurity.policy.disabledTag')}
                 />
               ) : null}
               {r.overridden ? <Tag color="orange">{t('toolsSecurity.policy.overriddenTag')}</Tag> : null}
               {r.overridden ? (
-                <Button size="small" type="link" onClick={() => resetRule(r)}>
+                <Button size="small" type="link" onClick={() => resetRule(lane, r)}>
                   {t('toolsSecurity.policy.reset')}
                 </Button>
               ) : null}
@@ -287,22 +440,32 @@ function PolicyPackageSection({
   return (
     <ConfigSettingsStack>
       <p className="config-field__hint">{t('toolsSecurity.policy.hint')}</p>
-      {/* R6：飞书写确认门控开关自飞书设置页迁入，就近规则区；custom 套餐下规则覆盖优先（见 hint） */}
-      <ConfigSwitchRow
-        label={t('toolsSecurity.policy.larkWriteRequiresConfirm')}
-        hint={t('toolsSecurity.policy.larkWriteRequiresConfirmHint')}
-        checked={feishu.larkCliWriteRequiresConfirm}
-        onChange={(v) => onFeishuChange({ ...feishu, larkCliWriteRequiresConfirm: v })}
-      />
       <Tabs
         items={LANES.map((lane) => {
-          const pkg = model?.packages[lane] ?? 'standard'
-          const hint = packageHint(pkg)
+          const pkg = lane === 'wechat'
+            ? imPackageOverride ?? model?.packages.wechat ?? 'standard'
+            : model?.packages[lane] ?? 'standard'
+          const hint = lane === 'wechat' && imPolicyVersion === 'im-standard-v2'
+            ? t('toolsSecurity.policy.imStandardHint')
+            : packageHint(pkg)
           return {
             key: lane,
             label: laneLabel(lane),
             children: (
               <ConfigSettingsStack>
+                {lane === 'wechat' && imPolicyVersion !== 'im-standard-v2' ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message={t('toolsSecurity.policy.currentStandardAvailable')}
+                    description={(
+                      <Space direction="vertical" align="start">
+                        <span>{t('toolsSecurity.policy.currentStandardAvailableHint')}</span>
+                        <Button onClick={switchImStandard}>{t('toolsSecurity.policy.switchToCurrentStandard')}</Button>
+                      </Space>
+                    )}
+                  />
+                ) : null}
                 <div className="config-policy-selector">
                   <div className="config-policy-selector__head">
                     <span className="config-policy-selector__label">
@@ -659,9 +822,9 @@ function AuditSection({
 /**
  * 「安全策略」设置页（§7，P4）：1. 策略套餐（含规则列表；规则行展示当前链路+档位的生效动作，
  * custom 档动作域按 lane）2. 确认记忆管理 3. 安全审计记录。
- * 工具开关（Agent 可用能力面）在「工具 → 工具开关」独立子 Tab，与安全策略管控并列。
+ * 安全策略同时覆盖工具调用和 IM 操作策略，因此作为全局设置页单独展示。
  */
-export function ToolsSecuritySettingsTab({ active, browser, onBrowserChange, feishu, onFeishuChange }: Props) {
+export function SecuritySettingsTab({ active, browser, onBrowserChange }: Props) {
   const { t } = useTypedTranslation('config')
   const [model, setModel] = useState<SecuritySettingsModelPayload | null>(null)
 
@@ -682,7 +845,7 @@ export function ToolsSecuritySettingsTab({ active, browser, onBrowserChange, fei
       <p className="config-field__hint">{t('toolsSecurity.intro')}</p>
       <Collapse
         ghost
-        className="config-tools-security"
+        className="config-security-settings"
         defaultActiveKey={['policy']}
         items={[
           {
@@ -692,8 +855,6 @@ export function ToolsSecuritySettingsTab({ active, browser, onBrowserChange, fei
               <PolicyPackageSection
                 model={model}
                 onModelChange={() => void reloadModel()}
-                feishu={feishu}
-                onFeishuChange={onFeishuChange}
               />
             )
           },

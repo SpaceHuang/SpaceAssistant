@@ -31,10 +31,11 @@ export function createDeferredTodoCapacityController(
   const identityLimit = limits.identityLimit ?? DEFAULT_DEFERRED_TODO_IDENTITY_LIMIT
   assertLimit(sessionLimit, 'SESSION')
   assertLimit(identityLimit, 'IDENTITY')
-  const conn = getDbConnection(db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每函数入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(db)
 
   function expire(now: number): number {
-    const result = conn.prepare(`UPDATE deferred_todo_capacity_reservations SET state='expired',updated_at=?
+    const result = liveConn().prepare(`UPDATE deferred_todo_capacity_reservations SET state='expired',updated_at=?
       WHERE state IN ('prepared','pending') AND expires_at<=?`).run(now, now)
     const count = Number(result.changes)
     if (count > 0) db.save()
@@ -49,9 +50,9 @@ export function createDeferredTodoCapacityController(
       const now = input.now ?? Date.now()
       const expiresAt = input.expiresAt ?? now + DEFAULT_DEFERRED_RESERVATION_TTL_MS
       if (!Number.isFinite(now) || !Number.isFinite(expiresAt) || expiresAt <= now) throw new TypeError('DEFERRED_TODO_RESERVATION_TTL_INVALID')
-      return runInTransaction(conn, () => {
+      return runInTransaction(liveConn(), () => {
         expire(now)
-        const prior = conn.prepare(`SELECT reservation_id,session_id,identity_key,state FROM deferred_todo_capacity_reservations
+        const prior = liveConn().prepare(`SELECT reservation_id,session_id,identity_key,state FROM deferred_todo_capacity_reservations
           WHERE invocation_id=?`).get(input.invocationId) as { reservation_id: string; session_id: string; identity_key: string; state: string } | undefined
         if (prior) {
           if (prior.reservation_id !== input.reservationId || prior.session_id !== input.sessionId || prior.identity_key !== input.identityKey) {
@@ -61,13 +62,13 @@ export function createDeferredTodoCapacityController(
             ? { ok: true, duplicate: true }
             : { ok: false, reason: 'reservation_conflict' }
         }
-        const sessionCount = conn.prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
+        const sessionCount = liveConn().prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
           WHERE session_id=? AND identity_key=? AND state IN ('prepared','pending')`).get(input.sessionId, input.identityKey) as { count: number }
         if (sessionCount.count >= sessionLimit) return { ok: false, reason: 'session_limit' }
-        const identityCount = conn.prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
+        const identityCount = liveConn().prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
           WHERE identity_key=? AND state IN ('prepared','pending')`).get(input.identityKey) as { count: number }
         if (identityCount.count >= identityLimit) return { ok: false, reason: 'identity_limit' }
-        conn.prepare(`INSERT INTO deferred_todo_capacity_reservations(
+        liveConn().prepare(`INSERT INTO deferred_todo_capacity_reservations(
           reservation_id,invocation_id,session_id,identity_key,state,created_at,expires_at,updated_at
         ) VALUES(?,?,?,?,?,?,?,?)`).run(
           input.reservationId, input.invocationId, input.sessionId, input.identityKey, input.state, now, expiresAt, now
@@ -78,21 +79,21 @@ export function createDeferredTodoCapacityController(
     },
 
     activate(reservationId: string, invocationId: string, now = Date.now()): boolean {
-      const result = conn.prepare(`UPDATE deferred_todo_capacity_reservations SET state='pending',updated_at=?
+      const result = liveConn().prepare(`UPDATE deferred_todo_capacity_reservations SET state='pending',updated_at=?
         WHERE reservation_id=? AND invocation_id=? AND state='prepared' AND expires_at>?`).run(now, reservationId, invocationId, now)
       if (Number(result.changes) === 1) db.save()
       return Number(result.changes) === 1
     },
 
     release(reservationId: string, invocationId: string, now = Date.now()): boolean {
-      const result = conn.prepare(`UPDATE deferred_todo_capacity_reservations SET state='released',updated_at=?
+      const result = liveConn().prepare(`UPDATE deferred_todo_capacity_reservations SET state='released',updated_at=?
         WHERE reservation_id=? AND invocation_id=? AND state IN ('prepared','pending')`).run(now, reservationId, invocationId)
       if (Number(result.changes) === 1) db.save()
       return Number(result.changes) === 1
     },
 
     releaseByInvocation(invocationId: string, now = Date.now()): boolean {
-      const row = conn.prepare(`SELECT reservation_id FROM deferred_todo_capacity_reservations
+      const row = liveConn().prepare(`SELECT reservation_id FROM deferred_todo_capacity_reservations
         WHERE invocation_id=? AND state IN ('prepared','pending')`).get(invocationId) as { reservation_id: string } | undefined
       return row ? this.release(row.reservation_id, invocationId, now) : false
     },
@@ -100,24 +101,24 @@ export function createDeferredTodoCapacityController(
     counts(input: { identityKey: string; now?: number }): { identity: number; sessions: Record<string, number> } {
       const now = input.now ?? Date.now()
       expire(now)
-      const identity = conn.prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
+      const identity = liveConn().prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
         WHERE identity_key=? AND state IN ('prepared','pending')`).get(input.identityKey) as { count: number }
-      const rows = conn.prepare(`SELECT session_id,SUM(CASE WHEN state IN ('prepared','pending') THEN 1 ELSE 0 END) AS count
+      const rows = liveConn().prepare(`SELECT session_id,SUM(CASE WHEN state IN ('prepared','pending') THEN 1 ELSE 0 END) AS count
         FROM deferred_todo_capacity_reservations WHERE identity_key=? GROUP BY session_id`).all(input.identityKey) as Array<{ session_id: string; count: number }>
       const sessions = Object.fromEntries(rows.map(({ session_id, count }) => [session_id, count]))
       return { identity: identity.count, sessions }
     },
 
     reconcile(validInvocationIds: string[], now = Date.now()): { expired: number; released: number } {
-      return runInTransaction(conn, () => {
+      return runInTransaction(liveConn(), () => {
         const expired = expire(now)
         const valid = new Set(validInvocationIds)
-        const active = conn.prepare(`SELECT reservation_id,invocation_id FROM deferred_todo_capacity_reservations
+        const active = liveConn().prepare(`SELECT reservation_id,invocation_id FROM deferred_todo_capacity_reservations
           WHERE state IN ('prepared','pending')`).all() as Array<{ reservation_id: string; invocation_id: string }>
         let released = 0
         for (const reservation of active) {
           if (valid.has(reservation.invocation_id)) continue
-          const result = conn.prepare(`UPDATE deferred_todo_capacity_reservations SET state='released',updated_at=?
+          const result = liveConn().prepare(`UPDATE deferred_todo_capacity_reservations SET state='released',updated_at=?
             WHERE reservation_id=? AND state IN ('prepared','pending')`).run(now, reservation.reservation_id)
           released += Number(result.changes)
         }

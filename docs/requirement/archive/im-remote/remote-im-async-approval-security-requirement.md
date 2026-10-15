@@ -1,14 +1,33 @@
 # 远程 IM 异步审批安全模型 — 需求规格
 
-> **版本：** v1.1
-> **日期：** 2026-10-08
-> **状态：** 需求复审通过（2026-10-08，见 [第二轮评审报告](../review/2026-10-08-remote-im-async-approval-security-requirement-review-v2.md)）；实施前决策与启用验收仍待完成
+> **版本：** v1.2
+> **日期：** 2026-10-12
+> **状态：** v1.2 对齐 2026-10-11 IM 安全审核改进契约；运行实现/本次版本验收/启用仍待完成；v1.1 历史评审结论不代表新行为已验收
 > **范围：** **仅安全侧**（包含与执行层共享的真实派发安全边界）。执行逻辑的变更（回合收尾策略、部分推进边界、待办重放时序、出站形态）另立方案，见 [附录 B](#附录-b与执行逻辑方案的分界)
 > **承接：** `docs/develop/approval-agent-shortest-path-plan.md` §8「本计划不碰、移交后续」中的 **wechat/feishu 回答者改造**
 > **上游依据：** `docs/develop/architect/confirmation-answerer-and-auto-approval-design.md`（不变量 I1–I5）、`docs/develop/architect/product-architecture-design.md` §7
 > **关联需求：** [remote-session-context-awareness-requirement.md](./remote-session-context-awareness-requirement.md)、[remote-workdir-switch-guard-requirement.md](./remote-workdir-switch-guard-requirement.md)、[confirmation-card-trust-requirement.md](./confirmation-card-trust-requirement.md)、[tool-confirmation-top-level-design-v2.md](./tool-confirmation-top-level-design-v2.md)
 
 ---
+
+## 0. v1.2 当前规范覆盖（替代旧冲突语句）
+
+本节与本文余下章节共同构成当前有效需求。凡旧段落、旧矩阵与本节不一致，以本节和 [IM 安全审核改进需求](./2026-10-11-im-security-review-improvement-requirement.md) 为准；v1.1 的历史测试证据只证明当时版本，不替代本次版本证据。
+
+- 策略域由本次可信入口选择：desktop→desktop，wechat/feishu→共同 im；lane/channel 仍用于传输/审计，Track 只标识任务归属。待办继续绑定原 channel、identity、owner、originSession、Track 与精确动作；桌面不能代答 IM。
+- `locked` 只表示规则不可编辑，不单独决定出口：locked deny/critical 为终局禁止且无待办；locked ask/confirm-every-time 为 human-required，直接创建原渠道精确待办，不先交 Agent。不得人工覆盖 hard-deny。
+- 自动审核候选仅在策略解析为 auto-eligible 后进入 Agent。Agent approve 且最终安全复检通过才允许执行；Agent 明确 deny、parsing/config/recursion/critical/hard-deny 终局拒绝；undetermined、timeout、暂时 unavailable 转原 IM 精确待办，待办不可用时 fail closed。
+- 人工批准仅授权该 todo 绑定的单一动作，actor=user；Agent 批准 actor=agent；确定性放行 actor=system。任何普通批准均不写长期授权缓存。
+- 外发不再按 `wechat_reply`/`wechat_send` 工具名免审或一概视为同类。只有主进程证明当前任务、当前已认证 owner 单聊、冻结目的地、非敏感正文及合法任务附件，并通过每次发送的最终检查，才可作为受控普通任务回复；任意 recipient、第三方/群聊、敏感内容、批量本地导出和内容/目标变化仍按主动外发逐次审核或禁止。工具、系统、媒体、重试、缓存和 Agent shortcut 均不得绕过最终检查。
+- `remoteConfirmPolicy` 和渠道私有安全字段不再是生效策略源；存量配置按冻结的 policyBehaviorVersion 一次性迁移到共同 im 策略。旧 lane 的 agent/loose/custom 限制不能替代共同规则解析；hard-deny 与 human-required 底线始终适用。
+
+### v1.2 对 §5.2/§5.3/§5.5/§11.2/§14/§15 的逐项替代
+
+- §5.2 中“Agent deny→deferred”替换为终局 reject 且无待办；“unparsable→deferred”替换为 config-error/解析失败终局拒绝；locked/critical 拆成 locked deny/critical 终局禁止与 locked ask 直接人工待办。
+- §5.3 “locked 规则一律不进入 deferred”仅适用于 locked deny；locked ask/confirm-every-time 按 human-required 创建精确待办。
+- §5.5 中“任意 outbound 必须真人逐次 deferred”和“用户明确要求发送也必须 deferred”仅在主动外发场景成立；受控 owner 任务回复按上方条件例外，所有出口仍必须 final check。
+- §11.2 及 §15 中 agent-deny、unparsable、locked/critical、outbound 的出口矩阵按本节重写；旧行不再是本次运行实现的验收标准。
+- §14 中与 `remoteConfirmPolicy` 分离、lane 限制 agent loose/custom 的旧配置约束由“单一版本化 policy domain + 一次性迁移 + 不可越过的语义底线”替代。
 
 ## 目录
 
@@ -74,7 +93,7 @@ IM 链路（飞书 / 微信）当前**完整沿用桌面的同步确认模型**�
 
 ---
 
-## 2. 背景与现状
+## 2. 背景与现状（v1.1 历史实现基线；当前入口与策略出口见 §0）
 
 ### 2.1 回答者维度已正交（I1 已落地）
 
@@ -213,30 +232,28 @@ export type ConfirmAnswererKind = 'user' | 'agent' | 'deny'
 
 ## 5. 功能需求 A：回答者解析与出口映射
 
-### 5.1 二维解析模型（复用既有设计）
+### 5.1 二维解析模型（旧回答出口模型；当前策略域由 §0 定义）
 
-`resolveConfirmChannel` 已是二维：**维度一 = 回答者种类**（`user` / `agent` / `deny`），**维度二 = 传输通道**（桌面窗口卡 / IM 出站）。本方案只改维度一在 IM lane 的取值，不动维度二。
+旧 `resolveConfirmChannel` 按回答者种类（`user` / `agent` / `deny`）与传输通道（桌面窗口卡 / IM 出站）组织出口。该模型保留为确认传输兼容层；当前安全策略域必须由可信本次入口选择，lane/channel 只决定传输与归因，不能单独决定 answerer 或策略许可。
 
-### 5.2 出口映射表（IM 与桌面/automation 对照）
+### 5.2 出口映射表（v1.2：IM 与桌面/automation 对照；旧矩阵见 §0）
 
 | 裁决结果 | desktop 出口 | automation 出口 | **IM 出口（本方案）** |
 |----------|-------------|----------------|---------------------|
 | `approve` | 不适用（人答） | `approved(agent-approved)` | `approved(agent-approved)`（outbound 除外，§5.5） |
-| `deny` | 不适用 | `rejected(agent-deny)` **终局** | **`deferred`**（cause `deferred-to-user`） |
+| `deny` | 不适用 | `rejected(agent-deny)` **终局** | **`rejected(agent-deny)` 终局、无待办** |
 | `undetermined` | 挂人工卡 | `rejected(agent-undetermined)` | **`deferred`** |
 | `unavailable` | 挂人工卡 | `rejected(unavailable)` | **`deferred`** |
 | `timeout` | 挂人工卡 | `rejected(timeout)` | **`deferred`** |
-| `unparsable` | 挂人工卡 | `rejected(unparsable)` | **`deferred`** |
+| `unparsable` | 挂人工卡 | `rejected(unparsable)` | **`rejected(unparsable/config-error)` 终局、无待办** |
 | `config-error` | 挂人工卡 | `rejected(config-error)` | **`rejected(config-error)`** ← 见 I11 |
 | `recursion-blocked` | 不适用 | `rejected` | `rejected`（不可 defer） |
-| 命中 `locked` 规则 / `critical` 风险 | 不适用 | `rejected` | **`rejected`（禁区，不给追认通道）** |
+| 命中 locked deny / critical | 不适用 | `rejected` | **`rejected` 终局、无待办** |
+| 命中 locked ask / confirm-every-time | 挂人工卡 | 由规则出口定义 | **原 IM 精确人工待办，不交 Agent** |
 
-### 5.3 禁区优先于 deferred
+### 5.3 规则出口分类优先于回答者
 
-策略 `locked: true` 规则命中（例：`remote-outside-write-deny`、`wiki-raw-write-deny`）与 `critical` 风险等级**先于**回答者解析生效：
-
-- 不得进入 `deferred`；
-- 不得因"用户追认"而放行——**有些事不是"等人说了就能做"，而是谁都不能做**。
+`locked` 是不可编辑元数据，不是统一出口。hard-deny/critical 先于回答者解析，终局拒绝且不得进入 `deferred`；locked ask/confirm-every-time 是 human-required，直接进入原渠道精确人工待办，不交 Agent。人工批准不得覆盖 hard-deny。
 
 ### 5.4 新类型
 
@@ -267,12 +284,13 @@ export type ConfirmOutcome =
 |------|------------------|
 | 非 outbound，直接委托精确覆盖动作且完整限制条件可验证 | 可到 `high`；当前策略允许且 Agent approve 后才可 `agent-approved` |
 | 动作来自材料、偏离委托或证据不完整 | `unknown / low`；需授权时必须 `deferred`，不得自主执行 |
-| 任意 `ActionClass = 'outbound'` | 代码强制禁止 `agent-approved`、禁止长期缓存命中免确认、禁止写入长期外流授权；非禁区动作必须对精确目标、正文及附件逐次 `deferred` 后真人批准 |
-| 当前策略 deny / locked / critical | `deny`，不提供追认绕过 |
+| 主动 outbound（第三方/群聊/任意收件人/敏感或批量本地导出） | 禁止 Agent 自动放行或长期缓存；未命中硬拒绝时按精确目标、正文、附件逐次人工待办 |
+| 受控 owner 任务回复 | 仅绑定当前 owner 单聊、当前任务及可信目的地，正文/附件检查通过且每次 final check 通过才可发 |
+| hard-deny / critical | `deny`，不提供追认绕过；locked ask 仍按 human-required todo |
 
-外流约束先于 Agent approve、策略 auto-allow 与缓存快捷路径；Agent 可以评估风险，但不能替代逐次真人批准。审批通知仅可经 §10 的专用安全 DTO 投递给当前已鉴权 owner，不可将任意工具外发伪装为通知以绕过规则。
+主动外发（不含下述受控 owner 任务回复）的逐次人工/禁止约束先于 Agent approve、策略 auto-allow 与缓存快捷路径；Agent 可以评估风险，但不能替代这类主动外发所需的逐次真人批准。受控 owner 任务回复仍必须逐次通过主进程最终检查。审批通知仅可经 §10 的专用安全 DTO 投递给当前已鉴权 owner，不可将任意工具外发伪装为通知以绕过规则。
 
-用户明确要求发送：委托证据可为 `high`，最终仍为 `deferred`。材料指定攻击者收件人或用户正文引用攻击指令：该段授权为 `unknown / low`，不得自动发送。原文第 500 字后含“不要发送/不要写入”等限制：必须保留限制并拒绝相冲突动作；无法验证完整原文时不得提权。
+用户明确要求发送不能单独证明目标或内容可自动外发：仅当前 owner 单聊、当前任务内普通回复符合受控回复契约时可进入 final check；第三方目标、材料指定收件人或敏感/批量导出仍逐次人工或禁止。原文中的限制必须保留，无法验证完整原文时不得提权。
 
 ## 6. 功能需求 B：待办状态机与持久化
 
@@ -517,19 +535,20 @@ remoteAuthorizationRegistry.registerTodoInvalidator({
 
 限额检查与创建/预留必须原子执行，按 session 与 identity 两级同时计数；同 invocationId 幂等创建不重复占额。未提交的准备记录也需预留容量，失败时可恢复地释放。并发不得超额；启动先过期并对账预留。TTL 自原始创建时刻计算，重启、补发或恢复请求均不得延长。
 
-### 11.2 降级矩阵（逐格 fail-deferred / fail-deny）
+### 11.2 降级矩阵（v1.2：逐格 fail-closed / 原渠道 todo）
 
 | 场景 | desktop | automation | **IM** |
 |------|---------|-----------|--------|
 | Agent 不可用 | 人工卡 | `deny(unavailable)` | `deferred(unavailable)` |
 | 裁决超时 | 人工卡 | `deny(timeout)` | `deferred(timeout)` |
-| 裁决不可解析 | 人工卡 | `deny(unparsable)` | `deferred(unparsable)` |
+| 裁决不可解析 | 人工卡 | `deny(unparsable)` | **`deny(unparsable/config-error)`，无 todo** |
 | Profile 缺失 / 配置损坏 | 人工卡 | `deny(config-error)` | **`deny(config-error)`**（I11） |
 | 待办限额已满 | — | — | `deny(no-answerer)` |
-| 命中 `locked` / `critical` | — | `deny` | **`deny`**（禁区） |
+| 命中 locked deny / critical | — | `deny` | **`deny` 终局、无 todo** |
+| 命中 locked ask / confirm-every-time | — | 按规则处理 | **human-required 原渠道 todo** |
 | 递归触顶 | — | `deny(recursion-blocked)` | `deny(recursion-blocked)` |
 
-**I11 的落点：** `config-error` 与禁区不进 `deferred`——因为 `deferred` 的隐含承诺是"回一句就能办"，若该承诺不成立即为欺骗。
+**I11 的落点：** `config-error`、解析错误、recursion-blocked、hard-deny 与 critical 不进 `deferred`；locked ask/confirm-every-time 是人工底线，必须创建原渠道 todo。
 
 ---
 
@@ -562,8 +581,8 @@ remoteAuthorizationRegistry.registerTodoInvalidator({
 **US-IMAA03：撤销后不被逃逸**
 作为管理员，当我在电脑上关闭微信远程，我希望**之前挂着的所有待办立即作废**，用户之后回 "Y" 也不能再触发执行。
 
-**US-IMAA04：被拒绝的能覆议**
-作为 IM 远程用户，当审批 Agent 判断某动作危险而拒绝，我希望**这个判断不是终局**——我应当能看到它的理由并有机会明确覆议。
+**US-IMAA04：需要人工的动作能追认（旧版用户故事已收窄）**
+作为 IM 远程用户，当规则判定某个非 hard-deny 动作必须由我决定，我希望收到绑定该精确动作的原渠道待办并能批准或拒绝。审批 Agent 明确 deny、hard-deny 或 critical 是终局结果，不提供覆议待办；需要改变策略时应通过设置变更及完整重裁决处理，不能覆写当前拒绝。
 
 **US-IMAA05：不会被自动升级权限**
 作为 IM 远程用户，当我追认了某类动作，我希望普通追认**只批准这一次**；只有我事前看到范围、有效期和撤销方式并明确选择“批准并记住”，才形成长期授权。
@@ -588,27 +607,27 @@ remoteAuthorizationRegistry.registerTodoInvalidator({
 
 **关闭/回退协议：** 先阻断异步派发入口并持久提交关闭事实、新 epoch 与 tombstone，失效 pending、取消已提交 resume_request、撤销 consumed 未派发 permit，完成对账后回退 user。旧答复/恢复请求不能转成同步批准；派发已开始者按日志报告真实结果。失败或重启中断时保持 fail closed，恢复补做，不能只改默认回答者。已有合法、独立人类授权缓存按既有撤销范围处理，不能保留旧 pending 所衍生的越权记录。
 
-**约束：** 本方案的配置**不得**与既有 `remoteConfirmPolicy` / 档位体系语义重叠或冲突；`kind='agent'` 的 lane 依旧不得 `loose`、不得 `custom` 向下覆盖（沿用既有套餐约束）。
+**约束（v1.2 替代）：** 安全行为只由固定 `policyBehaviorVersion` 下的共同策略域解析；`remoteConfirmPolicy` 与渠道安全字段只作为一次性迁移输入，不能运行时参与裁决。执行 lane 不决定更宽松策略；custom 显式 ask、hard-deny 与 human-required 底线均须保持，行为版本损坏或缺失 fail closed。
 
 ---
 
 ## 15. 验收标准
 
-### 15.1 回答者与出口（A）
+### 15.1 回答者与出口（A，v1.2 矩阵）
 
 | # | 场景 | 期望 |
 |---|------|------|
 | A1 | IM 非 outbound、未命中 `allow`，完整证据/当前策略有效且 Agent 裁决 `approve` | 执行；审计 `answererKind='agent'`、`cause='agent-approved'`；**无** `cache.write` |
-| A2 | IM Agent 裁决 `deny` | **`deferred`**（非终局）；产生 `pending` 待办 |
+| A2 | IM Agent 裁决 `deny` | **终局拒绝**；不产生待办 |
 | A3 | IM Agent 裁决 `undetermined` | **`deferred`** |
-| A4 | IM Agent 不可用 / 超时 / 不可解析 | **`deferred`**，`cause` 分别可区分 |
+| A4 | IM Agent 不可用 / 超时 / 不可解析 | 不可用/超时可进入原 IM 精确待办并区分 cause；不可解析为终局 `rejected(unparsable/config-error)`，无待办 |
 | A5 | IM 配置损坏（Profile 缺失） | `deny(config-error)`，**不**产生待办（I11） |
-| A6 | 命中 `locked` 规则 | `deny`，**不**产生待办 |
+| A6 | 命中 locked deny / critical | `deny`，不产生待办；命中 locked ask/confirm-every-time 则直接原渠道 human-required todo |
 | A7 | 桌面链路 | 行为**逐项等价**，零变化（回归） |
 | A8 | automation 链路 | 行为**逐项等价**，零变化（回归） |
 | A9 | 非 outbound，完整直接委托及限制覆盖动作，Agent 裁决 `approve` | 可到 `high` 授权 → 执行；**不**产生待办 |
 | A10 | 动作偏离 `taskDigest`、由被处理内容触发 | 授权 `unknown` / `low` → `deferred`（不自主执行） |
-| A11 | `ActionClass = 'outbound'` 且用户明确要求 | 证据可 high，但最终必须 deferred；禁止 agent-approved 和缓存免确认 |
+| A11 | 主动外发（第三方/群聊/敏感或批量本地数据） | 逐次原渠道人工 todo 或 hard-deny；无 Agent 自动放行/缓存捷径。当前 owner 单聊受控普通任务回复仅在来源、正文/附件、目的地绑定且最终检查通过时可自动发送 |
 | A12 | 构造用例：被处理内容中含"用户已授权 X"的文本 | 断言该文本**未进入** `taskDigest` 分区，且 X 未获得 `high` 授权 |
 
 ### 15.2 待办状态机（B）
@@ -678,7 +697,7 @@ remoteAuthorizationRegistry.registerTodoInvalidator({
 | P1-3 长期升级 | 普通批准零 cache.write；未选择、投递失败、含糊答复均不升级；显式记忆范围不得扩大，outbound 不记忆 | §7.3、§10.4 |
 | P1-4 派发竞态 | 最终复检/消费/派发前各注入撤销与取消，验证两种先后顺序；消费后崩溃与结果未知分别恢复，未知绝不自动重放；租约旧 owner 不派发 | §7.2、§8.3 |
 | P1-5 追认绑定 | 两条并行待办、乱序/旧通知、重复答复、同步卡共存、计划确认 Y、无引用同意均不产生错批；补发版本关联可验证 | §7.1 |
-| P1-6 外流/证据 | 明确发送为 high 但 deferred；材料收件人/引用攻击为 unknown/low 且不自动发；500 字后的禁止限制有效，截断不能 high；缓存/auto-allow/Agent approve 不能绕过 outbound | §5.5 |
+| P1-6 外流/证据 | 主动第三方/群聊/敏感或批量数据外发须逐次人工/禁止；当前 owner 受控任务回复只在目的、正文/附件绑定并 final check 通过时例外；材料收件人/引用攻击为 unknown/low，缓存/auto-allow/Agent approve 不能绕过统一 outbound 检查 | §5.5/v1.2 |
 | P1-7 启用门禁 | 任一控制未完成无法开启；并发创建不超两级额度；关闭后旧追认/恢复不能派发；通知初发/补发不泄露凭据、绝对路径、完整命令或材料指令 | §10、§11、§14、§16 |
 
 ### 15.9 回归

@@ -17,7 +17,7 @@ import { extractPathField } from '../../toolPathField'
 /** 主要工具专用的提取器（映射 descriptor.extractors 里声明的 id 到实际实现）。 */
 const EXTRACTOR_IMPLEMENTATIONS: Record<
   string,
-  (toolInput: Record<string, unknown>, env: EnvFacts) => { signals: FactSignal[]; summaryText: string }
+  (toolInput: Record<string, unknown>, env: EnvFacts, hostContext?: { trustedFeishuActorOpenId?: string }) => { signals: FactSignal[]; summaryText: string }
 > = {
   'command-sequence': (input, env) => {
     const command = typeof input.command === 'string' ? input.command : ''
@@ -37,8 +37,8 @@ const EXTRACTOR_IMPLEMENTATIONS: Record<
     const r = extractOutboundTarget(input)
     return { signals: r.signals, summaryText: r.summary }
   },
-  'lark-subcommand': (input) => {
-    const r = extractLarkSubcommand(input)
+  'lark-subcommand': (input, _env, hostContext) => {
+    const r = extractLarkSubcommand(input, hostContext?.trustedFeishuActorOpenId)
     return { signals: r.signals, summaryText: r.summary }
   },
   'toolkit-capability': (input) => {
@@ -85,7 +85,8 @@ export function hasUnsupportedV1ReadTarget(toolName: string, toolInput: Record<s
 export function runExtractors(
   descriptor: ToolActionDescriptor,
   toolInput: Record<string, unknown>,
-  env: EnvFacts
+  env: EnvFacts,
+  hostContext?: { trustedFeishuActorOpenId?: string }
 ): ContentFacts {
   const signals: FactSignal[] = []
   const summaryParts: string[] = []
@@ -93,7 +94,7 @@ export function runExtractors(
   for (const name of descriptor.extractors) {
     const impl = EXTRACTOR_IMPLEMENTATIONS[name]
     if (!impl) throw new Error(`UNIMPLEMENTED_FACT_EXTRACTOR:${name}`)
-    const r = impl(toolInput, env)
+    const r = impl(toolInput, env, hostContext)
     signals.push(...r.signals)
     if (r.summaryText) summaryParts.push(r.summaryText)
   }

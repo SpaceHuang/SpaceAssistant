@@ -14,6 +14,7 @@ export function createTrackScopedHistoryPort(
     if (!allowed.has(invocationId)) throw new Error('TRACK_HISTORY_INVOCATION_OUT_OF_SCOPE')
   }
   return {
+    listInvocationIds: () => history.listInvocationIds().filter((invocationId) => allowed.has(invocationId)),
     read: async (invocationId) => {
       requireInvocation(invocationId)
       const snapshot = await history.read(invocationId)
@@ -51,6 +52,10 @@ export function createCrossSessionTrackScopedHistoryPort(
     return historyForSession(scope.invocationSessionMap[invocationId])
   }
   return {
+    listInvocationIds: () => scope.allowedInvocationIds.filter((invocationId) => {
+      const sessionId = scope.invocationSessionMap[invocationId]
+      return sessionId === scope.currentSessionId && historyForSession(sessionId).listInvocationIds().includes(invocationId)
+    }),
     read: async (invocationId) => {
       const snapshot = await portForInvocation(invocationId).read(invocationId)
       if (snapshot.invocationId !== invocationId) throw new Error('TRACK_HISTORY_INVOCATION_MISMATCH')

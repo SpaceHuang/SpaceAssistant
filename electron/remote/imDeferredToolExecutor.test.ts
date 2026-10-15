@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
+import { getDbConnection } from '../database/sqliteStore'
+import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegistry'
 import { createDesktopAgentRuntime } from '../runtime/desktopAgentRuntime'
@@ -13,6 +15,7 @@ describe('IM deferred tool executor', () => {
 
   it('用持久调用身份经实时 SafetyGate 直接执行原 RegisteredTool，不请求模型', async () => {
     const db = createMemoryAppDb()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-v1.6', snapshot: {}, updatedAt: Date.now(), eventId: 'deferred-executor' })
     const session = createSession(db, { name: 'deferred-executor-session' })
     const storage = createSqliteSessionStorage(db)
     const providerStream = vi.fn(async function* () { yield { type: 'finish' as const, reason: 'stop' as const } })

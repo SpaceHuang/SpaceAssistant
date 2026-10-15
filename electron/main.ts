@@ -23,6 +23,7 @@ import { stagehandService } from './browser/stagehandService'
 import { createRemoteAuthorizationEpochStore } from './remote/remoteAuthorizationEpochStore'
 import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry'
 import { createDeferredTodoStore } from './confirmation/deferredTodoStore'
+import { ensureImPolicySnapshotAtStartup } from './confirmation/legacyImConfigBoundary'
 import { createDeferredTodoCapacityController } from './confirmation/deferredTodoCapacity'
 import { createImTaskControlCoordinator } from './remote/imTaskControlCoordinator'
 import { createDeferredTodoTaskControlSafetyPort } from './remote/deferredTodoTaskControlAdapter'
@@ -61,6 +62,8 @@ import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
 import { createSpillStore, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance, scheduleSourceTruthSpillGcMaintenance } from './storage/spillStore'
 import { isSafeDbMaintenanceRequested, runSafeDbMaintenance } from './storage/safeDbMaintenance'
+import { reconcileInterruptedCompaction } from './storage/sessionStorageMaintenance'
+import { pruneSessionArchives } from './storage/sessionArchiveRetention'
 import { schedulePeriodicSqliteMaintenance } from './storage/periodicSqliteMaintenance'
 import { archiveLegacyDatabaseJsonBackup } from './storage/legacyDatabaseBackup'
 import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
@@ -461,6 +464,8 @@ app.whenReady().then(async () => {
   let db: ReturnType<typeof openDatabase>
   try {
     await showStartupStatus('正在检查或升级本地数据库，请稍候…')
+    // 压缩换入崩溃对账必须在 openDatabase 之前：DatabaseSync 打开缺失路径会静默建空库。
+    measureStartupPhase('database.compact-recovery', () => reconcileInterruptedCompaction(dbPath))
     db = await measureStartupPhase('database.open-and-migrations', () => openDatabase(dbPath))
     remoteAuthorizationRegistry.bindPersistentEpochStore(createRemoteAuthorizationEpochStore(db))
   } catch (e) {
@@ -474,6 +479,12 @@ app.whenReady().then(async () => {
     return
   }
   appDb = db
+  try {
+    ensureImPolicySnapshotAtStartup(db)
+  } catch (error) {
+    // Keep startup available, but leave IM dispatch fail-closed when legacy policy cannot be read.
+    console.error('[im-policy] startup snapshot migration failed; IM tool calls will remain blocked:', error instanceof Error ? error.message : String(error))
+  }
   let turnRuntime!: TurnRuntime
   let sessionHistoryRepairFailureCount = 0
   let recoveredInvocationCount = 0
@@ -1182,7 +1193,7 @@ app.whenReady().then(async () => {
   const executeTurn = async (sender: Electron.WebContents | null, payload: ClaudeChatCreateWithToolsPayload) => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     turnRuntime.bindRequest(payload.requestId, payload.turnId)
-    return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (turn) => {
+    return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (_turn) => {
       const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
       if (result.ok) {
         turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' }, payload.turnId)
@@ -1499,6 +1510,12 @@ app.whenReady().then(async () => {
       console.warn('[main] main window creation failed; post-window maintenance remains deferred:', error instanceof Error ? error.message : String(error))
     })
   setupAppMenu(createHostTranslator({ locale: readAppLocale(db) }))
+  // 归档保留策略（B1/N5）：放 whenReady 尾部而非 reconcile 旁——此时 initAgentLogger 已执行（否则
+  // logAgentEvent 静默 no-op，删除完全无可观测性）；fire-and-forget，不占启动关键路径。
+  // 无 protect：若 --safe-db-maintenance 的压缩仍在飞行，按宽限期整体延后。
+  void pruneSessionArchives(app.getPath('userData')).catch((error) => {
+    console.error('[main] archive prune failed:', error instanceof Error ? error.stack ?? error.message : error)
+  })
 }).catch((err) => {
   console.error('[main] whenReady failed:', err instanceof Error ? err.stack ?? err.message : err)
 })

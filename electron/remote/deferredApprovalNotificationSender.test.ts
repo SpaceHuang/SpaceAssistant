@@ -39,7 +39,7 @@ describe('deferred approval notification sender', () => {
     await expect(sender.send(request))
       .resolves.toMatchObject({ status: 'delivery_pending' })
     expect(f.todoStore.get(f.todo.todoId, { channel: 'wechat', identityKey: f.todo.identityKey, ownerId: f.todo.ownerId,
-      authorizationEpoch: f.todo.authorizationEpoch, rule: f.todo.rule })?.status).toBe('pending')
+      authorizationEpoch: f.todo.authorizationEpoch, originSessionId: f.todo.originSessionId, rule: f.todo.rule })?.status).toBe('pending')
     await expect(sender.send(request))
       .resolves.toMatchObject({ status: 'delivered' })
     expect(adapter.send).toHaveBeenCalledTimes(2)

@@ -112,14 +112,22 @@ export type FactSignal =
       contentDigest?: string
       /** Opaque SHA-256 of the active work directory; scopes script trust to its filesystem boundary. */
       workdirDigest?: string
+      /** Facts extraction binds arguments and runtime environment; changes require a fresh review. */
+      parametersDigest?: string
+      environmentDigest?: string
+      authenticationVersion?: string
     }
   | { kind: 'script-path-declaration'; scope: 'workdir-readonly'; consistent: boolean }
   | { kind: 'script-language-analysis'; language: 'javascript' | 'typescript' | 'powershell' | 'unknown'; status: 'unverified' }
   | { kind: 'wiki-raw-target' }
   | { kind: 'feishu-media-target'; boundary: 'inside' | 'outside' | 'unknown' }
   | { kind: 'wechat-media-target'; boundary: 'inside-workdir' | 'outside-workdir' | 'unknown'; zone?: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown' }
+  /** Host-measured exact attachment version, included in confirmation and deferred-approval facts. */
+  | { kind: 'wechat-media-content'; sha256: string; byteSize: number; fileName: string; displayPath: string }
   | { kind: 'workdir-profile-target'; status: 'normal' | 'sensitive' | 'unknown' }
   | { kind: 'write-target-unsupported' }
+  | { kind: 'write-target-new' }
+  | { kind: 'write-target-existing' }
   | { kind: 'write-target-scope'; scope: 'inside-workdir' | 'outside-workdir' | 'unknown' }
   | { kind: 'network-egress'; domains: string[] }
   | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }
@@ -132,9 +140,9 @@ export type FactSignal =
    * 浏览器动作事实：动作名 + 目标域名（act 时为当前页域名，由执行链路注入 env）+
    * 高危评估结论。dangerous 映射 suspicious 档（§5.1 裁决：问而非拒）。
    */
-  | { kind: 'browser-action'; action: string; host?: string; dangerous?: boolean }
+  | { kind: 'browser-action'; action: string; host?: string; dangerous?: boolean; querySensitivity?: 'public' | 'private' | 'unknown'; sideEffect?: 'navigate' | 'read' | 'submit' | 'upload' | 'payment' | 'delete' | 'authorization' | 'unknown'; completeness?: 'complete' | 'partial' }
   /** lark-cli 子命令读/写分类事实（复用 classifyLarkCliImpact；high_impact/unknown fail-closed 必确认）。 */
-  | { kind: 'lark-subcommand'; impact: 'read' | 'write' | 'low_write' | 'high_impact' | 'unknown' }
+  | { kind: 'lark-subcommand'; impact: 'read' | 'write' | 'low_write' | 'high_impact' | 'unknown'; category?: string; classificationReason?: string; completeness?: 'complete' | 'partial'; messageTarget?: 'self' | 'direct-other' | 'group-or-multiple' | 'unknown' }
   /** MCP 工具调用事实：携带 serverId 与原始工具名（会话信任缓存键来源）。 */
   | { kind: 'mcp-tool'; serverId: string; toolName: string }
   /** MCP 只读注解信号：server 单方面声明 `readOnlyHint === true && destructiveHint !== true` 时
@@ -171,6 +179,17 @@ export type FactSignal =
       argsTruncated: boolean
       /** 分类依据，审计可追溯（4.3.2） */
       classificationBasis: 'annotations-readonly' | 'schema-heuristic' | 'default-write'
+      /** 调用语义分类与数据流事实；从参数/schema 提取，不能单靠 server 注解得出。 */
+      sideEffect: 'read' | 'write' | 'unknown'
+      dataSources: string[]
+      dataDestinations: string[]
+      queryText?: string
+      /** Host-supplied provenance; query text or server annotations cannot set it. */
+      querySource: 'public' | 'local-sensitive' | 'unknown'
+      /** Host-verified authorization for the account/data scope referenced by the invocation. */
+      accountAuthorization: 'authorized' | 'unauthorized' | 'unknown'
+      completeness: 'complete' | 'partial' | 'missing' | 'capability-description-stale'
+      missingFacts: string[]
     }
   /**
    * R5：shell 命令结构不受当前解析器支持（解析失败降级为确认的事实信号）。
@@ -200,7 +219,7 @@ export interface ContentFacts {
 
 // ===== 策略层输出 =====
 export type Decision =
-  | { type: 'auto-allow'; ruleId: string; cacheKey?: CacheKey; reason: string }
+  | { type: 'auto-allow'; ruleId: string; cacheKey?: CacheKey; reason: string; disposition?: 'auto-eligible'; cause?: string }
   | {
       type: 'require-confirm'
       ruleId: string
@@ -210,8 +229,11 @@ export type Decision =
       facts: ContentFacts
       memoryTiers: MemoryTier[]
       timeoutMs: number | null
+      disposition?: 'human-required' | 'auto-eligible'
+      cause?: string
+      reason?: string
     }
-  | { type: 'deny'; ruleId: string; reason: string }
+  | { type: 'deny'; ruleId: string; reason: string; disposition?: 'forbidden'; cause?: string }
 
 // ===== 确认通道 =====
 export interface MemoryTier {
@@ -224,6 +246,9 @@ export interface ConfirmRequest {
   riskLevel: RiskLevel
   memoryTiers: MemoryTier[]
   timeoutMs: number | null
+  /** Per-call model claim; untrusted and shown only as review context. */
+  modelJustification?: string
+  modelJustificationTruncated?: boolean
 }
 
 // ===== 回答者（I1：回答者与 lane 正交；I3：记忆只源于人类）=====
@@ -290,6 +315,8 @@ export type ApprovalVerdict =
  */
 export interface ApprovalCluePack {
   toolName: string
+  /** Host-visible identifier of the exact outer model tool call. */
+  toolUseId?: string
   actionClass: ActionClass
   riskLevel: RiskLevel
   /** ConfirmSummary 纯文本摘要。 */
@@ -298,6 +325,9 @@ export interface ApprovalCluePack {
   signals: string[]
   targetPath?: string
   command?: string
+  /** Untrusted model-provided explanation attached to this invocation. */
+  modelJustification?: string
+  modelJustificationTruncated?: boolean
   url?: string
   involvedFiles?: string[]
   /** R3：MCP 入参归一摘要（脱敏后；mcp-invocation 信号派生）。 */
@@ -437,6 +467,19 @@ export interface SecurityAuditEvent {
   /** P5：事实来源标注（仅宿主声明 factsProvider 时携带）。 */
   factSources?: Record<string, 'tool-contract' | 'host-environment'>
   lane: ExecutionLane
+  /** Unified policy domain that produced this decision (desktop, im, or automation). */
+  policyDomain?: 'desktop' | 'im' | 'automation'
+  /** Versioned behavior snapshot and revision used for the decision. */
+  policyBehaviorVersion?: string
+  policyRevision?: number
+  /** Whether the invocation facts were complete enough to decide. */
+  factsCompleteness?: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale' | 'unknown'
+  /** Deterministic policy, user confirmation, approval agent, or a fail-closed fallback path. */
+  reviewPath?: 'deterministic-policy' | 'user-confirmation' | 'approval-agent' | 'fallback'
+  /** Original degradation cause, retained when a fallback/review path was selected. */
+  fallbackCause?: string
+  /** Durable dispatcher idempotency key, when a deferred action is dispatched. */
+  dispatchKey?: string
   origin?: OriginInfo
   sessionId: string
   /** 请求短号（复用 allocateConfirmId），用于关联 confirm.request/outcome。 */
@@ -546,6 +589,8 @@ export interface PolicyRuleMatch {
   actionClass?: ActionClass
   /** 「包含」语义：所列信号全部出现在事实信号集即命中。 */
   signals?: string[]
+  /** 信号存在时不匹配；用于把已分类候选排除在通用兜底规则之外。 */
+  excludeSignals?: string[]
   target?: 'owner-only'
 }
 
@@ -554,6 +599,10 @@ export interface PolicyRule {
   when: PolicyWhen
   match?: PolicyRuleMatch
   action: PolicyAction
+  /** Trusted main-process marker: this action came from a validated persisted user override. */
+  userOverride?: true
+  /** 安全语义标记：即使 rule.action 被档位映射为 auto-evaluator，也必须原渠道逐次人工确认。 */
+  humanRequired?: boolean
   /** 系统保护条目：UI 只读、自定义套餐不可调松。 */
   locked?: boolean
   /** R2：拒绝分类声明（O4 全量标注；会产 ask/deny/confirm-every-time 的规则必须标，放行类不标）。 */
@@ -588,7 +637,7 @@ export type AutoEvaluator = (
 /** decide 的求值环境：策略层保持纯函数，所有运行时输入经由依赖对象传入。 */
 export interface PolicyEngineDeps {
   cache: DecisionCacheView
-  /** 配置值（remoteScriptRequiresConfirm / deniedTools / remoteDenyOutbound 等）。 */
+  /** 配置值（策略快照规则参数 / deniedTools 等）。 */
   config: Record<string, unknown>
   /** 迁移完成位（参数化配置引用问询）。 */
   migrationComplete: boolean

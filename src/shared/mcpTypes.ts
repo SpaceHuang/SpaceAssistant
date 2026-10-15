@@ -50,6 +50,10 @@ export interface McpToolDescriptor {
   mappedName: string
   description: string
   inputSchema: Record<string, unknown>
+  /** Canonical SHA-256 of the registered input schema. */
+  schemaHash?: string
+  /** Canonical SHA-256 binding server identity, tool name, description, annotations and schema. */
+  descriptorHash?: string
   annotations?: McpToolAnnotations
   discoveredAt: string
 }
@@ -79,6 +83,10 @@ export interface McpServerProfile {
   }
   http?: { endpoint: string; /** 显式允许该服务解析/连接到私网地址（默认 false，需 https）。 */ allowPrivateNetwork?: boolean }
   enabledToolNames: string[]
+  /** User-authored public-read trust, bound to the exact registered descriptor hash per original tool name. */
+  publicReadOnlyTools?: Record<string, string>
+  /** Explicit user authorization for this configured MCP connection to invoke each exact tool descriptor. */
+  accountAuthorizedTools?: Record<string, string>
   /** FR6（对齐 Claude Code alwaysLoad 语义）：true = 该服务工具始终全量注入（跳过延迟与索引）；缺省跟随全局档位。 */
   alwaysLoad?: boolean
   discoveredAt?: string
@@ -116,6 +124,10 @@ export interface McpServerWriteInput {
   }
   http?: { endpoint: string; allowPrivateNetwork?: boolean }
   enabledToolNames: string[]
+  /** Explicit user declaration that these exact descriptors only read public data. */
+  publicReadOnlyTools?: Record<string, string>
+  /** Explicit user authorization for this configured MCP connection to invoke each exact tool descriptor. */
+  accountAuthorizedTools?: Record<string, string>
   /** FR14：与 McpServerProfile.alwaysLoad 同步（写入 payload 字段；strict schema 未收录即抛错）。 */
   alwaysLoad?: boolean
   createdAt?: string
@@ -257,6 +269,15 @@ const McpHttpSchema = z.object({
   allowPrivateNetwork: z.boolean().optional()
 })
 
+const McpPublicReadOnlyToolsSchema = z.record(
+  z.string().trim().min(1).max(256),
+  z.string().regex(/^[a-f0-9]{64}$/)
+).refine((value) => Object.keys(value).length <= 512, { message: 'too many public read-only MCP tools' })
+const McpAccountAuthorizedToolsSchema = z.record(
+  z.string().trim().min(1).max(256),
+  z.string().regex(/^[a-f0-9]{64}$/)
+).refine((value) => Object.keys(value).length <= 512, { message: 'too many account-authorized MCP tools' })
+
 /**
  * 读取校验 + 迁移用：容忍未知字段（strip），并按传输类型做条件必填校验。
  */
@@ -278,6 +299,8 @@ export const McpServerProfileSchema = z
       .array(z.string().min(1).max(256))
       .max(512)
       .refine(uniqueStrings, { message: 'enabledToolNames must be unique' }),
+    publicReadOnlyTools: McpPublicReadOnlyToolsSchema.optional(),
+    accountAuthorizedTools: McpAccountAuthorizedToolsSchema.optional(),
     alwaysLoad: z.boolean().optional(),
     discoveredAt: z.string().max(64).optional(),
     discoveredProtocolVersion: z.string().max(32).optional(),
@@ -363,6 +386,8 @@ export const McpServerWriteInputSchema = z
       .array(z.string().min(1).max(256))
       .max(512)
       .refine(uniqueStrings, { message: 'enabledToolNames must be unique' }),
+    publicReadOnlyTools: McpPublicReadOnlyToolsSchema.optional(),
+    accountAuthorizedTools: McpAccountAuthorizedToolsSchema.optional(),
     alwaysLoad: z.boolean().optional(),
     createdAt: z.string().optional(),
     updatedAt: z.string().optional(),

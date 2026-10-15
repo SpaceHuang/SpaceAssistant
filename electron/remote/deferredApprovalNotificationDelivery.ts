@@ -4,7 +4,7 @@ import { runInTransaction } from '../database/transaction'
 import type { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import type { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { allocateDeferredApprovalShortCode } from './deferredApprovalIngress'
-import { buildDeferredApprovalNotification, type DeferredApprovalNotificationDto } from './deferredApprovalNotification'
+import { buildDeferredApprovalNotification, type DeferredApprovalAttachmentInfo, type DeferredApprovalNotificationDto } from './deferredApprovalNotification'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { buildDeferredApprovalAuditEvent } from '../confirmation/deferredApprovalAudit'
 
@@ -39,19 +39,25 @@ export function createDeferredApprovalNotificationDelivery(input: {
   allocateShortCode?: (scope: Pick<Scope, 'channel' | 'identityKey' | 'ownerId'>) => string | null
   audit(event: SecurityAuditEvent): void
 }) {
-  const conn = getDbConnection(input.db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每函数入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(input.db)
   const allocate = input.allocateShortCode ?? ((scope: Pick<Scope, 'channel' | 'identityKey' | 'ownerId'>) => allocateDeferredApprovalShortCode(input.db, scope))
-  const rowFor = (todoId: string, version: number) => conn.prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
+  const rowFor = (todoId: string, version: number) => liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
     WHERE todo_id=? AND notification_version=?`).get(todoId, version) as NotificationRow | undefined
-  const list = (todoId: string) => (conn.prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE todo_id=? ORDER BY notification_version`)
+  const list = (todoId: string) => (liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE todo_id=? ORDER BY notification_version`)
     .all(todoId) as NotificationRow[]).map(mapRow)
   const sessionForTodo = (todoId: string): string => {
-    const row = conn.prepare('SELECT origin_session_id FROM deferred_todos WHERE todo_id=?').get(todoId) as { origin_session_id: string } | undefined
+    const row = liveConn().prepare('SELECT origin_session_id FROM deferred_todos WHERE todo_id=?').get(todoId) as { origin_session_id: string } | undefined
     return row?.origin_session_id ?? 'unknown'
+  }
+  const invalidateUndelivered = (todoId: string, version: number, now: number) => {
+    liveConn().prepare(`UPDATE deferred_approval_notifications SET state='invalidated',updated_at=?
+      WHERE todo_id=? AND notification_version=? AND state='undelivered'`).run(now, todoId, version)
+    input.db.save()
   }
 
   function persist(todo: ReturnType<TodoStore['get']> & {}, dto: DeferredApprovalNotificationDto, state: 'undelivered', now: number, messageId: null): void {
-    conn.prepare(`INSERT INTO deferred_approval_notifications(${COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    liveConn().prepare(`INSERT INTO deferred_approval_notifications(${COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       todo.todoId, dto.notificationVersion, todo.invocationId, todo.channel, todo.identityKey, todo.ownerId,
       todo.authorizationEpoch, todo.rule.ruleId, todo.rule.factsHash, dto.shortCode, messageId, todo.expiresAt,
       JSON.stringify(dto), state, now, now
@@ -60,7 +66,9 @@ export function createDeferredApprovalNotificationDelivery(input: {
   }
 
   function buildDto(todo: NonNullable<ReturnType<TodoStore['get']>>, version: number, code: string, safeContent: {
-    safeActionSummary: string; userDelegation: string; untrustedMaterial: string
+    safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string; reasonSummary?: string
+    userDelegation: string; untrustedMaterial: string
+    attachmentInfo?: DeferredApprovalAttachmentInfo
   }): DeferredApprovalNotificationDto {
     return buildDeferredApprovalNotification({
       channel: todo.channel, todoId: todo.todoId, notificationVersion: version, shortCode: code,
@@ -71,12 +79,18 @@ export function createDeferredApprovalNotificationDelivery(input: {
   async function deliver(todoId: string, version: number): Promise<'delivered' | 'undelivered'> {
     const row = rowFor(todoId, version)
     if (!row || row.state !== 'undelivered') return 'undelivered'
+    const todo = input.todoStore.get(todoId, { channel: row.channel, identityKey: row.identity_key, ownerId: row.owner_id,
+      authorizationEpoch: row.authorization_epoch, originSessionId: sessionForTodo(todoId), rule: { ruleId: row.rule_id, factsHash: row.facts_hash } })
+    if (!todo) {
+      invalidateUndelivered(todoId, version, Date.now())
+      return 'undelivered'
+    }
     try {
       const mapped = mapRow(row)
       const result = await input.adapter.send(mapped.dto, { channel: mapped.channel, identityKey: mapped.identityKey, ownerId: mapped.ownerId })
       const messageId = typeof result === 'string' ? result : result?.messageId
       if (!messageId?.trim()) throw new Error('DEFERRED_NOTIFICATION_MESSAGE_ID_MISSING')
-      const changed = conn.prepare(`UPDATE deferred_approval_notifications SET state='delivered',trusted_message_id=?,updated_at=?
+      const changed = liveConn().prepare(`UPDATE deferred_approval_notifications SET state='delivered',trusted_message_id=?,updated_at=?
         WHERE todo_id=? AND notification_version=? AND state='undelivered'`).run(messageId, Date.now(), todoId, version)
       if (Number(changed.changes) !== 1) return 'undelivered'
       input.db.save()
@@ -92,13 +106,14 @@ export function createDeferredApprovalNotificationDelivery(input: {
 
   function createAuthorizedRecord(request: {
     todoId: string; invocationId: string; channel: Scope['channel']; identityKey: string; ownerId: string; authorizationEpoch: number
-    rule: { ruleId: string; factsHash: string }; safeActionSummary: string; userDelegation: string; untrustedMaterial: string; now: number
+    rule: { ruleId: string; factsHash: string }; safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string
+    reasonSummary?: string; userDelegation: string; untrustedMaterial: string; attachmentInfo?: DeferredApprovalAttachmentInfo; now: number
   }): { todo: NonNullable<ReturnType<TodoStore['get']>>; dto: DeferredApprovalNotificationDto } | null {
     const intent = input.intentStore.get(request.invocationId)
     if (!intent || intent.todoId !== request.todoId || !input.intentStore.authorizeResume(request.invocationId)) return null
     const todo = input.todoStore.get(request.todoId, {
       channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
-      authorizationEpoch: request.authorizationEpoch, rule: request.rule
+      authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(request.todoId), rule: request.rule
     }, request.now)
     if (!todo || todo.invocationId !== request.invocationId || todo.status !== 'pending') return null
     const latest = list(todo.todoId).at(-1)
@@ -107,8 +122,8 @@ export function createDeferredApprovalNotificationDelivery(input: {
     const code = allocate({ channel: todo.channel, identityKey: todo.identityKey, ownerId: todo.ownerId })
     if (!code) return null
     const dto = buildDto(todo, version, code, request)
-    runInTransaction(conn, () => {
-      if (latest?.state === 'undelivered') conn.prepare(`UPDATE deferred_approval_notifications SET state='superseded',updated_at=?
+    runInTransaction(liveConn(), () => {
+      if (latest?.state === 'undelivered') liveConn().prepare(`UPDATE deferred_approval_notifications SET state='superseded',updated_at=?
         WHERE todo_id=? AND notification_version=? AND state='undelivered'`).run(request.now, todo.todoId, latest.notificationVersion)
       persist(todo, dto, 'undelivered', request.now, null)
     })
@@ -122,9 +137,15 @@ export function createDeferredApprovalNotificationDelivery(input: {
   return {
     async createAndSend(request: {
       todoId: string; invocationId: string; channel: Scope['channel']; identityKey: string; ownerId: string; authorizationEpoch: number
-      rule: { ruleId: string; factsHash: string }; safeActionSummary: string; userDelegation: string; untrustedMaterial: string; now?: number
+      rule: { ruleId: string; factsHash: string }; safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string
+      reasonSummary?: string; userDelegation: string; untrustedMaterial: string; attachmentInfo?: DeferredApprovalAttachmentInfo; now?: number
     }): Promise<{ state: 'not_ready' | 'undelivered' | 'delivered'; notificationVersion?: number }> {
       const now = request.now ?? Date.now()
+      const authorizedTodo = input.todoStore.get(request.todoId, {
+        channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
+        authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(request.todoId), rule: request.rule
+      }, now)
+      if (!authorizedTodo || authorizedTodo.invocationId !== request.invocationId || authorizedTodo.status !== 'pending') return { state: 'not_ready' }
       const latest = list(request.todoId).at(-1)
       if (latest) return { state: latest.state === 'delivered' ? 'delivered' : 'undelivered', notificationVersion: latest.notificationVersion }
       const created = createAuthorizedRecord({ ...request, now })
@@ -137,7 +158,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
 
     async retryForAuthenticatedInbound(request: Scope & { now?: number }): Promise<Array<{ todoId: string; state: 'delivered' | 'undelivered'; notificationVersion: number; messageId?: string }>> {
       const now = request.now ?? Date.now()
-      const rows = conn.prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
+      const rows = liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
         WHERE channel=? AND identity_key=? AND owner_id=? AND authorization_epoch=? AND state='undelivered'
         ORDER BY created_at,todo_id,notification_version`).all(request.channel, request.identityKey, request.ownerId, request.authorizationEpoch) as NotificationRow[]
       const results = []
@@ -145,10 +166,10 @@ export function createDeferredApprovalNotificationDelivery(input: {
         const mapped = mapRow(row)
         const todo = input.todoStore.get(mapped.todoId, {
           channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
-          authorizationEpoch: request.authorizationEpoch, rule: mapped.rule
+          authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(mapped.todoId), rule: mapped.rule
         }, now)
         if (!todo || todo.status !== 'pending' || todo.expiresAt <= now || !input.intentStore.authorizeResume(mapped.invocationId)) {
-          conn.prepare(`UPDATE deferred_approval_notifications SET state='invalidated',updated_at=?
+          liveConn().prepare(`UPDATE deferred_approval_notifications SET state='invalidated',updated_at=?
             WHERE todo_id=? AND notification_version=? AND state='undelivered'`).run(now, mapped.todoId, mapped.notificationVersion)
           input.db.save()
           continue
@@ -156,8 +177,11 @@ export function createDeferredApprovalNotificationDelivery(input: {
         const prior = list(todo.todoId).at(-1)
         const content = {
           safeActionSummary: prior?.dto.sections.find(({ kind }) => kind === 'action-summary')?.text ?? '（动作摘要不可用，请拒绝）',
+          safeTargetSummary: prior?.dto.sections.find(({ kind }) => kind === 'target-summary')?.text ?? '（目标摘要不可用）',
+          impactSummary: prior?.dto.sections.find(({ kind }) => kind === 'impact-summary')?.text ?? '（影响摘要不可用）',
+          reasonSummary: prior?.dto.sections.find(({ kind }) => kind === 'reason-summary')?.text ?? '（策略要求人工确认）',
           userDelegation: prior?.dto.sections.find(({ kind }) => kind === 'user-delegation')?.text ?? '（未提供安全摘要）',
-          untrustedMaterial: ''
+          untrustedMaterial: '', attachmentInfo: prior?.dto.attachmentInfo
         }
         const created = createAuthorizedRecord({
           todoId: todo.todoId, invocationId: todo.invocationId, channel: todo.channel, identityKey: todo.identityKey,
@@ -178,14 +202,15 @@ export function createDeferredApprovalNotificationDelivery(input: {
     list,
     resolveCurrent(request: Scope & { shortCode: string; now?: number }) {
       const now = request.now ?? Date.now()
-      const row = conn.prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE channel=? AND identity_key=? AND owner_id=?
+      const row = liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE channel=? AND identity_key=? AND owner_id=?
         AND short_code=? AND authorization_epoch=? AND state='delivered' ORDER BY notification_version DESC LIMIT 1`)
         .get(request.channel, request.identityKey, request.ownerId, request.shortCode, request.authorizationEpoch) as NotificationRow | undefined
       if (!row || row.expires_at <= now) return null
       const todo = input.todoStore.get(row.todo_id, { channel: row.channel, identityKey: row.identity_key, ownerId: row.owner_id,
-        authorizationEpoch: row.authorization_epoch, rule: { ruleId: row.rule_id, factsHash: row.facts_hash } }, now)
-      if (!todo || todo.status !== 'pending') return null
-      return mapRow(row)
+        authorizationEpoch: row.authorization_epoch, originSessionId: sessionForTodo(row.todo_id),
+        rule: { ruleId: row.rule_id, factsHash: row.facts_hash } }, now)
+      if (!todo || (todo.status !== 'pending' && todo.status !== 'consumed')) return null
+      return { ...mapRow(row), originSessionId: todo.originSessionId, todoStatus: todo.status }
     }
   }
 }

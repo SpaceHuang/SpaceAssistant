@@ -36,7 +36,7 @@ function setup(executor: () => Promise<void>, recheck: () => Promise<{ allowed: 
 
 async function authorizeAndTrackTask(input: ReturnType<typeof setup>) {
   const { db, sessionId, todo, resume } = input
-  await resume.requestResume({ requestId: 'cancel-resume-request', todoId: todo.todoId, channel: 'wechat',
+  await resume.requestResume({ requestId: 'cancel-resume-request', todoId: todo.todoId, sessionId, channel: 'wechat',
     identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch, rule: todo.rule,
     notificationVersion: 1, messageId: 'trusted-notice', reasonKey: 'cancel-reason' })
   putTaskControlRecord(db, { sessionId, ownerId: todo.ownerId, workflowId: todo.workflowId, taskId: todo.taskId,
@@ -64,7 +64,7 @@ describe('task.cancel and real deferred dispatcher race', () => {
     expect(await flow.resume.dispatchPending(flow.sessionId)).toMatchObject([{ status: 'invalidated' }])
     expect(flow.executorCalls).not.toHaveBeenCalled()
     expect(flow.todoStore.get(flow.todo.todoId, { channel: 'wechat', identityKey: flow.todo.identityKey, ownerId: flow.todo.ownerId,
-      authorizationEpoch: flow.todo.authorizationEpoch, rule: flow.todo.rule })?.status).toBe('invalidated')
+      authorizationEpoch: flow.todo.authorizationEpoch, originSessionId: flow.todo.originSessionId, rule: flow.todo.rule })?.status).toBe('invalidated')
     flow.db.close()
   })
 
@@ -134,7 +134,7 @@ describe('task.cancel and real deferred dispatcher race', () => {
     const dispatchCalls = vi.fn()
     const resume = createDeferredResumeCoordinator({ db: temp.db, todoStore, envelopeStore, maxParallel: 2,
       recheck: async () => ({ allowed: true }), dispatch: async () => { dispatchCalls(); return { dispatched: true } } })
-    await resume.requestResume({ requestId: 'crash-request', todoId: todo.todoId, channel: 'wechat', identityKey: todo.identityKey,
+    await resume.requestResume({ requestId: 'crash-request', todoId: todo.todoId, sessionId, channel: 'wechat', identityKey: todo.identityKey,
       ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch, rule, notificationVersion: 1,
       messageId: 'notice', reasonKey: 'crash-reason' })
     putTaskControlRecord(temp.db, { sessionId, ownerId: todo.ownerId, workflowId: todo.workflowId, taskId: todo.taskId,
@@ -159,7 +159,7 @@ describe('task.cancel and real deferred dispatcher race', () => {
     await expect(recovered.recoverPendingOperations()).resolves.toEqual([{ operationId: 'crash-cancel', status: 'cancelled' }])
     expect(createDeferredResumeRequestStore(db).get('crash-request')?.state).toBe('invalidated')
     expect(reopenedTodos.get(todo.todoId, { channel: 'wechat', identityKey: todo.identityKey, ownerId: todo.ownerId,
-      authorizationEpoch: todo.authorizationEpoch, rule })?.status).toBe('invalidated')
+      authorizationEpoch: todo.authorizationEpoch, originSessionId: todo.originSessionId, rule })?.status).toBe('invalidated')
     expect(dispatchCalls).not.toHaveBeenCalled()
     expect(reopenedDispatchCalls).not.toHaveBeenCalled()
     db.close()

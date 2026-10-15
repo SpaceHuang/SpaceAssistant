@@ -7,8 +7,7 @@ import type {
   BrowserDetectResult
 } from '../../src/shared/browserTypes'
 import {
-  CHROMIUM_INSTALL_CMD,
-  NPM_INSTALL_CMD
+  CHROMIUM_INSTALL_CMD
 } from '../../src/shared/browserTypes'
 import { importEsmModule } from '../esmDynamicImport'
 import { resolveFullChromiumExecutable, type PlaywrightModule } from './playwrightBrowserHost'

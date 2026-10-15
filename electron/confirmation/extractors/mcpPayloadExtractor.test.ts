@@ -80,6 +80,60 @@ describe('extractMcpInvocationSignal（R3 事实信号）', () => {
     expect(sig.targetPath).toBe('C:\\tmp\\x.txt')
     expect(sig.targetUrl).toBeUndefined()
   })
+
+  it('search 场景提取查询文本、数据来源及 completeness，不把只读注解当作唯一事实', () => {
+    const sig = extractMcpInvocationSignal({
+      serverId: 'trusted-search', toolName: 'search',
+      toolInput: { query: 'private account balance', account: 'acct-7' },
+      annotationsSafe: true, inputSchema: { type: 'object', required: ['query', 'account'] }
+    })
+    expect(sig).toMatchObject({ kind: 'mcp-invocation', sideEffect: 'read',
+      dataSources: ['account'], dataDestinations: [], queryText: 'private account balance',
+      completeness: 'complete', missingFacts: [] })
+  })
+
+  it('缺查询字段或本地敏感查询无法判定目标时标记 partial/missing', () => {
+    const sig = extractMcpInvocationSignal({
+      serverId: 'unknown', toolName: 'search', toolInput: { query: 'ssh private key' },
+      annotationsSafe: false, inputSchema: { type: 'object', required: ['query', 'account'] }
+    })
+    expect(sig).toMatchObject({ kind: 'mcp-invocation', sideEffect: 'unknown',
+      completeness: 'partial', missingFacts: ['account'] })
+  })
+
+  it.each([
+    { queryText: 'Find the public API guide', querySource: 'public', expected: 'public' },
+    { queryText: 'Search my local ssh private key notes', querySource: 'local-sensitive', expected: 'local-sensitive' },
+    { queryText: 'search for this', querySource: undefined, expected: 'unknown' }
+  ] as const)('records query provenance as $expected rather than inferring it from query text', ({ queryText, querySource, expected }) => {
+    const sig = extractMcpInvocationSignal({
+      serverId: 'trusted-search', toolName: 'search', toolInput: { query: queryText, account: 'acct-7' },
+      annotationsSafe: true, inputSchema: { type: 'object', required: ['query', 'account'] },
+      ...(querySource ? { querySource } : {})
+    } as Parameters<typeof extractMcpInvocationSignal>[0])
+    expect(sig).toMatchObject({ kind: 'mcp-invocation', querySource: expected })
+  })
+
+  it.each(['authorized', 'unauthorized', 'unknown'] as const)(
+    'records host-verified account permission state %s without trusting a tool argument',
+    (accountAuthorization) => {
+      const sig = extractMcpInvocationSignal({
+        serverId: 'trusted-search', toolName: 'search', toolInput: { query: 'balance', account: 'acct-7' },
+        annotationsSafe: true, inputSchema: { type: 'object', required: ['query', 'account'] },
+        accountAuthorization
+      } as Parameters<typeof extractMcpInvocationSignal>[0])
+      expect(sig).toMatchObject({ kind: 'mcp-invocation', accountAuthorization })
+    }
+  )
+
+  it('does not classify a stale capability descriptor as a complete read', () => {
+    const sig = extractMcpInvocationSignal({
+      serverId: 'trusted-search', toolName: 'search', toolInput: { query: 'balance', account: 'acct-7' },
+      annotationsSafe: false, actionClass: 'write', inputSchema: { type: 'object', required: ['query', 'account'] },
+      descriptorValid: false
+    } as Parameters<typeof extractMcpInvocationSignal>[0])
+    expect(sig).toMatchObject({ kind: 'mcp-invocation', sideEffect: 'unknown', completeness: 'capability-description-stale' })
+  })
 })
 
 describe('E1（评审 2026-09-28）：嵌套对象/数组中的 secret 递归脱敏', () => {

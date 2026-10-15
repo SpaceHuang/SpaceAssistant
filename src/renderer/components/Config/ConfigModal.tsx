@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { Alert, App, Button, Form, Input, InputNumber, Radio, Select, Space } from 'antd'
+import { Alert, App, Button, Form, InputNumber, Select, Space } from 'antd'
 
 import { ArrowLeft } from 'lucide-react'
 
@@ -50,6 +50,7 @@ import { RemoteImCommonSettings } from './RemoteImCommonSettings'
 import type { RemoteImCommonConfig } from '../../../shared/imTypes'
 
 import { ToolsSettingsTab, type ToolsSettingsUi } from './ToolsSettingsTab'
+import { SecuritySettingsTab } from './ToolsSecuritySettingsTab'
 
 import { ModelsSettingsTab } from './ModelsSettingsTab'
 
@@ -99,7 +100,7 @@ import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
 import { StorageSettingsTab } from './StorageSettingsTab'
 import { isRemoteSettingsKey, REMOTE_SETTINGS_KEYS } from './remoteSettingsNav'
 
-const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat', 'butler', 'storage'] as const
+const SETTINGS_SECTION_KEYS = ['general', 'models', 'security', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat', 'butler', 'storage'] as const
 
 type SettingsSectionKey = (typeof SETTINGS_SECTION_KEYS)[number]
 
@@ -252,6 +253,7 @@ export function ConfigSettingsPage() {
     const labels: Record<SettingsSectionKey, string> = {
       general: tCommon('settings.general'),
       models: tCommon('settings.models'),
+      security: tCommon('settings.security'),
       skills: tCommon('settings.skills'),
       wiki: tCommon('settings.wiki'),
       remoteIm: tCommon('settings.remoteIm'),
@@ -837,7 +839,10 @@ export function ConfigSettingsPage() {
 
 
 
-  const settingsTabKey = (normalizeSettingsTabKey(settingsActiveTab) ?? 'general') as SettingsSectionKey | 'tools'
+  const normalizedSettingsTabKey = normalizeSettingsTabKey(settingsActiveTab) ?? 'general'
+  const settingsTabKey = (normalizedSettingsTabKey === 'tools' && (settingsToolsSubTab as string | undefined) === 'security'
+    ? 'security'
+    : normalizedSettingsTabKey) as SettingsSectionKey | 'tools'
 
   const toolsSection: ToolsSettingsSubTab =
     settingsToolsSubTab ??
@@ -957,10 +962,6 @@ export function ConfigSettingsPage() {
 
             setBrowserUi={setBrowserUi}
 
-            feishuUi={feishuUi}
-
-            setFeishuUi={setFeishuUi}
-
             shellUi={shellUi}
 
             setShellUi={setShellUi}
@@ -985,6 +986,10 @@ export function ConfigSettingsPage() {
           />
 
         )
+
+      case 'security':
+
+        return <SecuritySettingsTab active browser={browserUi} onBrowserChange={setBrowserUi} />
 
       case 'skills':
 
@@ -1097,7 +1102,7 @@ export function ConfigSettingsPage() {
 
           <nav className="config-settings-page__nav-list">
 
-            {settingsSections.slice(0, 2).map((section) => (
+            {settingsSections.slice(0, 3).map((section) => (
 
               <button
 
@@ -1147,7 +1152,7 @@ export function ConfigSettingsPage() {
 
             </div>
 
-            {settingsSections.filter((section) => !isRemoteSettingsKey(section.key)).slice(2).map((section) => (
+            {settingsSections.filter((section) => !isRemoteSettingsKey(section.key)).slice(3).map((section) => (
 
               <button
 

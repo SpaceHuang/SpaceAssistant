@@ -27,6 +27,7 @@ export async function resolvePermittedWriteTarget(fact: WritePathFact): Promise<
   let targetStat: Stats | null = null
   try {
     const lstat = await fs.lstat(fact.normalizedPath)
+    if (fact.targetKind === 'missing') throw new Error('write-target-appeared')
     if (lstat.isSymbolicLink() || !lstat.isFile() || (lstat.nlink > 1)) throw new Error('write-target-type-mismatch')
     targetStat = await fs.stat(fact.normalizedPath)
     if (!fact.identity || targetStat.dev !== fact.identity.dev || targetStat.ino !== fact.identity.ino || targetStat.mode !== fact.identity.mode || targetStat.size !== fact.identity.size || targetStat.mtimeMs !== fact.identity.mtimeMs) {

@@ -8,12 +8,14 @@ import {
   type RemoteProgressConfig
 } from '../../src/shared/remoteProgressTypes'
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
+import { createHostImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import type { RemoteProgressAdapter } from './remoteProgressCoordinator'
 import type { RemoteTrackOutboundDeliveryContext } from './remoteTrackOutbound'
 
 export function createFeishuProgressAdapter(args: {
   runner: LarkCliRunner
   messageId: string
+  outboundIdentity?: { identityKey: string; ownerId: string; chatType: 'p2p' | 'group' | 'unknown' }
   getSessionId: () => string
   config: FeishuConfig
   sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>
@@ -24,11 +26,17 @@ export function createFeishuProgressAdapter(args: {
     sendTyping: undefined,
     reply: (text: string) => {
       const sessionId = args.getSessionId()
+      if (!args.outboundIdentity) return
       void sendFeishuRemoteOutbound({
         runner: args.runner,
         messageId: args.messageId,
         body: text,
         sessionId,
+        recipient: args.outboundIdentity.ownerId,
+        outboundIdentity: args.outboundIdentity,
+        outboundDeliveryFacts: createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body: text, sessionId,
+          identityKey: args.outboundIdentity.identityKey, ownerId: args.outboundIdentity.ownerId,
+          recipient: args.outboundIdentity.ownerId, chatType: args.outboundIdentity.chatType, destinationId: args.messageId }),
         trackDelivery: args.trackDelivery,
         touch: { sessionCommands: args.sessionCommands, sessionId }
       }).catch(() => undefined)

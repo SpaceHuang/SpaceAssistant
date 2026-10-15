@@ -6,12 +6,10 @@ import type {
   SecurityClearCachePayload,
   SecuritySettingsModelPayload
 } from './confirmation/settingsCenter'
-import type { CacheKey, DecisionCacheEntry, ExecutionLane, PolicyAction } from './confirmation/types'
+import type { DecisionCacheEntry, ExecutionLane, PolicyAction } from './confirmation/types'
 import type { PolicyPackage } from './policy/policyPackages'
 import type {
   AppConfig,
-  AutoApproveFallback,
-  BrowserActDangerInfo,
   ChatImageAttachment,
   FileInfo,
   Message,
@@ -21,16 +19,12 @@ import type {
   SkillRouteRecentMessage,
   SkillRouteResult,
   SessionSkillsState,
-  GithubSkillCandidate,
   GithubSkillProbeResult,
   SkillDefinition,
   SkillsConfig,
   SkippedCandidate,
-  ToolCallResultPersisted,
-  ToolRiskLevel,
   ToolsConfig,
   ShellConfig,
-  ShellSecurityHints,
   TrustedShellCommand,
   WikiConfig,
   WikiStatus
@@ -87,11 +81,6 @@ import type {
   WeChatSdkDetectResult
 } from './wechatTypes'
 import type {
-  RemoteSecurityCommitResult,
-  RemoteSecurityMigrationPlan,
-  RemoteSecurityPatch
-} from './remoteSecurityMigration'
-import type {
   BrowserDetectResult,
   BrowserDependencyFailureCode,
   BrowserDependencyToolError
@@ -139,6 +128,36 @@ export type FileMetadata = {
   mtime: number
   isText: boolean
 }
+
+export type AgentsMdRequestSnapshotIndexEntry = Readonly<{
+  invocationId: string
+  requestId: string
+  modelTurn: number
+  attempt: number
+  status: string
+  digest?: string
+  byteLength: number
+  tokenCount: number
+  loadedAt: number
+  source: 'AGENTS.md'
+  scope: 'workdir-root'
+  workDirName?: string
+  approvalTools?: string[]
+  bodyAvailable: boolean
+}>
+
+export type AgentsMdRequestSnapshotBody = Readonly<{
+  invocationId: string
+  modelTurn: number
+  status: string
+  digest?: string
+  content?: string
+}>
+
+export type AgentsMdRequestSnapshotsResponse = Readonly<{
+  entries: AgentsMdRequestSnapshotIndexEntry[]
+  current: Readonly<{ status: string; digest?: string }>
+}>
 
 export type ClaudeChatMessageWithBlocks = {
   role: 'user' | 'assistant'
@@ -223,6 +242,7 @@ export type SpaceAssistantApi = {
     temperature?: number
     maxTokens?: number
     metadata?: Record<string, unknown>
+    agentsMdEnabled?: boolean
     /** composer 草稿带入的会话级 Thinking 强度覆盖 */
     thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
   }) => Promise<Session>
@@ -236,6 +256,7 @@ export type SpaceAssistantApi = {
     maxTokens?: number
     skillsState?: SessionSkillsState
     metadata?: Record<string, unknown>
+    agentsMdEnabled?: boolean
     /** 会话级 Thinking 强度覆盖；null = 清除覆盖（回到继承全局） */
     thinkingEffort?: import('./agent/invocation').AgentReasoningEffort | null
   }) => Promise<Session | undefined>
@@ -247,6 +268,8 @@ export type SpaceAssistantApi = {
   usageDelete: (sessionId: string) => Promise<void>
 
   chatGetMessages: (payload: { sessionId: string; limit?: number; offset?: number }) => Promise<Message[]>
+  chatGetAgentsMdRequestSnapshots: (payload: { sessionId: string; limit?: number }) => Promise<AgentsMdRequestSnapshotsResponse>
+  chatGetAgentsMdRequestSnapshot: (payload: { sessionId: string; invocationId: string; modelTurn: number }) => Promise<AgentsMdRequestSnapshotBody | undefined>
   chatCompactSessionContext: (payload: { sessionId: string; requestId: string }) => Promise<({ status: 'committed' } & import('./compactionEvents').CompactionMarker) | { status: 'no-op' | 'uncompressible' | 'busy' | 'failed' | 'stale' | 'forbidden' | 'session-not-found' }>
   chatGetSessionCompactionMarkers: (sessionId: string) => Promise<import('./compactionEvents').CompactionMarker[]>
   chatGetApiContextBaseline: (payload: {
@@ -356,6 +379,29 @@ export type SpaceAssistantApi = {
   // ===== 「安全策略」设置页（§7 五区，P4）=====
   /** 五区数据装配结果（套餐/确认模式/工具开关/确认记忆/审计摘要/规则视图）。 */
   securityGetSettingsModel: () => Promise<SecuritySettingsModelPayload>
+  /** Read the main-process policy domain selected by a trusted execution lane mapping. */
+  securityReadPolicyForLane: (payload: { lane: 'desktop' | 'wechat' | 'feishu' }) => Promise<{
+    domain: 'desktop' | 'im' | 'automation'
+    policyBehaviorVersion: string
+    revision: number
+    snapshot: Record<string, unknown>
+  }>
+  /** Versioned shared IM policy update with optimistic concurrency control. */
+  securityWritePolicy: (payload: {
+    lane: 'wechat' | 'feishu'
+    expectedRevision: number
+    change:
+      | { kind: 'package'; package: PolicyPackage }
+      | { kind: 'rule-override'; ruleId: string; action: PolicyAction }
+      | { kind: 'rule-reset'; ruleId: string }
+      | { kind: 'rule-enabled'; ruleId: string; enabled: boolean }
+      | { kind: 'capability-permission'; capabilityId: string; permission: 'deny' | 'ask' | 'allow' }
+      | { kind: 'switch-to-standard'; userChoiceConfirmed: true; displayedDiffs: readonly string[] }
+  }) => Promise<
+    | { status: 'committed'; revision: number }
+    | { status: 'conflict'; currentRevision: number }
+    | { status: 'already-migrated'; revision: number }
+  >
   /** 套餐选择（每链路）；变更落 settings.policy-change。 */
   securitySetPolicyPackage: (payload: {
     lane: ExecutionLane
@@ -582,8 +628,6 @@ export type SpaceAssistantApi = {
   feishuOwnerRebind: () => Promise<FeishuBindWindowResult>
   feishuOwnerBindCancel: () => Promise<FeishuOwnerBindSnapshot>
   feishuOwnerClear: () => Promise<FeishuOwnerBindSnapshot>
-  remoteSecurityPlan: () => Promise<RemoteSecurityMigrationPlan>
-  remoteSecurityCommit: (patch: RemoteSecurityPatch) => Promise<RemoteSecurityCommitResult>
   feishuOnOwnerBound: (cb: (data: { maskedOwnerOpenId?: string; boundAt?: number }) => void) => () => void
   feishuOnConfigInitProgress: (cb: (data: { line: string }) => void) => () => void
   feishuOnConfigChanged: (cb: (data: { feishu: FeishuConfig }) => void) => () => void
@@ -600,7 +644,6 @@ export type SpaceAssistantApi = {
   wechatPollStart: () => Promise<WeChatConnectionStatus>
   wechatPollStop: () => Promise<WeChatConnectionStatus>
   wechatPendingConfirms: () => Promise<unknown[]>
-  wechatConfirmResponse: (payload: { requestId: string; approved: boolean }) => Promise<{ ok: boolean }>
   wechatAuditTail: (limit?: number) => Promise<WeChatAuditEvent[]>
   wechatAuditQuery: (opts: { since?: number; types?: string[]; limit?: number }) => Promise<WeChatAuditQueryResult>
   wechatSend: (payload: { userId: string; text: string; imagePath?: string; filePath?: string }) => Promise<{ success: boolean; chunksSent?: number; error?: string }>

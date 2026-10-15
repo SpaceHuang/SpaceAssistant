@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { createHash } from 'node:crypto'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { logAgentError } from '../agentLogger/agentLogger'
 
@@ -45,6 +46,22 @@ export function sanitizeAuditEvent(event: SecurityAuditEvent): SecurityAuditEven
   ] as const) {
     const v = out[k]
     if (typeof v === 'string') out[k] = sanitizeAuditField(v) as never
+  }
+  if (out.event === 'policy.decision') {
+    // Decision facts may describe user commands, document names, paths, and provider payloads.
+    // Keep only a stable digest for correlation; the review reason is a machine cause code.
+    if (typeof out.factsSummary === 'string') {
+      out.factsSummary = `sha256:${createHash('sha256').update(out.factsSummary).digest('hex').slice(0, 24)}`
+    }
+    if (typeof out.factId === 'string' && !/^fact-[0-9a-f]{24}$/i.test(out.factId)) {
+      out.factId = `fact-${createHash('sha256').update(out.factId).digest('hex').slice(0, 24)}`
+    }
+    if (typeof out.fallbackCause === 'string' && !/^[a-z0-9][a-z0-9._:-]{0,127}$/i.test(out.fallbackCause)) {
+      out.fallbackCause = 'unclassified'
+    }
+    if (typeof out.reason === 'string' && /(?:^|\s)(?:\/|[A-Za-z]:\\)/.test(out.reason)) {
+      out.reason = 'sensitive-material-reference'
+    }
   }
   return out
 }

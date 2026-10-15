@@ -16,16 +16,13 @@ import {
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../src/shared/contextUsageEstimate'
-import { appendMessage, getSessionUsage, type AppDatabase } from '../database'
+import { getSessionUsage, type AppDatabase } from '../database'
 import { readStoredModels } from '../llmServiceResolver'
 import { createHash } from 'node:crypto'
-import { summarizeFailedInvocation } from '../runtime/continuationSummary'
 export { summarizeFailedInvocation } from '../runtime/continuationSummary'
-import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import type { SessionCommands, SessionExecutionStore } from '../sessionStorage/contracts'
-import type { ContinuationSourceQueries, ContinuationSourceRef, SessionQueries } from '../sessionStorage/contracts'
-import { runInTransaction, TransactionCommitUnknownError } from '../database/transaction'
-import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
+import type { ContinuationSourceRef, SessionQueries } from '../sessionStorage/contracts'
+import { TransactionCommitUnknownError } from '../database/transaction'
 
 /** 出站受理时的主进程状态快照（全部由主进程权威源构建，渲染端不再提供其中任何一项） */
 export type OutboundSnapshot = {
@@ -327,7 +324,6 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       if (locked) return { rejected: { reason: 'CONTINUATION_INTENT_IN_PROGRESS' } }
       intentInFlight.set(intent.requestId, fingerprint)
       try {
-        const now = Date.now()
         const exact = ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(intent.text.trim()) && !intent.attachments?.length
         const activeTurnIds = new Set(deps.turnRuntime.listActive(intent.sessionId).map((turn) => turn.turnId))
         const sourceInspection = sessionQueries.continuationSources.read({ sessionId: intent.sessionId, activeTurnIds: [...activeTurnIds], ...(intent.sourceSelection?.sourceAssistantMessageId ? { selectedAssistantMessageId: intent.sourceSelection.sourceAssistantMessageId } : {}) })

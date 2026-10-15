@@ -2,8 +2,8 @@ import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import type { LarkCliRunner } from './larkCliRunner'
-import { replyFeishuText, replyFeishuTextWithId } from './feishuReply'
-import { sendFeishuRemoteOutboundWithId } from './feishuRemoteOutbound'
+import { sendFeishuRemoteOutbound, sendFeishuRemoteOutboundWithId } from './feishuRemoteOutbound'
+import { createHostImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import { formatFeishuRemoteProgressPrefix } from './feishuRemoteProgress'
 import type { AppDatabase } from '../database'
 import {
@@ -16,11 +16,14 @@ import {
 } from '../remote/imConfirmReply'
 import { addTrustedCommand } from '../shell/shellCommandTrust'
 import { ImChannel, type ImCommitResult, type ImPendingConfirm } from '../confirmation/imChannel'
+import { formatMcpConfirmPromptDetails } from '../confirmation/mcpConfirmPrompt'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWriter'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, reconcileConfirmationSubmission, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { recordRemoteTrackConfirmationState } from '../database/remoteTrackStore'
+import { sanitizeAgentText } from '../../src/shared/agentSafeText'
+import { runShellJustificationForDisplay } from '../../src/shared/runShellJustification'
 
 export interface FeishuImChannelDeps {
   auditLogger?: FeishuAuditLogger
@@ -28,6 +31,8 @@ export interface FeishuImChannelDeps {
   db?: AppDatabase
   sessionStorage?: SessionStorage
   getGeneration?: (channel: 'feishu' | 'wechat') => number
+  /** Optional transport port for composition tests; production defaults to the Feishu sender below. */
+  sendConfirmationPrompt?: (entry: ImPendingConfirm, signal?: AbortSignal) => Promise<{ messageId: string }>
 }
 
 /**
@@ -55,7 +60,8 @@ export class FeishuImChannel extends ImChannel {
           })
         }
       },
-      sendPrompt: (entry) => {
+      sendPrompt: (entry, signal) => {
+        if (deps.sendConfirmationPrompt) return deps.sendConfirmationPrompt(entry, signal)
         if (!entry.matchKey) return Promise.reject(new Error('feishu-chat-missing'))
         return notifyFeishuConfirmPrompt(deps, entry)
       },
@@ -69,7 +75,12 @@ export class FeishuImChannel extends ImChannel {
         recordRemoteTrackConfirmationState(deps.db, {
           trackId: entry.trackId, confirmationId: entry.id, attributionEventId: entry.trackAttributionEventId, state,
           occurredAt: Date.now(), ...(entry.requestId ? { requestId: entry.requestId } : {}), ...(entry.toolName ? { toolName: entry.toolName } : {}),
-          ...(entry.turnId ? { turnId: entry.turnId } : {}), ...(entry.toolUseId ? { toolUseId: entry.toolUseId } : {})
+          ...(entry.turnId ? { turnId: entry.turnId } : {}), ...(entry.toolUseId ? { toolUseId: entry.toolUseId } : {}),
+          ...(entry.envelopeHash ? { envelopeHash: entry.envelopeHash } : {}), ...(entry.factsHash ? { factsHash: entry.factsHash } : {}),
+          ...(entry.policyBehaviorVersion ? { policyBehaviorVersion: entry.policyBehaviorVersion } : {}),
+          ...(entry.policySnapshotRevision != null ? { policySnapshotRevision: entry.policySnapshotRevision } : {}),
+          ...(entry.policyRevision ? { policyRevision: entry.policyRevision } : {}),
+          ...(entry.authorizationGeneration != null ? { authorizationGeneration: entry.authorizationGeneration } : {})
         })
       },
       ...(deps.db ? { onCommit: (entry: ImPendingConfirm, action: { kind: 'trust' | 'memory' | 'decision'; tier?: import('../../src/shared/confirmation/types').MemoryTier; approved: boolean }) => commitFeishuAction(deps.db, entry, action, deps.getGeneration) } : {}),
@@ -90,12 +101,23 @@ export class FeishuImChannel extends ImChannel {
       },
       onHint: (entry, kind) => {
         const runner = deps.runner
-        if (!runner) return
+        const ownerId = entry.authOwner
+        if (!runner || !ownerId || !entry.matchKey) return
         const hint = kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : kind === 'prompt_sending' ? IM_CONFIRM_PROMPT_SENDING_HINT : kind === 'quote_required' ? IM_CONFIRM_QUOTE_REQUIRED_HINT : IM_CONFIRM_USAGE_HINT
-        void replyFeishuText(runner, entry.messageId, hint).catch(() => undefined)
+        const outboundDeliveryFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body: hint,
+          sessionId: entry.sessionId, identityKey: ownerId, ownerId, recipient: ownerId, chatType: 'p2p', destinationId: entry.messageId })
+        void sendFeishuRemoteOutbound({ runner, messageId: entry.messageId, body: hint, sessionId: entry.sessionId,
+          recipient: ownerId, outboundDeliveryFacts }).catch(() => undefined)
       },
       onCommitFailure: (entry) => {
-        if (deps.runner) void replyFeishuText(deps.runner, entry.messageId, '确认提交失败，授权未生效，请重新发起操作。').catch(() => undefined)
+        const runner = deps.runner
+        const ownerId = entry.authOwner
+        if (!runner || !ownerId || !entry.matchKey) return
+        const body = '确认提交失败，授权未生效，请重新发起操作。'
+        const outboundDeliveryFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body,
+          sessionId: entry.sessionId, identityKey: ownerId, ownerId, recipient: ownerId, chatType: 'p2p', destinationId: entry.messageId })
+        void sendFeishuRemoteOutbound({ runner, messageId: entry.messageId, body, sessionId: entry.sessionId,
+          recipient: ownerId, outboundDeliveryFacts }).catch(() => undefined)
       }
     })
   }
@@ -181,17 +203,14 @@ function tryAddFeishuShellTrust(db: AppDatabase | undefined, pending: ImPendingC
 function notifyFeishuConfirmPrompt(deps: FeishuImChannelDeps, entry: ImPendingConfirm): Promise<{ messageId: string }> {
   const { runner, db, sessionStorage } = deps
   if (!runner) return Promise.reject(new Error('feishu-runner-unavailable'))
+  const ownerId = entry.authOwner
+  if (!ownerId || !entry.matchKey) return Promise.reject(new Error('FEISHU_CONFIRM_PROMPT_BINDING_REQUIRED'))
   const text = buildFeishuConfirmPromptText(entry)
-  const send = db
-    ? () =>
-        sendFeishuRemoteOutboundWithId({
-          runner,
-          messageId: entry.messageId,
-          body: text,
-          sessionId: entry.sessionId,
-          ...(sessionStorage ? { touch: { sessionCommands: sessionStorage.commands, sessionId: entry.sessionId } } : {})
-        })
-    : () => replyFeishuTextWithId(runner, entry.messageId, text)
+  const outboundDeliveryFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body: text,
+    sessionId: entry.sessionId, identityKey: ownerId, ownerId, recipient: ownerId, chatType: 'p2p', destinationId: entry.messageId })
+  const send = () => sendFeishuRemoteOutboundWithId({ runner, messageId: entry.messageId, body: text, sessionId: entry.sessionId,
+    recipient: ownerId, outboundDeliveryFacts,
+    ...(db && sessionStorage ? { touch: { sessionCommands: sessionStorage.commands, sessionId: entry.sessionId } } : {}) })
   return send().catch((e) => {
     logFeishuCliEvent('error', 'feishu.confirm.prompt_failed', {
       confirmId: entry.id,
@@ -200,6 +219,14 @@ function notifyFeishuConfirmPrompt(deps: FeishuImChannelDeps, entry: ImPendingCo
     })
     throw e
   })
+}
+
+/** Redact host-known secrets and collapse user-home path prefixes in the display copy only. */
+function sanitizeFeishuConfirmDisplay(text: string): string {
+  return sanitizeAgentText(text).text
+    .replace(/\b((?:api[_-]?key|access[_-]?token|password|passwd|token|secret|cookie)\s*)[=:]\s*<secret:redacted>/gi, '$1[已隐藏]')
+    .replace(/(?<![A-Za-z0-9_./-])\/(?:Users|home)\/[^/\s\"'`;&|<>{}()[\]]+/g, '~')
+    .replace(/\b[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s\"'`;&|<>{}()[\]]+/gi, '~')
 }
 
 /** 飞书确认提示文案：进度前缀 + 工具/命令摘要 + Y/N/记N 尾部（10 分钟有效）。 */
@@ -213,11 +240,15 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
   if (pending.toolName === 'browser' && pending.toolInput) {
     const action = pending.toolInput.action
     if (action === 'navigate' && typeof pending.toolInput.url === 'string') {
-      return `${progressPrefix}⚠️ 需要在浏览器中打开网页：\n${pending.toolInput.url.slice(0, 500)}\n${footer}（10 分钟内有效）`
+      return sanitizeFeishuConfirmDisplay(`${progressPrefix}⚠️ 需要在浏览器中打开网页：\n${pending.toolInput.url.slice(0, 500)}\n${footer}（10 分钟内有效）`)
     }
     if (action === 'act' && typeof pending.toolInput.instruction === 'string') {
-      return `${progressPrefix}⚠️ 需要在浏览器中执行操作：\n${pending.toolInput.instruction.slice(0, 200)}\n${footer}（10 分钟内有效）`
+      return sanitizeFeishuConfirmDisplay(`${progressPrefix}⚠️ 需要在浏览器中执行操作：\n${pending.toolInput.instruction.slice(0, 200)}\n${footer}（10 分钟内有效）`)
     }
+  }
+  if (pending.mcp) {
+    const details = formatMcpConfirmPromptDetails(pending.mcp, pending.toolInput)
+    return sanitizeFeishuConfirmDisplay(`${progressPrefix}⚠️ 需要确认以下 MCP 操作：\n${details}\n${footer}（10 分钟内有效）`)
   }
   let cmd =
     pending.toolName === 'run_lark_cli' && pending.toolInput?.args
@@ -228,6 +259,11 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
           ? pending.toolInput.code.trim().split('\n').find((l) => l.trim() && !l.trim().startsWith('#'))?.slice(0, 120) ??
             'run_script'
           : (pending.toolName ?? 'unknown')
+  const rawJustification = pending.toolName === 'run_shell' && typeof pending.toolInput?.justification === 'string'
+    ? pending.toolInput.justification.trim()
+    : ''
+  const justification = rawJustification ? runShellJustificationForDisplay(rawJustification) : ''
+  const truncatedNote = pending.toolInput?._justificationTruncated === true ? '（内容已截断）' : ''
   if (pending.toolName === 'run_script' && typeof pending.toolInput?.code === 'string') {
     const full = pending.toolInput.code
     if (full.length > 4000) {
@@ -236,7 +272,7 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
       cmd = full.slice(0, 2000)
     }
   }
-  return `${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${String(cmd).slice(0, 2000)}\n${footer}（10 分钟内有效）`
+  return sanitizeFeishuConfirmDisplay(`${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${String(cmd).slice(0, 2000)}\n${justification ? `调用理由${truncatedNote}：\n${justification}\n` : ''}${footer}（10 分钟内有效）`)
 }
 
 /** Confirm replies are only accepted from the bound owner in a p2p chat. */

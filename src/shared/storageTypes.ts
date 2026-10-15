@@ -1,7 +1,10 @@
 export type StorageMaintenanceProgress = Readonly<{
-  phase: 'archive' | 'vacuum' | 'reclaim' | 'complete'
+  phase: 'archive' | 'vacuum' | 'reclaim' | 'swap' | 'complete'
   completedPages?: number
   remainingPages?: number
+  /** 字节级真实进度（archive 阶段复制进度；swap 前的 vacuum 阶段为 staging 字节轮询）。缺省时 UI 回落阶段档位。 */
+  completedBytes?: number
+  totalBytes?: number
 }>
 
 export type StorageMetric = Readonly<{ rows: number; textBytes: number }>

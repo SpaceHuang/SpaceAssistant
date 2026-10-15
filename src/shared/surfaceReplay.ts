@@ -403,12 +403,6 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
   return currentSurface
 }
 
-function replayCanonicalPayload(value: unknown): string {
-  if (!value || typeof value !== 'object') return JSON.stringify(value) ?? ''
-  const source = value as { role?: unknown; content?: unknown }
-  return JSON.stringify({ role: source.role, content: canonicalSurfaceContent(source.role, source.content) })
-}
-
 function checkpointMessageId(committed: CompactionReplay['committed'][number]): string | undefined {
   const candidate = committed.summary.payload.candidate
   const checkpoint = candidate && typeof candidate === 'object' ? (candidate as { checkpointMessage?: unknown }).checkpointMessage : undefined

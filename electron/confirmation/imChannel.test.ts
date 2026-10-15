@@ -36,11 +36,16 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     const result = channel.request(req(), {
       sessionId: 'track-confirm-session', toolName: 'run_shell', messageId: 'track-confirm-origin', matchKey: 'owner',
       trackId: 'track-confirm-a', trackAttributionEventId: 'track-root-event', requestId: 'track-confirm-request',
-      turnId: 'track-confirm-turn', toolUseId: 'track-confirm-tool-use'
+      turnId: 'track-confirm-turn', toolUseId: 'track-confirm-tool-use', authorizationGeneration: 2,
+      envelopeHash: 'e'.repeat(64), factsHash: 'f'.repeat(64), policyBehaviorVersion: 'im-standard-v2',
+      policySnapshotRevision: 3, policyRevision: 'authorization-revision-7'
     })
     await Promise.resolve()
     expect(child).toHaveBeenCalledTimes(1)
-    expect(child).toHaveBeenNthCalledWith(1, expect.objectContaining({ trackId: 'track-confirm-a', trackAttributionEventId: 'track-root-event' }), 'pending')
+    expect(child).toHaveBeenNthCalledWith(1, expect.objectContaining({ trackId: 'track-confirm-a', trackAttributionEventId: 'track-root-event',
+      requestId: 'track-confirm-request', turnId: 'track-confirm-turn', toolUseId: 'track-confirm-tool-use', authorizationGeneration: 2,
+      envelopeHash: 'e'.repeat(64), factsHash: 'f'.repeat(64), policyBehaviorVersion: 'im-standard-v2',
+      policySnapshotRevision: 3, policyRevision: 'authorization-revision-7' }), 'pending')
     channel.tryResolveFromInbound({ kind: 'reject', confirmId: channel.listPending()[0]!.confirmId }, {
       matchKey: 'owner', messageId: 'track-confirm-answer', quotedMessageId: 'track-confirm-prompt'
     })
@@ -58,6 +63,90 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     await expect(result).resolves.toEqual({ kind: 'rejected', cause: 'unavailable' })
     expect(child).not.toHaveBeenCalled()
     expect(channel.countPending()).toBe(0)
+  })
+
+  it('fails closed when a Track-linked confirmation lacks a facts binding', async () => {
+    const child = vi.fn()
+    const sendPrompt = vi.fn(() => ({ messageId: 'must-not-send' }))
+    const channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 5000, onTrackConfirmationChild: child, sendPrompt })
+    const result = channel.request(req(), { sessionId: 'track-confirm-unbound', toolName: 'write_file', messageId: 'origin', matchKey: 'owner',
+      trackId: 'track-a', trackAttributionEventId: 'track-root', requestId: 'request-a', turnId: 'turn-a', toolUseId: 'tool-a',
+      authorizationGeneration: 2, envelopeHash: 'e'.repeat(64),
+      policyBehaviorVersion: 'im-standard-v2', policySnapshotRevision: 3, policyRevision: 'revision-a' })
+    await expect(result).resolves.toEqual({ kind: 'rejected', cause: 'unavailable' })
+    expect(sendPrompt).not.toHaveBeenCalled()
+    expect(child).not.toHaveBeenCalled()
+    expect(channel.countPending()).toBe(0)
+  })
+
+  it('binds two pending calls on one Track to separate confirmation prompts and tool-use identities', async () => {
+    const child = vi.fn()
+    const commits = vi.fn(() => ({ committed: true }))
+    const channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 5000, onTrackConfirmationChild: child, onCommit: commits,
+      sendPrompt: (entry) => ({ messageId: `prompt-${entry.toolUseId}` }) })
+    const makePending = (toolUseId: string) => channel.request(req(), { sessionId: 'track-session', toolName: 'write_file',
+      messageId: 'origin', matchKey: 'owner', trackId: 'track-a', trackAttributionEventId: 'track-root', requestId: 'request-a',
+      turnId: 'turn-a', toolUseId, authorizationGeneration: 2, envelopeHash: toolUseId.padEnd(64, 'e').slice(0, 64),
+      factsHash: toolUseId.padEnd(64, 'f').slice(0, 64), policyBehaviorVersion: 'im-standard-v2', policySnapshotRevision: 3,
+      policyRevision: 'policy-r3' })
+    const firstPromise = makePending('tool-one')
+    const secondPromise = makePending('tool-two')
+    await Promise.resolve()
+    const [first, second] = channel.listPending()
+    expect(first?.trackId).toBe('track-a')
+    expect(second?.trackId).toBe('track-a')
+    expect(first?.confirmId).not.toBe(second?.confirmId)
+    expect(channel.tryResolveFromInbound({ kind: 'approve', confirmId: first!.confirmId }, {
+      matchKey: 'owner', messageId: 'cross-tool-reply', quotedMessageId: second!.promptMessageId
+    })).toBe(true)
+    expect(commits).not.toHaveBeenCalled()
+    channel.tryResolveFromInbound({ kind: 'approve', confirmId: first!.confirmId }, {
+      matchKey: 'owner', messageId: 'first-reply', quotedMessageId: first!.promptMessageId
+    })
+    await expect(firstPromise).resolves.toMatchObject({ kind: 'approved' })
+    expect(channel.listPending()).toHaveLength(1)
+    expect(channel.listPending()[0]?.toolUseId).toBe('tool-two')
+    channel.tryResolveFromInbound({ kind: 'reject', confirmId: second!.confirmId }, {
+      matchKey: 'owner', messageId: 'second-reply', quotedMessageId: second!.promptMessageId
+    })
+    await expect(secondPromise).resolves.toMatchObject({ kind: 'rejected' })
+    expect(child.mock.calls.map(([entry, state]) => [(entry as { toolUseId?: string }).toolUseId, state])).toEqual([
+      ['tool-one', 'pending'], ['tool-two', 'pending'], ['tool-one', 'settled'], ['tool-two', 'settled']
+    ])
+  })
+
+  it('does not let a strict confirmation from another Track approve the pending tool call', async () => {
+    const commits = vi.fn(() => ({ committed: true }))
+    const channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 5000, onCommit: commits, onTrackConfirmationChild: vi.fn(),
+      sendPrompt: (entry) => ({ messageId: `prompt-${entry.trackId}` }) })
+    const start = (trackId: string, toolUseId: string) => channel.request(req(), {
+      sessionId: 'shared-session', toolName: 'write_file', messageId: `origin-${trackId}`, matchKey: 'owner',
+      trackId, trackAttributionEventId: `root-${trackId}`, requestId: `request-${trackId}`, turnId: `turn-${trackId}`, toolUseId,
+      authorizationGeneration: 2, envelopeHash: toolUseId.padEnd(64, 'e').slice(0, 64),
+      factsHash: toolUseId.padEnd(64, 'f').slice(0, 64), policyBehaviorVersion: 'im-standard-v2', policySnapshotRevision: 3,
+      policyRevision: 'policy-r3'
+    })
+    const firstPromise = start('track-first', 'tool-first')
+    const secondPromise = start('track-second', 'tool-second')
+    await Promise.resolve()
+    const [first, second] = channel.listPending()
+    expect(first?.confirmId).toMatch(/^\d{2}$/)
+    expect(second?.confirmId).toMatch(/^\d{2}$/)
+    expect(channel.tryResolveFromInbound({ kind: 'approve', confirmId: first!.confirmId }, {
+      matchKey: 'owner', messageId: 'cross-track-reply', quotedMessageId: second!.promptMessageId
+    })).toBe(true)
+    expect(commits).not.toHaveBeenCalled()
+    expect(channel.listPending()).toHaveLength(2)
+
+    channel.tryResolveFromInbound({ kind: 'approve', confirmId: first!.confirmId }, {
+      matchKey: 'owner', messageId: 'first-track-reply', quotedMessageId: first!.promptMessageId
+    })
+    await expect(firstPromise).resolves.toMatchObject({ kind: 'approved' })
+    channel.tryResolveFromInbound({ kind: 'reject', confirmId: second!.confirmId }, {
+      matchKey: 'owner', messageId: 'second-track-reply', quotedMessageId: second!.promptMessageId
+    })
+    await expect(secondPromise).resolves.toMatchObject({ kind: 'rejected' })
+    expect(commits).toHaveBeenCalledTimes(2)
   })
 
   it('微信按服务端提示 message_id 绑定引用，并在两位码复用后拒绝旧引用', async () => {

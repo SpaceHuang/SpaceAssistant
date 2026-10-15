@@ -5,6 +5,7 @@ import { createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { createDeferredTodoStore, DEFAULT_DEFERRED_TODO_TTL_MS } from './deferredTodoStore'
 import { applyRemoteTrackLifecycleEvent, createRemoteTrack } from '../database/remoteTrackStore'
+import { commitImPolicySnapshot } from './imPolicyStore'
 
 const trustedTodo = {
   todoId: 'todo-store-1',
@@ -25,6 +26,17 @@ const trustedTodo = {
 }
 
 describe('deferred todo authorization binding', () => {
+  it('persists the shared IM policy version, revision, and epoch captured at todo creation', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'todo-policy-seed' })
+    const todo = createDeferredTodoStore(db).create({ ...trustedTodo, invocationId: 'policy-bound-invocation' }).todo
+    expect(todo).toMatchObject({ policyBehaviorVersion: 'im-standard-v2', policyRevision: 1, policyEpoch: 1 })
+    expect(conn.prepare('SELECT policy_behavior_version,policy_revision,policy_epoch FROM deferred_todos WHERE todo_id=?').get(todo.todoId))
+      .toEqual({ policy_behavior_version: 'im-standard-v2', policy_revision: 1, policy_epoch: 1 })
+    db.close()
+  })
+
   it('persists the Track association on the todo source row and keeps the child projection in sync', () => {
     const db = createMemoryAppDb()
     createRemoteTrack(db, { trackId: 'todo-track', eventId: 'todo-track-root', idempotencyKey: 'todo-track-inbound', channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, rootMessageId: 'root-message', occurredAt: 1 })
@@ -38,7 +50,7 @@ describe('deferred todo authorization binding', () => {
       .toEqual({ state: 'pending' })
     expect(getDbConnection(db).prepare('SELECT state FROM remote_tracks WHERE track_id=?').get('todo-track')).toEqual({ state: 'waiting-async-approval' })
     const claimed = store.claimForDispatch('tracked-todo', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1',
-      authorizationEpoch: 8, rule: trustedTodo.rule }, 110)
+      authorizationEpoch: 8, originSessionId: trustedTodo.originSessionId, rule: trustedTodo.rule }, 110)
     expect(claimed?.status).toBe('dispatching')
     expect(getDbConnection(db).prepare('SELECT state FROM remote_tracks WHERE track_id=?').get('todo-track')).toEqual({ state: 'resuming' })
     db.close()
@@ -64,7 +76,7 @@ describe('deferred todo authorization binding', () => {
     const store = createDeferredTodoStore(db)
     store.create({ ...trustedTodo, createdAt: Date.now(), expiresAt: Date.now() + 10_000 })
     expect(store.invalidateByOriginSession('origin-session-1')).toEqual({ invalidatedTodoIds: ['todo-store-1'], dispatchingTodoIds: [] })
-    expect(store.get('todo-store-1', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, rule: trustedTodo.rule })?.status).toBe('invalidated')
+    expect(store.get('todo-store-1', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: trustedTodo.originSessionId, rule: trustedTodo.rule })?.status).toBe('invalidated')
     db.close()
   })
 
@@ -72,7 +84,7 @@ describe('deferred todo authorization binding', () => {
     const db = createMemoryAppDb()
     const store = createDeferredTodoStore(db)
     store.create({ ...trustedTodo, createdAt: Date.now(), expiresAt: Date.now() + 10_000 })
-    store.claimForDispatch('todo-store-1', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, rule: trustedTodo.rule })
+    store.claimForDispatch('todo-store-1', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: trustedTodo.originSessionId, rule: trustedTodo.rule })
     expect(store.invalidateByOriginSession('origin-session-1')).toEqual({ invalidatedTodoIds: [], dispatchingTodoIds: ['todo-store-1'] })
     db.close()
   })
@@ -84,11 +96,11 @@ describe('deferred todo authorization binding', () => {
     store.create({ ...trustedTodo, todoId: 'stale-pending', invocationId: 'stale-pending-inv', createdAt: now, expiresAt: now + 10_000, updatedAt: now })
     store.create({ ...trustedTodo, todoId: 'stale-dispatching', invocationId: 'stale-dispatching-inv', createdAt: now, expiresAt: now + 10_000, updatedAt: now })
     expect(store.claimForDispatch('stale-dispatching', {
-      channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, rule: trustedTodo.rule
+      channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: trustedTodo.originSessionId, rule: trustedTodo.rule
     }, now)).not.toBeNull()
     expect(store.invalidateOlderAuthorizationEpochs('feishu', 9, now + 1)).toEqual({ invalidatedTodoIds: ['stale-pending'], dispatchingTodoIds: ['stale-dispatching'] })
-    expect(store.get('stale-pending', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, rule: trustedTodo.rule })?.status).toBe('invalidated')
-    expect(store.get('stale-dispatching', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, rule: trustedTodo.rule })?.status).toBe('dispatching')
+    expect(store.get('stale-pending', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: trustedTodo.originSessionId, rule: trustedTodo.rule })?.status).toBe('invalidated')
+    expect(store.get('stale-dispatching', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: trustedTodo.originSessionId, rule: trustedTodo.rule })?.status).toBe('dispatching')
     db.close()
   })
 
@@ -97,16 +109,17 @@ describe('deferred todo authorization binding', () => {
     const store = createDeferredTodoStore(db)
     expect(store.create(trustedTodo)).toMatchObject({ ok: true, todo: trustedTodo })
     for (const context of [
-      { channel: 'wechat', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8 },
-      { channel: 'feishu', identityKey: 'identity-other', ownerId: 'owner-1', authorizationEpoch: 8 },
-      { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-other', authorizationEpoch: 8 },
-      { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 7 },
-      { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, rule: { ruleId: 'rule-write', factsHash: 'b'.repeat(64) } }
+      { channel: 'wechat', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: 'origin-session-1', rule: trustedTodo.rule },
+      { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: 'other-session', rule: trustedTodo.rule },
+      { channel: 'feishu', identityKey: 'identity-other', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: 'origin-session-1', rule: trustedTodo.rule },
+      { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-other', authorizationEpoch: 8, originSessionId: 'origin-session-1', rule: trustedTodo.rule },
+      { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 7, originSessionId: 'origin-session-1', rule: trustedTodo.rule },
+      { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: 'origin-session-1', rule: { ruleId: 'rule-write', factsHash: 'b'.repeat(64) } }
     ]) {
       expect(store.get('todo-store-1', context as never)).toBeNull()
     }
     expect(store.get('todo-store-1', {
-      channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8,
+      channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, originSessionId: 'origin-session-1',
       rule: trustedTodo.rule
     })).toMatchObject({ todoId: 'todo-store-1', invocationId: 'invocation-1' })
     db.close()
@@ -125,8 +138,10 @@ describe('deferred todo authorization binding', () => {
     const db = createMemoryAppDb()
     const store = createDeferredTodoStore(db)
     const first = store.create(trustedTodo)
-    const retry = store.create(trustedTodo)
+    const retry = store.create({ ...trustedTodo, createdAt: trustedTodo.createdAt + 50_000, expiresAt: trustedTodo.expiresAt + 50_000 })
     expect(retry).toMatchObject({ ok: true, todo: { todoId: first.todo.todoId, invocationId: 'invocation-1' } })
+    expect(retry.ok && retry.todo.createdAt).toBe(first.todo.createdAt)
+    expect(retry.ok && retry.todo.expiresAt).toBe(first.todo.expiresAt)
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM deferred_todos WHERE invocation_id=?')
       .get('invocation-1')).toEqual({ count: 1 })
     db.close()
@@ -147,7 +162,7 @@ describe('deferred todo authorization binding', () => {
     const reopenedStore = createDeferredTodoStore(reopened)
     const context = {
       channel: 'feishu' as const, identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8,
-      rule: trustedTodo.rule
+      originSessionId: trustedTodo.originSessionId, rule: trustedTodo.rule
     }
     expect(reopenedStore.get('lifecycle-todo', context)?.status).toBe('pending')
     expect(reopenedStore.claimForDispatch('lifecycle-todo', context)?.status).toBe('dispatching')

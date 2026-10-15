@@ -1,4 +1,4 @@
-import { App, Button, Input, InputNumber, Modal, Space, Switch, Typography } from 'antd'
+import { App, Button, Input, InputNumber, Modal, Space, Typography } from 'antd'
 import { useState } from 'react'
 import type { WikiConfig, WikiMigrationState } from '../../../shared/domainTypes'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'

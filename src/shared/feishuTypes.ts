@@ -2,16 +2,10 @@ import type { RemoteProgressConfig } from './remoteProgressTypes'
 import { FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG } from './remoteProgressTypes'
 import {
   mergeRemoteImCommonConfig,
-  normalizeImConfirmPolicy,
-  type ImConfirmPolicy,
-  type LegacyImConfirmPolicy,
   type RemoteImCommonConfig
 } from './imTypes'
 
 export type FeishuEventConnectionState = 'stopped' | 'connecting' | 'connected' | 'error'
-
-/** @deprecated Use ImConfirmPolicy; feishu_confirm migrates to im_confirm. */
-export type FeishuRemoteConfirmPolicy = ImConfirmPolicy | 'feishu_confirm'
 
 /** @deprecated Group chats are always rejected; field ignored when present. */
 export type FeishuGroupTrigger = 'mention' | 'prefix' | 'both'
@@ -35,7 +29,6 @@ export interface FeishuConfig extends RemoteImCommonConfig {
   wakeWordAutoExecute: boolean
   integrationMode: FeishuIntegrationMode
   larkCliDefaultTimeoutSec: number
-  larkCliWriteRequiresConfirm: boolean
 }
 
 export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
@@ -46,10 +39,6 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
   remoteGroupTrigger: 'mention',
   remoteCommandPrefix: '/sa ',
   remoteNotifyOnReceive: true,
-  remoteConfirmPolicy: 'always',
-  remoteAllowLocalWrite: true,
-  remoteDenyOutbound: false,
-  remoteBrowserRequiresConfirm: false,
   remoteSessionIdleMinutes: 10,
   remoteOwnerBindWindowMinutes: 5,
   region: 'feishu',
@@ -57,7 +46,6 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
   remoteRateLimitPerMinute: 60,
   integrationMode: 'cli',
   larkCliDefaultTimeoutSec: 120,
-  larkCliWriteRequiresConfirm: true,
   remoteProgressMode: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMode,
   remoteProgressHeartbeatSec: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressHeartbeatSec,
   remoteTypingEnabled: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteTypingEnabled,
@@ -67,23 +55,33 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
 }
 
 export function mergeFeishuConfig(
-  partial?: (Partial<FeishuConfig> & { remoteConfirmPolicy?: LegacyImConfirmPolicy }) | null
+  partial?: Partial<FeishuConfig> | null
 ): FeishuConfig {
   if (!partial || typeof partial !== 'object') return { ...DEFAULT_FEISHU_CONFIG }
 
   const common = mergeRemoteImCommonConfig(partial, DEFAULT_FEISHU_CONFIG)
-  const policy =
-    normalizeImConfirmPolicy(partial.remoteConfirmPolicy) ?? DEFAULT_FEISHU_CONFIG.remoteConfirmPolicy
 
   return {
     ...DEFAULT_FEISHU_CONFIG,
-    ...partial,
+    ...channelFieldsWithoutLegacySecurity(partial, LEGACY_FEISHU_SECURITY_KEYS),
     ...common,
-    remoteConfirmPolicy: policy,
     integrationMode: 'cli',
     remoteSenderAllowlist: common.remoteSenderAllowlist,
     wakeWords: Array.isArray(partial.wakeWords) ? [...partial.wakeWords] : DEFAULT_FEISHU_CONFIG.wakeWords
   }
+}
+
+const LEGACY_FEISHU_SECURITY_KEYS = [
+  'remoteConfirmPolicy', 'remoteWechatConfirm', 'remoteAllowLocalWrite', 'remoteDenyOutbound',
+  'remoteBrowserRequiresConfirm', 'remoteBrowserNavigateRequiresConfirm',
+  'remoteBrowserActRequiresConfirm', 'remoteScriptRequiresConfirm',
+  'remoteSecurityConfigVersion', 'remoteSecurityPresetSource', 'larkCliWriteRequiresConfirm', 'wechatSendRequiresConfirm'
+] as const
+
+function channelFieldsWithoutLegacySecurity<T extends object>(partial: T, keys: readonly string[]): T {
+  const fields = { ...partial } as Record<string, unknown>
+  for (const key of keys) delete fields[key]
+  return fields as T
 }
 
 export interface FeishuInboundMessage {
@@ -189,4 +187,4 @@ export interface FeishuBindWindowResult {
   snapshot: FeishuOwnerBindSnapshot
 }
 
-export type { RemoteProgressConfig, ImConfirmPolicy, RemoteImCommonConfig }
+export type { RemoteProgressConfig, RemoteImCommonConfig }

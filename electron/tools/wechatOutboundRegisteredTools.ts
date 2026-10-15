@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
+import type { ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
+import { assessImOutboundContent } from '../../src/shared/confirmation/outboundClassification'
 import { definePlannedTool, type RegisteredTool, type ToolExecutionContext } from './plannedToolRegistry'
 import type { RemoteContext, ToolExecutionContext as RuntimeExecutionContext, ToolExecutor, ToolExecutorResult } from './types'
+import { inspectWeChatTaskReplyAttachment } from './weChatToolExecutor'
 
 const REMOTE_BINDING_KEYS = [
   'source', 'messageId', 'chatId', 'userId', 'outboundSessionId', 'authOwner',
-  'authorizationGeneration', 'workDirProfileId', 'requestId', 'originSessionId'
+  'authorizationGeneration', 'workDirProfileId', 'requestId', 'originSessionId', 'deferredAttachmentApproval'
 ] as const
 
 type RemoteBinding = Readonly<Record<string, unknown>>
@@ -17,6 +20,7 @@ type PreparedOutbound = Readonly<{
   remoteContextPresent: boolean
   remoteBinding?: RemoteBinding
   wechatConfig?: WeChatConfig
+  outboundDeliveryFacts: ImOutboundFacts
 }>
 
 function runtimeContext(context: ToolExecutionContext): RuntimeExecutionContext {
@@ -32,7 +36,7 @@ function remoteBinding(remote: RemoteContext | undefined): RemoteBinding | undef
   ))
 }
 
-function snapshot(runtime: RuntimeExecutionContext): Omit<PreparedOutbound, 'input'> {
+function snapshot(runtime: RuntimeExecutionContext): Omit<PreparedOutbound, 'input' | 'outboundDeliveryFacts'> {
   return {
     workDir: runtime.workDir,
     sessionId: runtime.sessionId,
@@ -40,6 +44,52 @@ function snapshot(runtime: RuntimeExecutionContext): Omit<PreparedOutbound, 'inp
     remoteContextPresent: runtime.remoteContext !== undefined,
     ...(remoteBinding(runtime.remoteContext) ? { remoteBinding: remoteBinding(runtime.remoteContext)! } : {}),
     ...(runtime.wechatConfig ? { wechatConfig: structuredClone(runtime.wechatConfig) } : {})
+  }
+}
+
+async function deliveryFacts(name: 'wechat_send' | 'wechat_reply', input: Record<string, unknown>, runtime: RuntimeExecutionContext): Promise<ImOutboundFacts> {
+  const remote = runtime.remoteContext
+  const text = typeof input.text === 'string' ? input.text : undefined
+  const modelRecipient = typeof input.userId === 'string' ? input.userId : undefined
+  const requestedAttachment = typeof input.imagePath === 'string' || typeof input.filePath === 'string'
+  const attachment = requestedAttachment
+    ? await inspectWeChatTaskReplyAttachment(runtime.workDir, typeof input.imagePath === 'string' ? input.imagePath : undefined,
+      typeof input.filePath === 'string' ? input.filePath : undefined)
+    : { attachmentAuthorized: false }
+  if (remote?.deferredAttachmentApproval) {
+    const binding = remote.deferredAttachmentApproval
+    if (!requestedAttachment || !attachment.attachmentPath || attachment.attachmentPath !== binding.path ||
+      attachment.attachmentContentVersion !== binding.sha256 || attachment.checkedAttachmentContentVersion !== binding.sha256) {
+      throw new Error('WECHAT_DEFERRED_ATTACHMENT_APPROVAL_MISMATCH')
+    }
+  }
+  const textAssessment = text === undefined ? 'unknown' : assessImOutboundContent(text)
+  const taskReplyBindingValid = name === 'wechat_reply' && !modelRecipient && remote?.source === 'wechat' &&
+    Boolean(remote.userId && remote.authOwner === remote.userId && remote.originSessionId === runtime.sessionId &&
+      remote.currentUserMessageId && remote.taskBinding)
+  const controlledTaskReply = taskReplyBindingValid && textAssessment === 'ordinary' &&
+    (!requestedAttachment || attachment.attachmentAuthorized)
+  const originSessionId = remote?.originSessionId ??
+    (name === 'wechat_send' && runtime.lane === 'desktop' ? runtime.sessionId : undefined)
+  return {
+    channel: 'wechat',
+    purpose: name === 'wechat_reply' ? 'task-reply' : 'active-send',
+    ...(originSessionId ? { originSessionId } : {}),
+    activeSessionId: runtime.sessionId,
+    ...(remote?.userId ? { identityKey: remote.userId } : {}),
+    ...(remote?.authOwner ? { ownerId: remote.authOwner } : {}),
+    ...(name === 'wechat_reply' && remote?.userId ? { trustedRecipient: remote.userId } : {}),
+    ...(name === 'wechat_send' && typeof input.userId === 'string' ? { recipient: input.userId } : {}),
+    ...(name === 'wechat_reply' && remote?.userId ? { recipient: modelRecipient ?? remote.userId } : {}),
+    ...(modelRecipient ? { modelRecipient } : {}),
+    chatType: taskReplyBindingValid ? 'p2p' : 'unknown',
+    ...(text !== undefined ? { content: text } : {}),
+    ...(text !== undefined ? { contentAssessment: { source: 'host' as const, content: text,
+      classification: textAssessment,
+      classifierVersion: 'host-im-outbound-v1' } } : {}),
+    contentCompleteness: controlledTaskReply ? 'complete' : 'unknown',
+    hasAttachment: requestedAttachment,
+    ...attachment
   }
 }
 
@@ -54,7 +104,8 @@ function preparedSnapshot(prepared: PreparedOutbound): Omit<PreparedOutbound, 'i
     ...(prepared.lane !== undefined ? { lane: prepared.lane } : {}),
     remoteContextPresent: prepared.remoteContextPresent,
     ...(prepared.remoteBinding ? { remoteBinding: prepared.remoteBinding } : {}),
-    ...(prepared.wechatConfig ? { wechatConfig: prepared.wechatConfig } : {})
+    ...(prepared.wechatConfig ? { wechatConfig: prepared.wechatConfig } : {}),
+    outboundDeliveryFacts: prepared.outboundDeliveryFacts
   }
 }
 
@@ -68,10 +119,12 @@ function registerOutbound(name: 'wechat_send' | 'wechat_reply', executor: ToolEx
     },
     plan: async (input, planning) => {
       if (!planning.executionContext) throw new Error('WECHAT_OUTBOUND_RUNTIME_CONTEXT_REQUIRED')
-      return { input: structuredClone(input), ...snapshot(planning.executionContext) }
+      const delivery = await deliveryFacts(name, input, planning.executionContext)
+      return { input: structuredClone(input), ...snapshot(planning.executionContext), outboundDeliveryFacts: delivery }
     },
-    validate: (prepared, execution) => {
-      const current = snapshot(runtimeContext(execution))
+    validate: async (prepared, execution) => {
+      const runtime = runtimeContext(execution)
+      const current = { ...snapshot(runtime), outboundDeliveryFacts: await deliveryFacts(name, prepared.input, runtime) }
       if (fingerprint(current) !== fingerprint(preparedSnapshot(prepared))) {
         throw new Error('WECHAT_OUTBOUND_PREPARED_BINDING_CHANGED')
       }
@@ -81,6 +134,20 @@ function registerOutbound(name: 'wechat_send' | 'wechat_reply', executor: ToolEx
       const remoteContext = runtime.remoteContext && prepared.remoteBinding
         ? { ...runtime.remoteContext, ...prepared.remoteBinding } as RemoteContext
         : runtime.remoteContext
+      const outboundDeliveryFacts = structuredClone(prepared.outboundDeliveryFacts)
+      if (outboundDeliveryFacts.attachmentApprovalRequired) {
+        const receipt = execution.userConfirmationReceipt?.trim()
+        const exactPreparedAttachment = outboundDeliveryFacts.attachmentPath &&
+          outboundDeliveryFacts.attachmentPath === outboundDeliveryFacts.checkedAttachmentPath &&
+          outboundDeliveryFacts.attachmentContentVersion &&
+          outboundDeliveryFacts.attachmentContentVersion === outboundDeliveryFacts.checkedAttachmentContentVersion
+        const deferredBinding = remoteContext?.deferredAttachmentApproval
+        if (!receipt || execution.userConfirmationAnswerer !== 'user' || !exactPreparedAttachment || (deferredBinding &&
+          (deferredBinding.path !== outboundDeliveryFacts.attachmentPath || deferredBinding.sha256 !== outboundDeliveryFacts.attachmentContentVersion))) {
+          throw new Error('WECHAT_ATTACHMENT_HUMAN_APPROVAL_BINDING_REQUIRED')
+        }
+        outboundDeliveryFacts.attachmentAuthorized = true
+      }
       return executor.execute(prepared.input, {
         ...runtime,
         workDir: prepared.workDir,
@@ -88,6 +155,10 @@ function registerOutbound(name: 'wechat_send' | 'wechat_reply', executor: ToolEx
         ...(prepared.lane !== undefined ? { lane: prepared.lane } : {}),
         ...(remoteContext ? { remoteContext } : {}),
         ...(prepared.wechatConfig ? { wechatConfig: structuredClone(prepared.wechatConfig) } : {}),
+        outboundDeliveryFacts: {
+          ...outboundDeliveryFacts,
+          ...(execution.userConfirmationReceipt ? { userConfirmationReceipt: execution.userConfirmationReceipt } : {})
+        },
         requestId: execution.requestId,
         toolUseId: execution.toolUseId,
         signal: execution.signal

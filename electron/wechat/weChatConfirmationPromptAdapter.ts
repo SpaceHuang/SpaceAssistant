@@ -13,7 +13,7 @@ export const WECHAT_CONFIRMATION_QUOTE_CONTRACT = Object.freeze({
   sendAcknowledgement: ['message_id', 'ret', 'errmsg'],
   quoteBinding: 'ref_msg.message_item.msg_id',
   echoBinding: 'getupdates.msgs[client_id,to_user_id,message_type=BOT].message_id (fallback)',
-  platformQuoteRoundTripVerified: false as const
+  platformQuoteRoundTripVerified: true as const
 })
 
 type PendingSend = {

@@ -34,7 +34,7 @@ import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { getSessionEventSink } from '../sessionEvents'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
 import { buildRemoteProgressHookContext } from './buildRemoteProgressContext'
-import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
+import { onAgentsMdNotLoaded, onRemoteTextSegmentClosed } from './remoteProgressHooks'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { createImOrchestrationToolRegistry } from './imOrchestrationTools'
@@ -51,6 +51,7 @@ import { bindRemoteTrackToTurn, readRemoteTrackSourceChildren, remoteTrackTurnBi
 import { recordTrackModelMessage } from './trackModelInputViewStore'
 import { readRemoteTrackFeatureGates } from './remoteTrackFeatureGates'
 import { recordRemoteTrackRuntimeDiagnostic } from '../database/remoteTrackRuntimeDiagnosticStore'
+import { readImPromptPolicySnapshot } from './imPromptPolicySnapshot'
 
 export function extractTextFromContent(content: unknown[]): string {
   let s = ''
@@ -98,10 +99,13 @@ export async function runImRemoteAgent(args: {
   getWikiConfig?: () => WikiConfig
   getShellConfig?: () => ShellConfig
   createProgressAdapter: (getSessionId: () => string) => RemoteProgressAdapter
-  buildSystemAppendix: (args: { browserRemoteHint?: FeishuBrowserRemoteHint }) => string
+  buildSystemAppendix: (args: {
+    browserRemoteHint?: FeishuBrowserRemoteHint
+    policySnapshot?: import('../../src/shared/policy/policyPromptContext').ImPolicyPromptSnapshot
+  }) => string
   progressDefaults: Required<RemoteProgressConfig>
   progressConfig: RemoteProgressConfig
-  toolChatExtras?: Pick<AgentInvocationMaterials, 'feishuConfig' | 'wechatConfig' | 'larkCliRunner'>
+  toolChatExtras?: Pick<AgentInvocationMaterials, 'feishuConfig' | 'wechatConfig' | 'larkCliRunner' | 'resolveAgentSdkGateSupplement'>
   onFinally?: () => void
   /** WeChat historically rethrows as `new Error(message)`. */
   rethrowAsError?: boolean
@@ -347,11 +351,13 @@ export async function runImRemoteAgent(args: {
     }
 
     const browserConfig = args.getBrowserConfig?.()
+    const policySnapshot = readImPromptPolicySnapshot(args.db)
     const baseAppendix = args.buildSystemAppendix({
       browserRemoteHint: resolveFeishuBrowserRemoteHint(
         browserConfig?.enabled,
         browserConfig?.allowRemoteSessions
-      )
+      ),
+      policySnapshot
     })
     const continuation = args.remoteContext.deferredContinuation
     const appendix = continuation ? `${baseAppendix}\n\nDeferred action completion (already executed; do not repeat it):\n${JSON.stringify(continuation)}` : baseAppendix
@@ -413,6 +419,7 @@ export async function runImRemoteAgent(args: {
       baseUrl,
       messages,
       system: appendix,
+      agentsMdEnabled: frozenConfig.agentsMdEnabled ?? true,
       options: { maxTokens: 8192 },
       currentUserMessageId,
       toolsConfig,
@@ -445,6 +452,7 @@ export async function runImRemoteAgent(args: {
           })) }
         : {}),
       onRemoteTextActivity: (text) => onRemoteTextSegmentClosed(remoteProgressContext, text),
+      onAgentsMdNotLoaded: () => onAgentsMdNotLoaded(remoteProgressContext),
       locale: readAppLocale(args.db),
       ...args.toolChatExtras
       ,emitFactEvent: args.emitFactEvent ?? (() => undefined)

@@ -1,6 +1,6 @@
 import path from 'path'
 import type { WikiConfig } from '../../src/shared/domainTypes'
-import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
+import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 
 export const DEFAULT_WIKI_ROOT = WIKI_VOCABULARY_PREFIX
 

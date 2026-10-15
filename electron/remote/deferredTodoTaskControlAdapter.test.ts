@@ -16,7 +16,7 @@ describe('deferred todo task-control invalidation adapter', () => {
     const adapter = createDeferredTodoTaskControlSafetyPort({ todoStore: store, dispatchDeferred: async () => ({ dispatched: false }) })
     await expect(adapter.invalidateTask({ operationId: 'cancel-op', sessionId: 'session', ownerId: 'owner', workflowId: 'workflow', taskId: 'task', planRevision: 1, invocationIds: ['cancel-inv'] }))
       .resolves.toEqual({ invalidated: ['cancel-inv'] })
-    const context = { channel: 'feishu' as const, identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1, rule }
+    const context = { channel: 'feishu' as const, identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1, originSessionId: 'session', rule }
     expect(store.get('cancel-todo', context)?.status).toBe('invalidated')
     expect(store.get('keep-todo', context)?.status).toBe('pending')
     db.close()
@@ -29,7 +29,7 @@ describe('deferred todo task-control invalidation adapter', () => {
     store.create({ todoId: 'started-todo', invocationId: 'started-inv', channel: 'wechat', identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1,
       rule, workflowId: 'workflow', taskId: 'task', stepId: 'step', planRevision: 1,
       originSessionId: 'session', createdAt: 1, expiresAt: Date.now() + 60_000 })
-    store.claimForDispatch('started-todo', { channel: 'wechat', identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1, rule })
+    store.claimForDispatch('started-todo', { channel: 'wechat', identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1, originSessionId: 'session', rule })
     const adapter = createDeferredTodoTaskControlSafetyPort({ todoStore: store, dispatchDeferred: async () => ({ dispatched: false }) })
     await expect(adapter.invalidateTask({ operationId: 'cancel-op', sessionId: 'session', ownerId: 'owner', workflowId: 'workflow', taskId: 'task', planRevision: 1, invocationIds: ['started-inv'] }))
       .rejects.toThrow('DEFERRED_TODO_DISPATCH_ALREADY_STARTED')

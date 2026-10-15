@@ -161,6 +161,33 @@ describe('switchSessionExecutor', () => {
     expect(revoked).toEqual([[caller.id, 'session_switch']])
   })
 
+  it('resolves a unique short session reference to the canonical session ID', async () => {
+    const { db, manager } = setup()
+    const caller = createSession(db, { name: 'short-ref-caller', metadata: { source: 'feishu', feishuChatId: 'chat-short' } })
+    const target = createSession(db, { name: 'short-ref-target', metadata: { source: 'feishu', feishuChatId: 'chat-short' } })
+    const shortRef = target.id.replace(/-/g, '').slice(0, 8)
+    const result = await switchSessionExecutor.execute({ session_id: shortRef }, makeCtx(db, manager, caller.id,
+      { source: 'feishu', messageId: 'm-short', confirmPolicy: 'always', chatId: 'chat-short' }))
+    expect(result.success).toBe(true)
+    expect(requestRendererSessionSwitch).toHaveBeenCalledWith(expect.anything(), target.id)
+    expect((result.data as { sessionId: string }).sessionId).toBe(target.id)
+  })
+
+  it('rejects an ambiguous short session reference', async () => {
+    const { db, manager } = setup()
+    const caller = createSession(db, { name: 'ambiguous-caller', metadata: { source: 'feishu', feishuChatId: 'chat-ambiguous' } })
+    const first = createSession(db, { name: 'ambiguous-target-one', metadata: { source: 'feishu', feishuChatId: 'chat-ambiguous' } })
+    const second = createSession(db, { name: 'ambiguous-target-two', metadata: { source: 'feishu', feishuChatId: 'chat-ambiguous' } })
+    const baseQueries = createSqliteSessionStorage(db).queries
+    const collidingSecond = { ...second, id: `${first.id.slice(0, 8)}${second.id.slice(8)}` }
+    const queries = { ...baseQueries, listSessions: () => [first, collidingSecond] }
+    const ctx = makeCtx(db, manager, caller.id, { source: 'feishu', messageId: 'm-ambiguous', confirmPolicy: 'always', chatId: 'chat-ambiguous' })
+    ctx.sessionQueries = queries
+    const result = await switchSessionExecutor.execute({ session_id: first.id.replace(/-/g, '').slice(0, 8) }, ctx)
+    expect(result.success).toBe(false)
+    expect(requestRendererSessionSwitch).not.toHaveBeenCalled()
+  })
+
   it('确认后目标会话的远程身份变化时在 dispatch 前拒绝切换', async () => {
     const { db, manager } = setup()
     const caller = createSession(db, { name: 'caller' })

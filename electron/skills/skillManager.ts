@@ -107,9 +107,14 @@ export function createSkillManager(ctx: SkillManagerContext) {
         }
       }
 
+      // P2：!enabled 时从候选中前置剔除 llm-wiki——否则它仍进路由 catalog，被 LLM/手动点名时
+      // 先占住 maxConcurrent 名额、再在尾部过滤被丢弃，挤出本该入选的 skill。
+      const routeSkillsInput = wikiConfig && !wikiConfig.enabled
+        ? skills.filter((s) => s.meta.name !== WIKI_VOCABULARY_PREFIX)
+        : skills
       const result = await routeSkills({
         userInput: args.userInput,
-        skills,
+        skills: routeSkillsInput,
         config,
         sessionState: args.sessionState,
         sessionMetadata: args.sessionMetadata,
@@ -118,7 +123,8 @@ export function createSkillManager(ctx: SkillManagerContext) {
         baseUrl: args.baseUrl,
         getApiKey: args.getApiKey,
         sessionId: args.sessionId,
-        signal: args.signal
+        signal: args.signal,
+        wikiConfig
       })
 
       if (wikiConfig && !wikiConfig.enabled) {

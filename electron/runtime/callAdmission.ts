@@ -55,7 +55,7 @@ export interface AdmissionState {
   queued: number
 }
 
-export function emptyAdmissionState(now: number): AdmissionState {
+export function emptyAdmissionState(_now: number): AdmissionState {
   return {
     activeInteractive: 0,
     activeBackground: 0,

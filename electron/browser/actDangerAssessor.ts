@@ -1,8 +1,7 @@
 import type { BrowserConfig } from '../../src/shared/domainTypes'
 import type {
   ActDangerAssessment,
-  ActDangerConsequence,
-  ActFillPreview
+  ActDangerConsequence
 } from './browserActionPolicy'
 import { keywordToConsequence, matchHighRiskKeyword } from './browserActionPolicy'
 import type { StagehandService } from './stagehandService'
