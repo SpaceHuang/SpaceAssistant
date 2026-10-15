@@ -9,7 +9,7 @@ import path from 'path'
 import { existsSync } from 'node:fs'
 import os from 'os'
 import type { Dirent } from 'fs'
-import { resolveSafePath, resolveSafePathReal, resolveSafeWorkDirPath, resolveSafeWriteTarget } from '../pathSecurity'
+import { resolveSafeWriteTarget } from '../pathSecurity'
 import {
   captureFileIdentity,
   identityFromStat,
@@ -57,7 +57,6 @@ import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
 import { browserExecutor } from './browserExecutor'
-import { runShellExecutor } from './runShellExecutor'
 import { TypedToolRegistry } from './plannedToolRegistry'
 import { runShellRegisteredTool } from './runShellRegisteredTool'
 import { createRunScriptRegisteredTool } from './runScriptRegisteredTool'
@@ -631,10 +630,6 @@ export const listDirectoryExecutor: ToolExecutor = {
       dispose()
     }
   }
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function countOccurrences(hay: string, needle: string): number {
