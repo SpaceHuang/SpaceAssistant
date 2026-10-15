@@ -21,6 +21,7 @@
 | 云 main 恢复（历史一次性项目，整组归档） | `2026-10-01-cloud-main-feature-recovery-plan.md`、`-audit.md`、`-source-inventory.tsv`、`2026-10-01-cloud-main-516-path-audit.tsv`、`2026-10-01-cloud-main-recovery-source-commit-ledger.tsv` |
 | 本地/云端 main 分叉接入 | `2026-10-01-main-divergence-hosted-runtime-integration-plan.md`、`-execution-record.md` |
 | 其他 | `automated-test-suite-cleanup-audit.md`、`dependency-upgrade-plan-2026-08.md`、`legacy-workspace-layout-cleanup-plan.md`（Done 2026-07-24） |
+| 死代码清理（**merge main 补入**，3 件） | `main-dead-code-cleanup-audit-and-plan-2026-10-14.md`（审计+方案）、`main-dead-code-cleanup-execution-log.md`（执行记录）、`main-dead-code-unused-diagnostic-baseline-2026-10-15.md`（未用诊断基线） |
 
 ## 关联过程产物（`docs/superpowers/`，按 §2.5 不搬迁）
 

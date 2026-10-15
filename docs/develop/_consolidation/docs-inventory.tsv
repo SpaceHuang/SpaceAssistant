@@ -319,3 +319,12 @@ docs/requirement/web-browser-tools-requirement.md	tools-mcp	B	口径进需求基
 docs/develop/streaming-ui-performance-analysis.md	desktop-ui	B	核验更正：已实现（2026-05-24 feat: Plan 模式 MVP、流式 UI 性能优化与 LLM 多服务配置）
 docs/requirement/remove-plan-mode-requirement.md	desktop-ui	A	Plan 模式移除的现行口径
 docs/requirement/tool-call-card-batch-collapse-design.md	desktop-ui	B	自述已实施
+docs/develop/2026-10-13-storage-settings-refresh-storm-and-compact-busy-fix-plan.md	storage-session	B	merge main 后补录（新增）：自述 v3 已实施 + 评审阻断项已修复
+docs/develop/agents-md-workdir-instructions-behavior.md	agent-sdk	A	merge main 后补录（新增）：行为说明，现役
+docs/develop/agents-md-workdir-instructions-runtime-baseline.md	agent-sdk	A	merge main 后补录（新增）：运行时基线（阶段 0 代码核查）
+docs/develop/agents-md-workdir-instructions-development-plan.md	agent-sdk	B	merge main 后补录（新增）：自述「阶段 0–8 全部收尾」
+docs/develop/main-dead-code-cleanup-audit-and-plan-2026-10-14.md	platform-eng	B	merge main 后补录（新增）：审计+方案（过程产物）
+docs/develop/main-dead-code-cleanup-execution-log.md	platform-eng	B	merge main 后补录（新增）：执行记录
+docs/develop/main-dead-code-unused-diagnostic-baseline-2026-10-15.md	platform-eng	B	merge main 后补录（新增）：未用诊断基线
+docs/requirement/agents-md-workdir-instructions-requirement.md	agent-sdk	B	merge main 后补录（新增）：需求已通过评审，口径进需求基线
+docs/requirement/im-security-agent-agency-principles-requirement.md	im-remote	A	merge main 后补录（新增）：讨论共识（产品原则），未拆方案

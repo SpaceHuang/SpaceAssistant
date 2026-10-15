@@ -132,6 +132,8 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 | --- | --- |
 | [agent-sdk-architecture-development-plan.md](./agent-sdk-architecture-development-plan.md) | 方案（实施中，724 KB；架构落地主线） |
 | [agent-sdk-architecture-migration-baseline.md](./agent-sdk-architecture-migration-baseline.md) | 迁移前形态冻结基线 |
+| [agents-md-workdir-instructions-behavior.md](./agents-md-workdir-instructions-behavior.md) | 行为说明（**merge main 补入**）—— 工作目录 `AGENTS.md` 的加载与生效行为 |
+| [agents-md-workdir-instructions-runtime-baseline.md](./agents-md-workdir-instructions-runtime-baseline.md) | 运行时基线（**merge main 补入**）—— 入口与逻辑请求边界（阶段 0 代码核查，不改运行时行为） |
 | [runtime/](./runtime/)（11 篇） | **草稿（未实施）**：核验独有符号 0 命中 |
 | 本 README + 10 篇接口说明 | SDK 接口现状 |
 

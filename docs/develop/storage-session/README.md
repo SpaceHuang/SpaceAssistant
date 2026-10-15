@@ -35,6 +35,7 @@
 | 消息事实链路 | 5 | `message-fact-production-pipeline-refactor-plan.md`（实施中已接入主路径）、本地验收报告、owner 审计 |
 | 专题（session-ced59b41 / session-d961cc51） | 6 | 问题清单整改、验收证据、workdir 边界分层技术计划与实施矩阵 |
 | 其他 | 5 | `spill-reference-index-and-backfill-plan.md`、`storage-settings-profile-latency-*`、评审件 |
+| 存储占用页修复（**merge main 补入**） | 1 | `2026-10-13-storage-settings-refresh-storm-and-compact-busy-fix-plan.md`（v3 已实施 + 评审阻断项 B1–B3 已修复；P5-T10 与 V5–V7 为真机验收项） |
 
 ## 相关需求口径
 
