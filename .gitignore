@@ -45,7 +45,6 @@ test-browser.js
 ref/
 docs/analysis/
 docs/references/
-docs/review/
 docs/project/
 
 # 已废弃的后台 Mission 执行层设计文档（本地保留备查，不纳入版本控制）
