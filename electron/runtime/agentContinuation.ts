@@ -290,6 +290,7 @@ export function readCancelledAgentContinuationBySource(conn: DatabaseSync, sessi
   const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
     JOIN turns t ON t.turn_id=ac.source_turn_id
     WHERE t.session_id=? AND ac.source_turn_id=? AND ac.status='cancelled'
+      AND NOT EXISTS (SELECT 1 FROM agent_history_events e WHERE e.invocation_id=ac.target_invocation_id AND e.kind='tool-call-started')
     ORDER BY ac.updated_at DESC LIMIT 1`).get(sessionId, sourceTurnId) as ContinuationRow | undefined
   if (!row) return undefined
   const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
