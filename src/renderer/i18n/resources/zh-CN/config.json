@@ -630,7 +630,6 @@
     "unknownError": "未知错误"
   },
   "wiki": {
-    "enableLabel": "启用 LLM Wiki",
     "rootPathLabel": "共享库目录名（应用数据目录内）",
     "rootPathPlaceholder": "llm-wiki",
     "hideFromTreeLabel": "从文件列表隐藏 Wiki 目录",

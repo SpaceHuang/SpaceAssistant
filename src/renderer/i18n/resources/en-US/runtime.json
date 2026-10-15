@@ -113,7 +113,6 @@
   "wiki": {
     "importedRaw": "Imported raw: {{name}}. Ingest started.",
     "ingestStarted": "Ingest started: {{name}}",
-    "enableFirst": "Enable Wiki in Settings first",
     "initializeFirst": "Wiki is not initialized. Initialize it in Settings or from a Wiki segment first."
   },
   "workDir": {
