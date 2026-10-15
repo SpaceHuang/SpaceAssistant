@@ -1,5 +1,17 @@
 # SpaceAssistant Agent 架构说明与代码量
 
+> **⚠️ 时效声明（2026-10-15 评估）**：本文件是**历史快照**，不是现行架构依据。代码量统计与模块归属基于较早时点，已明显偏旧：
+>
+> | 代码域 | 本文记录 | 2026-10-15 实测 | 偏差 |
+> | --- | ---: | ---: | --- |
+> | `electron/` | 489 个文件 | **1,359** | 2.8× |
+> | `src/` | 544 个 | **793** | 1.5× |
+> | `electron/tools/` | 「工具执行器注册表 5 个文件」 | **122** | 24× |
+> | `electron/shell/` | 「Shell 工具 33 个」 | **102** | 3× |
+>
+> - **架构叙事仍可参考**（模块划分与职责大部分成立），但**代码量 / 文件数一律以实测为准**（命令见 §7 的更正块）。
+> - 本文提到的 `electron/claudeToolLoopStreamParams.ts` **已不存在**；原配套架构图（`spaceassistant-agent-architecture.html` / `.json` / `visual-check` 截图与清单）已于 2026-10-15 删除。
+
 本文档按原架构图中的模块逐项说明职责，并标注对应的源码位置与代码量。（原架构图 `spaceassistant-agent-architecture.html` / `.json` 与 `visual-check` 截图、清单已于 2026-10-15 删除，仅保留本说明。）
 
 ## 统计口径
@@ -79,7 +91,19 @@ Anthropic 是外部 LLM 服务，本地不包含其服务端代码，图中该�
 
 ### 7. 工具执行器注册表
 
-把模型返回的 `tool_use` 名称映射到具体执行器。`builtinExecutors.ts` 既是注册表，也内联实现了文件与脚本执行器。
+> **⚠️ 归属已变（2026-10-15）**：旧架构描述「`builtinExecutors.ts` 既是注册表，也内联实现了文件与脚本执行器」——**该描述今天不成立**。现状：`electron/tools/` 已拆出**独立执行器族**（`runShellExecutor` / `runScriptRegisteredTool` / `readRegisteredTools` / `writeFileRegisteredTools` / `workdirExecutors` / `wechatExecutors` / `remoteSessionExecutors` / `browserExecutor` 等），`builtinExecutors.ts` 退化为注册/装配之一。
+> 本节与 §8（文件工具）、§9（Shell 工具）中「执行器在 `builtinExecutors.ts` 内」的表述**同此更正，一律以 `electron/tools/` 为准**。
+>
+> **现行规模实测命令**（同口径：`git ls-files` + `wc -l`）：
+>
+> ```text
+> git ls-files 'electron/*.ts' 'electron/*.tsx' 'electron/*.css' 'electron/*.js' | wc -l   # 主进程
+> git ls-files 'src/*.ts' 'src/*.tsx' 'src/*.css' | wc -l                                    # 渲染与共享
+> git ls-files 'electron/tools/*.ts' | wc -l                                                  # 工具执行器族
+> git ls-files 'electron/shell/*.ts' | wc -l                                                  # shell 链路
+> ```
+
+把模型返回的 `tool_use` 名称映射到具体执行器。
 
 - `electron/tools/builtinExecutors.ts`：1,036 / 1,000
 - `electron/tools/types.ts`：140 / 129
