@@ -54,9 +54,13 @@
 | 阶段 | 状态 | 交付 / 验证 |
 |---|---|---|
 | 0. 边界与依赖清单 | 完成 | 本文件；本阶段批准删除数为 0，候选先保留/待映射；外部验收交付形态待用户选择 |
-| 1. 未使用绑定分批清理 | 未开始 | 基线已精确映射至 97 个文件；按小批次、先保行为的调用方回归，再清理 |
+| 1. 未使用绑定分批清理 | 进行中 | 基线已精确映射至 97 个文件；首批完成，剩余诊断继续按小批次审查 |
 | 2. SDK permit / browser recovery | 未开始 | 需先完成合同矩阵及定向测试 |
 | 3. 其余候选 | 未开始 | 按行为域逐批映射和验收 |
 | 4. 防回流检查与最终验收 | 未开始 | 强制 `npm run build` 干净构建；本地与外部运行结果分开记录 |
 
-阶段 1 暂不开始：已向用户确认外部验收的交付形态，答复尚未收到。当前先保持产品源码不变。
+### 阶段 1 批次记录
+
+| 批次 | 改动与行为证据 | 验证 |
+|---|---|---|
+| 1. WeChat clarification router | 清除 `weChatCommandRouter.ts` 中未使用的 `CURRENT_SCHEMA_VERSION` import 和 `assistantMessageId` 读取；将未使用的 `parked` 绑定改为原调用表达式，保留 `parkImInboxMessageForClarification` 持久化调用、参数求值和后续创建/发送 attempt 的先后顺序。现有 `ambiguous Track 消息会原子暂存并发送带句柄的选项` 测试已在修改前验证澄清记录、parked 消息与发送 attempt 状态。 | 修改前、后均 `npm exec -- vitest run electron/wechat/weChatCommandRouter.test.ts`：36/36 通过；全项目 noUnused 诊断由 277 降至 274（TS6133 234→231），该文件剩余诊断 0。 |

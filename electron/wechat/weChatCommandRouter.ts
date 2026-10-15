@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
-import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { ToolsConfig } from '../../src/shared/domainTypes'
 import type { WeChatConfig, WeChatInboundMessage } from '../../src/shared/wechatTypes'
 import { mergeWeChatConfig } from '../../src/shared/wechatTypes'
@@ -815,7 +814,7 @@ export class WeChatCommandRouter {
             const handle = generateClarificationHandle()
             const expiresAt = Date.now() + 5 * 60_000
             const queueScope = buildImQueueScope('wechat', sessionId)
-            const parked = parkImInboxMessageForClarification(this.deps.db, {
+            parkImInboxMessageForClarification(this.deps.db, {
               sessionId, channel: 'wechat', queueScope, channelMessageId: msg.messageId, content, contextToken: msg.contextToken,
               clarificationId, identityKey: msg.userId, ownerId: authSnapshot.owner, authorizationEpoch: epoch,
               handle, candidates, expiresAt
@@ -1066,8 +1065,6 @@ export class WeChatCommandRouter {
         if (!bindRemoteSessionExecutionId(sessionId, requestId, prepared.turnId)) {
           throw new Error('REMOTE_SESSION_LEASE_LOST')
         }
-        const assistantMessageId = prepared.assistantMessage.id
-
         let trackModelInputView: import('../../src/shared/remoteTrack').TrackModelInputViewRef | undefined
         if (trackContext) {
           if (!prepared.userMessage) throw new Error('WECHAT_TRACK_ACCEPTED_USER_MESSAGE_MISSING')
