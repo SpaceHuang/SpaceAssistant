@@ -17,22 +17,6 @@ import { createDeferredExecutionResultStore } from '../confirmation/deferredExec
 import { createDeferredImBundleRuntime } from './deferredImBundleRuntime'
 import { getDbConnection } from '../database/sqliteStore'
 import { restoreImPolicySnapshot } from '../confirmation/imPolicyStore'
-import { createRemoteAsyncApprovalGate, CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION, isRemoteAsyncApprovalGateEnabled, type RemoteAsyncApprovalGateEvidence } from '../confirmation/remoteAsyncApprovalGate'
-
-function rollbackDrillEvidence(): RemoteAsyncApprovalGateEvidence {
-  return {
-    behaviorVersion: CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION,
-    safetyReview: { status: 'approved', reviewId: 'rollback-drill-review' },
-    controls: Object.fromEntries(Array.from({ length: 7 }, (_, index) => {
-      const id = `P1-${index + 1}` as const
-      return [id, { passed: true, evidenceId: `rollback-drill-${id}` }]
-    })) as RemoteAsyncApprovalGateEvidence['controls'],
-    integrationRuns: Object.fromEntries(['6.5.16', '6.5.17', '6.5.18', '6.5.19'].map((id) => [id,
-      { passed: true, realStores: true, realDispatcher: true, onlyFinalExecutorFake: true, runId: `rollback-drill-${id}` }])) as RemoteAsyncApprovalGateEvidence['integrationRuns'],
-    decisions: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`OQ-${index + 1}`, 'resolved'])) as RemoteAsyncApprovalGateEvidence['decisions'],
-    groupChatPolicy: 'reject'
-  }
-}
 
 function makeRealStores(db: ReturnType<typeof openDatabase>, sessionId: string) {
   const todoStore = createDeferredTodoStore(db)
@@ -151,17 +135,8 @@ describe('real deferred approval close recovery', () => {
       rollbackToUser: async () => undefined
     } })
 
-    const gate = createRemoteAsyncApprovalGate({ db: temp.db, getEvidence: rollbackDrillEvidence,
-      currentBehaviorVersion: CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION,
-      closeAll: async () => {
-        const result = await close.close(scope)
-        return result.status === 'closed' ? { status: 'closed' as const } : { status: 'reconciliation_required' as const }
-      } })
-    await expect(gate.setEnabled(true)).resolves.toMatchObject({ state: 'enabled', enabled: true,
-      behaviorVersion: CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION })
-    const closed = await gate.setEnabled(false)
-    expect(closed).toMatchObject({ state: 'disabled', enabled: false, closeRequired: false, behaviorVersion: '' })
-    expect(gate.isEnabled()).toBe(false)
+    const closed = await close.close(scope)
+    expect(closed.status).toBe('closed')
     expect(closureSnapshot).toMatchObject({ todoStatus: 'invalidated', resumeStatus: 'invalidated', permitRevoked: true })
     expect(blockNewDispatch).toBe(true)
     expect(await stores.resume.dispatchPending(sessionId)).toEqual([])
@@ -182,21 +157,17 @@ describe('real deferred approval close recovery', () => {
     expect(resultStore.beginDispatch({ todoId: 'drill-unknown-todo', invocationId: 'drill-unknown-invocation', dispatchKey: 'drill-unknown-dispatch' }))
       .toMatchObject({ ok: false, reason: 'outcome_unknown' })
 
-    conn.prepare("INSERT INTO policy_behavior_snapshots(domain,policy_behavior_version,revision,snapshot_json,updated_at) VALUES('im','im-standard-v2',2,'{\"selectedPackage\":\"strict\",\"enabled\":false}',2)").run()
-    conn.prepare("INSERT INTO policy_behavior_snapshot_history(history_id,domain,policy_behavior_version,snapshot_json,archived_at) VALUES('im:1','im','im-standard-v2','{\"selectedPackage\":\"standard\",\"enabled\":true}',1)").run()
+    conn.prepare("INSERT INTO policy_behavior_snapshots(domain,policy_behavior_version,revision,snapshot_json,updated_at) VALUES('im','im-standard-v2',2,'{\"selectedPackage\":\"strict\"}',2)").run()
+    conn.prepare("INSERT INTO policy_behavior_snapshot_history(history_id,domain,policy_behavior_version,snapshot_json,archived_at) VALUES('im:1','im','im-standard-v2','{\"selectedPackage\":\"standard\"}',1)").run()
     restoreImPolicySnapshot(conn, { historyId: 'im:1', supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'],
       updatedAt: 3, eventId: 'drill-policy-restore' })
     expect(JSON.parse((conn.prepare("SELECT snapshot_json FROM policy_behavior_snapshots WHERE domain='im'").get() as { snapshot_json: string }).snapshot_json))
-      .toMatchObject({ selectedPackage: 'standard', enabled: true })
+      .toMatchObject({ selectedPackage: 'standard' })
     expect(conn.prepare("SELECT state FROM deferred_todos WHERE todo_id=?").get(stores.todo.todoId)).toEqual({ state: 'invalidated' })
-    expect(isRemoteAsyncApprovalGateEnabled(temp.db, CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION)).toBe(false)
     expect(close.getClosure(scope)?.state).toBe('closed')
 
     temp.db.close()
     const reopened = openDatabase(temp.dbPath)
-    expect(isRemoteAsyncApprovalGateEnabled(reopened, CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION)).toBe(false)
-    expect(getDbConnection(reopened).prepare('SELECT state,close_required,behavior_version FROM remote_async_approval_gate_state WHERE singleton=1').get())
-      .toEqual({ state: 'disabled', close_required: 0, behavior_version: '' })
     const recovered = createDeferredApprovalCloseCoordinator({ db: reopened, port: {
       blockNewDispatch: async () => undefined, persistClosureFacts: async () => undefined,
       invalidatePendingTodos: async () => ({ invalidatedTodoIds: [], dispatchingTodoIds: [] }),

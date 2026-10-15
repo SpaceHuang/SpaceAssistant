@@ -17,26 +17,11 @@ export interface LegacyImPolicyMigrationInput {
   wechat?: LegacyChannelConfig
   feishu?: LegacyChannelConfig
   currentSnapshot?: Record<string, unknown>
-  remoteAsyncApprovalEnabled?: boolean
 }
 
 export type LegacyImPolicyMigrationPlan =
   | { status: 'already-migrated'; domain: 'im'; policyBehaviorVersion: string; snapshot: Record<string, unknown> }
   | { status: 'migrate'; domain: 'im'; policyBehaviorVersion: typeof FROZEN_LEGACY_POLICY_BEHAVIOR_VERSION; snapshot: Record<string, unknown> }
-
-export function createNewImPolicySelection(input: { selectedPackage: 'standard'; gatePassed: boolean }): {
-  domain: 'im'
-  policyBehaviorVersion: 'im-standard-v2'
-  selectedPackage: 'standard'
-  enabled: boolean
-} {
-  return {
-    domain: 'im',
-    policyBehaviorVersion: 'im-standard-v2',
-    selectedPackage: input.selectedPackage,
-    enabled: input.gatePassed === true
-  }
-}
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
@@ -46,7 +31,7 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value)
 }
 
-/** Plan a one-time migration from identical channel settings; the async gate is deliberately ignored. */
+/** Plan a one-time migration from identical channel settings. */
 export function planLegacyImPolicyMigration(input: LegacyImPolicyMigrationInput): LegacyImPolicyMigrationPlan {
   if (input.currentSnapshot) {
     const version = input.currentSnapshot.policyBehaviorVersion

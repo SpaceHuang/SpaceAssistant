@@ -14,7 +14,7 @@ import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { executeWeChatSend, WeChatOutboundExecutionUncertainError } from './weChatToolExecutor'
-import { classifyImOutbound } from '../../src/shared/confirmation/outboundClassification'
+import { assertImOutboundAllowed, classifyImOutbound } from '../../src/shared/confirmation/outboundClassification'
 
 function makeRuntime() {
   return {
@@ -93,6 +93,40 @@ describe('WeChat outbound prepared registrations', () => {
     expect(result).toMatchObject({ success: false, error: 'ACTIVE_OUTBOUND_REQUIRES_SEPARATE_AUTHORIZATION' })
   })
 
+  it.each(['wechat_send', 'wechat_reply'] as const)(
+    'does not send a host-classified sensitive body through confirmed %s', async (toolName) => {
+      const body = 'api_key=sk-00000000000000000000000000000000'
+      const runtime = {
+        ...makeRuntime(),
+        remoteContext: { ...makeRuntime().remoteContext, authOwner: 'wechat-user-approved', currentUserMessageId: 'current-message',
+          taskBinding: { workflowId: 'im:request-sensitive', taskId: 'turn:request-sensitive', stepId: 'request', planRevision: 1, revision: 1 } }
+      }
+      const platformSend = vi.fn(async () => undefined)
+      const execute = vi.fn(async (input: Record<string, unknown>, context: { outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) => {
+        const facts = context.outboundDeliveryFacts!
+        expect(facts.contentAssessment?.classification).toBe('sensitive')
+        assertImOutboundAllowed(facts, { channel: 'wechat', body: String(input.text), sessionId: runtime.sessionId,
+          recipient: toolName === 'wechat_send' ? String(input.userId) : runtime.remoteContext.userId })
+        await platformSend()
+        return { success: true }
+      })
+      const [send, reply] = createWeChatOutboundRegisteredTools({
+        send: { name: 'wechat_send', execute } as never,
+        reply: { name: 'wechat_reply', execute } as never
+      })
+      const tool = toolName === 'wechat_send' ? send! : reply!
+      const input = toolName === 'wechat_send' ? { userId: 'third-party', text: body } : { text: body }
+
+      await expect(executeRegisteredTool(tool, input, {
+        requestId: `confirmed-sensitive-${toolName}`, toolUseId: `confirmed-sensitive-${toolName}-call`,
+        signal: new AbortController().signal, executionContext: runtime as never,
+        userConfirmationReceipt: 'confirmation:user-approved', userConfirmationAnswerer: 'user'
+      }, { confirm: async () => true, dispatch: async (_handle, _context, dispatch) => dispatch(new AbortController().signal) }))
+        .rejects.toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+      expect(platformSend).not.toHaveBeenCalled()
+    }
+  )
+
   it('binds reply purpose, origin session and recipient from authenticated host context, never from model input', async () => {
     const runtime = makeRuntime()
     const reply = vi.fn(async () => ({ success: true }))
@@ -112,7 +146,7 @@ describe('WeChat outbound prepared registrations', () => {
     expect(context.outboundDeliveryFacts).toMatchObject({
       purpose: 'task-reply', channel: 'wechat', originSessionId: 'session-approved',
       trustedRecipient: 'wechat-user-approved', modelRecipient: 'attacker-recipient',
-      content: 'hello', contentAssessment: { source: 'host', content: 'hello', classification: 'unknown' }
+      content: 'hello', contentAssessment: { source: 'host', content: 'hello', classification: 'ordinary' }
     })
     expect(classifyImOutbound(context.outboundDeliveryFacts as never)).toMatchObject({ kind: 'active-outbound', reason: 'untrusted-recipient' })
   })

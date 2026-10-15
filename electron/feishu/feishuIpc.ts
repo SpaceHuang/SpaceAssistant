@@ -30,7 +30,6 @@ import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
-import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { scheduleStartupWakeRecovery } from '../remote/startupWakeRecovery'
 import { createDeferredImBundleRuntime } from '../remote/deferredImBundleRuntime'
@@ -145,14 +144,14 @@ export function createFeishuBundle(deps: {
   const deferredProducer = createImDeferredApprovalProducer({ db: deps.db, channel: 'feishu', todoStore: deferredTodos,
     capacity: deferredTodoCapacity, intentStore: deferredIntentStore, envelopeStore: createDeferredEnvelopeStore(deps.db),
     notificationDelivery: deferredNotificationDelivery,
-    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled,
+    isEnabled: () => readCfg().remoteEnabled,
     onFallback: (reason) => logFeishuCliEvent('error', 'feishu.async_approval.defer_failed', { reason }),
     getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('feishu'),
     resolveTaskDigest: (context) => resolveImTaskDigest(deps.sessionStorage, context)
   })
   const deferredApprovalRuntime = createDeferredImBundleRuntime({
     db: deps.db, channel: 'feishu', todoStore: deferredTodos, notificationDelivery: deferredNotificationDelivery,
-    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled,
+    isEnabled: () => readCfg().remoteEnabled,
     getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('feishu'),
     maxParallel: deps.getMaxParallel(),
     isOwnerAuthorized: (todo) => {
@@ -294,7 +293,7 @@ export function createFeishuBundle(deps: {
     getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
     getShellConfig: () => readShellConfigFromDb(deps.db),
     turnRuntime: deps.turnRuntime,
-    isRemoteAsyncApprovalEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db),
+    isRemoteAsyncApprovalEnabled: () => readCfg().remoteEnabled,
     retryDeferredApprovalNotifications: ({ identityKey, ownerId }) => deferredNotificationDelivery.retryForAuthenticatedInbound({
       channel: 'feishu', identityKey, ownerId, authorizationEpoch: remoteAuthorizationRegistry.getAuthorizationEpoch('feishu')
     }),

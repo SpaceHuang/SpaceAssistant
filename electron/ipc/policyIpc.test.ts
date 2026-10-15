@@ -24,7 +24,7 @@ describe('policy domain read IPC contract', () => {
     const feishu = await read({}, { lane: 'feishu' })
     expect(desktop).toMatchObject({ domain: 'desktop', revision: 3 })
     expect(wechat).toMatchObject({ domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 7 })
-    expect(wechat.snapshot.enabled).toBe(false)
+    expect(wechat.snapshot).not.toHaveProperty('enabled')
     expect(feishu).toEqual(wechat)
     db.close()
   })

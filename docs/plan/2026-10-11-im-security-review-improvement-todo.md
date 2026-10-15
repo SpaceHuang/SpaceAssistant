@@ -8,7 +8,7 @@
 > 8.2.7 历史进度（2026-10-12，已由 2026-10-13 的完整固定任务观测替代）：当时公开检索因 MCP 授权事实未知而每次要求确认，六类任务及自动完成对比尚未齐备。当前验收结果见 8.2.7 正文：固定分母 11，桌面和 IM 均 11/11。
 > 8.2.7 续进度（2026-10-12，最终结果已在下方按 2026-10-13 当前验收条件更新）：六类任务、MCP 账户授权、普通回复目标绑定等证据均保留；当时 IM 10/11、桌面 11/11 的差距，已由低影响协作编辑的审核路径修复并重测，当前两边均为 11/11。历史段落不作为当前状态。
 > 历史验证补充（2026-10-12）：profile 的 public-source/account-use grant 变更已纳入 MCP execution binding；该记录中的 R3 结论已由 2026-10-13 验收口径替代。
-> 范围：把需求和开发方案拆成可顺序执行、可单项验收的本机开发、测试、文档对齐和启用门禁任务。本计划不代表本计划内运行代码已修改、测试已通过或自动审核已启用。
+> 范围：把需求和开发方案拆成可顺序执行、可单项验收的本机开发、测试、文档对齐和启用验收任务。本计划中的历史门禁记录不代表当前仍有运行时启用开关；当前状态见 11.2.10 与 12.5。
 > 当前续做状态（2026-10-13）：R3 使用 IM 绝对验收门槛，固定分母 11/11、6/6 任务完成；桌面结果只旁列。第 9 阶段仅用 fake IM 测试现有渠道共用契约；MCP 范围只覆盖用户已配置工具的策略与授权，不接入新工具、新 MCP server 或新增生产 IM 渠道。OQ-1～OQ-8 已在异步审批安全需求 §17 明确决定。当前尚未收口的是 11.2.1 的真实微信 deferred 审批通知引用/短码证据；2026-10-13 Strict 文件写入实测已结束，但第二次写入由普通同步确认（`im-write-ask`）放行，没有产生 deferred todo/通知/ingress receipt，因此不改变该专项状态，详见 11.2.1。11.2.4 全量 `npm test -- --configLoader native` 已通过（1,030 files passed、1 skipped；9,719 tests passed、111 skipped）；同步微信引用往返已通过 0.1.9。11.2.9 的账号、监控和当班安排改列为发布后开始灰度前的运营准备，不阻塞开发与功能测试。
 > 代码基线：`main` `708270a9`。该基线已含远程确认渠道标记/桌面 UI 过滤、微信确认消息 ID 精度修复及 IM Track 意图/恢复基础设施；同步引用消息 ID 往返已由 0.1.9 的真实微信会话验收；异步 deferred 审批通知引用/短码往返单独见 11.2.1，仍待验证。主进程仍有 `wechat:confirm-response` 桌面代答路径，assembler 仍需新增可信入口冻结及冲突拒绝；策略 package 仍按渠道 lane 区分，尚未统一 IM 策略或接通 IM 标准档审核 Agent。
 
@@ -23,7 +23,7 @@
 - 若任务无法完成，保留 `- [~]` 并记录首个错误、相关调用栈、预期/实际结果和下一步；不得绕过失败进入后续依赖任务。
 - 发现任务仍包含多个无法独立验收的行为时，先修改本计划拆分并校正编号，再开展该任务。
 - 先记录 `git status --short`。只修改正在执行任务列明的目标文件，不覆盖既有工作区改动。
-- 本地测试使用仓库测试框架、临时数据库/文件及 fake adapter/provider；不得用真实用户数据或生产 IM 账号。现有门禁未通过前，不启用自动审核或普通回复例外。
+- 本地测试使用仓库测试框架、临时数据库/文件及 fake adapter/provider；真实 IM 证据仅记录用户已完成的测试结果。技术验收完成后，现有微信/飞书远程功能设置即控制相应 IM 路径。
 - 每个行为变化先补相应测试，再实现；完成对应阶段时运行本计划列明的聚焦验证。全量测试、构建和启用验证只在明确列出的门禁任务中执行。
 
 ## 完成定义
@@ -32,7 +32,7 @@
 - R1–R16 均有可追溯的测试/审计证据；R10 普通回复与外发边界、R11 旧策略版本迁移、R12 补证后真实链路重裁决、R13 跨入口来源传递、R14 IM/桌面审批隔离、R15 标准档免打扰边界、R16 严格档 Track 绑定确认均不得只用单元测试或 renderer 过滤替代真实链路证据。
 - 统一策略迁移、统一 IPC 与设置、真实 IM 审核/待办/派发路径、受控回复、审计和回退均满足对应任务验收条件。
 - 阶段门禁中的 `npm test`、`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`、`npm run build` 均有记录；失败项保留首个错误及基线对照，不得宣称通过。
-- 既有异步审批门禁 P1-1～P1-7、既有集成验收、群聊拒绝和关闭恢复均已复核；新证据绑定当前代码与策略版本。所有门禁未通过时保持自动路径关闭。
+- 既有异步审批安全检查 P1-1～P1-7、集成验收、群聊拒绝和关闭恢复均已复核；策略快照、来源及授权围栏继续在每次执行时生效。技术验收后的发布启用门禁已从运行代码移除。
 
 ## 0. 基线、范围与验收映射
 
@@ -546,18 +546,18 @@
 - [x] **11.2.7** `npm run build` 在获批的沙箱外执行中通过：tray icons、i18n 类型生成、renderer Vite build、Electron 边界检查及 TypeScript 构建均完成；Vite 仅输出 dynamic import 和 chunk size 警告。
 - [x] **11.2.8** 汇总证据：R13/R14 引用 2.1.9、4.1.13；R15/R16 引用 3.3.8–3.3.9、4.1.14、5.2.11–5.3.16；IM 固定 denominator=11 的真实 Hosted 任务样本为 11/11 调用自动完成、6/6 任务完成；公开检索/报时无人确认，危险用例未授权派发=0。桌面结果只旁列，不作通过门槛。最终全量回归 1,030 files/9,719 tests 通过，详见 11.2.4；i18n 检查、构建和 Electron/shared/renderer typecheck 通过。普通文本微信受控回复 RED→GREEN；`weChatRemoteAgent.test.ts` 51/51、出站/回复相关回归 5 files/58 tests 通过。真实微信同步引用确认已由既有会话验证；真实 deferred 通知短码专项现由 11.2.1 的 `04` 往返证据闭环，dispatcher 执行成功。P5 灰度运营资料仅在启动灰度前准备。
 - [x] **11.2.9** 重新定界：WeChat/Feishu 灰度账号清单、运营指标基线、告警阈值和当班负责人属于发布后的灰度运营就绪条件（开发方案 P5），只要求在实际接入灰度流量前完成；它们不属于代码构建、隔离功能测试或技术安全验收门禁。当前没有启动灰度，因此未收集这些运营值是预期状态，不是当前功能测试阻断。开始灰度前仍须补齐并记录这些资料。
-- [x] **11.2.10** 启用评审结论：生产 gate 保持 disabled；本次不执行生产启用。11.2.1 的真实微信 deferred approval 通知引用短码、ingress、待办恢复和工具派发证据已通过，隔离开发测试路径完成技术功能验证，不依赖灰度账号、告警或当班安排。灰度运营准备（11.2.9）只在技术验收通过且实际开始灰度前要求。当前生产运行状态明确为“未启用”。
-- [x] **11.2.11** 未启动灰度，所以没有灰度运营数据；不得伪造人工率、审核超时、待办率或值守记录。当前运行状态“未启用”，未授权派发测试计数为 0。
-- [x] **11.2.12** 为完成 11.2.1 的隔离功能验证，新增未打包开发环境的异步审批测试开关（policy IPC→preload/shared API→安全设置页），只在当前 Electron 进程有效，真实生产 release gate 的 enabled/behavior version 不变；打包应用拒绝切换。WeChat/Feishu runtime、真实 todo producer、通知/ingress/resume/dispatcher 使用同一链路；待办 policy fence 带进程随机 run ID，进程结束或新测试运行后旧待办及未送达通知都拒绝恢复/重发。RED/GREEN：todoStore 接受当前 run marker、拒绝过期 marker；resume coordinator 在进程结束后 invalidates 旧待办；通知发送失败后进入新测试运行，RED 曾重建通知并因短码唯一约束失败，GREEN 将旧通知置为 invalidated 且不再调用发送器；producer→可信通知→短码回复→fenced dispatcher 在 release gate 与 dev test mode 两种路径均完成。验证：Electron 8 files/71 tests、renderer `ToolsSecuritySettingsTab.test.tsx` 23/23、Electron/renderer tsc、`i18n:check`、`git diff --check`、`npm run build` 通过。2026-10-14 已在未打包开发实例实际开启该开关并完成一次真实 WeChat deferred 短码往返（通知 `04` → 引用回复 → ingress/resume completed → 同一 todo consumed → executor succeeded）；生产 gate 数据仍为 disabled。进程退出后测试开关关闭，旧 run ID todo 不恢复。
+- [x] **11.2.10** 启用评审结论：真实微信 deferred approval 通知引用短码、ingress、待办恢复和工具派发证据已通过。按用户明确要求，IM 自动审核/异步审批现直接随微信或飞书远程功能设置工作；移除运行时 release gate、远程 gate 状态表及设置页“未启用”提示。schema v98 会删除旧 gate 状态表。保留逐次策略、来源、账户授权、权限撤销及待办失效检查。灰度运营准备（11.2.9）仅在实际开始灰度前要求。
+- [x] **11.2.11** 未启动灰度，所以没有灰度运营数据；不伪造人工率、审核超时、待办率或值守记录。没有灰度不影响已启用代码路径；未授权派发测试计数仍为 0。
+- [x] **11.2.12** 历史隔离功能验证：当时使用的未打包开发测试开关已从 policy IPC、preload、共享 API 和安全设置页清理。WeChat/Feishu runtime、todo producer、通知/ingress/resume/dispatcher 已共用同一执行路径；旧待办由进程 run ID 围栏拒绝恢复/重发。2026-10-14 真实 WeChat deferred 短码往返（通知 `04` → 引用回复 → ingress/resume completed → 同一 todo consumed → executor succeeded）作为技术验收证据保留。当前代码没有 release gate 与开发测试切换开关。
 
 ## 12. 最终交付记录
 
-- [x] **12.1** 最终交付状态已按计划更新：全量回归 1,030 files/9,719 tests、typecheck、i18n、构建见 11.2.4–11.2.7。异步审批隔离功能验证已由 11.2.1 完成真实微信 deferred 通知引用短码往返及工具派发；当前生产 gate 仍关闭。OQ-1～OQ-8 已在需求 §17 决定；11.2.9 灰度运营准备只在实际启动灰度前完成，不阻塞当前功能验收。
+- [x] **12.1** 最终交付状态已按计划更新：历史全量回归 1,030 files/9,719 tests、typecheck、i18n、构建见 11.2.4–11.2.7；异步审批真实微信 deferred 通知引用短码往返及工具派发见 11.2.1。当前启用路径直接由现有 IM 远程功能设置控制，不再经过 release gate；OQ-1～OQ-8 已在需求 §17 决定。灰度运营准备只在实际启动灰度前完成。
 - [x] **12.2** R1–R16 与固定任务集摘要：当前计划前序章节给出逐项实现证据；IM 固定 denominator=11，11/11 自动执行且 6/6 任务完成；桌面 11/11 仅旁列。危险用例未授权派发=0。真人批准/等待的固定任务样本为 0 次/0ms；灰度期间人工、审核超时、待办、失败/拒绝等运营指标没有数据。跨入口来源、禁止桌面代答、原渠道审批、标准档免打扰及 strict Track 绑定由 2.1.9、4.1.13–4.1.14、5.3.16 所列测试支撑；此处不替代真实外部 IM 平台实测。
-- [x] **12.3** 同步文档包括本计划所据 requirement/development plan、安全策略单入口、IM async approval、私聊安全、WeChat outbound confirm removal 等需求/方案文件。代码主要变更覆盖 shared policy、Electron store/IPC/runtime、WeChat/Feishu assembler/router/executor、renderer settings/i18n/tests。数据库 schema v97；IM behavior `im-standard-v2`；gate behavior `im-standard-v2:im-security-review-2026-10-13-v1`。迁移缺少旧 gate behavior version 时 fail closed；回退必须先通过持久关闭与撤销演练，不可恢复旧 todo 或自动重开。
+- [x] **12.3** 同步文档包括本计划所据 requirement/development plan、安全策略单入口、IM async approval、私聊安全、WeChat outbound confirm removal 等需求/方案文件。代码主要变更覆盖 shared policy、Electron store/IPC/runtime、WeChat/Feishu assembler/router/executor、renderer settings/i18n/tests。数据库 schema v98；IM behavior `im-standard-v2`；旧 gate 状态表由迁移删除。运行中仍逐次校验策略与授权；旧 todo 不会因移除发布 gate 而自动恢复。
 - [x] **12.4** 当前版本实际验证：`npm test -- --configLoader native` 退出码 0，1,030 files passed、1 skipped，9,719 tests passed、111 skipped、0 failed（649.32 秒）；provider build、Electron/renderer typecheck、`git diff --check`、`i18n:check`、`npm run build` 通过。
-- [x] **12.5** 当前运行状态：“生产 gate 未启用”。OQ-1～OQ-8 已由需求 §17 决定；本地 WeChat/Feishu IPC/router 链路 13 files/279 tests、异步审批开发测试链路 71 tests 均通过。2026-10-14 未打包开发实例实际完成真实微信 deferred 短码通知 `04` 的引用回复：通知可信消息 ID 匹配、ingress receipt 入库、resume request=`completed`、同一 todo=`consumed`、执行结果=`delivered/completed` 且 executor exit code 0。旧 pending todo 受进程 run ID 围栏保护，不会在新运行恢复。SQLite 生产 gate 状态仍为 `disabled`、`close_required=0`、behavior version 为空；没有启用生产自动审核。全量回归及 build/typecheck/i18n 证据见 11.2.4–11.2.7。灰度账号、运营指标/告警和值班安排属于 P5，仅在未来实际开始灰度前准备；当前未灰度。
+- [x] **12.5** 当前代码状态：IM 自动审核和异步审批已接入现有微信/飞书远程功能开关；运行时 release gate、开发测试开关及误导性的“异步人工审批通知尚未启用”提示均已移除。schema v98 迁移删除旧 gate 表。2026-10-14 真实微信 deferred 短码通知 `04` 的引用回复闭环证据仍有效：通知可信消息 ID 匹配、ingress receipt 入库、resume request=`completed`、同一 todo=`consumed`、执行结果 `delivered/completed` 且 executor exit code 0。旧 todo 受进程 run ID 围栏保护。历史全量回归、build/typecheck/i18n 证据见 11.2.4–11.2.7；本次代码调整的聚焦验证记录随当前修改补充。灰度账号、运营指标/告警和值班安排属于 P5，仅在未来实际开始灰度前准备。
 
 ## 13. 最终交付后的策略切换入口补齐
 
-- [x] **13.1** 跟进真实会话 `02d613d4-4c5a-4891-9e96-669db3f99196` 后确认：当前数据库仍固定在 `im-v1.6`，虽然新版行为解析器已存在，却没有从设置页切换行为版本的入口。设置页现对旧版本展示差异并要求明确确认；IPC 校验全部稳定差异 ID 后调用事务化 `switchToCurrentImStandard`，提交 revision、authorization epoch、todo/授权失效与安全审计。切换确定使用 standard 档，新版套餐由执行 assembler 从统一 IM 快照读取，防止旧 `policy_packages` 值覆盖。设置页同时显示 gate 实际状态及门禁未开说明。验证：IPC + assembler 2 files/76 tests，设置页 20/20，renderer/Electron TypeScript、`i18n:check` 与 `git diff --check` 通过。生产 gate 保持未启用；11.2.1 的 deferred approval 引用短码真实路径现已通过隔离开发测试完成验证，灰度运营条件已另列为 P5，仅在实际开始灰度前完成。
+- [x] **13.1** 跟进真实会话 `02d613d4-4c5a-4891-9e96-669db3f99196` 后确认：当前数据库仍固定在 `im-v1.6`，虽然新版行为解析器已存在，却没有从设置页切换行为版本的入口。设置页现对旧版本展示差异并要求明确确认；IPC 校验全部稳定差异 ID 后调用事务化 `switchToCurrentImStandard`，提交 revision、authorization epoch、todo/授权失效与安全审计。切换确定使用 standard 档，新版套餐由执行 assembler 从统一 IM 快照读取，防止旧 `policy_packages` 值覆盖。验证：IPC + assembler 2 files/76 tests，设置页 20/20，renderer/Electron TypeScript、`i18n:check` 与 `git diff --check` 通过。发布 gate 与对应设置提示现已整体删除；异步审批仍按当前策略和远程连接状态工作，灰度运营条件仅在实际开始灰度前准备。

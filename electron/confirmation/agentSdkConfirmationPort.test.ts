@@ -113,7 +113,7 @@ describe('createAgentSdkConfirmationPort', () => {
     const invokeApproval = vi.fn(async () => ({ ok: true as const, verdict: { kind: 'undetermined' as const, reason: { summary: '缺少影响范围证据' } } }))
     const channel = resolveConfirmChannel({
       lane: 'wechat', requestId: 'deferred-contract-undetermined', sessionId: 'session-contract', toolName: 'write_file',
-      remoteAsyncApprovalEnabled: true, answererPolicy: { kind: 'agent' },
+      answererPolicy: { kind: 'agent' },
       agentChannelFactory: (deps) => new AgentChannel({ ...deps, policy: deps.policy, invokeApproval }),
       imChannel: { send: vi.fn() } as never,
       buildImPending: () => ({}) as never

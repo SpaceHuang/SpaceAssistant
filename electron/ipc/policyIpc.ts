@@ -7,7 +7,6 @@ import { commitImPolicySnapshot, readImPolicySnapshot, switchToCurrentImStandard
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { isPolicyPackage, validateRuleOverride } from '../../src/shared/policy/policyPackages'
 import { IM_STANDARD_BEHAVIOR_DIFF_IDS } from '../../src/shared/policy/imPolicyBehavior'
-import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
 import type { PolicyAction } from '../../src/shared/confirmation/types'
 import { LEGACY_IM_POLICY_MIGRATION_VERSION } from '../../src/shared/policy/legacyPolicyMigration'
 import '../capabilities/registerBuiltinCapabilities'
@@ -40,8 +39,7 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
     const policy = readPolicyBehaviorSnapshot(getDbConnection(db), domain, {
       supportedBehaviorVersions: SUPPORTED_BEHAVIOR_VERSIONS[domain]
     })
-    if (domain !== 'im') return policy
-    return { ...policy, snapshot: { ...policy.snapshot, enabled: isRemoteAsyncApprovalGateEnabled(db) } }
+    return policy
   })
   ipcMain.handle('policy:write', async (_event, payload: unknown) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('POLICY_WRITE_PAYLOAD_INVALID')

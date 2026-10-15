@@ -22,6 +22,7 @@ import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWr
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, reconcileConfirmationSubmission, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { recordRemoteTrackConfirmationState } from '../database/remoteTrackStore'
+import { sanitizeAgentText } from '../../src/shared/agentSafeText'
 
 export interface FeishuImChannelDeps {
   auditLogger?: FeishuAuditLogger
@@ -219,6 +220,14 @@ function notifyFeishuConfirmPrompt(deps: FeishuImChannelDeps, entry: ImPendingCo
   })
 }
 
+/** Redact host-known secrets and collapse user-home path prefixes in the display copy only. */
+function sanitizeFeishuConfirmDisplay(text: string): string {
+  return sanitizeAgentText(text).text
+    .replace(/\b((?:api[_-]?key|access[_-]?token|password|passwd|token|secret|cookie)\s*)[=:]\s*<secret:redacted>/gi, '$1[已隐藏]')
+    .replace(/(?<![A-Za-z0-9_./-])\/(?:Users|home)\/[^/\s\"'`;&|<>{}()[\]]+/g, '~')
+    .replace(/\b[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s\"'`;&|<>{}()[\]]+/gi, '~')
+}
+
 /** 飞书确认提示文案：进度前缀 + 工具/命令摘要 + Y/N/记N 尾部（10 分钟有效）。 */
 export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string {
   const progressPrefix = formatFeishuRemoteProgressPrefix(pending.sessionId)
@@ -230,15 +239,15 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
   if (pending.toolName === 'browser' && pending.toolInput) {
     const action = pending.toolInput.action
     if (action === 'navigate' && typeof pending.toolInput.url === 'string') {
-      return `${progressPrefix}⚠️ 需要在浏览器中打开网页：\n${pending.toolInput.url.slice(0, 500)}\n${footer}（10 分钟内有效）`
+      return sanitizeFeishuConfirmDisplay(`${progressPrefix}⚠️ 需要在浏览器中打开网页：\n${pending.toolInput.url.slice(0, 500)}\n${footer}（10 分钟内有效）`)
     }
     if (action === 'act' && typeof pending.toolInput.instruction === 'string') {
-      return `${progressPrefix}⚠️ 需要在浏览器中执行操作：\n${pending.toolInput.instruction.slice(0, 200)}\n${footer}（10 分钟内有效）`
+      return sanitizeFeishuConfirmDisplay(`${progressPrefix}⚠️ 需要在浏览器中执行操作：\n${pending.toolInput.instruction.slice(0, 200)}\n${footer}（10 分钟内有效）`)
     }
   }
   if (pending.mcp) {
     const details = formatMcpConfirmPromptDetails(pending.mcp, pending.toolInput)
-    return `${progressPrefix}⚠️ 需要确认以下 MCP 操作：\n${details}\n${footer}（10 分钟内有效）`
+    return sanitizeFeishuConfirmDisplay(`${progressPrefix}⚠️ 需要确认以下 MCP 操作：\n${details}\n${footer}（10 分钟内有效）`)
   }
   let cmd =
     pending.toolName === 'run_lark_cli' && pending.toolInput?.args
@@ -257,7 +266,7 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
       cmd = full.slice(0, 2000)
     }
   }
-  return `${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${String(cmd).slice(0, 2000)}\n${footer}（10 分钟内有效）`
+  return sanitizeFeishuConfirmDisplay(`${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${String(cmd).slice(0, 2000)}\n${footer}（10 分钟内有效）`)
 }
 
 /** Confirm replies are only accepted from the bound owner in a p2p chat. */

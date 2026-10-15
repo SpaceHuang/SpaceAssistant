@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 97
+export const DB_SCHEMA_VERSION = 98
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -143,14 +143,6 @@ CREATE TABLE IF NOT EXISTS deferred_approval_closures (
   state TEXT NOT NULL CHECK(state IN ('closing','reconciliation_required','closed')),
   updated_at INTEGER NOT NULL,
   PRIMARY KEY(channel,identity_key,owner_id,session_id)
-);
-
-CREATE TABLE IF NOT EXISTS remote_async_approval_gate_state (
-  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-  state TEXT NOT NULL CHECK(state IN ('disabled','enabled','closing')),
-  close_required INTEGER NOT NULL DEFAULT 0 CHECK(close_required IN (0,1)),
-  behavior_version TEXT NOT NULL DEFAULT '',
-  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS im_lifecycle_outbox (

@@ -31,7 +31,6 @@ import { executeToolSearch } from '../tools/toolSearchTool'
 import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { AgentChannel } from '../confirmation/agentChannel'
-import { createRemoteAsyncApprovalGate, CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION, type RemoteAsyncApprovalGateEvidence } from '../confirmation/remoteAsyncApprovalGate'
 
 function createImPolicyTestDb(name: string) {
   const db = createMemoryAppDb(name)
@@ -512,7 +511,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     db.close()
   })
 
-  it('carries the current versioned IM package from assembler into the real gate decision', async () => {
+  it('carries the current versioned IM package from assembler into the real gate decision without a release switch', async () => {
     const db = createImPolicyTestDb('zh-CN')
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-v2-agent-workdir-'))
     const conn = getDbConnection(db)
@@ -531,20 +530,6 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     await expect(evaluateToolCallGate(gateArgs)).resolves.toMatchObject({ decision: {
       type: 'require-confirm', ruleId: 'browser-navigate-ask-remote', answerer: 'agent', disposition: 'auto-eligible'
     } })
-    const ids = ['P1-1', 'P1-2', 'P1-3', 'P1-4', 'P1-5', 'P1-6', 'P1-7'] as const
-    const integrationIds = ['6.5.16', '6.5.17', '6.5.18', '6.5.19'] as const
-    const oqIds = ['OQ-1', 'OQ-2', 'OQ-3', 'OQ-4', 'OQ-5', 'OQ-6', 'OQ-7', 'OQ-8'] as const
-    const evidence: RemoteAsyncApprovalGateEvidence = {
-      behaviorVersion: CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION,
-      safetyReview: { status: 'approved', reviewId: 'assembler-agent-test-review' },
-      controls: Object.fromEntries(ids.map((id) => [id, { passed: true, evidenceId: `test-${id}` }])) as RemoteAsyncApprovalGateEvidence['controls'],
-      integrationRuns: Object.fromEntries(integrationIds.map((id) => [id, { passed: true, realStores: true, realDispatcher: true,
-        onlyFinalExecutorFake: true, runId: `test-${id}` }])) as RemoteAsyncApprovalGateEvidence['integrationRuns'],
-      decisions: Object.fromEntries(oqIds.map((id) => [id, 'resolved'])) as RemoteAsyncApprovalGateEvidence['decisions'], groupChatPolicy: 'reject'
-    }
-    const releaseGate = createRemoteAsyncApprovalGate({ db, getEvidence: () => evidence, closeAll: async () => ({ status: 'closed' }) })
-    await releaseGate.setEnabled(true)
-    expect(releaseGate.getState().enabled).toBe(true)
     const invokeApproval = vi.fn(async () => ({ ok: true as const, verdict: { kind: 'approve' as const, reason: { summary: 'approved' } } }))
     const agentChannelFactory = vi.fn((deps) => new AgentChannel({ ...deps, invokeApproval }))
     const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never,
@@ -580,6 +565,28 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     await fs.rm(workDir, { recursive: true, force: true })
   })
 
+  it('preserves a persisted user ask override from assembler through the real IM gate', async () => {
+    const db = createImPolicyTestDb('im-standard-v2-user-ask-override')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-user-ask-override-'))
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'im-time-query-review': 'ask' } },
+      updatedAt: 1, eventId: 'im-standard-v2-user-ask-override' })
+    const { agentSdk } = assembleInvocation({ requestId: 'im-standard-v2-user-ask-override', sessionId: 'im-user-ask-session', lane: 'wechat',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'wechat', messageId: 'inbound-user-ask', confirmPolicy: 'always' } as never })
+    const binding = { requestId: 'im-standard-v2-user-ask-override', turnId: 'im-user-ask-turn',
+      invocationId: 'im-standard-v2-user-ask-override', toolCallId: 'time-query-tool', capabilityId: 'toolkit.call',
+      inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const gateArgs = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+      toolName: 'toolkit.call', input: { id: 'env.time', params: {} } })
+    const gate = await evaluateToolCallGate(gateArgs)
+    expect(gateArgs.effectiveRules.find((rule) => rule.id === 'im-time-query-review')?.action).toBe('ask')
+    expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-time-query-review', answerer: 'user', disposition: 'human-required' })
+    db.close()
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
   it('invalidates an IM Agent candidate when the write target changes before the Hosted recheck', async () => {
     const db = createMemoryAppDb('im-write-candidate-facts-change')
     const session = createSession(db, { name: 'im-write-candidate-facts-change' })
@@ -587,7 +594,6 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const target = path.join(workDir, 'new.md')
     commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
       updatedAt: 1, eventId: 'im-write-candidate-facts-change' })
-    getDbConnection(db).prepare("UPDATE remote_async_approval_gate_state SET state='enabled',close_required=0,behavior_version=? WHERE singleton=1").run(CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION)
     const { agentSdk } = assembleInvocation({ requestId: 'im-write-candidate-facts-change', sessionId: session.id, lane: 'feishu',
       remoteContext: { source: 'feishu', messageId: 'candidate-origin', chatId: 'candidate-chat', userId: 'owner' } as never,
       model: 'test-model', providerRouteId: 'route-im-write-candidate', agentSdkHistory: new MemoryHistory(), locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
@@ -1270,7 +1276,6 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
   ] as const)('does not route IM Agent %s into a desktop confirmation or approval todo', async (_name, agentOutcome) => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: `im-agent-${_name}` })
-    getDbConnection(db).prepare("UPDATE remote_async_approval_gate_state SET state='enabled',close_required=0,behavior_version=? WHERE singleton=1").run(CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION)
     const imRequest = vi.fn(async () => ({ kind: 'approved' as const, cause: 'user-approved' as const }))
     const onConfirmRequest = vi.fn()
     const agentRequest = vi.fn(async () => agentOutcome as never)
@@ -1488,13 +1493,12 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     }
   })
 
-  it('routes policy-selected IM auto-review to the Agent while async human approval stays disabled', async () => {
+  it('routes policy-selected IM auto-review to the Agent without a release gate row', async () => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: 'im-test-auto-review' })
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-test-auto-review-'))
     commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'im-test-auto-review-policy' })
-    const remoteApprovalState = getDbConnection(db).prepare("SELECT state FROM remote_async_approval_gate_state WHERE singleton=1").get()
-    expect(remoteApprovalState).toEqual({ state: 'disabled' })
+    expect(getDbConnection(db).prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_async_approval_gate_state'").get()).toBeUndefined()
     const { agentSdk } = assembleInvocation({ requestId: 'im-test-auto-review', sessionId: session.id, lane: 'feishu',
       remoteContext: { source: 'feishu', messageId: 'origin', chatId: 'chat', userId: 'owner', imChannel: { request: vi.fn(), cancelByRequestId: vi.fn() } } as never,
       model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
@@ -1532,7 +1536,6 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: 'im-standard-navigation-answerer' })
     commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'im-standard-navigation' })
-    getDbConnection(db).prepare("UPDATE remote_async_approval_gate_state SET state='enabled',close_required=0,behavior_version=? WHERE singleton=1").run(CURRENT_REMOTE_ASYNC_APPROVAL_BEHAVIOR_VERSION)
     const { agentSdk } = assembleInvocation({ requestId: 'im-standard-navigation', sessionId: session.id, lane: 'feishu',
       remoteContext: { source: 'feishu', messageId: 'origin', chatId: 'chat', userId: 'owner', imChannel: { request: vi.fn(), cancelByRequestId: vi.fn() } } as never,
       model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,

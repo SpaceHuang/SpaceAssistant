@@ -23,7 +23,7 @@ describe('IM async approval outcome integration', () => {
     const invokeApproval = vi.fn(async () => approval)
     const resolved = resolveConfirmChannel({
       lane, requestId: `integration-${lane}`, sessionId: `session-${lane}`, toolName: 'write_file',
-      remoteAsyncApprovalEnabled: true, agentChannelFactory: (deps) => new AgentChannel({ ...deps, invokeApproval })
+      agentChannelFactory: (deps) => new AgentChannel({ ...deps, invokeApproval })
     })
     const channelOutcome = await resolved.request(request)
     expect(channelOutcome).toMatchObject({ kind: 'approved', cause: 'agent-approved' })
@@ -60,23 +60,6 @@ describe('IM async approval outcome integration', () => {
     db.close()
   })
 
-  it.each(['wechat', 'feishu'] as const)('%s remains on the existing user answerer when rollout is off', async (lane) => {
-    const db = createMemoryAppDb()
-    const imChannel = createImChannelForTest({ lane, timeoutMs: 1000, sendPrompt: vi.fn() })
-    const agentFactory = vi.fn(() => new AgentChannel({ lane, requestId: 'unused', sessionId: 'unused', toolName: 'write_file',
-      policy: { kind: 'agent' }, invokeApproval: async () => ({ ok: true, verdict: { kind: 'approve', reason: { summary: 'unexpected' } } }) }))
-    const resolved = resolveConfirmChannel({ lane, requestId: `closed-${lane}`, sessionId: `closed-session-${lane}`, toolName: 'write_file',
-      remoteAsyncApprovalEnabled: false, imChannel, buildImPending: () => ({ requestId: `closed-${lane}`, sessionId: `closed-session-${lane}`, messageId: 'origin', matchKey: 'identity' }),
-      agentChannelFactory: agentFactory })
-    const pending = resolved.request(request)
-    await vi.waitFor(() => expect(imChannel.countPending()).toBe(1))
-    resolved.cancel(`closed-${lane}`)
-    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
-    expect(agentFactory).not.toHaveBeenCalled()
-    expect(db).toBeDefined()
-    db.close()
-  })
-
   it.each([
     ['deny', { ok: true, verdict: { kind: 'deny', reason: { summary: 'denied' } } }],
     ['undetermined', { ok: true, verdict: { kind: 'undetermined', reason: { summary: 'uncertain' } } }],
@@ -85,7 +68,7 @@ describe('IM async approval outcome integration', () => {
   ] as const)('%s from the real channel path follows the final gate disposition', async (_label, approval, lane = 'wechat') => {
     const db = createMemoryAppDb()
     const resolved = resolveConfirmChannel({ lane, requestId: `failed-${_label}`, sessionId: `failed-session-${_label}`, toolName: 'write_file',
-      remoteAsyncApprovalEnabled: true, answererPolicy: { kind: 'agent' }, agentChannelFactory: (deps) => new AgentChannel({ ...deps, invokeApproval: async () => approval }) })
+      answererPolicy: { kind: 'agent' }, agentChannelFactory: (deps) => new AgentChannel({ ...deps, invokeApproval: async () => approval }) })
     const channelOutcome = await resolved.request(request)
     expect(channelOutcome.kind).not.toBe('approved')
     if (_label === 'deny') expect(channelOutcome).toMatchObject({ kind: 'rejected', answererKind: 'agent', cause: 'agent-deny' })

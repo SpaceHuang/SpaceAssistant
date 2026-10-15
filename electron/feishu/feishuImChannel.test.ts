@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FeishuImChannel, buildFeishuConfirmPromptText, commitFeishuAction } from './feishuImChannel'
+import { assertImOutboundAllowed, assessImOutboundContent, createHostImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import type { ConfirmRequest } from '../../src/shared/confirmation/types'
 import { createAgentRuntime } from '../runtime/agentRuntime'
 import { setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
@@ -158,6 +159,30 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     })
     expect(text).toContain('https://example.com/article')
     expect(text).toContain('回复 Y')
+  })
+
+  it('safely displays ordinary absolute paths and secrets in synchronous confirmation prompts', () => {
+    const shellInput = { command: 'cat /Users/example/Documents/report.txt && echo api_key=sk-00000000000000000000000000000000' }
+    const shellPrompt = buildFeishuConfirmPromptText({ id: 'path-confirm', sessionId: 's-path', toolName: 'run_shell',
+      toolInput: shellInput, messageId: 'm-path', channel: 'feishu', authOwner: owner, memoryTiers: [], createdAt: 0, expiresAt: 1_000 })
+    expect(shellPrompt).toContain('~/Documents/report.txt')
+    expect(shellPrompt).not.toContain('/Users/example')
+    expect(shellPrompt).not.toContain('sk-00000000000000000000000000000000')
+    expect(shellInput.command).toContain('/Users/example')
+    expect(assessImOutboundContent(shellPrompt)).toBe('ordinary')
+    const shellFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body: shellPrompt,
+      sessionId: 's-path', identityKey: owner, ownerId: owner, recipient: owner, chatType: 'p2p', destinationId: 'm-path' })
+    expect(() => assertImOutboundAllowed(shellFacts, { channel: 'feishu', body: shellPrompt, sessionId: 's-path', recipient: owner,
+      destinationId: 'm-path' })).not.toThrow()
+
+    const mcpPrompt = buildFeishuConfirmPromptText({ id: 'path-mcp-confirm', sessionId: 's-path', toolName: 'mcp_file_read',
+      toolInput: { path: '/Users/example/Documents/report.txt', token: 'sk-00000000000000000000000000000000' },
+      mcp: { serverName: 'Local Files', originalToolName: 'read', description: 'Read a user selected file.' }, messageId: 'm-path',
+      channel: 'feishu', authOwner: owner, memoryTiers: [], createdAt: 0, expiresAt: 1_000 })
+    expect(mcpPrompt).toContain('~/Documents/report.txt')
+    expect(mcpPrompt).not.toContain('/Users/example')
+    expect(mcpPrompt).not.toContain('sk-00000000000000000000000000000000')
+    expect(assessImOutboundContent(mcpPrompt)).toBe('ordinary')
   })
 
   it('MCP confirmation explains the tool and request instead of showing its internal mapped name', () => {

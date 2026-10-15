@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planLegacyImPolicyMigration, createNewImPolicySelection } from './legacyPolicyMigration'
+import { planLegacyImPolicyMigration } from './legacyPolicyMigration'
 
 const sameLegacyConfig = {
   remoteConfirmPolicy: 'remote_read_only',
@@ -17,9 +17,9 @@ describe('frozen legacy IM migration planning', () => {
     expect(plan.snapshot).toEqual(expect.objectContaining({ denyWrite: true, denyOutbound: true, browserActRequiresConfirm: true }))
   })
 
-  it('keeps the old manual behavior on restart and gate enable until explicit version change', () => {
-    const first = planLegacyImPolicyMigration({ wechat: sameLegacyConfig, feishu: sameLegacyConfig, remoteAsyncApprovalEnabled: false })
-    const restarted = planLegacyImPolicyMigration({ wechat: sameLegacyConfig, feishu: sameLegacyConfig, currentSnapshot: first.snapshot, remoteAsyncApprovalEnabled: true })
+  it('keeps the old manual behavior on restart until explicit version change', () => {
+    const first = planLegacyImPolicyMigration({ wechat: sameLegacyConfig, feishu: sameLegacyConfig })
+    const restarted = planLegacyImPolicyMigration({ wechat: sameLegacyConfig, feishu: sameLegacyConfig, currentSnapshot: first.snapshot })
     expect(restarted).toMatchObject({ status: 'already-migrated', policyBehaviorVersion: 'im-v1.6' })
     expect(restarted.snapshot).toEqual(first.snapshot)
   })
@@ -43,11 +43,5 @@ describe('frozen legacy IM migration planning', () => {
       feishu: {}
     })
     expect(malformed).toMatchObject({ status: 'migrate', snapshot: { denyWrite: true, denyOutbound: true, unresolvedDifferences: expect.any(Array) } })
-  })
-
-  it('allows a new user to select current standard while keeping the runtime gate closed', () => {
-    expect(createNewImPolicySelection({ selectedPackage: 'standard', gatePassed: false })).toMatchObject({
-      domain: 'im', policyBehaviorVersion: 'im-standard-v2', selectedPackage: 'standard', enabled: false
-    })
   })
 })

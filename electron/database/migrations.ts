@@ -1708,6 +1708,11 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 97
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  if (version === 97) runInTransaction(conn, () => {
+    if (hasTable(conn, 'remote_async_approval_gate_state')) conn.exec('DROP TABLE remote_async_approval_gate_state')
+    version = 98
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {

@@ -15,7 +15,7 @@ import { assembleInvocation } from '../testSupport/invocationAssembler'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
-import { resolvePolicyRules } from '../../src/shared/policy/policyPackages'
+import { resolveImPolicyRulesForVersion, resolvePolicyRules } from '../../src/shared/policy/policyPackages'
 import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { evaluateSecurityTaskSet, SECURITY_TASK_SET_VERSION, runSecurityShadowComparison, type SecurityTaskSetReport } from './securityTaskSet'
 import { SECURITY_TASKS } from './securityTaskSet'
@@ -57,7 +57,6 @@ describe('fixed task-set actual gate shadow integration', () => {
     if (lane === 'im-standard') {
       commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
         updatedAt: 1, eventId: `security-observed-create-${lane}-policy` })
-      getDbConnection(db).prepare("UPDATE remote_async_approval_gate_state SET state='enabled',close_required=0 WHERE singleton=1").run()
     }
 
     const requestId = `security-observed-create-${lane}-request`
@@ -579,7 +578,9 @@ describe('fixed task-set actual gate shadow integration', () => {
           // profile resolver can attest the public-only designation, but account
           // authorization remains unknown; query wording is never authorization.
           ...(mcpEntry ? { mcpEntry } : {}),
-          effectiveRules: resolvePolicyRules({ lane: im ? 'feishu' : 'desktop', packages: { desktop: 'standard', feishu: 'standard' }, rules: DEFAULT_POLICY_RULES }), lanePackage: 'standard',
+          effectiveRules: im
+            ? resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+            : resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'standard' }, rules: DEFAULT_POLICY_RULES }), lanePackage: 'standard',
           decisionCache: { lookup: () => null, record: () => undefined, clear: () => 0, clearAllSession: () => 0, expireDormant: () => 0 },
           shellPrecheck: { touchTrustedCommand: () => undefined }, audit: { record: (event) => audits.push(event) },
           ...(im ? { imPolicySnapshot: { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: {} } } : {}),

@@ -83,8 +83,8 @@ async function deliveryFacts(name: 'wechat_send' | 'wechat_reply', input: Record
     chatType: taskReplyBindingValid ? 'p2p' : 'unknown',
     ...(text !== undefined ? { content: text } : {}),
     ...(text !== undefined ? { contentAssessment: { source: 'host' as const, content: text,
-      classification: controlledTaskReply ? textAssessment : 'unknown' as const,
-      classifierVersion: controlledTaskReply ? 'host-im-outbound-v1' : 'host-outbound-unclassified-v1' } } : {}),
+      classification: textAssessment,
+      classifierVersion: 'host-im-outbound-v1' } } : {}),
     contentCompleteness: controlledTaskReply ? 'complete' : 'unknown',
     hasAttachment: requestedAttachment,
     ...attachment

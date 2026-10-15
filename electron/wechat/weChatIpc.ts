@@ -32,7 +32,6 @@ import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
-import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { scheduleStartupWakeRecovery } from '../remote/startupWakeRecovery'
 import { createDeferredImBundleRuntime } from '../remote/deferredImBundleRuntime'
@@ -123,14 +122,14 @@ export function createWeChatBundle(deps: {
   const deferredProducer = createImDeferredApprovalProducer({ db: deps.db, channel: 'wechat', todoStore: deferredTodos,
     capacity: deferredTodoCapacity, intentStore: deferredIntentStore, envelopeStore: createDeferredEnvelopeStore(deps.db),
     notificationDelivery: deferredNotificationDelivery,
-    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled && readCfg().loggedIn,
+    isEnabled: () => readCfg().remoteEnabled && readCfg().loggedIn,
     onFallback: (reason) => logWeChatCliEvent('error', 'wechat.async_approval.defer_failed', { reason }),
     getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('wechat'),
     resolveTaskDigest: (context) => resolveImTaskDigest(deps.sessionStorage, context)
   })
   const deferredApprovalRuntime = createDeferredImBundleRuntime({
     db: deps.db, channel: 'wechat', todoStore: deferredTodos, notificationDelivery: deferredNotificationDelivery,
-    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled && readCfg().loggedIn,
+    isEnabled: () => readCfg().remoteEnabled && readCfg().loggedIn,
     getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('wechat'),
     maxParallel: deps.getMaxParallel(),
     isOwnerAuthorized: (todo) => {
@@ -286,7 +285,7 @@ export function createWeChatBundle(deps: {
     getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
     getShellConfig: () => readShellConfigFromDb(deps.db),
     turnRuntime: deps.turnRuntime,
-    isRemoteAsyncApprovalEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db),
+    isRemoteAsyncApprovalEnabled: () => readCfg().remoteEnabled && readCfg().loggedIn,
     retryDeferredApprovalNotifications: ({ identityKey, ownerId }) => deferredNotificationDelivery.retryForAuthenticatedInbound({
       channel: 'wechat', identityKey, ownerId, authorizationEpoch: remoteAuthorizationRegistry.getAuthorizationEpoch('wechat')
     }),
