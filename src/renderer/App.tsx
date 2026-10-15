@@ -117,7 +117,6 @@ function AppShellInner() {
   const [wikiInitialized, setWikiInitialized] = useState<boolean | null>(null)
   const wikiPaneRef = useRef<WikiPaneHandle>(null)
   const { openFile } = useDetailPanel()
-  const wikiEnabled = Boolean(config?.wiki?.enabled)
   useEffect(() => { void measureStartupRequest('renderer.mcp-tool-catalog', refreshMcpToolCatalog) }, [])
 
   // 偏差 11:失效通知服务(通知驱动重取,真相只从 Storage 取)
@@ -169,7 +168,7 @@ function AppShellInner() {
 
   const handleSearchFileClick = (relPath: string) => {
     const wikiRoot = config?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath
-    const isWikiPath = wikiEnabled && isUnderWikiRoot(relPath, wikiRoot)
+    const isWikiPath = isUnderWikiRoot(relPath, wikiRoot)
     if (isWikiPath) {
       setSiderKey('wiki')
       requestFilePaneSelect({ relPath, preferWiki: true })
@@ -254,15 +253,13 @@ function AppShellInner() {
                 onClick={() => setSiderKey('sessions')}
                 label={t('activity.sessions')}
               />
-              {wikiEnabled ? (
-                <IconTab
-                  lineSvg={wikiLineSvg}
-                  fillSvg={wikiFillSvg}
-                  active={siderKey === 'wiki'}
-                  onClick={() => setSiderKey('wiki')}
-                  label={t('activity.wiki')}
-                />
-              ) : null}
+              <IconTab
+                lineSvg={wikiLineSvg}
+                fillSvg={wikiFillSvg}
+                active={siderKey === 'wiki'}
+                onClick={() => setSiderKey('wiki')}
+                label={t('activity.wiki')}
+              />
               <IconTab
                 lineSvg={searchLineSvg}
                 fillSvg={searchFillSvg}
@@ -291,7 +288,7 @@ function AppShellInner() {
                   {t('session.new')}
                 </Button>
               ) : null}
-              {siderKey === 'wiki' && wikiEnabled ? (
+              {siderKey === 'wiki' ? (
                 <WikiPaneToolbar
                   showOpen={wikiInitialized === true}
                   refreshDisabled={!wikiInitialized}
@@ -302,7 +299,7 @@ function AppShellInner() {
             </div>
             <div className="sider-content-body">
               {siderKey === 'sessions' && <SessionListPane />}
-              {siderKey === 'wiki' && wikiEnabled && (
+              {siderKey === 'wiki' && (
                 <WikiPane
                   ref={wikiPaneRef}
                   workDir={config?.workDir ?? ''}
