@@ -340,7 +340,7 @@ function aggregateToolDimensions(rows: readonly { toolAttributionJson: string | 
 
 /** Cross-session input attribution and turn tool dimensions, using the exact summary filters and composite ownership keys. */
 export function queryUsageAttribution(db: AppDatabase, args: UsageStatsRangeArgs): UsageAttributionSummary {
-  const { whereToken, whereTurn, paramsToken, paramsTurn } = buildFilterWhere(args.dimensions)
+  const { whereToken, paramsToken } = buildFilterWhere(args.dimensions)
   const conn = getDbConnection(db)
   const rows = conn.prepare(
     `SELECT day, session_id AS sessionId, turn_id AS turnId, step_id AS stepId,

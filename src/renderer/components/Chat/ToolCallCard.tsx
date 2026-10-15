@@ -43,7 +43,6 @@ import { ShellTerminalView } from './ShellTerminalView'
 import { ShellScrollbackView } from './ShellScrollbackView'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
 import { McpToolResultView } from './McpToolResultView'
-import { ConfirmCardDecision } from './ConfirmCardDecision'
 
 function isMcpRecord(record: ToolCallRecord): boolean {
   return Boolean(record.mcp) || record.toolName.startsWith('mcp_')
@@ -247,8 +246,6 @@ export const ToolCallCard = memo(function ToolCallCard({
   const [terminalFallbackPlain, setTerminalFallbackPlain] = useState(false)
   const scrollbackPatchedRef = useRef(false)
   const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMetadata)
-  const shellCommand =
-    record.toolName === 'run_shell' && typeof record.input.command === 'string' ? record.input.command : ''
   const scriptCode =
     record.toolName === 'run_script' && typeof record.input.code === 'string' ? record.input.code : ''
   const scriptTimeout =
