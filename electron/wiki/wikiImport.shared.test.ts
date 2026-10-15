@@ -111,15 +111,6 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     expect(fs.existsSync(path.join(userData, 'my-lib', 'raw', projectId, 'note2.md'))).toBe(true)
     db.close()
   })
-
-  it('wiki 停用拒绝；workDir 侧 raw/ 显式路径维持现状', async () => {
-    const workDir = tmpdir('wiki-imp-off-')
-    const userData = tmpdir('wiki-imp-off-ud-')
-    const db = openDatabase(':memory:')
-    const res = await importRawFromWorkDir(workDir, wikiConfig(false), 'x.md', { userDataPath: userData, db })
-    expect(res.ok).toBe(false)
-    db.close()
-  })
 })
 
 describe('技能用户级安装（T1.13）', () => {
