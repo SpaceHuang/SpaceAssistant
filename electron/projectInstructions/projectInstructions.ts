@@ -41,11 +41,6 @@ function result(input: Omit<AgentsMdLoadResult, 'sourcePath' | 'workDir'> & { wo
   return { ...input, sourcePath: AGENTS_MD_FILE_NAME }
 }
 
-function inside(root: string, target: string): boolean {
-  const relative = path.relative(root, target)
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
-}
-
 type FileStat = Awaited<ReturnType<Awaited<ReturnType<typeof fs.open>>['stat']>>
 
 function sameFile(left: FileStat, right: FileStat): boolean {
@@ -62,7 +57,6 @@ export async function loadAgentsMd(workDir: string, options: LoadAgentsMdOptions
   if (!workDir.trim()) return emptyResult('invalid-workdir')
 
   const maxBytes = Math.min(options.maxBytes ?? AGENTS_MD_MAX_BYTES, AGENTS_MD_MAX_BYTES)
-  const filePath = path.join(rootPath, AGENTS_MD_FILE_NAME)
   let authorizedRootRealPath: string | undefined
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -70,15 +64,15 @@ export async function loadAgentsMd(workDir: string, options: LoadAgentsMdOptions
       if (authorizedRootRealPath && resolvedRootPath !== authorizedRootRealPath) return emptyResult('unstable')
       authorizedRootRealPath ??= resolvedRootPath
       const rootRealPath = authorizedRootRealPath
-      let targetRealPath: string
-      try {
-        targetRealPath = await fs.realpath(filePath)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyResult('missing')
-        if ((error as NodeJS.ErrnoException).code === 'EACCES' || (error as NodeJS.ErrnoException).code === 'EPERM') return emptyResult('read-error')
-        return emptyResult('read-error')
-      }
-      if (!inside(rootRealPath, targetRealPath)) return emptyResult('outside-workdir')
+      // Pin the direct child path to the authorized directory identity. Using
+      // the caller's (possibly symlinked) workDir path here would re-resolve
+      // that alias on every subsequent filesystem operation.
+      const filePath = path.join(rootRealPath, AGENTS_MD_FILE_NAME)
+      // Node does not expose portable openat-style traversal for arbitrary
+      // in-directory links. Reject AGENTS.md symlinks rather than following a
+      // mutable parent component and attempting to validate it after the fact.
+      const linkStat = await fs.lstat(filePath)
+      if (linkStat.isSymbolicLink()) return emptyResult('not-file')
       const pathBeforeOpen = await fs.stat(filePath)
       if (!pathBeforeOpen.isFile()) return emptyResult('not-file')
       if (pathBeforeOpen.size > maxBytes) return emptyResult('too-large', pathBeforeOpen.size)
@@ -89,16 +83,9 @@ export async function loadAgentsMd(workDir: string, options: LoadAgentsMdOptions
       // it has no effect on ordinary files.
       let handle: Awaited<ReturnType<typeof fs.open>>
       try {
-        handle = await fs.open(targetRealPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
+        handle = await fs.open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
-          const currentRootPath = await fs.realpath(rootPath)
-          const currentTargetPath = await fs.realpath(filePath)
-          if (currentRootPath !== rootRealPath) return emptyResult('unstable')
-          if (!inside(currentRootPath, currentTargetPath)) return emptyResult('outside-workdir')
-          if (attempt === 0) continue
-          return emptyResult('unstable')
-        }
+        if ((error as NodeJS.ErrnoException).code === 'ELOOP') return emptyResult('not-file')
         throw error
       }
       let buffer: Buffer
@@ -116,9 +103,8 @@ export async function loadAgentsMd(workDir: string, options: LoadAgentsMdOptions
 
         const verifiedRootPath = await fs.realpath(rootPath)
         if (verifiedRootPath !== rootRealPath) return emptyResult('unstable')
-        const verifiedTargetPath = await fs.realpath(filePath)
-        if (!inside(verifiedRootPath, verifiedTargetPath)) return emptyResult('outside-workdir')
-        const verifiedPathStat = await fs.stat(verifiedTargetPath)
+        const verifiedPathStat = await fs.lstat(filePath)
+        if (verifiedPathStat.isSymbolicLink()) return emptyResult('not-file')
         if (!sameFile(before, verifiedPathStat)) {
           if (attempt === 0) continue
           return emptyResult('unstable')
@@ -134,9 +120,8 @@ export async function loadAgentsMd(workDir: string, options: LoadAgentsMdOptions
 
       const finalRootPath = await fs.realpath(rootPath)
       if (finalRootPath !== rootRealPath) return emptyResult('unstable')
-      const finalTargetPath = await fs.realpath(filePath)
-      if (!inside(finalRootPath, finalTargetPath)) return emptyResult('outside-workdir')
-      const afterPath = await fs.stat(finalTargetPath)
+      const afterPath = await fs.lstat(filePath)
+      if (afterPath.isSymbolicLink()) return emptyResult('not-file')
       const stableVersion = sameFile(before, after) && before.size === after.size &&
         before.mtimeMs === after.mtimeMs && afterPath.dev === after.dev && afterPath.ino === after.ino &&
         afterPath.size === after.size && afterPath.mtimeMs === after.mtimeMs && buffer.length === after.size

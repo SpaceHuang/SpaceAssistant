@@ -15,7 +15,7 @@ import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { reduceAssistantFact, type AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivityTimeline'
 import type { Message } from '../../src/shared/domainTypes'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -77,24 +77,15 @@ describe('createAgentSdkDesktopObserver', () => {
     }
   })
 
-  it('does not put a raced outside-workdir AGENTS.md into provider requests or History', async () => {
+  it('does not put a symlinked outside-workdir AGENTS.md into provider requests or History', async () => {
     const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-raced-workdir-'))
     const outsideDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-raced-outside-'))
     const filePath = path.join(workDir, 'AGENTS.md')
     const privateFile = path.join(outsideDir, 'private.txt')
     await writeFile(filePath, 'project rules', 'utf8')
     await writeFile(privateFile, 'PRIVATE_OUTSIDE_WORKDIR', 'utf8')
-    const realpath = fs.realpath.bind(fs)
-    let swapped = false
-    const realpathSpy = vi.spyOn(fs, 'realpath').mockImplementation(async (input: Parameters<typeof fs.realpath>[0], options?: Parameters<typeof fs.realpath>[1]) => {
-      const resolved = await realpath(input as string, options as never)
-      if (input === filePath && !swapped) {
-        swapped = true
-        await fs.unlink(filePath)
-        await fs.symlink(privateFile, filePath)
-      }
-      return resolved
-    })
+    await rm(filePath)
+    await symlink(privateFile, filePath)
     try {
       const route = { routeId: 'agents-race', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }
       const registry = new ModelProviderRegistry()
@@ -126,12 +117,10 @@ describe('createAgentSdkDesktopObserver', () => {
       })
 
       const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
-      expect(swapped).toBe(true)
       expect(JSON.stringify(providerMessages)).not.toContain('PRIVATE_OUTSIDE_WORKDIR')
       expect(JSON.stringify(requestEvents)).not.toContain('PRIVATE_OUTSIDE_WORKDIR')
-      expect(requestEvents[0]?.payload).toMatchObject({ requestMetadata: { agentsMdSnapshot: { status: 'outside-workdir' } } })
+      expect(requestEvents[0]?.payload).toMatchObject({ requestMetadata: { agentsMdSnapshot: { status: 'not-file' } } })
     } finally {
-      realpathSpy.mockRestore()
       await Promise.all([rm(workDir, { recursive: true, force: true }), rm(outsideDir, { recursive: true, force: true })])
     }
   })

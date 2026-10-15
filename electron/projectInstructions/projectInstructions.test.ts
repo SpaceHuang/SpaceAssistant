@@ -53,7 +53,7 @@ describe('loadAgentsMd', () => {
     await fs.rmdir(path.join(root, 'AGENTS.md'))
     await fs.symlink(path.join(outside, 'rule.md'), path.join(root, 'AGENTS.md'))
     await fs.writeFile(path.join(outside, 'rule.md'), 'outside')
-    await expect(loadAgentsMd(root)).resolves.toMatchObject({ status: 'outside-workdir', content: null })
+    await expect(loadAgentsMd(root)).resolves.toMatchObject({ status: 'not-file', content: null })
   })
 
   it('rejects a workDir-external symlink swapped in after realpath validation', async () => {
@@ -63,24 +63,9 @@ describe('loadAgentsMd', () => {
     const privateFile = path.join(outside, 'private.txt')
     await fs.writeFile(filePath, 'project rules')
     await fs.writeFile(privateFile, 'PRIVATE_OUTSIDE_WORKDIR')
-    const realpath = fs.realpath.bind(fs)
-    let swapped = false
-    const spy = vi.spyOn(fs, 'realpath').mockImplementation(async (input: Parameters<typeof fs.realpath>[0], options?: Parameters<typeof fs.realpath>[1]) => {
-      const resolved = await realpath(input as string, options as never)
-      if (input === filePath && !swapped) {
-        swapped = true
-        await fs.unlink(filePath)
-        await fs.symlink(privateFile, filePath)
-      }
-      return resolved
-    })
-    try {
-      const result = await loadAgentsMd(root)
-      expect(result.status).toBe('outside-workdir')
-      expect(result.content).toBeNull()
-    } finally {
-      spy.mockRestore()
-    }
+    await fs.unlink(filePath)
+    await fs.symlink(privateFile, filePath)
+    await expect(loadAgentsMd(root)).resolves.toMatchObject({ status: 'not-file', content: null })
   })
 
   it('does not read an external target swapped in after the file handle is opened', async () => {
@@ -97,7 +82,7 @@ describe('loadAgentsMd', () => {
         await fs.symlink(privateFile, filePath)
       }
     })
-    expect(result.status).toBe('outside-workdir')
+    expect(result.status).toBe('not-file')
     expect(result.content).toBeNull()
   })
 
@@ -120,15 +105,57 @@ describe('loadAgentsMd', () => {
     expect(result.content).toBeNull()
   })
 
-  it('allows an in-workdir symlink and keeps simultaneous directories isolated', async () => {
+  it('rejects an in-workdir symlink and keeps simultaneous directories isolated', async () => {
     const a = await makeRoot()
     const b = await makeRoot()
     await fs.writeFile(path.join(a, 'policy.md'), 'A rule')
     await fs.symlink('policy.md', path.join(a, 'AGENTS.md'))
     await fs.writeFile(path.join(b, 'AGENTS.md'), 'B rule')
     const [resultA, resultB] = await Promise.all([loadAgentsMd(a), loadAgentsMd(b)])
-    expect(resultA).toMatchObject({ status: 'loaded', content: 'A rule' })
+    expect(resultA).toMatchObject({ status: 'not-file', content: null })
     expect(resultB).toMatchObject({ status: 'loaded', content: 'B rule' })
+  })
+
+  it('rejects repeated parent-directory symlink swaps before any outside content is read', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-review-parent-'))
+    roots.push(dir)
+    const root = path.join(dir, 'project')
+    const parent = path.join(root, 'policies')
+    const parked = path.join(root, 'policies.saved')
+    const outside = path.join(dir, 'outside')
+    await fs.mkdir(parent, { recursive: true })
+    await fs.mkdir(outside)
+    await fs.writeFile(path.join(parent, 'rules.md'), 'project rules')
+    await fs.writeFile(path.join(outside, 'rules.md'), 'PRIVATE_OUTSIDE_WORKDIR')
+    const file = path.join(root, 'AGENTS.md')
+    await fs.symlink('policies/rules.md', file)
+
+    const realpath = fs.realpath.bind(fs)
+    let swapped = false
+    let swaps = 0
+    const spy = vi.spyOn(fs, 'realpath').mockImplementation(async (input: Parameters<typeof fs.realpath>[0], options?: Parameters<typeof fs.realpath>[1]) => {
+      if (input === file && swapped) {
+        await fs.unlink(parent)
+        await fs.rename(parked, parent)
+        swapped = false
+      }
+      const resolved = await realpath(input as string, options as never)
+      if (input === file) {
+        await fs.rename(parent, parked)
+        await fs.symlink(outside, parent)
+        swapped = true
+        swaps += 1
+      }
+      return resolved
+    })
+    try {
+      const result = await loadAgentsMd(root)
+      expect(swaps).toBe(0)
+      expect(result.content).toBeNull()
+      expect(result.status).not.toBe('loaded')
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('retries an atomic editor replacement after opening and reads only the complete new version', async () => {
