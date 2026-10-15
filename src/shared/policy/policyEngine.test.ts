@@ -326,15 +326,16 @@ describe('decide：IM effective action 覆盖契约', () => {
   it('routes ordinary browser actions and classified Feishu writes to Agent, while dangerous actions and message sends stay with the user', () => {
     const imRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
     const transform = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
+    const browserDeps = deps({ transform, config: { actRequiresConfirm: true, remoteActSkipConfirm: false } })
     const browserRead = decide(mkFacts('browser', 'execute', [
       { kind: 'browser-action', action: 'act', dangerous: false, sideEffect: 'read', completeness: 'complete' }
-    ], 'low'), context, imRules, deps({ transform }))
+    ], 'low'), context, imRules, browserDeps)
     const browserDanger = decide(mkFacts('browser', 'execute', [
       { kind: 'browser-action', action: 'act', dangerous: true, sideEffect: 'delete', completeness: 'complete' }
-    ], 'high'), context, imRules, deps({ transform }))
+    ], 'high'), context, imRules, browserDeps)
     const browserUnclassified = decide(mkFacts('browser', 'execute', [
       { kind: 'browser-action', action: 'act', dangerous: false, sideEffect: 'unknown', completeness: 'partial' }
-    ], 'medium'), context, imRules, deps({ transform }))
+    ], 'medium'), context, imRules, browserDeps)
     const larkDocWrite = decide(mkFacts('run_lark_cli', 'execute', [
       { kind: 'lark-subcommand', impact: 'low_write', category: 'doc_write', completeness: 'complete' }
     ], 'medium'), mkContext('feishu'), imRules, deps({ transform }))
@@ -367,6 +368,25 @@ describe('decide：IM effective action 覆盖契约', () => {
     ], 'high'), mkContext('feishu'), imRules, deps({ transform }))
     expect(larkUnknown).toMatchObject({ type: 'require-confirm', ruleId: 'lark-unknown-ask', answerer: 'user' })
     expect(larkHigh).toMatchObject({ type: 'require-confirm', ruleId: 'lark-high-impact-ask', answerer: 'user' })
+  })
+
+  it('preserves explicit browser confirmation bypass settings after IM rules become Agent-review candidates', () => {
+    const imRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const transform = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
+    const lowRiskAct = mkFacts('browser', 'execute', [
+      { kind: 'browser-action', action: 'act', dangerous: false, sideEffect: 'read', completeness: 'complete' }
+    ], 'low')
+    const remoteSkip = decide(lowRiskAct, mkContext('wechat'), imRules, deps({
+      transform,
+      config: { actRequiresConfirm: true, remoteActSkipConfirm: true }
+    }))
+    expect(remoteSkip).toMatchObject({ type: 'auto-allow', ruleId: 'browser-act-ask-remote' })
+
+    const globalSkip = decide(lowRiskAct, mkContext('wechat'), imRules, deps({
+      transform,
+      config: { actRequiresConfirm: false, remoteActSkipConfirm: false }
+    }))
+    expect(globalSkip).toMatchObject({ type: 'auto-allow', ruleId: 'browser-act-allow-unconfigured' })
   })
 
   it('keeps shared candidate outcomes identical for the same facts in wechat and feishu', () => {

@@ -495,6 +495,7 @@ export function decide(
   let lastAutoRule: PolicyRule | undefined
   for (const rule of autoRules) {
     if (!ruleMatchesInvocation(rule, facts, context, deps)) continue
+    if (askUnlessHolds(rule, deps)) return autoAllow(rule.id, facts)
     lastAutoRule = rule
     if (deps.autoEvaluator) {
       const res = deps.autoEvaluator(facts, context)

@@ -399,6 +399,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act'], excludeSignals: ['browser-act-dangerous'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    configRequires: { config: 'actRequiresConfirm', equals: true },
     askUnless: { config: 'remoteActSkipConfirm', equals: true },
     reason: '远程浏览器 act 默认需确认'
   },
@@ -408,6 +409,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act-low-risk'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    configRequires: { config: 'actRequiresConfirm', equals: true },
     reason: '低影响浏览器读取/导航动作进入 standard 审核候选'
   },
   {
