@@ -1,13 +1,11 @@
 # 远程 IM 意图归属与 Track 管理 — 详细开发方案
 
-> **状态：** 技术开发方案 v1.2，已按用户确认固定 v1 参数，并以历史运行日志完成现有平台行为分析；新协议仍须通过实现后的灰度日志门槛。
-> **日期：** 2026-10-11
-> **范围：** 微信、飞书远程 IM；桌面链路不在本期接入。
-> **需求基线：** [远程 IM 意图归属与 Track 管理需求初稿](../requirement/remote-im-intent-track-requirement-draft.md)
-> **评审基线：** [第三轮需求重审报告](../review/2026-10-11-remote-im-intent-track-requirement-review-v3.md)
-> **既有安全契约：** [远程 IM 异步审批安全需求](../requirement/remote-im-async-approval-security-requirement.md)
+> **状态：** 技术开发方案 v1.2，已按用户确认固定 v1 参数，并以历史运行日志完成现有平台行为分析；新协议仍须通过实现后的灰度日志门槛。  
+> **日期：** 2026-10-11  
+> **范围：** 微信、飞书远程 IM；桌面链路不在本期接入。  
+> **需求基线：** [远程 IM 意图归属与 Track 管理需求初稿](../requirement/remote-im-intent-track-requirement-draft.md)  
+> **既有安全契约：** [远程 IM 异步审批安全需求](../requirement/remote-im-async-approval-security-requirement.md)  
 > **修订依据：** [开发计划评审报告](../review/2026-10-11-remote-im-intent-track-development-plan-review.md)
-> **执行状态（2026-10-11）：** 本分支已完成本机实现与自动化验收，执行记录见 [开发与测试计划 §9](../plan/remote-im-async-interaction-development-plan.md)。14 天双渠道影子质量门槛尚未取得，因此正式语义续接仍关闭，不能宣告产品启用完成。
 
 ---
 
@@ -204,9 +202,9 @@ interface IntentAttributor {
 | 每 identity 活动 Track 上限 | 10 | 达上限不淘汰任何有工作 Track；新意图提示用户结束/等待或重述 |
 | Clarification 候选数上限 | 5 | 超过 5 个合理候选不截断后挑选；不展示不完整候选列表，要求用户引用原消息或重述 |
 | continuation 判定 | `score >= 0.85` 且领先次高 `>= 0.15` | 分类器输出版本化 0–1 分数；候选未超过阈值/差距时进入澄清或 unavailable 策略 |
-| 影子运行最低门槛 | 连续 14 天、累计 500 条实际发出 provider 请求的可评估普通消息；微信/飞书各至少 200 条实际 provider 请求 | 期间正式语义自动续接保持关闭；仅分类器函数被调用、但未发出 provider 请求的记录，以及未调用分类器的零候选观察，均不计入数量、渠道配额或连续覆盖；数据不足任一通道则不开放语义续接 |
+| 影子运行最低门槛 | 连续 14 天、累计 500 条可评估普通消息；微信/飞书各至少 200 条 | 期间正式路由保持关闭；数据不足任一通道则该通道不开放语义续接 |
 | 影子误归属门槛 | 500 条样本中确认的错误自动续接为 0 | 任一确认错误即修正规则/模型并重新完整观察期；不是统计上对未来零风险的保证 |
-| 分类器性能/成本门槛 | p95 ≤ 2 秒；≤ USD 1 / 1,000 次有效分类 | p95 记录实际 provider 请求耗时；成本按 provider 返回的完整 token usage 与已核验且有来源/生效日证据的当前费率卡计算，任一缺失即阻断；超限退回确定性规则与 Clarification，不阻塞新 Track |
+| 分类器性能/成本门槛 | p95 ≤ 2 秒；≤ USD 1 / 1,000 次有效分类 | 以实际计费和端到端耗时记录；超限退回确定性规则与 Clarification，不阻塞新 Track |
 
 Clarification 超时/窗口计算统一使用 UTC wall clock 存储。句柄按密码学安全随机生成 13 个独立 Crockford Base32 字符，数据库 unique 冲突时重新生成；固定长度便于严格 parser。上述灰度门槛是本方案 v1 的明确启用规则，后续变更需通过新版本评审。
 
@@ -444,7 +442,7 @@ track.terminal | track.lifecycle.rejected_transition
 - 先启影子模式：只追加 shadow attribution event，不改变既有 router 行为；日志字段脱敏。
 - 建离线 fixture corpus（匿名化/合成的 new/continuation/ambiguous/explicit reference），对 classifier version 做确定性回放。
 
-**退出门槛：** shadow 中 `classifier_invoked=1 AND provider_call_made=1` 的可评估普通消息连续覆盖至少 14 天、累计至少 500 条且两个通道各至少 200 条；确认误续接为 0；实际 provider 调用 p95 ≤ 2 秒且按完整 token usage 与有来源/生效日证据的费率卡计算的分类成本 ≤ USD 1 / 1,000 次。费率证据缺失的历史 provider 调用保持 unpriced，不能被后来新增的费率卡追认。只调用分类器函数但没有发出 provider 请求的记录，以及没有候选而未调用分类器的观察，只作为基线，不计入分类质量样本量、渠道配额或连续覆盖。阈值需在独立标注样本上校准。任一条件不满足就保持规则确定路径 + 用户澄清，不开启自动语义 continuation。
+**退出门槛：** shadow 连续至少 14 天、累计至少 500 条可评估普通消息且两个通道各至少 200 条；确认误续接为 0；分类 p95 ≤ 2 秒且有效分类成本 ≤ USD 1 / 1,000 次。阈值需在独立标注样本上校准。任一条件不满足就保持规则确定路径 + 用户澄清，不开启自动语义 continuation。
 
 ### 阶段 3：入站入口、Track 传播与事务性执行 work
 
@@ -611,9 +609,8 @@ track.terminal | track.lifecycle.rejected_transition
 | `remoteTrackClarification` | ambiguous 消息 parked、句柄回复恢复 | execution 前置项、持久版本/attempt、strict parser、resolve transaction、worker recovery | 不允许仅靠 Track execution 开新路由；ambiguous 输入 fail closed 并回复需重述/稍后重试，不能旧路由猜测处理 |
 | `remoteTrackConfirmationLink` | 新 confirmation/todo 写 Track association | execution、Track event 映射、既有确认/异步恢复回归全通过 | 对已创建关联继续读写；不移除关联列/事件 |
 | `remoteTrackSemanticContinuation` | 对普通消息自动语义续接/完成 Track successor | execution + TrackModelInputView + clarification + 影子质量 gate + 参数冻结 | 显式引用/确定性规则可按单独策略运行；语义候选歧义则澄清或 fail closed |
-| `remoteTrackRolloutChannels` | 将全局 rollout 开关限制到显式列出的 IM 渠道 | 只接受闭合 JSON 数组 `wechat`/`feishu`；缺失或空数组表示两路均关闭 | 名单外渠道走现有路由；不影响已持久化 work 的恢复 worker |
 
-依赖关系强制为：`semanticContinuation → clarification → execution → recovery + scopedModelInput + storage`；Track-aware confirmation 依赖 execution 和既有 confirmation 安全契约，但不反向要求开启语义 classifier。router/runtime 必须将真实 IM channel 传给 gate reader；全局布尔开关不能绕过 `remoteTrackRolloutChannels`。任一硬前置未就绪，启动时配置校验必须拒绝启用依赖开关。
+依赖关系强制为：`semanticContinuation → clarification → execution → recovery + scopedModelInput + storage`；Track-aware confirmation 依赖 execution 和既有 confirmation 安全契约，但不反向要求开启语义 classifier。任一硬前置未就绪，启动时配置校验必须拒绝启用依赖开关。
 
 ### 11.2 回滚能力
 
@@ -630,14 +627,12 @@ track.terminal | track.lifecycle.rejected_transition
 
 以下条件必须全部完成，才能启用自动语义 continuation 或将此模型设为远程 IM 默认：
 
-> **门槛范围：** 本节是自动语义续接的运行期启用门槛，不是代码开发、代码评审、合并或打包门槛。实现必须先以默认关闭语义续接的状态交付；部署该实现并实际启用影子采集后，14 天观察窗口才开始。不得用“尚无 14 天样本”阻止开发交付，也不得在样本收集完成前打开自动语义续接。
-
 1. **参数定稿：** v1 参数以 §4.3 固定值实施；运行时不得由未审计环境变量改写，参数变更须版本化并更新测试/审计。
 2. **授权 epoch 闭环：** 使用现有 SQLite `remote_authorization_epochs` 持久 epoch (`getAuthorizationEpoch(channel)`)，重启不归零；不得使用进程内 `getGeneration()`；owner 变更和撤销与 clarification/track reply 并发用例通过。
 3. **事务恢复通过：** clarification resolve + parked input outbox 与 worker crash matrix 通过真实 SQLite restart tests。
 4. **平台能力证据：** 现有协议基线按 §4.4 历史日志和 SDK/API/parser 证据验收，不重复要求手工实机演示；当前微信证据已显示 send fulfilled 与 message binding 是分离事实、引用字段可能缺失。飞书历史证据不足的字段仅需在新协议灰度中通过现成结构化事件采集补齐；mock 自造字段不计为平台证据。
 5. **审批回归：** 现有异步 todo restart、撤销 fencing、session deletion、unknown dispatch 不重放的契约全绿。
-6. **分类质量：** `classifier_invoked=1 AND provider_call_made=1` 的影子观测至少连续 14 天、500 条且每通道不少于 200 条；仅调用分类器函数但未发出 provider 请求的记录、未调用分类器的零候选观察均不计入样本、渠道配额或覆盖；确认错误自动续接为 0；实际 provider 调用 p95 ≤ 2 秒且基于完整 token usage 和有来源/生效日证据费率卡估算的成本 ≤ USD 1 / 1,000 次有效分类。任何误续接或超限都关闭语义自动续接并重新完整观察。
+6. **分类质量：** 影子观测至少连续 14 天、500 条可评估消息且每通道不少于 200 条；确认错误自动续接为 0；分类 p95 ≤ 2 秒且实际成本 ≤ USD 1 / 1,000 次有效分类。任何误续接或超限都关闭语义自动续接并重新完整观察。
 7. **可观测性：** 能按 event/track 找到入站→归属→执行→确认→工具派发→回执完整链，字段脱敏；不依赖最近时间猜 join。
 8. **运维准备：** feature flags、暂停/恢复手册、待处理 Clarification 清理与 stale 回复文案、schema downgrade 兼容策略完成。
 
@@ -665,36 +660,10 @@ track.terminal | track.lifecycle.rejected_transition
 
 ## 14. 完成定义
 
-### 开发交付完成
-
-- 需求 §12 的全部归属、confirmation 和事件顺序不变量有自动化测试，尤其包括 Clarification 两个阻断修复点与第三轮 review 的四项启用前事项。
+- 需求 §12 的全部归属、confirmation 和事件顺序不变量有自动化测试，尤其包括 Clarification 阻断场景和所有启用前置条件。
 - 微信、飞书远程新消息经过统一归属入口；下游不再自行按 session/时间/正文推测 Track。
 - Track 事件贯通入站、session/request/turn/toolUse、confirmation/todo、出站消息和回执；缺失关联会显式告警。
 - resolve/parked input/execution work 在事务、崩溃和重试下无丢失、无重复 Agent turn/工具派发。
 - 已有同步确认重启失效、异步 todo 恢复、epoch 撤销 fencing 和未知派发不重放语义完全保持。
+- 真实平台证据、灰度指标、参数定稿及运行手册满足第 12 节门槛后，方可宣告产品启用完成。
 - 代码评审、typecheck、i18n、focused tests 和仓库要求的完整回归均记录在交付记录；不提交生成输出、隐私数据或无关工作区变更。
-
-开发交付完成不等于生产功能已经启用。交付版本必须保持 `remoteTrackSemanticContinuation` 默认关闭；缺少运行期影子数据不阻止代码完成、评审、合并或打包。
-
-### 自动语义续接启用完成
-
-- 只有部署含影子采集能力的版本，并在明确选择的渠道打开影子采集后，才开始计算第 12 节规定的连续窗口和实际样本量。
-- 第 12 节的运行期质量、平台证据、参数与运维门槛全部满足后，才能为对应渠道开启自动语义续接或将其设为默认。历史日志可以满足已发生的平台协议分析项，不能代替新分类器的实际调用质量样本。
-
-## 15. 代码评审阻断修复记录（2026-10-11）
-
-针对 [代码评审报告](../review/2026-10-11-wechat-confirmation-prompt-delivery-failure-code-review.md) 中的四项 P1，本轮已按 TDD 补上跨会话 inbox 迁移、飞书 chatId 澄清解析、异步审批 Track 上下文恢复及澄清工作结算后的 Track 终态重聚合。四项修复的边界和复核证据见该报告“修复复核”节。
-
-定向验证：5 个 Electron 测试文件、112 项测试通过；Electron/shared/renderer 类型检查及 `git diff --check` 通过。该记录不代表全仓回归、平台账号联调或自动语义续接的运行期启用门槛已完成。
-
-## 16. 第二轮代码评审阻断修复记录（2026-10-12）
-
-针对 [第二轮评审报告](../review/2026-10-12-wechat-confirmation-prompt-delivery-failure-code-review-v2.md) 的两项 P1，已统一路由器与 Agent 的 Turn 绑定事件 ID，并强化同身份重复绑定的幂等检查；Clarification 创建 successor 时持久继承原 Track 的来源会话，工作恢复识别 accepted 归属事件。实现细节及逐项回归见第二轮报告“阻断修复复核”。
-
-定向验证：7 个 Electron 测试文件、288 项测试通过；Electron 类型检查及 `git diff --check` 通过。未运行全仓 `npm test`、完整构建或平台账号联调。
-
-## 17. 第三轮代码评审阻断修复记录（2026-10-12）
-
-针对异步审批完成续跑复用原用户消息后模型输入视图被判为 `partial` 的问题，先增加 WeChat/Feishu 双渠道回归，确认两个 invocation 对同一消息的两条 ledger 事件会产生 `partial`（RED）。随后调整视图完整性规则：消息 ID 去重只用于 provider 输入 allowlist；事件级 invocation 关联仍逐条保留。相同消息在多 invocation 下合法复用；session、角色或内容不一致仍会标为 partial，缺少 accepted message/current invocation 仍为 unavailable。
-
-验证：Track 输入视图/过滤、Agent、WeChat 与 Feishu 路由定向测试通过；Electron 类型检查及 `git diff --check` 通过。范围和命令详见第三轮评审报告“修复复核”。

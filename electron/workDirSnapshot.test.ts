@@ -165,6 +165,23 @@ describe('resolveWorkspaceSnapshot / createWorkspaceSnapshotTracker', () => {
     })
   })
 
+  it('refresh：相同目录改绑到另一 profile 仍递增 binding revision', () => {
+    const { base } = setup()
+    let boundProfileId = 'profile-a'
+    const manager = {
+      listProfiles: () => [{ id: 'profile-a', path: base }, { id: 'profile-b', path: base }],
+      getActiveProfileId: () => 'profile-a', getActiveWorkDir: () => base
+    }
+    const queries = { readSession: () => ({ id: 'same-root-binding', workDirProfileId: boundProfileId }) } as never
+    const tracker = createWorkspaceSnapshotTracker({ sessionQueries: queries, sessionId: 'same-root-binding', workDirManager: manager as never, fallbackWorkDir: base })
+    const before = tracker.snapshot()
+    boundProfileId = 'profile-b'
+    const after = tracker.refresh()
+    expect(after.key).toBe(before.key)
+    expect(after.profileId).toBe('profile-b')
+    expect(after.revision).toBe(before.revision + 1)
+  })
+
   it('快照构造走 fallback（会话缺失）时仍可用且可 refresh', () => {
     const { db, manager, base, queries } = setup()
     manager.addProfile({ name: 'A', path: base })

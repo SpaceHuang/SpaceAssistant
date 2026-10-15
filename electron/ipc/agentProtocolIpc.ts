@@ -15,12 +15,15 @@ import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
-import { WikiStatus } from '../../src/shared/domainTypes'
+import { WikiConfig, WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
 import { getConfigValue, getNextQueuedMessage, getTurnByRequestId, listPersistedTurns, listTurnErrorsByAssistantMessageIds, setConfigValue } from '../database'
 import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { classifyWikiPath } from '../wiki/wikiPaths'
+import { resolveWikiMount } from '../wiki/wikiMount'
+import { detectLegacyWikiRoots, migrateLegacyWikis } from '../wiki/wikiMigration'
+import { renameWikiRoot } from '../wiki/wikiInit'
 import { createAnthropicClient } from '../anthropicClientFactory'
 import { createOutboundAcceptor, createOutboundDrainer, computeContextPressureWarnings } from '../outbound/outboundAcceptor'
 import { createSkillHintSystemMessage } from '../../src/shared/skillHintRecords'
@@ -66,6 +69,8 @@ import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
 import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
 import type { ContinuationIntentAcceptance, ContinuationSourceRef } from '../sessionStorage/contracts'
+import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
+import { loadAgentsMd } from '../projectInstructions/projectInstructions'
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
   const workDir = ctx.sessionStorage ? resolveWorkDirForSession(ctx.sessionStorage.queries, sessionId,
@@ -556,6 +561,108 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     }
   )
 
+  ipcMain.handle('chat:get-agents-md-request-snapshots', async (_event, payload: { sessionId: string; limit?: number }) => {
+    const session = sessionQueries.readSession(payload.sessionId)
+    if (!session || session.visibility === 'hidden' || session.ownership === 'internal') return { entries: [], current: { status: 'unavailable' } }
+    const limit = Number.isInteger(payload.limit) ? Math.min(200, Math.max(1, payload.limit!)) : 50
+    const history = sessionStorage.execution.historyFor({ sessionId: payload.sessionId })
+    const invocationIds = history.listInvocationIds().slice(-limit).reverse()
+    const entries: import('../../src/shared/api').AgentsMdRequestSnapshotIndexEntry[] = []
+    for (const invocationId of invocationIds) {
+      let snapshot: Awaited<ReturnType<typeof history.read>>
+      try { snapshot = await history.read(invocationId) } catch { continue }
+      const toolNames = new Map<string, string>()
+      const approvalToolsByModelTurn = new Map<number, Set<string>>()
+      for (const candidate of snapshot.events) {
+        if (!candidate.payload || typeof candidate.payload !== 'object' || Array.isArray(candidate.payload)) continue
+        const eventPayload = candidate.payload as Record<string, unknown>
+        if (candidate.kind === 'tool-call-started' && typeof eventPayload.toolCallId === 'string' && typeof eventPayload.toolName === 'string') {
+          toolNames.set(eventPayload.toolCallId, eventPayload.toolName)
+        }
+        if (candidate.kind === 'model-response-committed') {
+          const message = eventPayload.message && typeof eventPayload.message === 'object' && !Array.isArray(eventPayload.message)
+            ? eventPayload.message as Record<string, unknown>
+            : undefined
+          for (const toolCall of Array.isArray(message?.toolCalls) ? message.toolCalls : []) {
+            if (!toolCall || typeof toolCall !== 'object' || Array.isArray(toolCall)) continue
+            const call = toolCall as Record<string, unknown>
+            if (typeof call.id === 'string' && typeof call.name === 'string') toolNames.set(call.id, call.name)
+          }
+        }
+      }
+      for (const candidate of snapshot.events) {
+        if (!candidate.payload || typeof candidate.payload !== 'object' || Array.isArray(candidate.payload)) continue
+        const eventPayload = candidate.payload as Record<string, unknown>
+        if (candidate.kind === 'approval-waiting' && typeof eventPayload.modelTurn === 'number' && typeof eventPayload.toolCallId === 'string') {
+          const set = approvalToolsByModelTurn.get(eventPayload.modelTurn) ?? new Set<string>()
+          const toolName = toolNames.get(eventPayload.toolCallId)
+          if (toolName) set.add(toolName)
+          approvalToolsByModelTurn.set(eventPayload.modelTurn, set)
+        }
+      }
+      for (const event of snapshot.events) {
+        if (event.kind !== 'model-request-started') continue
+        const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : undefined
+        const requestMetadata = payload?.requestMetadata && typeof payload.requestMetadata === 'object' && !Array.isArray(payload.requestMetadata)
+          ? payload.requestMetadata as Record<string, unknown>
+          : undefined
+        const agentsMdSnapshot = requestMetadata?.agentsMdSnapshot && typeof requestMetadata.agentsMdSnapshot === 'object' && !Array.isArray(requestMetadata.agentsMdSnapshot)
+          ? requestMetadata.agentsMdSnapshot as Record<string, unknown>
+          : undefined
+        if (!agentsMdSnapshot || typeof payload?.requestId !== 'string' || typeof payload.modelTurn !== 'number') continue
+        const workDir = typeof agentsMdSnapshot.workDir === 'string' ? agentsMdSnapshot.workDir : undefined
+        entries.push({
+          invocationId,
+          requestId: payload.requestId,
+          modelTurn: payload.modelTurn,
+          attempt: typeof payload.attempt === 'number' ? payload.attempt : 1,
+          status: typeof agentsMdSnapshot.status === 'string' ? agentsMdSnapshot.status : 'unavailable',
+          ...(typeof agentsMdSnapshot.digest === 'string' ? { digest: agentsMdSnapshot.digest } : {}),
+          byteLength: typeof agentsMdSnapshot.byteLength === 'number' ? agentsMdSnapshot.byteLength : 0,
+          tokenCount: typeof agentsMdSnapshot.tokenCount === 'number' ? agentsMdSnapshot.tokenCount : 0,
+          loadedAt: typeof agentsMdSnapshot.loadedAt === 'number' ? agentsMdSnapshot.loadedAt : 0,
+          source: 'AGENTS.md',
+          scope: 'workdir-root',
+          ...(workDir ? { workDirName: path.basename(workDir) || workDir } : {}),
+          ...(approvalToolsByModelTurn.get(payload.modelTurn)?.size
+            ? { approvalTools: [...approvalToolsByModelTurn.get(payload.modelTurn)!] } : {}),
+          bodyAvailable: typeof agentsMdSnapshot.content === 'string'
+        })
+      }
+    }
+    const resolvedWorkDir = resolveWorkDirForSession(sessionQueries, payload.sessionId,
+      () => ctx.workDirManager.listProfiles(), () => ctx.workDirManager.getActiveProfileId(), () => ctx.workDirManager.getActiveWorkDir())
+    const currentSnapshot = await loadAgentsMd(resolvedWorkDir?.workDir ?? '', { enabled: session.metadata.agentsMdEnabled !== false })
+    return {
+      entries: entries.sort((a, b) => b.loadedAt - a.loadedAt || b.modelTurn - a.modelTurn).slice(0, limit),
+      current: { status: currentSnapshot.status, ...(currentSnapshot.digest ? { digest: currentSnapshot.digest } : {}) }
+    }
+  })
+
+  ipcMain.handle('chat:get-agents-md-request-snapshot', async (_event, payload: { sessionId: string; invocationId: string; modelTurn: number }) => {
+    const session = sessionQueries.readSession(payload.sessionId)
+    if (!session || session.visibility === 'hidden' || session.ownership === 'internal' || !Number.isInteger(payload.modelTurn)) return undefined
+    const history = sessionStorage.execution.historyFor({ sessionId: payload.sessionId })
+    let snapshot: Awaited<ReturnType<typeof history.read>>
+    try { snapshot = await history.read(payload.invocationId) } catch { return undefined }
+    const event = [...snapshot.events].reverse().find((candidate) => candidate.kind === 'model-request-started' &&
+      candidate.payload && typeof candidate.payload === 'object' && !Array.isArray(candidate.payload) &&
+      (candidate.payload as Record<string, unknown>).modelTurn === payload.modelTurn)
+    if (!event || !event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return undefined
+    const requestMetadata = (event.payload as Record<string, unknown>).requestMetadata
+    if (!requestMetadata || typeof requestMetadata !== 'object' || Array.isArray(requestMetadata)) return undefined
+    const agentsMdSnapshot = (requestMetadata as Record<string, unknown>).agentsMdSnapshot
+    if (!agentsMdSnapshot || typeof agentsMdSnapshot !== 'object' || Array.isArray(agentsMdSnapshot)) return undefined
+    const metadata = agentsMdSnapshot as Record<string, unknown>
+    return {
+      invocationId: payload.invocationId,
+      modelTurn: payload.modelTurn,
+      status: typeof metadata.status === 'string' ? metadata.status : 'unavailable',
+      ...(typeof metadata.digest === 'string' ? { digest: metadata.digest } : {}),
+      ...(typeof metadata.content === 'string' ? { content: metadata.content } : {})
+    }
+  })
+
   ipcMain.handle(
     'chat:get-api-context-baseline',
     (_e, payload: { sessionId: string }) => sessionQueries.readApiBaseline(payload)
@@ -718,8 +825,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         }
         const skillFragments = route.skills.map((skill) => `## Skill: ${skill.meta.name}\n\n${skill.content.trim()}`)
         let system: string | undefined
-        if (route.skills.some((skill) => skill.meta.name === 'llm-wiki')) {
-          const schema = readWikiSchema(ctx.getWorkDir(), readWikiConfig(ctx.db))?.trim()
+        if (route.skills.some((skill) => skill.meta.name === WIKI_VOCABULARY_PREFIX)) {
+          // T1.14：注入经共享根读全局 SCHEMA（所有 workDir 注入同一份规范）
+          const schema = readWikiSchema(ctx.getWorkDir(), readWikiConfig(ctx.db), ctx.getUserDataPath())?.trim()
           if (schema) system = system ? `${system}\n\n## Wiki Schema（项目规范）\n\n${schema}` : `## Wiki Schema（项目规范）\n\n${schema}`
         }
         const config = {
@@ -836,12 +944,14 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     listSkills: async () => skillManager.list(true),
     getSkill: async (payload) => skillManager.get(payload.name),
     wikiInit: async (payload) =>
+      // T1.12a：init 骨架建共享根 {userData}/<rootPath>（payload 无 rootPath 自定义入口，v2-C5）
       initWikiStructure(ctx.getWorkDir(), readWikiConfig(ctx.db), {
         overwrite: payload?.overwrite === true,
-        installSkill: payload?.installSkill !== false
+        installSkill: payload?.installSkill !== false,
+        userDataPath: ctx.getUserDataPath()
       }),
-    wikiStatus: async () => getWikiStatus(ctx.getWorkDir(), readWikiConfig(ctx.db)),
-    wikiImportRaw: (payload) => importRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), payload.srcRelPath),
+    wikiStatus: async () => getWikiStatus(ctx.getWorkDir(), readWikiConfig(ctx.db), { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
+    wikiImportRaw: (payload) => importRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), payload.srcRelPath, { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
     appendHintMessage: async (sessionId, hint) => {
       const msg = createSkillHintSystemMessage(sessionId, hint)
       const { sequence } = sessionCommands.appendNonTurnMessage(msg)
@@ -936,6 +1046,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const turn = typeof turnRuntime.getTurn === 'function' ? turnRuntime.getTurn(turnId) : undefined
     getCallAdmissionGate().cancelByTurnId(turnId)
     const cancelled = turnRuntime.cancel(turnId)
+    // turn.cancel：「取消被没被接受」的权威记录（accepted = coordinator 是否受理）。
+    // turn 取不到时省略 requestId 字段，不编造。
+    logAgentEvent('warn', 'turn.cancel', {
+      turnId,
+      ...(turn ? { requestId: turn.requestId } : {}),
+      accepted: cancelled
+    })
     if (cancelled && controller) {
       controller.abort()
       configuringAbortControllers.delete(turnId)
@@ -1296,7 +1413,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     'wiki:import-raw',
     async (event, payload: { srcRelPath: string }) => {
       const wikiConfig = readWikiConfig(ctx.db)
-      const result = await importRawFromWorkDir(ctx.getWorkDir(), wikiConfig, payload.srcRelPath)
+      const result = await importRawFromWorkDir(ctx.getWorkDir(), wikiConfig, payload.srcRelPath, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
       const treeChange = wikiImportFileTreeChange(result)
       if (treeChange) notifyFileTreeChanged(event.sender, treeChange)
       return result
@@ -1307,20 +1424,28 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const wikiConfig = readWikiConfig(ctx.db)
     const result = await initWikiStructure(ctx.getWorkDir(), wikiConfig, {
       overwrite: payload.overwrite === true,
-      installSkill: payload.installSkill !== false
+      installSkill: payload.installSkill !== false,
+      userDataPath: ctx.getUserDataPath()
     })
     if (result.ok) skillManager.invalidateCache()
     return result
   })
 
   ipcMain.handle('wiki:status', async (): Promise<WikiStatus> => {
+    // BLK-1（§10.1/§12.1）：wiki:status 同样携带迁移检测——WikiPane 提示条/向导门控的唯一数据源
     const wikiConfig = readWikiConfig(ctx.db)
-    return getWikiStatus(ctx.getWorkDir(), wikiConfig)
+    const status = getWikiStatus(ctx.getWorkDir(), wikiConfig, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
+    const detection = detectLegacyWikiRoots({
+      profiles: ctx.workDirManager.listProfiles().map((p) => ({ workDir: p.path })),
+      storedRootPath: wikiConfig.rootPath,
+      sharedRootInitialized: status.initialized === true
+    })
+    return { ...status, pendingLegacyMigration: detection.pendingLegacyMigration, legacyRoots: detection.legacyRoots }
   })
 
   ipcMain.handle('wiki:get-schema', async (): Promise<{ content: string } | null> => {
     const wikiConfig = readWikiConfig(ctx.db)
-    const content = readWikiSchema(ctx.getWorkDir(), wikiConfig)
+    const content = readWikiSchema(ctx.getWorkDir(), wikiConfig, ctx.getUserDataPath())
     return content ? { content } : null
   })
 
@@ -1330,6 +1455,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       try {
         const wikiConfig = readWikiConfig(ctx.db)
         const root = ctx.getWorkDir()
+        // T1.15（v3-I2）：absPath 同步经挂载解析为真实路径；只读别名标 readOnly
+        const resolution = resolveWikiMount(root, wikiConfig, ctx.getUserDataPath(), payload.relPath)
+        if (resolution.mounted) {
+          const absPath = resolution.realRel ? resolveSafePath(resolution.realBase, resolution.realRel) : resolution.realBase
+          const kind = classifyWikiPath(root, wikiConfig, resolution.vocabularyPath)
+          return { absPath, kind, ...(resolution.readOnly ? { readOnly: true } : {}) }
+        }
         const absPath = await resolveSafePath(root, payload.relPath)
         const rel = path.relative(root, absPath).replace(/\\/g, '/')
         return { absPath, kind: classifyWikiPath(root, wikiConfig, rel) }
@@ -1338,6 +1470,60 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       }
     }
   )
+
+  // T2.4：存量迁移 IPC（§10.1）——轻量检测 + 触发迁移
+  ipcMain.handle('wiki:migration-status', async (): Promise<WikiStatus> => {
+    const wikiConfig = readWikiConfig(ctx.db)
+    const status = getWikiStatus(ctx.getWorkDir(), wikiConfig, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
+    const detection = detectLegacyWikiRoots({
+      profiles: ctx.workDirManager?.listProfiles?.().map((p: { path: string }) => ({ workDir: p.path })) ?? [{ workDir: ctx.getWorkDir() }],
+      storedRootPath: wikiConfig.rootPath,
+      sharedRootInitialized: status.initialized === true
+    })
+    return {
+      ...status,
+      pendingLegacyMigration: detection.pendingLegacyMigration,
+      legacyRoots: detection.legacyRoots,
+      // T2.6：报告查看数据源 = config.wiki.migration（§10.2）
+      migration: wikiConfig.migration
+    }
+  })
+
+  // T2.6：受控改名（改配置 + rename + 失效广播 + 失败回滚，§6.3）
+  ipcMain.handle('wiki:rename-root', async (_e, payload: { newRootPath: string }): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const wikiConfig = readWikiConfig(ctx.db)
+    const currentRootPath = wikiConfig.rootPath || WIKI_VOCABULARY_PREFIX
+    const result = renameWikiRoot({
+      userDataPath: ctx.getUserDataPath(),
+      currentRootPath,
+      newRootPath: payload.newRootPath,
+      broadcast: () => notifyFileTreeChanged(null, { kind: 'paths', relPaths: [] })
+    })
+    if (!result.ok) return result
+    // rename 成功后才持久化配置（失败回滚语义：配置保持原值）
+    const next: WikiConfig = { ...wikiConfig, rootPath: payload.newRootPath }
+    setConfigValue(ctx.db, CONFIG_KEYS.wiki, JSON.stringify(next))
+    return { ok: true }
+  })
+
+  ipcMain.handle(
+    'wiki:migrate-legacy',
+    async (_e, payload: { profileIds?: string[]; extraLegacyRoots?: Array<{ workDir: string; rootDirName: string }> } = {}) => {
+      const wikiConfig = readWikiConfig(ctx.db)
+      const allProfiles = ctx.workDirManager?.listProfiles?.().map((p: { id: string; path: string; name?: string }) => ({ workDir: p.path, profileId: p.id, profileName: p.name })) ?? [{ workDir: ctx.getWorkDir() }]
+      const profiles = payload.profileIds?.length ? allProfiles.filter((p) => payload.profileIds!.includes(p.profileId ?? '')) : allProfiles
+      const report = await migrateLegacyWikis({
+        db: ctx.db,
+        userDataPath: ctx.getUserDataPath(),
+        wikiConfig,
+        profiles,
+        extraLegacyRoots: payload.extraLegacyRoots,
+        onFileTreeChange: (paths) => notifyFileTreeChanged(null, { kind: 'paths', relPaths: paths })
+      })
+      return report
+    }
+  )
+
 
   ipcMain.handle('skill:invalidate-cache', async (): Promise<void> => {
     skillManager.invalidateCache()

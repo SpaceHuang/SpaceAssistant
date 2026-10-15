@@ -97,7 +97,7 @@ describe('TurnCoordinator', () => {
       mode: 'create-user' as const, requestId: 'continue-r', sessionId: 's1', input: { text: '继续检查' },
       continuationAcceptance: { payloadSha256: 'a'.repeat(64), rawText: '继续检查', kind: 'follow-up' as const, route: 'context-turn', sourceInvocationId: 'failed-inv', sourceTurnId: 'failed-turn', sourceSequence: 8 },
       retryOfMessageId: 'failed-message', retryOfInvocationId: 'failed-inv',
-      config: { continuationContext: { sourceInvocationId: 'failed-inv', sourceTurnId: 'failed-turn', historySequence: 8, summary: 'known summary', state: 'known' as const } }
+      config: { continuationContext: { mode: 'context-fallback', fallbackReason: 'FOLLOW_UP_CONTEXT', sourceInvocationId: 'failed-inv', sourceTurnId: 'failed-turn', historySequence: 8, summary: 'known summary', state: 'known' as const } }
     }
     const started = new TurnCoordinator(db, { now: () => 1, id: (() => { let n = 0; return () => `id-${++n}` })() }).prepare(intent)
     expect(db.prepareAtomic).toHaveBeenCalledWith(expect.objectContaining({ turn: expect.objectContaining({
@@ -296,7 +296,7 @@ describe('TurnCoordinator', () => {
     const queuedUser = { ...user, status: 'queued' as const }
     const excludedAssistant = { ...assistant, id: 'failed-a', status: 'failed' as const }
     db.getMessage = vi.fn((id) => id === 'u1' ? queuedUser : id === 'failed-a' ? excludedAssistant : undefined)
-    db.claimQueuedAtomic = vi.fn(() => ({ user: { message: user, sequence: 1 }, assistant: { message: assistant, sequence: 2 }, executionConfig: { continuationContext: { sourceInvocationId: 'failed-inv', sourceTurnId: 'failed-turn', historySequence: 9, summary: 'prior failure', state: 'known' } } }))
+    db.claimQueuedAtomic = vi.fn(() => ({ user: { message: user, sequence: 1 }, assistant: { message: assistant, sequence: 2 }, executionConfig: { continuationContext: { mode: 'context-fallback', fallbackReason: 'CHECKPOINT_UNAVAILABLE', sourceInvocationId: 'failed-inv', sourceTurnId: 'failed-turn', historySequence: 9, summary: 'prior failure', state: 'known' } } }))
     const coordinator = new TurnCoordinator(db, { now: () => 1, id: (() => { let n = 0; return () => `queued-${++n}` })() })
 
     const result = coordinator.prepare({

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App, Modal } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 import {
   ackDisplayMessagePersisted,
   mergeTurnFailures,
@@ -53,6 +54,7 @@ import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import { buildToolChatPayload } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelThinkingPicker } from './ComposerModelThinkingPicker'
+import { ProjectInstructionsControl } from './ProjectInstructionsControl'
 import { resolveSessionModelBinding, resolveSessionThinkingBinding, resolveAvailableThinkingEfforts } from '../../services/sessionModelBinding'
 import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
@@ -491,7 +493,8 @@ export function ChatView() {
   )
 
   const abort = useCallback(() => {
-    if (sessionId) abortSessionRun(sessionId)
+    // 输入区按钮静默止血：反馈就是按钮态变化本身，不弹提示（accepted 分支只归列表按钮）
+    if (sessionId) void abortSessionRun(sessionId)
   }, [sessionId])
 
   const persistSkillHintSystemMessage = useCallback(
@@ -872,7 +875,7 @@ export function ChatView() {
   const handleArchiveToWiki = useCallback(
     (assistantContent: string) => {
       if (!sessionId) return
-      const wikiRoot = (cfg?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath).replace(/\\/g, '/').replace(/^\/+/, '')
+      const wikiRoot = WIKI_VOCABULARY_PREFIX // BLK-4（D9）：词汇根恒为常量
       const date = new Date().toISOString().slice(0, 10)
       const relPath = `${wikiRoot}/wiki/queries/${date}-archive.md`
       const excerpt = assistantContent.trim().slice(0, 12000)
@@ -886,18 +889,18 @@ export function ChatView() {
         })
       void send(runtimeText('chat.wikiArchivePrompt', { name: date, content: excerpt }))
     },
-    [send, sessionId, cfg?.wiki?.rootPath, currentSession?.metadata, dispatch]
+    [send, sessionId, currentSession?.metadata, dispatch]
   )
 
   const handleOpenFile = useCallback(
     (relPath: string) => {
-      const wikiRoot = cfg?.wiki?.rootPath ?? 'llm-wiki'
+      const wikiRoot = WIKI_VOCABULARY_PREFIX
       requestFilePaneSelect({ relPath, preferWiki: isUnderWikiRoot(relPath, wikiRoot) })
       void openFile(relPath).catch((e) => {
         message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
       })
     },
-    [message, openFile, cfg?.wiki?.rootPath]
+    [message, openFile]
   )
 
   const pendingConfirmItems = usePendingConfirmSnapshot()
@@ -1073,7 +1076,7 @@ export function ChatView() {
         shellConfig={cfg?.shell}
         sessionMetadata={currentSession?.metadata}
         onOpenFile={handleOpenFile}
-        wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
+        wikiRootPath={WIKI_VOCABULARY_PREFIX}
       />
     ),
     [
@@ -1093,7 +1096,7 @@ export function ChatView() {
       pendingConfirmItems,
       cfg?.workDir,
       cfg?.shell,
-      cfg?.wiki?.rootPath,
+
       currentSession?.metadata,
       handleOpenFile
     ]
@@ -1165,25 +1168,28 @@ export function ChatView() {
         runningElapsed={runningElapsedNode}
         prefsSlot={
           cfg && thinkingBinding ? (
-            <ComposerModelThinkingPicker
-              cfg={cfg}
-              modelName={sessionBinding?.modelName ?? chatModelName}
-              modelServiceName={
-                sessionBinding?.option?.serviceAmbiguous ? sessionBinding.option.serviceName : undefined
-              }
-              modelDisplayName={sessionBinding?.displayName ?? chatModelName}
-              modelUnavailable={Boolean(sessionBinding && !sessionBinding.option)}
-              onSelectModel={(opt) => void handleModelSelect(opt)}
-              effort={thinkingBinding.effort}
-              effortOverridden={thinkingBinding.overridden}
-              globalEffort={thinkingBinding.globalEffort}
-              effortDisabled={currentModelEntry?.supportsThinking === false}
-              effortDisabledReason={
-                currentModelEntry?.supportsThinking === false ? t('composer.thinking.notSupported') : undefined
-              }
-              onSelectEffort={(effort) => void handleThinkingSelect(effort)}
-              availableEfforts={availableEfforts}
-            />
+            <>
+              <ComposerModelThinkingPicker
+                cfg={cfg}
+                modelName={sessionBinding?.modelName ?? chatModelName}
+                modelServiceName={
+                  sessionBinding?.option?.serviceAmbiguous ? sessionBinding.option.serviceName : undefined
+                }
+                modelDisplayName={sessionBinding?.displayName ?? chatModelName}
+                modelUnavailable={Boolean(sessionBinding && !sessionBinding.option)}
+                onSelectModel={(opt) => void handleModelSelect(opt)}
+                effort={thinkingBinding.effort}
+                effortOverridden={thinkingBinding.overridden}
+                globalEffort={thinkingBinding.globalEffort}
+                effortDisabled={currentModelEntry?.supportsThinking === false}
+                effortDisabledReason={
+                  currentModelEntry?.supportsThinking === false ? t('composer.thinking.notSupported') : undefined
+                }
+                onSelectEffort={(effort) => void handleThinkingSelect(effort)}
+                availableEfforts={availableEfforts}
+              />
+              <ProjectInstructionsControl />
+            </>
           ) : null
         }
         onSend={send}

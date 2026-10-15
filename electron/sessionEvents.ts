@@ -192,8 +192,10 @@ export async function ensureTurnEndEvent(sink: SessionEventSink, turnId: string,
   if (existing) {
     const { turnId: existingTurnId, reason: existingReason, ...additionalPayload } = existing.payload
     const additionalKeys = Object.keys(additionalPayload)
-    const hasValidDiagnostics = additionalKeys.every((key) => key === 'error' || key === 'finalSurfaceSnapshot') &&
-      (additionalPayload.error === undefined || typeof additionalPayload.error === 'string')
+    // errorCode（A-8）：终态错误码透传，属于合法诊断字段
+    const hasValidDiagnostics = additionalKeys.every((key) => key === 'error' || key === 'errorCode' || key === 'finalSurfaceSnapshot') &&
+      (additionalPayload.error === undefined || typeof additionalPayload.error === 'string') &&
+      (additionalPayload.errorCode === undefined || typeof additionalPayload.errorCode === 'string')
     if (existingTurnId !== turnId || existingReason !== reason || !hasValidDiagnostics) {
       throw new Error(`conflicting invocation terminal projection: ${turnId}`)
     }

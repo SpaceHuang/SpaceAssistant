@@ -15,6 +15,7 @@ import { arrayMessagePageReader } from '../sessionBackupManager'
 import { assertValidOptionalAnthropicBaseUrl } from '../claudeRequestGuards'
 import { clearDecisionCacheOnSessionDelete } from '../confirmation/cacheMaintenanceHooks'
 import { clearSessionToolResources } from '../toolChatLoop'
+import { dialectRetryBreaker } from '../shell/dialectRetryBreaker'
 import { deleteSessionUsage, getConfigValue, getSessionUsage, setSessionUsage } from '../database'
 import { deleteSessionChatAttachmentsWithRetry } from '../chatAttachmentManager'
 import { isRemoteAgentRunning } from '../remote/remoteAgentRegistry'
@@ -178,7 +179,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     'session:create',
     async (
       _e,
-      payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown>; thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort }
+      payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown>; agentsMdEnabled?: boolean; thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort }
     ): Promise<Session> => {
       // 评审 N4:非法档位拒绝(与 session:update / config:set 同口径),不做静默丢弃
       if (payload.thinkingEffort !== undefined && !isThinkingEffort(payload.thinkingEffort)) {
@@ -189,6 +190,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       const s = sessionCommands.createSession({
         ...payload,
         metadata,
+        agentsMdEnabled: payload.agentsMdEnabled,
         workDirProfileId: ctx.workDirManager.getActiveProfileId()
       })
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
@@ -241,6 +243,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
         maxTokens?: number
         skillsState?: SessionSkillsState
         metadata?: Record<string, unknown>
+        agentsMdEnabled?: boolean
         workDirProfileId?: string
         thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort | null
       }
@@ -276,6 +279,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       }
       if (Object.keys(settings).length > 0) sessionCommands.updateSettings({ sessionId: payload.sessionId, ...settings })
       if (payload.metadata !== undefined) sessionCommands.updateUserMetadata(payload.sessionId, metadataPatch)
+      if (payload.agentsMdEnabled !== undefined) sessionCommands.updateAgentsMdEnabled(payload.sessionId, payload.agentsMdEnabled)
       const next = sessionQueries.readSession(payload.sessionId) ?? cur
       if (next) scheduleBackup(ctx, next.id)
       return next
@@ -290,6 +294,8 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     remoteAuthorizationRegistry.invalidateSession('feishu', sessionId)
     remoteAuthorizationRegistry.invalidateSession('wechat', sessionId)
     clearSessionToolResources(sessionId)
+    // D-8：方言错配计数为会话级作用域，会话删除时一并清理
+    dialectRetryBreaker.forgetSession(sessionId)
     sessionCommands.deleteSession(sessionId)
     ctx.wakeSourceTruthSpillGc?.()
     // §5.3：会话删除时清空会话级 decision_cache 条目；清理失败不阻塞删除流程

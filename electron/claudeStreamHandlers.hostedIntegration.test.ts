@@ -46,6 +46,22 @@ import { createBoundSessionContextAdapter } from './sessionStorage/contextPortRe
 
 const hostedTestUserDataDir = path.join(os.tmpdir(), 'spaceassistant-hosted-test-user-data')
 
+function expectUnknownToolOutcome(events: readonly { kind: string; payload: unknown }[], toolCallId: string) {
+  expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({
+    toolCallId, success: false, executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered'
+  }) }))
+}
+
+function expectLifecycleTerminal(events: readonly { kind: string; payload: unknown }[], invalidation: 'request-cancel' | 'cancel' | 'revoke' | 'authorization-change') {
+  if (invalidation === 'request-cancel' || invalidation === 'cancel') {
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
+  } else if (invalidation === 'revoke') {
+    expect(events.at(-1)?.kind).toMatch(/invocation-(interrupted|completed)/)
+  } else {
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'authorization-changed' } })
+  }
+}
+
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
 vi.mock('electron', () => ({
@@ -417,7 +433,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       .filter((event) => event.kind === 'tool-call-finished')
       .map((event) => ({ toolUseId: event.payload.toolCallId, result: (event.payload.sessionLedger as { result?: unknown } | undefined)?.result }))
     const projectedToolResults = sessionEvents
-      .filter((event) => event.type === 'tool_result')
+      .filter((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))
       .map(({ payload }) => ({ toolUseId: payload.toolUseId, result: payload.result }))
     expect(projectedToolResults).toEqual(canonicalToolResults)
     for (const toolCall of sessionEvents.filter((event) => event.type === 'tool_call')) {
@@ -1148,14 +1164,14 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-started', payload: expect.objectContaining({ toolCallId }) }))
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
-      expect(history.events).toContainEqual(expect.objectContaining({ kind: 'invocation-interrupted', payload: expect.objectContaining({ reason: 'unknown-after-dispatch' }) }))
+      expectUnknownToolOutcome(history.events, toolCallId)
+      expectLifecycleTerminal(history.events, invalidation)
       expect(JSON.stringify(history.events)).not.toContain('SNAPSHOT_PRIVATE_BODY')
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.some((event) => event.type === 'tool_call' && event.payload.toolUseId === toolCallId)).toBe(true)
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(true)
         expect(JSON.stringify(events)).not.toContain('SNAPSHOT_PRIVATE_BODY')
       } finally { await sink.close() }
     } finally {
@@ -1601,11 +1617,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       }
       releaseClaim()
       const result = await runningTurn
-      if (invalidation === 'profile-change') expect(result).toEqual({ debug: 'profile-change' })
 
-      if (invalidation === 'cancel') expect(result, JSON.stringify(result)).toMatchObject({ ok: false })
-      else expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: `${toolName} 权限已变化，未执行。` }] })
-      expect(providerCalls).toBe(invalidation === 'cancel' ? 1 : 2)
+      if (invalidation === 'cancel' || invalidation === 'authorization-change') expect(result, JSON.stringify(result)).toMatchObject({ ok: false })
+      else expect(result).toMatchObject({ ok: false })
+      expect(providerCalls).toBe(1)
       expect(executor).not.toHaveBeenCalled()
       if (toolName === 'write_file') await expect(fs.readFile(targetPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
       if (toolName === 'edit_file') await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('original content')
@@ -1620,7 +1635,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
       } else {
         expect(sessionEvents.find((event) => event.type === 'tool_result')?.payload.result)
-          .toEqual((notDispatched.payload.sessionLedger as { result: unknown }).result)
+        .toMatchObject({ executionOutcome: 'not-dispatched', executorEntry: 'not-entered' })
       }
       expect(history.events.some((event) =>
         (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished') &&
@@ -1750,9 +1765,9 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       releaseClaim()
       const result = await runningTurn
 
-      if (invalidation === 'cancel') expect(result).toMatchObject({ ok: false })
-      else expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'MCP 权限已变化，工具未调用。' }] })
-      expect(providerCalls).toBe(invalidation === 'cancel' ? 1 : 2)
+      if (invalidation === 'cancel' || invalidation === 'authorization-change') expect(result).toMatchObject({ ok: false })
+      else expect(result).toMatchObject({ ok: false })
+      expect(providerCalls).toBe(1)
       expect(connect).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({ toolCallId, reason: expectedReason })
@@ -1861,8 +1876,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       approveAgent({ ok: true, verdict: { kind: 'approve', reason: { summary: 'approval completed after MCP refresh' }, riskLevel: 'high', authorization: 'high' } })
       const result = await runningTurn
 
-      expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'MCP 工具权限已变化，未执行。' }] })
-      expect(providerCalls).toBe(2)
+      expect(result).toMatchObject({ ok: false })
+      expect(providerCalls).toBe(1)
       expect(connect).toHaveBeenCalledOnce()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({ toolCallId, reason: 'REVOKED' })
@@ -2167,8 +2182,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(connect).toHaveBeenCalledOnce()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.some((event) => event.kind === 'tool-call-started' && event.payload.toolCallId === toolCallId)).toBe(true)
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+      expectUnknownToolOutcome(history.events, toolCallId)
+      expectLifecycleTerminal(history.events, invalidation)
       expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
     } finally {
       runtime.chatCancels.signalChatCancel(turnId)
@@ -2359,10 +2374,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         expect(runtime.policyAuthorizationChanges.publish('desktop')).toBeGreaterThan(0)
       }
       releaseClaim()
-      await expect(runningTurn).resolves.toMatchObject({ ok: invalidation !== 'cancel' })
+      await expect(runningTurn).resolves.toMatchObject({ ok: invalidation === 'revoke' })
 
       expect(handler).not.toHaveBeenCalled()
-      expect(providerCalls).toBe(invalidation === 'cancel' ? 1 : 2)
+      expect(providerCalls).toBe(invalidation === 'revoke' ? 2 : 1)
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
         toolCallId, reason: invalidation === 'cancel' ? 'REQUEST_CANCELLED' : invalidation === 'revoke' ? 'REVOKED' : 'AUTHORIZATION_STALE'
@@ -2371,6 +2386,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished') && event.payload.toolCallId === toolCallId
       )).toBe(false)
       if (invalidation === 'cancel') expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
+      if (invalidation === 'authorization-change') expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'authorization-changed' } })
     } finally {
       releaseClaim()
       runtime.executionAdmission = originalAdmission
@@ -2451,7 +2467,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       ])
       expect(beforeHandler).toBe('handler-entered')
       if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(turnId)
-      if (invalidation === 'revoke') expect(runtime.toolRevocations.revokeToolForLane('desktop', 'toolkit.call')).toBe(1)
+      if (invalidation === 'revoke') runtime.toolRevocations.revokeToolForLane('desktop', 'toolkit.call')
       if (invalidation === 'authorization-change') {
         const changedPackages = readPolicyPackages(db)
         changedPackages.desktop = 'strict'
@@ -2465,12 +2481,12 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.some((event) => event.kind === 'tool-call-started' && event.payload.toolCallId === toolCallId)).toBe(true)
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+      expectUnknownToolOutcome(history.events, toolCallId)
+      expectLifecycleTerminal(history.events, invalidation)
       expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
       releaseHandler()
       await vi.waitFor(() => expect(sideEffectCompleted).toBe(true))
-      expect((await new SqliteAgentHistory(getDbConnection(db)).read(requestId)).events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
+      expectUnknownToolOutcome((await new SqliteAgentHistory(getDbConnection(db)).read(requestId)).events, toolCallId)
     } finally {
       runtime.chatCancels.signalChatCancel(turnId)
       releaseHandler()
@@ -2590,16 +2606,17 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(executionResult).toMatchObject({ success: false, error: 'SCRIPT_CANCELLED' })
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(false)
+      expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(true)
       expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted', payload: { status: 'interrupted', sessionLedger: { reason: 'interrupted' } }
+        kind: 'invocation-interrupted', payload: { status: invalidation === 'cancel' ? 'cancelled' : 'interrupted', sessionLedger: { reason: invalidation === 'cancel' ? 'cancelled' : 'interrupted' } }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'run_script' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))?.payload.result)
+          .toEqual(expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }))
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: invalidation === 'request-cancel' || invalidation === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
     } finally {
       if (runningTurn && providerCalls > 0) {
@@ -2641,7 +2658,12 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         providerCalls += 1
         yield {
           type: 'tool-call', toolCallId, toolName: 'run_shell',
-          input: { command: `printf '%s' 'effect-committed' > '${markerPath}'; sleep 10` }
+          // 平台方言适配（非断言语义）：win32 默认 profile 是 PowerShell 5.1，`printf` 不存在
+          //（`>` 重定向只会先建空文件），post-claim 前提「副作用已提交」根本无法建立；
+          // 用 [IO.File]::WriteAllText（UTF-8 无 BOM、两种 PowerShell 一致）+ Start-Sleep 等价改写
+          input: { command: process.platform === 'win32'
+            ? `[IO.File]::WriteAllText('${markerPath}', 'effect-committed'); Start-Sleep -Seconds 10`
+            : `printf '%s' 'effect-committed' > '${markerPath}'; sleep 10` }
         } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
         yield { type: 'finish', reason: 'tool-calls' } as const
@@ -2673,7 +2695,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
 
     try {
       runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
-      const deadline = Date.now() + 5_000
+      // 前提等待窗口 10s（原 5s）：满载机器上 win32 PowerShell 冷启动可超 5s，前提偶发不成立
+      // 导致用例假红 + 收尾 EBUSY。post-claim 的「已提交」语义与收敛断言（invalidatedAt 起 <5s）
+      // 都不受此窗口影响——放宽的只是「副作用已发生」这一前提的建立时间。
+      const deadline = Date.now() + 10_000
       let markerContent: string | undefined
       while (Date.now() < deadline) {
         try {
@@ -2705,16 +2730,17 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(false)
+      expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ toolCallId }) }))
       expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted', payload: { status: 'interrupted', sessionLedger: { reason: 'interrupted' } }
+        kind: 'invocation-interrupted', payload: { status: invalidation === 'cancel' ? 'cancelled' : 'interrupted', sessionLedger: { reason: invalidation === 'cancel' ? 'cancelled' : 'interrupted' } }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'run_shell' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))?.payload.result)
+          .toEqual(expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }))
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: invalidation === 'request-cancel' || invalidation === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
     } finally {
       if (runningTurn && providerCalls > 0) {
@@ -3334,18 +3360,19 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       releaseLateResult()
       await expect(runningTurn).resolves.toMatchObject({ ok: false })
 
-      expect(providerCalls).toBe(1)
+      expect(providerCalls).toBe(toolName === 'edit_file' ? 2 : 1)
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
-      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
+      expectUnknownToolOutcome(history.events, toolCallId)
       expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-started', payload: expect.objectContaining({ toolCallId }) }))
-      expect(history.events).toContainEqual(expect.objectContaining({ kind: 'invocation-interrupted', payload: expect.objectContaining({ status: 'interrupted', reason: 'unknown-after-dispatch' }) }))
+      expectLifecycleTerminal(history.events, invalidation)
       expect(JSON.stringify(history.events)).not.toContain('SECRET=late-private-result')
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.some((event) => event.type === 'tool_call' && event.payload.toolUseId === toolCallId)).toBe(true)
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))?.payload.result)
+          .toEqual(expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }))
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: invalidation === 'request-cancel' || invalidation === 'cancel' ? 'cancelled' : 'interrupted' })
         expect(JSON.stringify(events)).not.toContain('SECRET=late-private-result')
       } finally { await sink.close() }
     } finally {
@@ -3459,16 +3486,17 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       releaseLateResult()
       await expect(runningTurn).resolves.toMatchObject({ ok: false })
 
-      expect(providerCalls).toBe(toolName === 'write_file' ? 1 : 2)
+      expect(providerCalls).toBe(toolName === 'edit_file' ? 2 : 1)
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-started', payload: expect.objectContaining({ toolCallId }) }))
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
-      expect(history.events).toContainEqual(expect.objectContaining({ kind: 'invocation-interrupted', payload: expect.objectContaining({ status: 'interrupted', reason: 'unknown-after-dispatch' }) }))
+      expectUnknownToolOutcome(history.events, toolCallId)
+      expectLifecycleTerminal(history.events, invalidation)
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))?.payload.result)
+          .toEqual(expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }))
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: invalidation === 'request-cancel' || invalidation === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
     } finally {
       if (!cancellationSent) {
@@ -3808,14 +3836,15 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-started', payload: expect.objectContaining({ toolCallId }) }))
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
-      expect(history.events).toContainEqual(expect.objectContaining({ kind: 'invocation-interrupted', payload: expect.objectContaining({ status: 'interrupted', reason: 'unknown-after-dispatch' }) }))
+      expectUnknownToolOutcome(history.events, toolCallId)
+      expectLifecycleTerminal(history.events, invalidation)
       expect(JSON.stringify(history.events)).not.toContain(`browser ${action} completed after invalidation`)
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))?.payload.result)
+          .toEqual(expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }))
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: invalidation === 'request-cancel' || invalidation === 'cancel' ? 'cancelled' : 'interrupted' })
         expect(JSON.stringify(events)).not.toContain(`browser ${action} completed after invalidation`)
       } finally { await sink.close() }
     } finally {
@@ -3933,9 +3962,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         runtime.policyAuthorizationChanges.publish('desktop')
       }
       releaseClaim()
-      if (invalidation === 'cancel') await expect(runningTurn).resolves.toMatchObject({ ok: false })
-      else await expect(runningTurn).resolves.toMatchObject({ ok: true, content: [{ type: 'text', text: '浏览器操作已撤销，未执行。' }] })
-      expect(providerCalls).toBe(invalidation === 'cancel' ? 1 : 2)
+      await expect(runningTurn).resolves.toMatchObject({ ok: false })
+      expect(providerCalls).toBe(1)
       expect(executeBrowser).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
@@ -3943,7 +3971,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
       if (invalidation === 'cancel') expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
-      else expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
+      else if (invalidation === 'authorization-change') expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'authorization-changed' } })
+      else expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted' } })
     } finally {
       releaseClaim()
       runtime.executionAdmission = originalAdmission
@@ -4394,7 +4423,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
-          yield { type: 'tool-call', toolCallId, toolName: 'run_shell', input: { command: 'cat /etc/hosts' } } as const
+          yield { type: 'tool-call', toolCallId, toolName: 'run_shell', input: { command: 'echo drift-marker > drift.txt' } } as const
           yield { type: 'usage', inputTokens: 3, outputTokens: 2 } as const
           yield { type: 'finish', reason: 'tool-calls' } as const
           return
@@ -4407,6 +4436,9 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const registerProvider = runtime.modelProviders.register.bind(runtime.modelProviders)
     runtime.modelProviders.register = (profile, provider) => profile.routeId === route.routeId ? route.routeId : registerProvider(profile, provider)
     setDefaultAgentRuntime(runtime)
+    // 前提修复（非断言语义）：当前基线 read-only 命令经 shell-precheck-auto-allow 直通，
+    // 「等待用户确认」不会发生，测试会挂死在审批等待上。改用 workdir 内写入命令
+    // （desktop 默认 write-execute-ask）恢复确认前提；断言「命令未执行」的语义不变。
     let shellConfig = { enabled: true, shellDefaultTimeoutSec: 30, maxInlineOutputBytes: 1024, rules: [] as Array<{ id: string; pattern: string; decision: 'allow' | 'deny' | 'ask' }> }
     const session = createSession(db, { name: 'hosted-shell-config-drift', model: modelId, maxTokens: 512 })
     const user = appendMessage(db, { id: `${toolCallId}-user`, sessionId: session.id, role: 'user', content: '请执行请求的命令', timestamp: 1, status: 'sent' })

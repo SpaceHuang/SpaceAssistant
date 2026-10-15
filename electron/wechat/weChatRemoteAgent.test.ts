@@ -123,7 +123,8 @@ vi.mock('../remote/remoteProgressCoordinator', () => ({
 }))
 
 vi.mock('../remote/remoteProgressStore', () => ({
-  clearRemoteProgressSession: vi.fn()
+  clearRemoteProgressSession: vi.fn(),
+  updateRemoteProgressSnapshot: vi.fn()
 }))
 
 vi.mock('../windowRef', () => ({
@@ -476,8 +477,8 @@ describe('runWeChatRemoteAgent', () => {
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
       if (termination === 'cancel') await expect(runningAgent).rejects.toThrow(/cancelled/i)
-      else await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '回复授权已变化，未发送消息。' })
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      else await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
+      expect(providerCalls).toBe(1)
       expect(executeReply).not.toHaveBeenCalled()
       expect(reply).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
@@ -486,8 +487,8 @@ describe('runWeChatRemoteAgent', () => {
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
       expect(history.events.at(-1)).toMatchObject({
-        kind: termination === 'cancel' ? 'invocation-interrupted' : 'invocation-completed',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'completed' }
+        kind: 'invocation-interrupted',
+        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
       })
     } finally {
       releaseClaim()
@@ -663,22 +664,22 @@ describe('runWeChatRemoteAgent', () => {
       } else runtime.chatCancels.signalChatCancel(requestId)
       expect(executorSignal?.aborted).toBe(true)
       finishBotReply()
-      await expect(runningAgent).rejects.toThrow(/after dispatch|uncertain|interrupted/i)
+      await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       expect(reply).toHaveBeenCalledOnce()
       expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
+      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(true)
       expect(history.events.at(-1)).toMatchObject({
         kind: 'invocation-interrupted',
-        payload: { status: 'interrupted', sessionLedger: { reason: 'interrupted' } }
+        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted', sessionLedger: { reason: termination === 'cancel' ? 'cancelled' : 'interrupted' } }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'wechat_reply' })
-        expect(projected.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
+        expect(projected.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))?.payload.result).toMatchObject({ executionOutcome: 'unknown-after-dispatch' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
     } finally {
@@ -925,9 +926,9 @@ describe('runWeChatRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('wechat', 'switch_work_dir')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      if (termination === 'cancel') await expect(running).rejects.toThrow(/cancelled/i)
-      else await expect(running).resolves.toMatchObject({ ok: true, summary: '准入变化后未切换工作目录。' })
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      if (termination === 'cancel') await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'cancelled' })
+      else await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
+      expect(providerCalls).toBe(1)
       expect(executeSwitch).not.toHaveBeenCalled()
       expect(getSession(args.db, session.id)?.workDirProfileId).toBe('current-profile')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
@@ -1031,19 +1032,19 @@ describe('runWeChatRemoteAgent', () => {
       releaseDispatch()
       const result = await runningResult
       expect(result).toHaveProperty('error')
-      expect(String((result as { error: unknown }).error)).toMatch(/failed after dispatch|unknown/i)
+      expect(result.error).toMatchObject({ name: 'HostedTurnFinalizedError', outcome: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
       expect(providerCalls).toBe(1)
       expect(getSession(args.db, session.id)?.workDirProfileId).toBe('target-profile')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.some((event) => event.kind === 'tool-call-started')).toBe(true)
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(true)
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
       const sink = getSessionEventSink(currentDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))?.payload.result).toMatchObject({ executionOutcome: 'unknown-after-dispatch' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
     } finally {
       releaseDispatch()
@@ -1512,9 +1513,9 @@ describe('runWeChatRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('wechat', 'switch_session')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      if (termination === 'cancel') await expect(running).rejects.toThrow(/cancelled/i)
-      else await expect(running).resolves.toMatchObject({ ok: true, summary: '准入变化后未切换微信会话。' })
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      if (termination === 'cancel') await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'cancelled' })
+      else await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
+      expect(providerCalls).toBe(1)
       expect(executeSwitch).not.toHaveBeenCalled()
       expect(mockRequestRendererSessionSwitch).not.toHaveBeenCalled()
       expect(context.remoteContext.outboundSessionId).toBe(callerSession.id)
@@ -1623,15 +1624,15 @@ describe('runWeChatRemoteAgent', () => {
       expect(context.remoteContext.outboundSessionId).toBe(callerSession.id)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(true)
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
       const sink = getSessionEventSink(workDir, callerSession.id, callerSession.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'switch_session' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))?.payload.result).toMatchObject({ executionOutcome: 'unknown-after-dispatch' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
     } finally {
       rejectRenderer?.(new Error('test cleanup'))
@@ -1947,9 +1948,9 @@ describe('runWeChatRemoteAgent', () => {
 
     try {
       const runningAgent = runWeChatRemoteAgent(context)
-      if (termination === 'cancel') await expect(runningAgent).rejects.toThrow(/cancelled/i)
-      else await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '授权变化后脚本未执行。' })
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      if (termination === 'cancel') await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'cancelled' })
+      else await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
+      expect(providerCalls).toBe(1)
       expect(executeScript).not.toHaveBeenCalled()
       await expect(fs.access(markerPath)).rejects.toThrow()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
@@ -2055,18 +2056,18 @@ describe('runWeChatRemoteAgent', () => {
       releaseDispatch()
       const result = await runningResult
       expect(result).toHaveProperty('error')
-      expect(String((result as { error: unknown }).error)).toMatch(/failed after dispatch|unknown/i)
+      expect(result.error).toMatchObject({ name: 'HostedTurnFinalizedError', outcome: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       expect(providerCalls).toBe(1)
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.some((event) => event.kind === 'tool-call-started')).toBe(true)
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(true)
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))?.payload.result).toMatchObject({ executionOutcome: 'unknown-after-dispatch' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
     } finally {
       releaseDispatch()
@@ -2401,8 +2402,8 @@ describe('runWeChatRemoteAgent', () => {
     try {
       // runToolChatSession is mocked in this caller test; mirror its production pre-handoff registration.
       runtime.toolRevocations.registerToolRevocationRequest(args.requestId, 'wechat', args.requestId)
-      await expect(runWeChatRemoteAgent(context)).resolves.toMatchObject({ ok: true, summary: '本次读取已被撤销，未执行。' })
-      expect(providerCalls).toBe(2)
+      await expect(runWeChatRemoteAgent(context)).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
+      expect(providerCalls).toBe(1)
       expect(executor).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
@@ -2892,7 +2893,7 @@ describe('runWeChatRemoteAgent', () => {
       args.db.flushSave()
       runtime.policyAuthorizationChanges.publish('wechat')
 
-      await expect(invocation).rejects.toThrow(/after dispatch|interrupted/i)
+      await expect(invocation).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
       expect(observedSignal?.aborted).toBe(true)
       expect(providerCalls).toBe(1)
       expect(readFileExecutor.execute).toHaveBeenCalledOnce()

@@ -1,0 +1,107 @@
+node_modules/
+dist/
+dist-electron/
+release/
+release2/
+*.log
+*.map
+logs/
+.DS_Store
+coverage/
+.env
+.env.local
+.worktrees/
+
+# Claude Code 本地 IDE 配置
+.claude/settings.local.json
+
+# Claude Code 本地目录
+.claude/
+
+# GitHub 本地技能目录
+.github/skills/
+
+# Claude Code / Codex 本地配置目录
+.agent/
+
+# Claude Code Agent 技能定义（本地开发用）
+.agents/
+
+# Trae IDE 本地配置目录
+.trae/
+
+# ripgrep release staging (downloaded and verified locally/CI)
+resources/ripgrep/*
+!resources/ripgrep/.gitkeep
+
+# Agent 本地配置文件
+AGENTS.md
+
+# Mingcute 图标库源码（已复制所需图标到 src/renderer/assets/）
+res/mingcute-icons-main/
+
+# 本地测试脚本
+test-browser.js
+
+# 本地参考文档，不纳入版本控制
+ref/
+docs/analysis/
+docs/references/
+docs/review/
+docs/project/
+
+# 已废弃的后台 Mission 执行层设计文档（本地保留备查，不纳入版本控制）
+docs/废弃/后台Mission执行层/
+
+# Impeccable 代码审查工具输出
+.impeccable/
+
+# 本地分析报告，不纳入版本控制
+docs/analyze/
+docs/review/
+
+# 会话明文备份（运行时辅助导出渠道）
+sessions/
+
+# 后台任务运行时数据
+background-tasks/
+
+# LLM wiki 本地内容与技能目录
+llm-wiki/
+.space-skills/
+
+# Codex 本地配置
+.codex/
+
+# Impeccable hook 本地配置
+.github/hooks/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

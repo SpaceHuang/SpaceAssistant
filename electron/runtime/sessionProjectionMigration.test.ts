@@ -150,7 +150,9 @@ describe('session projection migration worker', () => {
 
       expect(result).toMatchObject({ processedCount: 0, failureCount: 0, status: 'needs_attention' })
       expect(reader).not.toHaveBeenCalled()
-      expect(conn.prepare('SELECT * FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+      // P1-①：写路径在 append 事务内授予的 eligibility 不受 fence 影响（scope UPDATE 无清除
+      // 触发器）；fence 的实质保证是 reader 不被调用 + item 保持 retry 待重新入队。
+      expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toEqual({ count: 1 })
       expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id)).toBeUndefined()
       expect(conn.prepare('SELECT status,error,attempts FROM session_projection_migration_items WHERE run_id=? AND session_id=?')
         .get(run.runId, session.id)).toMatchObject({ status: 'pending', error: 'session-scope-changed:internal/hidden', attempts: 0 })
@@ -179,7 +181,9 @@ describe('session projection migration worker', () => {
         outcomes: [expect.objectContaining({ sessionId: session.id, status: 'retry', reason: 'session-scope-changed-during-certification' })] })
       expect(conn.prepare('SELECT ownership,visibility FROM sessions WHERE id=?').get(session.id)).toEqual({ ownership: 'user', visibility: 'primary' })
       expect(conn.prepare('SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?').get(session.id, 'transcript')).toBeUndefined()
-      expect(conn.prepare('SELECT 1 FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+      // P1-①：写路径授予的 eligibility 在 certification 失败后保持原状（fence 不做清除，
+      // scope 变更由 retry 队列消费）。
+      expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toEqual({ count: 1 })
     } finally {
       vi.restoreAllMocks()
       db.close()

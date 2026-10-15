@@ -23,7 +23,8 @@ import { stripClixmlWrapper } from '../processOutput/clixml'
 import { ProgressThrottle } from '../shell/progressThrottle'
 import { ExecutionLifecycle } from '../shell/executionLifecycle'
 import { ProcessSupervisor } from '../shell/processSupervisor'
-import { DialectRetryBreaker } from '../shell/dialectRetryBreaker'
+import { dialectRetryBreaker } from '../shell/dialectRetryBreaker'
+import { escalatedDialectMismatchHints } from '../shell/shellDialectMismatch'
 import { snapshotEnvForLog } from '../shell/envSnapshot'
 import { buildShellArgs, profileForPlatform } from '../shell/shellProfiles'
 import { cleanupExpiredOutputArtifacts } from '../shell/outputArtifactCleanup'
@@ -37,7 +38,6 @@ const PROGRESS_TAIL = 4000
 /** 进度用滚动文本窗口：只需覆盖 PROGRESS_TAIL，避免为进度保留全量文本。 */
 const PROGRESS_TEXT_KEEP = 8 * 1024
 const DEFAULT_IO_MAX = 100 * 1024
-const dialectRetryBreaker = new DialectRetryBreaker()
 
 export function appendRawTailBuffer(prev: Buffer, chunk: Buffer): Buffer {
   const combined = Buffer.concat([prev, chunk])
@@ -92,8 +92,17 @@ export const runShellExecutor: ToolExecutor = {
       const planError = error instanceof RunShellPlanError ? error : undefined
       const message = error instanceof Error ? error.message : String(error)
       const code = planError?.code ?? 'SHELL_PLAN_INVALID'
+      const mismatchDetails = planError?.details as { shellProfileId?: unknown; signals?: unknown; detectedSyntax?: unknown } | undefined
+      const mismatchSignals = Array.isArray(mismatchDetails?.signals)
+        ? (mismatchDetails?.signals as unknown[]).filter((signal): signal is string => typeof signal === 'string')
+        : []
+      // §4.4/D-8：计数键为 sessionId + profileId + signals；tripped 仅意味着「提示升级」，不阻断
       const retry = code === 'SHELL_DIALECT_MISMATCH'
-        ? dialectRetryBreaker.record(String(planError?.details.shellProfileId ?? profileForPlatform(process.platform).id), Array.isArray(planError?.details.signals) ? planError.details.signals as string[] : [])
+        ? dialectRetryBreaker.record(
+          String(ctx.sessionId ?? ''),
+          String(mismatchDetails?.shellProfileId ?? profileForPlatform(process.platform).id),
+          mismatchSignals
+        )
         : undefined
       logShellAgentEvent('error', 'shell.exec.plan_failed', {
         requestId: ctx.requestId,
@@ -107,7 +116,7 @@ export const runShellExecutor: ToolExecutor = {
       return {
         success: false,
         error: code,
-        data: { code, reason: message, processResult: null, ...planError?.details, ...(retry ? { retryCount: retry.count, retryExhausted: retry.tripped } : {}), caseId: code === 'SHELL_EXECUTABLE_UNAVAILABLE' ? SHELL_CASE_IDS.executableUnavailable : code === 'SHELL_INTERACTIVE_TTY_REQUIRED' ? SHELL_CASE_IDS.tuiRequiresTerminal : code === 'SHELL_TUI_UNDETECTABLE' ? SHELL_CASE_IDS.tuiUndetectable : code === 'SHELL_DIALECT_MISMATCH' ? SHELL_CASE_IDS.dialectMismatch : SHELL_CASE_IDS.planInvalid, ...(code === 'SHELL_INTERACTIVE_TTY_REQUIRED' && planError?.details?.tuiMatch ? { hints: shellTuiHintLines(planError.details.tuiMatch as Parameters<typeof shellTuiHintLines>[0]) } : {}), ...(code === 'SHELL_TUI_UNDETECTABLE' && planError?.details?.tuiUndetectable ? { hints: shellTuiUndetectableHintLines(planError.details.tuiUndetectable as { reason: string; programs: string[] }) } : {}) },
+        data: { code, reason: message, processResult: null, ...planError?.details, ...(retry?.tripped && typeof mismatchDetails?.detectedSyntax === 'string' ? { hints: escalatedDialectMismatchHints(mismatchDetails.detectedSyntax as import('../shell/shellProfiles').ShellDialect) } : {}), ...(retry ? { retryCount: retry.count, retryExhausted: retry.tripped } : {}), caseId: code === 'SHELL_EXECUTABLE_UNAVAILABLE' ? SHELL_CASE_IDS.executableUnavailable : code === 'SHELL_INTERACTIVE_TTY_REQUIRED' ? SHELL_CASE_IDS.tuiRequiresTerminal : code === 'SHELL_TUI_UNDETECTABLE' ? SHELL_CASE_IDS.tuiUndetectable : code === 'SHELL_DIALECT_MISMATCH' ? SHELL_CASE_IDS.dialectMismatch : SHELL_CASE_IDS.planInvalid, ...(code === 'SHELL_INTERACTIVE_TTY_REQUIRED' && planError?.details?.tuiMatch ? { hints: shellTuiHintLines(planError.details.tuiMatch as Parameters<typeof shellTuiHintLines>[0]) } : {}), ...(code === 'SHELL_TUI_UNDETECTABLE' && planError?.details?.tuiUndetectable ? { hints: shellTuiUndetectableHintLines(planError.details.tuiUndetectable as { reason: string; programs: string[] }) } : {}) },
         ...(code === 'SHELL_INTERACTIVE_TTY_REQUIRED' || code === 'SHELL_TUI_UNDETECTABLE' ? { diagnostic: { caseId: code === 'SHELL_TUI_UNDETECTABLE' ? SHELL_CASE_IDS.tuiUndetectable : SHELL_CASE_IDS.tuiRequiresTerminal, category: 'environment', retryable: false } } : {}),
         duration: Date.now() - started
       }
@@ -148,8 +157,11 @@ export async function executePreparedShellExecutionWithHostFallback(
   baseLog: Record<string, unknown>
 ): Promise<ToolExecutorResult> {
   const primary = await executePreparedShellExecution(prepared, ctx, started, baseLog)
-  if (!shouldAttemptHostDegrade(primary)) return primary
-  return runShellWithHostFallback({
+  if (!shouldAttemptHostDegrade(primary)) {
+    markDialectCounterRecoveredOnSuccess(primary, prepared, ctx)
+    return primary
+  }
+  const degraded = await runShellWithHostFallback({
     prepared,
     ctx,
     started,
@@ -157,6 +169,20 @@ export async function executePreparedShellExecutionWithHostFallback(
     primaryResult: primary,
     runPrepared: executePreparedShellExecution
   })
+  markDialectCounterRecoveredOnSuccess(degraded, prepared, ctx)
+  return degraded
+}
+
+/** D-8：命令改写成功执行即清除该会话同 profile 的方言错配计数（可恢复性，恢复原设计意图）。 */
+function markDialectCounterRecoveredOnSuccess(
+  result: ToolExecutorResult,
+  prepared: PreparedShellExecution,
+  ctx: ToolExecutionContext
+): void {
+  if (result.success === false) return
+  // 键必须与 record 侧同源：detect 的 shellProfileId 写自 dependencySnapshot.profileId（内置
+  // profile id），而非 spawnSpec.shellId（自定义 shell 配置下是可执行文件 basename，评审 P2）
+  dialectRetryBreaker.clearOnSuccess(String(ctx.sessionId ?? ''), prepared.dependencySnapshot.profileId)
 }
 
 /**
@@ -366,9 +392,16 @@ export async function executePreparedShellExecution(
       void supervisor.terminate().then((result) => { terminationResult = result })
     }, timeoutSec * 1000)
 
+    let abortTermination: Promise<void> | undefined
     const onAbort = () => {
       interrupted = true
-      void supervisor.terminate().then((result) => { terminationResult = result })
+      // 1c① 收尾：abort 分支锚定 terminate 完成（supervisor 内置 3s 截止；taskkill 失败时
+      // killer 内部已升级 proc.kill 强杀，不新写终止逻辑）。结果回写 terminationResult，
+      // close 路径经 supervisor 的同一 pending 复用，不重复杀树。
+      abortTermination = supervisor.terminate().then(
+        (result) => { terminationResult = result },
+        () => undefined
+      )
     }
     ctx.signal.addEventListener('abort', onAbort)
 
@@ -438,7 +471,10 @@ export async function executePreparedShellExecution(
       const contractConflict = stderrMeta.contractConflict ?? stdoutMeta.contractConflict
 
       void (async () => {
-        if (interrupted && !terminationResult) {
+        if (abortTermination) {
+          // abort/超时已发起终止：等它收尾完成再结算，保证结果落库时进程树已终结
+          await abortTermination
+        } else if (interrupted && !terminationResult) {
           terminationResult = await supervisor.terminate()
         }
         let persistedOutputPath: string | undefined

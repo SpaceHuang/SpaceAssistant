@@ -1,0 +1,587 @@
+﻿=== 880c7050|2026-10-12|Merge branch 'feat/session-read-hot-path-perf'
+
+=== 5963987a|2026-10-12|fix: negative cache covers every canonical-unavailable kind
+The install-shipping regression report showed a large session paying the
+full 20s rebuild+compare on EVERY open: its canonical stream is
+snapshot-invalid, and the read path only persisted rejection verdicts for
+legacy-mismatch — other unavailable kinds fell through un-cached. Now every
+unavailable kind except session-missing/history-absent persists the verdict
+(read routes by conclusion in milliseconds; the background revalidator
+re-adjudicates and clears when the stream heals).
+
+=== ac7b5abe|2026-10-12|chore(release): v0.2.6
+
+=== 57b2ef81|2026-10-12|Merge branch 'feat/session-read-hot-path-perf'
+
+=== b1bad5a0|2026-10-12|fix: revalidation outcome threading and per-run budget test in one db
+- revalidateSession threads the verified reason through the outcome log and
+  routes every unavailable kind (order/snapshot-invalid included) into the
+  same backoff governance as legacy-mismatch — previously an 'other' verdict
+  updated nothing, so the revalidation never converged
+- runDue's per-session loop is fault-isolated (one broken stream no longer
+  aborts the batch; falls out with a warn log)
+- budget test now builds both sessions in one database (enqueue and
+  revalidation share the database context)
+
+=== 6506461f|2026-10-12|feat: revalidation logs carry session outcomes; read log carries reason
+
+=== be4b9d0c|2026-10-12|fix(review R1): pass the real callback error in every repair catch
+The S4 error pass-through only covered invocation-terminal; compaction,
+toolCallLedger, providerRetryLedger, usageLedger, finalRequestContextLedger,
+modelRequestLedger and toolLedger catches still folded into the generic
+boolean, keeping the terminal-failure categories unreachable for those
+kinds. All seven sites now forward the original error to the governance
+classifier.
+
+=== 691a9620|2026-10-12|feat: observability for the revalidation drain and checkpoint (review suggestion)
+
+=== c9930756|2026-10-12|fix: stop() call shape for the drain handle on quit
+
+=== 3b9d43c7|2026-10-12|fix: correct the drain handle type in main.ts
+
+=== aa178005|2026-10-12|fix: address review blockers B1 + S1~S7 and observation suggestions
+B1  toolChatLoop.invocation integration parity: snapshot strips messages the
+    same way the write path does (count/digest asserted) — the persisted-
+    snapshot-vs-provider-request parity test stays intact.
+S1  resident production drain: startSessionProjectionRevalidationDrain owned
+    by startup (unref'd interval) + integration test proving a healed session
+    recovers with no direct runDue caller; wired in main.ts, stopped on quit.
+S2  backoff-skipped queue entries re-queue themselves so permanence/TTL stays
+    reachable; integration test covers skip-then-due.
+S3  eventLoopWatchdog wired in main.ts (thresholdMs 200, unref'd, stopped on
+    quit); the dead sampleIntervalMs option removed.
+S4  repair outcomes carry the real callback error instead of a folded
+    boolean, so terminal categories are reachable for every repair kind.
+S5  main.ts pending-repair count excludes terminal_failed rows (startup no
+    longer reports degraded forever once a terminal verdict exists).
+S6  advanceProjectionCacheAfterAppend defers to a persisted rejection
+    verdict (no re-grant while divergence is unadjudicated); recording a
+    verdict drops the session's cached transcript so no warm L1 bypasses it.
+S7  append order: cache advance first (tail validation needs the adjacent
+    view), view fold second — the in-transaction tail no longer misses the
+    view and degrades to a full readSync; writeCanonicalSessionCache skips
+    the physical rewrite when value and every identity column are unchanged.
+Also: view-maintenance fall-outs log a warning (no silent L1 fall-out),
+pending_view event name registered, dbg/test leftovers removed, control
+group in the trigger-exemption test made real, SQLITE_BUSY classified via
+error.code, and the snapshot digest asserted against a locally computed one.
+
+=== f5bf5210|2026-10-11|fix(P0-③): keep revalidation off the read path, driven by the turn checkpoint only
+Kicking the consumer from the read path raced test assertions and deviated
+from the plan's per-turn revalidation cadence (每轮至多一次后台重验). The
+terminal checkpoint remains the sole production kick; read-path stale
+verdicts re-queue themselves for the next turn pass. The startup idle-pass
+trigger belongs to P0-⑥.
+
+=== 0d9c2a37|2026-10-11|fix(P0-③): use a static import for the read-path revalidation kick
+The dynamic import sat on the transcript→revalidation→transcript module
+cycle and silently failed, so stale verdicts were enqueued but the consumer
+never ran in production. The static edge is safe: both sides only
+dereference inside function bodies at call time.
+
+=== d6c6cc65|2026-10-11|chore: drop stray debug output
+
+=== ee7b72c9|2026-10-11|fix(P0-③): kick the revalidation queue consumer on enqueue
+The queue had enqueuers (read-path stale, terminal checkpoint) but no
+production consumer: runDueSessionProjectionRevalidations was never invoked
+outside tests, so mismatch verdicts were never refreshed or cleared. The
+terminal checkpoint and the read-path stale branch now kick the consumer
+fire-and-forget — yielding shards keep it off the critical path, backoff
+gating keeps it at one full revalidate per turn at most.
+
+=== e75d4d1b|2026-10-11|chore: add the eligibility import edge to the boundary baseline
+
+=== d6c35899|2026-10-11|fix: resolve full-build type errors missed by incremental checks
+- register eventloop.delay in the agent log event-name union
+- hasSessionProjectionEligibility imports from sessionTranscriptProjection
+  (its defining module), keeping the revalidator free of a rejection-module
+  dependency that does not own it
+- SessionHistoryPort's unavailable verdict declares the optional snapshot
+  carry (P0-⑤) so recovery reuses the already-read stream
+- canonicalRequestSnapshot adopts snapshotPreparedModelCall's P2a return
+  type
+
+=== 90d7a486|2026-10-11|chore: register revalidation executor edges in the session-storage boundary baseline
+
+=== 92618867|2026-10-11|Merge branch 'feat/run-shell-plan-rejection' — run_shell 方言错配误报与计划期错误致命化修复（R1–R4，D-1/D-7/D-8 定案 + 评审 BLK-1/P2/P3 处置）
+- P0-A：计划期失败降级为 PlanRejectedError 回模型（SDK 三处联动 + 宿主装配层转换 + D-7 JSON 拒绝文本）
+- P0-B：方言判定收紧 $name 系误报；cmd 信号补齐（评审 BLK-1 定夺后为 cmd-operator/cmd-dir/copy/del-switch/cmd-set-var）
+- P1：breaker 会话级作用域 + 成功即 clear + 提示升级；plan_failed 台账与 turn_end errorCode 透传
+- 文档：turn-loop.md / ced59b41 / lifecycle-todo 契约同步，改进计划文档入库（含实施记录与评审处置记录）
+
+=== 7d3d9e82|2026-10-11|fix(shell): 评审二轮残留——升级提示文案与测试夹具对齐 cmd-operator 口径
+- escalatedDialectMismatchHints 的 windows-cmd 分支去除 where.exe→Get-Command
+  示例（首轮漏改）；改写示例改为 & 串联→; 分隔、dir /b→Get-ChildItem，
+  与实际触发信号对应
+- planRejection.test / invocationAssembler.test 的升级文案断言更新，
+  并显式断言不再含 Get-Command（防回潮）
+- claudeToolHistory.test 夹具信号名 cmd-exe-chain→cmd-operator，
+  profileId 更正为真实内置 id builtin-windows-powershell
+- 实施记录登记引号无感观察项（echo "Tom & Jerry" 误报一次可恢复拒绝，
+  与检测器整体启发式口径一致，本期不处理）
+
+=== bace8f1c|2026-10-11|chore: drop stray debug output file
+
+=== 73da7f4b|2026-10-11|fix(P3-②): make the terminal-repair verdict an additive column
+The in-place table rebuild of canonical_projection_repairs recompiles the
+whole trigger schema during ALTER RENAME and breaks upgrade paths with
+mid-chain trigger shapes (reject_history_event_insert_after_content_write_stop).
+The terminal verdict now rides in an additive terminal_failed column gated on
+table_info (version-replay safe), retry queries filter it, the status CHECK
+domain stays untouched, and the migration version assertions across the
+migration suite advance to 86.
+
+=== f13ef720|2026-10-11|fix(shell): 评审处置——撤销 cmd-exe-chain 误报信号并修复计数键同源性
+BLK-1（定夺：收紧放行）：
+- 撤销 cmd-exe-chain（exe + ; 串联）信号——; 是 PowerShell 合法语句分隔符，
+  exe a; exe b 可正常执行，不构成 cmd 混入证据；继续拦截会误伤
+  git.exe fetch; git.exe log 一类合法命令（§1.2 命令修复后放行正常执行）
+- 补偿：新增 cmd-operator（词 & 词的 & 无条件串联——PowerShell 5.1 语法错误，
+  是真正的 cmd 证据；要求 & 前为词字符，避免误伤 { & cmd } 等合法调用运算符）；
+  && 仍由 posix-operator 覆盖；真实 cmd 混写检测力不降
+- windowsCmdHints 去除 where.exe→Get-Command 的错误指导，按真实 cmd 信号给改写建议
+
+P2：成功清除键由 spawnSpec.shellId（自定义 shell 下是可执行文件 basename）改为
+  dependencySnapshot.profileId（与 record 侧 detect 同源）；新增对齐测试
+  （回退可转红）
+
+P3：tool.result 日志 dispatched 排除 plan-rejection；更正 $$ 注释
+  （PowerShell 中为上一行最后一个 token，非进程 PID）；计划源文档入库（含
+  §10.4 评审处置记录，消除 D-x/A-x 锚点悬空）
+
+=== 69db3c91|2026-10-11|feat(P3-①③): worker probe green-light + resident event-loop observation gate
+- P3-① probe: node:sqlite loads inside worker_threads and reads a WAL
+  database opened by the main thread on the current runtime — the
+  architecture precondition for moving canonical rebuilds off the main
+  process holds; the executor migration builds on the P0 revalidation queue
+- P3-③ watchdog: resident monitorEventLoopDelay sampler with an injectable
+  histogram; p99 breaches above the threshold land in the agent log
+  (eventloop.delay) so gate evidence accumulates per the observation
+  protocol
+
+=== 59742812|2026-10-11|feat(P3-②): repair governance — terminal-failed state and minimum retry interval
+- v86 migration rebuilds canonical_projection_repairs with a terminal-failed
+  status; deterministically unrecoverable failure categories (workspace root
+  rejected, storage access denied) leave the retry queue instead of being
+  retried forever
+- the historical zero-backoff retry for lightly-loaded invocations now waits
+  at least REPAIR_MIN_RETRY_INTERVAL_MS; first attempts (attempts=0) stay
+  immediate so fresh obligations settle in the pass that classified them
+- recoverInterruptedInvocations reads the injectable clock (this.now) so the
+  restart-pass tests advance past the interval explicitly
+
+=== f4e8bdff|2026-10-11|perf(P2a): stop embedding the full messages body in requestSnapshot
+- snapshotPreparedModelCall persists route + request options only, with the
+  omitted messages body carried as messagesCount + messagesSha256 at the
+  top level for forensics (per-turn bytes become O(1), plan §5 P2a)
+- the sole consumer (assertHistoryRequestCompatibility) already compared
+  options after stripping messages, so pre/post formats coexist; the
+  rebuilders never read messages from the snapshot (rebuild behavior
+  unchanged, covered by the full turn integration suite)
+
+=== d75c9ecd|2026-10-11|chore: remove leftover debug files
+
+=== fbfff9fa|2026-10-11|perf(P1-②): incremental per-invocation pending tool/approval view
+- v85 migration adds canonical_invocation_pending_views; the append
+  transaction replays each new event against the persisted state (tool
+  proposals/dispatches, approval lifecycle incl. unbound approvals,
+  terminal/turn invariants) instead of re-reading the whole active stream
+- the L1 tail validation consults an adjacent view (schema gate + stream
+  invariants + incremental replay) and falls back to the exact historical
+  full-stream read when no adjacent view exists
+- invocationTerminalStatusMatches extracted in agent-sdk/history so the
+  terminal kind/status invariants are applicable per tail row
+- root cause R3 (state-bearing tail forcing a full readSync per turn) no
+  longer applies to streams the write path keeps advancing
+
+=== 94fd758f|2026-10-11|docs: 同步 run_shell 方言错配修复的契约文档（A-9）
+- interface/turn-loop.md：新增 PlanRejectedError 错误类型与回灌计划期拒绝语义；
+  终态 errorCode 契约标注 SHELL_DIALECT_MISMATCH 不再由 planned 链路产生
+  （特判仅保留兼容旧 History）；turn_end 透传 errorCode 说明
+- session-ced59b41-issue-remediation-technical-plan.md:1082：登记 breaker
+  作用域化/成功即 clear/提示升级三项契约变更（§4.4 要求同步评审）
+- run-shell-lifecycle-local-execution-todo.md:345：更正 shouldStopToolRetry
+  「主循环已接入」的文档漂移（实际无生产调用方，职责由 REPEATED_SEMANTIC_CALL 承担）
+
+=== 8cb86e0b|2026-10-11|feat(shell): 诊断三出口与方言错配计数会话级语义（P1，D-7/D-8 定案）
+- 转换层（planRejection）与 legacy executor 共享进程级 dialectRetryBreaker：
+  键作用域化为 sessionId + profileId + signals；命令改写成功执行即
+  clearOnSuccess 归零（接线于 executePreparedShellExecutionWithHostFallback，
+  覆盖 legacy/planned/确认后重执行全部入口）；session:delete 时 forgetSession；
+  不变量测试（随机 record/clear 序列 + 计数守恒 + tripped ⇔ count>=2）
+- 第 2 次同款错配 → 提示升级（escalatedDialectMismatchHints 给出改写形态），
+  不阻断执行、不终止 turn；retryCount/retryExhausted 如实进模型 JSON 与台账
+- planned 路径落 shell.exec.plan_failed 结构化台账（转换点一次构造同一 payload：
+  errorCode/caseId/signals/retryCount/retryExhausted/commandFingerprint）；
+  shellLogFields 白名单补 signals；模型出口为 D-7 紧凑单行 JSON
+- turn_end 透传终态 errorCode（finalizeTurn 新参 + cause 链提取；恢复重构分支
+  附加 errorCode）；sessionEvents 恢复修复协议将 errorCode 视为合法诊断字段
+  （否则旧会话恢复误报 conflicting terminal projection）
+- A-7：历史重建锁定测试——D-7 拒绝 JSON 文本在 buildToolResultBlock 后
+  signals/hints 仍可解析
+
+=== 3287aba5|2026-10-11|perf(P1-①): maintain the projection cache inside the append transaction
+- advanceProjectionCacheAfterAppend runs the cache-staircase tail fold in
+  the same transaction that mirrored canonical messages into legacy rows,
+  then re-grants projection eligibility (write-path trust replaces the
+  read-time self-verification the message triggers kept deleting)
+- any ambiguity leaves the cache untouched; reads keep their existing
+  fail-closed staircase and the fallback path grants nothing
+- equivalence test locks incremental cache == full rebuild byte for byte;
+  warm-path test locks zero full rebuilds after mirrored writes
+
+=== 450acfcf|2026-10-11|test(P0-⑦): first-screen entry regression for mismatched sessions
+- chat message page: the first page read pays one full compare to establish
+  the verdict; page replays and session switches back route by the persisted
+  verdict with zero full rebuilds
+- sequence pages for sessions without canonical-backed rows return through
+  the inline guard without touching the projection at all
+
+=== 2a5bf478|2026-10-11|perf(P0-⑤): merge same-turn history reads behind a turn-scoped memo
+- createTurnScopedHistoryMemo memoizes HistoryPort.read per invocation id
+  for the duration of one runToolChatSession; any appendBatch (including
+  idempotent duplicates) drops the whole memo so continued turns can never
+  see a transcript missing the previous round's tool results
+- wired at runToolChatSession entry before the history writer/host history
+  are built, merging the three toolChatLoop reads (terminal check, message
+  rebuild, base-ownership check)
+- readLatestInvocationForSession unavailable verdicts now carry the stream
+  snapshot they just read; hostedTurnHandoff recovery reuses it instead of
+  re-reading the same full invocation
+
+=== 2ca72344|2026-10-11|fix(shell): 方言判定收紧 $name 误报并补齐 cmd 方言信号（P0-B，§4.2）
+- posix-variable 收紧：仅 PowerShell 无法解释的 POSIX 形态计信号
+  （位置参数 $1/$@/$*、bash 参数展开修饰符 ${VAR:…#…%…/…[…]…}）；
+  $p、$env:NAME、$null、$?、$PSVersionTable、纯 ${name} 等合法 PS
+  语法不再误报（本次事故根因 R2 的最小复现即 Get-ChildItem $p -Force）
+- 新增 cmd-* 信号：cmd-exe-chain（exe 以 ; 链式）、cmd-dir/copy/del-switch
+  （cmdlet 别名 + /x 开关，PS 下解析失败）、cmd-set-var（set VAR=value）；
+  §1.2 事故命令仍被拦但理由变为 windows-cmd 类信号（验收红线）
+- hints 与 detectedSyntax 对齐：cmd 口径给出 PowerShell 等价写法
+  （Get-Command/Get-ChildItem/Copy-Item/Remove-Item/$env:NAME），
+  posix 口径维持 PowerShell 改写指导
+
+=== 5ab8a3ec|2026-10-11|perf(P0-③④): background projection revalidation queue with backoff and permanence
+- new sessionProjectionRevalidationQueue (process-local, per-db WeakMap) +
+  sessionProjectionRevalidation executor: full rebuild+compare runs shard by
+  shard with event-loop yields between sessions, never inside a read
+- stale verdicts (O(1) metadata drift / legacy digest change) enqueue with
+  forced revalidation; routine terminal registrations are gated by the
+  persisted retry_after (30s exponential, 7-day cap); N revalidations of an
+  unchanged canonical fingerprint mark the verdict permanent (7-day TTL)
+- turn-terminal path (claudeStreamHandlers finally) now uses
+  checkpointSessionTranscriptProjection: cheap L1 fast path stays sync,
+  everything else enqueues background revalidation
+- verdict cleared on matched revalidation, on field-ineligible sessions,
+  and on explicit refresh success (P0-④ three clear paths)
+
+=== e69f9eb1|2026-10-11|fix(agent): 计划期失败降级为可回传拒绝（P0-A，D-1/D-7 定案）
+- SDK 新增宿主—中性 PlanRejectedError；returnDeniedToolsToModel 开启时
+  与 ToolDeniedError 同走 markNotDispatched + is_error tool 消息物化，
+  turn 继续到下一模型轮；fatalRejection/shouldDrain/rejectedTools 三处联动；
+  afterToolResult 新增 plan-rejection 口径，与策略拒绝审计分离
+- 宿主 invocationAssembler.prepareTool 包装层：run_shell 计划期白名单错误
+  （SHELL_DIALECT_MISMATCH/SHELL_PLAN_INVALID/SHELL_INTERACTIVE_TTY_REQUIRED/
+  SHELL_TUI_UNDETECTABLE）转换为 PlanRejectedError，拒绝文本为 D-7 紧凑 JSON
+  （code/caseId/detectedSyntax/expectedDialect/shellProfileId/signals/hints）；
+  白名单外异常保持 fatal
+- 新增 electron/tools/planRejection.ts 承载白名单与载荷构造（转换点一次序列化）
+- 清理 toolChatLoop.ts 无使用点的 planRunShellExecution/RunShellPlanError import
+- 顺带修正：planned 路径 SHELL_DIALECT_MISMATCH 不再出现 turn_end.error
+
+=== 5f368e55|2026-10-11|perf(P0-①②): canonical projection rejection negative cache with O(1) keying
+- v84 migration adds canonical_session_projection_rejections (session-scoped
+  mismatch verdicts), explicitly exempt from v46 cursor-invalidation triggers
+  and from the message-mutation triggers that clear eligibility
+- read path consults the verdict before any full rebuild: hit → legacy
+  immediately (reason projection-rejected); O(1) metadata drift or a changed
+  legacy body digest → still legacy immediately, verdict flagged stale
+- first legacy-mismatch persists the verdict (keyed by event_count/watermark
+  ids/legacy row count/max rowid + legacy body digest per v4 M1); terminal
+  refresh checkpoints clear it on success and re-record on failure
+- recovery after a repaired legacy body is checkpoint-driven
+  (refreshSessionTranscriptProjectionCache) instead of a synchronous L2 retry
+
+=== 9c34f7a4|2026-10-11|fix(wiki): surface migration failures; align migration UI with design system
+Flow fixes (2026-10-11 device regression):
+- WikiPane resets wizardOpen after running the migration, so the wizard
+  cannot re-appear once the report is closed while pending state remains
+- report modals render a failed-items section (previously invisible
+  behind the migrated-only summary) with a retryable hint
+
+Design-system alignment (DESIGN.md, Operate mode):
+- banner action uses brand primary, not danger (migration never deletes)
+- wizard uses antd Input; legacy roots and project chips render as warm
+  quiet chips on bg-subtle/border tokens, orphan state tinted
+- shared conflict/summary/failure components replace duplicated markup;
+  explicit primary close on both report modals, width parity at 560
+- i18n: reportClose/failedTitle keys (zh-CN/en-US), types regenerated
+
+Rendered regression tests cover failure (wizard must not revive, banner
+persists while pending) and success (banner clears after refresh).
+
+=== 4f5e1c59|2026-10-11|fix(wiki): create shared wiki/ dir before legacy index/log merge
+A shared root that only ever received raw/ ingest (no initWikiStructure)
+made mergeIndexFiles' writeFileSync throw ENOENT; the profile was then
+silently recorded as failed while the report still read completed, so
+the banner re-armed on refresh and the wizard appeared to never finish.
+mkdir the merge target up front; migration stays idempotent on retry.
+
+=== 21ffca26|2026-10-11|fix(storage): stop win32 dir-fsync EPERM from poisoning maintenance watermarks
+On Windows fs.open(dir,'r') succeeds but handle.sync() always raises
+EPERM, so every watermark write recorded a failure right after the
+renamed success state had already landed: each retention task then
+retried forever with lastError=EPERM and never reported green.
+
+- add storage/directorySync.ts: skip dir fsync on win32; tolerate
+  unsupported-fsync codes (EINVAL/ENOTSUP/EISDIR/EPERM/EACCES) on other
+  platforms while real I/O errors still propagate
+- adopt it in maintenanceWatermark, spillStore (write + gc sync) and
+  mcpArtifactCapacity (replacing its equally incomplete local allowlist)
+- sessionEventRetention: fs.rm maxRetries to ride out transient
+  EPERM/EBUSY on locked session ledgers
+- main: surface the first per-session failure code on the thrown
+  retention error so watermark lastError stays diagnosable
+
+Verified on win32: a dev run writes all 6 maintenance reports clean on
+the first attempt (no lastError); spillStore suite goes 29 known
+failures -> 0.
+
+=== ae87d445|2026-10-11|Merge branch 'feat/wiki-shared-centralized-storage' — LLM Wiki 集中共享存储（P0–P3 + 评审 v1/v2 修复）
+全量验收（合并前 worktree 内实跑）：npm test 119 failed = 干净基线 119（零新增）；
+typecheck 双端 / i18n:check / npm run build 全绿。评审 v1 9 阻断 + 16 P1 与
+复审 v2 的 BLK-5 残余 + 3 P1 残余全部闭环（详见 docs/review/ 两份评审报告）。
+
+=== fadad9ed|2026-10-11|chore(wiki): consume rootPathHelp hint in WikiTab (review v1 P2-16 residual)
+
+=== f612dd5a|2026-10-11|fix(wiki): review v2 — BLK-5 residual (case-insensitive structure segment) + 3 P1 residuals
+- BLK-5 残余：classifyWikiPath 结构段比较大小写不敏感——llm-wiki/RAW/x 形态
+  挂载命中后 vocabularyPath 保留入参后缀，raw deny 不得因大小写漏判；
+  补 gate 层端到端 deny 用例（llm-wiki/RAW/case-evil.md → wiki-raw-write-deny）
+- P1 残余 1：read-file 失败返回补 kind:'error' 字段（原 { error, migratedTo }
+  与 FileReadResult/DetailPanelContext 的 kind==='error' 判据不匹配，提示死路）
+- P1 残余 2：ingest 返回路径恒用 WIKI_VOCABULARY_PREFIX（rootPath 改名后
+  my-lib/raw/... 不可挂载）
+- P1 残余 3：safeRootName 放宽多段相对根名（docs/wiki 可入迁移管线并注册别名；
+  仍禁 ../ 逃逸/绝对/盘符），补多段迁移端到端用例与逃逸过滤用例
+
+全量 npm test（worktree 内实跑）：119 failed = 干净基线 119，零新增；
+失败分布与基线逐一吻合（spillStore 29/hostedIntegration 20/sessionEvents 8/…）
+
+=== 072d1103|2026-10-11|fix(wiki): address implementation review — all 9 blockers + P1 fixes
+阻断修复（评审 2026-10-10-wiki-shared-centralized-storage-implementation-review.md）：
+- BLK-1 wiki:status 并入迁移检测（WikiPane 提示条/向导门控可达）；WikiTab 迁移弹窗补「立即迁移」按钮
+- BLK-2 SCHEMA 哈希基准改为真实 v1 全文（882 字符）LF/CRLF 双哈希；「已修改」分支补写共享库新版模板
+- BLK-3 存量自定义 rootPath 自动并入迁移管线（与默认根同等对待），配置重置默认 + 别名注册；
+  userData 侧旧物理目录归位或改名 .pre-migrated-* 保留
+- BLK-4 词汇常量收口：classifyWikiPath/resolveWikiRelPath/wikiSchemaRelPath/wikiIndexRelPath 与
+  渲染层（WikiPane/ChatView/FileOverlay/FileContentView/ReferencedFilesPanel/DetailPanelFileList）
+  词汇根全部改 WIKI_VOCABULARY_PREFIX，与 rootPath 物理语义解耦；fileIpc 排除集同口径（大小写不敏感）
+- BLK-5 挂载 vocabularyPath 前缀段大小写规范化（LLM-WIKI/raw 不再绕过 wiki-raw-write-deny）
+- BLK-6 startContentWatch 第三参改为广播键 broadcastRel，wiki 文件实时刷新链路修复（scope=词汇路径）
+- BLK-7 根列表回归「仅虚拟条目」（删除共享根子条目平铺与 ../.. 破碎路径）
+- BLK-8 list_directory 挂载目标条目 path 以词汇路径为基准（不泄漏 userData、Agent 可回喂）
+- BLK-9 file:delete/rename 挂载根本身拒绝；全部 UI 写通道拒绝只读别名（§9.3 落实）
+
+P1 修复：探测层 realBase 绝对形态反向锚点（审批卡片不再泄漏 userData）、matchedPrefix 多段别名锚点、
+迁移 mkdir 缺口、rawCount 递归统计、log preamble 保留、嵌套 index/log 归并、ingest 选名+拷贝整体互斥、
+裸登记不覆盖 display_name、init 清理项目级技能副本（R1）、export-markdown 图片根 realBase、
+read-file 失败附 migratedTo（§12.3 接线）、profile 删除置 orphan（§13）、WikiPane 向导独立开关、
+(orphan) i18n、rootPathLabel 文案更新 + 改名迁移门禁；P2：时间戳格式/rootPath 校验/api readOnly 类型。
+
+全量 npm test：120 failed = 基线 119 + 1（watcher 遗留 sender 死参数用例，已随本次修复更新）
+
+=== 0678e04d|2026-10-10|feat(wiki): P3 wrap-up — D9 literal cleanup with scan guard, docs promotion, plan status
+- T3.1（D9 收口）：16 个源码文件散落 'llm-wiki' 字面量全部改引 wikiConstants
+  （词汇前缀/默认目录名按语义分派）；新增 wikiLiteralScan.test.ts 源码扫描断言
+  （白名单：常量定义/模板正文/默认值数据；剥离注释），红绿验证通过
+- T3.2：llm-wiki-requirement.md 升 v1.7（集中共享存储章节）；
+  wiki-import-ingest-requirement.md ingest 目标更新为 raw/<projectId>/
+- 计划文档 42 任务状态更新为 GREEN；.probe/ 误提交清理并入 .gitignore
+- 终验：npm test 119 failed 全部为干净基线已有环境性失败（基线 118 electron + 1 policyEngine），
+  零新增；npm run build 全量构建通过
+- manual 待真机走查：M1–M7（见计划 §2）
+
+=== 7e51b105|2026-10-10|feat(wiki): P2 legacy migration & onboarding UI — detection pipeline, IPC, WikiPane/WikiTab, i18n
+P2（与 P1 同版本发布，D8 硬约束）：
+- wikiMigration：检测五态（含自定义根双扫/extraLegacyRoots 手工根）、幂等合并管线
+  （raw/<projectId>/、冲突双保留 + 平行版本提示行、index/log 归并、SCHEMA 哈希三分支）、
+  写入经 wikiWriteMutex、报告持久化 config.wiki.migration、别名注册 legacyRootAliases
+- IPC：wiki:migration-status / wiki:migrate-legacy / wiki:rename-root（受控改名 + 失败回滚）
+- WikiPane：迁移提示条 + 向导（extraLegacyRoots 输入）+ 报告展示 + projects 显示名数据源
+- WikiTab：rootPath 受控改名（配置值失败回滚）、迁移报告查看、打开共享库目录
+- i18n zh-CN/en-US 全量新增文案；i18n:check 绿
+- 全量验证：test:electron 118 failed（= 干净基线，零新增）；test:renderer 0 failed
+
+=== 5c7e7a8a|2026-10-10|feat(wiki): P0+P1 shared centralized storage — mount layer, probe/permit/executor, grep dual-root, wiki modules
+P0 基建（行为不变）：
+- src/shared/wikiConstants.ts：词汇前缀/默认目录名唯一定义点（D9）
+- WikiConfig.legacyRootAliases/migration、WikiStatus.shared/projects 等新字段 + merge 归一
+- DB v83：wiki_projects 表 + wikiProjectStore CRUD
+- config.wiki 键收敛（main.ts WIKI_CONFIG_KEY 并入 CONFIG_KEYS.wiki）
+- wikiMount 八条规则纯函数 + wikiWriteMutex（含 mulberry32 不变量测试，红绿验证）
+
+P1 主进程切换（P1+P2 须同版本发布，D8）：
+- 探测层 mountAnchors 可选入参（零行为差异硬门槛：既有探测测试零改动通过）
+- classifyReadPathZone sensitiveRootExemptions（豁免优先，含祖先级前缀）
+- gate 写/读/media 三探测点接入；wiki-raw 信号反向识别（realBase 绝对形态）
+- 写范围分类基准 scopeBase；写 permit 一致性守卫（漂移 fail-closed）；远程断言按 scopeBase
+- 执行层写挂载 + wikiWriteMutex 互斥 + 失效广播词汇路径；读挂载 permit.vocabularyPath
+- grep 双根编排（无 path 全库搜索）+ workDir 根实体残留去重（§7.7）+ 输出词汇路径改写
+- wikiInit/wikiStatus/wikiImport 切共享根（meta v2）；技能用户级 + 项目级副本清理函数
+- SCHEMA 注入经共享根；fileIpc 子通道挂载（虚拟条目/去重/watcher/export）；configIpc 透传
+- defaultRules 零改动契约测试；模板补共享守则/禁 shell
+
+=== ed3dac54|2026-10-10|fix(runtime): isolate session ledger result projection
+
+=== 8148f307|2026-10-10|Merge branch 'codex/remote-im-async-interaction-tdd'
+
+=== 09e74809|2026-10-10|fix(remote): close async approval recovery gaps
+
+=== b042897e|2026-10-10|fix(remote): dispose wake retry dispatchers
+
+=== f713eecd|2026-10-10|feat(remote): configure model and thinking effort
+
+=== 71efa790|2026-10-09|feat(remote): implement durable async IM approvals
+
+=== b3bb0af7|2026-10-09|docs(remote): define async IM approval contracts
+
+=== 21807894|2026-10-08|merge: integrate origin/main into main
+
+=== 8e3c5d12|2026-10-08|fix(continuation): return source turn from selected retry query
+
+=== caf70654|2026-10-08|fix(history): order invocations by durable commit sequence
+
+=== 90f7249d|2026-10-08|fix(continuation): accept safe interrupted checkpoints
+
+=== 47ea5cac|2026-10-08|fix(continuation): separate turn and history identities
+
+=== 14fc1b2c|2026-10-08|fix(history): preserve mixed user message identity
+
+=== 9806ced6|2026-10-08|fix(session): accept interrupted continuation history
+
+=== 94c3a12a|2026-10-08|merge: spill reference index and maintenance backfill
+
+=== 9b2c9ecc|2026-10-08|feat(spill): index references and schedule backfill
+
+=== 9a1a6e6d|2026-10-08|fix(chat): reconcile terminal message segments
+
+=== 98f331f8|2026-10-08|test(db): cover schema 53 database compatibility
+
+=== 46c68f86|2026-10-06|fix(db): avoid rewriting large legacy History on startup
+
+=== 881ea324|2026-10-06|fix(db): repair 0.2.4 main schema collision
+
+=== e6f3550b|2026-10-08|docs(session-storage): record async candidate fix
+
+=== 6d2a3f41|2026-10-08|fix(agent-sdk): freeze context candidates across awaits
+
+=== 430b2dab|2026-10-08|fix(session-storage): address review blockers
+
+=== b375a732|2026-10-08|docs(session-storage): record implementation and acceptance
+
+=== 413674a1|2026-10-08|feat(session-storage): add public ports and migrate consumers
+
+=== f2cec895|2026-10-07|docs(im): design asynchronous remote tasks
+
+=== 0dc3bf28|2026-10-07|docs(storage): plan spill reference index backfill
+
+=== c2e63020|2026-10-07|docs(storage): refine public interface design
+
+=== 78ac93fd|2026-10-07|test(butler): isolate workdir fixtures
+
+=== 3e03e314|2026-10-07|perf(startup): instrument startup and spill scans
+
+=== f803f336|2026-10-07|test(storage): isolate performance benchmarks
+
+=== 3aeb0239|2026-10-07|test(storage): remove CI timing gate
+
+=== 7a125738|2026-10-06|docs(storage): qualify v0.2.5 rollback floor
+
+=== ae8ac589|2026-10-06|docs(storage): record v0.2.5 release verification
+
+=== f5f95bf4|2026-10-06|fix(history): stabilize startup projection recovery
+Keep startup progress accurate while projection repairs wait for backoff, reconstruct safe tool-result projections from canonical events, and emit fixed-category diagnostics without transcript or invocation identifiers. Refresh schema assertions for schema 53 so the release quality gate matches the shipped migrations.
+
+=== 419df9ee|2026-10-06|fix: avoid failure code on successful process results
+
+=== 9a1e0de1|2026-10-06|fix(history): limit backoff to large repair queues
+
+=== 959e7062|2026-10-06|fix(startup): keep progress visible until app is ready
+
+=== ac2f15b9|2026-10-06|fix(startup): avoid repeating legacy history recovery
+
+=== f6014467|2026-10-06|fix(db): avoid rewriting large legacy History on startup
+
+=== e823f44c|2026-10-06|fix(db): repair 0.2.4 main schema collision
+
+=== 4d4d4050|2026-10-06|ci: remove non-target storage perf run
+
+=== 4da925b1|2026-10-06|ci: make storage latency check advisory
+
+=== ca05316c|2026-10-06|fix(ci): isolate storage performance release gate
+
+=== 367d5339|2026-10-06|chore: ignore local Users document backups
+
+=== 280ce177|2026-10-06|chore(release): bump version to 0.2.5
+
+=== 455d5a1f|2026-10-06|feat(storage): complete session migration and cleanup path
+Complete canonical session projection migration, schema compatibility, guarded cleanup, and recovery workflows with regression coverage.
+
+Record ordered source review, main integration, and local candidate evidence. Keep real-user migration and cleanup behind their separate owner authorization and deployment controls.
+
+=== 2329c20e|2026-10-04|docs(storage): record watermark anchor recovery smoke
+
+=== 6a4d4b17|2026-10-04|docs(storage): record cursor drift package faults
+
+=== b3bc6818|2026-10-04|test(storage): cover v46 allocator gap migration
+
+=== 84baa8bd|2026-10-04|docs(storage): record schema 19 profile upgrade smoke
+
+=== 95892711|2026-10-04|docs(storage): record x64 healthy spill IPC smoke
+
+=== a0b7c526|2026-10-04|docs(storage): align remaining rollback matrix status
+
+=== b983865a|2026-10-04|docs(storage): record x64 spill fault smoke
+
+=== a56ed36c|2026-10-04|docs(storage): record x64 history fault smoke
+
+=== 3de3e8e3|2026-10-04|docs(storage): record stream owner watermark package cases
+
+=== 08b9dd77|2026-10-04|docs(storage): record allocator cursor fault matrix
+
+=== 12f9a93d|2026-10-04|docs(storage): record history owner package fault
+
+=== f1f66eab|2026-10-04|docs(storage): record allocator marker package fault
+
+=== be5d82e3|2026-10-04|docs(storage): record allocator pending package fault
+
+=== 83f68768|2026-10-04|docs(storage): record x64 canonical package smoke
+
+=== 90601f5a|2026-10-04|docs(storage): record v0.2.4 canonical spill IPC
+
+=== bc9616ad|2026-10-04|docs(storage): record packaged canonical IPC fault smoke
+
+=== c56324b0|2026-10-04|docs(storage): record v0.2.4 isolated UI smoke
+
+=== 0a294c31|2026-10-04|chore(release): set rollback candidate version 0.2.4
+
+=== 97c988f1|2026-10-04|fix(chat): reconcile orphaned streaming assistant rows
+
+=== 9bdcd9cd|2026-10-04|docs(storage): record rollback floor spill and UI gaps
+
+=== 11f1398b|2026-10-04|docs(storage): record canonical backup restore smoke
+
+=== 16eb02f5|2026-10-04|docs(storage): record packaged retry IPC verification
+
+=== 62240721|2026-10-04|docs(storage): record versioned v0.2.3 candidate verification
+
+=== 3d8871db|2026-10-04|docs(storage): record v46 rollback candidate package smoke
+
+=== af9db479|2026-10-04|fix(test): build local provider package before test suite
+
+=== c69b5873|2026-10-04|feat(storage): implement session content cutover and cleanup
+
+=== 25f8692f|2026-10-02|feat(storage): implement session storage refactor phases 0-4
+
+=== c06e52b0|2026-10-06|docs(storage): add refactor plans and agent SDK design

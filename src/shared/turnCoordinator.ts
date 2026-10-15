@@ -60,6 +60,7 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.enableThinking !== undefined ? { enableThinking: config.enableThinking } : {}),
     ...(config.locale?.trim() ? { locale: config.locale.trim() } : {}),
     ...(config.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: config.projectMemoryEnabled } : {}),
+    ...(config.agentsMdEnabled !== undefined ? { agentsMdEnabled: config.agentsMdEnabled } : {}),
     ...(config.effectiveModelForUsage?.trim() ? { effectiveModelForUsage: config.effectiveModelForUsage.trim() } : {}),
     ...(config.continuationSafetySnapshot ? { continuationSafetySnapshot: { ...config.continuationSafetySnapshot } } : {}),
     ...(config.continuationSource ? { continuationSource: { ...config.continuationSource } } : {}),

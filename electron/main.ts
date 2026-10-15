@@ -5,6 +5,7 @@ import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import type { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
+import { CONFIG_KEYS } from './ipc/ipcShared'
 import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
@@ -52,6 +53,7 @@ import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
 import { flushPendingSessionBackups } from './sessionBackupShutdown'
 import type { SessionQueries } from './sessionStorage/contracts'
 import { signalChatCancel } from './chatCancelRegistry'
+import { cancelAllToolConfirmsForRequest } from './toolConfirmRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
 import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, reconcileSessionEventFilesDetailed } from './sessionEvents'
@@ -99,6 +101,8 @@ import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
 import { encryptSecret } from './secureApiKey'
 import { loadProjectMemory, startMemoryWatcher, stopMemoryWatcher } from './projectMemory'
+import { startEventLoopWatchdog } from './runtime/eventLoopWatchdog'
+import { startSessionProjectionRevalidationDrain } from './runtime/sessionProjectionRevalidation'
 import {
   getActiveLlmService,
   migrateLegacyLlmServicesIfNeeded,
@@ -137,7 +141,6 @@ const safeDbMaintenanceRequested = isSafeDbMaintenanceRequested(process.argv)
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
-const WIKI_CONFIG_KEY = 'config.wiki'
 
 // 开发版使用独立的 Electron userData，避免与已安装版或其他分支共用数据库。
 // 必须在 app.whenReady() 前设置，否则 Electron 已经确定了默认 userData 路径。
@@ -279,6 +282,8 @@ let usageStatsStartupMaintenance: (() => void) | null = null
 let startWindowReadyMaintenance: (() => void) | null = null
 let storageLifecycleStop: ((deadlineMs: number) => Promise<{ status: 'quiescent' | 'deadline-exceeded' }>) | null = null
 let storageProfileCoordinator: StorageProfileCoordinator | null = null
+let projectionRevalidationDrainStop: { stop: () => void } | null = null
+let eventLoopWatchdogStop: (() => void) | null = null
 let safeDatabaseMaintenanceInFlight: Promise<void> | undefined
 let isQuitting = false
 let quitCleanupDone = false
@@ -544,7 +549,11 @@ app.whenReady().then(async () => {
           prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db), shouldRetainSessionDir: shouldRetain
         })
         for (const failure of result.summary.failures) console.warn('[sessionEvents] retention cleanup failed:', failure.sessionName, failure.error)
-        if (result.summary.failures.length) throw new Error('session-event-retention-incomplete')
+        if (result.summary.failures.length) {
+          // 透传首个失败的平台错误码（EPERM/EBUSY…），watermark 报告的 lastError 才有诊断价值
+          const firstCode = result.summary.failures.find((failure) => failure.error && typeof failure.error === 'object' && 'code' in failure.error)?.error as { code?: string } | undefined
+          throw Object.assign(new Error('session-event-retention-incomplete'), { code: firstCode?.code ?? 'RETENTION_INCOMPLETE' })
+        }
         return result.summary.removed + result.summary.retained.length
       })),
       dailyRetentionTask('spill-degradable-retention', () => String(resolveRetentionPolicyFromDb(db).degradableSpillRetentionDays), () => path.join(app.getPath('userData'), 'spill'), async () => {
@@ -807,7 +816,7 @@ app.whenReady().then(async () => {
     pendingSessionHistoryRepairs = (getDbConnection(db).prepare(`SELECT COUNT(*) AS count
       FROM canonical_projection_repairs repairs
       LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-      WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+      WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
         cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).get() as { count: number }).count
     sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0 && pendingSessionHistoryRepairs === 0
     if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
@@ -1000,7 +1009,12 @@ app.whenReady().then(async () => {
   turnRuntime = new TurnRuntime({
     storage: sessionStorage.execution.coordinator,
     deps: { now: Date.now, id: randomUUID },
-    onCancel: (turn) => signalChatCancel(turn.turnId),
+    onCancel: (turn) => {
+      signalChatCancel(turn.turnId)
+      // 撤确认卡必须按 requestId 索引（toolConfirmRegistry 的 pending 按 requestId 登记）；
+      // signalChatCancel 收到的钥匙是 turnId，查不到确认卡，这里用完整 turn 对象上的真实 requestId 补齐
+      cancelAllToolConfirmsForRequest(turn.requestId)
+    },
     onEvent: (turn, event) => {
       const display = turnToDisplay(turn)
       if (event.type === 'source-cancelled') display.outcome = 'cancelled'
@@ -1091,6 +1105,14 @@ app.whenReady().then(async () => {
   // 注册维护任务；实际执行时机在下方 createMainWindow 完成之后（评审 P1-3）。
   usageStatsStartupMaintenance = runUsageStatsStartupMaintenance
 
+  // P0-③（评审 S1）：重校验队列的常驻生产 drain——入队方（读路径 stale / 终态检查点）之外
+  // 必须有消费方，否则 mismatch verdict 永不重验/清除。unref 不阻碍进程退出。
+  projectionRevalidationDrainStop = startSessionProjectionRevalidationDrain(db)
+  // P3-③（评审 S3）：常驻事件循环延迟采样——p99 超阈值（200ms）落 agent 日志，作为
+  // monitorEventLoopDelay 门禁证据；只告警不干预。
+  const eventLoopWatchdog = startEventLoopWatchdog({ thresholdMs: 200 })
+  eventLoopWatchdogStop = eventLoopWatchdog.stop
+
   const getApiKey = async (): Promise<string | null> => {
     return getActiveLlmService(db).getApiKey()
   }
@@ -1141,7 +1163,7 @@ app.whenReady().then(async () => {
       }
     },
     getWikiConfig: () => {
-      const raw = getConfigValue(db, WIKI_CONFIG_KEY)
+      const raw = getConfigValue(db, CONFIG_KEYS.wiki)
       if (!raw) return mergeWikiConfig(null)
       try {
         return mergeWikiConfig(JSON.parse(raw) as Parameters<typeof mergeWikiConfig>[0])
@@ -1506,6 +1528,8 @@ app.on('before-quit', (event) => {
   butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()
+  projectionRevalidationDrainStop?.stop()
+  eventLoopWatchdogStop?.()
   stopMemoryWatcher()
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.destroy()

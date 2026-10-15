@@ -10,9 +10,10 @@ import type { McpOAuthClientPreset } from './oauthClientPresets'
 vi.hoisted(() => vi.resetModules())
 
 vi.mock('../secureApiKey', () => ({
-  isSecretStorageAvailable: () => true,
   encryptSecret: (plain: string) => `enc:${plain}`,
-  decryptSecret: (b64: string) => b64.replace(/^enc:/, '')
+  decryptSecret: (b64: string) => b64.replace(/^enc:/, ''),
+  isSecretEncrypted: (value: string) => value.startsWith('enc:'),
+  isLegacySecret: (value: string) => !value.startsWith('enc:'),
 }))
 
 const servers: Array<http.Server> = []
@@ -325,24 +326,17 @@ describe('mcpService.addMcpServer 三态结论（需求 §7 Phase 2 / 前案 §5
     }
   })
 
-  it('safeStorage 不可用且带 secret → save-failed，不落库（评审建议 14）', async () => {
-    const secureApiKey = await import('../secureApiKey')
-    const spy = vi.spyOn(secureApiKey, 'isSecretStorageAvailable').mockReturnValue(false)
+  it('stores MCP secrets without requiring system safeStorage', async () => {
+    const { db, cleanup } = createTempDatabase('mcp-add-no-keychain-')
     try {
-      const { db, cleanup } = createTempDatabase('mcp-add-nostorage-')
-      try {
-        const result = await addMcpServer(db, {
-          name: '无存储服务', transport: 'stdio', command: 'npx', args: ['-y', 'x'],
-          env: { API_TOKEN: 'tok-1' }
-        })
-        expect(result.ok).toBe(false)
-        if (!result.ok) expect(result.code).toBe('save-failed')
-        expect(listProfiles(db)).toHaveLength(0)
-      } finally {
-        cleanup()
-      }
+      const result = await addMcpServer(db, {
+        name: '本地加密服务', transport: 'stdio', command: 'npx', args: ['-y', 'x'],
+        env: { API_TOKEN: 'tok-1' }
+      })
+      expect(result.ok).toBe(true)
+      expect(listProfiles(db)).toHaveLength(1)
     } finally {
-      spy.mockRestore()
+      cleanup()
     }
   })
 

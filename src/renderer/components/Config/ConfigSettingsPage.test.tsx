@@ -122,11 +122,11 @@ describe('ConfigSettingsPage 优选默认模型', () => {
     store.dispatch(setSettingsOpen(true))
   })
 
-  it('在手动验证前展示钥匙串说明，且仅点击验证时请求读取已保存 Key', async () => {
+  it('在手动验证前说明本地加密存储，且仅点击验证时请求读取已保存 Key', async () => {
     renderPage()
     const verify = (window.api as unknown as { configVerifyLlmKey: ReturnType<typeof vi.fn> }).configVerifyLlmKey
     expect(verify).not.toHaveBeenCalled()
-    expect(screen.getByText(/macOS 可能要求批准钥匙串访问/)).toBeDefined()
+    expect(screen.getByText('API Key 会在本地加密保存。')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: '验证已保存 Key' }))
     await waitFor(() => expect(verify).toHaveBeenCalledWith('ds'))
   })

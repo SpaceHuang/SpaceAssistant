@@ -58,6 +58,8 @@ import type { GateConfirmationContext } from '../confirmation/agentSdkConfirmati
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 import type { ToolCallGateArgs } from '../confirmation/toolCallGate'
 import { createRegisteredAgentTurnTools } from '../tools/registeredAgentTurnTools'
+import { RunShellPlanError } from '../tools/runShellPlan'
+import { planRejectionFromRunShellPlan } from '../tools/planRejection'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
 import { buildSessionDirectoryContextBlock, normalizeDirectoryGrantPath, type SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
@@ -70,7 +72,7 @@ import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityP
 import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
 import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
 import { createHostedAgentTurnHost } from './hostedAgentTurnHost'
-import { MAX_MODEL_TURNS_PER_INVOCATION, type ConfirmationPort } from '../../packages/agent-sdk/src/turn'
+import { AgentTurnLifecycleInvalidatedError, MAX_MODEL_TURNS_PER_INVOCATION, type ConfirmationPort } from '../../packages/agent-sdk/src/turn'
 import { FileStateCache } from '../fileStateCache'
 import { resolveEffectiveShellOutputMode } from '../../src/shared/shellOutputMode'
 import { assessActDanger } from '../browser/actDangerAssessor'
@@ -141,6 +143,7 @@ export interface AgentInvocationMaterials {
   remoteContext?: import('../tools/types').RemoteContext
   /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
   onRemoteTextActivity?: (text: string) => void
+  onAgentsMdNotLoaded?: () => void
   workDir: string
   workDirManager?: import('../workDirManager').WorkDirManager
   resolveWorkDir?: () => string
@@ -155,6 +158,7 @@ export interface AgentInvocationMaterials {
   historyForSession?: (sessionId: string) => import('../../packages/agent-sdk/src/history').HistoryPort
   locale?: import('../../src/shared/domainTypes').AppLocale
   projectMemoryEnabled?: boolean
+  agentsMdEnabled?: boolean
   skillFragments?: string[]
   /** Test composition hook for IM-only orchestration capabilities; production adapters are added by the ordered tool tasks. */
   imOrchestrationToolRegistry?: import('../tools/plannedToolRegistry').TypedToolRegistry
@@ -232,7 +236,7 @@ function buildWorkspacePorts(materials: AgentInvocationMaterials, sessionQueries
     sessionQueries,
     sessionId: materials.sessionId,
     workDirManager: materials.workDirManager as import('../workDirManager').WorkDirManager | undefined,
-    fallbackWorkDir: materials.workDir,
+    fallbackWorkDir: () => materials.resolveWorkDir?.() ?? materials.workDir,
     onRebound: (e) => {
       getSecurityAuditLog().record({
         ts: Date.now(),
@@ -386,6 +390,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const runtimeTurnId = acceptedTurnId ?? materials.requestId
   const db = materials.appDb as AppDatabase | undefined
   const sessionStorage = materials.sessionStorage
+  const workspacePorts = buildWorkspacePorts(materials, sessionStorage?.queries)
   if (db && !sessionStorage) throw new Error('SESSION_STORAGE_REQUIRED')
   // Model identity must come from the trusted resolver at the call site. Looking it up
   // by display name here would make unrelated Hosted/remote invocations depend on a
@@ -494,6 +499,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(materials.options !== undefined ? { options: materials.options } : {}),
       ...(resolvedLocale !== undefined ? { locale: resolvedLocale } : {}),
       ...(materials.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: materials.projectMemoryEnabled } : {}),
+      agentsMdEnabled: materials.agentsMdEnabled ?? true,
       ...(invocationSkillFragments.length > 0 ? { skillFragments: invocationSkillFragments } : {}),
       tools: {
         toolsConfig: materials.toolsConfig,
@@ -908,7 +914,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const turnId = runtimeTurnId
       const fileStateCache = new FileStateCache()
       const createExecutionContext = input.createExecutionContext ?? ((call) => ({
-        workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+        workDir: (workspacePorts.snapshot() as { rootPath?: string }).rootPath || materials.resolveWorkDir?.() || materials.workDir,
         userDataDir: materials.userDataDir,
         requestId: materials.requestId,
         toolUseId: call.toolCallId,
@@ -965,9 +971,26 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           : {})
       }))
       const refreshExecutionContext = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: { confirmation?: { receipt: string } }, current: Record<string, unknown>) => {
+        const requestMetadata = (stage as { requestMetadata?: Record<string, unknown> }).requestMetadata
+        const agentsMdSnapshot = requestMetadata?.agentsMdSnapshot
+        const sourceWorkDir = agentsMdSnapshot && typeof agentsMdSnapshot === 'object' && !Array.isArray(agentsMdSnapshot)
+          ? (agentsMdSnapshot as { workDir?: unknown }).workDir
+          : undefined
+        const currentWorkspace = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
+        const currentWorkDir = path.resolve(currentWorkspace.rootPath ?? materials.resolveWorkDir?.() ?? materials.workDir)
+        const sourceWorkspace = requestMetadata?.workspaceBinding as { workDir?: unknown; profileId?: unknown; key?: unknown; revision?: unknown } | undefined
+        if (sourceWorkspace && typeof sourceWorkspace.key === 'string' &&
+          (sourceWorkspace.key !== currentWorkspace.key || sourceWorkspace.profileId !== currentWorkspace.profileId || sourceWorkspace.revision !== currentWorkspace.revision)) {
+          const { ToolDeniedError } = await import('../../packages/agent-sdk/src/turn')
+          throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'The session work directory binding changed after this model response. The tool was not executed; issue a new request under the current directory instructions.')
+        }
+        if (typeof sourceWorkDir === 'string' && sourceWorkDir.length > 0 && path.resolve(sourceWorkDir) !== currentWorkDir) {
+          const { ToolDeniedError } = await import('../../packages/agent-sdk/src/turn')
+          throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'The session work directory changed after this model response. The tool was not executed; issue a new request under the current directory instructions.')
+        }
         const refreshed = {
           ...current,
-          workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+          workDir: typeof sourceWorkspace?.workDir === 'string' ? path.resolve(sourceWorkspace.workDir) : typeof sourceWorkDir === 'string' && sourceWorkDir.length > 0 ? path.resolve(sourceWorkDir) : currentWorkDir,
           browserConfig: materials.resolveBrowserConfig?.() ?? current.browserConfig ?? materials.browserConfig,
           toolsConfig: materials.resolveToolsConfig?.() ?? current.toolsConfig ?? materials.toolsConfig,
           shellConfig: materials.resolveShellConfig?.() ?? current.shellConfig ?? materials.shellConfig,
@@ -1267,6 +1290,14 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.sessionLedgerForInvocationTerminal ? { sessionLedgerForInvocationTerminal: input.sessionLedgerForInvocationTerminal } : {}),
         prepareTool: input.registeredTools.prepareTool,
         discardPreparedTool: input.registeredTools.discardPreparedTool,
+        beforeModelRequest: () => {
+          const revoked = [...input.authorizedToolNames].some((toolName) =>
+            runtime.toolRevocations.isToolRevoked(materials.requestId, toolName)
+          )
+          if (revoked) throw new AgentTurnLifecycleInvalidatedError('revoked')
+          const current = resolveCurrentAuthorization().authorizationVersion
+          if (current !== authorizationVersion) throw new AgentTurnLifecycleInvalidatedError('authorization-changed')
+        },
         ...(input.confirmation ? { confirmation: input.confirmation } : {}),
         toolExecution: input.registeredTools.toolExecution,
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
@@ -1282,15 +1313,23 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         resourceLocks: (materials.resourceLocks ?? runtime.resourceLocks) as never,
         toolResourceKeys: input.registeredTools.toolResourceKeys,
         isApprovalCandidate: input.registeredTools.isApprovalCandidate,
-        ...(materials.sessionEventLocation ? { sessionLedgerForToolResult: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, execution: { output: unknown; isError?: boolean; auditRef?: string }) => {
+        ...(materials.sessionEventLocation ? { sessionLedgerForToolResult: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, execution: { output: unknown; isError?: boolean; auditRef?: string; executionOutcome?: string; executorEntry?: string; errorCode?: string; invocationDisposition?: string }) => {
           const isError = execution.isError ?? false
           const result = projectCanonicalToolResultForSessionLedger({
             rawResult: execution.output, isError, toolName: call.toolName, workspaceRoot: materials.resolveWorkDir?.() ?? materials.workDir,
-            ...(execution.auditRef ? { auditRef: execution.auditRef } : {})
+            ...(execution.auditRef ? { auditRef: execution.auditRef } : {}),
+            ...(execution.executionOutcome ? { executionOutcome: execution.executionOutcome as import('../../src/shared/domainTypes').ToolCallResultPersisted['executionOutcome'] } : {}),
+            ...(execution.executorEntry ? { executorEntry: execution.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
+            ...(execution.errorCode ? { executionErrorCode: execution.errorCode } : {}),
+            ...(execution.invocationDisposition ? { invocationDisposition: execution.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
           })
           // FR8/AD10：延迟工具未浮现直调 → 持久化面标记（不进 wire 面工具结果块，B4）
           const record = execution.output && typeof execution.output === 'object' && !Array.isArray(execution.output) ? execution.output as Record<string, unknown> : undefined
           if (!(isError || record?.success === false) && input.deferredUnsurfacedCheck?.(call.toolName)) result.deferredUnsurfaced = true
+          if (execution.executionOutcome) result.executionOutcome = execution.executionOutcome as NonNullable<typeof result.executionOutcome>
+          if (execution.executorEntry) result.executorEntry = execution.executorEntry as NonNullable<typeof result.executorEntry>
+          if (execution.errorCode) result.executionErrorCode = execution.errorCode
+          if (execution.invocationDisposition) result.invocationDisposition = execution.invocationDisposition as NonNullable<typeof result.invocationDisposition>
           return {
             location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result,
             requestId: materials.requestId, invocationRequestId: materials.requestId,
@@ -1404,6 +1443,22 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...registeredTools,
         prepareTool: async (call: Parameters<typeof registeredTools.prepareTool>[0], stage: Parameters<typeof registeredTools.prepareTool>[1]) => {
           try {
+            if (stage.kind === 'recheck') {
+              const snapshot = stage.requestMetadata?.agentsMdSnapshot
+              const sourceWorkDir = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+                ? (snapshot as { workDir?: unknown }).workDir
+                : undefined
+              const currentWorkspace = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
+              const currentWorkDir = path.resolve(currentWorkspace.rootPath ?? materials.resolveWorkDir?.() ?? materials.workDir)
+              const sourceWorkspace = stage.requestMetadata?.workspaceBinding as { workDir?: unknown; profileId?: unknown; key?: unknown; revision?: unknown } | undefined
+              const workspaceBindingChanged = sourceWorkspace && typeof sourceWorkspace.key === 'string' &&
+                (sourceWorkspace.key !== currentWorkspace.key || sourceWorkspace.profileId !== currentWorkspace.profileId || sourceWorkspace.revision !== currentWorkspace.revision)
+              const workDirChanged = typeof sourceWorkDir === 'string' && sourceWorkDir.length > 0 && path.resolve(sourceWorkDir) !== currentWorkDir
+              if (workspaceBindingChanged || workDirChanged) {
+                const { ToolDeniedError } = await import('../../packages/agent-sdk/src/turn')
+                throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'The session work directory binding changed after this model response. The tool was not executed; issue a new request under the current directory instructions.')
+              }
+            }
             return await registeredTools.prepareTool(call, stage)
           } catch (error) {
             const message = error instanceof Error ? error.message : ''
@@ -1416,6 +1471,20 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
                   ? `工具 ${call.toolName} 因本轮上下文预算未注入（已被裁剪），本轮无法调用。请减少同时启用的 MCP 工具，或在设置页查看工具预算裁剪记录。`
                   : `工具 ${call.toolName} 当前不可用：MCP 工具可能已变更或服务不可用。请确认服务连接，并在设置页刷新工具列表后重试。`
               )
+            }
+            // P0-A（D-1/D-7/D-8）：可回传的 run_shell 计划期失败降级为 PlanRejectedError——SDK 视为
+            // 「拒绝即回模型」，turn 继续到下一模型轮；转换点同一 payload 写 plan_failed 台账并维护
+            // 方言错配计数（第 2 次同款升级提示）。白名单外异常原样 rethrow，保持 fatal。
+            if (error instanceof RunShellPlanError) {
+              const rejected = planRejectionFromRunShellPlan(error, {
+                sessionId: materials.sessionId,
+                requestId: materials.requestId,
+                toolUseId: call.toolCallId,
+                command: typeof call.input === 'object' && call.input !== null && typeof (call.input as { command?: unknown }).command === 'string'
+                  ? (call.input as { command: string }).command
+                  : undefined
+              })
+              if (rejected) throw rejected
             }
             throw error
           }
@@ -1548,11 +1617,17 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       lane: materialsLane,
       model: materials.model,
       contextWindow: materials.contextWindow,
+      getWorkDirSnapshot: () => {
+        const snapshot = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
+        return { workDir: snapshot.rootPath ?? materials.workDir, profileId: snapshot.profileId ?? '', key: snapshot.key ?? '', revision: snapshot.revision ?? 0 }
+      },
+      agentsMdEnabled: materials.agentsMdEnabled ?? true,
       windowId: materials.windowId,
       ...(materials.sessionEventLocation ? { sessionEventLocation: materials.sessionEventLocation } : {}),
       turnIdForRetry: runtimeTurnId,
       stageAssistantContentUntilTurnFinished: materials.remoteContext !== undefined,
       onRemoteTextActivity: materials.onRemoteTextActivity,
+      onAgentsMdNotLoaded: materials.onAgentsMdNotLoaded,
       assistantMessageId: materials.assistantMessageId,
       emitSessionEvent: materials.emitSessionEvent,
       onProviderRetry: (retry) => materials.emitSessionEvent({
@@ -1570,7 +1645,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       onUsageAttribution: ({ modelTurn, attribution }) => attributionByModelTurn.set(modelTurn, attribution),
       onTurnToolAttribution: (dimension) => { turnToolAttribution = dimension },
       onDispatchDiagnostic: (event) => {
-        const eventName = event.type === 'tools.dispatch_stopped_with_pending' || event.type === 'tools.undispatched_slots_materialized' || event.type === 'tools.dispatch_failure_context'
+        const eventName = event.type === 'tools.dispatch_stopped_with_pending' || event.type === 'tools.undispatched_slots_materialized' || event.type === 'tools.dispatch_failure_context' || event.type === 'tools.execution_summary'
           ? event.type
           : 'tool.error'
         logAgentEvent('warn', eventName, {
@@ -1601,7 +1676,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           ...(typeof record?.error === 'string' ? { error: record.error } : {}),
           ...(typeof record?.userMessage === 'string' ? { userMessage: record.userMessage } : {}),
           ...(typeof record?.decisionRuleId === 'string' ? { decisionRuleId: record.decisionRuleId } : {}),
-          ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object' ? { autoApprovedWrite: record.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta } : {})
+          ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object' ? { autoApprovedWrite: record.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta } : {}),
+          ...(typeof record?.executionOutcome === 'string' ? { executionOutcome: record.executionOutcome as import('../../src/shared/domainTypes').ToolCallResultPersisted['executionOutcome'] } : {}),
+          ...(typeof record?.executorEntry === 'string' ? { executorEntry: record.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
+          ...(typeof record?.executionErrorCode === 'string' ? { executionErrorCode: record.executionErrorCode } : {}),
+          ...(typeof record?.invocationDisposition === 'string' ? { invocationDisposition: record.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
         }, { workspaceRoot: materials.workDir, processTool: isProcessToolName(call.toolName) })
         if (projected.success && projected.autoApprovedWrite) {
           logAgentEvent('info', 'file.auto_approve', { requestId: materials.requestId, sessionId: materials.sessionId,
@@ -1613,7 +1692,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     }),
     diagnostics,
     answerer,
-    workspace: buildWorkspacePorts(materials, sessionStorage?.queries),
+    workspace: workspacePorts,
     credentials: {
       resolveApiKey: () => materials.getApiKey(),
       ...(materials.baseUrl !== undefined ? { networkTarget: { baseUrl: materials.baseUrl } } : {})

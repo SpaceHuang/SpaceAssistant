@@ -88,7 +88,9 @@ export function createAgentSdkConfirmationPort(input: {
     }
     const request: ConfirmRequest = {
       facts: confirmation.context.facts,
-      ...confirmation.context.decision
+      ...confirmation.context.decision,
+      ...(typeof confirmation.context.modelJustification === 'string' ? { modelJustification: confirmation.context.modelJustification } : {}),
+      ...(confirmation.context.modelJustificationTruncated === true ? { modelJustificationTruncated: true } : {})
     }
     const lane = confirmation.context.lane
     const imHumanApproval = confirmation.answerer === 'user' && confirmation.context.decision.disposition === 'human-required' &&

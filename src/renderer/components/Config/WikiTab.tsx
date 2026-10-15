@@ -1,17 +1,30 @@
-import { App, Button, Input, InputNumber, Space, Switch } from 'antd'
-import type { WikiConfig } from '../../../shared/domainTypes'
+import { App, Button, Input, InputNumber, Modal, Space, Switch, Typography } from 'antd'
+import { useState } from 'react'
+import type { WikiConfig, WikiMigrationState } from '../../../shared/domainTypes'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { LegacyRootChips, MigrationConflictSection, MigrationFailureSection, MigrationSummary } from '../WikiPane/wikiMigrationShared'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 type Props = {
   wiki: WikiConfig
   onChange: (next: WikiConfig) => void
 }
 
+type MigrationStatus = {
+  pendingLegacyMigration?: boolean
+  legacyRoots?: string[]
+  migration?: WikiMigrationState
+}
+
+/** T2.6：共享库设置页——受控改名 / 迁移入口与报告查看（数据源 config.wiki.migration）/ 打开目录。 */
 export function WikiTab({ wiki, onChange }: Props) {
   const { message } = App.useApp()
   const { t } = useTypedTranslation('config')
+  const [renaming, setRenaming] = useState(false)
+  const [newRootPath, setNewRootPath] = useState('')
+  const [migration, setMigration] = useState<MigrationStatus | null>(null)
 
   const initWiki = async () => {
     const result = await window.api.wikiInit({ installSkill: true })
@@ -28,6 +41,57 @@ export function WikiTab({ wiki, onChange }: Props) {
     await window.api.skillInvalidateCache()
   }
 
+  const startRename = async () => {
+    // P1-16（§11）：存量自定义根未迁移时先展示迁移引导而非直接改名
+    const status = (await window.api.wikiMigrationStatus()) as unknown as MigrationStatus
+    if (status.pendingLegacyMigration) {
+      message.warning(t('wiki.renameBlockedByMigration'))
+      void openMigrationInfo()
+      return
+    }
+    setNewRootPath(wiki.rootPath)
+    setRenaming(true)
+  }
+
+  const confirmRename = async () => {
+    const result = await window.api.wikiRenameRoot({ newRootPath: newRootPath.trim() })
+    if (!result.ok) {
+      // 失败回滚语义：配置值保持不变，仅提示错误
+      message.error(formatUserFacingError(result.error))
+      return
+    }
+    onChange({ ...wiki, rootPath: newRootPath.trim() })
+    setRenaming(false)
+    message.success(t('wiki.renameSuccess', { path: newRootPath.trim() }))
+  }
+
+  const openMigrationInfo = async () => {
+    const status = (await window.api.wikiMigrationStatus()) as unknown as MigrationStatus
+    setMigration(status)
+  }
+
+  // BLK-1：设置页弹窗内直接执行迁移（§16-B5 迁移入口必须可达）
+  const [migrating, setMigrating] = useState(false)
+  const runMigration = async () => {
+    setMigrating(true)
+    try {
+      const report = await window.api.wikiMigrateLegacy()
+      const status = (await window.api.wikiMigrationStatus()) as unknown as MigrationStatus
+      setMigration({ ...status, migration: { ...(status.migration ?? { status: 'completed' }), report } })
+    } catch (e) {
+      message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
+    } finally {
+      setMigrating(false)
+    }
+  }
+
+  const openSharedDir = () => {
+    // BLK-4（D9）：挂载按词汇前缀解析，rootPath 是物理目录名不参与词汇语义
+    void window.api.fileShowInExplorer(WIKI_VOCABULARY_PREFIX)
+  }
+
+  const report = migration?.migration?.report
+
   return (
     <ConfigSettingsStack>
       <ConfigSwitchRow
@@ -35,12 +99,17 @@ export function WikiTab({ wiki, onChange }: Props) {
         checked={wiki.enabled}
         onChange={(enabled) => onChange({ ...wiki, enabled })}
       />
-      <ConfigField label={t('wiki.rootPathLabel')}>
-        <Input
-          value={wiki.rootPath}
-          onChange={(e) => onChange({ ...wiki, rootPath: e.target.value.trim() || 'llm-wiki' })}
-          placeholder={t('wiki.rootPathPlaceholder')}
-        />
+      <ConfigField label={t('wiki.rootPathLabel')} hint={t('wiki.rootPathHelp')}>
+        <Space.Compact style={{ width: '100%' }}>
+          <Input
+            value={wiki.rootPath}
+            readOnly
+            placeholder={t('wiki.rootPathPlaceholder')}
+          />
+          <Button onClick={() => void startRename()} disabled={!wiki.enabled}>
+            {t('wiki.renameButton')}
+          </Button>
+        </Space.Compact>
       </ConfigField>
       <ConfigSwitchRow
         label={t('wiki.hideFromTreeLabel')}
@@ -61,9 +130,85 @@ export function WikiTab({ wiki, onChange }: Props) {
           style={{ width: '100%' }}
         />
       </ConfigField>
-      <Button type="primary" onClick={() => void initWiki()} disabled={!wiki.enabled}>
-        {t('wiki.initButton')}
-      </Button>
+      <Space wrap>
+        <Button type="primary" onClick={() => void initWiki()} disabled={!wiki.enabled}>
+          {t('wiki.initButton')}
+        </Button>
+        <Button onClick={() => void openMigrationInfo()} disabled={!wiki.enabled}>
+          {t('wiki.migrationEntry')}
+        </Button>
+        <Button onClick={openSharedDir} disabled={!wiki.enabled}>
+          {t('wiki.openSharedDir')}
+        </Button>
+      </Space>
+      <Modal
+        open={renaming}
+        title={t('wiki.renameTitle')}
+        onOk={() => void confirmRename()}
+        onCancel={() => setRenaming(false)}
+        okText={t('wiki.renameButton')}
+      >
+        <Typography.Paragraph type="secondary">{t('wiki.renameHint')}</Typography.Paragraph>
+        <Input
+          value={newRootPath}
+          onChange={(e) => setNewRootPath(e.target.value.trim())}
+          placeholder={t('wiki.rootPathPlaceholder')}
+        />
+      </Modal>
+      <Modal
+        open={migration !== null}
+        title={t('wiki.migrationTitle')}
+        footer={null}
+        onCancel={() => setMigration(null)}
+        width={560}
+      >
+        {migration?.pendingLegacyMigration ? (
+          <>
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
+              {t('wiki.migrationPendingHint', { count: migration.legacyRoots?.length ?? 0 })}
+            </Typography.Paragraph>
+            <LegacyRootChips roots={migration.legacyRoots ?? []} />
+            <Button type="primary" loading={migrating} onClick={() => void runMigration()} style={{ marginTop: 12 }}>
+              {t('wiki.migrationRunNow')}
+            </Button>
+          </>
+        ) : (
+          <Typography.Paragraph type="secondary">{t('wiki.migrationUpToDate')}</Typography.Paragraph>
+        )}
+        {report ? (
+          <>
+            <Typography.Title level={5} style={{ marginTop: 16, marginBottom: 6 }}>
+              {t('wiki.migrationReportTitle')}
+            </Typography.Title>
+            <MigrationSummary
+              text={t('wiki.migrationReportSummary', {
+                migrated: report.profiles?.filter((p) => p.status === 'migrated').length ?? 0,
+                conflicts: report.conflicts?.length ?? 0,
+                renames: report.renames?.length ?? 0
+              })}
+            />
+            <MigrationConflictSection
+              title={t('wiki.migrationConflictsTitle')}
+              conflicts={report.conflicts}
+            />
+            <MigrationFailureSection
+              title={t('wiki.migrationFailedTitle')}
+              failures={(report.profiles ?? []).filter((p) => p.status === 'failed')}
+            />
+            <Button
+              type="primary"
+              style={{ marginTop: 12 }}
+              onClick={() => setMigration(null)}
+            >
+              {t('wiki.migrationReportClose')}
+            </Button>
+          </>
+        ) : (
+          <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+            {t('wiki.migrationNoReport')}
+          </Typography.Paragraph>
+        )}
+      </Modal>
     </ConfigSettingsStack>
   )
 }

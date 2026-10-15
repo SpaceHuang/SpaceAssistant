@@ -127,12 +127,43 @@ export type FileReadResult =
   | { kind: 'image'; content: string; encoding: 'base64'; mimeType: string }
   | { kind: 'unsupported'; ext: string }
   | { kind: 'too_large'; size: number }
+  | { kind: 'error'; error: string; migratedTo?: string }
 
 export type FileMetadata = {
   size: number
   mtime: number
   isText: boolean
 }
+
+export type AgentsMdRequestSnapshotIndexEntry = Readonly<{
+  invocationId: string
+  requestId: string
+  modelTurn: number
+  attempt: number
+  status: string
+  digest?: string
+  byteLength: number
+  tokenCount: number
+  loadedAt: number
+  source: 'AGENTS.md'
+  scope: 'workdir-root'
+  workDirName?: string
+  approvalTools?: string[]
+  bodyAvailable: boolean
+}>
+
+export type AgentsMdRequestSnapshotBody = Readonly<{
+  invocationId: string
+  modelTurn: number
+  status: string
+  digest?: string
+  content?: string
+}>
+
+export type AgentsMdRequestSnapshotsResponse = Readonly<{
+  entries: AgentsMdRequestSnapshotIndexEntry[]
+  current: Readonly<{ status: string; digest?: string }>
+}>
 
 export type ClaudeChatMessageWithBlocks = {
   role: 'user' | 'assistant'
@@ -217,6 +248,7 @@ export type SpaceAssistantApi = {
     temperature?: number
     maxTokens?: number
     metadata?: Record<string, unknown>
+    agentsMdEnabled?: boolean
     /** composer 草稿带入的会话级 Thinking 强度覆盖 */
     thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
   }) => Promise<Session>
@@ -230,6 +262,7 @@ export type SpaceAssistantApi = {
     maxTokens?: number
     skillsState?: SessionSkillsState
     metadata?: Record<string, unknown>
+    agentsMdEnabled?: boolean
     /** 会话级 Thinking 强度覆盖；null = 清除覆盖（回到继承全局） */
     thinkingEffort?: import('./agent/invocation').AgentReasoningEffort | null
   }) => Promise<Session | undefined>
@@ -241,6 +274,8 @@ export type SpaceAssistantApi = {
   usageDelete: (sessionId: string) => Promise<void>
 
   chatGetMessages: (payload: { sessionId: string; limit?: number; offset?: number }) => Promise<Message[]>
+  chatGetAgentsMdRequestSnapshots: (payload: { sessionId: string; limit?: number }) => Promise<AgentsMdRequestSnapshotsResponse>
+  chatGetAgentsMdRequestSnapshot: (payload: { sessionId: string; invocationId: string; modelTurn: number }) => Promise<AgentsMdRequestSnapshotBody | undefined>
   chatCompactSessionContext: (payload: { sessionId: string; requestId: string }) => Promise<({ status: 'committed' } & import('./compactionEvents').CompactionMarker) | { status: 'no-op' | 'uncompressible' | 'busy' | 'failed' | 'stale' | 'forbidden' | 'session-not-found' }>
   chatGetSessionCompactionMarkers: (sessionId: string) => Promise<import('./compactionEvents').CompactionMarker[]>
   chatGetApiContextBaseline: (payload: {
@@ -340,7 +375,6 @@ export type SpaceAssistantApi = {
   }) => Promise<{ mimeType: string; dataBase64: string } | { error: string }>
 
   configGet: () => Promise<AppConfig>
-  configAckKeyAccessUpgradeNotice: () => Promise<void>
   /** exposure 清单：主进程读 DB 按链路求值可见工具名（渲染端薄壳消费，不上行 config）。 */
   getToolExposureList: (payload: { lane: 'desktop' | 'wechat' | 'feishu' }) => Promise<string[]>
   /** 配置变更后主进程重推桌面链路清单。 */
@@ -435,7 +469,7 @@ export type SpaceAssistantApi = {
       locale: import('./domainTypes').AppLocale
     }>
   ) => Promise<void>
-  configVerifyLlmKey: (serviceId: string) => Promise<{ ok: boolean; code?: 'LLM_KEY_NOT_CONFIGURED' | 'LLM_KEY_STORAGE_UNAVAILABLE' | 'LLM_KEY_ACCESS_DENIED' }>
+  configVerifyLlmKey: (serviceId: string) => Promise<{ ok: boolean; code?: 'LLM_KEY_NOT_CONFIGURED' | 'LLM_KEY_ACCESS_DENIED' }>
   configTestConnection: (options?: {
     serviceId?: string
     apiKey?: string
@@ -559,10 +593,16 @@ export type SpaceAssistantApi = {
   wikiGetSchema: () => Promise<{ content: string } | null>
   wikiResolvePath: (payload: {
     relPath: string
-  }) => Promise<{ absPath: string; kind: 'raw' | 'wiki' | 'schema' | 'other' } | { error: string }>
+  }) => Promise<{ absPath: string; kind: 'raw' | 'wiki' | 'schema' | 'other'; readOnly?: boolean } | { error: string }>
   wikiImportRaw: (payload: {
     srcRelPath: string
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
+  wikiMigrationStatus: () => Promise<import('./domainTypes').WikiStatus>
+  wikiMigrateLegacy: (payload?: {
+    profileIds?: string[]
+    extraLegacyRoots?: Array<{ workDir: string; rootDirName: string }>
+  }) => Promise<import('./domainTypes').WikiMigrationReport>
+  wikiRenameRoot: (payload: { newRootPath: string }) => Promise<{ ok: true } | { ok: false; error: string }>
 
   projectMemoryGetState: () => Promise<ProjectMemoryState>
   projectMemoryGenerate: () => Promise<{ success: boolean; prompt?: string; content?: string; error?: string }>

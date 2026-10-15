@@ -134,6 +134,19 @@ function applyReadResult(
       tooLargeSize: null
     }
   }
+  if (result.kind === 'error') {
+    // P1-10（§12.3-2）：读取失败（含「已合并至」跳转线索 migratedTo）
+    return {
+      previewContent: null,
+      imageDataUrl: null,
+      fileType,
+      loadError: result.migratedTo
+        ? runtimeText('detailPanel.fileMigrated', { to: result.migratedTo })
+        : result.error,
+      unsupportedExt: null,
+      tooLargeSize: null
+    }
+  }
   if (result.kind === 'image') {
     return {
       previewContent: null,

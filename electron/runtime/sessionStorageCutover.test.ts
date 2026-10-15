@@ -301,8 +301,10 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     appendMessage(db, { id: 'write-stopped-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
     await writeCanonicalMessages(db, session.id, [{ id: 'write-stopped-user', role: 'user', content: 'question', timestamp: 1 }])
     expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
+    // P1-①：writeCanonicalMessages 的 append 已由写路径授予 eligibility，此处确保行存在（幂等）。
     getDbConnection(db).prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at)
-      VALUES(?,?,?)`).run(session.id, session.generation, Date.now())
+      VALUES(?,?,?) ON CONFLICT(session_id) DO UPDATE SET session_generation=excluded.session_generation, validated_at=excluded.validated_at`)
+      .run(session.id, session.generation, Date.now())
     getDbConnection(db).prepare(`UPDATE session_message_content_cutover SET cleanup_state='write-stopped'
       WHERE session_id=?`).run(session.id)
 

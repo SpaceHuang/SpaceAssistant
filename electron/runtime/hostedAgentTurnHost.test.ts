@@ -761,9 +761,9 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     expect(providerCalls).toEqual(['tool-call'])
     expect(admission.activeLeaseCount(deps.invocationId, deps.invocationId)).toBe(0)
     expect(snapshot.events.map((event) => event.kind)).toContain('tool-call-started')
-    expect(snapshot.events.map((event) => event.kind)).not.toContain('tool-call-finished')
+    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'authorization-invalidated' }) }))
     expect(snapshot.events.at(-1)).toMatchObject({
-      kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'unknown-after-dispatch' }
+      kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'authorization-revoked' }
     })
   })
 

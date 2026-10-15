@@ -65,6 +65,18 @@ describe('resolveTrustedTurnExecutionConfig', () => {
     expect(readSession).toHaveBeenCalledWith(session.id)
   })
 
+  it('桌面执行快照保留已持久化的 AGENTS.md 关闭设置', async () => {
+    const db = createMemoryAppDb()
+    seedLlmConfig(db, [makeModel({ id: 'text', name: 'deepseek-chat' })])
+    const storage = createSqliteSessionStorage(db)
+    const session = storage.commands.createSession({ name: 'agents-disabled', model: 'deepseek-chat' })
+    storage.commands.updateSettings({ sessionId: session.id, agentsMdEnabled: false })
+
+    await expect(resolveTrustedTurnExecutionConfigWithQueries(
+      db, storage.queries, storage.commands, session.id, 'desktop', { projectMemoryEnabled: true }
+    )).resolves.toMatchObject({ agentsMdEnabled: false })
+  })
+
   it.each(['desktop', 'feishu', 'wechat'] as const)('%s 从同一可信 session 配置生成规范化快照', async (lane) => {
     const db = createMemoryAppDb()
     seedLlmConfig(db, [makeModel({ id: 'text', name: 'deepseek-chat' })])

@@ -401,6 +401,11 @@ export class RemoteCommandRouter {
     }
     const acceptedTurn = createAcceptedTurnFromPrepared(prepared, 'feishu', executionConfig ?? { lane: 'feishu' }, this.deps.sessionStorage!.execution)
     const result = await executeRemoteTurn({ runtime: this.deps.turnRuntime, prepared, requestId: input.requestId,
+      ...(input.trackContext ? { onTerminal: (outcome) => {
+        const target = outcome === 'completed' || outcome === 'parked' ? 'completed' : outcome === 'cancelled' ? 'cancelled' : 'failed'
+        convergeRemoteTrackTerminal(this.deps.db, { trackId: input.trackContext!.trackId, target, occurredAt: Date.now(),
+          readActiveConfirmations: (trackId) => this.deps.imChannel.listPendingTrackConfirmations(trackId) })
+      } } : {}),
       run: () => { input.assertAuthorized(); return runFeishuRemoteAgent({ db: this.deps.db, sessionStorage: this.deps.sessionStorage!, sessionId: input.sessionId,
         userMessage: input.content, replyMessageId: input.messageId, requestId: input.requestId, turnId: prepared.turnId,
         acceptedTurn, feishuConfig: input.config,
@@ -1264,6 +1269,11 @@ export class RemoteCommandRouter {
             runtime: this.deps.turnRuntime,
             prepared,
             requestId,
+            ...(trackContext ? { onTerminal: (outcome) => {
+              const target = outcome === 'completed' || outcome === 'parked' ? 'completed' : outcome === 'cancelled' ? 'cancelled' : 'failed'
+              convergeRemoteTrackTerminal(this.deps.db, { trackId: trackContext.trackId, target, occurredAt: Date.now(),
+                readActiveConfirmations: (trackId) => this.deps.imChannel.listPendingTrackConfirmations(trackId) })
+            } } : {}),
             run: () => runFeishuRemoteAgent({
             db: this.deps.db,
             sessionStorage: this.deps.sessionStorage!,

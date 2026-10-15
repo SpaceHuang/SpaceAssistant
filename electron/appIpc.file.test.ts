@@ -823,11 +823,14 @@ describe('file IPC handlers', () => {
     ctx.turnRuntime = {
       coordinator: { cancel, recover },
       cancel: runtimeCancel,
+      getTurn: vi.fn(() => ({ turnId: 'turn-desktop-1', requestId: 'req-desktop-1', sessionId: 'sess-1' })),
       listActive: vi.fn().mockReturnValue([]),
       subscribe: vi.fn(() => () => undefined)
     } as unknown as AppIpcContext['turnRuntime']
     ipc = mockIpcMain()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const logger = await import('./agentLogger/agentLogger')
+    const logSpy = vi.spyOn(logger, 'logAgentEvent')
 
     const result = await ipc.getHandler('chat:cancel-turn')!({}, 'turn-desktop-1')
 
@@ -835,6 +838,40 @@ describe('file IPC handlers', () => {
     expect(cancelQueuedTurn).toHaveBeenCalledWith('turn-desktop-1')
     expect(runtimeCancel).toHaveBeenCalledWith('turn-desktop-1')
     expect(cancel).not.toHaveBeenCalled()
+    // turn.cancel：取消被接受的权威记录，requestId 从 turn 对象透传
+    expect(logSpy).toHaveBeenCalledWith('warn', 'turn.cancel', {
+      turnId: 'turn-desktop-1',
+      requestId: 'req-desktop-1',
+      accepted: true
+    })
+    logSpy.mockRestore()
+  })
+
+  it('desktop cancel IPC records turn.cancel with accepted=false when the turn is already terminal', async () => {
+    const cancel = vi.fn().mockReturnValue(true)
+    const recover = vi.fn()
+    const runtimeCancel = vi.fn().mockReturnValue(false)
+    ctx.turnRuntime = {
+      coordinator: { cancel, recover },
+      cancel: runtimeCancel,
+      getTurn: vi.fn(() => undefined),
+      listActive: vi.fn().mockReturnValue([]),
+      subscribe: vi.fn(() => () => undefined)
+    } as unknown as AppIpcContext['turnRuntime']
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const logger = await import('./agentLogger/agentLogger')
+    const logSpy = vi.spyOn(logger, 'logAgentEvent')
+
+    const result = await ipc.getHandler('chat:cancel-turn')!({}, 'turn-gone')
+
+    expect(result).toBe(false)
+    // turn 取不到时省略 requestId，不编造；accepted=false 如实记录「拒绝」
+    expect(logSpy).toHaveBeenCalledWith('warn', 'turn.cancel', {
+      turnId: 'turn-gone',
+      accepted: false
+    })
+    logSpy.mockRestore()
   })
 
   it('desktop confirm IPC resolves the pending Core confirmation without emitting a fact directly', async () => {

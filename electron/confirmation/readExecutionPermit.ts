@@ -6,7 +6,7 @@ import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirect
 export type ReadPermitIdentity = { dev: number; ino: number; mode: number; size: number; mtimeMs: number }
 // subtree：grep 目录递归 permit——绑定根目录 identity 并递归读取其子树（§5.2）
 export type ReadPermitScope = 'single-target' | 'direct-entries' | 'subtree'
-export type ReadPermitTarget = { factId: string; decisionRuleId: string; normalizedPath: string; zone: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown'; resolvedKind?: 'file' | 'directory' | 'special'; scope?: ReadPermitScope; identity?: ReadPermitIdentity; directoryGrant?: Pick<SessionDirectoryGrantRecord, 'grantId' | 'sessionId' | 'realPath' | 'identity'> }
+export type ReadPermitTarget = { factId: string; decisionRuleId: string; normalizedPath: string; zone: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown'; resolvedKind?: 'file' | 'directory' | 'special'; scope?: ReadPermitScope; identity?: ReadPermitIdentity; directoryGrant?: Pick<SessionDirectoryGrantRecord, 'grantId' | 'sessionId' | 'realPath' | 'identity'>; /** wiki 挂载命中时的词汇路径（T1.8；审批卡片/审计展示用） */ vocabularyPath?: string }
 export type ReadPermitInput = { decisionRuleId?: string; requestId: string; toolUseId: string; toolName: 'read_file' | 'grep' | 'list_directory' | 'read_feishu_attachment'; input: Record<string, unknown>; facts: ReadPermitTarget[] }
 export type ReadExecutionPermit = ReadPermitInput & { inputDigest: string; targets: ReadPermitTarget[] }
 
@@ -38,7 +38,7 @@ function freezeDeep<T>(value: T): T {
 export function buildReadExecutionPermit(input: ReadPermitInput): ReadExecutionPermit {
   const factIds = input.facts.map((fact) => fact.factId)
   const ruleIds = [...new Set(input.facts.map((fact) => fact.decisionRuleId))]
-  if (!input.requestId || !input.toolUseId || input.facts.length === 0 || new Set(factIds).size !== factIds.length || ruleIds.length !== 1 || (input.decisionRuleId !== undefined && input.decisionRuleId !== ruleIds[0]) || input.facts.some((fact) => !fact.factId || typeof fact.normalizedPath !== 'string' || !isAbsoluteReadTargetPath(fact.normalizedPath) || !fact.decisionRuleId || ['unknown', 'default', 'placeholder'].includes(fact.decisionRuleId))) throw new Error('INVALID_READ_PERMIT_TARGET')
+  if (!input.requestId || !input.toolUseId || input.facts.length === 0 || new Set(factIds).size !== factIds.length || ruleIds.length !== 1 || (input.decisionRuleId !== undefined && input.decisionRuleId !== ruleIds[0]) || input.facts.some((fact) => !fact.factId || typeof fact.normalizedPath !== 'string' || !isAbsoluteReadTargetPath(fact.normalizedPath) || !fact.decisionRuleId || ['unknown', 'default', 'placeholder'].includes(fact.decisionRuleId) || (fact.vocabularyPath !== undefined && (typeof fact.vocabularyPath !== 'string' || fact.vocabularyPath.length === 0)))) throw new Error('INVALID_READ_PERMIT_TARGET')
   const inputSnapshot = freezeDeep(structuredClone(input.input))
   const targets = Object.freeze(input.facts.map((fact) => freezeDeep(structuredClone(fact)))) as unknown as ReadPermitTarget[]
   return Object.freeze({

@@ -2,7 +2,7 @@ import type { IpcMain, WebContents } from 'electron'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
-import { refreshSessionTranscriptProjectionCache } from './runtime/sessionTranscriptProjection'
+import { checkpointSessionTranscriptProjection } from './runtime/sessionProjectionRevalidation'
 import { serializeErrorCauseChain } from './agentLogger/errorCauseChain'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
@@ -115,6 +115,7 @@ export type ClaudeChatCreateWithToolsPayload = {
     enableThinking?: boolean
   }
   projectMemoryEnabled?: boolean
+  agentsMdEnabled?: boolean
   locale?: string
 }
 
@@ -272,6 +273,19 @@ function toEventPersistenceFailure(error: unknown): EventPersistenceFailure {
   }
 }
 
+/** 沿 cause 链提取终态 errorCode（ToolLoopRoundLimitError.code / 恢复重构 Error.errorCode），供 turn_end 透传。 */
+function resolveTurnEndErrorCode(err: unknown): string | undefined {
+  let current: unknown = err
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    const code = (current as { code?: unknown }).code
+    if (typeof code === 'string' && code) return code
+    const errorCode = (current as { errorCode?: unknown }).errorCode
+    if (typeof errorCode === 'string' && errorCode) return errorCode
+    current = (current as { cause?: unknown }).cause
+  }
+  return undefined
+}
+
 export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStreamDeps): ClaudeTurnExecution {
   const injectedStorage = deps.sessionStorage
   if (!injectedStorage) throw new Error('SESSION_STORAGE_REQUIRED')
@@ -286,7 +300,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       // 这里只累计，由 finalizeTurn 统一上报为 eventPersistenceFailed。
       const eventAppendFailures: EventPersistenceFailure[] = []
       let droppedChunkEvents = 0
-      const finalizeTurn = (turnId: string, reason: string, error?: string, finalSurfaceSnapshot?: unknown): Promise<FinalizeResult> => {
+      // A-8（§4.3 / turn-loop.md:207）：turn_end 透传终态 errorCode（如 TOOL_LOOP_MAX_ROUNDS_EXCEEDED、
+      // 旧会话恢复重放的 SHELL_DIALECT_MISMATCH），不再只有裸 message
+      const finalizeTurn = (turnId: string, reason: string, error?: string, finalSurfaceSnapshot?: unknown, errorCode?: string): Promise<FinalizeResult> => {
         if (finalizePromise) return finalizePromise
         finalizePromise = (async () => {
           const failures: EventPersistenceFailure[] = [...eventAppendFailures]
@@ -296,7 +312,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             failures.push(toEventPersistenceFailure(finalizeError))
           }
           try {
-            await eventWriter?.appendCritical({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}), ...(finalSurfaceSnapshot ? { finalSurfaceSnapshot } : {}) } })
+            await eventWriter?.appendCritical({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}), ...(errorCode ? { errorCode } : {}), ...(finalSurfaceSnapshot ? { finalSurfaceSnapshot } : {}) } })
           } catch (finalizeError) {
             failures.push(toEventPersistenceFailure(finalizeError))
           }
@@ -418,14 +434,6 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           currentUserMessageId: authoritative.currentUserMessageId,
           sessionId
         })
-        const continuationContext = authoritative.executionConfig?.continuationContext
-        if (continuationContext) {
-          builtMessages.push({
-            role: 'user',
-            id: `continuation-context:${continuationContext.sourceInvocationId}:${continuationContext.historySequence}`,
-            content: `\n[结构化历史事实：失败执行摘要；来源 ${continuationContext.sourceInvocationId}，History 序号 ${continuationContext.historySequence}；状态 ${continuationContext.state}]\n${continuationContext.summary}`
-          })
-        }
         // 压缩提交端记录的是已展开的 API surface；回放必须在同一层执行，
         // 否则数据库的一条 assistant(toolCalls) 与 API 的 assistant/tool_result
         // 多条消息无法共享 boundary、range 和 fingerprint。
@@ -486,6 +494,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           system: frozen.system,
           locale: typeof localeCandidate === 'string' && isAppLocale(localeCandidate) ? localeCandidate : undefined,
           projectMemoryEnabled: frozen.projectMemoryEnabled,
+          agentsMdEnabled: frozen.agentsMdEnabled ?? true,
           skillFragments: frozen.skillFragments,
           options: { maxTokens: frozen.maxTokens, enableThinking: frozen.enableThinking },
           // §7.2：主链路显式传档位（优先于 options.enableThinking 兼容映射；旧 turn 记录无该字段时回退）。
@@ -632,7 +641,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
         })
         const hostedHandoffOptions = {
-          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => {
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, ...(authoritative.executionConfig?.continuationContext ? { continuationContext: authoritative.executionConfig.continuationContext } : {}), refreshExecutionContext: (_call, stage, current) => {
             const toolsConfig = deps.getToolsConfig()
             const browserConfig = deps.getBrowserConfig()
             const shellConfig = deps.getShellConfig()
@@ -679,7 +688,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         let finalized: FinalizeResult | undefined
         if (eventWriter && eventTurnId) {
           const reason = err instanceof HostedTurnFinalizedError ? hostedTerminalSessionEventReason(err.outcome) : 'error'
-          finalized = await finalizeTurn(eventTurnId, reason, message)
+          finalized = await finalizeTurn(eventTurnId, reason, message, undefined, resolveTurnEndErrorCode(err))
         }
         logAgentEvent('error', 'llm.error', err instanceof LlmKeyAccessError
           ? { requestId: requestId || undefined, serviceId: err.serviceId, stage: 'credential-read', code: err.code }
@@ -710,7 +719,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       } finally {
         const refreshSessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
         try {
-          if (refreshSessionId) refreshSessionTranscriptProjectionCache(deps.getAppDatabase(), refreshSessionId)
+          // P0-③: turn-terminal checkpoints stay on the cheap fast path; anything else
+          // enqueues background revalidation instead of a synchronous full compare here.
+          if (refreshSessionId) checkpointSessionTranscriptProjection(deps.getAppDatabase(), refreshSessionId)
         } catch (error) {
           logAgentEvent('warn', 'history.cutover', {
             requestId: requestId || undefined,

@@ -10,7 +10,9 @@ import type { ExecutionLane } from '../../src/shared/confirmation/types'
 import { buildRequestContextPayload, buildRequestHeaderPayload, computeAnthropicCacheBreakpointPositions } from '../../src/shared/requestContext'
 import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { computeContextPressure } from '../../src/shared/contextMeter'
-import { projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
+import { estimateTokensFromUtf8Text, projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
+import { loadAgentsMd, type AgentsMdLoadResult } from '../projectInstructions/projectInstructions'
+import { renderAgentsMdSection, renderAgentsMdStatusSection } from '../llmSystemPrompt'
 import { accumulateDeferredDimension, accumulateToolDeclarationSnapshot, accumulateToolResultVolume, buildStepAttribution, emptyTurnToolDimension, estimateDeferredSavings, summarizeToolDeclarations, type DeferredToolDimension, type TurnToolDimension } from '../../src/shared/usageAttribution'
 
 type ObserverChunk = Exclude<import('../../packages/agent-sdk/src/model').StreamChunk, { type: 'finish' }>
@@ -31,6 +33,7 @@ export function createAgentSdkDesktopObserver(input: {
   turnIdForRetry?: string
   stageAssistantContentUntilTurnFinished?: boolean
   onRemoteTextActivity?(text: string): void
+  onAgentsMdNotLoaded?(): void
   assistantMessageId?: string
   onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
   emitSessionEvent?(event: SessionEventInput): void | Promise<void>
@@ -45,6 +48,9 @@ export function createAgentSdkDesktopObserver(input: {
   /** FR8：节省量按轮日志出口（assembler 落 agentLogger；事件面不进 wire 面与会话事件流）。 */
   onDeferredSavings?(input: { modelTurn: number; toolCount: number; eagerEquivalentTokens: number; indexTokens: number; savedTokens: number }): void
   onDispatchDiagnostic?(event: Readonly<Record<string, unknown>>): void
+  getWorkDir?(modelTurn: number): string
+  getWorkDirSnapshot?(): Readonly<{ workDir: string; profileId: string; key: string; revision: number }>
+  agentsMdEnabled?: boolean
 }): AgentTurnObserver {
   let pendingChunks: ObserverChunk[] = []
   let streamedText = ''
@@ -52,6 +58,12 @@ export function createAgentSdkDesktopObserver(input: {
   let hasPreview = false
   let recoveredOutput = false
   const turnToolDimension: TurnToolDimension = emptyTurnToolDimension()
+  const proposedToolCallIds = new Set<string>()
+  const enteredToolCallIds = new Set<string>()
+  const knownFailureToolCallIds = new Set<string>()
+  const unknownToolCallIds = new Set<string>()
+  const notDispatchedToolCallIds = new Set<string>()
+  let executionSummaryEmitted = false
   const previousCacheBreakpointsByWindow = new Map<string, string[]>()
   let activeModelTurn = 0
   let lastAssistantActivityTimestamp = 0
@@ -79,6 +91,8 @@ export function createAgentSdkDesktopObserver(input: {
     request: NonNullable<ReturnType<typeof requestContexts.get>>
   }>()
   const projectedToolUsage = new Map<number, ContextUsageRaw>()
+  const agentsMdSnapshots = new Map<number, AgentsMdLoadResult>()
+  const agentsMdWorkspaceBindings = new Map<number, Readonly<{ workDir: string; profileId: string; key: string; revision: number }>>()
   const stepId = (modelTurn: number) => `${input.requestId}:model:${modelTurn}`
   const emitFact = (event: AssistantFactEvent) => input.emitFactEvent?.(event)
   const emitSessionEvent = (event: SessionEventInput) => input.emitSessionEvent?.({
@@ -89,11 +103,51 @@ export function createAgentSdkDesktopObserver(input: {
         invocationRequestId: input.requestId,
         turnId: typeof event.payload.turnId === 'string' ? event.payload.turnId : input.turnId,
         ...(input.lane ? { lane: input.lane } : {})
-      }
+    }
+  })
+  const emitToolExecutionSummary = async () => {
+    if (executionSummaryEmitted || proposedToolCallIds.size === 0) return
+    executionSummaryEmitted = true
+    input.onDispatchDiagnostic?.({
+      type: 'tools.execution_summary',
+      proposalCount: proposedToolCallIds.size,
+      executorEntryCount: enteredToolCallIds.size,
+      knownFailureCount: knownFailureToolCallIds.size,
+      unknownOutcomeCount: unknownToolCallIds.size,
+      notDispatchedCount: notDispatchedToolCallIds.size
     })
-  const prepareRequestProjection = (request: Parameters<NonNullable<AgentTurnObserver['onModelRequest']>>[0]) => {
-    const system = request.request.messages.filter((message) => message.role === 'system').map((message) => typeof message.content === 'string' ? message.content : '').join('\n') || ''
-    const canonicalMessages = request.request.messages.filter((message) => message.role !== 'system')
+  }
+  const prepareRequestProjection = async (request: Parameters<NonNullable<AgentTurnObserver['onModelRequest']>>[0]) => {
+    let agentsMdSnapshot = agentsMdSnapshots.get(request.modelTurn)
+    let workspaceBinding = agentsMdWorkspaceBindings.get(request.modelTurn)
+    if (!agentsMdSnapshot) {
+      workspaceBinding = input.getWorkDirSnapshot?.()
+      if (workspaceBinding) agentsMdWorkspaceBindings.set(request.modelTurn, workspaceBinding)
+      agentsMdSnapshot = await loadAgentsMd(workspaceBinding?.workDir ?? input.getWorkDir?.(request.modelTurn) ?? '', { enabled: input.agentsMdEnabled, contextWindow: input.contextWindow, promptOverheadTokens: estimateTokensFromUtf8Text(renderAgentsMdSection('')) })
+      agentsMdSnapshots.set(request.modelTurn, agentsMdSnapshot)
+      if (input.lane === 'feishu' || input.lane === 'wechat') {
+        if (agentsMdSnapshot.status !== 'loaded') input.onAgentsMdNotLoaded?.()
+      }
+    }
+    const agentsMdSection = agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content
+      ? renderAgentsMdSection(agentsMdSnapshot.content)
+      : !input.getWorkDir && !input.getWorkDirSnapshot || agentsMdSnapshot.status === 'missing' || agentsMdSnapshot.status === 'empty' || agentsMdSnapshot.status === 'disabled'
+        ? undefined
+        : renderAgentsMdStatusSection(agentsMdSnapshot.status)
+    let requestPatch: Partial<import('../../packages/agent-sdk/src/model').PreparedModelCall['request']> | undefined
+    if (agentsMdSection) {
+      let appended = false
+      const patchedMessages = request.request.messages.map((message) => {
+        if (message.role !== 'system' || appended) return message
+        appended = true
+        return { ...message, content: `${typeof message.content === 'string' ? message.content : ''}\n\n${agentsMdSection}` }
+      })
+      if (!appended) patchedMessages.unshift({ role: 'system', content: agentsMdSection })
+      requestPatch = { messages: patchedMessages }
+    }
+    const requestMessages = requestPatch?.messages ?? request.request.messages
+    const system = requestMessages.filter((message) => message.role === 'system').map((message) => typeof message.content === 'string' ? message.content : '').join('\n') || ''
+    const canonicalMessages = requestMessages.filter((message) => message.role !== 'system')
     const requiredMessage = request.requiredUserMessage
     const messages = canonicalMessages.map((message) => message.role === 'user' && requiredMessage && JSON.stringify(message) === JSON.stringify(requiredMessage.message)
       ? { ...message, id: requiredMessage.id }
@@ -193,6 +247,17 @@ export function createAgentSdkDesktopObserver(input: {
     const requestContextPayload = { ...context, turnId: input.turnId, attempt: request.attempt }
     requestContexts.set(request.modelTurn, { requestId, messages, header, context, requestHeaderPayload, requestContextPayload })
     return {
+      requestMetadata: { agentsMdSnapshot: {
+        status: agentsMdSnapshot.status,
+        ...(agentsMdSnapshot.digest ? { digest: agentsMdSnapshot.digest } : {}),
+        byteLength: agentsMdSnapshot.byteLength,
+        loadedAt: agentsMdSnapshot.loadedAt,
+        tokenCount: agentsMdSnapshot.tokenCount,
+        source: 'AGENTS.md', scope: 'workdir-root',
+        workDir: agentsMdSnapshot.workDir,
+        ...(agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content !== null ? { content: agentsMdSnapshot.content } : {})
+      }, ...(workspaceBinding ? { workspaceBinding } : {}) },
+      ...(requestPatch ? { requestPatch } : {}),
       ...(input.sessionEventLocation ? { sessionLedger: {
         location: input.sessionEventLocation,
         requestHeader: stripUndefinedProperties({ ...requestHeaderPayload, invocationRequestId: input.requestId, ...(input.lane ? { lane: input.lane } : {}) }),
@@ -377,7 +442,11 @@ export function createAgentSdkDesktopObserver(input: {
     },
     async onModelRequest(request) {
       activeModelTurn = request.modelTurn
-      const prepared = requestContexts.get(request.modelTurn) ?? (prepareRequestProjection(request), requestContexts.get(request.modelTurn)!)
+      let prepared = requestContexts.get(request.modelTurn)
+      if (!prepared) {
+        await prepareRequestProjection(request)
+        prepared = requestContexts.get(request.modelTurn)!
+      }
       const projectedUsage = projectedToolUsage.get(request.modelTurn)
       if (projectedUsage) emitFact({ type: 'usage-updated', usage: projectedUsage, projected: true })
       await emitSessionEvent({ type: 'request_header', payload: prepared.requestHeaderPayload })
@@ -431,6 +500,8 @@ export function createAgentSdkDesktopObserver(input: {
         return
       }
       const requestContext = requestContexts.get(response.modelTurn)
+      const committedToolCalls = response.message.role === 'assistant' ? response.message.toolCalls ?? [] : []
+      const committedToolCallsById = new Map(committedToolCalls.map((call) => [call.id, call]))
       if (requestContext) {
         const prepared = responseContextProjections.get(response.modelTurn) ?? (() => {
           prepareResponseContextProjection(response)
@@ -467,6 +538,8 @@ export function createAgentSdkDesktopObserver(input: {
         }
         else if (chunk.type === 'tool-call') {
           closeActiveBlock()
+          const committedCall = committedToolCallsById.get(chunk.toolCallId)
+          if (!committedCall) throw new Error(`missing committed input for tool call ${chunk.toolCallId}`)
           const index = nextBlockIndex++
           const compatName = toolIdToOpenAiCompatibleApiToolName(normalizeExternalToolName(chunk.toolName).canonicalName)
           pushDelta({ type: 'block_start', index, blockType: 'tool_use', id: chunk.toolCallId, name: compatName })
@@ -474,7 +547,9 @@ export function createAgentSdkDesktopObserver(input: {
           pushDelta({ type: 'tool_call_delta', index, partialJson: '' })
           pushDelta({ type: 'block_end', index })
           const isToolkitCall = compatName === 'toolkit_call' || compatName === 'toolkit.call'
-          const args = structuredClone(chunk.input)
+          // Persist only the same committed snapshot consumed by SDK history, preparation and review.
+          // Stream chunks are retained for presentation order; their raw inputs may predate normalization.
+          const args = structuredClone(committedCall.input)
           toolCallEvents.push({ type: 'tool_call', payload: { turnId: input.turnId, stepId: stepId(response.modelTurn), toolUseId: chunk.toolCallId, name: compatName, args: isToolkitCall ? sanitizeCapabilityParamsForDisplay(args) : args } })
         }
         else if (chunk.type === 'usage') pushDelta({ type: 'usage', usage: { input_tokens: chunk.inputTokens, output_tokens: chunk.outputTokens, ...(chunk.cacheReadInputTokens !== undefined ? { cache_read_input_tokens: chunk.cacheReadInputTokens } : {}), ...(chunk.cacheCreationInputTokens !== undefined ? { cache_creation_input_tokens: chunk.cacheCreationInputTokens } : {}) } })
@@ -491,8 +566,8 @@ export function createAgentSdkDesktopObserver(input: {
         if (streamedText !== committedText && committedText) emitFact({ type: 'content-reconciled', text: committedText })
         if (streamedThinking !== committedThinking && committedThinking) emitFact({ type: 'thinking-reconciled', text: committedThinking })
       }
-      const committedToolCalls = response.message.role === 'assistant' ? response.message.toolCalls ?? [] : []
       for (const call of committedToolCalls) {
+        proposedToolCallIds.add(call.id)
         toolCallStepIds.set(call.id, stepId(response.modelTurn))
         const compatName = toolIdToOpenAiCompatibleApiToolName(normalizeExternalToolName(call.name).canonicalName)
         const sourceTimestamp = toolCallActivityTimestamps.get(call.id)
@@ -506,19 +581,34 @@ export function createAgentSdkDesktopObserver(input: {
       hasPreview = false
     },
     async onToolStarted() {},
+    async onToolNotDispatched(call) {
+      notDispatchedToolCallIds.add(call.toolCallId)
+    },
     async onToolFinished(call, result) {
+      const executorEntry = result.executorEntry ?? (result.executionOutcome === 'not-dispatched' ? 'not-entered' : 'entered')
+      if (executorEntry === 'entered') enteredToolCallIds.add(call.toolCallId)
+      const outcome = result.executionOutcome ?? (result.isError ? 'known-failure' : 'succeeded')
+      if (outcome === 'known-failure') knownFailureToolCallIds.add(call.toolCallId)
+      if (outcome === 'unknown-after-dispatch') unknownToolCallIds.add(call.toolCallId)
+      if (outcome === 'not-dispatched') notDispatchedToolCallIds.add(call.toolCallId)
       const toolName = normalizeExternalToolName(call.toolName).canonicalName
       accumulateToolResultVolume(turnToolDimension, toolName, result.output)
       const isError = result.isError ?? false
       const output = result.output && typeof result.output === 'object' && !Array.isArray(result.output)
         ? result.output as Record<string, unknown>
         : undefined
-      const projected = input.mapToolResult?.(call, result.output, isError) ?? ({
+      const projected = {
+        ...(input.mapToolResult?.(call, result.output, isError) ?? {
         success: typeof output?.success === 'boolean' ? output.success : !isError,
         ...((typeof output?.error === 'string' || isError) ? { error: typeof output?.error === 'string' ? output.error : String(result.output ?? 'tool failed') } : {}),
         ...(typeof output?.userMessage === 'string' ? { userMessage: output.userMessage } : {}),
         ...('data' in (output ?? {}) ? { data: output!.data } : { data: result.output })
-      } as never)
+        } as NonNullable<Extract<AssistantFactEvent, { type: 'tool-result' }>['result']>),
+        ...(result.executionOutcome ? { executionOutcome: result.executionOutcome } : {}),
+        ...(result.executorEntry ? { executorEntry: result.executorEntry } : {}),
+        ...(result.errorCode ? { executionErrorCode: result.errorCode } : {}),
+        ...(result.invocationDisposition ? { invocationDisposition: result.invocationDisposition } : {})
+      }
       if (result.auditRef && projected && typeof projected === 'object') projected.auditRef = result.auditRef
       await emitSessionEvent({ type: 'tool_result', payload: { turnId: input.turnId, stepId: toolStepId(call.toolCallId), toolUseId: call.toolCallId, result: projected } })
       emitFact({ type: 'tool-result', id: call.toolCallId, result: projected })
@@ -545,17 +635,26 @@ export function createAgentSdkDesktopObserver(input: {
     },
     async onToolDispatchFailureContext(event) {
       input.onDispatchDiagnostic?.({ type: 'tools.dispatch_failure_context', ...event })
-      await emitSessionEvent({ type: 'tool_result', payload: { turnId: input.turnId, stepId: event.stepId, diagnosticType: 'tools.dispatch_failure_context', toolUseId: event.toolCallId, toolName: event.toolName, reasonCode: event.reasonCode } })
+      await emitSessionEvent({ type: 'tool_result', payload: {
+        turnId: input.turnId, stepId: event.stepId, diagnosticType: 'tools.dispatch_failure_context',
+        toolUseId: event.toolCallId, toolName: event.toolName, reasonCode: event.reasonCode,
+        ...(event.errorCode ? { errorCode: event.errorCode } : {}),
+        ...(event.executionOutcome ? { executionOutcome: event.executionOutcome } : {}),
+        ...(event.executorEntry ? { executorEntry: event.executorEntry } : {}),
+        ...(event.invocationDisposition ? { invocationDisposition: event.invocationDisposition } : {})
+      } })
     },
     async onTurnOutputReady(result) {
       if (input.stageAssistantContentUntilTurnFinished || recoveredOutput) emitFact({ type: 'content-reconciled', text: result.text })
     },
     async onTurnFinished() {
       input.onTurnToolAttribution?.(structuredClone(turnToolDimension))
+      await emitToolExecutionSummary()
       recoveredOutput = false
       hasPreview = false
     },
     async onTurnFailed() {
+      await emitToolExecutionSummary()
       if (hasPreview) emitFact({ type: 'preview-rollback' })
       recoveredOutput = false
       hasPreview = false

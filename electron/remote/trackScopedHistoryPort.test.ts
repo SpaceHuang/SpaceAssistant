@@ -9,6 +9,7 @@ function snapshot(invocationId: string): HistorySnapshot {
 
 function makeHistory(): SessionHistoryPort {
   return {
+    listInvocationIds: vi.fn(() => ['turn-a', 'turn-b']),
     appendBatch: vi.fn(async () => ({ version: 1, duplicate: false })),
     read: vi.fn(async (invocationId: string) => snapshot(invocationId)),
     readLatestInvocationForSession: vi.fn(async () => ({ kind: 'completed' as const, snapshot: snapshot('turn-b') }))
@@ -16,6 +17,10 @@ function makeHistory(): SessionHistoryPort {
 }
 
 describe('Track-scoped HistoryPort', () => {
+  it('lists only invocations in the frozen Track view', () => {
+    const scoped = createTrackScopedHistoryPort(makeHistory(), { sessionId: 'session-1', allowedInvocationIds: ['turn-a'] })
+    expect(scoped.listInvocationIds()).toEqual(['turn-a'])
+  })
   it('permits reads and appends only for invocations in the frozen view', async () => {
     const history = makeHistory()
     const scoped = createTrackScopedHistoryPort(history, {

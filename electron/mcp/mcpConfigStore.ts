@@ -15,7 +15,7 @@ import {
   type McpServerWriteInput,
   type McpToolCacheEntry
 } from '../../src/shared/mcpTypes'
-import { isSecretStorageAvailable, encryptSecret } from '../secureApiKey'
+import { encryptSecret } from '../secureApiKey'
 import {
   assertValidSecretRef,
   deleteSecretsForServerRaw,
@@ -48,22 +48,13 @@ type SecretChange =
 function buildSecretChanges(input: McpServerWriteInput): SecretChange[] {
   const changes: SecretChange[] = []
   if (input.auth.accessToken?.trim()) {
-    if (!isSecretStorageAvailable()) {
-      throw new Error('系统不支持安全存储（safeStorage），无法保存 MCP Secret')
-    }
     changes.push({ serverId: input.id, kind: 'access-token', enc: encryptSecret(input.auth.accessToken.trim()) })
   }
   if (input.auth.headerValue?.trim()) {
-    if (!isSecretStorageAvailable()) {
-      throw new Error('系统不支持安全存储（safeStorage），无法保存 MCP Secret')
-    }
     changes.push({ serverId: input.id, kind: 'auth-header', enc: encryptSecret(input.auth.headerValue.trim()) })
   }
   for (const env of input.stdio?.env ?? []) {
     if (env.value !== undefined && env.value !== '') {
-      if (!isSecretStorageAvailable()) {
-        throw new Error('系统不支持安全存储（safeStorage），无法保存 MCP Secret')
-      }
       changes.push({ serverId: input.id, kind: `env:${env.key}`, enc: encryptSecret(env.value) })
     } else if (env.clear) {
       changes.push({ serverId: input.id, kind: `env:${env.key}`, clear: true })

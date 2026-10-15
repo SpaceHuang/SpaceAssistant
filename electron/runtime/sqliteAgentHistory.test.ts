@@ -46,6 +46,26 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it('persists and restores the exact bounded run_shell justification in the canonical response snapshot', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const input = { command: 'pwd', justification: '核对工作目录', _justificationTruncated: true }
+    await history.appendBatch([{
+      ...event('shell-justification-response', 1),
+      kind: 'model-response-committed',
+      payload: {
+        modelTurn: 1,
+        finishReason: 'tool-calls',
+        usage: { type: 'usage', inputTokens: 1, outputTokens: 1 },
+        message: { role: 'assistant', toolCalls: [{ id: 'shell-call', name: 'run_shell', input }] }
+      }
+    }], 0)
+    await expect(history.read('inv-1')).resolves.toMatchObject({
+      events: [{ kind: 'model-response-committed', payload: { message: { toolCalls: [{ id: 'shell-call', input }] } } }]
+    })
+    conn.close()
+  })
+
   it('commits a real SDK parked terminal and transcript participant atomically to SQLite', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'sqlite-sdk-parked-transcript', model: 'test-model' })
@@ -1713,12 +1733,14 @@ describe('SqliteAgentHistory', () => {
       ]
     } }], 0)
 
+    // P1-①: the append transaction already folded this suffix into the cache, so the explicit
+    // read replays nothing while still returning the fully folded transcript.
     expect(history.readCanonicalSessionTranscriptWithCache('session-l1', 'transcript', [
       { id: 'l1-user-1', role: 'user', content: 'one', timestamp: 1 },
       { id: 'l1-assistant-1', role: 'assistant', content: 'two', timestamp: 2 }
     ])).toMatchObject({ kind: 'matched', source: 'L1', messages: [
       { id: 'l1-user-1' }, { id: 'l1-assistant-1' }
-    ], replayedEvents: 1 })
+    ], replayedEvents: 0 })
     conn.close()
   })
 
@@ -1768,7 +1790,8 @@ describe('SqliteAgentHistory', () => {
     expect(history.readCanonicalSessionTranscriptWithCache('session-l1-response', 'transcript', [
       { id: 'l1-response-user', role: 'user', content: 'question', timestamp: 1 },
       { id: 'l1-response-assistant', role: 'assistant', content: 'answer', timestamp: 2 }
-    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 2, messages: [
+    // P1-①: the append transaction already folded these events into the cache.
+    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 0, messages: [
       { id: 'l1-response-user' }, { id: 'l1-response-assistant', timestamp: 2 }
     ] })
     conn.prepare("DELETE FROM agent_history_events WHERE event_id='l1-response-answer'").run()
@@ -1795,7 +1818,7 @@ describe('SqliteAgentHistory', () => {
     } }], 0)
     expect(history.readCanonicalSessionTranscriptWithCache('session-empty-cache', 'transcript', [
         { id: 'empty-first-user', role: 'user', content: 'first', timestamp: 1 }
-    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 1 })
+    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 0 })
     conn.close()
   })
 
@@ -1973,7 +1996,8 @@ describe('SqliteAgentHistory', () => {
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='legacy-terminal'").get()).toEqual({ status: 'pending', attempts: 1 })
 
     const succeeds = vi.fn(async () => undefined)
-    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: succeeds })
+    // P3-②: a retry waits at least the minimum interval; the restart clock advances past it.
+    await new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000).recoverInterruptedInvocations({ repairInvocationTerminal: succeeds })
     expect(succeeds).toHaveBeenCalledTimes(1)
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='legacy-terminal'").get()).toEqual({ status: 'completed', attempts: 2 })
     conn.close()
@@ -2254,7 +2278,7 @@ describe('SqliteAgentHistory', () => {
       .toEqual({ status: 'pending', attempts: 1 })
 
     const succeeding = vi.fn(async () => undefined)
-    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: succeeding })
+    await new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000).recoverInterruptedInvocations({ repairInvocationTerminal: succeeding })
     expect(succeeding).toHaveBeenCalledWith(location, { status: 'completed', turnId: 'terminal-retry-turn', reason: 'completed' })
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='terminal-retry-invocation'").get())
       .toEqual({ status: 'completed', attempts: 2 })
@@ -2277,7 +2301,7 @@ describe('SqliteAgentHistory', () => {
       .toEqual({ status: 'pending', attempts: 1 })
 
     const retry = vi.fn(async () => undefined)
-    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: retry })
+    await new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000).recoverInterruptedInvocations({ repairInvocationTerminal: retry })
     expect(retry).toHaveBeenCalledWith(location, { status: 'completed', turnId: 'terminal-failed-turn', reason: 'completed' })
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='terminal-failed-invocation'").get())
       .toEqual({ status: 'completed', attempts: 2 })
@@ -2501,7 +2525,8 @@ describe('SqliteAgentHistory', () => {
     })
     expect(conn.prepare("SELECT COUNT(*) AS count FROM canonical_projection_repairs WHERE status='pending' AND attempts=1").get()).toEqual({ count: 11 })
     expect(conn.prepare("SELECT COUNT(*) AS count FROM canonical_projection_repairs WHERE status='completed'").get()).toEqual({ count: 0 })
-    const retryHistory = new SqliteAgentHistory(conn)
+    // P3-②: the restart clock advances past the minimum retry interval.
+    const retryHistory = new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000)
     const successOptions = {
       repairModelRequestLedger: vi.fn(async () => undefined),
       repairProviderRetryLedger: vi.fn(async () => undefined),
@@ -2726,7 +2751,8 @@ describe('SqliteAgentHistory', () => {
       kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'in progress' }] }
     }], 0)
 
-    await expect(history.readLatestInvocationForSession('session-latest-state')).resolves.toEqual({ kind: 'unavailable', invocationId: 'latest-incomplete' })
+    // P0-⑤: unavailable verdicts carry the stream snapshot they just read.
+    await expect(history.readLatestInvocationForSession('session-latest-state')).resolves.toMatchObject({ kind: 'unavailable', invocationId: 'latest-incomplete' })
     conn.close()
   })
 
@@ -3652,6 +3678,34 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('restores each request instruction snapshot after restart and leaves the invocation interrupted', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const snapshot = (version: string) => ({
+      status: 'loaded', source: 'AGENTS.md', scope: 'workdir-root', workDir: '/workspace/a',
+      digest: `digest-${version}`, byteLength: version.length, loadedAt: 100, tokenCount: 1, content: `rule ${version}`
+    })
+    await history.appendBatch([
+      { ...event('agents-request-a', 1), kind: 'model-request-started', payload: {
+        requestId: 'inv-1:round:1', modelTurn: 1, attempt: 1, routeId: 'route-1',
+        requestMetadata: { agentsMdSnapshot: snapshot('A') }
+      } },
+      { ...event('agents-request-b', 2), kind: 'model-request-started', payload: {
+        requestId: 'inv-1:round:2', modelTurn: 2, attempt: 1, routeId: 'route-1',
+        requestMetadata: { agentsMdSnapshot: snapshot('B') }
+      } }
+    ], 0)
+
+    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([{ invocationId: 'inv-1', state: 'interrupted' }])
+    const restartedHistory = new SqliteAgentHistory(conn)
+    const restored = await restartedHistory.read('inv-1')
+    const snapshots = restored.events.filter((entry) => entry.kind === 'model-request-started')
+      .map((entry) => (entry.payload as { requestMetadata: { agentsMdSnapshot: { digest: string; content: string } } }).requestMetadata.agentsMdSnapshot)
+    expect(snapshots.map(({ digest, content }) => ({ digest, content }))).toEqual([{ digest: 'digest-A', content: 'rule A' }, { digest: 'digest-B', content: 'rule B' }])
+    expect(restored.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } })
+    conn.close()
+  })
+
   it('closes a committed model request as interrupted on restart instead of resuming it', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
@@ -4182,7 +4236,8 @@ describe('SqliteAgentHistory', () => {
     conn.close()
 
     conn = createDb(databasePath)
-    history = new SqliteAgentHistory(conn)
+    // P3-②: the restart clock advances past the minimum retry interval.
+    history = new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000)
     await expect(history.read('retry-invocation')).resolves.toEqual(canonicalBeforeRestart)
 
     const repairProviderRetryLedger = async (repairLocation: typeof location, payload: Record<string, unknown>) => {
@@ -4391,7 +4446,9 @@ describe('SqliteAgentHistory', () => {
 
   it('keeps failed compaction repair retryable even if its diagnostic callback fails', async () => {
     const conn = createDb()
-    const history = new SqliteAgentHistory(conn)
+    // P3-②: the mutable clock advances past the minimum retry interval between the two passes.
+    let now = Date.now()
+    const history = new SqliteAgentHistory(conn, 1, () => now)
     await history.appendBatch([{
       ...event('compacted-retry', 1),
       kind: 'transcript-compacted',
@@ -4412,6 +4469,7 @@ describe('SqliteAgentHistory', () => {
     })).resolves.toMatchObject([{ state: 'interrupted' }])
 
     const retryRepair = vi.fn(async () => undefined)
+    now += 31 * 60_000
     await expect(history.recoverInterruptedInvocations({ repairCompaction: retryRepair })).resolves.toMatchObject([{ state: 'interrupted' }])
     expect(failedRepair).toHaveBeenCalledTimes(1)
     expect(retryRepair).toHaveBeenCalledTimes(1)
@@ -4645,7 +4703,9 @@ describe('SqliteAgentHistory', () => {
 
   it('keeps a completed terminal retryable after SessionEvent projection fails', async () => {
     const conn = createDb()
-    const history = new SqliteAgentHistory(conn)
+    // P3-②: the mutable clock advances past the minimum retry interval between the two passes.
+    let now = Date.now()
+    const history = new SqliteAgentHistory(conn, 1, () => now)
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-history-terminal-retry-'))
     const location = { workDir: root, sessionId: 'session-terminal-retry', createdAt: 1000 }
     const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
@@ -4671,6 +4731,7 @@ describe('SqliteAgentHistory', () => {
     expect(onRepairError).toHaveBeenCalledWith(expect.any(Error), 'inv-1', 'turn-terminal-retry')
     await expect(readSessionEvents(path.join(root, 'sessions', 'session-terminal-retry-19700101', 'events.jsonl'))).resolves.toHaveLength(1)
 
+    now += 31 * 60_000
     await history.recoverInterruptedInvocations({ repairInvocationTerminal, onInvocationTerminalRepairError: onRepairError })
 
     await expect(history.read('inv-1')).resolves.toEqual(before)

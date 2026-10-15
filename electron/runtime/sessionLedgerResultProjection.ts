@@ -9,6 +9,10 @@ export function projectCanonicalToolResultForSessionLedger(input: {
   workspaceRoot?: string
   auditRef?: string
   deferredUnsurfaced?: boolean
+  executionOutcome?: import('../../src/shared/domainTypes').ToolCallResultPersisted['executionOutcome']
+  executorEntry?: import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry']
+  executionErrorCode?: string
+  invocationDisposition?: import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition']
 }): AgentToolResultInput {
   const record = input.rawResult && typeof input.rawResult === 'object' && !Array.isArray(input.rawResult)
     ? input.rawResult as Record<string, unknown>
@@ -24,6 +28,10 @@ export function projectCanonicalToolResultForSessionLedger(input: {
       : {})
   }, { ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}), processTool: isProcessToolName(input.toolName) })
   if (input.auditRef) result.auditRef = input.auditRef
+  if (input.executionOutcome) result.executionOutcome = input.executionOutcome
+  if (input.executorEntry) result.executorEntry = input.executorEntry
+  if (input.executionErrorCode) result.executionErrorCode = input.executionErrorCode
+  if (input.invocationDisposition) result.invocationDisposition = input.invocationDisposition
   if (input.deferredUnsurfaced && !input.isError && record?.success !== false) result.deferredUnsurfaced = true
   return result
 }

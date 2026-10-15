@@ -1,6 +1,7 @@
 # 第三批 P0 证据复测销号表
 
 > 复测时点:2026-09-20 | worktree:`.worktrees/batch3` | 分支 `codex/batch3-runtime-admission-sdk-reuse` @ `5bb10766`(与计划声明基线一致)
+> 命名沿革:表中 `check:agent-core` / `typecheck:agent-core` / `scripts/check-agent-core-boundary.mjs` / `packages/agent-core` 等均为复测当时的旧名。该包已原子更名为 `packages/agent-sdk`(`@spaceassistant/agent-sdk`);护栏现为 `scripts/check-agent-sdk-{boundary,dependencies,package-closure}.mjs`,由 `npm run check:agent-sdk` 聚合;类型检查为 `typecheck:agent-sdk`。表内旧名属历史事实,未逐处改写。
 > 复测方式:计划 §1 表全部证据命令逐条重跑;无「文件 / 路径不存在」级失败,不触发整表复核纪律。
 
 ## 销号结果

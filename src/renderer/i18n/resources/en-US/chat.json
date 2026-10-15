@@ -33,7 +33,7 @@
     "failureReason": "Reason",
     "retry": "Retry from the beginning",
     "continueFromCheckpoint": "Continue previous run",
-    "retrySourceLabel": "Retry source",
+    "continuationSourceLink": "View where the previous run stopped",
     "openModelSettings": "Open model service settings"
   },
   "scrollToLatest": {
@@ -49,6 +49,7 @@
     "pending": "Still running…",
     "rejected": "Rejected",
     "failed": "Failed",
+    "unknownAfterDispatch": "The call may have taken effect, but its result could not be confirmed. It was not retried automatically.",
     "completed": "Succeeded",
     "empty": "(empty)",
     "fileFallback": "File",
@@ -226,6 +227,8 @@
       "defaultTitle": "Shell command",
       "executeTitle": "Run shell command",
       "highRisk": "High risk",
+      "justification": "Call justification",
+      "justificationTruncated": "Content truncated",
       "pathSecurityWarning": "Path safety warning"
     },
     "script": {
@@ -315,6 +318,37 @@
     "outputTrustSuspect": "Output encoding is suspect and the raw bytes were saved: the text may not be the real output — check the raw-bytes artifact to verify."
   },
   "writeSuccess": {},
+  "projectInstructions": {
+    "button": "Workdir instructions",
+    "title": "AGENTS.md project instructions",
+    "enabled": "Use AGENTS.md at the work directory root",
+    "toggleHint": "This switch takes effect on the next invocation. File contents are reloaded for the next model request.",
+    "pending": "The disk version differs from the latest request and will be used on the next model request.",
+    "current": "Current file: {{status}}",
+    "requests": "Request snapshots",
+    "approval": "Approval: {{tool}}",
+    "empty": "No request snapshots yet",
+    "view": "View snapshot text",
+    "unavailableBody": "This snapshot text cannot be restored.",
+    "loading": "Loading snapshot…",
+    "refresh": "Refresh status",
+    "loadFailed": "Could not load request snapshots",
+    "status": {
+      "loaded": "Loaded",
+      "missing": "File not found",
+      "empty": "File is empty",
+      "disabled": "Disabled",
+      "too-large": "File is too large",
+      "token-budget-exceeded": "Instruction budget exceeded",
+      "invalid-workdir": "Invalid work directory",
+      "outside-workdir": "File resolves outside the work directory",
+      "not-file": "Not a regular file",
+      "invalid-encoding": "Invalid encoding",
+      "read-error": "Read failed",
+      "unstable": "File changed while reading",
+      "unavailable": "Unavailable"
+    }
+  },
   "composer": {
     "prefs": {
       "label": "Model & thinking effort",

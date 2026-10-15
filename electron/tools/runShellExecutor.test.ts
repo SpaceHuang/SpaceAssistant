@@ -4,9 +4,10 @@ import { spawn } from 'node:child_process'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { appendRawTailBuffer, executePreparedShellExecution, runShellExecutor, resolveShellSpawnSpec } from './runShellExecutor'
+import { appendRawTailBuffer, executePreparedShellExecution, executePreparedShellExecutionWithHostFallback, runShellExecutor, resolveShellSpawnSpec } from './runShellExecutor'
 import { planRunShellExecution } from './runShellPlan'
 import { prepareShellExecution } from '../shell/preparedShellExecution'
+import { dialectRetryBreaker } from '../shell/dialectRetryBreaker'
 import { appendProgressOutputRaw, decodeProgressRawTail } from '../../src/shared/terminalScrollback'
 import { PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
 import { ACCIDENT_HEX } from '../processOutput/testFixtures'
@@ -855,6 +856,71 @@ describe('runShellExecutor', () => {
     const second = await runShellExecutor.execute({ command }, baseCtx(workDir, userDataDir))
     expect(second.data).toMatchObject({ retryCount: 2, retryExhausted: true })
   })
+
+  // ===== 阶段 3（§4.3/§4.4 / D-7/D-8）：第 2 次同款错配提示升级 + 成功改写即清除（不阻断） =====
+
+  it('第 2 次同款错配时 data.hints 升级为改写形态（不再重复同一句，不阻断）', async () => {
+    if (!isWindows) return
+    const command = 'del /q dialect-escalate-probe.txt'
+    const first = await runShellExecutor.execute({ command }, baseCtx(workDir, userDataDir))
+    expect(first.success).toBe(false)
+    const firstHints = (first.data as { hints?: string[] }).hints ?? []
+    expect(firstHints.join(' ')).toContain('cmd')
+    const second = await runShellExecutor.execute({ command }, baseCtx(workDir, userDataDir))
+    expect(second.success).toBe(false)
+    expect(second.data).toMatchObject({ retryCount: 2, retryExhausted: true })
+    const escalatedHints = (second.data as { hints?: string[] }).hints ?? []
+    expect(escalatedHints).not.toEqual(firstHints)
+    expect(escalatedHints.join(' ')).toContain('Remove-Item')
+    // 计数器可恢复：清掉本用例键，避免跨用例污染
+    dialectRetryBreaker.clear('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch'])
+  })
+
+  it('命令改写成功执行后计数归零：下一次同款错配 retryCount 从 1 重新计（可恢复性断言）', async () => {
+    if (!isWindows) return
+    const mismatch = 'copy /y dialect-clear-probe-a.txt dialect-clear-probe-b.txt'
+    const first = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
+    expect(first.data).toMatchObject({ retryCount: 1, retryExhausted: false })
+    const second = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
+    expect(second.data).toMatchObject({ retryCount: 2, retryExhausted: true })
+    // 改写后的合法 PowerShell 命令成功执行 → 成功即 clear（D-8）
+    const recovered = await runShellExecutor.execute({ command: 'Get-ChildItem . -Name | Select-Object -First 1' }, baseCtx(workDir, userDataDir))
+    expect(recovered.success).toBe(true)
+    const third = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
+    expect(third.data).toMatchObject({ retryCount: 1, retryExhausted: false })
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  // 评审 P2：自定义 shell 配置下 spawnSpec.shellId（可执行文件 basename）≠ record 侧的
+  // dependencySnapshot.profileId（内置 profile id）；成功清除必须按 record 同源键，否则永不清零。
+  // 计数用 breaker.record 直接播种（不再真实跑两次错配命令）：record 与生产登记同样会建
+  // lastMismatchKeys 的会话+profile 范围，clearOnSuccess 的定向清除语义被完整钉住；
+  // 真实拉起只保留成功触发那一次（生产清除路径本体），CI 容器慢不再构成墙钟风险。
+  it('自定义 shell 配置（shellId ≠ profileId）下成功执行仍清除错配计数', async () => {
+    if (!isWindows) return
+    const seeded = dialectRetryBreaker.record('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch'])
+    expect(seeded.count).toBe(1)
+    // 构造 prepared：shellId 为自定义名，dependencySnapshot.profileId 保持内置（与 record 同源）
+    const planned = await planRunShellExecution({ command: 'Get-ChildItem . -Name | Select-Object -First 1' }, baseCtx(workDir, userDataDir))
+    const prepared = prepareShellExecution({
+      command: planned.command,
+      profile: planned.profile,
+      spawnSpec: { ...planned.spawnSpec, shellId: 'my-custom-shell' },
+      cwd: planned.cwd,
+      timeoutMs: planned.timeoutMs,
+      ioMaxBytes: planned.ioMaxBytes,
+      environment: { ...planned.environment },
+      facts: planned.facts,
+      configRevision: planned.configRevision,
+      policyRevision: planned.policyRevision,
+      dependencySnapshot: { ...planned.dependencySnapshot },
+      pathSnapshot: { ...planned.pathSnapshot }
+    }, SPAWN_TEST_TIMEOUT_MS)
+    const result = await executePreparedShellExecutionWithHostFallback(prepared, baseCtx(workDir, userDataDir), Date.now(), {})
+    expect(result.success).toBe(true)
+    // 修复前（按 shellId 清）播种的计数会残留 → record 返回 2；按 profileId 同源清后 → 1
+    expect(dialectRetryBreaker.record('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch']).count).toBe(1)
+    dialectRetryBreaker.clear('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch'])
+  }, SPAWN_TEST_TIMEOUT_MS)
 
   /** 事故重放：把 136 字节原样写进指定流，并复现宿主失败退出码（§2.2 / Gate 1）。 */
   function accidentReplayCommand(stream: 'stdout' | 'stderr' = 'stderr'): string {

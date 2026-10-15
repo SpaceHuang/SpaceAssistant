@@ -11,6 +11,7 @@ coverage/
 .env
 .env.local
 .worktrees/
+.probe/
 
 # Claude Code 本地 IDE 配置
 .claude/settings.local.json
@@ -33,9 +34,6 @@ coverage/
 # ripgrep release staging (downloaded and verified locally/CI)
 resources/ripgrep/*
 !resources/ripgrep/.gitkeep
-
-# Agent 本地配置文件
-AGENTS.md
 
 # Mingcute 图标库源码（已复制所需图标到 src/renderer/assets/）
 res/mingcute-icons-main/

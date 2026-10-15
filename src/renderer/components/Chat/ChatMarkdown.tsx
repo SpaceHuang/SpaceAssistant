@@ -3,6 +3,7 @@ import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import { Button } from 'antd'
 import { Check, Copy } from 'lucide-react'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 import {
   memo,
   useEffect,
@@ -57,7 +58,7 @@ function splitHighlightedText(text: string, start: number, end: number): ReactNo
 
 export const ChatMarkdown = memo(function ChatMarkdown({
   content,
-  wikiRootPath = 'llm-wiki',
+  wikiRootPath = WIKI_VOCABULARY_PREFIX,
   baseRelPath,
   onOpenFile,
   messageId,

@@ -439,7 +439,7 @@ describe('switchSessionExecutor', () => {
     const remoteContext = { source: 'feishu' as const, messageId: 'm1', confirmPolicy: 'always' as const, chatId: 'chat-1', outboundSessionId: caller.id }
     const ctx = makeCtx(db, manager, caller.id, remoteContext, requestId)
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
+    revocations.registerToolRevocationRequest(requestId, 'feishu', turnId)
     let reachedRenderer!: () => void
     let rejectRenderer!: (error: Error) => void
     const rendererRequested = new Promise<void>((resolve) => { reachedRenderer = resolve })
@@ -486,10 +486,12 @@ describe('switchSessionExecutor', () => {
       expect(revocations.revokeToolForLane('feishu', 'switch_session')).toBe(1)
       rejectRenderer(new Error('renderer acknowledgement lost after request dispatch'))
 
-      await expect(running).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+      await expect(running).rejects.toMatchObject({ name: 'AgentTurnLifecycleInvalidatedError', reason: 'revoked' })
       const events = (await history.read(invocationId)).events
-      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-      expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'authorization-revoked' } })
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({
+        toolCallId: 'switch-session-unknown-call', executionOutcome: 'unknown-after-dispatch', invocationDisposition: 'authorization-invalidated'
+      }) }))
       expect(providerCalls).toBe(1)
       expect(remoteContext.outboundSessionId).toBe(caller.id)
       expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)

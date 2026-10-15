@@ -181,6 +181,7 @@ export interface ResolveConfirmChannelArgs {
     turnId?: string
     sessionId: string
     toolName: string
+    toolUseId?: string
     policy: ConfirmAnswererPolicy
     audit?: AuditSink
   }) => ConfirmationChannel
@@ -220,6 +221,7 @@ export function resolveConfirmChannel(args: ResolveConfirmChannelArgs): Confirma
       ...(args.turnId ? { turnId: args.turnId } : {}),
       sessionId: args.sessionId,
       toolName: args.toolName,
+      ...(args.toolUseId ? { toolUseId: args.toolUseId } : {}),
       policy: answerer,
       ...(args.audit ? { audit: args.audit } : {})
     })

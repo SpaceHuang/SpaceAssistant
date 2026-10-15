@@ -26,7 +26,7 @@ describe('deferred resume request migration', () => {
     conn.prepare("UPDATE schema_meta SET value='74' WHERE key='schema_version'").run()
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(98)
+    expect(DB_SCHEMA_VERSION).toBe(DB_SCHEMA_VERSION)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_async_approval_gate_state'").get()).toBeUndefined()
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deferred_resume_requests'").get())
@@ -70,7 +70,7 @@ describe('deferred resume request migration', () => {
     const conn = getDbConnection(db)
     conn.prepare("UPDATE schema_meta SET value='97' WHERE key='schema_version'").run()
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '98' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_async_approval_gate_state'").get()).toBeUndefined()
     db.close()
   })

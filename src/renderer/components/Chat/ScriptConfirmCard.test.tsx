@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
@@ -64,6 +64,28 @@ describe('ScriptConfirmCard', () => {
         'dark'
       )
     })
+  })
+
+  it('does not let a stale highlight overwrite a cached code block', async () => {
+    const { getCachedHighlight, highlightCode } = await import('../../utils/shikiHighlighter')
+    let resolveOld!: (value: string) => void
+    const oldResult = new Promise<string>((resolve) => { resolveOld = resolve })
+    vi.mocked(getCachedHighlight).mockImplementation((code) => code === 'B' ? '<pre>cached B</pre>' : null)
+    vi.mocked(highlightCode).mockImplementation((code) => code === 'A' ? oldResult : Promise.resolve('<pre>new</pre>'))
+
+    const view = render(<ShikiHighlightedCodeBody code="A" language="text" />)
+    view.rerender(<ShikiHighlightedCodeBody code="B" language="text" />)
+    expect(await screen.findByText('cached B')).toBeDefined()
+
+    await act(async () => {
+      resolveOld('<pre>stale A</pre>')
+      await oldResult
+    })
+
+    expect(screen.getByText('cached B')).toBeDefined()
+    expect(screen.queryByText('stale A')).toBeNull()
+    vi.mocked(getCachedHighlight).mockReturnValue(null)
+    vi.mocked(highlightCode).mockResolvedValue('<pre class="shiki"><code>highlighted</code></pre>')
   })
 
   it('shows timeout meta when provided', () => {

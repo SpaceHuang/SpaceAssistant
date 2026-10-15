@@ -19,6 +19,11 @@ export async function resolvePermittedWriteTarget(fact: WritePathFact): Promise<
   if (!parentStat.isDirectory() || !identityMatches(fact.parentIdentity, parentStat) || await fs.realpath(fact.parentReal) !== fact.parentReal) {
     throw new Error('write-parent-identity-mismatch')
   }
+  // probeWritePathFact canonicalizes symlinks into normalizedPath while retaining the
+  // original target kind. Reject from that trusted fact before inspecting the resolved
+  // referent, so a symlink target is consistently diagnosed as a type mismatch.
+  if (fact.targetKind === 'symlink') throw new Error('write-target-type-mismatch')
+  if (fact.targetKind !== 'file' && fact.targetKind !== 'missing') throw new Error('write-target-kind-denied')
   let targetStat: Stats | null = null
   try {
     const lstat = await fs.lstat(fact.normalizedPath)
@@ -34,7 +39,6 @@ export async function resolvePermittedWriteTarget(fact: WritePathFact): Promise<
   }
   if (fact.targetKind === 'file' && !targetStat) throw new Error('write-target-disappeared')
   if (fact.targetKind === 'missing' && targetStat) throw new Error('write-target-appeared')
-  if (fact.targetKind !== 'file' && fact.targetKind !== 'missing') throw new Error('write-target-kind-denied')
   if (path.dirname(fact.normalizedPath) !== fact.parentReal && !fact.normalizedPath.startsWith(fact.parentReal + path.sep)) throw new Error('write-target-outside-parent')
   return { targetPath: fact.normalizedPath, parentReal: fact.parentReal, existed: targetStat !== null, existingStat: targetStat }
 }

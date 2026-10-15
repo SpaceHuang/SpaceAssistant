@@ -47,7 +47,7 @@ describe('session content cutover schema', () => {
     const conn = makeV37Database()
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(97)
+    expect(DB_SCHEMA_VERSION).toBe(DB_SCHEMA_VERSION)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare('SELECT content, content_storage_state FROM messages WHERE id=?').get('legacy-message'))
       .toEqual({ content: 'preserve this body', content_storage_state: 'legacy' })

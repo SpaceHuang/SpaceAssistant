@@ -21,9 +21,9 @@ import { FileStateCache } from './fileStateCache'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
 import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from '../packages/agent-sdk/src/history'
+import { createTurnScopedHistoryMemo } from './runtime/turnScopedHistoryMemo'
 import { CanonicalCompactionCommitUncertainError, toCanonicalModelMessages } from './runtime/canonicalHistory'
 import { rebuildClaudeMessagesFromHistory } from './runtime/canonicalHistory'
-import { planRunShellExecution, RunShellPlanError } from './tools/runShellPlan'
 import type { PreparedShellExecution } from './shell/preparedShellExecution'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
 import { getDiagnostics, safeAppendDiagnostic } from './mcp/mcpDiagnostics'
@@ -142,6 +142,7 @@ import {
   throwIfChatCancelled
 } from './chatCancelRegistry'
 import { clearSessionActiveStream, registerSessionActiveStream } from './chatActiveStreams'
+import { cancelAllActiveAgentToolsForTurn } from './activeAgentToolCancellation'
 import { getCachedMemoryContent } from './projectMemory'
 import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
 import type { AppLocale } from '../src/shared/locale'
@@ -179,6 +180,9 @@ import { bindHostedRequiredUserMessage, canonicalHostedRequiredUserMessage, crea
 export const DESKTOP_TOOL_LOOP_MAX_ROUNDS = 500
 
 const fileCaches = new Map<string, FileStateCache>()
+
+/** chatSignal abort → Inner catch 捕获的计时起点（1b 写入，llm.cancel 打点读取；取不到则省略字段）。 */
+const cancelTimestamps = new WeakMap<AbortSignal, number>()
 
 export function getFileStateCacheForSession(sessionId: string): FileStateCache {
   let c = fileCaches.get(sessionId)
@@ -560,6 +564,9 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
 
 export async function runToolChatSession(invocation: AgentInvocation, ports: RunToolChatSessionPorts, options: Pick<RunToolChatSessionArgs, 'onHostedTurnHandoff'> = {}): Promise<AgentInvocationResult> {
   const args = { ...expandInvocation(invocation, ports), ...options, hostHistory: ports.hostHistory }
+  // P0-⑤ 同轮读合并：同一 invocation 流在本回合被读取多次（terminal 检查 / 消息重建 / base 归属
+  // 检查），中间无写入；按 invocationId memoize，任何 append 即整体失效，防止续轮读到过期 transcript。
+  if (args.history) args.history = createTurnScopedHistoryMemo(args.history)
   const executionId = args.turnId ?? args.requestId
   const historyWriter = args.history ? new InvocationHistoryWriter(args.history as never, { invocationId: executionId, turnId: executionId }) : undefined
   const appendHistoryEvents = async (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]): Promise<void> => {
@@ -581,6 +588,24 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Run
     ? { current: ports.invocationRuntime.acquireLease(executionId) }
     : undefined
   const chatSignal = registerChatCancel(executionId)
+  // turn 级取消传导（公共落点）：IPC 取消 / 应用退出 / 测试直调三类中止来源都经
+  // ChatCancelRegistry 的 controller.abort 汇到这里，一次监听把「杀工具」接进所有来源；
+  // 与 UI 单工具取消按钮走同一回调（activeAgentToolCancellation → registeredAgentTurnTools
+  // 的 cancelController）。{ once: true }：abort 仅发生一次，监听器随 controller 生命周期回收
+  //（finally 的 clearChatCancel 只注销不 abort，不会误触发）。
+  chatSignal.addEventListener('abort', () => {
+    // llm.cancel 的计时起点（Inner catch 与本处不同作用域，经 WeakMap 跨层传递）
+    cancelTimestamps.set(chatSignal, performance.now())
+    const cancelledTools = cancelAllActiveAgentToolsForTurn(args.sessionId, executionId)
+    // 不打 turn.cancel（该名字保留给 IPC 处理器的 accepted 记录，字段形状互不混淆）；
+    // cancelledTools 落日志让「传导到了但匹配 0 个」的静默失效可见
+    logAgentEvent('warn', 'turn.cancel.tools', {
+      turnId: executionId,
+      requestId: args.requestId,
+      sessionId: args.sessionId,
+      cancelledTools
+    })
+  }, { once: true })
   // sessionId→活跃流反向登记：供 action.session.status/list 判定会话运行中（需求 §9.4，
   // 与下方 finally 的 clearSessionActiveStream 成对、按 requestId 粒度删除，重入安全）
   registerSessionActiveStream(args.sessionId, args.requestId)
@@ -791,7 +816,8 @@ async function runToolChatSessionInner(
       toolName: call.toolName,
       modelTurn: source?.modelTurn,
       semanticCallSha256: createHash('sha256').update(semanticIdentity).digest('hex'),
-      dispatched: source?.kind !== 'safety-rejection',
+      // plan-rejection 与 safety-rejection 同为「未派发即拒绝」，不得计入 dispatched（评审 P3）
+      dispatched: source?.kind !== 'safety-rejection' && source?.kind !== 'plan-rejection',
       resultCommitted: true,
       success: !resultIsError,
       ...(resultIsError ? { errorClass: normalizeToolErrorClass(errorText, output) } : {}),
@@ -1182,6 +1208,21 @@ async function runToolChatSessionInner(
     throw new HostedTurnHandoffError(new Error('HOSTED_HANDOFF_REQUIRED'))
   } catch (error) {
     retractAttemptPreview()
+    // llm.cancel 审计（abort → catch 延迟）。条件按 hosted 实测口径取 chatSignal.aborted：
+    // 原生 ChatCancelledError 只在 pre-LLM 判定抛出，流中段取消以
+    // HostedTurnFinalizedError(cancelled/interrupted) 或包装 HandoffError 到达本 catch，
+    // signal 状态判定可一并覆盖；loopRound 是本层局部变量，故打点必须在此层。
+    // 计时起点由公共落点（registerChatCancel 旁的 abort 监听）经 cancelTimestamps 写入；
+    // 取不到时省略字段（宿主边界，不编造数值）。
+    if (chatSignal.aborted) {
+      const abortedAt = cancelTimestamps.get(chatSignal)
+      logAgentEvent('warn', 'llm.cancel', {
+        requestId,
+        sessionId,
+        loopRound,
+        ...(abortedAt === undefined ? {} : { abortToCatchMs: Math.max(0, Math.round(performance.now() - abortedAt)) })
+      })
+    }
     if (error instanceof ChatCancelledError || error instanceof HostedTurnFinalizedError || error instanceof HostedTurnHandoffError || error instanceof ToolLoopRoundLimitError) throw error
     throw new HostedTurnHandoffError(error)
   } finally {

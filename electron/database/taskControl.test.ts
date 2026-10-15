@@ -90,7 +90,7 @@ describe('trusted IM task control records', () => {
     conn.exec('DROP TABLE im_task_control')
     conn.prepare("UPDATE schema_meta SET value='65' WHERE key='schema_version'").run()
     runMigrations(conn)
-      expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '97' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '99' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='im_task_control'").get())
       .toEqual({ name: 'im_task_control' })
     db.close()

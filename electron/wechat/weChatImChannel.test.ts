@@ -6,7 +6,7 @@ import { openSqliteDatabase, type AppDatabase } from '../database'
 import * as decisionCacheWriter from '../confirmation/decisionCacheWriter'
 import type { ImPendingConfirm } from '../confirmation/imChannel'
 import { parseImConfirmReply } from '../remote/imConfirmReply'
-import { WeChatConfirmationPromptAdapter } from './weChatConfirmationPromptAdapter'
+import { WeChatConfirmationPromptAdapter, wrapFetchForLosslessWeChatMessageId } from './weChatConfirmationPromptAdapter'
 import { createMockWeChatBot } from './__mocks__/wechatBotMock'
 import { parseSdkInboundMessage } from './weChatInboundParser'
 
@@ -69,7 +69,8 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
 
   it('用 sendmessage 响应中的服务端 message_id 匹配引用 msg_id 完成确认往返', async () => {
     const bot = createMockWeChatBot()
-    const sendMessage = vi.fn(async () => ({ message_id: '12345', ret: 0 }))
+    const exactId = '9007199254740993'
+    const sendMessage = vi.fn(async () => ({ message_id: exactId, ret: 0 }))
     Object.assign(bot, {
       getCredentials: () => ({ baseUrl: 'https://ilink.test', token: 'test-token' }),
       api: { sendMessage }
@@ -82,18 +83,23 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     }) })
     const pending = im.request(req(), { sessionId: 'quoted-roundtrip', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test', authOwner: 'wx-user@test' })
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
-    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('12345'))
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe(exactId))
     const confirmId = im.listPending()[0]!.confirmId!
+    const fetchWithLosslessIds = wrapFetchForLosslessWeChatMessageId((async () => new Response(
+      `{"msgs":[{"item_list":[{"ref_msg":{"message_item":{"type":0,"msg_id":${exactId},"create_time_ms":${Date.now()},"is_completed":true}}}] }]}`
+    )) as typeof fetch)
+    const response = await fetchWithLosslessIds('https://ilink.test/ilink/bot/getupdates')
+    const update = await response.json() as { msgs: Array<{ item_list: unknown[] }> }
     const quotedReply = makeIncomingMessage({
       text: `N ${confirmId}`,
       raw: {
         ...makeIncomingMessage().raw,
         client_id: 'quoted-answer',
-        item_list: [{ type: 1, ref_msg: { message_item: { type: 0, msg_id: 12345, create_time_ms: Date.now(), is_completed: true } } }]
+        item_list: update.msgs[0].item_list
       } as never
     })
     const parsedReply = parseSdkInboundMessage(quotedReply)
-    expect(parsedReply.quotedMessageId).toBe('12345')
+    expect(parsedReply.quotedMessageId).toBe(exactId)
     expect(parsedReply.quotedMessageText).toBeUndefined()
     expect(im.tryResolveFromInboundMessage(parsedReply, { allowedUserIds: ['wx-user@test'] })).toBe(true)
     await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'user-denied' })
@@ -199,6 +205,58 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     expect(parseImConfirmReply('N 07')).toMatchObject({ kind: 'reject', confirmId: '07' })
     expect(parseImConfirmReply('Y')).toMatchObject({ kind: 'usage_hint' })
     expect(prompt).not.toMatch(/(?:回复|或)\s+Y\/N\b/)
+  })
+
+  it('把 run_shell 命令、调用理由和截断状态纳入微信确认文本', () => {
+    const prompt = buildWeChatConfirmPrompt({
+      id: 'shell-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification: '查看目录\n确定项目根路径', _justificationTruncated: true },
+      messageId: 'm1', channel: 'wechat', memoryTiers: [], createdAt: 1, expiresAt: 2
+    })
+    expect(prompt).toContain('命令：pwd')
+    expect(prompt).toContain('调用理由（内容已截断）：\n查看目录\n确定项目根路径')
+  })
+
+  it('微信确认文本完整保留 2,000 个 Unicode 码点的合法理由', () => {
+    const justification = '😀'.repeat(1_500)
+    const prompt = buildWeChatConfirmPrompt({
+      id: 'shell-unicode-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification },
+      messageId: 'm1', channel: 'wechat', memoryTiers: [], createdAt: 1, expiresAt: 2
+    })
+    expect(prompt).toContain(`调用理由：\n${justification}\n`)
+    expect(prompt).not.toContain('调用理由（内容已截断）')
+  })
+
+  it('并行 run_shell 确认通过微信发送入口保留各自命令和调用理由', async () => {
+    const im = new WeChatImChannel({ getReplyBot })
+    const start = (suffix: string) => im.request(req('run_shell'), {
+      sessionId: `s-parallel-${suffix}`, toolName: 'run_shell',
+      toolInput: { command: `echo ${suffix}`, justification: `用户要求检查 ${suffix}` },
+      messageId: `origin-${suffix}`, matchKey: 'wx-user@test', authOwner: 'wx-user@test',
+      context: makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: `origin-${suffix}` } })
+    })
+    const first = start('alpha')
+    const second = start('beta')
+    await vi.waitFor(() => expect(im.listPending()).toHaveLength(2))
+    await vi.waitFor(() => expect(sendToUser).toHaveBeenCalledTimes(2))
+
+    const sent = sendToUser.mock.calls.map((call) => call[1])
+    expect(sent).toEqual(expect.arrayContaining([
+      expect.stringContaining('命令：echo alpha\n调用理由：\n用户要求检查 alpha'),
+      expect.stringContaining('命令：echo beta\n调用理由：\n用户要求检查 beta')
+    ]))
+    const pendingByCommand = new Map(im.listPending().map((entry) => [String(entry.toolInput?.command), entry]))
+    for (const command of ['echo alpha', 'echo beta']) {
+      const entry = pendingByCommand.get(command)!
+      expect(im.tryResolveFromInboundMessage({
+        messageId: `answer-${command}`, quotedMessageId: entry.promptMessageId,
+        userId: 'wx-user@test', text: `Y ${entry.confirmId}`, type: 'text',
+        timestamp: new Date().toISOString(), contextToken: 'ctx'
+      }, { allowedUserIds: ['wx-user@test'] })).toBe(true)
+    }
+    await expect(first).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
+    await expect(second).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
   })
 
   it.each([

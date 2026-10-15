@@ -41,6 +41,17 @@ describe('file-tool descriptions hint the path field name', () => {
     expect(pathProp.description).not.toContain('不支持目录递归')
   })
 
+
+  it("grep 支持调用级 timeout 参数（超时可操作引导,产品增强）", () => {
+    const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'grep')!
+    const timeoutProp = def.input_schema.properties.timeout as { type: string; minimum: number; maximum: number } | undefined
+    expect(timeoutProp).toBeDefined()
+    expect(timeoutProp!.type).toBe('number')
+    expect(timeoutProp!.minimum).toBe(5)
+    expect(timeoutProp!.maximum).toBe(600)
+    expect(def.input_schema.required).not.toContain('timeout')
+  })
+
   it('grep description 首句改为文件/目录搜索根契约', () => {
     const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'grep')!
     expect(def.description).toContain('搜索根为文件或目录')
@@ -69,6 +80,16 @@ describe('toolkit 网关工具（docs/requirement/agent-toolkit-capability-gatew
 })
 
 describe('run_shell 能力拒绝话术边界', () => {
+  it('公开可选调用理由并要求说明与用户目标的关系', () => {
+    const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'run_shell')!
+    expect(def.input_schema.properties.justification).toMatchObject({ type: 'string' })
+    expect(def.input_schema.required).not.toContain('justification')
+    expect(def.input_schema.properties.justification).toMatchObject({ description: expect.stringContaining('用户的当前目标') })
+    expect(def.input_schema.properties.justification.description).toContain('调用参数')
+    expect(def.description).toContain('justification')
+    expect(def.description).toContain('提交')
+  })
+
   it('明确区分能力拒绝与安全策略，不诱导绕过', () => {
     const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'run_shell')!
     expect(def.description).toContain('能力拒绝不等于安全策略拒绝')

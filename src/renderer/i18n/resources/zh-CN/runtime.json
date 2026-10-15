@@ -87,7 +87,8 @@
     "setWorkDir": "设置工作目录...",
     "switchWorkDir": "切换工作目录",
     "selectOrCreateSession": "请先选择或创建一个会话",
-    "projectFiles": "项目文件"
+    "projectFiles": "项目文件",
+    "fileMigrated": "该文件已合并至 {{to}}，请在新位置打开"
   },
   "usage": {
     "compactBillions": "{{value}} 亿",
@@ -113,8 +114,7 @@
     "importedRaw": "已导入 raw：{{name}}，Ingest 已开始",
     "ingestStarted": "Ingest 已开始：{{name}}",
     "enableFirst": "请先在设置中启用 Wiki",
-    "initializeFirst": "Wiki 尚未初始化，请先在设置或 Wiki 分段中初始化",
-    "schemaSection": "## Wiki Schema（项目规范）"
+    "initializeFirst": "Wiki 尚未初始化，请先在设置或 Wiki 分段中初始化"
   },
   "workDir": {
     "switchFailed": "切换工作目录失败"

@@ -462,6 +462,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       return ''
     }
     if (record.toolName === 'run_script') return ''
+    if (result.executionOutcome === 'unknown-after-dispatch') return t('tool.unknownAfterDispatch')
     if (result.success) {
       if (result.data === undefined) return ''
       return typeof result.data === 'string' ? result.data : JSON.stringify(result.data, null, 2)
@@ -799,7 +800,9 @@ export const ToolCallCard = memo(function ToolCallCard({
 
           {showGenericFailureMessage ? (
             <span className="tool-row-detail__message">
-              {record.result?.userMessage ?? record.result?.error ?? (record.status === 'rejected' ? t('tool.rejected') : t('tool.failed'))}
+              {record.result?.executionOutcome === 'unknown-after-dispatch'
+                ? <>{t('tool.unknownAfterDispatch')}{record.result.executionErrorCode ? ` (${record.result.executionErrorCode})` : ''}</>
+                : record.result?.userMessage ?? record.result?.error ?? (record.status === 'rejected' ? t('tool.rejected') : t('tool.failed'))}
             </span>
           ) : null}
           {mcp && record.status === 'failed' ? (

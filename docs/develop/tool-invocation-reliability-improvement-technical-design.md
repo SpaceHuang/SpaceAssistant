@@ -74,7 +74,7 @@
 | 路径规范化 / 比较键 | **Utils** | 判据 4：删掉只影响质量，不影响语义 |
 | 诊断的**内容**（规则 ID、基准、目标、建议） | **Safety**（内容在外） | §7.1 第一问：它变了产品安全语义就变 |
 | 诊断的**形状**与下发 | **Core 协议**（闭合字段，不可被配置替换） | §7.1 第二问：被调用方伪造会误导判定 |
-| 结果信封的构造出口 | **Core**（`packages/agent-core` 内的纯数据契约） | 判据 1：信封是执行语义的对外表达 |
+| 结果信封的构造出口 | **Core**（`packages/agent-sdk` 内的纯数据契约） | 判据 1：信封是执行语义的对外表达 |
 | 信封的历史扫描脚本 | **Utils / 工具链** | 判据 4 |
 | 新增 i18n 文案 | **Driver（渲染端真源）+ 主进程只产键** | §2.4 规则 1：主进程不产出文案 |
 
@@ -416,7 +416,7 @@ export function assertApprovalPayloadComplete(
 
 ### 4.4 R4：结果信封的单一出口与不变量
 
-#### 4.4.1 契约（`packages/agent-core/src/toolResultContract.ts`）
+#### 4.4.1 契约（`packages/agent-sdk/src/toolResultContract.ts`）
 
 ```ts
 /** 五类细分失败码（闭合枚举，拒绝插件扩展） */
@@ -842,7 +842,7 @@ export type DirectoryErrorClass =
 | --- | --- | --- |
 | `WorkspaceSnapshot` / `workspacePathKey` | `src/shared/agent/workspace.ts` + `electron/writeSafety/pathIdentity.ts` | R1、R2（诊断基准）、审计 |
 | `SafetyDiagnostics` | `src/shared/confirmation/diagnostics.ts` | R2、R3、R5、R8（统一「键 + 参数 + 建议」） |
-| `ToolResultEnvelope` / `ToolErrorCode` / 不变量 | `packages/agent-core/src/toolResultContract.ts` | R4、R5、R6、R8（所有失败都走同一出口） |
+| `ToolResultEnvelope` / `ToolErrorCode` / 不变量 | `packages/agent-sdk/src/toolResultContract.ts` | R4、R5、R6、R8（所有失败都走同一出口） |
 | `GrepScope` | `src/shared/grepScope.ts` | R6、R7 |
 | `DirectoryErrorClass` | `src/shared/errorCodes.ts` 扩展 | R8 |
 
@@ -893,7 +893,7 @@ export type DirectoryErrorClass =
 
 | 文件 | 改动 |
 | --- | --- |
-| `packages/agent-core/src/toolResultContract.ts`（新） | `ToolResultEnvelope`、`ToolErrorCode`、不变量表、`normalizeToolResultEnvelope` |
+| `packages/agent-sdk/src/toolResultContract.ts`（新） | `ToolResultEnvelope`、`ToolErrorCode`、不变量表、`normalizeToolResultEnvelope` |
 | `electron/tools/types.ts` | `validateToolExecutorResult*` 改为调用契约归一；保留兼容导出一版 |
 | `src/shared/errorCodes.ts` | 新增 `TOOL_EXEC_FAILED` / `TOOL_EXECUTOR_ERROR` / `POLICY_NOT_EXECUTED` / `TOOL_USER_CANCELLED` / `TOOL_INVALID_INPUT` 与 `SHELL_*` → 新码的映射表（**长期保留，不设删除期限**，理由见附录 A.1） |
 | `electron/tools/runShellExecutor.ts` | `settle` 各分支改用新码（行为不变，仅口径细分） |
@@ -1309,7 +1309,7 @@ export function normalizeGrepArgs(input: Record<string, unknown>): GrepNormalize
 ### D.3 R4：校验器从「矛盾即改判失败」改为「按事实归一 + 告警」
 
 ```ts
-// packages/agent-core/src/toolResultContract.ts
+// packages/agent-sdk/src/toolResultContract.ts
 export function normalizeToolResultEnvelope(
   raw: unknown,
   facts: { exitCode?: number | null; terminationReason?: string; aborted?: boolean }
@@ -1385,7 +1385,7 @@ function classifyDirectoryError(e: unknown): DirectoryErrorClass | 'ABORTED' {
 | A4 | 四个消费点改同源（env / 文件工具 / shell cwd / gate `EnvFacts`）+ **调用边界 `refresh()` 接线**（§4.1.3）+ `initialWorkDir` 残留清理 | `electron/capabilities/handlers/env.ts`、`electron/toolChatLoop.ts`、`electron/confirmation/toolCallGate.ts` | A3 |
 | A5 | 一致性护栏 + `workspace.basis-mismatch` / `workspace.rebound` 审计 | 审计白名单与读取端 | A3、A4 |
 | A6 | 跨层测试 T-R1-1 ~ T-R1-4 | 新增测试文件 | A4、A5 |
-| A7 | 结果契约：`ToolResultEnvelope` / `ToolErrorCode` / 不变量 / `normalizeToolResultEnvelope` | `packages/agent-core/src/toolResultContract.ts`（新） | — |
+| A7 | 结果契约：`ToolResultEnvelope` / `ToolErrorCode` / 不变量 / `normalizeToolResultEnvelope` | `packages/agent-sdk/src/toolResultContract.ts`（新） | — |
 | A8 | 校验器切换 + 兼容导出 + `SHELL_*` → 新码映射表 | `electron/tools/types.ts`、`src/shared/errorCodes.ts`、`electron/tools/runShellExecutor.ts` | A7 |
 | A9 | 新日志事件 + 违规计数进诊断 | `electron/agentLogger/types.ts`、`electron/toolChatLoop.ts` | A7、A8 |
 | A10 | 历史事件流扫描脚本 + npm 脚本 + CI 接入 | `scripts/scan-tool-result-invariants.mjs`（新）、`package.json` | A7 |

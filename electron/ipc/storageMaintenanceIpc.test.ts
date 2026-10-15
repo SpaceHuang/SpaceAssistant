@@ -21,7 +21,7 @@ describe('storage maintenance IPC', () => {
     expect(await handlers.get('storage:run-audit')!()).toEqual({ collectedAt: expect.any(String) })
     expect(await handlers.get('storage:clear-cache')!()).toEqual({ cacheRows: 0, eligibilityRows: 0 })
     const result = await handlers.get('storage:compact')!({ sender: { send } }) as { archivePath: string }
-    expect(result.archivePath).toContain('user-data/session-archives')
+    expect(result.archivePath.replace(/\\/g, '/')).toContain('user-data/session-archives')
     expect(send).toHaveBeenCalledWith('storage:maintenance-progress', expect.objectContaining({ phase: 'complete' }))
     temp.cleanup()
   })

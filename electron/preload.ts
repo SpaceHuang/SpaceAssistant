@@ -40,6 +40,8 @@ const api: SpaceAssistantApi = {
   usageDelete: (sessionId) => ipcRenderer.invoke('usage:delete', sessionId),
 
   chatGetMessages: (payload) => ipcRenderer.invoke('chat:get-messages', payload),
+  chatGetAgentsMdRequestSnapshots: (payload) => ipcRenderer.invoke('chat:get-agents-md-request-snapshots', payload),
+  chatGetAgentsMdRequestSnapshot: (payload) => ipcRenderer.invoke('chat:get-agents-md-request-snapshot', payload),
   chatCompactSessionContext: (payload) => ipcRenderer.invoke('chat:compact-session-context', payload),
   chatGetSessionCompactionMarkers: (sessionId) => ipcRenderer.invoke('chat:get-session-compaction-markers', sessionId),
   chatGetApiContextBaseline: (payload) => ipcRenderer.invoke('chat:get-api-context-baseline', payload),
@@ -97,7 +99,6 @@ const api: SpaceAssistantApi = {
   chatReadStagedImage: (args) => ipcRenderer.invoke('chat:read-staged-image', args),
 
   configGet: () => ipcRenderer.invoke('config:get'),
-  configAckKeyAccessUpgradeNotice: () => ipcRenderer.invoke('config:ack-key-access-upgrade-notice'),
   getToolExposureList: (payload) => ipcRenderer.invoke('exposure:get-tools', payload),
 
   // ===== 「安全策略」设置页（§7 五区，P4）=====
@@ -245,6 +246,10 @@ const api: SpaceAssistantApi = {
   wikiGetSchema: () => ipcRenderer.invoke('wiki:get-schema'),
   wikiResolvePath: (payload: { relPath: string }) => ipcRenderer.invoke('wiki:resolve-path', payload),
   wikiImportRaw: (payload: { srcRelPath: string }) => ipcRenderer.invoke('wiki:import-raw', payload),
+  wikiMigrationStatus: () => ipcRenderer.invoke('wiki:migration-status'),
+  wikiMigrateLegacy: (payload?: { profileIds?: string[]; extraLegacyRoots?: Array<{ workDir: string; rootDirName: string }> }) =>
+    ipcRenderer.invoke('wiki:migrate-legacy', payload ?? {}),
+  wikiRenameRoot: (payload: { newRootPath: string }) => ipcRenderer.invoke('wiki:rename-root', payload),
 
   projectMemoryGetState: () => ipcRenderer.invoke('project-memory:get-state'),
   projectMemoryGenerate: () => ipcRenderer.invoke('project-memory:generate'),

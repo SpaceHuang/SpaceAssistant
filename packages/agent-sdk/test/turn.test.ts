@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AgentTurnCancelledError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
+import { createHash } from 'node:crypto'
+import { AgentTurnCancelledError, AgentTurnLifecycleInvalidatedError, PlanRejectedError, ToolDeniedError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
 import { ModelProviderRegistry, type CanonicalModelMessage, type StreamChunk } from '../src/model'
 import { CapabilityRegistry } from '../src/capability'
 import { InMemorySafetyPermitStore, type PermitBinding } from '../src/safetyPermit'
@@ -25,6 +26,490 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('freezes request patches and metadata across provider retry, then refreshes them for the next model turn', async () => {
+    const registry = new ModelProviderRegistry()
+    const providerRequests: CanonicalModelMessage[][] = []
+    let providerCall = 0
+    registry.register(route, { providerId: 'request-snapshot-patch', stream: async function* (call) {
+      providerCall += 1
+      providerRequests.push(structuredClone([...call.request.messages]))
+      if (providerCall === 1) throw new Error('temporary provider failure')
+      if (providerCall === 2) {
+        yield { type: 'tool-call', toolCallId: 'request-patch-tool', toolName: 'lookup', input: {} }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+        return
+      }
+      yield { type: 'text-delta', text: 'done' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'request-snapshot-patch'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      observer: { prepareModelRequest: ({ modelTurn }) => ({
+        requestPatch: { messages: [{ role: 'system', content: `snapshot-${modelTurn}` }, { role: 'user', content: 'go' }] },
+        requestMetadata: { snapshot: `snapshot-${modelTurn}` }
+      }) },
+      recoverProviderAttempt: async ({ error, messages }) => error ? ({ kind: 'retry', reasonCode: 'TEMPORARY_PROVIDER_FAILURE', messages }) : undefined,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) =>
+        ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion })
+      } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'step complete' })),
+      maxModelTurns: 3
+    })
+    expect(result.modelTurns).toBe(2)
+    expect(providerRequests.map((messages) => messages.find((message) => message.role === 'system')?.content)).toEqual([
+      'snapshot-1', 'snapshot-1', 'snapshot-2'
+    ])
+    const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
+    expect(requestEvents.map((event) => (event.payload as { requestMetadata?: unknown }).requestMetadata)).toEqual([
+      { snapshot: 'snapshot-1' }, { snapshot: 'snapshot-1' }, { snapshot: 'snapshot-2' }
+    ])
+    expect((await history.read(invocationId)).events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({
+      sourceRequestId: `${invocationId}:round:1`, modelTurn: 1
+    })
+  })
+  it('passes the originating logical request metadata to initial and final tool preparation', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'request-bound-tool-metadata', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'bound-call', toolName: 'lookup', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    const stages: Array<{ kind: string; requestMetadata?: Readonly<Record<string, unknown>> }> = []
+    const invocationId = 'request-bound-tool-metadata'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      observer: { prepareModelRequest: ({ modelTurn }) => ({ requestMetadata: { agentsMdSnapshot: { workDir: `/workspace/${modelTurn}` } } }) },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => {
+        stages.push({ kind: stage.kind, requestMetadata: stage.requestMetadata })
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }
+      },
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'ok' })), maxModelTurns: 2
+    })
+    expect(stages).toEqual([
+      { kind: 'initial', requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/1' } } },
+      { kind: 'recheck', requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/1' } } }
+    ])
+  })
+  it('runs switch_work_dir before the response siblings and returns siblings as not dispatched', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'request-switch-barrier', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'sibling', toolName: 'lookup', input: {} }
+        yield { type: 'tool-call' as const, toolCallId: 'switch', toolName: 'switch_work_dir', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    const executionOrder: string[] = []
+    const invocationId = 'request-switch-barrier'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup', 'switch_work_dir'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+      toolExecution: toolExecutionPort(permits, async (call) => { executionOrder.push(call.toolName); return { output: 'ok' } }), maxModelTurns: 2
+    })
+    expect(executionOrder).toEqual(['switch_work_dir'])
+    const events = (await history.read(invocationId)).events
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'sibling', reason: 'WORKDIR_SWITCH_BARRIER' }) }))
+    expect(events.findIndex(({ kind, payload }) => kind === 'tool-call-started' && (payload as { toolCallId?: string }).toolCallId === 'switch'))
+      .toBeLessThan(events.findIndex(({ kind, payload }) => kind === 'tool-call-not-dispatched' && (payload as { toolCallId?: string }).toolCallId === 'sibling'))
+  })
+  it('loads the next logical request from the directory selected by switch_work_dir', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    let currentWorkDir = '/workspace/A'
+    const requestMetadata: Array<Record<string, unknown>> = []
+    registry.register(route, { providerId: 'request-switch-refresh', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'switch-to-b', toolName: 'switch_work_dir', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    const invocationId = 'request-switch-refresh'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['switch_work_dir'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'switch to B' }], maxTokens: 32 },
+      observer: { prepareModelRequest: () => {
+        const metadata = { agentsMdSnapshot: { workDir: currentWorkDir, content: `instructions-${currentWorkDir}` } }
+        requestMetadata.push(metadata)
+        return { requestMetadata: metadata }
+      } },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+      toolExecution: toolExecutionPort(permits, async () => { currentWorkDir = '/workspace/B'; return { output: 'switched' } }), maxModelTurns: 2
+    })
+    expect(requestMetadata.map(({ agentsMdSnapshot }) => (agentsMdSnapshot as { workDir: string }).workDir)).toEqual(['/workspace/A', '/workspace/B'])
+    const historyMetadata = (await history.read(invocationId)).events.filter(({ kind }) => kind === 'model-request-started').map(({ payload }) => (payload as { requestMetadata?: unknown }).requestMetadata)
+    expect(historyMetadata).toEqual(requestMetadata)
+  })
+  it('does not execute a request-bound tool when the work directory changes while waiting for its resource lock', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'request-binding-resource-lock', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'stale-after-lock', toolName: 'lookup', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    let currentWorkDir = '/workspace/A'
+    let markLockEntered!: () => void
+    let releaseLock!: () => void
+    const lockEntered = new Promise<void>((resolve) => { markLockEntered = resolve })
+    const lockBarrier = new Promise<void>((resolve) => { releaseLock = resolve })
+    const invocationId = 'request-binding-resource-lock'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const execute = vi.fn(async () => ({ output: 'must not execute' }))
+    const execution = runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      observer: { prepareModelRequest: () => ({ requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/A' } } }) },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => {
+        if (stage.kind === 'recheck' && stage.requestMetadata?.agentsMdSnapshot &&
+          (stage.requestMetadata.agentsMdSnapshot as { workDir?: string }).workDir !== currentWorkDir) {
+          throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'work directory changed')
+        }
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }
+      },
+      toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 2,
+      resourceLocks: { acquire: async () => { markLockEntered(); await lockBarrier; return { release: vi.fn() } } }
+    })
+    await lockEntered
+    currentWorkDir = '/workspace/B'
+    releaseLock()
+    await expect(execution).rejects.toMatchObject({ reasonCode: 'WORKDIR_BINDING_CHANGED' })
+    expect(execute).not.toHaveBeenCalled()
+    expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'stale-after-lock', reason: 'WORKDIR_BINDING_CHANGED' }) }))
+  })
+  it('cancels an approved operation when its source work directory changes during approval wait', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'request-binding-approval', stream: async function* () {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'stale-after-approval', toolName: 'lookup', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'done' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    } })
+    let currentWorkDir = '/workspace/A'
+    let approve!: (result: { kind: 'approved'; receipt: string }) => void
+    let requestApproval!: () => void
+    const approvalRequested = new Promise<void>((resolve) => { requestApproval = resolve })
+    const invocationId = 'request-binding-approval'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const execute = vi.fn(async () => ({ output: 'must not execute' }))
+    const execution = runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 32 },
+      observer: { prepareModelRequest: () => ({ requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/A' } } }) },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'ask' as const, confirmationId: 'approval', answerer: 'user', reasonCode: 'CONFIRM_REQUIRED' }) } }),
+      confirmation: async () => { requestApproval(); return new Promise((resolve) => { approve = resolve }) },
+      prepareTool: async (call, stage) => {
+        if (stage.kind === 'recheck' && stage.requestMetadata?.agentsMdSnapshot &&
+          (stage.requestMetadata.agentsMdSnapshot as { workDir?: string }).workDir !== currentWorkDir) {
+          throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'work directory changed')
+        }
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }
+      },
+      toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 2
+    })
+    await approvalRequested
+    currentWorkDir = '/workspace/B'
+    approve({ kind: 'approved', receipt: 'approval-receipt' })
+    await expect(execution).rejects.toMatchObject({ reasonCode: 'WORKDIR_BINDING_CHANGED' })
+    expect(execute).not.toHaveBeenCalled()
+    expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'stale-after-approval', reason: 'WORKDIR_BINDING_CHANGED' }) }))
+  })
+  it('normalizes run_shell justification before hashing, persisting, and dispatching the call', async () => {
+    const registry = new ModelProviderRegistry()
+    let modelCalls = 0
+    registry.register(route, { providerId: 'shell-justification', stream: () => ++modelCalls === 1
+      ? stream(
+        { type: 'tool-call', toolCallId: 'shell-1', toolName: 'run_shell', input: { command: 'pwd', justification: '  e\u0301  ' } },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+      )
+      : stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }) })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv', ['run_shell'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const preparedInputs: Record<string, unknown>[] = []
+    const executedInputs: Record<string, unknown>[] = []
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'inv', history,
+      request: { messages: [{ role: 'user', content: 'check current directory' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => {
+        preparedInputs.push(call.input)
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }
+      },
+      toolExecution: toolExecutionPort(permits, async (call) => { executedInputs.push((call as typeof call & { input: Record<string, unknown> }).input); return { output: 'ok' } }),
+      maxModelTurns: 2
+    })
+    const expected = { command: 'pwd', justification: 'é' }
+    expect(preparedInputs[0]).toEqual(expected)
+    expect(executedInputs[0]).toEqual(expected)
+    expect((await history.read('inv')).events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'model-response-committed', payload: expect.objectContaining({
+        message: expect.objectContaining({ toolCalls: [expect.objectContaining({ id: 'shell-1', input: expected })] })
+      }) })
+    ]))
+  })
+
+  it('rechecks authorization after asynchronous model request projection', async () => {
+    const registry = new ModelProviderRegistry()
+    const provider = vi.fn(async function* () {
+      yield { type: 'text-delta' as const, text: 'must not dispatch' }
+      yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish' as const, reason: 'stop' as const }
+    })
+    registry.register(route, { providerId: 'projection-revocation', stream: provider })
+    let revoked = false
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('projection-revocation', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'projection-revocation',
+      request: { messages: [{ role: 'user', content: 'query' }], maxTokens: 32 },
+      beforeModelRequest: () => { if (revoked) throw new AgentTurnLifecycleInvalidatedError('revoked') },
+      observer: { onModelRequest: async () => { revoked = true } },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+      maxModelTurns: 3
+    })).rejects.toBeInstanceOf(AgentTurnLifecycleInvalidatedError)
+    expect(provider).not.toHaveBeenCalled()
+  })
+
+  it('rechecks authorization after retry request projection before retry dispatch', async () => {
+    const registry = new ModelProviderRegistry()
+    const provider = vi.fn(async function* () {
+      yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish' as const, reason: 'stop' as const }
+    })
+    registry.register(route, { providerId: 'retry-projection-revocation', stream: provider })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('retry-projection-revocation', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    let revoked = false
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'retry-projection-revocation',
+      request: { messages: [{ role: 'user', content: 'query' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+      beforeModelRequest: () => { if (revoked) throw new AgentTurnLifecycleInvalidatedError('revoked') },
+      observer: { onModelRequest: async ({ attempt }) => { if (attempt === 2) revoked = true } },
+      recoverProviderAttempt: async ({ messages }) => ({ kind: 'retry', reasonCode: 'CONTEXT_OVERFLOW', messages }),
+      maxModelTurns: 3
+    })).rejects.toBeInstanceOf(AgentTurnLifecycleInvalidatedError)
+    expect(provider).toHaveBeenCalledOnce()
+  })
+
+  it('retains a same-resource lock until a cancelled executor actually settles', async () => {
+    const registry = new ModelProviderRegistry()
+    const provider = vi.fn(async function* () {
+      yield { type: 'tool-call' as const, toolCallId: 'locked-tool', toolName: 'lookup', input: {} }
+      yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish' as const, reason: 'tool-calls' as const }
+    })
+    registry.register(route, { providerId: 'resource-lock-cancel', stream: provider })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('resource-lock-cancel', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const locks = new ResourceLockRegistry()
+    const controller = new AbortController()
+    let entered!: () => void
+    let finish!: () => void
+    const executorEntered = new Promise<void>((resolve) => { entered = resolve })
+    const execution = createPermitBoundToolExecutionPort({
+      permits, admission, allowedPhase: 'recheck',
+      resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
+      execute: async () => {
+        entered()
+        await new Promise<void>((resolve) => { finish = resolve })
+        return { output: 'late completion' }
+      }
+    })
+    const turn = runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'resource-lock-cancel',
+      request: { messages: [{ role: 'user', content: 'query' }], maxTokens: 32, signal: controller.signal },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: execution, resourceLocks: locks, toolResourceKeys: () => ['workspace:/probe'], maxModelTurns: 3
+    })
+    await executorEntered
+    controller.abort()
+    await expect(turn).rejects.toBeDefined()
+    let secondAcquired = false
+    const secondLease = locks.acquire(['workspace:/probe']).then((lease) => { secondAcquired = true; return lease })
+    await Promise.resolve()
+    expect(secondAcquired).toBe(false)
+    finish()
+    const lease = await secondLease
+    expect(secondAcquired).toBe(true)
+    lease.release()
+  })
+
+  it('stops before the next model request when host lifecycle changes after a settled tool result', async () => {
+    const registry = new ModelProviderRegistry()
+    const provider = vi.fn(async function* () {
+      yield { type: 'tool-call' as const, toolCallId: 'lifecycle-tool', toolName: 'lookup', input: {} }
+      yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish' as const, reason: 'tool-calls' as const }
+    })
+    registry.register(route, { providerId: 'lifecycle-boundary', stream: provider })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('lifecycle-boundary', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    let checks = 0
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'lifecycle-boundary', history,
+      request: { messages: [{ role: 'user', content: 'query' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: { success: true, data: 'ok' } })),
+      beforeModelRequest: () => { checks += 1; if (checks === 2) throw new AgentTurnLifecycleInvalidatedError('authorization-changed') },
+      maxModelTurns: 3, maxConcurrentTools: 1
+    })).rejects.toBeInstanceOf(AgentTurnLifecycleInvalidatedError)
+    expect(provider).toHaveBeenCalledOnce()
+    expect((await history.read('lifecycle-boundary')).events).toContainEqual(expect.objectContaining({
+      kind: 'invocation-interrupted', payload: expect.objectContaining({ reason: 'authorization-changed' })
+    }))
+  })
+
+  it.each([
+    ['executor throw races with revocation', 'revoked-throw'],
+    ['executor ignores revocation and returns normally', 'revoked-return'],
+    ['lease-only authorization change races with an executor error', 'authorization-change'],
+    ['Invocation timeout races with a tool timeout', 'timeout']
+  ] as const)('%s never starts another model request', async (_label, scenario) => {
+    const registry = new ModelProviderRegistry()
+    const provider = vi.fn(async function* (call) {
+      if (provider.mock.calls.length === 1) {
+        yield { type: 'tool-call' as const, toolCallId: 'race-tool', toolName: 'lookup', input: {} }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      } else {
+        yield { type: 'text-delta' as const, text: 'must not be requested' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      }
+    })
+    registry.register(route, { providerId: `lifecycle-${scenario}`, stream: provider })
+    const invocationId = `lifecycle-${scenario}`
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const history = new MemoryHistory()
+    const controller = new AbortController()
+    let revoke!: () => void
+    let authorizationChanged!: () => void
+    let authorizationVersion = 'auth-v1'
+    const execution = createPermitBoundToolExecutionPort({
+      permits, admission, allowedPhase: 'recheck',
+      resolveExpected: async (call) => ({ ...toolBinding, requestId: toolBinding.requestId, invocationId: call.invocationId,
+        toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
+      currentAuthorizationVersion: () => authorizationVersion,
+      subscribeRevocation: (_call, listener) => { revoke = listener; return () => undefined },
+      subscribeAuthorizationChange: (_call, listener) => { authorizationChanged = listener; return () => undefined },
+      execute: async () => {
+        if (scenario === 'revoked-throw') { revoke(); throw new Error('transport failed during revoke') }
+        if (scenario === 'revoked-return') { revoke(); return { output: 'late acknowledgement' } }
+        if (scenario === 'authorization-change') {
+          authorizationVersion = 'auth-v2'
+          authorizationChanged()
+          throw new Error('transport failed during authorization change')
+        }
+        controller.abort('agent-turn-timeout')
+        throw new Error('tool timed out at Invocation timeout boundary')
+      }
+    })
+
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'query' }], maxTokens: 32, signal: controller.signal },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: execution, maxModelTurns: 3, maxConcurrentTools: 1
+    })).rejects.toMatchObject(scenario === 'timeout' ? { code: 'TURN_TIMED_OUT' } : { name: 'AgentTurnLifecycleInvalidatedError' })
+
+    expect(provider).toHaveBeenCalledOnce()
+    const events = (await history.read(invocationId)).events
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({
+      toolCallId: 'race-tool', executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered'
+    }) }))
+    expect(events.at(-1)).toMatchObject({
+      kind: 'invocation-interrupted',
+      payload: scenario === 'timeout' ? { status: 'interrupted', reason: 'timeout' } : { status: 'interrupted' }
+    })
+  })
+
   it('adds transient system loop-check messages every 20 completed model turns without persisting them', async () => {
     const registry = new ModelProviderRegistry()
     const requests: CanonicalModelMessage[][] = []
@@ -99,7 +584,7 @@ describe('runAgentTurn', () => {
       capabilities.define(invocationId, ['lookup'])
       const permits = new InMemorySafetyPermitStore()
       const history = new MemoryHistory()
-      const fatal = outcomes.some((outcome) => outcome === 'fatal')
+      const fatal = false
       const execution = toolExecutionPort(permits, async (call) => {
         const index = Number(call.toolCallId.split('-')[2])
         const outcome = outcomes[index]
@@ -143,8 +628,8 @@ describe('runAgentTurn', () => {
         if (messageCount === 0 && eventCount === 0 && !started) expect(notDispatchedCount).toBe(1)
       }
       const notDispatchedIds = results.filter(({ kind }) => kind === 'tool-call-not-dispatched').map(({ payload }) => (payload as { toolCallId: string }).toolCallId)
-      if (notDispatchedIds.some((id) => !outcomes[Number(id.split('-')[2])] || outcomes[Number(id.split('-')[2])] !== 'deny')) expect(fatal).toBe(true)
-      if (!fatal) expect(proposedIds.every((id) => outcomes[Number(id.split('-')[2])] === 'deny' || results.some(({ kind, payload }) => kind === 'tool-call-finished' && (payload as { toolCallId?: string }).toolCallId === id))).toBe(true)
+      for (const id of notDispatchedIds) expect(outcomes[Number(id.split('-')[2])]).toBeOneOf(['deny', 'fatal', 'idle', 'business', 'success'])
+      if (!fatal) expect(proposedIds.every((id) => outcomes[Number(id.split('-')[2])] === 'deny' || results.some(({ kind, payload }) => (kind === 'tool-call-finished' || kind === 'tool-call-not-dispatched') && (payload as { toolCallId?: string }).toolCallId === id))).toBe(true)
     }
   }, 30000)
   it('派发前准入拒绝写入 not-dispatched 并回灌模型，且不触碰 executor', async () => {
@@ -447,7 +932,7 @@ describe('runAgentTurn', () => {
 
     await expect(running).rejects.toMatchObject({ code: 'TURN_TIMED_OUT' })
     expect((await backing.read('hosted-timeout')).events.at(-1)).toMatchObject({
-      kind: 'invocation-failed', payload: { status: 'failed', reason: 'timeout' }
+      kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'timeout' }
     })
     expect(transcriptCommits).toHaveLength(1)
     expect(transcriptCommits[0]).toMatchObject({ outcome: 'timed_out', messageMirror: {
@@ -639,6 +1124,7 @@ describe('runAgentTurn', () => {
     const permits = new InMemorySafetyPermitStore()
     const oldMessage = { role: 'user' as const, content: 'old context' }
     const currentMessage = { role: 'user' as const, content: 'current question' }
+    const instructionMessage = { role: 'system' as const, content: 'AGENTS_SENTINEL' }
     const planContextReplacement = vi.fn(async (input: import('../src/turn').ContextReplacementPlanInput) => input.phase === 'preflight' ? ({
       messages: [currentMessage], windowId: 'window-reset'
     }) : undefined)
@@ -652,12 +1138,24 @@ describe('runAgentTurn', () => {
       request: { messages: [oldMessage, currentMessage], maxTokens: 32 },
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })), maxModelTurns: 1,
+      observer: { prepareModelRequest: ({ request }) => ({
+        requestPatch: { messages: [instructionMessage, ...request.messages] },
+        requestMetadata: { agentsMdSnapshot: { status: 'loaded', content: 'AGENTS_SENTINEL' } }
+      }) },
       planContextReplacement, contextProjectionCommitter
     })
 
     expect(planContextReplacement.mock.calls.map(([call]) => call.phase)).toEqual(['preflight', 'turn-boundary'])
     expect(contextProjectionCommitter).toHaveBeenCalledOnce()
-    expect(providerRequests).toEqual([[currentMessage]])
+    expect(providerRequests).toEqual([[instructionMessage, currentMessage]])
+    const requestStarted = (await history.read('preflight-request')).events.find(({ kind }) => kind === 'model-request-started')!
+    expect(requestStarted.payload).toMatchObject({
+      requestMetadata: { agentsMdSnapshot: { status: 'loaded', content: 'AGENTS_SENTINEL' } },
+      requestSnapshot: {
+        messagesCount: 2,
+        messagesSha256: createHash('sha256').update(JSON.stringify([instructionMessage, currentMessage]), 'utf8').digest('hex')
+      }
+    })
     expect((await history.read('preflight-request')).events.map(({ kind }) => kind)).toEqual([
       'invocation-context-committed', 'transcript-compacted', 'model-request-started', 'model-response-committed', 'invocation-completed'
     ])
@@ -854,7 +1352,6 @@ describe('runAgentTurn', () => {
         capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
       toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'done' }))),
       confirmation: async ({ call }) => ({ kind: 'deferred' as const, todoId: 'park-todo', invocationId: call.invocationId,
-        cause: 'human-required' as const, executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
         checkpointRef: { checkpointId: 'park-checkpoint', workflowRevision: 5 } })
     })
 
@@ -864,124 +1361,6 @@ describe('runAgentTurn', () => {
       messages: [userMessage] })
     expect(transcriptCommits[0]).not.toHaveProperty('messageMirror')
     expect((await backing.read('parked-transcript-invocation')).events.at(-1)).toMatchObject({ kind: 'invocation-parked' })
-  })
-
-  it('defers a fresh human-required decision when the post-Agent recheck changes scope', async () => {
-    const registry = new ModelProviderRegistry()
-    registry.register(route, { providerId: 'agent-recheck-human-defer', stream: () => stream(
-      { type: 'tool-call', toolCallId: 'changed-write', toolName: 'write_file', input: { path: 'report.md', content: 'reviewed' } },
-      { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
-    ) })
-    const permits = new InMemorySafetyPermitStore()
-    const capabilities = new CapabilityRegistry()
-    capabilities.define('agent-recheck-human-defer', ['write_file'])
-    const evaluate = vi.fn(async (binding: PermitBinding) => binding.phase === 'initial-compat'
-      ? { kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: 'agent' as const, reasonCode: 'im-low-risk-create' }
-      : { kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: 'user' as const, reasonCode: 'im-write-ask',
-          context: { decision: { disposition: 'human-required' } } })
-    const execute = vi.fn(async () => ({ output: 'must not execute' }))
-    const confirmation = vi.fn(async ({ answerer }: { answerer: 'user' | 'agent' }) => answerer === 'agent'
-      ? { kind: 'approved' as const, receipt: 'agent-receipt', answerer: 'agent' as const }
-      : { kind: 'deferred' as const, todoId: 'fresh-human-todo', invocationId: 'agent-recheck-human-defer',
-          cause: 'human-required' as const, executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
-          checkpointRef: { checkpointId: 'fresh-human-checkpoint', workflowRevision: 2 } })
-    const history = new MemoryHistory()
-    const result = await runAgentTurn({
-      registry, routeId: route.routeId, invocationId: 'agent-recheck-human-defer', history,
-      request: { messages: [{ role: 'user', content: 'create a report' }], maxTokens: 32 }, maxModelTurns: 2,
-      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate } }),
-      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
-        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
-      confirmation: confirmation as never,
-      toolExecution: toolExecutionPort(permits, execute)
-    })
-
-    expect(result).toMatchObject({ parked: true, parkedTodoId: 'fresh-human-todo' })
-    expect(confirmation.mock.calls.map(([call]) => call.answerer)).toEqual(['agent', 'user'])
-    expect(execute).not.toHaveBeenCalled()
-    expect((await history.read('agent-recheck-human-defer')).events).toContainEqual(expect.objectContaining({ kind: 'approval-deferred',
-      payload: expect.objectContaining({ toolCallId: 'changed-write', todoId: 'fresh-human-todo', cause: 'human-required', executionState: 'not-executed' }) }))
-  })
-
-  it('finishes an independent tool already running when another tool becomes deferred', async () => {
-    const registry = new ModelProviderRegistry()
-    registry.register(route, { providerId: 'deferred-independent-action', stream: () => stream(
-      { type: 'tool-call', toolCallId: 'deferred-write', toolName: 'write_file', input: { path: 'report.md' } },
-      { type: 'tool-call', toolCallId: 'independent-read', toolName: 'lookup', input: { query: 'public status' } },
-      { type: 'tool-call', toolCallId: 'dependent-publish', toolName: 'publish', input: { dependsOnToolCallId: 'deferred-write' } },
-      { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
-    ) })
-    const permits = new InMemorySafetyPermitStore()
-    const capabilities = new CapabilityRegistry()
-    capabilities.define('deferred-independent-invocation', ['write_file', 'lookup', 'publish'])
-    let markLookupStarted!: () => void
-    const lookupStarted = new Promise<void>((resolve) => { markLookupStarted = resolve })
-    const execute = vi.fn(async (call: { toolCallId: string }) => {
-      if (call.toolCallId === 'independent-read') markLookupStarted()
-      return { output: 'public status' }
-    })
-    const history = new MemoryHistory()
-    const result = await runAgentTurn({
-      registry, routeId: route.routeId, invocationId: 'deferred-independent-invocation', request: { messages: [{ role: 'user', content: 'write and look up' }], maxTokens: 32 },
-      history, maxModelTurns: 2, maxConcurrentTools: 2,
-      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) =>
-        binding.capabilityId === 'write_file'
-          ? { kind: 'ask' as const, confirmationId: `confirm-${binding.toolCallId}`, answerer: 'user' as const, reasonCode: 'USER_APPROVAL' as const }
-          : { kind: 'allow' as const, reasonCode: 'READ_ALLOWED' as const, authorizationVersion: binding.authorizationVersion }
-      } }),
-      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
-        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
-      toolExecution: toolExecutionPort(permits, execute),
-      confirmation: async ({ call }) => {
-        await lookupStarted
-        return { kind: 'deferred' as const, todoId: 'independent-todo', invocationId: call.invocationId,
-          cause: 'human-required' as const, executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
-          checkpointRef: { checkpointId: 'independent-checkpoint', workflowRevision: 1 } }
-      }
-    })
-    expect(result).toMatchObject({ parked: true, parkedTodoId: 'independent-todo' })
-    expect(execute).toHaveBeenCalledTimes(1)
-    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'independent-read' }), expect.any(AbortSignal))
-    const events = (await history.read('deferred-independent-invocation')).events
-    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched',
-      payload: expect.objectContaining({ toolCallId: 'dependent-publish', reason: 'DEFERRED_APPROVAL_PARKED' }) }))
-  })
-
-  it('returns a pending-existing hint to the model without creating a todo or dispatching the duplicate action', async () => {
-    const registry = new ModelProviderRegistry()
-    let modelRound = 0
-    registry.register(route, { providerId: 'pending-existing-hint', stream: () => {
-      modelRound += 1
-      return modelRound === 1
-        ? stream({ type: 'tool-call', toolCallId: 'duplicate-write', toolName: 'write_file', input: { path: 'report.md', content: 'new body' } },
-            { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' })
-        : stream({ type: 'text-delta', text: '该目标已有待审批操作，请使用原审批通知。' },
-            { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
-    } })
-    const permits = new InMemorySafetyPermitStore()
-    const capabilities = new CapabilityRegistry()
-    capabilities.define('pending-existing-invocation', ['write_file'])
-    const execute = vi.fn(async () => ({ output: 'must not execute' }))
-    const history = new MemoryHistory()
-    const result = await runAgentTurn({
-      registry, routeId: route.routeId, invocationId: 'pending-existing-invocation',
-      request: { messages: [{ role: 'user', content: 'write report' }], maxTokens: 32 },
-      history, maxModelTurns: 2, returnDeniedToolsToModel: true,
-      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) =>
-        ({ kind: 'ask' as const, confirmationId: `confirm-${binding.toolCallId}`, answerer: 'user' as const, reasonCode: 'USER_APPROVAL' as const })
-      } }),
-      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
-        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
-      toolExecution: toolExecutionPort(permits, execute),
-      confirmation: async () => ({ kind: 'denied' as const, answerer: 'user', cause: 'pending-existing',
-        userMessage: '已有同目标操作正在等待审批。本次请求未创建新的待办，也未执行；请先处理原审批通知。' })
-    })
-    expect(result).toMatchObject({ text: '该目标已有待审批操作，请使用原审批通知。' })
-    expect(execute).not.toHaveBeenCalled()
-    expect(modelRound).toBe(2)
-    expect((await history.read('pending-existing-invocation')).events).toContainEqual(expect.objectContaining({
-      kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'duplicate-write', reason: 'CONFIRMATION_DENIED' })
-    }))
   })
 
   it('projects canonical assistant text blocks into the failed terminal message mirror', async () => {
@@ -1251,13 +1630,17 @@ describe('runAgentTurn', () => {
     expect(onTurnFailed).toHaveBeenCalledOnce()
   })
 
-  it('retains the last accepted provider usage on the canonical failed terminal after tool execution fails', async () => {
+  it('retains the unknown executor outcome in History before continuing the model turn', async () => {
     const registry = new ModelProviderRegistry()
-    registry.register(route, { providerId: 'fake', stream: () => stream(
-      { type: 'tool-call', toolCallId: 'tc-usage-failure', toolName: 'lookup', input: { query: 'fail' } },
-      { type: 'usage', inputTokens: 1000, outputTokens: 50 },
-      { type: 'finish', reason: 'tool-calls' }
-    ) })
+    let modelTurn = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      modelTurn += 1
+      return modelTurn === 1 ? stream(
+        { type: 'tool-call', toolCallId: 'tc-usage-failure', toolName: 'lookup', input: { query: 'fail' } },
+        { type: 'usage', inputTokens: 1000, outputTokens: 50 },
+        { type: 'finish', reason: 'tool-calls' }
+      ) : stream({ type: 'text-delta', text: 'recovered' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    } })
     const history = new MemoryHistory()
     const capabilities = new CapabilityRegistry()
     capabilities.define('inv-usage-failure', ['lookup'])
@@ -1270,11 +1653,13 @@ describe('runAgentTurn', () => {
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
       toolExecution: toolExecutionPort(permits, async () => { throw new Error('tool failed') }),
       maxModelTurns: 2
-    })).rejects.toThrow('tool failed')
+    })).resolves.toMatchObject({ text: 'recovered' })
 
-    expect((await history.read('inv-usage-failure')).events.at(-1)).toMatchObject({
-      kind: 'invocation-interrupted', payload: { usage: { inputTokens: 1000, outputTokens: 50 } }
+    const events = (await history.read('inv-usage-failure')).events
+    expect(events.find(({ kind }) => kind === 'tool-call-finished')?.payload).toMatchObject({
+      success: false, executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', errorCode: 'TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH'
     })
+    expect(events.at(-1)?.kind).toBe('invocation-completed')
   })
 
   it('carries a turn-boundary reset window id to the next Hosted model request', async () => {
@@ -1976,20 +2361,30 @@ describe('runAgentTurn', () => {
     const history = new MemoryHistory()
     const writer = new InvocationHistoryWriter(history, { invocationId: 'host-seeded', turnId: 'turn-seeded' })
     const userMessage = { role: 'user' as const, content: 'hello' }
-    const assistantMessage = { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'starting' }], toolCalls: [{ id: 'host-seeded-tool', name: 'lookup', input: { query: 'q' } }] }
+    const truncatedJustification = 'x'.repeat(2_000)
+    const committedShellInput = { command: 'pwd', justification: truncatedJustification, _justificationTruncated: true }
+    const assistantMessage = { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'starting' }], toolCalls: [{ id: 'host-seeded-tool', name: 'lookup', input: { query: 'q' } }, { id: 'host-seeded-shell', name: 'run_shell', input: committedShellInput }] }
     await writer.append([
       { kind: 'invocation-context-committed', payload: { messages: [userMessage] } },
       { kind: 'model-response-committed', payload: { message: assistantMessage, finishReason: 'tool_use', usage: { inputTokens: 1, outputTokens: 1 } } }
     ])
     const permits = new InMemorySafetyPermitStore()
     const capabilities = new CapabilityRegistry()
-    capabilities.define('host-seeded', ['lookup'])
+    capabilities.define('host-seeded', ['lookup', 'run_shell'])
+    const preparedInputs: Record<string, unknown>[] = []
+    const dispatchedInputs: Record<string, unknown>[] = []
     const ports = {
       registry, routeId: route.routeId, invocationId: 'host-seeded', turnId: 'turn-seeded', history,
       request: { messages: [userMessage], maxTokens: 80 },
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
-      prepareTool: async (call: { invocationId: string; toolCallId: string; toolName: string }, stage: { kind: 'initial' | 'recheck' }) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
-      toolExecution: toolExecutionPort(permits, async () => ({ output: 'tool result' })), maxModelTurns: 2
+      prepareTool: async (call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }, stage: { kind: 'initial' | 'recheck' }) => {
+        preparedInputs.push(call.input)
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }
+      },
+      toolExecution: toolExecutionPort(permits, async (call) => {
+        dispatchedInputs.push((call as typeof call & { input: Record<string, unknown> }).input)
+        return { output: 'tool result' }
+      }), maxModelTurns: 2
     }
     const host: AgentTurnHost = { createPorts: async () => ports }
     const observedChunks: unknown[] = []
@@ -2007,6 +2402,8 @@ describe('runAgentTurn', () => {
     expect(result.text).toBe('startingdone')
     expect(firstProviderStream).not.toHaveBeenCalled()
     expect(nextProviderStream).toHaveBeenCalledOnce()
+    expect(preparedInputs).toContainEqual(committedShellInput)
+    expect(dispatchedInputs).toContainEqual(committedShellInput)
     expect(observedChunks).toEqual([
       { type: 'text-delta', text: 'done' },
       { type: 'usage', inputTokens: 2, outputTokens: 1 }
@@ -2544,14 +2941,19 @@ describe('runAgentTurn', () => {
     expect(events.at(-1)).toMatchObject({ kind: 'invocation-completed' })
   })
 
-  it('waits for already-dispatched sibling tools to settle before recording an uncertain terminal', async () => {
+  it('settles dispatch-after timeout as unknown, completes the batch, and returns every slot without retrying', async () => {
     const registry = new ModelProviderRegistry()
     let modelCalls = 0
-    registry.register(route, { providerId: 'fake', stream: () => {
+    const requests: CanonicalModelMessage[][] = []
+    registry.register(route, { providerId: 'fake', stream: (call) => {
       modelCalls += 1
+      requests.push(structuredClone(call.request.messages) as CanonicalModelMessage[])
+      if (modelCalls > 1) return stream({ type: 'text-delta', text: 'recovered with the complete batch' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
       return stream(
-        { type: 'tool-call', toolCallId: 'tc-fails', toolName: 'lookup', input: { query: 'fail' } },
-        { type: 'tool-call', toolCallId: 'tc-sibling', toolName: 'lookup', input: { query: 'slow' } },
+        { type: 'tool-call', toolCallId: 'tc-success', toolName: 'lookup', input: { query: 'success' } },
+        { type: 'tool-call', toolCallId: 'tc-timeout', toolName: 'lookup', input: { query: 'timeout' } },
+        { type: 'tool-call', toolCallId: 'tc-queued-1', toolName: 'lookup', input: { query: 'queued-1' } },
+        { type: 'tool-call', toolCallId: 'tc-queued-2', toolName: 'lookup', input: { query: 'queued-2' } },
         { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
       )
     } })
@@ -2559,31 +2961,35 @@ describe('runAgentTurn', () => {
     capabilities.define('inv', ['lookup'])
     const permits = new InMemorySafetyPermitStore()
     const history = new MemoryHistory()
-    let siblingSettled = false
+    const started: string[] = []
     const execution = createPermitBoundToolExecutionPort<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, { output: unknown }>({
       permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
       resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
       execute: async (call) => {
-        if (call.input.query === 'fail') throw new Error('uncertain tool dispatch')
-        await new Promise((resolve) => setTimeout(resolve, 20))
-        siblingSettled = true
-        return { output: 'sibling completed' }
+        started.push(call.toolCallId)
+        if (call.input.query === 'timeout') throw new Error('network timeout')
+        return { output: 'confirmed success' }
       }
     })
-    await expect(runAgentTurn({
+    const result = await runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'inv', history, request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 100 },
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
-      toolExecution: execution, maxModelTurns: 2, toolResourceKeys: () => []
-    })).rejects.toThrow('uncertain tool dispatch')
-    expect(siblingSettled).toBe(true)
-    expect(modelCalls).toBe(1)
+      toolExecution: execution, maxModelTurns: 2, maxConcurrentTools: 2, toolResourceKeys: () => []
+    })
+    expect(result.text).toBe('recovered with the complete batch')
+    expect(modelCalls).toBe(2)
+    expect(started).toEqual(['tc-success', 'tc-timeout'])
+    expect(requests[1]?.filter((message) => message.role === 'tool').map((message) => [message.toolCallId, message.isError])).toEqual([
+      ['tc-success', false], ['tc-timeout', true], ['tc-queued-1', true], ['tc-queued-2', true]
+    ])
     const events = (await history.read('inv')).events
-    expect(events.filter(({ kind }) => kind === 'tool-call-finished')).toHaveLength(1)
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+    expect(events.filter(({ kind }) => kind === 'tool-call-finished')).toHaveLength(2)
+    expect(events.filter(({ kind }) => kind === 'tool-call-not-dispatched')).toHaveLength(2)
+    expect(events.at(-1)?.kind).toBe('invocation-completed')
   })
 
-  it('drains in-flight work after a denial and leaves queued tools undispatched on a fatal result', async () => {
+  it('drains in-flight unknown results after a denial and leaves queued tools undispatched', async () => {
     const registry = new ModelProviderRegistry()
     registry.register(route, { providerId: 'fake', stream: () => stream(
       { type: 'tool-call', toolCallId: 'tc-denied', toolName: 'lookup', input: { query: 'deny' } },
@@ -2628,11 +3034,12 @@ describe('runAgentTurn', () => {
     await vi.waitFor(async () => expect((await history.read('inv')).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'tc-denied' }) })))
     expect(started).toEqual(['tc-uncertain'])
     releaseUncertain()
-    await expect(turn).rejects.toThrow('dispatch outcome unknown')
+    await expect(turn).rejects.toThrow('tool call denied: POLICY_DENY')
     expect(started).toEqual(['tc-uncertain'])
     const events = (await history.read('inv')).events
     expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'tc-queued', reason: 'TURN_STOPPED_BEFORE_DISPATCH' }) }))
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ toolCallId: 'tc-uncertain', executionOutcome: 'unknown-after-dispatch' }) }))
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { status: 'denied', reason: 'POLICY_DENY' } })
     expect(dispatchDiagnostics).toEqual([{ modelTurn: 1, reason: 'ToolExecutionAfterDispatchError', attemptedCount: 2, undispatchedToolCallIds: ['tc-queued'] }])
   })
 
@@ -2688,7 +3095,7 @@ describe('runAgentTurn', () => {
     expect(snapshot.events.filter(({ kind }) => kind === 'tool-call-not-dispatched').map(({ payload }) => (payload as { toolCallId: string }).toolCallId)).toEqual(['tc-denied'])
   })
 
-  it('holds a multi-worker drain barrier until every claimed worker settles, then resumes without losing fatal errors', async () => {
+  it('holds a multi-worker drain barrier until every claimed worker settles after an unknown result', async () => {
     const registry = new ModelProviderRegistry()
     registry.register(route, { providerId: 'fake', stream: () => stream(
       ...['deny', 'slow-a', 'slow-b', 'queued-a', 'queued-b'].map((query) => ({ type: 'tool-call' as const, toolCallId: `tc-${query}`, toolName: 'lookup', input: { query } })),
@@ -2731,9 +3138,10 @@ describe('runAgentTurn', () => {
     await Promise.resolve()
     expect(started).toEqual(['tc-slow-a', 'tc-slow-b'])
     releaseB()
-    await expect(turn).rejects.toThrow('fatal b')
+    await expect(turn).rejects.toThrow('tool call denied: POLICY_DENY')
     expect(started).toEqual(['tc-slow-a', 'tc-slow-b'])
     const events = (await history.read('barrier')).events
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ toolCallId: 'tc-slow-b', executionOutcome: 'unknown-after-dispatch' }) }))
     expect(events.filter(({ kind }) => kind === 'tool-call-not-dispatched').map(({ payload }) => (payload as { toolCallId: string }).toolCallId)).toEqual(['tc-deny', 'tc-queued-a', 'tc-queued-b'])
   })
 
@@ -2837,11 +3245,12 @@ describe('runAgentTurn', () => {
     expect(persisted.at(-1)?.payload).toMatchObject({ status: 'interrupted', reason: 'unknown-after-dispatch' })
   })
 
-  it('marks executor errors after dispatch as unknown and does not retry the tool', async () => {
+  it('marks executor errors after dispatch as unknown and gives the result to the next model turn without retrying', async () => {
     const registry = new ModelProviderRegistry()
     let modelCalls = 0
     registry.register(route, { providerId: 'fake', stream: () => {
       modelCalls += 1
+      if (modelCalls > 1) return stream({ type: 'text-delta', text: 'I will not repeat the uncertain call.' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
       return stream(
         { type: 'tool-call', toolCallId: 'tc-executor-error', toolName: 'lookup', input: { query: 'weather' } },
         { type: 'usage', inputTokens: 1, outputTokens: 1 },
@@ -2859,13 +3268,17 @@ describe('runAgentTurn', () => {
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
       toolExecution: toolExecutionPort(permits, executed), maxModelTurns: 2, history
-    })).rejects.toThrow('executor failed after partial side effect')
+    })).resolves.toMatchObject({ text: 'I will not repeat the uncertain call.' })
 
     expect(executed).toHaveBeenCalledOnce()
-    expect(modelCalls).toBe(1)
+    expect(modelCalls).toBe(2)
     const snapshot = await history.read('inv')
-    expect(snapshot.events.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'invocation-interrupted'])
-    expect(snapshot.events.at(-1)?.payload).toMatchObject({ status: 'interrupted', reason: 'unknown-after-dispatch' })
+    expect(snapshot.events.filter(({ kind }) => kind === 'tool-call-started')).toHaveLength(1)
+    expect(snapshot.events.find(({ kind }) => kind === 'tool-call-started')?.payload).toMatchObject({ executorEntry: 'unknown' })
+    expect(snapshot.events.find(({ kind }) => kind === 'tool-call-finished')?.payload).toMatchObject({
+      executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', isError: true
+    })
+    expect(snapshot.events.at(-1)?.kind).toBe('invocation-completed')
   })
 
   it('persists SDK tool dispatch, result, and invocation terminal history', async () => {
@@ -2980,27 +3393,27 @@ describe('runAgentTurn', () => {
     })
 
     const snapshot = await history.read('inv-request-snapshot')
+    // P2a: the snapshot keeps route + request options and carries the omitted messages body as
+    // count + digest at the top level; the rebuilders never read messages from the snapshot.
+    const expectedSnapshot = {
+      route: routeProfile,
+      request: {
+        maxTokens: 96,
+        tools: request.tools,
+        thinking: { enabled: true, effort: 'high' }
+      },
+      messagesCount: request.messages.length
+    }
+    expect(snapshot.events[0]?.payload).toMatchObject({ requestSnapshot: expectedSnapshot })
+    // 摘要与本地实算比对（不只验证格式）：摘要必须忠实对应被省略的 messages 正文。
+    const { createHash } = await import('node:crypto')
+    const expectedMessagesSha = createHash('sha256').update(JSON.stringify(request.messages), 'utf8').digest('hex')
     expect(snapshot.events[0]?.payload).toMatchObject({
-      requestSnapshot: {
-        route: routeProfile,
-        request: {
-          messages: request.messages,
-          maxTokens: 96,
-          tools: request.tools,
-          thinking: { enabled: true, effort: 'high' }
-        }
-      }
+      requestSnapshot: { messagesSha256: expectedMessagesSha }
     })
+    expect(Object.hasOwn((snapshot.events[0]?.payload as { requestSnapshot: { request: Record<string, unknown> } }).requestSnapshot.request, 'messages')).toBe(false)
     expect(snapshot.events.find(({ kind }) => kind === 'model-response-committed')?.payload).toMatchObject({
-      requestSnapshot: {
-        route: routeProfile,
-        request: {
-          messages: request.messages,
-          maxTokens: 96,
-          tools: request.tools,
-          thinking: { enabled: true, effort: 'high' }
-        }
-      }
+      requestSnapshot: expectedSnapshot
     })
     expect(JSON.stringify(snapshot.events)).not.toContain('must-not-be-persisted')
   })
@@ -3903,12 +4316,60 @@ describe('runAgentTurn', () => {
     await entered
     controller.abort()
     const outcome = await Promise.race([turn.then(() => 'completed', (error: unknown) => error), new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 25))])
-    expect(outcome).toMatchObject({ code: 'TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH' })
+    expect(outcome).toMatchObject({ code: 'TURN_CANCELLED' })
     expect(admission.activeLeaseCount('req')).toBe(0)
     expect([...admission.closedOutcomes.values()]).toEqual(['unknown-after-dispatch'])
     const interruptedSnapshot = await history.read('inv')
-    expect(interruptedSnapshot.events.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'invocation-interrupted'])
-    expect(rebuildInvocationStates(interruptedSnapshot).get('inv')).toMatchObject({ state: 'interrupted' })
+    expect(interruptedSnapshot.events.map(({ kind }) => kind)).toEqual(['invocation-context-committed', 'model-request-started', 'model-response-committed', 'tool-call-started', 'tool-call-finished', 'invocation-interrupted'])
+    expect(interruptedSnapshot.events.at(-2)?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'cancelled' })
+    expect(rebuildInvocationStates(interruptedSnapshot).get('inv')).toMatchObject({ state: 'cancelled' })
+  })
+
+  it.each(['revoked', 'authorization-changed'] as const)('lifecycle invalidation wins over an ordinary executor failure: %s', async (reason) => {
+    const registry = new ModelProviderRegistry()
+    let modelCalls = 0
+    registry.register(route, { providerId: 'lifecycle-priority', stream: () => {
+      modelCalls += 1
+      return stream({ type: 'tool-call', toolCallId: `lifecycle-priority-${reason}`, toolName: 'lookup', input: {} },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' })
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('lifecycle-priority', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const history = new MemoryHistory()
+    let invalidateRevocation!: () => void
+    let invalidateAuthorization!: () => void
+    let resolveInvalidated!: () => void
+    const invalidated = new Promise<void>((resolve) => { resolveInvalidated = resolve })
+    let authorizationVersion = 'auth-v1'
+    const execution = createPermitBoundToolExecutionPort({
+      permits, admission, allowedPhase: 'recheck',
+      resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
+      currentAuthorizationVersion: () => authorizationVersion,
+      subscribeRevocation: (_call, listener) => { invalidateRevocation = listener; return () => undefined },
+      subscribeAuthorizationChange: (_call, listener) => { invalidateAuthorization = listener; return () => undefined },
+      execute: async () => {
+        if (reason === 'revoked') invalidateRevocation()
+        else { authorizationVersion = 'auth-v2'; invalidateAuthorization() }
+        await invalidated
+        throw new Error('ordinary transport failure')
+      }
+    })
+    const running = runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'lifecycle-priority', history,
+      request: { messages: [], maxTokens: 20 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+      toolExecution: execution, maxModelTurns: 2
+    })
+    await expect(running).rejects.toMatchObject({ name: 'AgentTurnLifecycleInvalidatedError', reason })
+    expect(modelCalls).toBe(1)
+    const events = (await history.read('lifecycle-priority')).events
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted' } })
+    expect(events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'authorization-invalidated' })
+    resolveInvalidated()
+    await vi.waitFor(() => expect(admission.activeLeaseCount('req', 'lifecycle-priority')).toBe(0))
   })
 
   it('fails closed and never executes when policy denies a tool', async () => {
@@ -4310,6 +4771,129 @@ describe('runAgentTurn', () => {
     expect((await histories.B.read(sessionB.invocationId)).events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
     expect((await histories.B.read(sessionB.invocationId)).events.find((event) => event.kind === 'approval-resolved')).toMatchObject({
       kind: 'approval-resolved', payload: { toolCallId: 'tool-B', approved: true, outcome: 'approved' }
+    })
+  })
+
+  describe('PlanRejectedError（计划期拒绝回传模型，D-1 定案）', () => {
+    const planRejectionJson = '{"code":"SHELL_DIALECT_MISMATCH","caseId":"SHELL-DIALECT-001","signals":["posix-variable"],"hints":["改写命令"]}'
+
+    it('prepareTool 抛 PlanRejectedError 时 turn 继续，拒绝物化为 is_error tool 消息回传模型', async () => {
+      const registry = new ModelProviderRegistry()
+      let modelCalls = 0
+      let secondTurnToolMessages: CanonicalModelMessage[] = []
+      registry.register(route, { providerId: 'fake', stream: (call) => {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          return stream(
+            { type: 'tool-call', toolCallId: 'tc-plan-reject', toolName: 'lookup', input: { query: 'mixed dialect' } },
+            { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+          )
+        }
+        secondTurnToolMessages = call.request.messages.filter((message) => message.role === 'tool') as CanonicalModelMessage[]
+        return stream({ type: 'text-delta', text: 'recovered after plan rejection' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+      } })
+      const capabilities = new CapabilityRegistry()
+      capabilities.define('inv', ['lookup'])
+      const permits = new InMemorySafetyPermitStore()
+      const history = new MemoryHistory()
+      const planRejection = new PlanRejectedError('SHELL_DIALECT_MISMATCH', planRejectionJson)
+      const afterToolResultSources: Array<{ kind: string; reasonCode?: string }> = []
+      const result = await runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'inv', history,
+        request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 100 },
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
+        prepareTool: async () => { throw planRejection },
+        toolExecution: toolExecutionPort(permits, async () => ({ output: 'unexpected execution' })),
+        maxModelTurns: 2, toolResourceKeys: () => [], returnDeniedToolsToModel: true,
+        observer: { onToolFinished: () => { /* source-side assertions live on afterToolResult */ } },
+        afterToolResult: (_call, _result, source) => { if (source) afterToolResultSources.push({ kind: source.kind, reasonCode: source.reasonCode }) }
+      })
+      expect(result).toMatchObject({ text: 'recovered after plan rejection' })
+      expect(modelCalls).toBe(2)
+      expect(secondTurnToolMessages).toHaveLength(1)
+      expect(secondTurnToolMessages[0]).toMatchObject({ role: 'tool', toolCallId: 'tc-plan-reject', content: planRejectionJson, isError: true })
+      const events = (await history.read('inv')).events
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: 'tool-call-not-dispatched',
+        payload: expect.objectContaining({ toolCallId: 'tc-plan-reject', reason: 'SHELL_DIALECT_MISMATCH', replayContent: planRejectionJson, isError: true })
+      }))
+      // 审计口径与「策略拒绝」（safety-rejection）分离（D-1）
+      expect(afterToolResultSources).toContainEqual({ kind: 'plan-rejection', reasonCode: 'SHELL_DIALECT_MISMATCH' })
+    })
+
+    it('PlanRejectedError 走 drain 语义：不中断 in-flight 工具，排队工具继续派发', async () => {
+      const registry = new ModelProviderRegistry()
+      let modelCalls = 0
+      registry.register(route, { providerId: 'fake', stream: () => {
+        modelCalls += 1
+        return modelCalls === 1
+          ? stream(
+            { type: 'tool-call', toolCallId: 'tc-reject', toolName: 'lookup', input: { query: 'reject' } },
+            { type: 'tool-call', toolCallId: 'tc-slow', toolName: 'lookup', input: { query: 'slow' } },
+            { type: 'tool-call', toolCallId: 'tc-queued', toolName: 'lookup', input: { query: 'queued' } },
+            { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+          )
+          : stream({ type: 'text-delta', text: 'resumed' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+      } })
+      const capabilities = new CapabilityRegistry()
+      capabilities.define('inv', ['lookup'])
+      const permits = new InMemorySafetyPermitStore()
+      const history = new MemoryHistory()
+      let releaseSlow!: () => void
+      const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve })
+      const started: string[] = []
+      const executed: string[] = []
+      const execution = createPermitBoundToolExecutionPort<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, { output: unknown }>({
+        permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+        resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
+        execute: async (call) => {
+          started.push(call.toolCallId)
+          if (call.input.query === 'slow') await slowGate
+          executed.push(call.toolCallId)
+          return { output: call.toolCallId }
+        }
+      })
+      const turn = runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'inv', history,
+        request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 100 },
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
+        prepareTool: async (call, stage) => {
+          if (call.toolCallId === 'tc-reject' && stage.kind === 'initial') throw new PlanRejectedError('SHELL_DIALECT_MISMATCH', planRejectionJson)
+          return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }
+        },
+        toolExecution: execution, maxModelTurns: 2, maxConcurrentTools: 2, toolResourceKeys: () => [], returnDeniedToolsToModel: true
+      })
+      await vi.waitFor(() => expect(started).toContain('tc-slow'))
+      releaseSlow()
+      await expect(turn).resolves.toMatchObject({ text: 'resumed' })
+      expect(executed).toEqual(['tc-slow', 'tc-queued'])
+      expect(modelCalls).toBe(2)
+    })
+
+    it('returnDeniedToolsToModel 未开启时 PlanRejectedError 仍致命（fatal-by-default 不变）', async () => {
+      const registry = new ModelProviderRegistry()
+      let modelCalls = 0
+      registry.register(route, { providerId: 'fake', stream: () => {
+        modelCalls += 1
+        return stream(
+          { type: 'tool-call', toolCallId: 'tc-plan-reject', toolName: 'lookup', input: { query: 'mixed dialect' } },
+          { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+        )
+      } })
+      const capabilities = new CapabilityRegistry()
+      capabilities.define('inv', ['lookup'])
+      const permits = new InMemorySafetyPermitStore()
+      const history = new MemoryHistory()
+      const planRejection = new PlanRejectedError('SHELL_DIALECT_MISMATCH', planRejectionJson)
+      await expect(runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'inv', history,
+        request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 100 },
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
+        prepareTool: async () => { throw planRejection },
+        toolExecution: toolExecutionPort(permits, async () => ({ output: 'unexpected execution' })),
+        maxModelTurns: 2, toolResourceKeys: () => []
+      })).rejects.toBe(planRejection)
+      expect(modelCalls).toBe(1)
     })
   })
 })

@@ -22,6 +22,40 @@ const baseArgs = { toolName: 'read_file', toolInput: { path: 'x' }, sessionId: '
 const result = (decision: Decision): ToolCallGateResult => ({ decision, facts, approvedFactIds: [] })
 
 describe('createAgentSdkSafetyPolicy', () => {
+  it('carries the current run_shell justification and truncation marker into automation approval context', async () => {
+    const toolInput = { command: 'pwd', justification: '核对工作目录', _justificationTruncated: true }
+    const agentBinding = {
+      ...binding,
+      capabilityId: 'run_shell',
+      inputSnapshotHash: createHash('sha256').update('{"_justificationTruncated":true,"command":"pwd","justification":"核对工作目录"}').digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'run_shell' }
+    }
+    const shellArgs = { ...baseArgs, toolName: 'run_shell', toolInput, lane: 'automation' } as ToolCallGateArgs
+    const policy = createAgentSdkSafetyPolicy({
+      resolveGateArgs: async () => shellArgs,
+      evaluateGate: async () => result({ type: 'require-confirm', ruleId: 'automation-shell-review', answerer: 'agent', riskLevel: 'high', facts, memoryTiers: [], timeoutMs: 1000 })
+    })
+    await expect(policy.evaluate(agentBinding)).resolves.toMatchObject({
+      kind: 'ask', answerer: 'agent', context: { lane: 'automation', modelJustification: '核对工作目录', modelJustificationTruncated: true }
+    })
+  })
+
+  it('拒绝理由变化后沿用旧 run_shell 输入快照绑定', async () => {
+    const toolInput = { command: 'pwd', justification: '核对当前目录' }
+    const staleBinding = {
+      ...binding,
+      capabilityId: 'run_shell',
+      inputSnapshotHash: createHash('sha256').update('{"command":"pwd","justification":"核对之前目录"}').digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'run_shell' }
+    }
+    const policy = createAgentSdkSafetyPolicy({
+      resolveGateArgs: async () => ({ ...baseArgs, toolName: 'run_shell', toolInput } as ToolCallGateArgs),
+      evaluateGate: vi.fn(async () => result({ type: 'auto-allow', ruleId: 'unexpected', reason: 'must not reach gate' }))
+    })
+
+    await expect(policy.evaluate(staleBinding)).resolves.toEqual({ kind: 'deny', reasonCode: 'STALE_AUTHORIZATION' })
+  })
+
   it('把用户明确选择的记忆键传到确认提交回调，未选择则不写入', async () => {
     const key = { kind: 'script-content' as const, digest: 'a'.repeat(64), sessionId: 'session-1' }
     const scriptFacts: ContentFacts = {
@@ -89,6 +123,42 @@ describe('createAgentSdkSafetyPolicy', () => {
     markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
     await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1', phase: 'recheck' }))
       .resolves.toEqual({ kind: 'allow', authorizationVersion: 'edit-v1' })
+  })
+
+  it('allows a confirmed write when only the parent directory volatile fields drift before recheck', async () => {
+    const approvedTarget = { rawPath: 'new.txt', normalizedPath: '/workspace/new.txt', zone: 'workdir-normal' as const, targetKind: 'missing' as const, parentReal: '/workspace', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 4096, mtimeMs: 1000, nlink: 3 } }
+    // 审批窗口内的良性宿主活动（如防抖会话备份在 workDir 创建 sessions/ 子树）会漂移父目录的
+    // size/mtimeMs/nlink；目录身份 dev/ino/mode 未变。执行器 writePermitExecutor 只钉住这三个
+    // 字段，范围比对沿用同一口径，不得更严。
+    const driftedParent = { ...approvedTarget, parentIdentity: { ...approvedTarget.parentIdentity, size: 4096, mtimeMs: 1320.5, nlink: 4 } }
+    const writeFacts: ContentFacts = { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'write new file' } }
+    const initial: ToolCallGateResult = { decision: { type: 'require-confirm', ruleId: 'write-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts, memoryTiers: [], timeoutMs: 1000 }, facts: writeFacts, approvedFactIds: [], writePathFact: approvedTarget }
+    const drifted: ToolCallGateResult = { ...initial, writePathFact: driftedParent }
+    const args = { ...baseArgs, toolName: 'write_file', toolInput: { path: 'new.txt', content: 'x' }, workDir: '/workspace' } as ToolCallGateArgs
+    const testBinding = { ...binding, capabilityId: 'write_file', inputSnapshotHash: createHash('sha256').update('{"content":"x","path":"new.txt"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'write_file' } }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(drifted)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, evaluateGate })
+
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'write-confirm' })
+    markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1', phase: 'recheck' })).resolves.toEqual({ kind: 'allow', authorizationVersion: 'write-v1' })
+  })
+
+  it('still denies a confirmed write when the parent directory itself was replaced before recheck', async () => {
+    const approvedTarget = { rawPath: 'new.txt', normalizedPath: '/workspace/new.txt', zone: 'workdir-normal' as const, targetKind: 'missing' as const, parentReal: '/workspace', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 4096, mtimeMs: 1000, nlink: 3 } }
+    // ino 变化意味着父目录本体被替换（symlink 攻击面），必须继续 FACTS_CHANGED。
+    const swappedParent = { ...approvedTarget, parentIdentity: { ...approvedTarget.parentIdentity, ino: 9 } }
+    const writeFacts: ContentFacts = { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'write new file' } }
+    const initial: ToolCallGateResult = { decision: { type: 'require-confirm', ruleId: 'write-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts, memoryTiers: [], timeoutMs: 1000 }, facts: writeFacts, approvedFactIds: [], writePathFact: approvedTarget }
+    const swapped: ToolCallGateResult = { ...initial, writePathFact: swappedParent }
+    const args = { ...baseArgs, toolName: 'write_file', toolInput: { path: 'new.txt', content: 'x' }, workDir: '/workspace' } as ToolCallGateArgs
+    const testBinding = { ...binding, capabilityId: 'write_file', inputSnapshotHash: createHash('sha256').update('{"content":"x","path":"new.txt"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'write_file' } }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(swapped)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, evaluateGate })
+
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'write-confirm' })
+    markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1', phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
   })
 
   it('rejects an approved ask when recheck becomes auto-allow under changed facts', async () => {
@@ -215,7 +285,7 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
   })
 
-  it('requires a fresh human decision when a confirmed Feishu attachment identity changes', async () => {
+  it('denies a confirmed Feishu attachment when its target identity changes before recheck', async () => {
     const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-feishu-confirmed-attachment-'))
     const mediaDir = path.join(userDataDir, 'feishu-media', 'cache', 'message-1')
     const attachmentPath = path.join(mediaDir, 'brief.txt')
@@ -233,7 +303,7 @@ describe('createAgentSdkSafetyPolicy', () => {
       toolName: 'read_feishu_attachment', toolInput, sessionId: 'feishu-session', requestId: 'feishu-request', toolUseId: 'feishu-tool',
       workDir: path.join(userDataDir, 'work'), userDataDir, lane: 'feishu' as const,
       remoteContext: { source: 'feishu' as const, messageId: 'message-1', confirmPolicy: 'im_confirm' as const, feishuAttachments: [{ id: 'attachment-1', messageId: 'message-1', localPath: attachmentPath, fileName: 'brief.txt', mimeType: 'text/plain' }] },
-      imPolicySnapshot: { domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 0, snapshot: {} },
+      imPolicySnapshot: { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } },
       toolsConfig: DEFAULT_TOOLS_CONFIG, effectiveRules: confirmedAttachmentRules, lanePackage: 'standard', decisionCache: { lookup: () => null },
       shellPrecheck: { touchTrustedCommand() {} }, audit: { record() {} }, readConfirmationRegistry
     } as unknown as ToolCallGateArgs
@@ -261,9 +331,7 @@ describe('createAgentSdkSafetyPolicy', () => {
       expect(executionContext.readExecutionPermit).toMatchObject({ toolName: 'read_feishu_attachment', targets: [{ identity: { ino: expect.any(Number) } }] })
       await fs.rename(attachmentPath, `${attachmentPath}.approved`)
       await fs.writeFile(attachmentPath, 'replacement')
-      await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({
-        kind: 'ask', answerer: 'user', context: { decision: { disposition: 'human-required' } }
-      })
+      await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
     } finally {
       await fs.rm(userDataDir, { recursive: true, force: true })
     }

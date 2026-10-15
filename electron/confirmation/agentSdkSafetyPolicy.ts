@@ -35,6 +35,12 @@ export function createAgentSdkSafetyPolicy(input: {
       kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId,
       context: {
         toolName: args.toolName,
+        ...(args.toolName === 'run_shell' && typeof args.toolInput.justification === 'string'
+          ? { modelJustification: args.toolInput.justification }
+          : {}),
+        ...(args.toolName === 'run_shell' && args.toolInput._justificationTruncated === true
+          ? { modelJustificationTruncated: true }
+          : {}),
         ...(args.lane ? { lane: args.lane } : {}),
         ...(args.currentPageUrl ? { currentPageUrl: args.currentPageUrl } : {}),
         ...(args.dangerAssessment ? { dangerAssessment: args.dangerAssessment } : {}),
@@ -112,15 +118,11 @@ export function createAgentSdkSafetyPolicy(input: {
             (previous.confirmed ? sameConfirmedDecision : decision.type === 'auto-allow')
           initial.delete(key)
           if (!recheckAllowed) {
-            const confirmationScopeChanged = !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget ||
-              !sameWriteApprovalConfiguration || (previous.confirmed && !sameConfirmedDecision)
-            if (confirmationScopeChanged && sameAuthorizationVersion && decision.type === 'require-confirm' &&
-              decision.answerer === 'user' && decision.disposition === 'human-required') {
-              await input.onInitialGateResult?.(structuredClone(binding), structuredClone(result), gateArgs)
-              initial.set(key, { binding: structuredClone(binding), result: structuredClone(result), args: gateArgs, confirmed: false })
-              return ask(binding, result, gateArgs)
-            }
-            return { kind: 'deny', reasonCode: confirmationScopeChanged && previous.confirmed ? 'FACTS_CHANGED' : 'POLICY_DENY' }
+            const confirmationScopeChanged = previous.confirmed && (
+              !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget ||
+              !sameWriteApprovalConfiguration || !sameConfirmedDecision
+            )
+            return { kind: 'deny', reasonCode: confirmationScopeChanged ? 'FACTS_CHANGED' : 'POLICY_DENY' }
           }
           return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
         }

@@ -42,37 +42,22 @@ describe('settleExecutorUnhandledError（统一出口：漏网异常的结算决
     expect(isExecutionOutcomeUncertainError(new Error('plain'))).toBe(false)
   })
 
-  it('读类工具漏网异常 → 降级为工具级失败结果，retryable 与 executor 内降级同信号', () => {
+  it('普通 executor error 不按 read/write 分类降级；entry 后交给 SDK 标记 unknown', () => {
     const transient = settleExecutorUnhandledError(Object.assign(new Error('file closed'), { code: 'EBADF' }), 'read_file', 'read')
-    expect(transient.rethrow).toBe(false)
-    if (!transient.rethrow) {
-      expect(transient.result).toMatchObject({
-        success: false,
-        error: expect.stringContaining('EBADF'),
-        diagnostic: { caseId: 'executor-unhandled-error', retryable: true, category: 'executor' }
-      })
-    }
-    const programmingError = settleExecutorUnhandledError(new TypeError('boom'), 'read_file', 'read')
-    expect(programmingError.rethrow).toBe(false)
-    if (!programmingError.rethrow) {
-      expect(programmingError.result).toMatchObject({
-        success: false,
-        diagnostic: { caseId: 'executor-unhandled-error', retryable: false, category: 'executor' }
-      })
-    }
+    expect(transient.rethrow).toBe(true)
+    if (transient.rethrow) expect(transient.error).toMatchObject({ code: 'EBADF' })
+
+    const programmingError = new TypeError('boom')
+    const programming = settleExecutorUnhandledError(programmingError, 'read_file', 'read')
+    expect(programming.rethrow).toBe(true)
+    if (programming.rethrow) expect(programming.error).toBe(programmingError)
   })
 
-  it('降级结果保留 errno 码（toToolUserError 退到通用文案时模型仍能看到关键信号）', () => {
-    const settlement = settleExecutorUnhandledError(
-      Object.assign(new Error("EACCES: permission denied, open 'C:\\sec\\a.txt'"), { code: 'EACCES' }),
-      'read_file',
-      'read'
-    )
-    expect(settlement.rethrow).toBe(false)
-    if (!settlement.rethrow) {
-      expect(settlement.result.error as string).toContain('EACCES')
-      expect(settlement.result).toMatchObject({ diagnostic: { retryable: false } })
-    }
+  it('executor errno 由 SDK 原样读取并持久化为 unknown 诊断码', () => {
+    const error = Object.assign(new Error("EACCES: permission denied, open 'C:\\sec\\a.txt'"), { code: 'EACCES' })
+    const settlement = settleExecutorUnhandledError(error, 'read_file', 'read')
+    expect(settlement.rethrow).toBe(true)
+    if (settlement.rethrow) expect(settlement.error).toBe(error)
   })
 })
 

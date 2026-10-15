@@ -229,8 +229,9 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     expect(selectConfirmationAnswerer({ lane: 'desktop' })).toEqual({ kind: 'user' })
     expect(selectConfirmationAnswerer({ lane: 'automation' })).toEqual({ kind: 'user' })
     const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
-    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', agentChannelFactory: factory })
+    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', toolUseId: 'outer-tool-use', agentChannelFactory: factory })
     expect(factory).toHaveBeenCalledOnce()
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({ toolUseId: 'outer-tool-use' }))
   })
 
   it('honors an explicit Agent answerer selected by policy', () => {

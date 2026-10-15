@@ -11,7 +11,7 @@ import {
 import type { AppDatabase } from './database'
 import { deleteConfigValue, getConfigValue, getDbConnection, runInTransaction, setConfigValue } from './database'
 import { assertValidOptionalAnthropicBaseUrl } from './claudeRequestGuards'
-import { decryptSecret, encryptSecret, isSecretStorageAvailable } from './secureApiKey'
+import { decryptSecret, encryptSecret, isLegacySecret, markLegacySecret } from './secureApiKey'
 
 export const LLM_SERVICE_CONFIG_KEYS = {
   llmServices: 'config.llmServices',
@@ -70,7 +70,7 @@ function writeLlmServiceKeysMap(db: AppDatabase, map: LlmServiceKeysMap): void {
   setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.llmServiceKeys, JSON.stringify(map))
 }
 
-export type LlmKeyAccessErrorCode = 'LLM_KEY_STORAGE_UNAVAILABLE' | 'LLM_KEY_ACCESS_DENIED'
+export type LlmKeyAccessErrorCode = 'LLM_KEY_ACCESS_DENIED'
 const failedReads = new WeakMap<AppDatabase, Map<string, { enc: string; code: LlmKeyAccessErrorCode }>>()
 
 function accessFailures(db: AppDatabase): Map<string, { enc: string; code: LlmKeyAccessErrorCode }> {
@@ -90,14 +90,13 @@ export class LlmKeyAccessError extends Error {
   constructor(public readonly code: LlmKeyAccessErrorCode, public readonly serviceId: string, serviceName?: string, locale?: string) {
     const name = serviceName || serviceId
     super(locale === 'en-US'
-      ? `API key for “${name}” ${code === 'LLM_KEY_STORAGE_UNAVAILABLE' ? 'cannot be read because secure storage is unavailable' : 'could not be read from secure storage'}. Verify or replace it in model service settings (${code}).`
-      : `服务「${name}」的 API Key ${code === 'LLM_KEY_STORAGE_UNAVAILABLE' ? '安全存储不可用' : '读取授权未完成'}，请到模型服务设置验证或重新输入（${code}）`)
+      ? `API key for “${name}” could not be read. Verify or replace it in model service settings (${code}).`
+      : `服务「${name}」的 API Key 无法读取，请到模型服务设置验证或重新输入（${code}）`)
     this.name = 'LlmKeyAccessError'
   }
 }
 
 function decryptLlmKey(enc: string, serviceId: string): string {
-  if (!isSecretStorageAvailable()) throw new LlmKeyAccessError('LLM_KEY_STORAGE_UNAVAILABLE', serviceId)
   try {
     const plain = decryptSecret(enc)
     if (!plain) throw new Error('empty decrypted API key')
@@ -107,12 +106,32 @@ function decryptLlmKey(enc: string, serviceId: string): string {
   }
 }
 
+function decryptAndUpgradeLlmKey(db: AppDatabase, enc: string, serviceId: string): string {
+  try {
+    const plain = decryptSecret(enc)
+    if (isLegacySecret(enc)) {
+      const map = readLlmServiceKeysMap(db)
+      if (map[serviceId] === enc) {
+        const upgraded = encryptSecret(plain)
+        runInTransaction(getDbConnection(db), () => {
+          map[serviceId] = upgraded
+          writeLlmServiceKeysMap(db, map)
+          if (readActiveLlmServiceId(db) === serviceId) setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.apiKeyEnc, upgraded)
+        })
+      }
+    }
+    if (!plain) throw new Error('empty decrypted API key')
+    return plain
+  } catch {
+    throw new LlmKeyAccessError('LLM_KEY_ACCESS_DENIED', serviceId)
+  }
+}
+
 function encryptLlmKey(plain: string, serviceId: string): string {
-  if (!isSecretStorageAvailable()) throw new LlmKeyAccessError('LLM_KEY_STORAGE_UNAVAILABLE', serviceId)
   try {
     return encryptSecret(plain)
   } catch {
-    throw new LlmKeyAccessError('LLM_KEY_STORAGE_UNAVAILABLE', serviceId)
+    throw new Error(`无法加密服务「${serviceId}」的 API Key`)
   }
 }
 
@@ -126,7 +145,7 @@ function readLlmServiceApiKey(db: AppDatabase, serviceId: string, retry: boolean
     const name = readLlmServices(db).find((service) => service.id === serviceId)?.name
     return Promise.reject(new LlmKeyAccessError(cached.code, serviceId, name, getConfigValue(db, 'config.locale')))
   }
-  try { return Promise.resolve(decryptLlmKey(enc, serviceId)) }
+  try { return Promise.resolve(decryptAndUpgradeLlmKey(db, enc, serviceId)) }
   catch (error) {
     if (error instanceof LlmKeyAccessError) {
       failures.set(serviceId, { enc, code: error.code })
@@ -355,7 +374,7 @@ export function migrateLegacyLlmServicesIfNeeded(db: AppDatabase): void {
 
   const keysMap = readLlmServiceKeysMap(db)
   if (legacyEnc && !keysMap[id]) {
-    keysMap[id] = legacyEnc
+    keysMap[id] = markLegacySecret(legacyEnc)
     writeLlmServiceKeysMap(db, keysMap)
   }
 }

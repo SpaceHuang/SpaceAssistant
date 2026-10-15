@@ -13,6 +13,7 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { resolveCanonicalRequestCutover } from './sessionHistoryCutover'
 import { decodeTerminalOutcome } from './terminalOutcome'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
+import type { ContinuationContext } from '../../src/shared/assistantFactAggregator'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
@@ -155,6 +156,9 @@ export function createHostedTurnHandoff(input: {
   recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
   refreshExecutionContext?: NonNullable<Parameters<HostedRuntimeFactory['createHostedTurnRuntime']>[0]['refreshExecutionContext']>
   confirmationAdapter?: Partial<Parameters<typeof createAgentSdkConfirmationPort>[0]>
+  continuationContext?: ContinuationContext
+  /** When true, request.messages is already built from a verified Track view. */
+  trackScopedModelInput?: boolean
 }): NonNullable<RunToolChatSessionArgs['onHostedTurnHandoff']> {
   if (input.sessionExecution && !input.sessionQueries) throw new Error('SESSION_QUERIES_REQUIRED')
   if (input.acceptedTurn && (input.acceptedTurn.turnId !== input.turnId || input.acceptedTurn.sessionId !== input.sessionId ||
@@ -194,10 +198,10 @@ export function createHostedTurnHandoff(input: {
       }
     }
     let request = handoff.request
-    if (checkpoint && checkpoint.version > 0 && handoff.requiredUserMessage) {
+    if (!input.trackScopedModelInput && checkpoint && checkpoint.version > 0 && handoff.requiredUserMessage) {
       const systemMessages = handoff.request.messages.filter((message) => message.role === 'system')
       request = { ...handoff.request, messages: [...systemMessages, ...committedTranscriptMessages(checkpoint.messages as CanonicalModelMessage[]), handoff.requiredUserMessage.message] }
-    } else if (input.sessionId && handoff.requiredUserMessage && hasSessionHistoryQueries(input.history)) {
+    } else if (!input.trackScopedModelInput && input.sessionId && handoff.requiredUserMessage && hasSessionHistoryQueries(input.history)) {
       // Existing streams must never silently fall back to legacy session messages.
       const sessionHistory = input.history
       let latest: Awaited<ReturnType<SessionHistoryPort['readLatestInvocationForSession']>>
@@ -215,7 +219,9 @@ export function createHostedTurnHandoff(input: {
         let snapshotVersion: number | undefined
         let recoveredRestartInput = false
         try {
-          const snapshot = await sessionHistory.read(latest.invocationId)
+          // P0-⑤: the unavailable verdict already read this stream; only fall back to a
+          // re-read for ports whose unavailable result predates the snapshot carry.
+          const snapshot = latest.snapshot ?? await sessionHistory.read(latest.invocationId)
           snapshotVersion = snapshot.version
           previousTurnId = snapshot.events.at(-1)?.turnId
           const acceptedInput = input.sessionExecution && handoff.requiredUserMessage
@@ -271,6 +277,18 @@ export function createHostedTurnHandoff(input: {
           logSessionHistoryShadowDiagnostic({ requestId: input.invocationId, turnId: input.turnId, sessionId: input.sessionId, stage: 'match-current-message', reasonCode: reason, historyStreamId: latest.snapshot.invocationId, previousTurnId: latest.snapshot.events.at(-1)?.turnId, snapshotVersion: latest.snapshot.version })
           throw new Error('Canonical session History could not safely provide the Hosted transcript')
         }
+      }
+    }
+    if (input.continuationContext) {
+      const context = input.continuationContext
+      const summary = context.summary.slice(0, 6_000)
+      const fallbackReason = context.fallbackReason ?? (context.state === 'unknown' ? 'UNKNOWN_SIDE_EFFECT' : 'CHECKPOINT_UNAVAILABLE')
+      request = {
+        ...request,
+        messages: [...request.messages, {
+          role: 'system',
+          content: `[Continuation mode: ${context.mode ?? 'context-fallback'}; fallback reason: ${fallbackReason}; source invocation ${context.sourceInvocationId}, turn ${context.sourceTurnId}, History sequence ${context.historySequence}, state ${context.state}]\n${summary}`
+        }]
       }
     }
     const transcriptFailureMessages = ownership && checkpoint && handoff.requiredUserMessage
@@ -360,7 +378,8 @@ export function createHostedTurnHandoff(input: {
           throw new HostedTurnFinalizedError(new ToolLoopRoundLimitError(input.maxToolRounds ?? 0, payload.reason), hostedFailureOutcome(terminal), terminalUsage(terminal))
         }
         if (payload?.errorCode === 'SHELL_DIALECT_MISMATCH' && typeof payload.reason === 'string') {
-          throw new HostedTurnFinalizedError(new Error(payload.reason), hostedFailureOutcome(terminal), terminalUsage(terminal))
+          // 兼容旧 History（修复前该码会产生 fatal 终态）；附加 errorCode 供 turn_end 透传（A-8）
+          throw new HostedTurnFinalizedError(Object.assign(new Error(payload.reason), { errorCode: payload.errorCode }), hostedFailureOutcome(terminal), terminalUsage(terminal))
         }
         throw new HostedTurnFinalizedError(new Error(`Hosted invocation ended as ${terminal.kind}`), hostedFailureOutcome(terminal))
       }

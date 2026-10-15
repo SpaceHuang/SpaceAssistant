@@ -6,6 +6,8 @@ import fs from 'fs/promises'
 import { realpathSync } from 'fs'
 import type { FileHandle } from 'fs/promises'
 import path from 'path'
+import { existsSync } from 'node:fs'
+import os from 'os'
 import type { Dirent } from 'fs'
 import { resolveSafePath, resolveSafePathReal, resolveSafeWorkDirPath, resolveSafeWriteTarget } from '../pathSecurity'
 import {
@@ -20,6 +22,9 @@ import { recordPolicyExecutionVeto } from '../confirmation/audit'
 import { readDirectoryBoundToIdentity } from '../confirmation/directoryHandleReader'
 import { validateWriteExecutionPermit } from '../confirmation/writeExecutionPermit'
 import { resolvePermittedWriteTarget } from '../confirmation/writePermitExecutor'
+import { resolveWikiMount } from '../wiki/wikiMount'
+import { acquireWikiWriteMutex } from '../wiki/wikiWriteMutex'
+import { notifyFileTreeChanged } from '../fileTreeSyncNotify'
 import { classifyWriteTargetScope } from '../confirmation/extractors/writePathFacts'
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
 import { sanitizeToolOutput, sanitizeToolOutputText, toToolUserError } from './toolUserErrors'
@@ -44,6 +49,9 @@ import {
   type RipgrepUnavailableReason
 } from './ripgrepBinary'
 import { planGrepInvocation, formatGrepNoMatchOutput, type GrepScope } from './grepScope'
+import { probeReadPathFact } from '../confirmation/extractors/readPathFacts'
+import { buildReadExecutionPermit } from '../confirmation/readExecutionPermit'
+import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
 import { isSensitivePath } from '../shell/shellSensitivePaths'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
@@ -599,8 +607,15 @@ export const listDirectoryExecutor: ToolExecutor = {
         recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'list_directory', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass, caseId: snapshot.caseId })
         return { success: false, error: snapshot.caseId === 'read-directory-identity-changed' ? '目录在许可校验后发生变化，已停止枚举。' : '目录不可用，已停止枚举。', diagnostic: { caseId: snapshot.caseId, retryable: false, category: failureClass }, duration: Date.now() - started }
       }
+      // BLK-8（§7.3/§14）：挂载命中（permit 携带 vocabularyPath）时条目 path 以词汇路径为基准，
+      // 不产出 ../.. 相对化真实路径（不泄漏 userData 布局且 Agent 可回喂）
+      const permitVocabularyPath = ctx.readExecutionPermit?.targets[0]?.vocabularyPath
       const rows = snapshot.entries.map((entry) => {
         const entryPath = path.join(target, entry.name)
+        if (permitVocabularyPath) {
+          const relWithin = path.relative(target, entryPath).replace(/\\/g, '/')
+          return { name: entry.name, path: `${permitVocabularyPath}/${relWithin}`, isDirectory: entry.isDirectory, ...(entry.size === undefined ? {} : { size: entry.size }), ...(entry.mtimeMs === undefined ? {} : { mtimeMs: entry.mtimeMs }) }
+        }
         return { name: entry.name, path: path.relative(root, entryPath) || '.', isDirectory: entry.isDirectory, ...(entry.size === undefined ? {} : { size: entry.size }), ...(entry.mtimeMs === undefined ? {} : { mtimeMs: entry.mtimeMs }) }
       })
       rows.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
@@ -747,6 +762,8 @@ async function recordFileStateAfterWrite(
 
 function writePathErrorMessage(e: unknown, rel: string): string {
   const msg = e instanceof Error ? e.message : String(e)
+  if (msg === 'wiki-readonly-alias-write-denied') return `该路径为历史迁移保留的只读别名，请写入共享库新路径 ${WIKI_VOCABULARY_PREFIX}/ 下的对应位置: ${rel}`
+  if (msg === 'wiki-mount-consistency-mismatch') return `写入许可与当前共享库配置不一致，请重新发起写入: ${rel}`
   if (msg === 'remote-write-target-outside-workdir') return `远程会话只能写入当前工作目录内的文件: ${rel}`
   if (msg.includes('路径超出') || msg.includes('工作目录')) return `路径超出工作目录范围: ${rel}`
   return msg
@@ -767,14 +784,36 @@ async function resolveWriteTargetFromPermit(input: Record<string, unknown>, ctx:
   const permit = ctx.writeExecutionPermit
   const rawPath = extractPathField(input)
   if (rawPath === undefined) throw new Error('write-path-missing')
-  if (!permit && ctx.lane !== 'desktop') return resolveSafeWriteTarget(ctx.workDir, rawPath)
+  if (!permit && ctx.lane !== 'desktop') {
+    // T1.7：远程 lane 无 permit 兜底——wiki 挂载命中改走 realBase 沙箱解析（别名只读拒绝）
+    const mount = ctx.wikiConfig?.enabled
+      ? resolveWikiMount(ctx.workDir, ctx.wikiConfig, ctx.userDataDir, rawPath)
+      : undefined
+    if (mount?.mounted) {
+      if (mount.readOnly) throw new Error('wiki-readonly-alias-write-denied')
+      const resolved = await resolveSafeWriteTarget(mount.realBase, mount.realRel)
+      return { ...resolved, wikiVocabularyPath: mount.vocabularyPath }
+    }
+    return resolveSafeWriteTarget(ctx.workDir, rawPath)
+  }
   if (!permit) throw new Error('write-permit-missing')
   const valid = validateWriteExecutionPermit(permit, { requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName, input })
   if (!valid.ok) throw new Error(valid.caseId)
-  if (ctx.lane === 'feishu' || ctx.lane === 'wechat' || ctx.remoteContext !== undefined) {
-    await assertRemoteWriteTargetInsideWorkDir(ctx.workDir, permit.target.normalizedPath)
+  // T1.6 一致性守卫：permit 携带词汇路径时对入参二次挂载比对，防探测/执行间状态漂移（R9）
+  if (permit.target.vocabularyPath) {
+    if (!ctx.wikiConfig?.enabled) throw new Error('wiki-mount-consistency-mismatch')
+    const resolution = resolveWikiMount(ctx.workDir, ctx.wikiConfig, ctx.userDataDir, permit.target.vocabularyPath)
+    if (!resolution.mounted) throw new Error('wiki-mount-consistency-mismatch')
+    if (resolution.readOnly) throw new Error('wiki-readonly-alias-write-denied')
+    const relFromBase = path.relative(resolution.realBase, permit.target.normalizedPath)
+    if (relFromBase.startsWith('..') || path.isAbsolute(relFromBase)) throw new Error('wiki-mount-consistency-mismatch')
   }
-  return resolvePermittedWriteTarget(permit.target)
+  if (ctx.lane === 'feishu' || ctx.lane === 'wechat' || ctx.remoteContext !== undefined) {
+    // T1.9：挂载命中按 scopeBase（realBase）断言包含；未挂载维持 workDir 断言（远程豁免面仅限 wiki 命名空间）
+    await assertRemoteWriteTargetInsideWorkDir(permit.target.scopeBase ?? ctx.workDir, permit.target.normalizedPath)
+  }
+  const resolved = await resolvePermittedWriteTarget(permit.target)
+  return { ...resolved, wikiVocabularyPath: permit.target.vocabularyPath }
 }
 
 function writePermitFailure(e: unknown): Pick<ToolExecutorResult, 'success' | 'error' | 'diagnostic'> {
@@ -808,6 +847,8 @@ export const editFileExecutor: ToolExecutor = {
     const replaceAll = Boolean(input.replace_all)
     ctx.sendProgress('editing', '正在编辑文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
+    let wikiVocabularyPath: string | undefined
+    let releaseWikiMutex: (() => void) | undefined
     try {
       let writeTarget: Awaited<ReturnType<typeof resolveSafeWriteTarget>>
       try {
@@ -817,6 +858,9 @@ export const editFileExecutor: ToolExecutor = {
         return { ...writePermitFailure(e), error: writePathErrorMessage(e, rel), duration: Date.now() - started }
       }
       const abs = writeTarget.targetPath
+      // T1.7：wiki 命名空间写入包文件互斥区（读-改-写整体），写完成广播词汇路径失效
+      wikiVocabularyPath = (writeTarget as { wikiVocabularyPath?: string }).wikiVocabularyPath
+      releaseWikiMutex = wikiVocabularyPath ? await acquireWikiWriteMutex(abs) : undefined
       if (oldS === newS) {
         return { success: false, error: '新旧字符串相同，无需修改', duration: Date.now() - started }
       }
@@ -940,6 +984,10 @@ export const editFileExecutor: ToolExecutor = {
       }
       return await applyAndWrite(oldS)
     } finally {
+      if (releaseWikiMutex) {
+        releaseWikiMutex()
+        if (wikiVocabularyPath) notifyFileTreeChanged(null, { kind: 'paths', relPaths: [wikiVocabularyPath] })
+      }
       dispose()
     }
   }
@@ -958,6 +1006,8 @@ export const writeFileExecutor: ToolExecutor = {
     const content = typeof input.content === 'string' ? input.content : ''
     ctx.sendProgress('writing', '正在写入文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
+    let wikiVocabularyPath: string | undefined
+    let releaseWikiMutex: (() => void) | undefined
     try {
       let writeTarget: Awaited<ReturnType<typeof resolveSafeWriteTarget>>
       try {
@@ -967,6 +1017,9 @@ export const writeFileExecutor: ToolExecutor = {
         return { ...writePermitFailure(e), error: writePathErrorMessage(e, rel), duration: Date.now() - started }
       }
       const abs = writeTarget.targetPath
+      // T1.7：wiki 命名空间写入包文件互斥区（整文件替换），写完成广播词汇路径失效
+      wikiVocabularyPath = (writeTarget as { wikiVocabularyPath?: string }).wikiVocabularyPath
+      releaseWikiMutex = wikiVocabularyPath ? await acquireWikiWriteMutex(abs) : undefined
       const existed = writeTarget.existed
       const body = content.replace(/\r\n/g, '\n')
       let expectedIdentity: FileIdentity | null = null
@@ -1036,6 +1089,10 @@ export const writeFileExecutor: ToolExecutor = {
       await recordFileStateAfterWrite(ctx.fileStateCache, abs, body)
       return { success: true, data: { path: rel }, duration: Date.now() - started }
     } finally {
+      if (releaseWikiMutex) {
+        releaseWikiMutex()
+        if (wikiVocabularyPath) notifyFileTreeChanged(null, { kind: 'paths', relPaths: [wikiVocabularyPath] })
+      }
       dispose()
     }
   }
@@ -1141,7 +1198,8 @@ export function normalizeGrepArgs(input: Record<string, unknown>): GrepNormalize
   const GREP_TIMEOUT_MAX = 600
   let timeoutSeconds: number | undefined
   if (input.timeout !== undefined) {
-    if (typeof input.timeout !== 'number' || !Number.isFinite(input.timeout)) {
+    // 非法值（非数字 / 非正数）直接 paramConflict；只有正数才进入 clamp
+    if (typeof input.timeout !== 'number' || !Number.isFinite(input.timeout) || input.timeout <= 0) {
       return {
         ok: false,
         error: {
@@ -1269,7 +1327,7 @@ export async function grepWithRg(
   killer: ProcessKiller = processTreeKiller,
   onTerminate?: (info: GrepTerminateInfo) => void,
   /** 一次规划、两处消费：与 grepExecutor 的 searchScope 输出共用同一组规划覆盖（§7.6 改动 2，防 rg 行为与对外报告范围不一致） */
-  planOverrides?: { searchKind?: 'file' | 'directory'; searchGitignored?: boolean }
+  planOverrides?: { searchKind?: 'file' | 'directory'; searchGitignored?: boolean; extraExcludeDirNames?: readonly string[] }
 ): Promise<RipgrepRunResult> {
   if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
   const openedFileFd = openedFile?.fileHandle.fd
@@ -1465,7 +1523,9 @@ export async function grepFallbackJs(
   onProgress: (s: string) => void,
   timeoutMs = 60_000,
   stableFileHandle?: FileHandle,
-  deps: GrepFallbackDeps = {}
+  deps: GrepFallbackDeps = {},
+  /** T1.11c（§7.7）：挂载词汇前缀实体目录排除（不受 includeIgnored 解除，与 rg 侧 extraExcludeDirNames 同语义） */
+  extraSkipDirNames?: readonly string[]
 ): Promise<string> {
   let flags = 'g'
   if (args.ignoreCase) flags += 'i'
@@ -1744,6 +1804,8 @@ export async function grepFallbackJs(
       const full = path.join(dir, ent.name)
       const isHiddenEntry = ent.name.startsWith('.')
       if (!args.includeIgnored && (GREP_SKIP_DIRS.has(ent.name) || isHiddenEntry)) continue
+      // T1.11c：挂载词汇前缀实体目录恒排除（词汇路径由共享根唯一提供，§7.7）
+      if (extraSkipDirNames?.includes(ent.name)) continue
       // 敏感路径逐条目判定（includeIgnored 不解除）；显式点名敏感根时豁免子树条目
       if (!explicitSensitiveRoot && isSensitivePath(full)) continue
       if (ent.isDirectory()) await walk(full)
@@ -1793,6 +1855,231 @@ export async function grepFallbackJs(
   return finishOutput(contentLines.join('\n') + suffix)
 }
 
+
+// ===== T1.11：grep 双根编排（§7.2 I3 / §7.7 词汇路径唯一性） =====
+
+interface WikiDualRootPlan {
+  vocabularyPrefix: string
+  realBase: string
+  /** workDir 根扫描需排除的实体目录名（挂载词汇前缀 + 只读别名前缀，§7.7） */
+  extraExcludeDirNames: string[]
+}
+
+const dualRootSuppressedCtxs = new WeakSet<object>()
+/** 双根编排的 workDir 子调用携带的挂载前缀排除目录（单根执行路径消费，T1.11c） */
+const dualRootExtrasByCtx = new WeakMap<object, readonly string[]>()
+
+/** wiki 启用且共享根已初始化、且本次无显式 path 时，无 path 全库搜索规划为双根。 */
+function planWikiDualRootGrep(ctx: ToolExecutionContext, input: Record<string, unknown>): WikiDualRootPlan | undefined {
+  const wc = ctx.wikiConfig
+  if (!wc?.enabled) return undefined
+  if (dualRootSuppressedCtxs.has(ctx)) return undefined
+  if (extractPathField(input) !== undefined) return undefined
+  const rootDirname = wc.rootPath || DEFAULT_WIKI_ROOT_DIRNAME
+  const realBase = path.join(ctx.userDataDir, rootDirname)
+  // 共享根不存在（未初始化）→ 双根无意义，维持 workDir 单根（现状）
+  if (!existsSync(realBase)) return undefined
+  return {
+    vocabularyPrefix: WIKI_VOCABULARY_PREFIX,
+    realBase,
+    extraExcludeDirNames: [WIKI_VOCABULARY_PREFIX, ...(wc.legacyRootAliases ?? [])]
+  }
+}
+
+/** 为 wiki 根构造目录 subtree permit（模拟 gate 挂载探测 → 签发链路）。 */
+async function buildWikiGrepPermit(ctx: ToolExecutionContext, input: Record<string, unknown>, plan: WikiDualRootPlan): Promise<boolean> {
+  const wc = ctx.wikiConfig!
+  const resolution = resolveWikiMount(ctx.workDir, wc, ctx.userDataDir, plan.vocabularyPrefix)
+  if (!resolution.mounted) return false
+  const fact = await probeReadPathFact({
+    rawPath: resolution.realRel || '.',
+    workDir: resolution.realBase,
+    userDataDir: ctx.userDataDir,
+    homeDir: os.homedir(),
+    customSensitivePrefixes: ctx.shellConfig?.customSensitivePrefixes ?? [],
+    sensitiveRootExemptions: [resolution.realBase]
+  })
+  // The wiki mount exemption applies only while its canonical target remains inside the
+  // configured shared root. A replaced/symlinked root must not mint a permit for an
+  // arbitrary or sensitive directory.
+  const canonicalSharedRoot = await fs.realpath(resolution.realBase).catch(() => undefined)
+  const canonicalUserDataDir = await fs.realpath(ctx.userDataDir).catch(() => undefined)
+  const expectedSharedRoot = canonicalUserDataDir ? path.join(canonicalUserDataDir, wc.rootPath || DEFAULT_WIKI_ROOT_DIRNAME) : undefined
+  if (!canonicalSharedRoot || canonicalSharedRoot !== expectedSharedRoot || fact.normalizedPath !== canonicalSharedRoot || fact.zone !== 'workdir-normal' ||
+      !(fact.targetKind === 'directory' || fact.resolvedKind === 'directory')) return false
+  const wikiInput = { ...input, path: plan.vocabularyPrefix }
+  ctx.readExecutionPermit = buildReadExecutionPermit({
+    requestId: ctx.requestId,
+    toolUseId: ctx.toolUseId,
+    toolName: 'grep',
+    input: wikiInput,
+    facts: [{
+      factId: `fact-${fact.normalizedPath}`,
+      decisionRuleId: 'wiki-dual-root-grep',
+      normalizedPath: fact.normalizedPath,
+      zone: fact.zone,
+      targetKind: 'directory',
+      scope: 'subtree',
+      ...(fact.identity ? { identity: fact.identity } : {}),
+      vocabularyPath: plan.vocabularyPrefix
+    }]
+  })
+  return true
+}
+
+function outputOf(result: ToolExecutorResult): string | undefined {
+  const data = result.data as { output?: string } | undefined
+  return data?.output
+}
+
+function splitBoundary(output: string): { body: string; boundary: string[] } {
+  const marker = '\n[边界摘要]'
+  const idx = output.indexOf(marker)
+  if (idx < 0) return { body: output, boundary: [] }
+  return {
+    body: output.slice(0, idx),
+    boundary: output.slice(idx + marker.length).split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2))
+  }
+}
+
+const NO_MATCH_PREFIX = 'No matches found'
+
+/** T1.8/T1.11b：挂载命中的 grep 输出路径改写回词汇路径（结果不暴露 userData 真实路径）。 */
+function rewriteMountedGrepOutput(output: string, permitTarget: { normalizedPath: string; targetKind?: string; vocabularyPath?: string } | undefined): string {
+  if (!permitTarget?.vocabularyPath) return output
+  const base = permitTarget.targetKind === 'directory' || permitTarget.targetKind === 'symlink'
+    ? permitTarget.normalizedPath
+    : path.dirname(permitTarget.normalizedPath)
+  return output.split('\n').map((line) => {
+    if (line === base || line === permitTarget.normalizedPath) return permitTarget.vocabularyPath!
+    if (line.startsWith(base + path.sep)) return permitTarget.vocabularyPath + '/' + line.slice(base.length + path.sep.length).replace(/\\/g, '/')
+    return line
+  }).join('\n')
+}
+
+function mergeDualRootGrepResults(
+  workDirResult: ToolExecutorResult,
+  wikiResult: ToolExecutorResult | undefined,
+  gargs: GrepExecArgs,
+  plan: WikiDualRootPlan,
+  started: number
+): ToolExecutorResult {
+  const rewrite = (line: string): string => {
+    const base = plan.realBase
+    if (line === base) return plan.vocabularyPrefix
+    if (line.startsWith(base + path.sep)) return plan.vocabularyPrefix + '/' + line.slice(base.length + path.sep.length).replace(/\\/g, '/')
+    return line
+  }
+  const boundaries: string[] = []
+  const noMatchRoots: string[] = []
+  const bodies: Array<{ lines: string[]; rootLabel: string }> = []
+  const roots: Array<readonly [string, ToolExecutorResult | undefined]> = [['.', workDirResult], [plan.vocabularyPrefix, wikiResult]]
+  for (const [rootLabel, result] of roots) {
+    if (!result) { boundaries.push(`${rootLabel} 根未执行（共享根不可用）`); continue }
+    if (!result.success) {
+      boundaries.push(`${rootLabel} 根搜索失败：${(result.error ?? '未知错误').slice(0, 200)}`)
+      continue
+    }
+    const out = outputOf(result)
+    if (out === undefined) { boundaries.push(`${rootLabel} 根无输出`); continue }
+    const { body, boundary } = splitBoundary(out)
+    boundaries.push(...boundary)
+    if (body.startsWith(NO_MATCH_PREFIX)) { noMatchRoots.push(rootLabel); continue }
+    if (body.startsWith('Error:')) { boundaries.push(`${rootLabel} 根搜索失败：${body.slice('Error:'.length).trim().slice(0, 200)}`); continue }
+    bodies.push({ lines: body.split('\n').filter((l) => l.length > 0), rootLabel })
+  }
+
+  const mergedBoundary = boundaries.length > 0 ? `\n[边界摘要]\n${[...new Set(boundaries)].map((b) => `- ${b}`).join('\n')}` : ''
+  const noMatchOutput = `${NO_MATCH_PREFIX} (searched: ${noMatchRoots.join(', ')})${mergedBoundary}`
+
+  const searchScopeData = (workDirResult.data as { searchScope?: unknown } | undefined)?.searchScope
+    ?? (wikiResult?.data as { searchScope?: unknown } | undefined)?.searchScope
+  const buildResult = (output: string, status?: string): ToolExecutorResult => ({
+    success: true,
+    data: { output, ...(status ? { status } : {}), ...(searchScopeData !== undefined ? { searchScope: searchScopeData } : {}) },
+    duration: Date.now() - started
+  })
+
+  // 全部根均无命中 / 无可用结果体
+  if (bodies.length === 0) {
+    if (noMatchRoots.length === 0) return workDirResult
+    const status = (workDirResult.data as { status?: string } | undefined)?.status
+    return buildResult(noMatchOutput, status === 'no_match_with_skips' ? 'no_match_with_skips' : 'no_match')
+  }
+
+  if (gargs.outputMode === 'files_with_matches') {
+    const files: string[] = []
+    for (const { lines } of bodies) {
+      const list = lines[0]?.startsWith('Found ') ? lines.slice(1) : lines
+      files.push(...list)
+    }
+    const rewritten = files.map(rewrite)
+    const slice = rewritten.slice(0, gargs.headLimit)
+    const truncNote = slice.length < rewritten.length ? `\n[结果已按 head_limit=${gargs.headLimit} 截断，共 ${rewritten.length} 个文件命中]` : ''
+    if (slice.length === 0) return buildResult(noMatchOutput, 'no_match')
+    return buildResult(`Found ${slice.length} files\n${slice.join('\n')}${truncNote}${mergedBoundary}`)
+  }
+
+  if (gargs.outputMode === 'count') {
+    const countLines: string[] = []
+    let totalMatches = 0
+    for (const { lines } of bodies) {
+      const tailIdx = lines.findIndex((l) => l.startsWith('共 ') && l.includes(' 处匹配'))
+      const rows = tailIdx >= 0 ? lines.slice(0, tailIdx) : lines
+      for (const row of rows) {
+        const sep = row.lastIndexOf(':')
+        if (sep <= 0) continue
+        const c = Number(row.slice(sep + 1))
+        if (!Number.isFinite(c)) continue
+        countLines.push(`${rewrite(row.slice(0, sep))}:${c}`)
+        totalMatches += c
+      }
+    }
+    if (countLines.length === 0) return buildResult(noMatchOutput, 'no_match')
+    const slice = countLines.slice(0, gargs.headLimit)
+    const truncNote = slice.length < countLines.length ? `\n[结果已按 head_limit=${gargs.headLimit} 截断，共 ${countLines.length} 个文件命中]` : ''
+    return buildResult(`${slice.join('\n')}${truncNote}\n\n共 ${totalMatches} 处匹配，涉及 ${countLines.length} 个文件${mergedBoundary}`)
+  }
+
+  // content 模式：行拼接（workDir 根在前、wiki 根在后，根内保持引擎原序——确定性）
+  const lines: string[] = []
+  for (const { lines: rootLines } of bodies) lines.push(...rootLines)
+  const rewritten = lines.map(rewrite)
+  const slice = gargs.headLimit > 0 ? rewritten.slice(0, gargs.headLimit) : rewritten
+  const truncNote = slice.length < rewritten.length
+    ? `\n[已按 head_limit=${gargs.headLimit} 截断，共 ${rewritten.length} 行]`
+    : ''
+  if (slice.length === 0) return buildResult(noMatchOutput, 'no_match')
+  return buildResult(`${slice.join('\n')}${truncNote}${mergedBoundary}`)
+}
+
+async function executeWikiDualRootGrep(
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+  gargs: GrepExecArgs,
+  plan: WikiDualRootPlan,
+  started: number
+): Promise<ToolExecutorResult> {
+  dualRootSuppressedCtxs.add(ctx)
+  // 根 1：workDir（排除挂载前缀实体目录）；子执行传 headLimit=∞，由编排层统一截断（T1.11b④ 跨根口径一致）
+  const workDirCtx: ToolExecutionContext = { ...ctx }
+  dualRootSuppressedCtxs.add(workDirCtx)
+  dualRootExtrasByCtx.set(workDirCtx, plan.extraExcludeDirNames)
+  const workDirResult = await grepExecutor.execute(input, workDirCtx)
+  // 根 2：wiki 词汇路径（挂载 permit；构造失败 = 单根降级，workDir 结果照常）
+  let wikiResult: ToolExecutorResult | undefined
+  try {
+    const wikiCtx: ToolExecutionContext = { ...ctx }
+    if (await buildWikiGrepPermit(wikiCtx, input, plan)) {
+      wikiResult = await grepExecutor.execute({ ...input, path: plan.vocabularyPrefix }, wikiCtx)
+    }
+  } catch (e) {
+    if (process.env.WIKI_GREP_DEBUG) console.error('[wiki-grep] root2 failed:', e)
+    wikiResult = undefined
+  }
+  return mergeDualRootGrepResults(workDirResult, wikiResult, gargs, plan, started)
+}
+
 export const grepExecutor: ToolExecutor = {
   name: 'grep',
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
@@ -1811,6 +2098,11 @@ export const grepExecutor: ToolExecutor = {
       }
     }
     const gargs: GrepExecArgs = normalized.args
+    // T1.11：无 path 全库搜索的 wiki 双根编排（wiki 停用/共享根未初始化/显式 path 时维持单根现状）
+    const dualPlan = planWikiDualRootGrep(ctx, input)
+    if (dualPlan) {
+      return executeWikiDualRootGrep(input, ctx, gargs, dualPlan, started)
+    }
     ctx.sendProgress('grep', '搜索中...')
     let absSearch: string
     let permitFileHandle: Awaited<ReturnType<typeof fs.open>> | undefined
@@ -1841,11 +2133,14 @@ export const grepExecutor: ToolExecutor = {
       // 一次规划、三处消费：rgArgs 驱动（经 grepWithRg 透传）、walk plan、searchScope 输出 plan
       // 必须同一组 overrides，否则 rg 实际行为与对外报告的范围会不一致（§7.6 改动 2，B1）
       const searchKind: 'file' | 'directory' = ctx.readExecutionPermit?.targets[0]?.targetKind === 'directory' ? 'directory' : 'file'
-      const planOverrides = { searchKind, searchGitignored: ctx.toolsConfig.grepSearchGitignored }
+      // T1.11c：双根编排的 workDir 根子调用携带挂载前缀实体目录排除（§7.7 去重）
+      const extraExcludeDirNames = dualRootExtrasByCtx.get(ctx)
+      const planOverrides = { searchKind, searchGitignored: ctx.toolsConfig.grepSearchGitignored, extraExcludeDirNames }
       const executeFallback = async (): Promise<ToolExecutorResult> => {
         const fallbackText = await grepFallbackJs(
           ctx.workDir, absSearch, pattern, gargs, ctx.signal,
-          (message) => ctx.sendProgress('grep', message), timeoutMs, permitFileHandle
+          (message) => ctx.sendProgress('grep', message), timeoutMs, permitFileHandle,
+          undefined, extraExcludeDirNames
         )
         const permitTarget = ctx.readExecutionPermit?.targets[0]
         const authorizedIdentity = permitTarget?.identity
@@ -1883,7 +2178,7 @@ export const grepExecutor: ToolExecutor = {
         return {
           success: true,
           data: {
-            output,
+            output: rewriteMountedGrepOutput(output, ctx.readExecutionPermit?.targets[0]),
             ...(noMatch ? { status: scope.skippedCount > 0 ? 'no_match_with_skips' : 'no_match' } : {}),
             searchScope: serializeSearchScope(scope),
             ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
@@ -1980,7 +2275,7 @@ export const grepExecutor: ToolExecutor = {
         return {
           success: true,
           data: {
-            output: text.output,
+            output: rewriteMountedGrepOutput(text.output, ctx.readExecutionPermit?.targets[0]),
             searchScope: serializeSearchScope(scope),
             ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
           },

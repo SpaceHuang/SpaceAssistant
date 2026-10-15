@@ -112,7 +112,8 @@ export async function enforceSessionEventRetentionDetailed(workDir: string, maxS
         continue
       }
       await options.prepareProjectionForRetention?.(entry.name, workDir)
-      await fs.rm(path.join(root, entry.name), { recursive: true, force: true })
+      // maxRetries：Windows 上目录/文件被瞬态占用（Defender、自身句柄）时 fs.rm 抛 EPERM/EBUSY，Node 内置重试可自愈
+      await fs.rm(path.join(root, entry.name), { recursive: true, force: true, maxRetries: 5, retryDelay: 250 })
       count += 1
       removedSessions.push(entry.name)
     } catch (error) {

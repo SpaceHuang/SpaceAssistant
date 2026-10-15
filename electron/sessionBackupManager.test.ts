@@ -106,6 +106,19 @@ describe('SessionBackupManager', () => {
     expect(restored?.messages.map((m) => m.id)).toEqual(['m1', 'm2'])
   })
 
+  it('preserves the same bounded run_shell justification in the existing session backup/export', async () => {
+    const mgr = new SessionBackupManager(workDir)
+    const session = makeSession()
+    const input = { command: 'pwd', justification: '核对工作目录', _justificationTruncated: true }
+    const message = makeMessage('m-shell-reason', {
+      role: 'assistant',
+      toolCalls: [{ id: 'shell-call', toolName: 'run_shell', input, status: 'confirming', riskLevel: 'high' }]
+    })
+    await mgr.backupSession(session, arrayMessagePageReader([message]))
+    const restored = await mgr.restoreSession(session.id)
+    expect(restored?.messages[0]?.toolCalls?.[0]).toMatchObject({ id: 'shell-call', input })
+  })
+
   it('reads backup events without repairing or modifying a torn JSONL tail', async () => {
     const mgr = new SessionBackupManager(workDir)
     const session = makeSession()

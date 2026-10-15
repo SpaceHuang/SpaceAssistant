@@ -385,10 +385,10 @@ describe('runImRemoteAgent', () => {
     const acceptedTurn = createAcceptedTurn({
       turnId: 'exact-service-turn', requestId: 'exact-service-request', sessionId: session.id, lane: 'feishu',
       startToken: 'exact-service-token', currentUserMessageId: 'exact-service-user', transcriptVersion: 0,
-      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-frozen', thinkingEffort: 'low' }
+      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-frozen', thinkingEffort: 'low', agentsMdEnabled: false }
     })
     acceptTurnContext(db, acceptedTurn)
-    let captured: { profile: { baseUrl?: string }; ports: { credentials: { resolveApiKey: () => Promise<string | null> } } } = {} as never
+    let captured: { invocation: { profile: { baseUrl?: string; agentsMdEnabled?: boolean } }; ports: { credentials: { resolveApiKey: () => Promise<string | null> } } } = {} as never
     mockRunToolChatSession.mockImplementation(async (invocation: never, ports: never) => {
       captured = { invocation, ports } as never
       return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
@@ -398,6 +398,7 @@ describe('runImRemoteAgent', () => {
 
     expect(mockResolveLlmCredentialsForPair).toHaveBeenCalledWith(db, 'catalog-model', 'svc-frozen')
     expect(captured.ports.credentials.networkTarget?.baseUrl).toBe('https://creds.example.com')
+    expect(captured.invocation.profile.agentsMdEnabled).toBe(false)
     expect(await captured.ports.credentials.resolveApiKey()).toBe('creds-key')
     db.close()
   })
@@ -1685,13 +1686,9 @@ describe('runImRemoteAgent', () => {
           runtime.chatCancels.signalChatCancel(requestId)
         }
         releaseClaim()
-        if (termination === 'cancel') {
-          await expect(runningAgent).rejects.toThrow(/cancelled/i)
-        } else {
-          await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: 'Authorization changed; read stopped.' })
-        }
+        await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
 
-        expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+        expect(providerCalls).toBe(1)
         expect(execute).not.toHaveBeenCalled()
         const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
         expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
@@ -1700,8 +1697,8 @@ describe('runImRemoteAgent', () => {
         })
         expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
         expect(history.events.at(-1)).toMatchObject({
-          kind: termination === 'cancel' ? 'invocation-interrupted' : 'invocation-completed',
-          payload: { status: termination === 'cancel' ? 'cancelled' : 'completed' }
+          kind: 'invocation-interrupted',
+          payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
         })
       } finally {
         releaseClaim()
@@ -1903,12 +1900,12 @@ describe('runImRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('feishu', 'run_lark_cli')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
 
-      await expect(invocation).rejects.toThrow(/cancel|uncertain|after dispatch/i)
+      await expect(invocation).rejects.toThrow(/cancel|uncertain|after dispatch|lifecycle invalidated/i)
       expect(observedSignal?.aborted).toBe(true)
       expect(runner.run).toHaveBeenCalledOnce()
       expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted' } })
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: `feishu-${termination}-cli` })
       expect(history.events.some((event) => event.kind === 'tool-call-not-dispatched')).toBe(false)
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
@@ -1916,8 +1913,8 @@ describe('runImRemoteAgent', () => {
       try {
         const events = await readSessionEvents(ledger.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: `feishu-${termination}-cli`, name: 'run_lark_cli' })
-        expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: requestId, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: requestId, reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await ledger.close() }
     } finally {
       runtime.chatCancels.clear(requestId)
@@ -2009,9 +2006,8 @@ describe('runImRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('feishu', 'run_lark_cli')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      if (termination === 'cancel') await expect(runningAgent).rejects.toThrow(/cancelled/i)
-      else await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: 'CLI 授权变化后命令未执行。' })
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+      expect(providerCalls).toBe(1)
       expect(runner.run).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'approval-resolved')?.payload).toMatchObject({ toolCallId, approved: true })
@@ -2020,8 +2016,8 @@ describe('runImRemoteAgent', () => {
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
       expect(history.events.at(-1)).toMatchObject({
-        kind: termination === 'cancel' ? 'invocation-interrupted' : 'invocation-completed',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'completed' }
+        kind: 'invocation-interrupted',
+        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
       })
     } finally {
       releaseClaim()
@@ -2132,13 +2128,9 @@ describe('runImRemoteAgent', () => {
         runtime.chatCancels.signalChatCancel(requestId)
       }
       releaseClaim()
-      if (termination === 'cancel') {
-        await expect(runningAgent).rejects.toThrow(/cancelled/i)
-      } else {
-        await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '写入授权已变化，操作未执行。' })
-      }
+      await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
 
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      expect(providerCalls).toBe(1)
       expect(executeWrite).not.toHaveBeenCalled()
       if (toolName === 'edit_file') await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('original edit target')
       else await expect(fs.access(targetPath)).rejects.toThrow()
@@ -2152,8 +2144,8 @@ describe('runImRemoteAgent', () => {
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
       expect(history.events.at(-1)).toMatchObject({
-        kind: termination === 'cancel' ? 'invocation-interrupted' : 'invocation-completed',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'completed' }
+        kind: 'invocation-interrupted',
+        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
       })
     } finally {
       releaseClaim()
@@ -2256,20 +2248,20 @@ describe('runImRemoteAgent', () => {
       }
       expect(executorSignal?.aborted).toBe(true)
       releaseExecutor()
-      await expect(runningAgent).rejects.toThrow(/after dispatch|uncertain|interrupted/i)
+      await expect(runningAgent).rejects.toThrow(/after dispatch|uncertain|interrupted|lifecycle invalidated|cancelled/i)
       expect(providerCalls).toBe(1)
       await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('side effect committed; acknowledgement lost')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
+      expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: expect.any(String) })
       expect(history.events.at(-1)).toMatchObject({
         kind: 'invocation-interrupted',
-        payload: { status: 'interrupted', sessionLedger: { reason: 'interrupted' } }
+        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted', sessionLedger: { reason: termination === 'cancel' ? 'cancelled' : 'interrupted' } }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
     } finally {
@@ -2373,9 +2365,8 @@ describe('runImRemoteAgent', () => {
         runtime.chatCancels.signalChatCancel(requestId)
       }
       releaseClaim()
-      if (termination === 'cancel') await expect(runningAgent).rejects.toThrow(/cancelled/i)
-      else await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '浏览器授权已变化，操作未执行。' })
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+      expect(providerCalls).toBe(1)
       expect(executeBrowser).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'approval-resolved')?.payload).toMatchObject({
@@ -2387,8 +2378,8 @@ describe('runImRemoteAgent', () => {
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
       expect(history.events.at(-1)).toMatchObject({
-        kind: termination === 'cancel' ? 'invocation-interrupted' : 'invocation-completed',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'completed' }
+        kind: 'invocation-interrupted',
+        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
       })
     } finally {
       releaseClaim()
@@ -2484,21 +2475,21 @@ describe('runImRemoteAgent', () => {
       }
       expect(executorSignal?.aborted).toBe(true)
       releaseExecutor()
-      await expect(runningAgent).rejects.toThrow(/after dispatch|uncertain|interrupted/i)
+      await expect(runningAgent).rejects.toThrow(/after dispatch|uncertain|interrupted|lifecycle invalidated|cancelled/i)
       expect(pageActionCommitted).toBe(true)
       expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'approval-resolved')?.payload).toMatchObject({ toolCallId, approved: true })
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
+      expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: expect.any(String) })
       expect(history.events.at(-1)).toMatchObject({
         kind: 'invocation-interrupted',
-        payload: { status: 'interrupted', sessionLedger: { reason: 'interrupted' } }
+        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted', sessionLedger: { reason: termination === 'cancel' ? 'cancelled' : 'interrupted' } }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
     } finally {
@@ -2657,8 +2648,8 @@ describe('runImRemoteAgent', () => {
     try {
       // The mocked legacy loop normally registers the request before invoking this Hosted handoff.
       runtime.toolRevocations.registerToolRevocationRequest(args.requestId, 'feishu', args.requestId)
-      await expect(runImRemoteAgent({ ...args, sessionId: session.id })).resolves.toMatchObject({ ok: true, summary: '读取已撤销，未执行。' })
-      expect(providerCalls).toBe(2)
+      await expect(runImRemoteAgent({ ...args, sessionId: session.id })).rejects.toThrow(/lifecycle invalidated/i)
+      expect(providerCalls).toBe(1)
       expect(executor).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
@@ -3094,8 +3085,8 @@ describe('runImRemoteAgent', () => {
       } else runtime.chatCancels.signalChatCancel(args.requestId)
       releaseClaim()
       if (termination === 'cancel') await expect(running).rejects.toThrow(/cancelled/i)
-      else await expect(running).resolves.toMatchObject({ ok: true, summary: '授权变化后脚本未执行。' })
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      else await expect(running).rejects.toThrow(/lifecycle invalidated/i)
+      expect(providerCalls).toBe(1)
       expect(executeScript).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'approval-resolved')?.payload).toMatchObject({
@@ -3196,19 +3187,19 @@ describe('runImRemoteAgent', () => {
         args.db.flushSave()
         expect(runtime.policyAuthorizationChanges.publish('feishu')).toBeGreaterThan(0)
       }
-      await expect(running).rejects.toMatchObject({ outcome: 'interrupted', historyTerminalCommitted: true })
+      await expect(running).rejects.toMatchObject({ outcome: termination === 'cancel' ? 'cancelled' : 'interrupted', historyTerminalCommitted: true })
       expect(await fs.readFile(markerPath, 'utf8')).toBe('effect-committed')
       expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: requestId })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted' } })
+      expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: expect.any(String) })
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: requestId, name: 'run_script' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === requestId && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result' && event.payload.toolUseId === requestId)?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
     } finally {
@@ -3516,9 +3507,8 @@ describe('runImRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('feishu', 'switch_work_dir')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      if (termination === 'cancel') await expect(running).rejects.toThrow(/cancelled/i)
-      else await expect(running).resolves.toMatchObject({ ok: true, summary: '准入变化后未切换工作目录。' })
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      await expect(running).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+      expect(providerCalls).toBe(1)
       expect(executeSwitch).not.toHaveBeenCalled()
       expect(getSession(args.db, session.id)?.workDirProfileId).toBe('current-profile')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
@@ -3622,18 +3612,20 @@ describe('runImRemoteAgent', () => {
       releaseDispatch()
       const result = await runningResult
       expect(result).toHaveProperty('error')
-      expect(String((result as { error: unknown }).error)).toMatch(/failed after dispatch|unknown/i)
+      expect(String((result as { error: unknown }).error)).toMatch(/failed after dispatch|unknown|lifecycle invalidated|cancelled/i)
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
       expect(providerCalls).toBe(1)
       expect(getSession(args.db, session.id)?.workDirProfileId).toBe('target-profile')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.some((event) => event.kind === 'tool-call-started')).toBe(true)
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+      expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: expect.any(String) })
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: termination === 'cancel'
+        ? { sessionLedger: { reason: 'cancelled' } }
+        : { reason: termination === 'revoke' ? 'authorization-revoked' : 'authorization-changed' } })
       const sink = getSessionEventSink(currentDir, session.id, session.createdAt)
       const projected = await readSessionEvents(sink.eventsPath)
-      expect(projected.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
-      expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
+      expect(projected.find((event) => event.type === 'tool_result')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch' })
+      expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       await sink.close()
     } finally {
       releaseDispatch()
@@ -4165,7 +4157,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('created-during-approval')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'feishu-write-target-drift', reason: 'WRITE_PREPARED_PERMIT_CHANGED'
+        toolCallId: 'feishu-write-target-drift', reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -4236,7 +4228,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       expect(executeRead).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'feishu-read-identity-drift', reason: 'RECHECK_REQUIRES_CONFIRMATION'
+        toolCallId: 'feishu-read-identity-drift', reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -4399,9 +4391,8 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
         expect(runtime.toolRevocations.revokeToolForLane('feishu', 'read_feishu_attachment')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      if (termination === 'cancel') await expect(runningAgent).rejects.toThrow(/cancel/i)
-      else await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '附件读取已被安全拦截。' })
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      await expect(runningAgent).rejects.toThrow(/cancelled|lifecycle invalidated/i)
+      expect(providerCalls).toBe(1)
       expect(executeAttachment).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
@@ -4494,20 +4485,20 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       } else runtime.chatCancels.signalChatCancel(requestId)
       expect(observedSignal?.aborted).toBe(true)
       releaseRead()
-      await expect(runningAgent).rejects.toThrow(/cancel|uncertain|after dispatch|interrupted/i)
+      await expect(runningAgent).rejects.toThrow(/cancel|uncertain|after dispatch|interrupted|lifecycle invalidated/i)
       expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: `attachment-${termination}-postclaim` })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted' } })
+      expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: expect.any(String) })
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
       expect(JSON.stringify(history.events)).not.toContain('registered attachment content')
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: `attachment-${termination}-postclaim`, name: 'read_feishu_attachment' })
-        expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'tool_result')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
     } finally {
       releaseRead()
@@ -4756,10 +4747,9 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
       const outcome = await observedAgent
-      if (termination === 'cancel') expect(outcome).toHaveProperty('error')
-      else expect(outcome).toMatchObject({ value: { ok: true, summary: '会话切换在执行前被安全拦截。' } })
+      expect(outcome).toHaveProperty('error')
       expect(executeSwitch).not.toHaveBeenCalled()
-      expect(providerCalls).toBe(termination === 'cancel' ? 1 : 2)
+      expect(providerCalls).toBe(1)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
         toolCallId: `switch-session-${termination}`,
@@ -4767,8 +4757,8 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
       expect(history.events.at(-1)).toMatchObject({
-        kind: termination === 'cancel' ? 'invocation-interrupted' : 'invocation-completed',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'completed' }
+        kind: 'invocation-interrupted',
+        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
       })
     } finally {
       releaseClaim()
@@ -4958,17 +4948,17 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       expect(context.remoteContext.outboundSessionId).toBe(callerSession.id)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched')).toBe(false)
+      expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: expect.any(String) })
       expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted', payload: { status: 'interrupted', sessionLedger: { reason: 'interrupted' } }
+        kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted', sessionLedger: { reason: termination === 'cancel' ? 'cancelled' : 'interrupted' } }
       })
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
       const sink = getSessionEventSink(workDir, callerSession.id, callerSession.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'switch_session' })
-        expect(projected.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: requestId, reason: 'interrupted' })
+        expect(projected.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)?.payload).toMatchObject({ executionOutcome: 'unknown-after-dispatch' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: requestId, reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
       } finally { await sink.close() }
     } finally {
       rejectRenderer?.(new Error('test cleanup'))

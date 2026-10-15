@@ -28,3 +28,19 @@ export function cancelActiveAgentTool(sessionId: string, turnId: string, toolUse
   entry.cancel()
   return true
 }
+
+/** Cancel every prepared or executing SDK tool call of one (sessionId, turnId); returns the cancelled count. */
+export function cancelAllActiveAgentToolsForTurn(sessionId: string, turnId: string): number {
+  // 与 keyFor 同源：二元组序列化去掉闭括号、补尾逗号 → `["sid","tid",`，
+  // 恰好覆盖该 turn 的全部三元组 key（JSON 转义保证 turnId 里的引号/逗号不会伪造前缀）。
+  // 只调 cancel 不直接 delete：登记句柄的注销走其自有清理路径（与 registeredAgentTurnTools
+  // 的 cleanupPrepared 一致性守卫同路）。
+  const prefix = JSON.stringify([sessionId, turnId]).slice(0, -1) + ','
+  let count = 0
+  for (const [key, entry] of [...activeCancellations]) {
+    if (!key.startsWith(prefix)) continue
+    entry.cancel()
+    count++
+  }
+  return count
+}

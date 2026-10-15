@@ -1,0 +1,308 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "IM 调用安全审核：现状与目标流程",
+    "output": "docs/architecture/im-security-current-vs-target-workflow.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      2100,
+      1200
+    ]
+  },
+  "lanes": [
+    {
+      "id": "current",
+      "label": "当前：IM 常走逐次确认"
+    },
+    {
+      "id": "target",
+      "label": "新方案：统一策略与审核 Agent"
+    },
+    {
+      "id": "result",
+      "label": "结局与约束"
+    },
+    {
+      "id": "exception",
+      "label": "分支处理",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "intake",
+      "label": "入口与授权",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "judge",
+      "label": "事实检查与决策",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "finish",
+      "label": "待办、复核与派发",
+      "fromCol": 4,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "inbound",
+    "splitcfg",
+    "oldask",
+    "oldwait",
+    "oldexecute"
+  ],
+  "nodes": [
+    {
+      "id": "inbound",
+      "lane": "current",
+      "col": 0,
+      "type": "external",
+      "label": "微信 / 飞书消息",
+      "sublabel": "IM 任务请求",
+      "width": 110,
+      "height": 72,
+      "yOffset": -35
+    },
+    {
+      "id": "splitcfg",
+      "lane": "current",
+      "col": 2,
+      "type": "database",
+      "label": "渠道各自取配置",
+      "sublabel": "微信、飞书分别保存",
+      "width": 110,
+      "height": 72,
+      "yOffset": -35
+    },
+    {
+      "id": "oldask",
+      "lane": "current",
+      "col": 4,
+      "type": "security",
+      "label": "IM 规则转人工确认",
+      "sublabel": "未实际走审核 Agent",
+      "width": 110,
+      "height": 72,
+      "yOffset": -35
+    },
+    {
+      "id": "oldwait",
+      "lane": "current",
+      "col": 5,
+      "type": "messagebus",
+      "label": "等待逐次确认",
+      "sublabel": "超时则调用未执行",
+      "width": 110,
+      "height": 72,
+      "yOffset": -35
+    },
+    {
+      "id": "oldexecute",
+      "lane": "current",
+      "col": 5,
+      "type": "backend",
+      "label": "确认后尝试执行",
+      "sublabel": "任务受等待阻塞",
+      "width": 110,
+      "height": 72,
+      "yOffset": -35
+    },
+    {
+      "id": "targetidentity",
+      "lane": "target",
+      "col": 0,
+      "type": "security",
+      "label": "校验身份 / 单聊 / 渠道",
+      "sublabel": "可信映射到 IM 策略域",
+      "width": 110,
+      "height": 72,
+      "yOffset": 35
+    },
+    {
+      "id": "targetfacts",
+      "lane": "target",
+      "col": 2,
+      "type": "backend",
+      "label": "检查能力与调用事实",
+      "sublabel": "参数、路径、数据流、影响",
+      "width": 110,
+      "height": 72,
+      "yOffset": 35
+    },
+    {
+      "id": "targetreview",
+      "lane": "target",
+      "col": 4,
+      "type": "security",
+      "label": "硬规则与自动审核",
+      "sublabel": "确定性快通道 → 审核 Agent",
+      "width": 110,
+      "height": 72,
+      "yOffset": 35
+    },
+    {
+      "id": "targetfence",
+      "lane": "target",
+      "col": 5,
+      "type": "security",
+      "label": "派发前状态复核",
+      "sublabel": "动作、身份、版本、文件状态",
+      "width": 110,
+      "height": 72,
+      "yOffset": 35
+    },
+    {
+      "id": "done",
+      "lane": "target",
+      "col": 5,
+      "type": "backend",
+      "label": "执行 / 返回结果",
+      "sublabel": "无依赖工作可继续",
+      "width": 110,
+      "height": 72,
+      "yOffset": 35
+    },
+    {
+      "id": "denied",
+      "lane": "exception",
+      "col": 0,
+      "type": "security",
+      "label": "拒绝执行",
+      "sublabel": "身份、能力或硬规则不通过",
+      "width": 110,
+      "height": 72,
+      "yOffset": 5
+    },
+    {
+      "id": "human",
+      "lane": "exception",
+      "col": 4,
+      "type": "messagebus",
+      "label": "异步人工待办",
+      "sublabel": "必要时才问；等待非批准",
+      "width": 110,
+      "height": 72,
+      "yOffset": 150
+    },
+    {
+      "id": "recheck",
+      "lane": "exception",
+      "col": 5,
+      "type": "backend",
+      "label": "精确批准后重验",
+      "sublabel": "状态变化即作废旧批准",
+      "width": 110,
+      "height": 72,
+      "yOffset": 150
+    }
+  ],
+  "edges": [
+    {
+      "from": "inbound",
+      "to": "splitcfg"
+    },
+    {
+      "from": "splitcfg",
+      "to": "oldask"
+    },
+    {
+      "from": "oldask",
+      "to": "oldwait",
+      "route": "outside-right"
+    },
+    {
+      "from": "oldwait",
+      "to": "oldexecute",
+      "variant": "emphasis"
+    },
+    {
+      "from": "targetidentity",
+      "to": "targetfacts"
+    },
+    {
+      "from": "targetfacts",
+      "to": "targetreview"
+    },
+    {
+      "from": "targetreview",
+      "to": "targetfence",
+      "variant": "emphasis",
+      "route": "outside-right"
+    },
+    {
+      "from": "targetfence",
+      "to": "done",
+      "variant": "emphasis"
+    },
+    {
+      "from": "targetidentity",
+      "to": "denied",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "from": "targetfacts",
+      "to": "denied",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "from": "targetreview",
+      "to": "human",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "from": "human",
+      "to": "recheck",
+      "variant": "emphasis"
+    },
+    {
+      "from": "recheck",
+      "to": "targetfence",
+      "variant": "emphasis"
+    },
+    {
+      "from": "human",
+      "to": "done",
+      "variant": "dashed",
+      "role": "async",
+      "route": "outside-right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "现状的结果",
+      "items": [
+        "渠道各自取安全设置",
+        "IM 常进入人工确认，审核 Agent 未成为普通动作的真实裁决路径",
+        "确认等待会占住任务，超时不是批准"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "目标的结果",
+      "items": [
+        "先验证资格与事实，再按硬规则、确定性动作和审核 Agent 分流",
+        "需要用户决定时创建精确待办，其他独立工作继续",
+        "批准不长期记忆；动作或策略变化时重新判断"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "目标边界",
+      "items": [
+        "禁止与能力不可用：拒绝；不得用批准绕过",
+        "敏感操作、主动外发和未知高影响动作继续人工或禁止",
+        "新方案需通过既有门禁和验收后才启用"
+      ]
+    }
+  ]
+}

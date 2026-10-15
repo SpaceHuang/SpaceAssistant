@@ -246,6 +246,9 @@ export interface ConfirmRequest {
   riskLevel: RiskLevel
   memoryTiers: MemoryTier[]
   timeoutMs: number | null
+  /** Per-call model claim; untrusted and shown only as review context. */
+  modelJustification?: string
+  modelJustificationTruncated?: boolean
 }
 
 // ===== 回答者（I1：回答者与 lane 正交；I3：记忆只源于人类）=====
@@ -312,6 +315,8 @@ export type ApprovalVerdict =
  */
 export interface ApprovalCluePack {
   toolName: string
+  /** Host-visible identifier of the exact outer model tool call. */
+  toolUseId?: string
   actionClass: ActionClass
   riskLevel: RiskLevel
   /** ConfirmSummary 纯文本摘要。 */
@@ -320,6 +325,9 @@ export interface ApprovalCluePack {
   signals: string[]
   targetPath?: string
   command?: string
+  /** Untrusted model-provided explanation attached to this invocation. */
+  modelJustification?: string
+  modelJustificationTruncated?: boolean
   url?: string
   involvedFiles?: string[]
   /** R3：MCP 入参归一摘要（脱敏后；mcp-invocation 信号派生）。 */

@@ -72,6 +72,7 @@ export type ContinuationSourceRef = Readonly<{
 
 /** Session-scoped History capability needed to safely select a prior Hosted transcript. */
 export type SessionHistoryPort = HistoryPort & Readonly<{
+  listInvocationIds(): string[]
   readLatestInvocationForSession(
     sessionId: string,
     options?: { excludeInvocationId?: string; excludeInvocationIds?: readonly string[] }
@@ -79,7 +80,9 @@ export type SessionHistoryPort = HistoryPort & Readonly<{
     | Readonly<{ kind: 'none' }>
     | Readonly<{ kind: 'completed'; snapshot: HistorySnapshot }>
     | Readonly<{ kind: 'cancelled'; snapshot: HistorySnapshot }>
-    | Readonly<{ kind: 'unavailable'; invocationId: string }>
+    // P0-⑤: the unavailable verdict carries the stream snapshot it just read so callers
+    // never re-read the same full invocation; ports without it fall back to a re-read.
+    | Readonly<{ kind: 'unavailable'; invocationId: string; snapshot?: HistorySnapshot }>
   >
 }>
 export type ContinuationIntentAcceptance = Readonly<{
@@ -208,6 +211,7 @@ export interface SessionCommands {
     name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number
     workDirProfileId?: string; fixedWorkDir?: string; ownership?: SessionOwnership; visibility?: SessionVisibility
     thinkingEffort?: Session['thinkingEffort']; metadata?: Readonly<Record<string, unknown>>
+    agentsMdEnabled?: boolean
   }): Session
   renameSession(sessionId: string, name: string): Session | undefined
   updateSettings(input: {
@@ -219,9 +223,11 @@ export interface SessionCommands {
     skillsState?: Session['skillsState']
     workDirProfileId?: Session['workDirProfileId']
     thinkingEffort?: Session['thinkingEffort'] | null
+    agentsMdEnabled?: boolean
   }): Session | undefined
   updateUserMetadata(sessionId: string, metadataPatch: Readonly<Record<string, unknown>>): Session | undefined
   updateDirectoryGrants(sessionId: string, grants: readonly SessionDirectoryGrantRecord[]): Session | undefined
+  updateAgentsMdEnabled(sessionId: string, enabled: boolean): Session | undefined
   updateTitleSuggestionState(sessionId: string, state: { generated?: boolean; backfillAttempted?: boolean }): Session | undefined
   applyGeneratedTitle(sessionId: string, title: string): Session | undefined
   recordRemoteSessionActivity(sessionId: string, at: number): Session | undefined
