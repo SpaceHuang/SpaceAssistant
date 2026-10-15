@@ -181,7 +181,6 @@ function AppShellInner() {
 
   const handleCollectToWiki = (srcRelPath: string) => {
     void collectToWiki(srcRelPath, {
-      wikiEnabled: Boolean(config?.wiki?.enabled),
       sessionId: currentSessionId,
       onMissingSession: () => message.warning(t('appShell.selectSessionFirst')),
       onError: (text) => message.error(formatUserFacingError(text)),

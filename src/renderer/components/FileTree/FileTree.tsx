@@ -80,7 +80,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   const buildNodeMenuItems = useCallback(
     (node: FileTreeNodeData) => {
       const showCollect = Boolean(
-        onCollectToWiki && canShowCollectToWiki(node.relPath, wikiRootPath, node.isDirectory, wikiEnabled)
+        onCollectToWiki && canShowCollectToWiki(node.relPath, wikiRootPath, node.isDirectory)
       )
       return buildFileTreeContextMenuItems({
         onAddToChat: () => {},

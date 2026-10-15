@@ -44,19 +44,18 @@ export function FileOverlay() {
   const { isIndex, indexView, setIndexView } = useWikiIndexViewState(selectedFile, wikiRoot)
 
   const showCollectToWiki = Boolean(
-    selectedFile && canShowCollectToWiki(selectedFile, wikiRoot, false, wikiEnabled)
+    selectedFile && canShowCollectToWiki(selectedFile, wikiRoot, false)
   )
 
   const handleCollectToWiki = useCallback(() => {
     if (!selectedFile) return
     void collectToWiki(selectedFile, {
-      wikiEnabled,
       sessionId,
       onMissingSession: () => message.warning(t('appShell.selectSessionFirst')),
       onError: (text) => message.error(text),
       onSuccess: (text) => message.success(text)
     })
-  }, [message, selectedFile, sessionId, wikiEnabled])
+  }, [message, selectedFile, sessionId])
 
   const overlayActive = Boolean(selectedFile) || contentMode === 'url'
   const showWebChrome = isWebViewActive || contentMode === 'url'

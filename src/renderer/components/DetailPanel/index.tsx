@@ -27,7 +27,6 @@ export function DetailPanel() {
 
   const handleCollectToWiki = (srcRelPath: string) => {
     void collectToWiki(srcRelPath, {
-      wikiEnabled: Boolean(config?.wiki?.enabled),
       sessionId: currentSessionId,
       onMissingSession: () => message.warning(runtimeText('detailPanel.selectOrCreateSession')),
       onError: (text) => message.error(text),
