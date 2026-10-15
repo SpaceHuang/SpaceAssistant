@@ -1,7 +1,7 @@
 # 架构文档索引
 
 > 定位：本目录存放 SpaceAssistant 的**架构层文档** —— 理想态、演进规划、具体方案与外部对照研究。实施类计划文档不在这里（见 §5）。
-> 状态：待评审 ｜ 基线：工作区 HEAD ｜ 整理日期：2026-09-12
+> 状态：待评审 ｜ 基线：`main` `17236274`（2026-10-14 更新；原为「工作区 HEAD」）｜ 整理日期：2026-09-12
 
 **一句话**：Agent 能力应当是**一个内核（Core）加若干装配层与驱动源**。这一组文档回答五件事：产品要支撑什么形态、架构上分成哪几块、今天差在哪、为什么选择改造而不是重写、外部实现是怎么做的。
 
@@ -80,8 +80,14 @@
 
 | 计划文档 | 与架构的关系 |
 | --- | --- |
-| `docs/develop/context-injection-refactor-plan.md` | 上下文装配的重构目标；基线要求裁剪与注入规则与它同源，不允许第二份装配逻辑 |
-| `docs/develop/tool-confirmation-framework-implementation-plan.md` | 策略引擎与确认通道的骨架；块 2 方案是它「接口预留」的落地 |
-| `docs/develop/builtin-subagent-development-plan.md` | 走独立子进程 + 私有 RPC，与 in-process 嵌套执行域是两条路线，按场景分流 |
-| `docs/develop/message-fact-persistence-core-refactor-plan.md` | 驱动权迁移的基础 |
-| `docs/develop/background-task-execution-layer-technical-design-v3.md` | **目标保留、方案降级为参考**（它用外挂 Codex CLI 绕过 Core 的解耦问题） |
+| `docs/develop/archive/agent-sdk/context-injection-refactor-plan.md` | 上下文装配的重构目标；**已实施并合入 main**（`9dfc46d1`） |
+| `docs/develop/archive/safety-approval/tool-confirmation-framework-implementation-plan.md` | 策略引擎与确认通道的骨架；框架部分已落地 |
+| `docs/develop/builtin-subagent-development-plan.md`（**已不在库内**） | 走独立子进程 + 私有 RPC，与 in-process 嵌套执行域是两条路线，按场景分流 |
+| `docs/develop/archive/storage-session/message-fact-persistence-core-refactor-plan.md` | 驱动权迁移的基础；**已实现**（2026-09-09 `refactor(message-fact): persist turn lifecycle in core`） |
+| `docs/develop/background-task-execution-layer-technical-design-v3.md`（**已不在库内**，现见 `docs/废弃/后台Mission执行层/`） | **目标保留、方案降级为参考**（它用外挂 Codex CLI 绕过 Core 的解耦问题） |
+
+> 上表路径已按 2026-10-14 的主题化搬迁更新（本条修订也修掉了 3 处搬迁后失效的旧路径）。
+
+## 6. 核验记录
+
+- [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) —— 基线 `17236274`；本目录零搬迁（仅 README 基准行与本表路径更新）；含状态口径说明与无法核验项。

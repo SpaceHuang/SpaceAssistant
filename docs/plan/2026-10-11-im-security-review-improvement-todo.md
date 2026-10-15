@@ -1,6 +1,6 @@
 # IM 安全审核改进：详细开发计划
 
-> 依据：[需求方案](../requirement/2026-10-11-im-security-review-improvement-requirement.md)、[开发方案](../develop/2026-10-11-im-security-review-improvement-development-plan.md)。
+> 依据：[需求方案](../requirement/im-remote/in-flight/2026-10-11-im-security-review-improvement-requirement.md)、[开发方案](../develop/im-remote/in-flight/2026-10-11-im-security-review-improvement-development-plan.md)。
 > 日期：2026-10-11（按 `main` 最新代码复核：`708270a9`，2026-10-12）
 > 当前验收口径（2026-10-13）：R3 按绝对门槛验收，IM 固定 11/11 个合格调用自动完成、6/6 项任务完成，合格搜索/报时无需真人批准，危险任务未授权派发为零；桌面数据只旁列，不参与通过/失败判断。本计划只涉及现有 WeChat、Feishu 和已配置 MCP 的安全策略，不接入新工具、新 MCP server 或新生产 IM 渠道；fake IM 只用于测试共享契约。以下 2026-10-12 内容是历史记录，不能作为当前验收结论。
 > 历史进度快照（2026-10-12）：保留当日执行记录供追溯；其中旧的 R3 结论已由 2026-10-13 验收口径及 8.2.7 当前结果替代。

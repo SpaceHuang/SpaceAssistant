@@ -3,7 +3,7 @@
 > 定位：本文阐述 SpaceAssistant 的**架构理想态** —— 产品要支撑什么、主进程分哪几块、每块负责什么、对外接口是什么、今天差在哪、往哪走。它是方向共识，不是具体方案。
 > 上游（业务预期、当前问题、工作块与优先级）：`docs/develop/architect/agent-core-roadmap.md`。
 > 下游（具体方案）：`agent-core-roadmap.md` §9 的方案清单，已完成的如 `docs/develop/architect/confirmation-answerer-and-auto-approval-design.md`。
-> 当前准入策略（并发额度、排队容量与审批恢复等待语义）：[`docs/requirement/agent-runtime-admission-policy-requirement.md`](../../requirement/agent-runtime-admission-policy-requirement.md)。本文中早期关于速率、配额和审批有界等待的规划表述以该策略记录为准。
+> 当前准入策略（并发额度、排队容量与审批恢复等待语义）：[`docs/requirement/agent-runtime-admission-policy-requirement.md`](../../requirement/agent-sdk/agent-runtime-admission-policy-requirement.md)。本文中早期关于速率、配额和审批有界等待的规划表述以该策略记录为准。
 > 参考（外部实现的对照研究，非基线）：`docs/develop/architect/codex-architecture-comparison-and-learnings.md`（Codex）、`docs/develop/architect/dsh-architecture-comparison-and-learnings.md`（DeepSeek Harness）、`docs/develop/architect/claude-code-architecture-comparison-and-learnings.md`（Claude Code）；三家横向汇总见 `docs/develop/architect/three-products-architecture-benchmark-summary.md`。
 > 引用约定：`roadmap §N.M` 指规划文档的小节；不带前缀的 `§N` 指本文小节。
 > 状态：待评审 ｜ 基线：工作区 HEAD ｜ 摸排日期：2026-09-12
