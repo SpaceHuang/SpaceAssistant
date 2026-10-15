@@ -14,6 +14,6 @@
 
 ## 当前状态
 
-schema 与校验器已完成，注册表首版暂为空。P3-03 将依 P0 盘点和 P2 locked-rule 分类逐项登记经确认的 admission、identity、integrity、capability、lifecycle invariants；不得将策略型规则搬进来充数。
+schema、校验器与门禁已完成。注册表首版有 5 项：递归审批保护、permit subject/expiry 核验、SDK capability admission、执行期间 capability revocation、复检后不允许静默发起二次审批。P0 的其他候选逐项排除：outbound/outside-workdir/sensitive/MCP/locked deny 属 policy；路径/参数不合法属 input validation；facts 不完整属 facts/policy；执行对象与 identity 已由 permit/final-check 负责。不得将策略型规则搬进来充数。
 
-证据：`src/shared/security/systemInvariantRegistry.test.ts`、`src/shared/security/executionAuthorizationCheck.test.ts`。
+证据：`src/shared/security/systemInvariantRegistry.test.ts`、`scripts/check-system-invariant-registry.mjs`、`scripts/check-system-invariant-registry.test.mjs`、CI `check:system-invariant-registry`。

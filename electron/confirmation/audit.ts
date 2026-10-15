@@ -72,12 +72,13 @@ export function recordPolicyExecutionVeto(input: {
   pathZone?: import('../../src/shared/confirmation/types').PathZone
   failureClass: 'input' | 'mechanism' | 'environment' | 'integration-violation'
   caseId: string
+  invariantId?: string
 }): void {
   ;(input.audit ?? getSecurityAuditLog()).record({
     ts: Date.now(), event: 'policy.execution-veto', lane: input.lane, sessionId: input.sessionId,
     requestId: input.requestId, toolUseId: input.toolUseId, toolName: input.toolName,
     decisionRuleId: input.decisionRuleId, pathZone: input.pathZone,
     ...(input.factId ? { factId: auditFactId(input.factId) } : {}),
-    failureClass: input.failureClass, caseId: input.caseId, reason: input.caseId, actor: 'system'
+    failureClass: input.failureClass, caseId: input.caseId, invariantId: input.invariantId, reason: input.caseId, actor: 'system'
   })
 }

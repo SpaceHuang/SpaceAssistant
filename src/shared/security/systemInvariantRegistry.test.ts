@@ -11,7 +11,14 @@ const valid: SystemInvariantRegistration = {
 describe('source-only system invariant registry', () => {
   it('accepts a fully justified registration without producing a runtime policy result', () => {
     expect(validateSystemInvariantRegistry([valid])).toEqual([])
-    expect(SYSTEM_INVARIANT_REGISTRY).toEqual([])
+    expect(SYSTEM_INVARIANT_REGISTRY.length).toBeGreaterThan(0)
+    expect(validateSystemInvariantRegistry(SYSTEM_INVARIANT_REGISTRY)).toEqual([])
+    expect(new Set(SYSTEM_INVARIANT_REGISTRY.map((entry) => entry.id)).size).toBe(SYSTEM_INVARIANT_REGISTRY.length)
+    expect(SYSTEM_INVARIANT_REGISTRY.every((entry) => entry.tests.every((path) => path.split('/').at(-1)?.includes('.test.')))).toBe(true)
+  })
+
+  it('keeps policy rule classifications out of the non-configurable registry', () => {
+    expect(SYSTEM_INVARIANT_REGISTRY.some((entry) => /outbound|outside|sensitive|mcp|locked.*deny/i.test(`${entry.id} ${entry.scope}`))).toBe(false)
   })
 
   it('rejects missing owner, rationale, scope, audit, and test reference', () => {

@@ -494,6 +494,8 @@ export interface SecurityAuditEvent {
   decisionId?: string
   policyDependencyFingerprint?: string
   decisionRuleIds?: string[]
+  /** Source registry reference for a non-policy system invariant; never grants an exemption. */
+  invariantId?: string
   /** Stable identifier of the exact fact snapshot consumed by policy/approval. */
   factsSnapshotId?: string
   extractorVersion?: string

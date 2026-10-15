@@ -44,6 +44,7 @@
     "check:no-nul": "node scripts/check-no-nul.mjs",
     "check:treesitter-wasm": "node scripts/check-treesitter-wasm.mjs",
     "check:agent-sdk": "node scripts/check-agent-sdk-boundary.mjs && node scripts/check-agent-sdk-dependencies.mjs && node scripts/check-agent-sdk-package-closure.mjs",
+    "check:system-invariant-registry": "node scripts/check-system-invariant-registry.mjs && node scripts/check-system-invariant-registry.test.mjs",
     "model:baseline": "node --import tsx scripts/generate-model-baseline.mjs",
     "check:model-baseline": "node --import tsx scripts/generate-model-baseline.mjs --check",
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",

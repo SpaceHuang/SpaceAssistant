@@ -79,6 +79,15 @@ npm run pack:linux
 
 API Key 经 `secureApiKey.ts`（`safeStorage`）加密存储；文件访问必须走 `pathSecurity.ts` 的路径防护；日志经 `logSanitize.ts` 脱敏，不落消息正文、token、secret。
 
+### 安全逻辑变更规范
+
+- 新安全逻辑在代码注释或对应设计文档中标明阶段（facts / policy / final-check / invariant）、关键调用位置与边界测试。
+- facts 生产器只报告观测、来源与覆盖程度，不决定 allow / confirm / deny；策略决定必须有稳定 rule ID 和可查询的 decision trace。
+- final-check 只核验已批准的身份、对象、授权代次、permit 和执行材料，不重新计算业务风险；失败使用稳定 failure class/case ID，并保持 executor/dispatch 未调用。
+- 新增不可配置系统约束前，先在 `src/shared/security/systemInvariantRegistry.ts` 登记 owner、依据、范围、审计和测试；登记 ID 仅用于追踪，不能豁免策略改判扫描。
+- locked 策略规则继续由共享 Policy Engine 与 policy trace 管理，不得登记成系统 invariant 来绕过配置/决策审查。
+- 安全改动提交前运行对应边界测试和 `npm run check:system-invariant-registry`，并在 PR/提交描述列出上述阶段、rule/invariant ID 与验证命令。
+
 ## 目录结构
 
 - 代码三处落点：`electron/`（主进程）、`src/`（渲染进程 + 两端共享的 `src/shared/`）、`packages/`（npm workspaces，运行时契约核心 `agent-sdk`，受 `check:agent-sdk` 约束）。

@@ -7,7 +7,7 @@
 | Facts snapshot（进程内） | `invocationId`、`envelopeHash`、`factsHash`、`extractorVersion`、`completeness`、`evidenceReferences`、`environmentVersion`、`policyVersion`、`factsRevision`、`facts` | `createInvocationFactsSnapshot` 对 envelope/facts 做稳定序列化与 SHA-256，并冻结快照 | 当前 `ContentFacts` 仍可能携带信号明细；必须确认它们只流向必要消费者，不把原始正文/秘密写审计 |
 | policy.decision | `lane`、`policyDomain`、`policyBehaviorVersion`、`policyRevision`、`factsCompleteness`、`reviewPath`、`fallbackCause`、`sessionId`、`requestId`、`toolUseId`、`invocationId`、`toolName`、`actionClass`、`factId`、`signals`、`decision`、`ruleId`、`decisionRuleId`、`answerer`、`ruleOrigin`、`denyClass`、`cause` | `SecurityAuditEvent`；`securityAuditLog.sanitizeAuditEvent` 对 factsSummary 做短摘要 hash，对原 factId hash化，对敏感凭据/路径做脱敏 | 无稳定独立 `decisionId`；`factId` 字段被多处复用，需要确认能稳定关联 snapshot `factsHash`；rule collection/顺序依赖指纹未见统一字段 |
 | confirm.request / confirm.outcome | `requestId`、`toolUseId`（按 producer）、`outcome`、`answerer`、`cause`、`reasonSummary`、`evidenceCount`、`actorRef`、`latencyMs` | channel / approval Agent producer；摘要可记、证据正文不得进审计 | 需要核实所有路径都携带原 `decisionId` 或 `decisionRuleId`、facts revision/hash、精确 subject digest；本表字段定义未见 decision dependency fingerprint |
-| execution veto | `policy.execution-veto`、`requestId`、`toolUseId`、`toolName`、`decisionRuleId`、`factId`、`pathZone`、`failureClass`、`caseId` | `recordPolicyExecutionVeto` 对 factId hash化；failureClass 为 input/mechanism/environment/integration-violation | 已区分 veto 与 policy.decision；当前未见 invariantId 通用字段，且部分 veto 可能没有原 decision ID |
+| execution veto | `policy.execution-veto`、`requestId`、`toolUseId`、`toolName`、`decisionRuleId`、`factId`、`pathZone`、`failureClass`、`caseId`、可选 `invariantId` | `recordPolicyExecutionVeto` 对 factId hash化；failureClass 为 input/mechanism/environment/integration-violation；read permit subject/identity veto 关联 `SYS-PERMIT-001` | veto 与 policy.decision 分开；仅系统底线触发时附 invariantId，普通输入/机制失败不伪装成 invariant |
 | Dispatch / deferred approval | `dispatchKey`、`todoId`、`invocationId`、`executionState`、`notificationState`；部分 remote 任务带 channel、identity/owner、`authorizationEpoch`、rule/facts hash | deferred event 定义与 DB schema；业务 payload 按对应 store 规则脱敏/引用 | 需要逐通道核验 dispatch outcome 是否与原 decision/approval/subject digest 同链；不要将 idempotency key 当作授权身份 |
 | 许可对象 | read permit 的 `requestId`、`toolUseId`、`toolName`、`inputDigest`、targets 中 `factId`/`decisionRuleId`/path zone/kind/identity；memory permit 的 invocation/request/tool/session、plan/facts digest、revision、过期时间 | 许可在内存 registry 绑定 subject digest；执行时比较对象、过期、身份/代次 | 一次普通 `PolicyDecision` 到 receipt、permit、policy dependency fingerprint 尚未由统一契约连接 |
 
@@ -27,7 +27,7 @@
 - 原始本机路径、私人收件人信息；以路径 zone、脱敏 factId、必要的对象摘要代替。
 - 审批 Agent 的 clue/evidence 原文；只留安全摘要、证据计数和引用。
 
-Phase 1/2/3/4 需要补齐：稳定 decision ID、facts snapshot hash/revision、规则依赖指纹、receipt/approval 关联键、执行 envelope digest、invariant ID 与 failure class 的统一链路；在不破坏历史事件读取的前提下增加。
+Phase 1/2/3/4 补齐项：稳定 decision ID、facts snapshot hash/revision、规则依赖指纹、receipt/approval 关联键、执行 envelope digest。Phase 3 已为 execution veto 增加可选 invariantId，并由 permit executor 写入 SYS-PERMIT-001；旧 JSONL 事件仍可读取，未带字段的事件保持兼容。
 
 
 Phase 1 新增 policy event 仅记录 `factsSnapshotId`（稳定短 hash）、`extractorVersion`、`factsRevision`，与已有路径/目标 `factId` 分开；同一快照 provenance 沿 gate → SDK confirmation → Agent clue 传递。JSONL 测试验证字段 round-trip；原始 envelope、正文、secret 不写入。

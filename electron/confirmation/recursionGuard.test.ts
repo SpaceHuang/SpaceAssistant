@@ -85,6 +85,7 @@ describe('递归守卫（I5：internalConfirmExemption）', () => {
     const ev = audit.events.find((e) => e.event === 'policy.decision')
     expect(ev?.cause).toBe('recursion-blocked')
     expect(ev?.decision).toBe('deny')
+    expect(ev?.ruleId).toBe('recursion-guard')
   })
 
   it('正向：审批会话内只读工具不产生确认（auto-allow 不受守卫影响）', async () => {

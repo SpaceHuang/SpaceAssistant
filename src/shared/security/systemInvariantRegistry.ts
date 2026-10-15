@@ -47,5 +47,46 @@ export function validateSystemInvariantRegistry(entries: readonly SystemInvarian
   return issues
 }
 
-/** The single source-level registry. P3-03 populates audited baseline invariants. */
-export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] = Object.freeze([])
+/** The single source-level registry. These entries trace mechanisms, never policy verdicts. */
+export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] = Object.freeze([
+  {
+    id: 'SYS-RECURSION-001', owner: 'electron/confirmation', stage: 'admission', category: 'integrity',
+    rationale: 'Approval agents cannot recursively request approval for their own internal tools.',
+    effect: 'block', scope: 'electron/confirmation/toolCallGate.ts:recursion-guard',
+    audit: 'policy.decision cause recursion-guard; retain the triggering decision context',
+    tests: ['electron/confirmation/recursionGuard.test.ts', 'electron/confirmation/toolCallGate.test.ts'],
+    overrideability: 'none'
+  },
+  {
+    id: 'SYS-PERMIT-001', owner: 'electron/confirmation', stage: 'final-check', category: 'integrity',
+    rationale: 'A consumed authorization permit must match its immutable approved subject and remain unexpired.',
+    effect: 'validate', scope: 'electron/confirmation/confirmationAuthorizationRegistry.ts',
+    audit: 'policy.execution-veto with permit mismatch or expiry failure class',
+    tests: ['electron/confirmation/readReadIntegration.test.ts', 'electron/confirmation/confirmationAuthorizationRegistry.test.ts'],
+    overrideability: 'none'
+  },
+  {
+    id: 'SYS-CAPABILITY-001', owner: 'agent-sdk', stage: 'admission', category: 'capability',
+    rationale: 'A tool without a host granted SDK capability cannot enter the execution port.',
+    effect: 'block', scope: 'packages/agent-sdk/src/safetyGate.ts',
+    audit: 'tool execution rejection reason and original invocation identity',
+    tests: ['packages/agent-sdk/test/safetyGate.test.ts'],
+    overrideability: 'none'
+  },
+  {
+    id: 'SYS-REVOCATION-001', owner: 'agent-sdk', stage: 'lifecycle', category: 'lifecycle',
+    rationale: 'Revocation during an active tool call aborts the lease and prevents remaining work.',
+    effect: 'revoke', scope: 'packages/agent-sdk/src/toolExecutionPort.ts;packages/agent-sdk/src/runtime/components.ts',
+    audit: 'tool execution rejection lifecycleInvalidation=revoked',
+    tests: ['packages/agent-sdk/test/toolExecutionPort.test.ts', 'packages/agent-sdk/test/runtimeComponents.test.ts'],
+    overrideability: 'none'
+  },
+  {
+    id: 'SYS-APPROVAL-001', owner: 'electron/confirmation', stage: 'final-check', category: 'integrity',
+    rationale: 'A policy recheck that newly requires approval cannot silently inherit an earlier approval.',
+    effect: 'block', scope: 'electron/confirmation/toolCallGate.ts:recheck-requires-confirm',
+    audit: 'policy.execution-veto cause recheck-requires-confirm with decision linkage',
+    tests: ['electron/confirmation/toolCallGate.test.ts', 'electron/confirmation/agentSdkSafetyPolicy.test.ts'],
+    overrideability: 'none'
+  }
+])

@@ -304,38 +304,38 @@ type SafetyInvariantRegistration = {
   - **完成判据：** 缺 owner、依据、范围、测试引用的条目不能通过校验；`decision-floor` 必须给出为何不可配置的说明
   - **验证 / 依赖：** Schema 单测/校验器测试；依赖 P3-01
 
-- [ ] **P3-03 · 登记现存 system invariant**
+- [x] **P3-03 · 登记现存 system invariant**
   - **动作：** 将 P0-05/P0-06 认定的递归 guard、SDK capability、授权撤销/代次等逐项登记；纯 policy rule 不放入 invariant registry
   - **产物：** 完整 registry 首版
   - **完成判据：** P0 清单中每项底线均有注册 ID，或有记录的“不属于底线”排除理由；代码、审计和 registry ID 对得上
   - **验证 / 依赖：** 注册表覆盖率检查；依赖 P3-02、P2-08
 
-- [ ] **P3-04 · 增加登记完整性架构测试**
+- [x] **P3-04 · 增加登记完整性架构测试**
   - **动作：** 检查 ID 唯一、引用存在、测试文件存在、删除实现时登记清理；在关键策略出口检查无规则来源的授权改判
   - **产物：** CI registry lint/架构测试并接入 CI workflow
   - **完成判据：** 测试包含至少一条缺 ID/缺 owner/缺 test 的失败样例和一条合法样例；仓库 CI workflow 实际运行该检查并能阻断未登记变更
   - **验证 / 依赖：** 定向测试及脚本执行；依赖 P3-03
 
-- [ ] **P3-05 · 增加新硬编码规则拦截约束**
+- [x] **P3-05 · 增加新硬编码规则拦截约束**
   - **动作：** 为新增 deny/approved=false/dispatch suppression 入口建立可持续维护的检查；优先结构性依赖边界或显式 wrapper，避免脆弱的全局 grep 单测
   - **产物：** architecture rule 和豁免格式
   - **完成判据：** 在策略 adapter/port/executor 的目标文件加模拟未登记改判，门禁能失败；普通参数校验错误和 final-check mismatch 不被错误算作策略覆盖
   - **验证 / 依赖：** 门禁自测正反例；依赖 P2-09、P3-04
 
-- [ ] **P3-06 · 写入开发规范**
+- [x] **P3-06 · 写入开发规范**
   - **动作：** 在 AGENTS/安全开发文档要求新逻辑标注阶段、调用位置、注册/规则 ID 和边界测试；提供 PR/提交自检模板
   - **产物：** 开发规范更新
   - **完成判据：** 开发者可按 checklist 检查新安全分支；规范说明 facts 不裁决、policy 有 rule trace、final-check 不重算风险、底线先登记
   - **验证 / 依赖：** 文档审查；依赖 P3-01～05
 
-- [ ] **P3-07 · 统一底线执行审计**
+- [x] **P3-07 · 统一底线执行审计**
   - **动作：** 在 invariant 触发处记录 invariantId、decisionId（若有）、调用 ID、failure class；不覆盖原 policy decision
   - **产物：** audit schema/事件实现
   - **完成判据：** 每项运行时 invariant 有可关联事件；查询样例能区分 `policy.deny` 与 `execution.veto`/`invariant.block`；审计脱敏通过
   - **验证 / 依赖：** audit 单测；依赖 P0-09、P3-03
 
 
-- [ ] **Phase 3 关闭门槛：** registry 既覆盖全部被认定的底线，也能被门禁验证；策略型例外不能仅靠贴 invariant ID 通过；贡献规范与 CI 有可执行检查。Phase 收尾依仓库纪律运行全量 `npm test` 并提交。
+- [x] **Phase 3 关闭门槛：** registry 既覆盖全部被认定的底线，也能被门禁验证；策略型例外不能仅靠贴 invariant ID 通过；贡献规范与 CI 有可执行检查。Phase 收尾全量 `npm test` 退出码 1（14 files failed / 1060 passed / 1 skipped；159 tests failed / 9979 passed / 111 skipped），新增 P3 定向集通过；失败分类见 `security-policy-phase3-test-record.md`。
 
 ### Phase 4：统一执行前授权检查
 

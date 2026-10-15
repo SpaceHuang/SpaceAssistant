@@ -1075,7 +1075,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     decision = { type: 'deny', ruleId: 'recursion-guard', reason, disposition: 'forbidden', cause: 'recursion-guard' }
   }
 
-  if (args.phase === 'recheck' && decision.type === 'require-confirm' && !args.previouslyConfirmed) decision = { type: 'deny', ruleId: 'recheck-requires-confirm', reason: '确认后复检不得发起第二次确认' }
+  if (args.phase === 'recheck' && decision.type === 'require-confirm' && !args.previouslyConfirmed) {
+    decision = { type: 'deny', ruleId: 'recheck-requires-confirm', reason: '确认后复检不得发起第二次确认' }
+  }
 
   // 目录目标可签发 permit 的工具：list_directory（direct-entries）与 grep（subtree）——§7.4 改动 4
   const directoryPermittable = isListDirectoryTool || args.toolName === 'grep'
