@@ -42,13 +42,15 @@ export function readUnknownEffectRecoveryState(
       typeof (effect as { originInvocationId?: unknown }).originInvocationId === 'string' && typeof (effect as { toolCallId?: unknown }).toolCallId === 'string')) : []
   const started = new Map<string, Record<string, unknown>>()
   const settled = new Set<string>()
+  const explicitUnknown = new Set<string>()
   for (const event of snapshot.events) {
     if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) continue
     const payload = event.payload as Record<string, unknown>
     if (event.kind === 'tool-call-started' && typeof payload.toolCallId === 'string') started.set(payload.toolCallId, payload)
+    if (event.kind === 'tool-call-finished' && payload.executionOutcome === 'unknown-after-dispatch' && typeof payload.toolCallId === 'string') explicitUnknown.add(payload.toolCallId)
     if (((event.kind === 'tool-call-finished' && payload.executionOutcome !== 'unknown-after-dispatch') || event.kind === 'tool-call-not-dispatched' || event.kind === 'tool-call-deferred') && typeof payload.toolCallId === 'string') settled.add(payload.toolCallId)
   }
-  const localUnknown = [...started].filter(([toolCallId]) => !settled.has(toolCallId) && options.includeUnsettledStarted !== false).map(([toolCallId, payload]) => ({
+  const localUnknown = [...started].filter(([toolCallId]) => explicitUnknown.has(toolCallId) || (!settled.has(toolCallId) && options.includeUnsettledStarted !== false)).map(([toolCallId, payload]) => ({
     id: `${snapshot.invocationId}:${toolCallId}`, originInvocationId: snapshot.invocationId, toolCallId,
     ...(typeof payload.toolName === 'string' ? { toolName: payload.toolName } : {}), ...(typeof payload.inputHash === 'string' ? { inputHash: payload.inputHash } : {})
   }))

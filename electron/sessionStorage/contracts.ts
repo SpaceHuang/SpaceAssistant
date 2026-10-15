@@ -121,6 +121,7 @@ export interface ContinuationStore {
   readByTarget(input: { sessionId: string; targetInvocationId: string }): SessionContinuationRecord | undefined
   readByRequest(input: { sessionId: string; requestIdempotencyKey: string }): SessionContinuationRecord | undefined
   readAwaitingBySource(input: { sessionId: string; sourceTurnId: string }): SessionContinuationRecord | undefined
+  readCancelledBySource(input: { sessionId: string; sourceTurnId: string }): SessionContinuationRecord | undefined
   cancelPending(input: { continuationId: string }): boolean
 }
 export interface ContinuationLaunchStore {

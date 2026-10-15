@@ -148,6 +148,15 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     expect((ctx as AppIpcContext).sessionStorage!.execution.continuations.readByTarget({
       sessionId: session.id, targetInvocationId: pending.targetInvocationId!
     })?.status).toBe('cancelled')
+    const retried = await continueAgentFromCheckpoint({ ...options,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'retry-after-cancel' } })
+    expect(retried).toMatchObject({ accepted: true, status: 'pending', recoveryState: { mode: 'verify-only' } })
+    expect(retried.accepted && retried.targetInvocationId).not.toBe(pending.targetInvocationId)
+    const oldRequestReplay = await continueAgentFromCheckpoint({ ...options,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'cancel-risk-decision' } })
+    expect(oldRequestReplay).toMatchObject({ accepted: true, status: 'pending',
+      targetInvocationId: retried.accepted ? retried.targetInvocationId : undefined })
+    expect(dispatch).not.toHaveBeenCalled()
   })
 
   it('单次重试批准也先追加到目标历史，再启动其活动 writer', async () => {

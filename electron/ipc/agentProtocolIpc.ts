@@ -161,19 +161,27 @@ export async function continueAgentFromCheckpoint(input: {
         ...(status === 'pending' && recoveryState.mode === 'verify-only' ? { recoveryState } : {})
       }
     }
-    const inspection = storage.queries.continuationSources.read({ sessionId: payload.sessionId, activeTurnIds: turnRuntime.listActive(payload.sessionId).map((turn) => turn.turnId), selectedAssistantMessageId: sourceTurn.assistantMessageId })
-    if (inspection.kind !== 'available' || inspection.selected.kind !== 'found' || inspection.selected.candidate.source.turnId !== payload.sourceTurnId) {
+    const cancelledRetry = storage.execution.continuations.readCancelledBySource({ sessionId: payload.sessionId, sourceTurnId: payload.sourceTurnId })
+    const inspection = cancelledRetry ? undefined : storage.queries.continuationSources.read({ sessionId: payload.sessionId, activeTurnIds: turnRuntime.listActive(payload.sessionId).map((turn) => turn.turnId), selectedAssistantMessageId: sourceTurn.assistantMessageId })
+    if (!cancelledRetry && (inspection?.kind !== 'available' || inspection.selected.kind !== 'found' || inspection.selected.candidate.source.turnId !== payload.sourceTurnId)) {
       return { accepted: false, reason: 'CONTINUATION_SOURCE_IDENTITY_MISMATCH' }
     }
-    const candidate = inspection.selected.candidate
+    const candidate = cancelledRetry ? undefined : inspection!.kind === 'available' && inspection!.selected.kind === 'found' ? inspection!.selected.candidate : undefined
+    const sourceSnapshot = cancelledRetry
+      ? await storage.execution.historyFor({ sessionId: payload.sessionId }).read(cancelledRetry.sourceInvocationId)
+      : candidate!.snapshot
+    const sourceRef = cancelledRetry ? {
+      sessionId: payload.sessionId, invocationId: cancelledRetry.sourceInvocationId, turnId: cancelledRetry.sourceTurnId,
+      checkpointSequence: cancelledRetry.checkpointSequence, expectedHistoryVersion: sourceSnapshot.version
+    } : candidate!.source
     const recoveryMode = (() => {
-      try { return validateUnknownRecoveryCheckpoint(candidate.snapshot).unresolvedEffects.length ? 'unknown-effects' as const : 'exact' as const }
+      try { return validateUnknownRecoveryCheckpoint(sourceSnapshot).unresolvedEffects.length ? 'unknown-effects' as const : 'exact' as const }
       catch { return 'exact' as const }
     })()
-    const contextEvent = candidate.snapshot.events.find((event) => event.kind === 'invocation-context-committed') as { payload?: { requiredUserMessage?: { message?: { content?: string } } } } | undefined
+    const contextEvent = sourceSnapshot.events.find((event) => event.kind === 'invocation-context-committed') as { payload?: { requiredUserMessage?: { message?: { content?: string } } } } | undefined
     const started = await storage.execution.continuationLaunch.prepareAndClaim({
       payload: { requestId: payload.requestIdempotencyKey, sessionId: payload.sessionId, text: contextEvent?.payload?.requiredUserMessage?.message?.content ?? '' },
-      source: candidate.source, createdBy: payload.sessionId, frozenConfig: currentSnapshot,
+      source: sourceRef, createdBy: payload.sessionId, frozenConfig: currentSnapshot,
       executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: currentSnapshot },
       ...(recoveryMode === 'unknown-effects' ? { recoveryMode } : {}),
       ...(recoveryMode === 'unknown-effects' ? { deferDispatch: true } : {}),

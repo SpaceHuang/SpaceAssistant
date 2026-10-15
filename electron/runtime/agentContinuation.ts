@@ -174,11 +174,11 @@ export function createOrGetAgentContinuation(input: {
     }
     const byCheckpoint = input.conn.prepare('SELECT * FROM agent_continuations WHERE source_invocation_id=? AND checkpoint_sequence=?').get(input.snapshot.invocationId, checkpoint.checkpointSequence) as ContinuationRow | undefined
     if (byCheckpoint) {
-      if (byCheckpoint.status !== 'interrupted' || byCheckpoint.frozen_config_sha256 !== sha256(input.frozenConfig)) throw new AgentContinuationRejectedError('CONTINUATION_ALREADY_CLAIMED')
+      if ((byCheckpoint.status !== 'interrupted' && byCheckpoint.status !== 'cancelled') || byCheckpoint.frozen_config_sha256 !== sha256(input.frozenConfig)) throw new AgentContinuationRejectedError('CONTINUATION_ALREADY_CLAIMED')
       const priorEvents = input.conn.prepare("SELECT kind FROM agent_history_events WHERE invocation_id=? AND kind='tool-call-started' LIMIT 1").get(byCheckpoint.target_invocation_id)
       if (priorEvents) throw new AgentContinuationRejectedError('CONTINUATION_ALREADY_CLAIMED')
-      // Explicit user retry after startup recovery: rotate the target identity so a terminal Turn
-      // and provider history from the interrupted attempt can never be resumed or replayed.
+      // Explicit retry after startup recovery or user cancellation: rotate the target identity so
+      // prior provider history and any target-scoped recovery decision cannot be resumed or replayed.
       const retry = {
         ...byCheckpoint,
         request_idempotency_key: key,
@@ -187,8 +187,8 @@ export function createOrGetAgentContinuation(input: {
         target_start_token: newId(),
         status: 'pending' as const
       }
-      input.conn.prepare("UPDATE agent_continuations SET request_idempotency_key=?,target_invocation_id=?,target_turn_id=?,target_start_token=?,status='pending',updated_at=? WHERE continuation_id=? AND status='interrupted'")
-        .run(key, retry.target_invocation_id, retry.target_turn_id, retry.target_start_token, now, retry.continuation_id)
+      input.conn.prepare("UPDATE agent_continuations SET request_idempotency_key=?,target_invocation_id=?,target_turn_id=?,target_start_token=?,status='pending',updated_at=? WHERE continuation_id=? AND status=?")
+        .run(key, retry.target_invocation_id, retry.target_turn_id, retry.target_start_token, now, retry.continuation_id, byCheckpoint.status)
       const contextEvent = {
         invocationId: retry.target_invocation_id, turnId: retry.target_turn_id, sequence: 1, schemaVersion: input.snapshot.schemaVersion,
         eventId: `${retry.continuation_id}:context:${retry.target_invocation_id}`, idempotencyKey: `${retry.continuation_id}:context:${retry.target_invocation_id}`,
@@ -279,6 +279,17 @@ export function readAwaitingAgentContinuationBySource(conn: DatabaseSync, sessio
   const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
     JOIN turns t ON t.turn_id=ac.source_turn_id
     WHERE t.session_id=? AND ac.source_turn_id=? AND ac.status='pending'
+    ORDER BY ac.updated_at DESC LIMIT 1`).get(sessionId, sourceTurnId) as ContinuationRow | undefined
+  if (!row) return undefined
+  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+  const snapshot = history.readSync(row.source_invocation_id)
+  return rowToRecord(row, validateUnknownRecoveryCheckpoint(snapshot).transcript)
+}
+
+export function readCancelledAgentContinuationBySource(conn: DatabaseSync, sessionId: string, sourceTurnId: string): AgentContinuationRecord | undefined {
+  const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
+    JOIN turns t ON t.turn_id=ac.source_turn_id
+    WHERE t.session_id=? AND ac.source_turn_id=? AND ac.status='cancelled'
     ORDER BY ac.updated_at DESC LIMIT 1`).get(sessionId, sourceTurnId) as ContinuationRow | undefined
   if (!row) return undefined
   const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)

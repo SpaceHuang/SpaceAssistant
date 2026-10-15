@@ -20,7 +20,7 @@ import type { HistoryPort } from '../../packages/agent-sdk/src/history'
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { createTurnCoordinatorStorage } from './coordinator'
-import { cancelPendingAgentContinuation, claimAgentContinuation, createOrGetAgentContinuation, readAgentContinuationByRequest, readAgentContinuationByTarget, readAwaitingAgentContinuationBySource, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
+import { cancelPendingAgentContinuation, claimAgentContinuation, createOrGetAgentContinuation, readAgentContinuationByRequest, readAgentContinuationByTarget, readAwaitingAgentContinuationBySource, readCancelledAgentContinuationBySource, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
 
 /** Narrow SQLite execution adapter for prepared acceptance and validated context loading. */
 export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQueries, options: { getTurnRuntime?: () => import('../turnRuntime').TurnRuntime } = {}): SessionExecutionStore {
@@ -44,6 +44,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       readByTarget: ({ sessionId, targetInvocationId }: Parameters<SessionExecutionStore['continuations']['readByTarget']>[0]) => readAgentContinuationByTarget(liveConn(), sessionId, targetInvocationId),
       readByRequest: ({ sessionId, requestIdempotencyKey }: Parameters<SessionExecutionStore['continuations']['readByRequest']>[0]) => readAgentContinuationByRequest(liveConn(), sessionId, requestIdempotencyKey),
       readAwaitingBySource: ({ sessionId, sourceTurnId }: Parameters<SessionExecutionStore['continuations']['readAwaitingBySource']>[0]) => readAwaitingAgentContinuationBySource(liveConn(), sessionId, sourceTurnId),
+      readCancelledBySource: ({ sessionId, sourceTurnId }: Parameters<SessionExecutionStore['continuations']['readCancelledBySource']>[0]) => readCancelledAgentContinuationBySource(liveConn(), sessionId, sourceTurnId),
       cancelPending: ({ continuationId }: Parameters<SessionExecutionStore['continuations']['cancelPending']>[0]) => cancelPendingAgentContinuation(liveConn(), continuationId)
     }),
     continuationLaunch: Object.freeze({

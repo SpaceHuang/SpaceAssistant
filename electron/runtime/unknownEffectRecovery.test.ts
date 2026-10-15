@@ -50,6 +50,44 @@ describe('unknown effect recovery state', () => {
     expect(second.kind).toBe('dispatch')
   })
 
+  it('keeps an explicit unknown-after-dispatch result in the active gate and rejects a new call ID', async () => {
+    const uncertain = snapshot([])
+    uncertain.events.push(
+      { invocationId: 'target', turnId: 'turn', sequence: 2, schemaVersion: 1, eventId: 'started-write', idempotencyKey: 'started-write',
+        kind: 'tool-call-started', payload: { toolCallId: 'write', toolName: 'write_file', inputHash: 'a'.repeat(64) } },
+      { invocationId: 'target', turnId: 'turn', sequence: 3, schemaVersion: 1, eventId: 'unknown-write', idempotencyKey: 'unknown-write',
+        kind: 'tool-call-finished', payload: { toolCallId: 'write', executionOutcome: 'unknown-after-dispatch' } }
+    )
+    const history = { read: async () => uncertain, appendBatch: async () => ({ version: uncertain.version, duplicate: false }) }
+    const gate = createUnknownEffectBeforeDispatchLease(history)
+    expect(readUnknownEffectRecoveryState(uncertain).mode).toBe('verify-only')
+    expect(await gate({ invocationId: 'target', toolCallId: 'repeat-write', toolName: 'write_file', input: { path: 'x' } }))
+      .toMatchObject({ kind: 'reject', reasonCode: 'RECOVERY_CHECKER_UNAVAILABLE' })
+  })
+
+  it('invalidates an earlier risk acceptance when a new explicit unknown is added', async () => {
+    const active = snapshot([{ id: 'origin:old', originInvocationId: 'origin', toolCallId: 'old' }])
+    let current = active
+    const history = {
+      read: async () => current,
+      appendBatch: async (events: readonly HistorySnapshot['events'][number][], expectedVersion: number) => {
+        current = { ...current, version: expectedVersion + events.length, events: [...current.events, ...events] }
+        return { version: current.version, duplicate: false }
+      }
+    }
+    await recordUnknownEffectRiskAcceptance({ history, targetInvocationId: 'target', acceptedIds: ['origin:old'] })
+    current = { ...current, events: [...current.events,
+      { invocationId: 'target', turnId: 'turn', sequence: 3, schemaVersion: 1, eventId: 'started-new', idempotencyKey: 'started-new',
+        kind: 'tool-call-started', payload: { toolCallId: 'new', toolName: 'write_file', inputHash: 'b'.repeat(64) } },
+      { invocationId: 'target', turnId: 'turn', sequence: 4, schemaVersion: 1, eventId: 'unknown-new', idempotencyKey: 'unknown-new',
+        kind: 'tool-call-finished', payload: { toolCallId: 'new', executionOutcome: 'unknown-after-dispatch' } }
+    ] }
+    const gate = createUnknownEffectBeforeDispatchLease(history)
+    expect(readUnknownEffectRecoveryState(current).mode).toBe('verify-only')
+    expect(await gate({ invocationId: 'target', toolCallId: 'later', toolName: 'write_file', input: { path: 'later' } }))
+      .toMatchObject({ kind: 'reject', reasonCode: 'RECOVERY_CHECKER_UNAVAILABLE' })
+  })
+
   it('only accepts a risk decision bound to the current complete unknown set and target invocation', () => {
     const state = readUnknownEffectRecoveryState(snapshot([
       { id: 'origin:a', originInvocationId: 'origin', toolCallId: 'a' },
