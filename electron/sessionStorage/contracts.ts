@@ -126,6 +126,7 @@ export interface ContinuationLaunchStore {
     createdBy: string
     frozenConfig: Record<string, unknown>
     executionConfig: TurnExecutionConfig
+    recoveryMode?: 'exact' | 'unknown-effects'
     acceptance: Pick<ContinuationIntentAcceptance, 'payloadSha256' | 'rawText' | 'attachments' | 'intentKind' | 'route'>
   }): ReturnType<typeof import('../runtime/agentContinuation').startAgentContinuation>
 }
@@ -163,6 +164,10 @@ export interface ContinuationSourceQueries {
     activeTurnIds: readonly string[]
     selectedAssistantMessageId?: string
   }): ContinuationSourceInspection
+  readRecoveryFacts(sessionId: string): Readonly<{
+    unresolvedEffects: readonly import('../runtime/agentContinuation').UnresolvedEffect[]
+    toolOutcomes: readonly Readonly<{ id: string; toolName?: string; outcome: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched' }>[]
+  }>
 }
 
 /** Bound, database-free business read capabilities for a session storage instance. */

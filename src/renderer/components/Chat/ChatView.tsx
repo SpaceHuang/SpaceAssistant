@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { App, Modal } from 'antd'
+import { App, Button, Modal, Space } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
@@ -705,6 +705,31 @@ export function ChatView() {
       }
       if (!result.accepted) {
         message.warning(t('chatView.warnings.continuationUnavailable'))
+      } else if (result.recoveryState?.verification === 'unavailable') {
+        Modal.confirm({
+          title: t('chatView.recoveryRiskTitle'),
+          content: t('chatView.recoveryRiskBody', { operations: result.recoveryState.unresolvedEffects.map((effect) => effect.toolName ?? effect.id).join('、') }),
+          okText: t('chatView.recoveryRiskAccept'),
+          cancelText: t('chatView.recoveryCancel'),
+          footer: (_originNode, { OkBtn, CancelBtn }) => <Space wrap>
+            <CancelBtn />
+            {result.recoveryState!.unresolvedEffects.filter((effect) => effect.toolName && effect.inputHash).map((effect) => (
+              <Button key={effect.id} onClick={async () => {
+                const decision = await window.api.chatApproveUnknownEffectRetry({ sessionId, targetInvocationId: result.targetInvocationId!, unknownEffectId: effect.id })
+                if (decision.accepted) Modal.destroyAll()
+                else message.warning(t('chatView.warnings.continuationNoChecker'))
+              }}>{t('chatView.recoveryRetryOnce', { tool: effect.toolName })}</Button>
+            ))}
+            <OkBtn />
+          </Space>,
+          onOk: async () => {
+            const decision = await window.api.chatAcceptUnknownEffectRisk({
+              sessionId, targetInvocationId: result.targetInvocationId!,
+              unresolvedEffectIds: result.recoveryState!.unresolvedEffects.map((effect) => effect.id)
+            })
+            if (!decision.accepted) message.warning(t('chatView.warnings.continuationNoChecker'))
+          }
+        })
       }
     } catch {
       // Keep the same idempotency key after a transport error so a retry resolves to the same continuation.

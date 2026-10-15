@@ -11,6 +11,9 @@ export type ToolExecutionRejectReason =
   | Extract<PermitConsumeResult, { ok: false }>['reason']
   | 'REVOKED'
   | 'PERMIT_NOT_CONSUMED'
+  | 'VERIFY_ONLY_UNREVIEWED_CAPABILITY'
+  | 'RECOVERY_CHECKER_UNAVAILABLE'
+  | 'RECOVERY_HISTORY_UNAVAILABLE'
 
 export class ToolExecutionRejectedError extends Error {
   readonly code = 'TOOL_EXECUTION_REJECTED'

@@ -17,6 +17,7 @@ import { countVisibleTitleMessagesForSuggest, reachedCumulativeMessagesForTitleS
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from '../packages/agent-sdk/src/history'
+import { findOneTimeUnknownEffectRetryApproval, readUnknownEffectRecoveryState } from './runtime/unknownEffectRecovery'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
 import { createTurnScopedHistoryMemo } from './runtime/turnScopedHistoryMemo'
 import { CanonicalCompactionCommitUncertainError, toCanonicalModelMessages } from './runtime/canonicalHistory'
@@ -161,6 +162,7 @@ export type RunToolChatSessionArgs = {
     hostHistory?: import('../packages/agent-sdk/src/history').HistoryPort
     afterToolResult?: import('../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
     beforeToolDispatch?: import('../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
+    beforeDispatchLease?: import('../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']
     initialResponse?: HostCommittedModelResponse
     currentUserMessageId?: string
     assistantMessageId?: string
@@ -801,6 +803,24 @@ async function runToolChatSessionInner(
     if (!priorResponseFailures) return { kind: 'dispatch' }
     return { kind: 'reject', reasonCode: 'REPEATED_SEMANTIC_CALL', message: 'The same semantic tool operation has failed repeatedly. Do not execute it again; explain the blocker or ask the user for guidance.' }
   }
+  const beforeDispatchLease: NonNullable<import('../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']> = async (call) => {
+    if (!args.history) return { kind: 'reject', reasonCode: 'RECOVERY_HISTORY_UNAVAILABLE', message: 'Recovery state could not be verified; no tool was dispatched.' }
+    const snapshot = await args.history.read(call.invocationId)
+    const state = readUnknownEffectRecoveryState(snapshot)
+    if (state.mode === 'risk-accepted') return { kind: 'dispatch' }
+    if (state.mode === 'verify-only') {
+      const inputHash = createHash('sha256').update(JSON.stringify(call.input)).digest('hex')
+      const approvalEventId = await findOneTimeUnknownEffectRetryApproval({ history: args.history, targetInvocationId: call.invocationId, toolName: call.toolName, inputHash })
+      if (approvalEventId) return { kind: 'dispatch', retryApprovalEventId: approvalEventId }
+    }
+    if (state.mode === 'verify-only') {
+      const reasonCode = state.checkerAvailable ? 'VERIFY_ONLY_UNREVIEWED_CAPABILITY' : 'RECOVERY_CHECKER_UNAVAILABLE'
+      return { kind: 'reject', reasonCode, message: state.checkerAvailable
+        ? 'A prior operation is still unresolved. This tool is not approved for read-only recovery checks, so it was not dispatched.'
+        : 'A prior operation is still unresolved and no reviewed read-only checker is available. No tool was dispatched.' }
+    }
+    return { kind: 'dispatch' }
+  }
   let effortOutputConfig = requestedOutputConfig
   const thinkingAvailability = resolveThinkingAvailability(model, {
     effortUnsupportedByMemo: isEffortUnsupportedByUpstream(args.llmServiceId, model)
@@ -1045,6 +1065,7 @@ async function runToolChatSessionInner(
             resolveRegisteredToolName: (providerToolName) => compatToInternal.get(providerToolName) ?? providerToolName,
             afterToolResult,
             beforeToolDispatch,
+            beforeDispatchLease,
             // FR3/A 方案：延迟名随依赖传入，capabilities.define 并入 known + authorized（门禁簿记，零上下文成本）
             deferredToolNames,
             deferredUnsurfacedCheck,

@@ -6,6 +6,23 @@ const event = (eventId: string, sequence: number, kind: HistoryEvent['kind'] = '
 })
 
 describe('History Port semantics', () => {
+  it('atomically consumes a one-time unknown retry with a matching tool start and rejects reuse', async () => {
+    const history = new MemoryHistory()
+    const writer = new InvocationHistoryWriter(history, { invocationId: 'inv-1', turnId: 'turn-1' })
+    await writer.append([{ kind: 'invocation-context-committed', payload: { messages: [] } }])
+    const inputHash = 'a'.repeat(64)
+    await writer.append([{ kind: 'unknown-effect-retry-approved', payload: {
+      targetInvocationId: 'inv-1', unknownEffectId: 'origin:call', toolName: 'write_file', inputHash, approvedAt: 10
+    } }])
+    const approvalEventId = (await history.read('inv-1')).events.at(-1)!.eventId
+    const pairedDispatch = [
+      { kind: 'unknown-effect-retry-consumed' as const, payload: { targetInvocationId: 'inv-1', approvalEventId, consumedAt: 11 } },
+      { kind: 'tool-call-started' as const, payload: { toolCallId: 'new-call', toolName: 'write_file', inputHash, executorEntry: 'unknown' } }
+    ]
+    await writer.append(pairedDispatch)
+    await expect(writer.append(pairedDispatch)).rejects.toBeInstanceOf(HistoryBatchError)
+  })
+
   it('serializes concurrent event producers into contiguous idempotent batches', async () => {
     const history = new MemoryHistory()
     const writer = new InvocationHistoryWriter(history, { invocationId: 'inv-1', turnId: 'turn-1' })

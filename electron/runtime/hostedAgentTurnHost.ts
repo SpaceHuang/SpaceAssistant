@@ -71,6 +71,7 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   /** Revalidate host-owned invocation lifecycle before each model request. */
   beforeModelRequest?(): void | Promise<void>
   beforeToolDispatch?: AgentTurnPorts['beforeToolDispatch']
+  beforeDispatchLease?: AgentTurnPorts['beforeDispatchLease']
   sessionLedgerForNotDispatched?(call: TCall, reason: string, result: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
   sessionLedgerForModelResponse?(message: import('../../packages/agent-sdk/src/turn').CanonicalTurnMessage, modelTurn: number, attempt: number): Record<string, unknown> | Promise<Record<string, unknown>>
   sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
@@ -186,6 +187,7 @@ export function createHostedAgentTurnHost<
         ...(dependencies.afterToolResult ? { afterToolResult: dependencies.afterToolResult as AgentTurnPorts['afterToolResult'] } : {}),
         ...(dependencies.beforeModelRequest ? { beforeModelRequest: dependencies.beforeModelRequest } : {}),
         ...(dependencies.beforeToolDispatch ? { beforeToolDispatch: dependencies.beforeToolDispatch } : {}),
+        ...(dependencies.beforeDispatchLease ? { beforeDispatchLease: dependencies.beforeDispatchLease } : {}),
         ...(dependencies.sessionLedgerForNotDispatched ? { sessionLedgerForNotDispatched: dependencies.sessionLedgerForNotDispatched as AgentTurnPorts['sessionLedgerForNotDispatched'] } : {}),
         ...(dependencies.sessionLedgerForModelResponse ? { sessionLedgerForModelResponse: dependencies.sessionLedgerForModelResponse } : {}),
         ...(dependencies.sessionLedgerForAttemptUsage ? { sessionLedgerForAttemptUsage: dependencies.sessionLedgerForAttemptUsage } : {}),

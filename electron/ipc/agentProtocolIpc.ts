@@ -2,6 +2,8 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { AppIpcContext } from '../appIpc'
+import { validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
+import { approveOneTimeUnknownEffectRetry, readUnknownEffectRecoveryState, recordUnknownEffectRiskAcceptance } from '../runtime/unknownEffectRecovery'
 import type { IpcMain } from 'electron'
 import { AUTO_CONTRACT } from '../processOutput/contracts'
 import { AgentLogEventName, AgentLogFields } from '../agentLogger/types'
@@ -111,7 +113,7 @@ export async function continueAgentFromCheckpoint(input: {
   dispatch: (sender: null, payload: TurnExecutePayload, continuationId?: string) => unknown
   resolveCurrentSafetySnapshot?: (sessionId: string) => ReturnType<typeof createContinuationSafetySnapshot>
 }): Promise<{ accepted: false; reason: string } | {
-  accepted: true; continuationId: string; targetInvocationId: string; targetTurnId: string; status: string
+  accepted: true; continuationId: string; targetInvocationId: string; targetTurnId: string; status: string; recoveryState?: import('../runtime/unknownEffectRecovery').UnknownEffectRecoveryState
 }> {
   const { ctx, turnRuntime, payload } = input
   if (!payload.sessionId?.trim() || !payload.sourceTurnId?.trim() || !payload.requestIdempotencyKey?.trim()) {
@@ -137,16 +139,23 @@ export async function continueAgentFromCheckpoint(input: {
       return { accepted: false, reason: 'CONTINUATION_SOURCE_IDENTITY_MISMATCH' }
     }
     const candidate = inspection.selected.candidate
+    const recoveryMode = (() => {
+      try { return validateUnknownRecoveryCheckpoint(candidate.snapshot).unresolvedEffects.length ? 'unknown-effects' as const : 'exact' as const }
+      catch { return 'exact' as const }
+    })()
     const contextEvent = candidate.snapshot.events.find((event) => event.kind === 'invocation-context-committed') as { payload?: { requiredUserMessage?: { message?: { content?: string } } } } | undefined
     const started = await storage.execution.continuationLaunch.prepareAndClaim({
       payload: { requestId: payload.requestIdempotencyKey, sessionId: payload.sessionId, text: contextEvent?.payload?.requiredUserMessage?.message?.content ?? '' },
       source: candidate.source, createdBy: payload.sessionId, frozenConfig: currentSnapshot,
       executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: currentSnapshot },
+      ...(recoveryMode === 'unknown-effects' ? { recoveryMode } : {}),
       acceptance: {
         payloadSha256: createHash('sha256').update(JSON.stringify({ sessionId: payload.sessionId, sourceTurnId: payload.sourceTurnId, requestIdempotencyKey: payload.requestIdempotencyKey })).digest('hex'),
         rawText: '继续', intentKind: 'exact-continue', route: 'continuation'
       }
     })
+    const targetHistory = await storage.execution.historyFor({ sessionId: payload.sessionId }).read(started.continuation.targetInvocationId)
+    const recoveryState = readUnknownEffectRecoveryState(targetHistory)
     if (started.started && started.turn) {
       void input.dispatch(null, {
         requestId: started.turn.requestId,
@@ -160,7 +169,8 @@ export async function continueAgentFromCheckpoint(input: {
       continuationId: started.continuation.continuationId,
       targetInvocationId: started.continuation.targetInvocationId,
       targetTurnId: started.continuation.targetTurnId,
-      status: started.continuation.status
+      status: started.continuation.status,
+      ...(recoveryState.mode === 'verify-only' ? { recoveryState } : {})
     }
   } catch (error) {
     return { accepted: false, reason: error instanceof Error ? error.message : 'CONTINUATION_UNAVAILABLE' }
@@ -217,6 +227,35 @@ export function registerAgentContinuationIpc(
   ipcMain.handle('chat:continue-from-checkpoint', (_event, payload: { sessionId: string; sourceTurnId: string; requestIdempotencyKey: string }) =>
     continueAgentFromCheckpoint({ ...dependencies, payload })
   )
+  ipcMain.handle('chat:accept-unknown-effect-risk', async (_event, payload: { sessionId: string; targetInvocationId: string; unresolvedEffectIds: string[] }) => {
+    if (!payload?.sessionId?.trim() || !payload.targetInvocationId?.trim() || !Array.isArray(payload.unresolvedEffectIds) ||
+      payload.unresolvedEffectIds.length === 0 || payload.unresolvedEffectIds.some((id) => typeof id !== 'string' || !id.trim())) {
+      return { accepted: false, reason: 'UNKNOWN_EFFECT_DECISION_INVALID' }
+    }
+    if (!dependencies.turnRuntime.listActive(payload.sessionId).some((turn) => turn.requestId === payload.targetInvocationId)) {
+      return { accepted: false, reason: 'UNKNOWN_EFFECT_TARGET_NOT_ACTIVE' }
+    }
+    try {
+      const history = dependencies.ctx.sessionStorage?.execution.historyFor({ sessionId: payload.sessionId })
+      if (!history) return { accepted: false, reason: 'SESSION_STORAGE_NOT_CONFIGURED' }
+      await recordUnknownEffectRiskAcceptance({ history, targetInvocationId: payload.targetInvocationId, acceptedIds: payload.unresolvedEffectIds })
+      return { accepted: true }
+    } catch (error) {
+      return { accepted: false, reason: error instanceof Error ? error.message : 'UNKNOWN_EFFECT_DECISION_FAILED' }
+    }
+  })
+  ipcMain.handle('chat:approve-unknown-effect-retry', async (_event, payload: { sessionId: string; targetInvocationId: string; unknownEffectId: string }) => {
+    if (!payload?.sessionId?.trim() || !payload.targetInvocationId?.trim() || !payload.unknownEffectId?.trim()) return { accepted: false, reason: 'UNKNOWN_EFFECT_DECISION_INVALID' }
+    if (!dependencies.turnRuntime.listActive(payload.sessionId).some((turn) => turn.requestId === payload.targetInvocationId)) return { accepted: false, reason: 'UNKNOWN_EFFECT_TARGET_NOT_ACTIVE' }
+    try {
+      const history = dependencies.ctx.sessionStorage?.execution.historyFor({ sessionId: payload.sessionId })
+      if (!history) return { accepted: false, reason: 'SESSION_STORAGE_NOT_CONFIGURED' }
+      await approveOneTimeUnknownEffectRetry({ history, targetInvocationId: payload.targetInvocationId, unknownEffectId: payload.unknownEffectId })
+      return { accepted: true }
+    } catch (error) {
+      return { accepted: false, reason: error instanceof Error ? error.message : 'UNKNOWN_EFFECT_DECISION_FAILED' }
+    }
+  })
 }
 
 /** 将持久 receipt 对账结果回接到仍在主进程等待的桌面确认项。 */

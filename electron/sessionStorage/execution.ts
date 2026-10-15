@@ -20,7 +20,7 @@ import type { HistoryPort } from '../../packages/agent-sdk/src/history'
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { createTurnCoordinatorStorage } from './coordinator'
-import { claimAgentContinuation, createOrGetAgentContinuation, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint } from '../runtime/agentContinuation'
+import { claimAgentContinuation, createOrGetAgentContinuation, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
 
 /** Narrow SQLite execution adapter for prepared acceptance and validated context loading. */
 export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQueries, options: { getTurnRuntime?: () => import('../turnRuntime').TurnRuntime } = {}): SessionExecutionStore {
@@ -51,12 +51,13 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
         const history = new SqliteAgentHistory(conn, 1, Date.now, input.payload.sessionId)
         const snapshot = history.readSync(input.source.invocationId)
         if (snapshot.version !== input.source.expectedHistoryVersion) throw new Error('CONTINUATION_SOURCE_STALE')
-        const checkpoint = validateContinuationCheckpoint(snapshot)
+        const checkpoint = input.recoveryMode === 'unknown-effects' ? validateUnknownRecoveryCheckpoint(snapshot) : validateContinuationCheckpoint(snapshot)
         if (snapshot.events[0]?.turnId !== input.source.turnId || checkpoint.checkpointSequence !== input.source.checkpointSequence) throw new Error('CONTINUATION_SOURCE_STALE')
         return startAgentContinuation({
           conn, snapshot, sessionId: input.payload.sessionId, userMessageId: checkpoint.requiredUserMessage.id,
           requestIdempotencyKey: input.payload.requestId, createdBy: input.createdBy,
           frozenConfig: input.frozenConfig, executionConfig: input.executionConfig, runtime,
+          ...(input.recoveryMode ? { recoveryMode: input.recoveryMode } : {}),
           continuationAcceptance: {
             payloadSha256: input.acceptance.payloadSha256, rawText: input.acceptance.rawText,
             attachments: input.acceptance.attachments, intentKind: input.acceptance.intentKind, route: input.acceptance.route

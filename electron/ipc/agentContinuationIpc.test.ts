@@ -5,6 +5,7 @@ import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TurnRuntime } from '../turnRuntime'
 import { continueAgentFromCheckpoint, registerAgentContinuationIpc, startAgentContinuationFromSource } from './agentProtocolIpc'
+import { validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
 import type { AppIpcContext } from '../appIpc'
 
 const safetySnapshot = {
@@ -16,7 +17,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
   afterEach(() => { db?.close(); db = undefined; vi.restoreAllMocks() })
 
-  async function setup() {
+  async function setup(withUnknownEffect = false) {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'continuation-ipc' })
     const user = appendMessage(db, { id: 'ipc-user', sessionId: session.id, role: 'user', content: 'continue the task', timestamp: 1, status: 'sent' })
@@ -29,7 +30,12 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     })
     const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 10, session.id)
     const requiredUser = { id: user.message.id, message: { role: 'user' as const, content: 'continue the task' } }
-    await history.appendBatch([
+    await history.appendBatch(withUnknownEffect ? [
+      { invocationId: 'source-turn', turnId: 'source-turn', sequence: 1, schemaVersion: 1, eventId: 'source-context', idempotencyKey: 'source-context', kind: 'invocation-context-committed', payload: { messages: [requiredUser.message], requiredUserMessage: requiredUser } },
+      { invocationId: 'source-turn', turnId: 'source-turn', sequence: 2, schemaVersion: 1, eventId: 'source-response', idempotencyKey: 'source-response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'unknown-call', name: 'write_file', input: { path: 'x', content: 'y' } }] } } },
+      { invocationId: 'source-turn', turnId: 'source-turn', sequence: 3, schemaVersion: 1, eventId: 'source-start', idempotencyKey: 'source-start', kind: 'tool-call-started', payload: { toolCallId: 'unknown-call', toolName: 'write_file', inputHash: 'hash' } },
+      { invocationId: 'source-turn', turnId: 'source-turn', sequence: 4, schemaVersion: 1, eventId: 'source-failed', idempotencyKey: 'source-failed', kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } }
+    ] : [
       { invocationId: 'source-turn', turnId: 'source-turn', sequence: 1, schemaVersion: 1, eventId: 'source-context', idempotencyKey: 'source-context', kind: 'invocation-context-committed', payload: { messages: [requiredUser.message], requiredUserMessage: requiredUser } },
       { invocationId: 'source-turn', turnId: 'source-turn', sequence: 2, schemaVersion: 1, eventId: 'source-response', idempotencyKey: 'source-response', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'provider failed' } } },
       { invocationId: 'source-turn', turnId: 'source-turn', sequence: 3, schemaVersion: 1, eventId: 'source-failed', idempotencyKey: 'source-failed', kind: 'invocation-failed', payload: { status: 'failed' } }
@@ -67,6 +73,30 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
 
     const duplicate = await continueAgentFromCheckpoint(options)
     expect(duplicate).toMatchObject({ accepted: true, continuationId: accepted.continuationId, targetTurnId: accepted.targetTurnId })
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('普通继续一次性创建 unknown recovery context，保留来源 ID 且不重放旧 tool call', async () => {
+    const { session, runtime, ctx, history } = await setup(true)
+    const inspection = (ctx as AppIpcContext).sessionStorage!.queries.continuationSources.read({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'ipc-assistant' })
+    if (inspection.kind !== 'available' || inspection.selected.kind !== 'found') throw new Error('unknown source inspection failed')
+    const recoveryCheckpoint = validateUnknownRecoveryCheckpoint(inspection.selected.candidate.snapshot)
+    expect(recoveryCheckpoint.unresolvedEffects).toHaveLength(1)
+    expect(recoveryCheckpoint.transcript).toContainEqual(expect.objectContaining({ role: 'user', content: expect.arrayContaining([expect.objectContaining({ type: 'tool_result', tool_use_id: 'unknown-call', is_error: true })]) }))
+    const dispatch = vi.fn()
+    const accepted = await continueAgentFromCheckpoint({
+      ctx, turnRuntime: runtime,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'unknown-recovery' },
+      dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot
+    })
+    if (!accepted.accepted) throw new Error(accepted.reason)
+    const target = history.readSync(accepted.targetInvocationId)
+    expect(target.events[0]?.payload).toMatchObject({
+      unresolvedEffects: [{ id: 'source-turn:unknown-call', originInvocationId: 'source-turn', toolCallId: 'unknown-call' }],
+      messages: expect.arrayContaining([expect.objectContaining({ role: 'tool', toolCallId: 'unknown-call', isError: true })])
+    })
+    expect(target.events[0]?.kind).toBe('invocation-context-committed')
+    expect(history.readSync('source-turn').events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
     expect(dispatch).toHaveBeenCalledOnce()
   })
 
