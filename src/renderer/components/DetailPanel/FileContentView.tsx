@@ -1,8 +1,6 @@
 import { useCallback, useState } from 'react'
 import { Modal } from 'antd'
 import { Spin, Typography } from 'antd'
-import { useTypedSelector } from '../../hooks'
-import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { isUnderWikiRoot, requestFilePaneSelect } from '../../services/filePaneNavigation'
 import { openExternalUrl } from '../../services/openExternalUrl'
 import { useFileSourceSearch } from '../../services/fileSourceSearchAdapter'

@@ -3,7 +3,7 @@ import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import type { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import type { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import type { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
-import { createDeferredApprovalIngress, type parseDeferredApprovalReply } from './deferredApprovalIngress'
+import { createDeferredApprovalIngress } from './deferredApprovalIngress'
 import { createDeferredResumeCoordinator } from './deferredResumeCoordinator'
 
 type TodoStore = ReturnType<typeof createDeferredTodoStore>

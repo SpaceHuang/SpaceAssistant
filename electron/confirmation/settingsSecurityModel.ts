@@ -9,8 +9,7 @@ import type {
 } from '../../src/shared/confirmation/settingsCenter'
 import {
   DEFAULT_POLICY_PACKAGES,
-  type PolicyPackage,
-  type PolicyPackageMap
+  type PolicyPackage
 } from '../../src/shared/policy/policyPackages'
 
 export type { PolicyPackage }

@@ -1,5 +1,4 @@
 import fs from 'fs'
-import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Session } from '../../src/shared/domainTypes'
 import {

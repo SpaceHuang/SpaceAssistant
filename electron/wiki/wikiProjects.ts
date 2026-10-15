@@ -1,6 +1,5 @@
 import { createHash } from 'crypto'
 import fs from 'fs'
-import path from 'path'
 import type { AppDatabase } from '../database/sqliteStore'
 import { insertWikiProject, listWikiProjects, updateWikiProjectDisplayName } from './wikiProjectStore'
 

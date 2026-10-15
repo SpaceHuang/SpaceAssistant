@@ -23,7 +23,7 @@ export function createWeChatProgressAdapter(args: {
   sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>
   trackDelivery?: RemoteTrackOutboundDeliveryContext
 }): RemoteProgressAdapter {
-  const progressConfig = mergeRemoteProgressConfig(
+  mergeRemoteProgressConfig(
     pickWeChatProgressConfig(args.config),
     {
       ...DEFAULT_REMOTE_PROGRESS_CONFIG,

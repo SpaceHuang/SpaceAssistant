@@ -1,7 +1,7 @@
 import path from 'path'
 import { resolveDbPath, resolveJsonPathForDb } from './jsonSnapshot'
 import { migrateFromJsonIfNeeded } from './migrateFromJson'
-import { openSqliteDatabase, openSqliteDatabaseReadOnly, type AppDatabase } from './sqliteStore'
+import { openSqliteDatabase, type AppDatabase } from './sqliteStore'
 import { migrateThinkingEffortConfig } from './thinkingEffortMigration'
 
 export type { AppDatabase } from './sqliteStore'

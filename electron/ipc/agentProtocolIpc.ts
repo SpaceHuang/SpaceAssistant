@@ -17,7 +17,7 @@ import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
 import { WikiConfig, WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
-import { getConfigValue, getNextQueuedMessage, getTurnByRequestId, listPersistedTurns, listTurnErrorsByAssistantMessageIds, setConfigValue } from '../database'
+import { getConfigValue, getNextQueuedMessage, listTurnErrorsByAssistantMessageIds, setConfigValue } from '../database'
 import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { classifyWikiPath } from '../wiki/wikiPaths'
@@ -45,14 +45,14 @@ import { notifyFileTreeChanged } from '../fileTreeSyncNotify'
 import { createHash, randomUUID } from 'node:crypto'
 import { readActiveLlmServiceId, readLlmServices, resolveFastPreferredModelName, resolveLanguagePreferredModelName, resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { readBrowserConfigFromDb, persistBrowserConfig } from '../browser/browserConfigDb'
-import { recordUserAnswerFromMemoryTiers, clearSystemManagedCacheEntry, readSystemManagedCacheEntry, restoreSystemManagedCacheEntry } from '../confirmation/decisionCacheWriter'
+import { recordUserAnswerFromMemoryTiers, readSystemManagedCacheEntry, restoreSystemManagedCacheEntry } from '../confirmation/decisionCacheWriter'
 import { canonicalKeyJson } from '../confirmation/sqliteDecisionCache'
 import { revokeLegacyTrustForCacheKey } from '../confirmation/legacyTrustRevocation'
 import { resolveSafePath } from '../pathSecurity'
 import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
 import { scanSkillsWithSkipped } from '../skills/skillScanner'
 import { spawn } from 'child_process'
-import { submitToolConfirmResponse, reserveToolConfirmResponse, restoreReservedToolConfirm, isToolConfirmCommitAllowed, signalToolCancel, isPendingMemoryTier, getPendingMemoryTiers, isPendingConfirm, getPendingConfirmToolName, getPendingConfirmSessionId, getPendingConfirmGeneration, getPendingConfirmRevision, getPendingMcpTrust, isPendingTrust } from '../toolConfirmRegistry'
+import { submitToolConfirmResponse, reserveToolConfirmResponse, restoreReservedToolConfirm, isToolConfirmCommitAllowed, signalToolCancel, getPendingMemoryTiers, isPendingConfirm, getPendingConfirmToolName, getPendingConfirmSessionId, getPendingConfirmGeneration, getPendingConfirmRevision, getPendingMcpTrust, isPendingTrust } from '../toolConfirmRegistry'
 import { cancelActiveAgentTool } from '../activeAgentToolCancellation'
 import { toConfirmationSnapshot, turnToDisplay } from '../../src/shared/turnDisplayProtocol'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
@@ -273,7 +273,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'tool:confirm-response',
     async (
-      event,
+      _event,
       payload: {
         requestId: string
         toolUseId: string
@@ -422,11 +422,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           source: 'user-confirm'
         })
         writtenCacheKeys.push(payload.memoryTier)
-      }
-      const trustAllowed = (kind: 'command' | 'domain' | 'act-domain' | 'mcp') => {
-        if (kind === 'command') return true
-        if (kind === 'domain' || kind === 'act-domain') return true
-        return true
       }
       if (payload.approved && pendingConfirm && payload.trustCommand?.trim()) {
         if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId, ownerSessionId)) throw new Error('confirmation-missing')

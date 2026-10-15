@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto'
 import type { Session } from '../src/shared/domainTypes'
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
 import type { AppDatabase } from './database'
-import { getConfigValue, getSession, setConfigValue } from './database'
+import { getConfigValue, setConfigValue } from './database'
 import type { SessionCommands, SessionQueries } from './sessionStorage/contracts'
 
 const PROFILES_KEY = 'config.workDirProfiles'

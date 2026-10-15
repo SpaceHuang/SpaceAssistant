@@ -380,7 +380,7 @@ export function migrateLegacyLlmServicesIfNeeded(db: AppDatabase): void {
 }
 
 export function validateLlmServices(input: ValidateLlmServicesInput): void {
-  const { services, activeLlmServiceIds, keysPayload = {}, existingKeys, previousServiceIds } = input
+  const { services, activeLlmServiceIds, keysPayload = {}, previousServiceIds } = input
 
   if (services.length === 0) {
     throw new LlmServiceValidationError('至少保留一套大模型服务')
@@ -393,7 +393,6 @@ export function validateLlmServices(input: ValidateLlmServicesInput): void {
     throw new LlmServiceValidationError('至少选择一个当前使用的服务')
   }
 
-  const activeSet = new Set(activeLlmServiceIds)
   for (const id of activeLlmServiceIds) {
     if (!services.some((s) => s.id === id)) {
       throw new LlmServiceValidationError('请选择当前使用的大模型服务')

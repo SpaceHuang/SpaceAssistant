@@ -40,10 +40,6 @@ export const ChatRunningElapsed = memo(function ChatRunningElapsed({
   return <span className="composer-status__elapsed">{formatStreamingElapsed(now - streamingAssistant.timestamp)}</span>
 })
 
-type StatusProps = {
-  streamingAssistant: Message | undefined
-}
-
 /** 无秒级时钟：仅在 streaming 消息引用变化时更新状态文案。 */
 export function resolveChatRunningLabels(
   streamingAssistant: Message | undefined,

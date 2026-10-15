@@ -3,7 +3,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { collectSessionStorageStrictProfile } from './sessionStorageProfile'
 import { getSessionLedgerRecoveryRoots } from '../runtime/sessionLedgerRecovery'
-import { RETENTION_POLICY_CONFIG_KEYS, resolveRetentionPolicy } from '../storage/retentionPolicy'
+import { resolveRetentionPolicy } from '../storage/retentionPolicy'
 import { readCanonicalSpillReferences } from '../storage/spillStore'
 import type { SpillDescriptor } from '../storage/spillProtocol'
 

@@ -7,7 +7,6 @@ import { visitSpillReferencesOffThread, type SpillReferenceWorkerEntry } from '.
 const MAX_BATCH_ROWS = 200
 const MAX_BATCH_BYTES = 8 * 1024 * 1024
 const MAX_OWNER_BYTES = 64 * 1024 * 1024
-const MAX_CHUNK_ROWS = 200
 const MAX_CHUNK_BYTES = 512 * 1024
 const SQLITE_CHUNK_BUDGET_MS = 100
 

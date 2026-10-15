@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto'
 import type { AppDatabase } from '../database'
-import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { FeishuConfig, FeishuInboundMessage, WorkDirProfile } from '../../src/shared/feishuTypes'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
 import { readRemoteSessionIdleMinutes } from '../../src/shared/remoteSessionResolve'
@@ -20,7 +19,7 @@ import type { SessionStorage } from '../sessionStorage/contracts'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { resolveClarificationControlMessage, type ClarificationResolverInput, type ClarificationResolverResult } from '../remote/clarificationInbound'
-import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSession, isRequestLeaseOwner, getRemoteAgentLease } from '../remote/remoteAgentRegistry'
+import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSession, getRemoteAgentLease } from '../remote/remoteAgentRegistry'
 import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
@@ -1221,7 +1220,6 @@ export class RemoteCommandRouter {
         if (!bindRemoteSessionExecutionId(sessionId, requestId, prepared.turnId)) {
           throw new Error('REMOTE_SESSION_LEASE_LOST')
         }
-        const assistantMessageId = prepared.assistantMessage.id
         let trackModelInputView: TrackModelInputViewRef | undefined
         if (trackContext) {
           if (!prepared.userMessage) throw new Error('FEISHU_TRACK_ACCEPTED_USER_MESSAGE_MISSING')

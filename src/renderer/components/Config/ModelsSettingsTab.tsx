@@ -9,8 +9,7 @@ import {
 import { THINKING_EFFORT_LEVELS } from '../../../shared/thinkingEffort'
 import {
   ConfigModelOptionContent,
-  ConfigModelSelectValuePreferred,
-  ConfigModelVisionBadge
+  ConfigModelSelectValuePreferred
 } from './ConfigModelOption'
 import { configModalModelSelectPopupClassNames } from './configModalUi'
 import { LlmServiceTab } from './LlmServiceTab'

@@ -2,7 +2,6 @@ import Anthropic from '@anthropic-ai/sdk'
 import { createHash } from 'node:crypto'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { ToolLoopRoundLimitError } from '../packages/agent-sdk/src/turn'
-import type { PermitBoundToolExecutionPort } from '../packages/agent-sdk/src/toolExecutionPort'
 import type { CanonicalModelMessage, PreparedModelCall } from '../packages/agent-sdk/src/model'
 import type { ExecutionAdmissionCoordinator } from '../packages/agent-sdk/src/executionAdmission'
 import type { SafetyPermitStore } from '../packages/agent-sdk/src/safetyPermit'
@@ -13,60 +12,34 @@ import {
   isEffortUnsupportedByUpstream
 } from './effortFallback'
 import { resolveThinkingAvailability } from '../src/shared/thinkingAvailability'
-import type { NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { countVisibleTitleMessagesForSuggest, reachedCumulativeMessagesForTitleSuggest } from './sessionTitleSuggest'
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
-import { getCallAdmissionGate } from './runtime/callAdmissionGate'
-import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
 import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from '../packages/agent-sdk/src/history'
+import { McpConnectionManager } from './mcp/mcpConnectionManager'
 import { createTurnScopedHistoryMemo } from './runtime/turnScopedHistoryMemo'
 import { CanonicalCompactionCommitUncertainError, toCanonicalModelMessages } from './runtime/canonicalHistory'
 import { rebuildClaudeMessagesFromHistory } from './runtime/canonicalHistory'
-import type { PreparedShellExecution } from './shell/preparedShellExecution'
-import { McpConnectionManager } from './mcp/mcpConnectionManager'
-import { getDiagnostics, safeAppendDiagnostic } from './mcp/mcpDiagnostics'
-import { createMcpToolExecutor } from './mcp/mcpToolExecutor'
-import { createRegisteredMcpTool } from './mcp/registeredMcpTool'
-import {
-  buildSnapshotFromDb,
-  type McpToolSnapshot
-} from './mcp/mcpToolRegistry'
-import { getSecret } from './mcp/mcpSecretStore'
-import { createMcpOAuthClientProvider } from './mcp/mcpOauthService'
-import { maskSensitiveArgs } from '../src/shared/mcpTypes'
+import type { McpToolSnapshot } from './mcp/mcpToolRegistry'
 import type {
-  AutoApproveFallback,
-  AutoApprovedWriteMeta,
   BrowserConfig,
   ShellConfig,
-  ShellSecurityHints,
   ToolCallResultPersisted,
   ToolsConfig,
   WikiConfig
 } from '../src/shared/domainTypes'
-import { computeDiffLineStats } from '../src/shared/writeDiffStats'
-import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
-import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { buildToolCapabilityConventionHint } from '../src/shared/skillPrompt'
 import { buildMcpToolCatalogSection } from '../src/shared/toolCatalogPrompt'
 import { MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT } from '../src/shared/domainTypes'
-import { getSkillByName } from './skills/skillScanner'
 import { getCachedSkills } from './skills/skillCache'
-import { recordStepUsage, recordTurnSummary, type UsageTurnOutcome } from './usageStats/usageStatsRecorder'
+import { type UsageTurnOutcome } from './usageStats/usageStatsRecorder'
 import { listProfiles } from './mcp/mcpConfigStore'
 import type { BrowserDetectContext } from '../src/shared/browserTypes'
-import { type ActDangerAssessment } from './browser/browserActionPolicy'
-import { assessActDanger } from './browser/actDangerAssessor'
 import {
   clearBrowserSessionActTrust,
-  clearBrowserSessionTrust,
-  isBrowserSessionActTrustedHost,
-  rememberBrowserSessionActTrust,
-  rememberBrowserSessionTrustedUrl
+  clearBrowserSessionTrust
 } from './browser/browserSessionTrust'
-import { extractHostname, isTrustedDomain } from './browser/urlSecurity'
 import { stagehandService } from './browser/stagehandService'
 import type { HistoryFact } from '../src/shared/historyReader'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
@@ -78,58 +51,20 @@ import type {
   AgentInvocation,
   AgentInvocationResult
 } from '../src/shared/agent/invocation'
-import type { AgentHostPorts } from '../packages/agent-sdk/src/invocation'
 import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../src/shared/agent/invocation'
+import type { AgentHostPorts } from '../packages/agent-sdk/src/invocation'
 import type { WeChatConfig } from '../src/shared/wechatTypes'
-import type {
-  ConfirmAnswererPolicy, ExecutionLane } from '../src/shared/confirmation/types'
-import { BROWSER_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
-import { SHELL_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
-import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogger'
-import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
-import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import type { SessionEventInput } from './sessionEvents'
-import { buildToolCallGateArgs, evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
 import { finalizeInvocationResult, HostedTurnFinalizedError } from './runtime/hostedTurnFinalization'
 import type { HostedTurnFinalization } from './runtime/hostedTurnFinalization'
 import { markHostedTurnFinalization } from './runtime/hostedTurnFinalization'
 import type { HostCommittedModelResponse } from '../packages/agent-sdk/src/turn'
-import { validateReadExecutionBoundary } from './confirmation/readExecutionBoundary'
-import { buildWriteExecutionPermit } from './confirmation/writeExecutionPermit'
-import { finalizeReadConfirmation, settleReadConfirmation } from './confirmation/readConfirmationFlow'
-import { recordPolicyExecutionVeto } from './confirmation/audit'
-import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
-import { getSecurityAuditLog } from './confirmation/audit'
-import { channelFor, type ResolveConfirmChannelArgs } from './confirmation/channels'
-import { shouldFallbackToUser } from './confirmation/fallbackToUser'
-import { approvalFallbackReasonFor } from './confirmation/fallbackReason'
-import type { ConfirmationChannel } from '../src/shared/confirmation/types'
-import { AgentChannel } from './confirmation/agentChannel'
-import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
-import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
-import { mapLegacyConfirmation, type LegacyConfirmationRejectReason, type LegacyPolicyCode } from './tools/coordinatorConfirmationAdapter'
-import type { ConfirmAnswererKind, ConfirmOutcome, ConfirmOutcomeCause, ConfirmRequest } from '../src/shared/confirmation/types'
+import type { ConfirmOutcomeCause } from '../src/shared/confirmation/types'
 import {
-  formatScriptDenyUserMessage,
   getRemoteTaskController
 } from './remote/remoteTaskController'
-import {
-  checkRemoteTaskBudget,
-  createRemoteTaskBudgetState,
-  recordOutboundWrite,
-  recordToolCall,
-  type RemoteTaskBudgetState
-} from './remote/remoteTaskBudget'
 import { DEFAULT_REMOTE_TASK_BUDGET } from '../src/shared/imTypes'
-import { recheckRemoteWriteAuthorization } from './remote/remoteWriteAuthorization'
-import {
-  logShellPathConfirm,
-  logShellSecurityDeny,
-  logShellWeakDenyOutcome,
-  precheckRunShellTool,
-  type RunShellPrecheckResult
-} from './shell/shellToolLoopHelpers'
 import {
   beginLlm,
   clearRequest,
@@ -144,18 +79,9 @@ import {
 import { clearSessionActiveStream, registerSessionActiveStream } from './chatActiveStreams'
 import { cancelAllActiveAgentToolsForTurn } from './activeAgentToolCancellation'
 import { getCachedMemoryContent } from './projectMemory'
-import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
+import { buildFinalSystemPrompt } from './llmSystemPrompt'
 import type { AppLocale } from '../src/shared/locale'
 import { stripThinkingBlocksFromAssistantMessages } from '../src/shared/stripThinkingFromApiMessages'
-import {
-  clearToolCancel,
-  registerToolCancel,
-  type ToolConfirmOutcome
-} from './toolConfirmRegistry'
-import * as toolConfirmRegistry from './toolConfirmRegistry'
-import fs from 'fs/promises'
-import path from 'path'
-import { assertSafeToolInput } from './toolInputGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { projectProcessResultForAgentLog } from '../src/shared/agentSafeProjection'
 import { isProcessToolName } from '../src/shared/processResultProjection'
@@ -164,13 +90,10 @@ import {
   TOOL_LOOP_MAX_TOKENS_WITH_BUILTIN_TOOLS_MIN
 } from '../src/shared/llm/toolLoopMaxTokens'
 import {
-  checkWritePathConflict,
-  claimWritePath,
-  releaseWritePath,
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
-import { computeDeferredPlan, computeEffectiveTools, authorizeToolCall } from './effectiveTools'
-import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
+import { computeDeferredPlan, computeEffectiveTools } from './effectiveTools'
+import { clearToolRevocationRequest, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildCommandRetryKey, normalizeFileToolIdentity, normalizeToolErrorClass, SemanticToolRetryTracker } from './toolErrorRetryPolicy'
 import type { ContextMeter } from '../src/shared/contextMeterService'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
@@ -713,7 +636,6 @@ async function runToolChatSessionInner(
 ): Promise<RunToolChatSessionResult> {
   const {
     requestId,
-    toolExecutionConcurrency,
     sessionId,
     model,
     baseUrl,
@@ -723,36 +645,23 @@ async function runToolChatSessionInner(
     toolsConfig,
     browserConfig,
     shellConfig,
-    wikiConfig,
     feishuConfig,
     wechatConfig,
-    larkCliRunner,
     remoteContext,
     workDir: initialWorkDir,
-    workDirManager,
     resolveWorkDir,
     userDataDir,
     getApiKey,
-    hostDiagnostics,
-    hostUsage,
     hostSessionMetadata,
     hostTitleSuggestions,
     hostExposureRules,
     hostMcp,
-    hostAnswerer,
     toolsTrim,
     reasoningEffort,
     locale: payloadLocale,
     projectMemoryEnabled,
     chatSignal,
-    resourceLocks,
-    invocationRuntime,
-    invocationLeaseState,
-    getBrowserDetectContext,
-    getMcpConnectionManager,
-    events: invocationEvents,
-    hasImageAttachments,
-    turnUsageStats
+    hasImageAttachments
   } = args
   // 台账事件与统计写入共用 Turn ID；requestId 仅供未迁移的旧调用兼容。
   const eventTurnId = args.turnId ?? args.requestId
@@ -769,14 +678,6 @@ async function runToolChatSessionInner(
   }
 
   const sessionMeta = hostSessionMetadata
-  const remoteBudgetState: RemoteTaskBudgetState | null = remoteContext
-    ? createRemoteTaskBudgetState(
-        requestId,
-        (remoteContext.source === 'feishu'
-          ? feishuConfig?.remoteTaskBudget
-          : wechatConfig?.remoteTaskBudget) ?? DEFAULT_REMOTE_TASK_BUDGET
-      )
-    : null
   if (remoteContext) {
     getRemoteTaskController().ensureTask(requestId, {
       sessionId,
@@ -787,7 +688,7 @@ async function runToolChatSessionInner(
         DEFAULT_REMOTE_TASK_BUDGET.maxConcurrentExecutions
     })
   }
-  const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMeta, remoteContext?.source)
+  resolveEffectiveShellOutputMode(shellConfig, sessionMeta, remoteContext?.source)
   const toolLoopOptions = resolveToolLoopModelOptions(options ?? {})
   const maxTokensEffective = effectiveMaxTokensForBuiltinToolLoop(options?.maxTokens)
   // Thinking 由 effort 档位映射（§7.3）：off → disabled、其余档 adaptive + output_config.effort 同发。
@@ -901,7 +802,6 @@ async function runToolChatSessionInner(
     return { kind: 'reject', reasonCode: 'REPEATED_SEMANTIC_CALL', message: 'The same semantic tool operation has failed repeatedly. Do not execute it again; explain the blocker or ask the user for guidance.' }
   }
   let effortOutputConfig = requestedOutputConfig
-  let effortRetryUsed = false
   const thinkingAvailability = resolveThinkingAvailability(model, {
     effortUnsupportedByMemo: isEffortUnsupportedByUpstream(args.llmServiceId, model)
   })
@@ -1034,11 +934,6 @@ async function runToolChatSessionInner(
   const appendCanonicalHistory = async (events: Array<{ kind: HistoryEvent['kind']; payload: unknown }>): Promise<void> => {
     if (events.length === 0) return
     await args.appendHistoryEvents?.(events)
-  }
-  const appendReplayUserMessage = async (content: string): Promise<void> => {
-    const [message] = toCanonicalModelMessages([{ role: 'user', content }])
-    if (!message) throw new Error('recovery prompt could not be represented in canonical history')
-    await appendCanonicalHistory([{ kind: 'replay-message-committed', payload: { message } }])
   }
   const loopRound = 1
 

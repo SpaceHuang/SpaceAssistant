@@ -1,4 +1,4 @@
-import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
+import type { ToolExecutor, ToolExecutorResult } from './types'
 import { assertSafeLarkCliArgs } from '../feishu/larkCliSecurity'
 import { parseLarkCliError } from '../feishu/larkCliErrors'
 import { LarkCliExecutionUncertainError, type LarkCliRunner } from '../feishu/larkCliRunner'

@@ -32,10 +32,6 @@ function cloneMessages(msgs: Message[]): Message[] {
   }))
 }
 
-function persistKey(sessionId: string, messageId: string): string {
-  return `${sessionId}:${messageId}`
-}
-
 /** @deprecated timestamp 合并；展示/API 路径禁止使用。保留给测试兼容。 */
 export function mergeDbAndLive(db: Message[], live?: Message[] | null): Message[] {
   return mergeMessagesByTimestamp(db, live)

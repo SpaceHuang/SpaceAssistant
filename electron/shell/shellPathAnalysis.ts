@@ -1,4 +1,3 @@
-import fs from 'fs/promises'
 import path from 'path'
 import { resolveSafePath, resolveSafePathReal } from '../pathSecurity'
 import { isProtectedShellPath, type ShellPathPlatform } from './shellSensitivePaths'

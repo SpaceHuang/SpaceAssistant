@@ -1,4 +1,3 @@
-import type { Message } from '../../src/shared/domainTypes'
 import type { PersistedMessage, TurnStorage, TurnStarted } from '../../src/shared/turnCoordinator'
 import {
   appendMessage,

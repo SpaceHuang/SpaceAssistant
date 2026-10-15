@@ -1,4 +1,4 @@
-import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
+import type { ToolExecutor, ToolExecutorResult } from './types'
 import { getWeChatBundle, readWeChatConfigFromDb } from '../wechat/weChatIpc'
 import { executeWeChatReply, executeWeChatSend, WeChatOutboundExecutionUncertainError } from './weChatToolExecutor'
 import { toToolUserError } from './toolUserErrors'

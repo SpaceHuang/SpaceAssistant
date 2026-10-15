@@ -1,14 +1,13 @@
 import type { IpcMain, WebContents } from 'electron'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
-import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
+import { assertValidModel, assertValidRequestId } from './claudeRequestGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { checkpointSessionTranscriptProjection } from './runtime/sessionProjectionRevalidation'
 import { serializeErrorCauseChain } from './agentLogger/errorCauseChain'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
-import { getDbConnection, type AppDatabase } from './database'
+import { type AppDatabase } from './database'
 import { LlmKeyAccessError, resolveLlmCredentialsForModel } from './llmServiceResolver'
-import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { requireInvocationAnthropicRoute } from './runtime/invocationProviderRoute'
 import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop'
@@ -32,7 +31,7 @@ import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, type SessionEventSink } from './sessionEvents'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { ContextMeter } from '../src/shared/contextMeterService'
 import { computeCompactionSummaryHash, countCommittedCompactions, currentCompactionWindowId } from '../src/shared/compactionEvents'
@@ -44,7 +43,6 @@ import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { toCanonicalModelMessages } from './runtime/canonicalHistory'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
-import { rebuildClaudeMessagesFromHistory } from './runtime/canonicalHistory'
 import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExecutionConfig } from './runtime/continuationSafetySnapshot'
 import type { SessionStorage } from './sessionStorage/contracts'
 
@@ -84,7 +82,7 @@ type ClaudeChatMessageWithContentBlocks = {
   timestamp?: number
 }
 
-export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string, sessionStorage: SessionStorage): { messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] } {
+export function loadAuthoritativeTurnContext(_db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string, sessionStorage: SessionStorage): { messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] } {
   const persisted = sessionStorage.execution.readTurn({ sessionId, turnId })
   if (!persisted || persisted.sessionId !== sessionId || persisted.requestId !== requestId || persisted.startToken !== startToken) {
     throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
@@ -286,11 +284,11 @@ function resolveTurnEndErrorCode(err: unknown): string | undefined {
   return undefined
 }
 
-export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStreamDeps): ClaudeTurnExecution {
+export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStreamDeps): ClaudeTurnExecution {
   const injectedStorage = deps.sessionStorage
   if (!injectedStorage) throw new Error('SESSION_STORAGE_REQUIRED')
   const sessionStorage: SessionStorage = injectedStorage
-  const executeClaudeRequest: ClaudeTurnExecution = async (sender, payload) => {
+  const executeClaudeRequest: ClaudeTurnExecution = async (_sender, payload) => {
       let requestId = ''
       let eventWriter: SessionEventSink | undefined
       let eventTurnId = ''
@@ -562,7 +560,6 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               contextWindow: { tokens: budget.totalInputBudget + budget.outputReserveTokens, source: 'config' as const }
             }
             if (!eventWriter || !session || !projection || !shouldCompact(projection, budget) || (phase !== 'preflight' && messages.length < 3)) return
-            const boundaryEventWriter = eventWriter
             const replayMessages = projectReplaySurface(excludeReplayOnlyMessages(messages, frozen.skillFragments))
             const messageIdentities = surfaceItemIdentities(replayMessages).map((identity, index) => {
               const messageId = (replayMessages[index] as { id?: unknown }).id
@@ -585,14 +582,14 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               const end = items.findIndex((item) => item.id === range.end)
               return start >= 0 && end >= start ? items.slice(start, end + 1).map((item) => item.id) : []
             }))
-            const shadowSource = replayMessages.filter((message, index) => shadowedIds.has(messageIdentities[index]!))
+            const shadowSource = replayMessages.filter((_message, index) => shadowedIds.has(messageIdentities[index]!))
             checkpointMessage.content = JSON.stringify({ kind: 'context_checkpoint', task: shadowSource.filter((message) => message.role === 'user').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), decisions: shadowSource.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), pending: '如需完整历史，使用 history.read 查询被压缩消息。' })
             const shadowed = new Set(record.shadowedRanges.flatMap((range) => {
               const start = items.findIndex((item) => item.id === range.start)
               const end = items.findIndex((item) => item.id === range.end)
               return start >= 0 && end >= start ? items.slice(start, end + 1).map((item) => item.id) : []
             }))
-            const outputMessages = [checkpointMessage, ...replayMessages.filter((message, index) => !shadowed.has(messageIdentities[index]!))]
+            const outputMessages = [checkpointMessage, ...replayMessages.filter((_message, index) => !shadowed.has(messageIdentities[index]!))]
             const shadowedRanges = record.shadowedRanges
             const outputHeader = buildRequestHeaderPayload({ requestId: `${boundaryRequestId}:boundary`, system, tools, messages: outputMessages, requiredSurfaceSet, toolExecutionCheckpoint })
             const pairs = extractToolPairIds(outputMessages)

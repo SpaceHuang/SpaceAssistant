@@ -5,7 +5,6 @@ import { APP_PRODUCT_NAME } from '../../../shared/appMeta'
 import appLogoUrl from '../../assets/sa-logo.png'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import {
-  formatFloatingActionSummary,
   formatFloatingHoverTitle,
   formatFloatingMainLabel
 } from './floatingNotificationDisplay'

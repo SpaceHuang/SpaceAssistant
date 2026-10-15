@@ -13,7 +13,7 @@ import { readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../co
 import { intersectPolicyRulesWithFloor } from '../../src/shared/policy/policyFloor'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
-import { getDbConnection, getSession, updateSession } from '../database'
+import { getDbConnection } from '../database'
 import { readStoredModels } from '../llmServiceResolver'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { AppDatabase } from '../database'

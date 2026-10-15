@@ -6,12 +6,10 @@ import type {
   SecurityClearCachePayload,
   SecuritySettingsModelPayload
 } from './confirmation/settingsCenter'
-import type { CacheKey, DecisionCacheEntry, ExecutionLane, PolicyAction } from './confirmation/types'
+import type { DecisionCacheEntry, ExecutionLane, PolicyAction } from './confirmation/types'
 import type { PolicyPackage } from './policy/policyPackages'
 import type {
   AppConfig,
-  AutoApproveFallback,
-  BrowserActDangerInfo,
   ChatImageAttachment,
   FileInfo,
   Message,
@@ -21,16 +19,12 @@ import type {
   SkillRouteRecentMessage,
   SkillRouteResult,
   SessionSkillsState,
-  GithubSkillCandidate,
   GithubSkillProbeResult,
   SkillDefinition,
   SkillsConfig,
   SkippedCandidate,
-  ToolCallResultPersisted,
-  ToolRiskLevel,
   ToolsConfig,
   ShellConfig,
-  ShellSecurityHints,
   TrustedShellCommand,
   WikiConfig,
   WikiStatus
