@@ -117,7 +117,6 @@ describe('WikiPane', () => {
 
 describe('WikiPane 迁移流回归（横幅 → 向导 → 报告）', () => {
   const PENDING_STATUS = {
-    enabled: true,
     initialized: true,
     pendingLegacyMigration: true,
     legacyRoots: ['llm-wiki'],

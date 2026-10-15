@@ -573,7 +573,6 @@ export interface WikiProjectSummary {
 }
 
 export interface WikiStatus {
-  enabled: boolean
   rootPath: string
   initialized: boolean
   pageCount: number

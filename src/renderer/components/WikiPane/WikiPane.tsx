@@ -50,7 +50,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
     const status = (await window.api.wikiStatus()) as import('../../../shared/domainTypes').WikiStatus
     setWikiInitialized(status.initialized)
     setPendingMigration(
-      status.enabled && status.pendingLegacyMigration ? { legacyRoots: status.legacyRoots ?? [] } : null
+      status.pendingLegacyMigration ? { legacyRoots: status.legacyRoots ?? [] } : null
     )
     setProjectNames(projectDisplayMap(status.projects))
   }, [wikiRoot])
