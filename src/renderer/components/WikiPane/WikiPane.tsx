@@ -51,17 +51,13 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   const highlightPaths = useMemo(() => [wikiIndexPath], [wikiIndexPath])
 
   const refreshWikiStatus = useCallback(async () => {
-    if (!wiki.enabled) {
-      setWikiInitialized(null)
-      return
-    }
     const status = (await window.api.wikiStatus()) as import('../../../shared/domainTypes').WikiStatus
     setWikiInitialized(status.initialized)
     setPendingMigration(
       status.enabled && status.pendingLegacyMigration ? { legacyRoots: status.legacyRoots ?? [] } : null
     )
     setProjectNames(projectDisplayMap(status.projects))
-  }, [wiki.enabled])
+  }, [wikiRoot])
 
   useEffect(() => {
     onInitStateChange?.(wikiInitialized)
@@ -87,7 +83,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   useEffect(() => {
     return subscribeFilePaneSelect((req) => {
       const preferWiki = req.preferWiki ?? isUnderWikiRoot(req.relPath, wikiRoot)
-      if (!preferWiki || !wiki.enabled) {
+      if (!preferWiki) {
         setSelectedKey(null)
         return
       }
@@ -95,7 +91,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
       void wikiTreeRef.current?.selectPath(req.relPath)
       setSelectedKey(req.relPath.replace(/\\/g, '/'))
     })
-  }, [wiki.enabled, wikiRoot, onSwitchToWikiTab])
+  }, [wikiRoot, onSwitchToWikiTab])
 
   const handleWikiSelect = (relPath: string) => {
     setSelectedKey(relPath)
