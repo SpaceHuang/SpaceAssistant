@@ -94,11 +94,6 @@ export function WikiTab({ wiki, onChange }: Props) {
 
   return (
     <ConfigSettingsStack>
-      <ConfigSwitchRow
-        label={t('wiki.enableLabel')}
-        checked={wiki.enabled}
-        onChange={(enabled) => onChange({ ...wiki, enabled })}
-      />
       <ConfigField label={t('wiki.rootPathLabel')} hint={t('wiki.rootPathHelp')}>
         <Space.Compact style={{ width: '100%' }}>
           <Input
@@ -106,7 +101,7 @@ export function WikiTab({ wiki, onChange }: Props) {
             readOnly
             placeholder={t('wiki.rootPathPlaceholder')}
           />
-          <Button onClick={() => void startRename()} disabled={!wiki.enabled}>
+          <Button onClick={() => void startRename()}>
             {t('wiki.renameButton')}
           </Button>
         </Space.Compact>
@@ -131,13 +126,13 @@ export function WikiTab({ wiki, onChange }: Props) {
         />
       </ConfigField>
       <Space wrap>
-        <Button type="primary" onClick={() => void initWiki()} disabled={!wiki.enabled}>
+        <Button type="primary" onClick={() => void initWiki()}>
           {t('wiki.initButton')}
         </Button>
-        <Button onClick={() => void openMigrationInfo()} disabled={!wiki.enabled}>
+        <Button onClick={() => void openMigrationInfo()}>
           {t('wiki.migrationEntry')}
         </Button>
-        <Button onClick={openSharedDir} disabled={!wiki.enabled}>
+        <Button onClick={openSharedDir}>
           {t('wiki.openSharedDir')}
         </Button>
       </Space>
