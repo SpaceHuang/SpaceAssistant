@@ -10,7 +10,7 @@ function createMigratedDb(): AppDatabase {
 
 describe('schema v83 wiki_projects 表迁移（T0.3）', () => {
   it('DB_SCHEMA_VERSION 为 83', () => {
-    expect(DB_SCHEMA_VERSION).toBe(95)
+    expect(DB_SCHEMA_VERSION).toBe(99)
   })
 
   it('v82 旧库升级后 wiki_projects 表结构正确且幂等', () => {

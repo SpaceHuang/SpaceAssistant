@@ -35,7 +35,8 @@ describe('IM policy snapshot schema migration', () => {
     const db = dbAt94()
     db.exec('CREATE TABLE policy_behavior_snapshots(unexpected TEXT)')
     expect(() => runMigrations(db)).toThrow()
-    expect(db.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '94' })
+    // 合并后迁移 95 的建表走 IF NOT EXISTS（坏表不在此引爆），失败点移到索引创建步，回滚停在 95
+    expect(db.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '95' })
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_policy_behavior_domain_revision'").get()).toBeUndefined()
     db.close()
   })
