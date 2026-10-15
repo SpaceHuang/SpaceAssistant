@@ -141,7 +141,7 @@ export class ToolScheduler {
       }
       // 审批等待不会完成 promise；在仍有调度容量时立即重新评估 ready 节点，
       // 使“所有在途节点都等待审批”也不会阻塞后续独立工具。
-      const activeCount = [...running.keys()].filter((id) => !this.options.isWaiting?.(id)).length
+      void [...running.keys()].filter((id) => !this.options.isWaiting?.(id))
       if (started) continue
       let completed: [string, T] | undefined
       try {

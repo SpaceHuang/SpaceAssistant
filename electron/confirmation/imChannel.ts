@@ -142,7 +142,7 @@ function logPromptDiagnostic(log: ImChannelDeps['log'], event: string, fields: R
   try { log?.(event, fields) } catch { /* Diagnostics must never change fail-closed settlement. */ }
 }
 
-function toOutcome(decision: PendingDecision, memoryTiers: MemoryTier[], memory?: MemoryTier): ConfirmOutcome {
+function toOutcome(decision: PendingDecision, _memoryTiers: MemoryTier[], memory?: MemoryTier): ConfirmOutcome {
   if (decision === 'y') {
     return { kind: 'approved', ...(memory ? { memory: memory.key } : {}), cause: 'user-approved' }
   }

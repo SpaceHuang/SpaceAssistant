@@ -9,7 +9,7 @@ export interface CoordinatorHooks {
   phaseTimeoutMs?: Partial<Record<'plan' | 'gate' | 'confirm' | 'validate' | 'execute', number>>
 }
 
-async function withPhaseTimeout<T>(phase: string, operation: Promise<T>, timeoutMs: number | undefined, signal: AbortSignal): Promise<T> {
+async function withPhaseTimeout<T>(phase: string, operation: Promise<T>, timeoutMs: number | undefined): Promise<T> {
   if (!timeoutMs || timeoutMs <= 0) return operation
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -30,7 +30,7 @@ async function withPhaseControl<T>(phase: string, operation: Promise<T>, timeout
       abortHandler = () => reject(new Error(`${phase.toUpperCase()}_CANCELLED`))
       signal.addEventListener('abort', abortHandler, { once: true })
     })
-    return await withPhaseTimeout(phase, Promise.race([operation, cancellation]), timeoutMs, signal)
+    return await withPhaseTimeout(phase, Promise.race([operation, cancellation]), timeoutMs)
   } finally {
     if (abortHandler) signal.removeEventListener('abort', abortHandler)
   }

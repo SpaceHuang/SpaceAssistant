@@ -76,7 +76,7 @@ export class ReadConfirmationRegistry {
     return true
   }
 
-  settle(requestId: string, toolUseId: string, state: 'rejected' | 'expired'): boolean {
+  settle(requestId: string, toolUseId: string, _state: 'rejected' | 'expired'): boolean {
     const now = this.clock.now()
     this.prune(now)
     const key = this.key(requestId, toolUseId)
