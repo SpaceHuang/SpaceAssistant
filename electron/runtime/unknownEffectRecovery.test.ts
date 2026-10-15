@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
-import { approveOneTimeUnknownEffectRetry, findOneTimeUnknownEffectRetryApproval, isUnknownEffectDecisionCurrent, readUnknownEffectRecoveryState, recordUnknownEffectRiskAcceptance } from './unknownEffectRecovery'
+import { approveOneTimeUnknownEffectRetry, createUnknownEffectBeforeDispatchLease, findOneTimeUnknownEffectRetryApproval, isUnknownEffectDecisionCurrent, readUnknownEffectRecoveryState, recordUnknownEffectRiskAcceptance } from './unknownEffectRecovery'
 
 function snapshot(unresolvedEffects: unknown): HistorySnapshot {
   return { invocationId: 'target', version: 1, schemaVersion: 1, events: [{
@@ -24,6 +24,30 @@ describe('unknown effect recovery state', () => {
     const state = readUnknownEffectRecoveryState(source)
     expect(state.mode).toBe('verify-only')
     expect(state.unresolvedEffects).toContainEqual(expect.objectContaining({ id: 'target:new-id' }))
+  })
+
+  it('does not classify an in-flight call as recovery uncertainty at the next dispatch gate', () => {
+    const active = snapshot([])
+    active.events.push({ invocationId: 'target', turnId: 'turn', sequence: 2, schemaVersion: 1,
+      eventId: 'active-read', idempotencyKey: 'active-read', kind: 'tool-call-started',
+      payload: { toolCallId: 'active-read', toolName: 'read_file', inputHash: 'read-hash' } })
+    expect(readUnknownEffectRecoveryState(active, new Set(), { includeUnsettledStarted: false }).mode).toBe('clear')
+    expect(readUnknownEffectRecoveryState(active).mode).toBe('verify-only')
+  })
+
+  it('lets two ordinary parallel calls pass while the first call is still running', async () => {
+    const active = snapshot([])
+    active.events.push({ invocationId: 'target', turnId: 'turn', sequence: 2, schemaVersion: 1,
+      eventId: 'active-a', idempotencyKey: 'active-a', kind: 'tool-call-started',
+      payload: { toolCallId: 'call-a', toolName: 'read_file', inputHash: 'a' } })
+    const history = { read: async () => active, appendBatch: async () => ({ version: active.version, duplicate: false }) }
+    const gate = createUnknownEffectBeforeDispatchLease(history)
+    const [first, second] = await Promise.all([
+      gate({ invocationId: 'target', toolCallId: 'call-a', toolName: 'read_file', input: { path: 'a' } }),
+      gate({ invocationId: 'target', toolCallId: 'call-b', toolName: 'read_file', input: { path: 'b' } })
+    ])
+    expect(first.kind).toBe('dispatch')
+    expect(second.kind).toBe('dispatch')
   })
 
   it('only accepts a risk decision bound to the current complete unknown set and target invocation', () => {

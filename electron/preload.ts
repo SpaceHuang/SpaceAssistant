@@ -55,6 +55,7 @@ const api: SpaceAssistantApi = {
   chatContinueFromCheckpoint: (payload) => ipcRenderer.invoke('chat:continue-from-checkpoint', payload),
   chatAcceptUnknownEffectRisk: (payload) => ipcRenderer.invoke('chat:accept-unknown-effect-risk', payload),
   chatApproveUnknownEffectRetry: (payload) => ipcRenderer.invoke('chat:approve-unknown-effect-retry', payload),
+  chatCancelUnknownEffectRecovery: (payload) => ipcRenderer.invoke('chat:cancel-unknown-effect-recovery', payload),
   chatGetMessageSequence: (payload) => ipcRenderer.invoke('chat:get-message-sequence', payload),
   messageAppendNonTurn: (msg) => ipcRenderer.invoke('message:append-non-turn', msg),
   messagePatchNonTurn: (payload) => ipcRenderer.invoke('message:patch-non-turn', payload),

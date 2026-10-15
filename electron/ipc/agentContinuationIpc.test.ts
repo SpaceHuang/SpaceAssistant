@@ -7,6 +7,8 @@ import { TurnRuntime } from '../turnRuntime'
 import { continueAgentFromCheckpoint, registerAgentContinuationIpc, startAgentContinuationFromSource } from './agentProtocolIpc'
 import { validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
 import type { AppIpcContext } from '../appIpc'
+import { InvocationHistoryWriter } from '../../packages/agent-sdk/src/history'
+import { approveOneTimeUnknownEffectRetry, recordUnknownEffectRiskAcceptance } from '../runtime/unknownEffectRecovery'
 
 const safetySnapshot = {
   workDirProfileId: 'profile-a', workDirSha256: 'a'.repeat(64),
@@ -33,7 +35,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     await history.appendBatch(withUnknownEffect ? [
       { invocationId: 'source-turn', turnId: 'source-turn', sequence: 1, schemaVersion: 1, eventId: 'source-context', idempotencyKey: 'source-context', kind: 'invocation-context-committed', payload: { messages: [requiredUser.message], requiredUserMessage: requiredUser } },
       { invocationId: 'source-turn', turnId: 'source-turn', sequence: 2, schemaVersion: 1, eventId: 'source-response', idempotencyKey: 'source-response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'unknown-call', name: 'write_file', input: { path: 'x', content: 'y' } }] } } },
-      { invocationId: 'source-turn', turnId: 'source-turn', sequence: 3, schemaVersion: 1, eventId: 'source-start', idempotencyKey: 'source-start', kind: 'tool-call-started', payload: { toolCallId: 'unknown-call', toolName: 'write_file', inputHash: 'hash' } },
+      { invocationId: 'source-turn', turnId: 'source-turn', sequence: 3, schemaVersion: 1, eventId: 'source-start', idempotencyKey: 'source-start', kind: 'tool-call-started', payload: { toolCallId: 'unknown-call', toolName: 'write_file', inputHash: 'a'.repeat(64) } },
       { invocationId: 'source-turn', turnId: 'source-turn', sequence: 4, schemaVersion: 1, eventId: 'source-failed', idempotencyKey: 'source-failed', kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } }
     ] : [
       { invocationId: 'source-turn', turnId: 'source-turn', sequence: 1, schemaVersion: 1, eventId: 'source-context', idempotencyKey: 'source-context', kind: 'invocation-context-committed', payload: { messages: [requiredUser.message], requiredUserMessage: requiredUser } },
@@ -97,6 +99,113 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     })
     expect(target.events[0]?.kind).toBe('invocation-context-committed')
     expect(history.readSync('source-turn').events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(accepted).toMatchObject({ status: 'pending', recoveryState: { mode: 'verify-only' } })
+  })
+
+  it('先持久化用户风险决定，再创建活动 writer 并派发恢复轮次', async () => {
+    const { session, runtime, ctx, history } = await setup(true)
+    const dispatch = vi.fn()
+    const options = { ctx, turnRuntime: runtime, dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot }
+    const pending = await continueAgentFromCheckpoint({ ...options,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'await-risk-decision' } })
+    if (!pending.accepted) throw new Error(pending.reason)
+    expect(dispatch).not.toHaveBeenCalled()
+
+    const handlers = new Map<string, (...args: never[]) => unknown>()
+    registerAgentContinuationIpc({ handle: (channel, handler) => handlers.set(channel, handler as never) } as never, options)
+    let writerCompletion: Promise<unknown> | undefined
+    dispatch.mockImplementation(() => {
+      const writer = new InvocationHistoryWriter(history, { invocationId: pending.targetInvocationId, turnId: pending.targetTurnId })
+      writerCompletion = writer.append([{ kind: 'invocation-completed', payload: { status: 'completed' } }])
+    })
+    const decision = await handlers.get('chat:accept-unknown-effect-risk')?.({} as never, {
+      sessionId: session.id, targetInvocationId: pending.targetInvocationId!, unresolvedEffectIds: ['source-turn:unknown-call']
+    } as never) as { accepted: boolean }
+    expect(decision).toEqual({ accepted: true })
+    expect(dispatch).toHaveBeenCalledOnce()
+    await writerCompletion
+    const events = history.readSync(pending.targetInvocationId!).events
+    expect(events.map((event) => event.kind)).toEqual([
+      'invocation-context-committed', 'unknown-effect-risk-accepted', 'invocation-completed'
+    ])
+  })
+
+  it('取消等待中的未知副作用决定会结束挂起 continuation 且不派发', async () => {
+    const { session, runtime, ctx } = await setup(true)
+    const dispatch = vi.fn()
+    const options = { ctx, turnRuntime: runtime, dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot }
+    const pending = await continueAgentFromCheckpoint({ ...options,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'cancel-risk-decision' } })
+    if (!pending.accepted) throw new Error(pending.reason)
+    const handlers = new Map<string, (...args: never[]) => unknown>()
+    registerAgentContinuationIpc({ handle: (channel, handler) => handlers.set(channel, handler as never) } as never, options)
+    const cancelled = await handlers.get('chat:cancel-unknown-effect-recovery')?.({} as never, {
+      sessionId: session.id, targetInvocationId: pending.targetInvocationId!
+    } as never) as { accepted: boolean }
+    expect(cancelled).toEqual({ accepted: true })
+    expect(dispatch).not.toHaveBeenCalled()
+    expect((ctx as AppIpcContext).sessionStorage!.execution.continuations.readByTarget({
+      sessionId: session.id, targetInvocationId: pending.targetInvocationId!
+    })?.status).toBe('cancelled')
+  })
+
+  it('单次重试批准也先追加到目标历史，再启动其活动 writer', async () => {
+    const { session, runtime, ctx, history } = await setup(true)
+    const dispatch = vi.fn()
+    const options = { ctx, turnRuntime: runtime, dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot }
+    const pending = await continueAgentFromCheckpoint({ ...options,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'await-retry-decision' } })
+    if (!pending.accepted) throw new Error(pending.reason)
+    const handlers = new Map<string, (...args: never[]) => unknown>()
+    registerAgentContinuationIpc({ handle: (channel, handler) => handlers.set(channel, handler as never) } as never, options)
+    let writerCompletion: Promise<unknown> | undefined
+    dispatch.mockImplementation(() => {
+      const writer = new InvocationHistoryWriter(history, { invocationId: pending.targetInvocationId, turnId: pending.targetTurnId })
+      writerCompletion = writer.append([{ kind: 'invocation-completed', payload: { status: 'completed' } }])
+    })
+    const decision = await handlers.get('chat:approve-unknown-effect-retry')?.({} as never, {
+      sessionId: session.id, targetInvocationId: pending.targetInvocationId!, unknownEffectId: 'source-turn:unknown-call'
+    } as never) as { accepted: boolean }
+    expect(decision).toEqual({ accepted: true })
+    expect(dispatch).toHaveBeenCalledOnce()
+    await writerCompletion
+    expect(history.readSync(pending.targetInvocationId!).events.map((event) => event.kind)).toEqual([
+      'invocation-context-committed', 'unknown-effect-retry-approved', 'invocation-completed'
+    ])
+  })
+
+  it('进程在风险决定持久化后、启动恢复轮次前退出时，重复继续会安全启动同一目标', async () => {
+    const { session, runtime, ctx, history } = await setup(true)
+    const dispatch = vi.fn()
+    const options = { ctx, turnRuntime: runtime, dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot }
+    const pending = await continueAgentFromCheckpoint({ ...options,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'recover-after-decision' } })
+    if (!pending.accepted) throw new Error(pending.reason)
+    await recordUnknownEffectRiskAcceptance({ history, targetInvocationId: pending.targetInvocationId!,
+      acceptedIds: ['source-turn:unknown-call'] })
+
+    const resumed = await continueAgentFromCheckpoint({ ...options,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'new-key-after-restart' } })
+    expect(resumed).toMatchObject({ accepted: true, continuationId: pending.continuationId,
+      targetInvocationId: pending.targetInvocationId, status: 'running' })
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('进程在单次重试许可持久化后、启动恢复轮次前退出时可续接同一目标', async () => {
+    const { session, runtime, ctx, history } = await setup(true)
+    const dispatch = vi.fn()
+    const options = { ctx, turnRuntime: runtime, dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot }
+    const pending = await continueAgentFromCheckpoint({ ...options,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'recover-after-retry-approval' } })
+    if (!pending.accepted) throw new Error(pending.reason)
+    await approveOneTimeUnknownEffectRetry({ history, targetInvocationId: pending.targetInvocationId!,
+      unknownEffectId: 'source-turn:unknown-call' })
+
+    const resumed = await continueAgentFromCheckpoint({ ...options,
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'new-retry-key-after-restart' } })
+    expect(resumed).toMatchObject({ accepted: true, continuationId: pending.continuationId,
+      targetInvocationId: pending.targetInvocationId, status: 'running' })
     expect(dispatch).toHaveBeenCalledOnce()
   })
 

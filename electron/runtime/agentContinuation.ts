@@ -5,7 +5,7 @@ import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import { runInTransaction } from '../database/transaction'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { toCanonicalModelMessages } from './canonicalHistory'
-import { mirrorCanonicalContextMessages } from './sqliteAgentHistory'
+import { mirrorCanonicalContextMessages, SqliteAgentHistory } from './sqliteAgentHistory'
 
 export type AgentContinuationRecord = Readonly<{
   continuationId: string
@@ -250,6 +250,42 @@ export function claimAgentContinuation(conn: DatabaseSync, continuationId: strin
   })
 }
 
+export function cancelPendingAgentContinuation(conn: DatabaseSync, continuationId: string, now = Date.now()): boolean {
+  return conn.prepare("UPDATE agent_continuations SET status='cancelled',updated_at=? WHERE continuation_id=? AND status='pending'")
+    .run(now, continuationId).changes === 1
+}
+
+export function readAgentContinuationByTarget(conn: DatabaseSync, sessionId: string, targetInvocationId: string): AgentContinuationRecord | undefined {
+  const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
+    JOIN turns t ON t.turn_id=ac.source_turn_id
+    WHERE t.session_id=? AND ac.target_invocation_id=?`).get(sessionId, targetInvocationId) as ContinuationRow | undefined
+  if (!row) return undefined
+  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+  const snapshot = history.readSync(row.source_invocation_id)
+  return rowToRecord(row, validateUnknownRecoveryCheckpoint(snapshot).transcript)
+}
+
+export function readAgentContinuationByRequest(conn: DatabaseSync, sessionId: string, requestIdempotencyKey: string): AgentContinuationRecord | undefined {
+  const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
+    JOIN turns t ON t.turn_id=ac.source_turn_id
+    WHERE t.session_id=? AND ac.request_idempotency_key=?`).get(sessionId, requestIdempotencyKey) as ContinuationRow | undefined
+  if (!row) return undefined
+  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+  const snapshot = history.readSync(row.source_invocation_id)
+  return rowToRecord(row, validateUnknownRecoveryCheckpoint(snapshot).transcript)
+}
+
+export function readAwaitingAgentContinuationBySource(conn: DatabaseSync, sessionId: string, sourceTurnId: string): AgentContinuationRecord | undefined {
+  const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
+    JOIN turns t ON t.turn_id=ac.source_turn_id
+    WHERE t.session_id=? AND ac.source_turn_id=? AND ac.status='pending'
+    ORDER BY ac.updated_at DESC LIMIT 1`).get(sessionId, sourceTurnId) as ContinuationRow | undefined
+  if (!row) return undefined
+  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+  const snapshot = history.readSync(row.source_invocation_id)
+  return rowToRecord(row, validateUnknownRecoveryCheckpoint(snapshot).transcript)
+}
+
 export function setAgentContinuationStatus(conn: DatabaseSync, continuationId: string, status: Extract<AgentContinuationRecord['status'], 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unknown_side_effect'>, now = Date.now()): boolean {
   return conn.prepare("UPDATE agent_continuations SET status=?,updated_at=? WHERE continuation_id=? AND status='running'")
     .run(status, now, continuationId).changes === 1
@@ -308,6 +344,7 @@ export async function startAgentContinuation(input: {
   createdBy: string; frozenConfig: Record<string, unknown>; executionConfig: import('../../src/shared/assistantFactAggregator').TurnExecutionConfig
   continuationAcceptance?: { payloadSha256: string; rawText: string; attachments?: unknown[]; intentKind: 'exact-continue' | 'follow-up'; route: string }
   recoveryMode?: 'exact' | 'unknown-effects'
+  deferDispatch?: boolean
   runtime: import('../turnRuntime').TurnRuntime; now?: () => number; newId?: () => string
 }): Promise<{ accepted: true; started: boolean; continuation: AgentContinuationRecord; turn?: import('../../src/shared/turnCoordinator').TurnStarted }> {
   return runInTransaction(input.conn, () => {
@@ -340,11 +377,11 @@ export async function startAgentContinuation(input: {
         checkpointSequence: continuation.checkpointSequence, checkpointSha256: continuation.checkpointSha256
       }
       const config = { ...input.executionConfig, continuationSource: source }
-      turn = input.runtime.prepareContinuation({
+      if (!input.deferDispatch) turn = input.runtime.prepareContinuation({
         requestId: continuation.targetInvocationId, sessionId: input.sessionId, userMessageId: input.userMessageId,
         turnId: continuation.targetTurnId, startToken: continuation.targetStartToken, config
       })
-      if (claimAgentContinuation(input.conn, continuation.continuationId, input.frozenConfig, (input.now ?? Date.now)())) {
+      if (!input.deferDispatch && claimAgentContinuation(input.conn, continuation.continuationId, input.frozenConfig, (input.now ?? Date.now)())) {
         started = true
         finalRecord = { ...continuation, status: 'running' }
       } else {

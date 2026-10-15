@@ -118,6 +118,10 @@ export interface ContinuationStore {
   claim(input: { continuationId: string; revalidatedFrozenConfig: Record<string, unknown> }): boolean
   settle(input: { continuationId: string; status: ContinuationTerminalStatus }): boolean
   settleForTurn(input: { targetTurnId: string; status: ContinuationTerminalStatus }): boolean
+  readByTarget(input: { sessionId: string; targetInvocationId: string }): SessionContinuationRecord | undefined
+  readByRequest(input: { sessionId: string; requestIdempotencyKey: string }): SessionContinuationRecord | undefined
+  readAwaitingBySource(input: { sessionId: string; sourceTurnId: string }): SessionContinuationRecord | undefined
+  cancelPending(input: { continuationId: string }): boolean
 }
 export interface ContinuationLaunchStore {
   prepareAndClaim(input: {
@@ -127,7 +131,8 @@ export interface ContinuationLaunchStore {
     frozenConfig: Record<string, unknown>
     executionConfig: TurnExecutionConfig
     recoveryMode?: 'exact' | 'unknown-effects'
-    acceptance: Pick<ContinuationIntentAcceptance, 'payloadSha256' | 'rawText' | 'attachments' | 'intentKind' | 'route'>
+    deferDispatch?: boolean
+    acceptance?: Pick<ContinuationIntentAcceptance, 'payloadSha256' | 'rawText' | 'attachments' | 'intentKind' | 'route'>
   }): ReturnType<typeof import('../runtime/agentContinuation').startAgentContinuation>
 }
 

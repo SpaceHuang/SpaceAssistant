@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { HistoryPort, HistorySnapshot } from '../../packages/agent-sdk/src/history'
 
 export type UnknownEffectRecoveryState = Readonly<{
@@ -9,8 +10,30 @@ export type UnknownEffectRecoveryState = Readonly<{
   reason?: 'NO_REVIEWED_READ_ONLY_CAPABILITY'
 }>
 
+export function createUnknownEffectBeforeDispatchLease(history: HistoryPort): NonNullable<import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']> {
+  return async (call) => {
+    const snapshot = await history.read(call.invocationId)
+    const state = readUnknownEffectRecoveryState(snapshot, new Set(), { includeUnsettledStarted: false })
+    if (state.mode === 'risk-accepted') return { kind: 'dispatch' }
+    if (state.mode === 'verify-only') {
+      const inputHash = createHash('sha256').update(JSON.stringify(call.input)).digest('hex')
+      const approvalEventId = await findOneTimeUnknownEffectRetryApproval({ history, targetInvocationId: call.invocationId, toolName: call.toolName, inputHash })
+      if (approvalEventId) return { kind: 'dispatch', retryApprovalEventId: approvalEventId }
+      const reasonCode = state.checkerAvailable ? 'VERIFY_ONLY_UNREVIEWED_CAPABILITY' : 'RECOVERY_CHECKER_UNAVAILABLE'
+      return { kind: 'reject', reasonCode, message: state.checkerAvailable
+        ? 'A prior operation is still unresolved. This tool is not approved for read-only recovery checks, so it was not dispatched.'
+        : 'A prior operation is still unresolved and no reviewed read-only checker is available. No tool was dispatched.' }
+    }
+    return { kind: 'dispatch' }
+  }
+}
+
 /** Recovery policy is derived only from canonical context fields and reviewed code capability IDs. */
-export function readUnknownEffectRecoveryState(snapshot: HistorySnapshot, reviewedReadOnlyToolNames: ReadonlySet<string> = new Set()): UnknownEffectRecoveryState {
+export function readUnknownEffectRecoveryState(
+  snapshot: HistorySnapshot,
+  reviewedReadOnlyToolNames: ReadonlySet<string> = new Set(),
+  options: Readonly<{ includeUnsettledStarted?: boolean }> = {}
+): UnknownEffectRecoveryState {
   const context = snapshot.events.find((event) => event.kind === 'invocation-context-committed')?.payload
   const effects = context && typeof context === 'object' && !Array.isArray(context)
     ? (context as { unresolvedEffects?: unknown }).unresolvedEffects : undefined
@@ -25,7 +48,7 @@ export function readUnknownEffectRecoveryState(snapshot: HistorySnapshot, review
     if (event.kind === 'tool-call-started' && typeof payload.toolCallId === 'string') started.set(payload.toolCallId, payload)
     if (((event.kind === 'tool-call-finished' && payload.executionOutcome !== 'unknown-after-dispatch') || event.kind === 'tool-call-not-dispatched' || event.kind === 'tool-call-deferred') && typeof payload.toolCallId === 'string') settled.add(payload.toolCallId)
   }
-  const localUnknown = [...started].filter(([toolCallId]) => !settled.has(toolCallId)).map(([toolCallId, payload]) => ({
+  const localUnknown = [...started].filter(([toolCallId]) => !settled.has(toolCallId) && options.includeUnsettledStarted !== false).map(([toolCallId, payload]) => ({
     id: `${snapshot.invocationId}:${toolCallId}`, originInvocationId: snapshot.invocationId, toolCallId,
     ...(typeof payload.toolName === 'string' ? { toolName: payload.toolName } : {}), ...(typeof payload.inputHash === 'string' ? { inputHash: payload.inputHash } : {})
   }))
@@ -86,4 +109,18 @@ export async function findOneTimeUnknownEffectRetryApproval(input: { history: Hi
     return payload.targetInvocationId === input.targetInvocationId && state.unresolvedEffects.some(({ id }) => id === payload.unknownEffectId) && payload.toolName === input.toolName && payload.inputHash === input.inputHash
   })
   return approval?.eventId
+}
+
+export async function hasPendingUnknownEffectRetryApproval(history: HistoryPort, targetInvocationId: string): Promise<boolean> {
+  const snapshot = await history.read(targetInvocationId)
+  const state = readUnknownEffectRecoveryState(snapshot)
+  if (state.mode !== 'verify-only') return false
+  const consumed = new Set(snapshot.events.filter((event) => event.kind === 'unknown-effect-retry-consumed')
+    .map((event) => (event.payload as { approvalEventId?: unknown }).approvalEventId).filter((id): id is string => typeof id === 'string'))
+  return snapshot.events.some((event) => {
+    if (event.kind !== 'unknown-effect-retry-approved' || consumed.has(event.eventId)) return false
+    const payload = event.payload as { targetInvocationId?: unknown; unknownEffectId?: unknown; toolName?: unknown; inputHash?: unknown }
+    return payload.targetInvocationId === targetInvocationId && state.unresolvedEffects.some((effect) =>
+      effect.id === payload.unknownEffectId && effect.toolName === payload.toolName && effect.inputHash === payload.inputHash)
+  })
 }

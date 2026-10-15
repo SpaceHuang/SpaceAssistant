@@ -20,7 +20,7 @@ import type { HistoryPort } from '../../packages/agent-sdk/src/history'
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { createTurnCoordinatorStorage } from './coordinator'
-import { claimAgentContinuation, createOrGetAgentContinuation, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
+import { cancelPendingAgentContinuation, claimAgentContinuation, createOrGetAgentContinuation, readAgentContinuationByRequest, readAgentContinuationByTarget, readAwaitingAgentContinuationBySource, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
 
 /** Narrow SQLite execution adapter for prepared acceptance and validated context loading. */
 export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQueries, options: { getTurnRuntime?: () => import('../turnRuntime').TurnRuntime } = {}): SessionExecutionStore {
@@ -40,7 +40,11 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       },
       claim: ({ continuationId, revalidatedFrozenConfig }: Parameters<SessionExecutionStore['continuations']['claim']>[0]) => claimAgentContinuation(liveConn(), continuationId, revalidatedFrozenConfig),
       settle: ({ continuationId, status }: Parameters<SessionExecutionStore['continuations']['settle']>[0]) => setAgentContinuationStatus(liveConn(), continuationId, status),
-      settleForTurn: ({ targetTurnId, status }: Parameters<SessionExecutionStore['continuations']['settleForTurn']>[0]) => setAgentContinuationStatusForTurn(liveConn(), targetTurnId, status)
+      settleForTurn: ({ targetTurnId, status }: Parameters<SessionExecutionStore['continuations']['settleForTurn']>[0]) => setAgentContinuationStatusForTurn(liveConn(), targetTurnId, status),
+      readByTarget: ({ sessionId, targetInvocationId }: Parameters<SessionExecutionStore['continuations']['readByTarget']>[0]) => readAgentContinuationByTarget(liveConn(), sessionId, targetInvocationId),
+      readByRequest: ({ sessionId, requestIdempotencyKey }: Parameters<SessionExecutionStore['continuations']['readByRequest']>[0]) => readAgentContinuationByRequest(liveConn(), sessionId, requestIdempotencyKey),
+      readAwaitingBySource: ({ sessionId, sourceTurnId }: Parameters<SessionExecutionStore['continuations']['readAwaitingBySource']>[0]) => readAwaitingAgentContinuationBySource(liveConn(), sessionId, sourceTurnId),
+      cancelPending: ({ continuationId }: Parameters<SessionExecutionStore['continuations']['cancelPending']>[0]) => cancelPendingAgentContinuation(liveConn(), continuationId)
     }),
     continuationLaunch: Object.freeze({
       prepareAndClaim: async (input: Parameters<SessionExecutionStore['continuationLaunch']['prepareAndClaim']>[0]) => {
@@ -58,10 +62,11 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
           requestIdempotencyKey: input.payload.requestId, createdBy: input.createdBy,
           frozenConfig: input.frozenConfig, executionConfig: input.executionConfig, runtime,
           ...(input.recoveryMode ? { recoveryMode: input.recoveryMode } : {}),
-          continuationAcceptance: {
+          ...(input.deferDispatch ? { deferDispatch: true } : {}),
+          ...(input.acceptance ? { continuationAcceptance: {
             payloadSha256: input.acceptance.payloadSha256, rawText: input.acceptance.rawText,
             attachments: input.acceptance.attachments, intentKind: input.acceptance.intentKind, route: input.acceptance.route
-          }
+          } } : {})
         })
       }
     }),

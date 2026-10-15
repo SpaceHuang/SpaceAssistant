@@ -717,7 +717,7 @@ export function ChatView() {
               <Button key={effect.id} onClick={async () => {
                 const decision = await window.api.chatApproveUnknownEffectRetry({ sessionId, targetInvocationId: result.targetInvocationId!, unknownEffectId: effect.id })
                 if (decision.accepted) Modal.destroyAll()
-                else message.warning(t('chatView.warnings.continuationNoChecker'))
+                else message.warning(t('chatView.warnings.continuationUnavailable'))
               }}>{t('chatView.recoveryRetryOnce', { tool: effect.toolName })}</Button>
             ))}
             <OkBtn />
@@ -727,7 +727,12 @@ export function ChatView() {
               sessionId, targetInvocationId: result.targetInvocationId!,
               unresolvedEffectIds: result.recoveryState!.unresolvedEffects.map((effect) => effect.id)
             })
-            if (!decision.accepted) message.warning(t('chatView.warnings.continuationNoChecker'))
+            if (!decision.accepted) message.warning(t('chatView.warnings.continuationUnavailable'))
+          },
+          onCancel: async () => {
+            const cancelled = await window.api.chatCancelUnknownEffectRecovery({ sessionId, targetInvocationId: result.targetInvocationId! })
+            if (!cancelled.accepted) message.warning(t('chatView.warnings.continuationUnavailable'))
+            continuationRequestKeysRef.current.delete(assistantMessageId)
           }
         })
       }
