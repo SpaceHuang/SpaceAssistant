@@ -145,7 +145,7 @@ function reconcileDeferredWorkflowCompletion(db: AppDatabase, current: WorkflowS
 
 function validateWorkflowSteps(steps: readonly (string | ImWorkflowStep)[]): void {
   const byId = new Map<string, ImWorkflowStep>()
-  for (const [index, value] of steps.entries()) {
+  for (const [, value] of steps.entries()) {
     if (typeof value === 'string') continue
     if (!value || typeof value !== 'object' || !value.stepId.trim() || !value.instruction.trim() || byId.has(value.stepId)) {
       throw new Error('IM_WORKFLOW_STEP_INVALID')

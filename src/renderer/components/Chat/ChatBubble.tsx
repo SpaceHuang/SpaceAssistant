@@ -474,7 +474,7 @@ export const ChatBubble = memo(function ChatBubble({
         keepExpanded={keepExpanded}
         searchReveal={searchReveal}
         summary={buildBatchSummary(segment.items.filter((item) => item.kind !== 'text'), { toolById, thinkingSegments, t })}
-        renderItem={(item, itemIndex) =>
+        renderItem={(item, _itemIndex) =>
           renderActivityItem(item, `${message.id}-batch-${activityItemKey(item)}`)
         }
       />

@@ -11,7 +11,6 @@ export function createAgentSdkOutputRecovery(input?: { location?: { workDir: str
         hadVisibleText,
         hadToolUse: toolCalls.length > 0
       })
-    const requestId = `${invocationId}:round:${modelTurn}`
     return {
       ...(continuation ? { continuation: { role: 'user' as const, content: continuation.content } } : {}),
       ...(continuation && input?.location ? {

@@ -142,7 +142,7 @@ async function callRoutingLlm(args: {
   timeoutMs: number
   signal?: AbortSignal
 }): Promise<string> {
-  const { client, model, userMessage, timeoutMs, signal } = args
+  const { client, model, userMessage, signal } = args
   const res = (await client.messages.create(
     {
       model,
