@@ -77,7 +77,6 @@ function makeDeps(
     isDev: () => true,
     apiKeyPresent: () => true,
     getMaxParallel: () => 3,
-    readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }),
     listSkills: async () => [],
     getSkill: async () => null,
     wikiInit: async () => ({ ok: true as const, rootPath: 'llm-wiki', skillInstalled: true }),

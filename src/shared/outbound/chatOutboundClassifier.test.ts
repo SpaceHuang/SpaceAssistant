@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 import { classifyOutboundMessageWithDeps } from './chatOutboundClassifier'
-import { DEFAULT_WIKI_CONFIG } from '../domainTypes'
 import type { SkillDefinition } from '../domainTypes'
 
 function makeSkill(name: string, scope: SkillDefinition['scope']): SkillDefinition {
@@ -38,7 +37,6 @@ function makeDeps(overrides: Partial<Parameters<typeof classifyOutboundMessageWi
 }
 
 const ctx = {
-  wikiConfig: { ...DEFAULT_WIKI_CONFIG, enabled: true },
   sessionSkillsState: { manualActivated: [], manualDisabled: [] }
 }
 
