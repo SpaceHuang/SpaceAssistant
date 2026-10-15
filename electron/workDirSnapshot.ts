@@ -2,7 +2,6 @@ import fs from 'fs'
 
 import type { WorkspaceSnapshot } from '../src/shared/agent/workspace'
 import { normalizeWorkspaceRoot, workspacePathKey } from '../src/shared/agent/workspace'
-import type { AppDatabase } from './database'
 import type { SessionQueries } from './sessionStorage/contracts'
 import type { WorkDirManager } from './workDirManager'
 import { resolveWorkDirForSession } from './workDirManager'
@@ -41,7 +40,7 @@ export function resolveWorkspaceSnapshot(
   sessionQueries: SessionQueries | undefined,
   sessionId: string,
   workDirManager: WorkDirManager | undefined,
-  fallbackWorkDir: string
+  _fallbackWorkDir: string
 ): WorkspaceSnapshot | null {
   if (!workDirManager || !sessionQueries) return null
   const session = sessionQueries.readSession(sessionId)
