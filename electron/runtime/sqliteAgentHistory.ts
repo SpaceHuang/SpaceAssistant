@@ -247,7 +247,7 @@ export const REPAIR_MIN_RETRY_INTERVAL_MS = 60 * 1000
 /** P3-②: failure categories that cannot heal by retrying; they leave the queue terminal-failed. */
 const REPAIR_TERMINAL_FAILURE_CATEGORIES = ['workspace-root-rejected', 'storage-access-denied']
 
-export function projectionRepairRetryDelayMs(attempts: number, invocationRepairCount: number): number {
+export function projectionRepairRetryDelayMs(attempts: number, _invocationRepairCount: number): number {
   // P3-②: the historical zero-backoff retry for lightly-loaded invocations re-ran a full
   // read+fold with no delay; a *retry* (attempts >= 1) now carries at least the minimum
   // interval, and repeated failures keep the exponential backoff up to the daily cap. First
@@ -2019,7 +2019,6 @@ export class SqliteAgentHistory implements HistoryPort {
               (terminalState === 'interrupted' && payload.status === 'interrupted' && ledger.reason === 'interrupted') ||
               (terminalState === 'interrupted' && payload.status === 'cancelled' && ledger.reason === 'cancelled'))) {
             const repairLocation = location as CompactionLedgerLocation
-            const repairId = `${invocationId}:invocation-projections:${event.eventId}`
             try {
               await options.repairInvocationTerminal(repairLocation, { status: payload.status as string, turnId: ledger.turnId, reason: ledger.reason })
               markEventRepair(event.eventId, true)
