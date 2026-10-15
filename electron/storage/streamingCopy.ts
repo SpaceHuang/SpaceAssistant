@@ -5,7 +5,12 @@ import { StorageMaintenanceError } from './storageMaintenanceError'
 
 const COPY_CHUNK_BYTES = 4 * 1024 * 1024
 
-export type StreamingCopyOptions = { signal?: AbortSignal; onProgress?: (completedBytes: number) => void }
+export type StreamingCopyOptions = {
+  signal?: AbortSignal
+  onProgress?: (completedBytes: number) => void
+  /** 回读哈希阶段（copy 完成后的第二遍全文件扫描）的 chunk 边界心跳——不发进度，仅证明 worker 存活。 */
+  onHeartbeat?: () => void
+}
 
 export type CopyFileWithHashResult = Readonly<{ bytes: number; sourceSha256: string; destSha256: string }>
 export type CopyTreeWithManifestResult = Readonly<{ bytes: number; sourceManifest: string[]; destManifest: string[] }>
@@ -56,7 +61,7 @@ export async function copyFileWithHash(sourcePath: string, destPath: string, opt
       } while (bytesRead > 0)
     } finally { fs.closeSync(dest) }
   } finally { fs.closeSync(source) }
-  const destSha256 = await hashFileStreaming(destPath, options)
+  const destSha256 = await hashFileStreaming(destPath, { signal: options.signal, onHeartbeat: options.onHeartbeat })
   return { bytes, sourceSha256: sourceHash.digest('hex'), destSha256 }
 }
 
@@ -70,6 +75,7 @@ export async function hashFileStreaming(filePath: string, options: StreamingCopy
       throwIfAborted(options.signal)
       bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null)
       if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead))
+      options.onHeartbeat?.()
     } while (bytesRead > 0)
   } finally { fs.closeSync(descriptor) }
   return hash.digest('hex')
@@ -88,8 +94,8 @@ export async function copyTreeWithManifest(sourceRoot: string, destRoot: string,
   const sourceManifest: string[] = []
   const destManifest: string[] = []
   let completedBeforeCurrentFile = 0
-  const fileOptions: StreamingCopyOptions = options.onProgress
-    ? { signal: options.signal, onProgress: (completed) => options.onProgress!(completedBeforeCurrentFile + completed) }
+  const fileOptions: StreamingCopyOptions = options.onProgress || options.onHeartbeat
+    ? { signal: options.signal, onProgress: options.onProgress ? (completed) => options.onProgress!(completedBeforeCurrentFile + completed) : undefined, onHeartbeat: options.onHeartbeat }
     : { signal: options.signal }
   const visit = async (directory: string, destDirectory: string, prefix: string): Promise<void> => {
     fs.mkdirSync(destDirectory, { recursive: true })

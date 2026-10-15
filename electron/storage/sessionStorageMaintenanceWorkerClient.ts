@@ -111,6 +111,7 @@ export async function runSessionMaintenanceWorker(request: SessionMaintenanceWor
         stageDurationsMs?: { archive: number; verify: number; vacuum: number }
       }
       heartbeat()
+      // type: 'heartbeat'（协议见 SessionMaintenanceWorkerHeartbeatMessage）仅续期看门狗，不进任何业务分支。
       if (message.type === 'progress' && message.phase && typeof message.completedBytes === 'number' && typeof message.totalBytes === 'number') {
         try {
           options.onProgress?.({ phase: message.phase as 'archive' | 'vacuum', completedBytes: message.completedBytes, totalBytes: message.totalBytes })

@@ -726,6 +726,71 @@ describe('worker compaction orchestration', () => {
     temp.cleanup()
   })
 
+  it('does not reuse the previous worker result when a retryable failure follows a stale attempt (P1)', async () => {
+    // 评审 P1 双故障序列：第 1 次成功但 live 文件在窗口内被外部写入（stale，worker 内 data_version 相等）
+    // → 第 2 次可重试失败（归档 quick_check 被拒）。守卫若复用第 1 轮结果：dataVersion 相等 + 本轮
+    // live 快照（已含外部写入）无变化 → stale 复核全过 → 拿第 1 轮哈希证据复核本轮已清空的归档 → ENOENT 误报。
+    const temp = createTempDatabase('storage-maintenance-stale-then-fail-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('stable');")
+    temp.db.flushSave()
+    let spawnCount = 0
+    const createWorker = () => {
+      spawnCount += 1
+      const attempt = spawnCount
+      const stub = new StubCompactionWorker()
+      stub.postMessage = () => {
+        queueMicrotask(() => {
+          if (attempt === 1) {
+            getDbConnection(temp.db).exec("INSERT INTO maintenance_payload VALUES('external-write')")
+            temp.db.flushSave()
+            stub.emit('message', snapshotMismatchResult(1, 1))
+          } else if (attempt === 2) {
+            stub.emit('message', { type: 'error', code: 'STORAGE_MAINTENANCE_FAILED', message: 'archived database failed quick_check' })
+          } else {
+            stub.emit('message', snapshotMismatchResult(2, 3))
+          }
+        })
+      }
+      return stub as unknown as Worker
+    }
+
+    await expect(compactSessionDatabase(temp.db, userDataDir, undefined, { createWorker }))
+      .rejects.toMatchObject({ code: 'STORAGE_MAINTENANCE_BUSY' })
+
+    expect(spawnCount).toBe(COMPACT_SNAPSHOT_RETRY_LIMIT)
+    // 归档从未通过证据复核：耗尽报错不得谎报 archivePreserved（评审 P2-6）。
+    expect(await fs.readdir(path.join(userDataDir, 'session-archives'))).toEqual([])
+    expect(conn.prepare('SELECT value FROM maintenance_payload').get()).toEqual({ value: 'stable' })
+    temp.cleanup()
+  })
+
+  it('excludes staging side-effect files (-wal/-shm) from swap-in candidates and cleans them (P2-1)', async () => {
+    const temp = createTempDatabase('storage-maintenance-reconcile-sidecar-')
+    const dbPath = temp.dbPath
+    const dir = path.dirname(dbPath)
+    const base = path.basename(dbPath)
+    const sideWal = path.join(dir, `${base}.compact-staging-9-z-wal`)
+    const sideShm = path.join(dir, `${base}.compact-staging-9-z-shm`)
+    // live 在场：副作用文件不是候选，只随对账清理，不改变 removedStaleStaging 计数。
+    await fs.writeFile(sideWal, 'wal-bytes')
+    await fs.writeFile(sideShm, 'shm-bytes')
+    expect(reconcileInterruptedCompaction(dbPath)).toEqual({ recoveredAtSwap: false, removedStaleStaging: 0 })
+    // live 缺失：真 staging 换入；副作用文件 mtime 更新也不得成为候选（修复前会被 rename 成主库）。
+    temp.db.close()
+    await fs.rm(dbPath)
+    await fs.writeFile(path.join(dir, `${base}.compact-staging-8-a`), 'staging-bytes')
+    await fs.writeFile(sideWal, 'wal-bytes-newer')
+    await fs.writeFile(sideShm, 'shm-bytes-newer')
+
+    expect(reconcileInterruptedCompaction(dbPath)).toEqual({ recoveredAtSwap: true, removedStaleStaging: 0 })
+    expect(await fs.readFile(dbPath, 'utf8')).toBe('staging-bytes')
+    expect(fsSync.existsSync(sideWal)).toBe(false)
+    expect(fsSync.existsSync(sideShm)).toBe(false)
+    temp.cleanup()
+  })
+
   it('redoes compaction when the snapshot changed and swaps in the fresh snapshot', async () => {
     const temp = createTempDatabase('storage-maintenance-snapshot-redo-')
     const userDataDir = path.dirname(temp.dbPath)
@@ -920,7 +985,8 @@ describe('interrupted compaction reconciliation', () => {
     await fs.writeFile(livePath + '.compact-staging-1-a', 'stale')
     await fs.writeFile(livePath + '.compact-staging-1-a-wal', 'stale-wal')
 
-    expect(reconcileInterruptedCompaction(livePath)).toEqual({ recoveredAtSwap: false, removedStaleStaging: 2 })
+    // P2-1：-wal 副作用文件不是候选、不进 removedStaleStaging 计数（随对账静默清理）。
+    expect(reconcileInterruptedCompaction(livePath)).toEqual({ recoveredAtSwap: false, removedStaleStaging: 1 })
 
     expect(await fs.readFile(livePath, 'utf8')).toBe('live-bytes')
     expect(fsSync.readdirSync(dir).filter((name) => name.includes('.compact-staging-'))).toEqual([])

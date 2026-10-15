@@ -35,7 +35,11 @@ export type SessionMaintenanceWorkerResultMessage = Readonly<{
 
 export type SessionMaintenanceWorkerErrorMessage = Readonly<{ type: 'error'; code: string; message: string }>
 
+/** watchdog 心跳：长同步阶段（回读哈希 chunk 边界、quick_check 发起前）发出，client 仅续期不转发。 */
+export type SessionMaintenanceWorkerHeartbeatMessage = Readonly<{ type: 'heartbeat' }>
+
 export type SessionMaintenanceWorkerMessage =
   | SessionMaintenanceWorkerProgressMessage
   | SessionMaintenanceWorkerResultMessage
   | SessionMaintenanceWorkerErrorMessage
+  | SessionMaintenanceWorkerHeartbeatMessage

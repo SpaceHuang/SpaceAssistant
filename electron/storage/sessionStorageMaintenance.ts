@@ -6,7 +6,6 @@ import { performance } from 'node:perf_hooks'
 import type { Worker } from 'node:worker_threads'
 import type { AppDatabase } from '../database'
 import { getDbConnection, reopenDatabaseConnection, setDatabaseSaveSuspended } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
 import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 import { StorageMaintenanceError } from './storageMaintenanceError'
 import { copyFileWithHash, copyTreeWithManifest } from './streamingCopy'
@@ -204,18 +203,32 @@ function liveDatabaseFileChanged(before: ReturnType<typeof liveDatabaseFileSnaps
 export function reconcileInterruptedCompaction(dbPath: string): { recoveredAtSwap: boolean; removedStaleStaging: number } {
   const directory = path.dirname(dbPath)
   const base = path.basename(dbPath)
-  const stagingPaths = fs.existsSync(directory)
-    ? fs.readdirSync(directory).filter((name) => name.startsWith(`${base}.compact-staging-`)).map((name) => path.join(directory, name))
+  const allStagingNames = fs.existsSync(directory)
+    ? fs.readdirSync(directory).filter((name) => name.startsWith(`${base}.compact-staging-`))
     : []
+  // 候选排除 staging 自身的 -wal/-shm 副作用文件——live 缺失时把它们 rename 成主库是灾难（评审 P2-1）；
+  // 排除后成为孤儿的副作用文件仍须清理（removeSidecarFiles）。
+  const stagingPaths = allStagingNames
+    .filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm'))
+    .map((name) => path.join(directory, name))
+  const removeSidecarFiles = () => {
+    for (const name of allStagingNames) {
+      if (name.endsWith('-wal') || name.endsWith('-shm')) fs.rmSync(path.join(directory, name), { force: true })
+    }
+  }
   if (!fs.existsSync(dbPath)) {
     const candidate = stagingPaths
       .map((stagingPath) => ({ stagingPath, modifiedAt: fs.statSync(stagingPath).mtimeMs }))
       // mtime 同毫秒平局时按文件名降序（staging 名含 Date.now() 时间戳，后者更新）。
       .sort((left, right) => right.modifiedAt - left.modifiedAt || (left.stagingPath < right.stagingPath ? 1 : -1))[0]
-    if (!candidate) return { recoveredAtSwap: false, removedStaleStaging: 0 }
+    if (!candidate) {
+      removeSidecarFiles()
+      return { recoveredAtSwap: false, removedStaleStaging: 0 }
+    }
     for (const suffix of ['-wal', '-shm']) fs.rmSync(`${candidate.stagingPath}${suffix}`, { force: true })
     renameWithRetry(candidate.stagingPath, dbPath)
     for (const stagingPath of stagingPaths) if (stagingPath !== candidate.stagingPath) removeStagingArtifacts(stagingPath)
+    removeSidecarFiles()
     try {
       fs.writeFileSync(`${dbPath}.compact-recovery.json`,
         `${JSON.stringify({ recoveredAtSwap: true, recordedAt: new Date().toISOString() }, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
@@ -223,6 +236,7 @@ export function reconcileInterruptedCompaction(dbPath: string): { recoveredAtSwa
     return { recoveredAtSwap: true, removedStaleStaging: stagingPaths.length - 1 }
   }
   for (const stagingPath of stagingPaths) removeStagingArtifacts(stagingPath)
+  removeSidecarFiles()
   return { recoveredAtSwap: false, removedStaleStaging: stagingPaths.length }
 }
 
@@ -294,12 +308,16 @@ async function compactSessionDatabaseImpl(
     ensureNotAborted()
     fs.mkdirSync(archivePath, { recursive: true, mode: 0o700 })
     onProgress?.({ phase: 'archive' })
-    let workerResult!: Awaited<ReturnType<typeof runSessionMaintenanceWorker>>
+    // 每次尝试开始前复位上一轮的 worker 结果：stale/可重试失败的 continue 依赖本守卫区分
+    // 「worker 失败重试」与「worker 成功待复核」，残留上一轮成功结果会让守卫失效，
+    // 用上一轮的双侧哈希证据去复核本轮失败后的现场（评审 P1：成功→stale→失败 双故障序列）。
+    let workerResult: Awaited<ReturnType<typeof runSessionMaintenanceWorker>> | undefined
     let snapshotAttempts = 0
     const readMainDataVersion = () => Number((conn.prepare('PRAGMA data_version').get() as { data_version: number }).data_version)
     for (;;) {
       ensureNotAborted()
       if (activeSessionTurnCount(db) > 0) throw maintenanceBusyError()
+      workerResult = undefined
       // B1：每次尝试从零开始。worker 复制以 'wx' 独占创建，归档残留会让第二次尝试必撞 EEXIST；
       // 归档尚未通过换入前证据复核，清理不违反「已验证归档保留」语义（archiveVerified 随之复位）。
       removeStagingArtifacts(stagingPath)
@@ -375,6 +393,8 @@ async function compactSessionDatabaseImpl(
       if (staleSnapshot) {
         removeStagingArtifacts(stagingPath)
         fs.rmSync(archivePath, { recursive: true, force: true })
+        // 归档已删除：达到上限报错时不得谎报 archivePreserved（评审 P2-6）。
+        archiveVerified = false
         if (snapshotAttempts >= COMPACT_SNAPSHOT_RETRY_LIMIT) {
           throw new StorageMaintenanceError('STORAGE_MAINTENANCE_BUSY',
             'database snapshot kept changing during compaction; retry when all session turns are idle')
@@ -422,6 +442,8 @@ async function compactSessionDatabaseImpl(
     const swapStartedAt = performance.now()
     // 写栅栏：BEGIN IMMEDIATE 阻塞其它连接提交，把「最终复核 → close」的残余窗口压到同语句级；
     // 空写事务 COMMIT 不产生任何变更。栅栏获取失败说明有并发写入者，按忙碌处理（保留归档）。
+    // 注：此处刻意不走 runInTransaction——这不是业务事务，而是跨连接的换入临界区写栅栏，
+    // 空事务必须立即 COMMIT 释放写锁，事务包装器的语义（嵌套/长持锁）在此不适用。
     try {
       conn.exec('BEGIN IMMEDIATE')
       conn.exec('COMMIT')
@@ -451,6 +473,8 @@ async function compactSessionDatabaseImpl(
       if (!fs.existsSync(dbPath) && fs.existsSync(archivedDbPath)) renameWithRetry(archivedDbPath, dbPath)
       reopenDatabaseConnection(db)
       removeStagingArtifacts(stagingPath)
+      // 归档 DB 已移回 live：归档目录不再含数据库副本（空心），不得按已验证归档保留（评审 P2-3）。
+      archiveVerified = false
       throw swapError
     }
     reopenDatabaseConnection(db)
@@ -467,6 +491,8 @@ async function compactSessionDatabaseImpl(
       for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true })
       renameWithRetry(archivedDbPath, dbPath)
       reopenDatabaseConnection(db)
+      // 归档 DB 已移回 live（空心归档）：外层 catch 不得按已验证归档保留（评审 P2-3）。
+      archiveVerified = false
       throw new Error('compaction swap verification failed; restored the pre-compaction database from the archive')
     }
     const swapDurationMs = performance.now() - swapStartedAt

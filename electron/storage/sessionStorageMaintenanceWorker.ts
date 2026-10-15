@@ -38,6 +38,10 @@ async function runWorkerCompaction(request: SessionMaintenanceWorkerRequest): Pr
     lastPostedAt = performance.now()
     lastPostedBytes = completedBytes
   }
+  // watchdog 心跳：回读哈希 chunk 边界与 quick_check 发起前补一条消息，消除长阶段静默盲区。
+  // 残余窗口：quick_check 本身是单条同步 PRAGMA（大库数十秒），期间无法插消息——
+  // 部署的 watchdogTimeoutMs 必须覆盖最坏单次 quick_check 时长。
+  const postHeartbeat = () => { parentPort!.postMessage({ type: 'heartbeat' }) }
   const throttledPost = (phase: SessionMaintenanceWorkerPhase, completedBytes: number, totalBytes: number) => {
     const now = performance.now()
     if (now - lastPostedAt >= PROGRESS_THROTTLE_MS || completedBytes - lastPostedBytes >= PROGRESS_THROTTLE_BYTES) {
@@ -48,17 +52,18 @@ async function runWorkerCompaction(request: SessionMaintenanceWorkerRequest): Pr
   const archiveStageStartedAt = performance.now()
   const archivedDbPath = path.join(request.archivePath, path.basename(request.dbPath))
   const copyProgress = (fileCompletedBytes: number) => throttledPost('archive', copiedBytes + fileCompletedBytes, copyTotalBytes)
-  const dbCopy = await copyFileWithHash(request.dbPath, archivedDbPath, { onProgress: copyProgress })
+  const copyOptions = { onProgress: copyProgress, onHeartbeat: postHeartbeat }
+  const dbCopy = await copyFileWithHash(request.dbPath, archivedDbPath, copyOptions)
   copiedBytes += dbCopy.bytes
   let spillSourceManifest: string[] = []
   let spillDegradedSourceManifest: string[] = []
   if (fs.existsSync(request.spillRoot)) {
-    const copied = await copyTreeWithManifest(request.spillRoot, path.join(request.archivePath, 'spill'), { onProgress: copyProgress })
+    const copied = await copyTreeWithManifest(request.spillRoot, path.join(request.archivePath, 'spill'), copyOptions)
     copiedBytes += copied.bytes
     spillSourceManifest = copied.sourceManifest
   }
   if (fs.existsSync(request.degradedSpillRoot)) {
-    const copied = await copyTreeWithManifest(request.degradedSpillRoot, path.join(request.archivePath, 'spill-degraded'), { onProgress: copyProgress })
+    const copied = await copyTreeWithManifest(request.degradedSpillRoot, path.join(request.archivePath, 'spill-degraded'), copyOptions)
     copiedBytes += copied.bytes
     spillDegradedSourceManifest = copied.sourceManifest
   }
@@ -67,6 +72,7 @@ async function runWorkerCompaction(request: SessionMaintenanceWorkerRequest): Pr
   stageDurationsMs.archive = verifyStageStartedAt - archiveStageStartedAt
 
   // 归档校验（quick_check 单遍结构兜底；字节恒等由双侧哈希清单承担）
+  postHeartbeat()
   if (!quickCheckOk(archivedDbPath)) throw Object.assign(new Error('archived database failed quick_check'), { code: 'STORAGE_MAINTENANCE_FAILED' })
   stageDurationsMs.verify = performance.now() - verifyStageStartedAt
 
@@ -81,6 +87,7 @@ async function runWorkerCompaction(request: SessionMaintenanceWorkerRequest): Pr
     const dataVersionAfter = readDataVersion(source)
     stageDurationsMs.vacuum = performance.now() - vacuumStageStartedAt
     const stagingBytes = fs.statSync(request.stagingPath).size
+    postHeartbeat()
     if (!quickCheckOk(request.stagingPath)) throw Object.assign(new Error('compacted staging database failed quick_check'), { code: 'STORAGE_MAINTENANCE_FAILED' })
     post('vacuum', stagingBytes, Math.max(dbBytes, stagingBytes))
     return {
