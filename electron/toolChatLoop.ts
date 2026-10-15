@@ -64,10 +64,6 @@ import type { ConfirmOutcomeCause } from '../src/shared/confirmation/types'
 import {
   getRemoteTaskController
 } from './remote/remoteTaskController'
-import {
-  createRemoteTaskBudgetState,
-  type RemoteTaskBudgetState
-} from './remote/remoteTaskBudget'
 import { DEFAULT_REMOTE_TASK_BUDGET } from '../src/shared/imTypes'
 import {
   beginLlm,
@@ -640,7 +636,6 @@ async function runToolChatSessionInner(
 ): Promise<RunToolChatSessionResult> {
   const {
     requestId,
-    toolExecutionConcurrency,
     sessionId,
     model,
     baseUrl,
@@ -650,36 +645,23 @@ async function runToolChatSessionInner(
     toolsConfig,
     browserConfig,
     shellConfig,
-    wikiConfig,
     feishuConfig,
     wechatConfig,
-    larkCliRunner,
     remoteContext,
     workDir: initialWorkDir,
-    workDirManager,
     resolveWorkDir,
     userDataDir,
     getApiKey,
-    hostDiagnostics,
-    hostUsage,
     hostSessionMetadata,
     hostTitleSuggestions,
     hostExposureRules,
     hostMcp,
-    hostAnswerer,
     toolsTrim,
     reasoningEffort,
     locale: payloadLocale,
     projectMemoryEnabled,
     chatSignal,
-    resourceLocks,
-    invocationRuntime,
-    invocationLeaseState,
-    getBrowserDetectContext,
-    getMcpConnectionManager,
-    events: invocationEvents,
-    hasImageAttachments,
-    turnUsageStats
+    hasImageAttachments
   } = args
   // 台账事件与统计写入共用 Turn ID；requestId 仅供未迁移的旧调用兼容。
   const eventTurnId = args.turnId ?? args.requestId
@@ -696,14 +678,6 @@ async function runToolChatSessionInner(
   }
 
   const sessionMeta = hostSessionMetadata
-  const remoteBudgetState: RemoteTaskBudgetState | null = remoteContext
-    ? createRemoteTaskBudgetState(
-        requestId,
-        (remoteContext.source === 'feishu'
-          ? feishuConfig?.remoteTaskBudget
-          : wechatConfig?.remoteTaskBudget) ?? DEFAULT_REMOTE_TASK_BUDGET
-      )
-    : null
   if (remoteContext) {
     getRemoteTaskController().ensureTask(requestId, {
       sessionId,
@@ -714,7 +688,7 @@ async function runToolChatSessionInner(
         DEFAULT_REMOTE_TASK_BUDGET.maxConcurrentExecutions
     })
   }
-  const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMeta, remoteContext?.source)
+  resolveEffectiveShellOutputMode(shellConfig, sessionMeta, remoteContext?.source)
   const toolLoopOptions = resolveToolLoopModelOptions(options ?? {})
   const maxTokensEffective = effectiveMaxTokensForBuiltinToolLoop(options?.maxTokens)
   // Thinking 由 effort 档位映射（§7.3）：off → disabled、其余档 adaptive + output_config.effort 同发。
@@ -828,7 +802,6 @@ async function runToolChatSessionInner(
     return { kind: 'reject', reasonCode: 'REPEATED_SEMANTIC_CALL', message: 'The same semantic tool operation has failed repeatedly. Do not execute it again; explain the blocker or ask the user for guidance.' }
   }
   let effortOutputConfig = requestedOutputConfig
-  let effortRetryUsed = false
   const thinkingAvailability = resolveThinkingAvailability(model, {
     effortUnsupportedByMemo: isEffortUnsupportedByUpstream(args.llmServiceId, model)
   })
@@ -961,11 +934,6 @@ async function runToolChatSessionInner(
   const appendCanonicalHistory = async (events: Array<{ kind: HistoryEvent['kind']; payload: unknown }>): Promise<void> => {
     if (events.length === 0) return
     await args.appendHistoryEvents?.(events)
-  }
-  const appendReplayUserMessage = async (content: string): Promise<void> => {
-    const [message] = toCanonicalModelMessages([{ role: 'user', content }])
-    if (!message) throw new Error('recovery prompt could not be represented in canonical history')
-    await appendCanonicalHistory([{ kind: 'replay-message-committed', payload: { message } }])
   }
   const loopRound = 1
 
