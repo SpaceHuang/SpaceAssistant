@@ -69,10 +69,12 @@ async function deliveryFacts(name: 'wechat_send' | 'wechat_reply', input: Record
       remote.currentUserMessageId && remote.taskBinding)
   const controlledTaskReply = taskReplyBindingValid && textAssessment === 'ordinary' &&
     (!requestedAttachment || attachment.attachmentAuthorized)
+  const originSessionId = remote?.originSessionId ??
+    (name === 'wechat_send' && runtime.lane === 'desktop' ? runtime.sessionId : undefined)
   return {
     channel: 'wechat',
     purpose: name === 'wechat_reply' ? 'task-reply' : 'active-send',
-    ...(remote?.originSessionId ? { originSessionId: remote.originSessionId } : {}),
+    ...(originSessionId ? { originSessionId } : {}),
     activeSessionId: runtime.sessionId,
     ...(remote?.userId ? { identityKey: remote.userId } : {}),
     ...(remote?.authOwner ? { ownerId: remote.authOwner } : {}),

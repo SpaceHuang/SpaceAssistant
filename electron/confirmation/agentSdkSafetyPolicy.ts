@@ -22,7 +22,7 @@ export function createAgentSdkSafetyPolicy(input: {
   /** Finalize user-approved structural permits after the existing confirmation channel approves. */
   onConfirmed?(binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs, answerer: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): void
 }): SafetyPolicyPort & { markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer?: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): void } {
-  const initial = new Map<string, { binding: PermitBinding; result: ToolCallGateResult; args: ToolCallGateArgs; confirmed: boolean }>()
+  const initial = new Map<string, { binding: PermitBinding; result: ToolCallGateResult; args: ToolCallGateArgs; confirmed: boolean; confirmedAnswerer?: 'user' | 'agent' }>()
   const callKey = (binding: PermitBinding) => JSON.stringify([binding.invocationId, binding.toolCallId])
   const deny = (binding: PermitBinding, reasonCode: SafetyDenyReason) => {
     if (binding.phase === 'recheck') initial.delete(callKey(binding))
@@ -67,6 +67,7 @@ export function createAgentSdkSafetyPolicy(input: {
       if (decision) {
         input.onConfirmed?.(decision.binding, decision.result, decision.args, answerer, memory)
         decision.confirmed = true
+        decision.confirmedAnswerer = answerer
       }
     },
     async evaluate(binding) {
@@ -122,6 +123,21 @@ export function createAgentSdkSafetyPolicy(input: {
               !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget ||
               !sameWriteApprovalConfiguration || !sameConfirmedDecision
             )
+            const humanBottomLine = decision.type === 'require-confirm' && (
+              decision.answerer === 'user' && decision.disposition === 'human-required' ||
+              previous.confirmedAnswerer === 'agent' && decision.answerer === 'agent' && decision.disposition === 'auto-eligible'
+            )
+            if (confirmationScopeChanged && humanBottomLine) {
+              // The previous receipt no longer covers the latest facts. Preserve only the fresh
+              // decision so the confirmation port can create a new, precisely bound human todo.
+              // A changed target/risk cannot be re-approved by reusing the prior Agent verdict.
+              // A second recheck is required after that new decision is approved.
+              const humanResult = decision.answerer === 'user' && decision.disposition === 'human-required'
+                ? result
+                : { ...result, decision: { ...decision, answerer: 'user' as const, disposition: 'human-required' as const } }
+              initial.set(key, { binding: structuredClone(binding), result: structuredClone(humanResult), args: gateArgs, confirmed: false })
+              return ask(binding, humanResult, gateArgs)
+            }
             return { kind: 'deny', reasonCode: confirmationScopeChanged ? 'FACTS_CHANGED' : 'POLICY_DENY' }
           }
           return { kind: 'allow', authorizationVersion: binding.authorizationVersion }

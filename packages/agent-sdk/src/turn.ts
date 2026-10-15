@@ -1806,11 +1806,124 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           await markNotDispatched(tool, 'STALE_AUTHORIZATION')
           throw new ToolDeniedError('STALE_AUTHORIZATION')
         }
-        const authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
+        let authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
         if (input.request.signal?.aborted && authorization.kind === 'allow') {
           input.safetyGate.discardPermit(authorization.permitId)
         }
         throwIfAborted(input.request.signal)
+        if (authorization.kind === 'ask') {
+          const askContext = authorization.context && typeof authorization.context === 'object'
+            ? authorization.context as { decision?: { disposition?: unknown } }
+            : undefined
+          if (authorization.answerer !== 'user' || askContext?.decision?.disposition !== 'human-required' || !input.confirmation) {
+            const reason = authorization.answerer !== 'user' || askContext?.decision?.disposition !== 'human-required'
+              ? 'RECHECK_REQUIRES_CONFIRMATION' : 'CONFIRMATION_REQUIRED'
+            await markNotDispatched(tool, reason)
+            throw new ToolDeniedError(reason)
+          }
+          if (!approvalPermitHeld) {
+            try {
+              await approvalSlots.acquire(input.request.signal ? { signal: input.request.signal } : {})
+              approvalPermitHeld = true
+            } catch (error) {
+              await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'CONFIRMATION_CAPACITY_UNAVAILABLE')
+              throw error
+            }
+          }
+          await appendHistory([{
+            kind: 'approval-waiting',
+            payload: {
+              toolCallId: tool.toolCallId,
+              sourceRequestId: `${invocationId}:round:${modelTurns}`,
+              modelTurn: modelTurns,
+              approvalId: authorization.confirmationId,
+              answerer: authorization.answerer,
+              reasonCode: authorization.reasonCode,
+              requestId: input.invocationId,
+              requestedAt: Date.now()
+            }
+          }])
+          let freshConfirmation: ToolConfirmationResult
+          try {
+            freshConfirmation = await input.confirmation({
+              call: executionCall,
+              modelTurn: modelTurns,
+              confirmationId: authorization.confirmationId,
+              answerer: authorization.answerer,
+              reasonCode: authorization.reasonCode,
+              ...(authorization.context !== undefined ? { context: structuredClone(authorization.context) } : {}),
+              ...(input.request.signal ? { signal: input.request.signal } : {})
+            })
+          } catch (error) {
+            await appendHistory([{ kind: 'approval-resolved', payload: {
+              toolCallId: tool.toolCallId, approvalId: authorization.confirmationId, approved: false,
+              outcome: 'unavailable', settledAt: Date.now()
+            } }])
+            throw error
+          }
+          if (freshConfirmation.kind === 'deferred') {
+            if (!freshConfirmation.todoId.trim() || freshConfirmation.invocationId !== input.invocationId ||
+              !freshConfirmation.checkpointRef.checkpointId.trim() || !Number.isInteger(freshConfirmation.checkpointRef.workflowRevision) ||
+              freshConfirmation.checkpointRef.workflowRevision <= 0) {
+              await markNotDispatched(tool, 'DEFERRED_CHECKPOINT_INVALID')
+              throw new ToolDeniedError('DEFERRED_CHECKPOINT_INVALID')
+            }
+            await appendHistory([{ kind: 'approval-deferred', payload: {
+              toolCallId: tool.toolCallId, approvalId: authorization.confirmationId, todoId: freshConfirmation.todoId,
+              invocationId: freshConfirmation.invocationId, checkpointId: freshConfirmation.checkpointRef.checkpointId,
+              workflowRevision: freshConfirmation.checkpointRef.workflowRevision,
+              ...(freshConfirmation.cause ? { cause: freshConfirmation.cause } : {}),
+              ...(freshConfirmation.executionState ? { executionState: freshConfirmation.executionState } : {}),
+              ...(freshConfirmation.retryable !== undefined ? { retryable: freshConfirmation.retryable } : {}),
+              ...(freshConfirmation.nextStep ? { nextStep: freshConfirmation.nextStep } : {})
+            } }])
+            toolDispatchStates.set(tool.toolCallId, 'finished')
+            parkRequested = true
+            parkedTodoId = freshConfirmation.todoId
+            throw new DeferredTurnParkedError()
+          }
+          const freshApproved = freshConfirmation.kind === 'approved' && Boolean(freshConfirmation.receipt.trim())
+          await appendHistory([{ kind: 'approval-resolved', payload: {
+            toolCallId: tool.toolCallId,
+            approvalId: authorization.confirmationId,
+            approved: freshApproved,
+            outcome: freshApproved ? 'approved' : freshConfirmation.kind === 'approved' ? 'denied' : freshConfirmation.kind,
+            ...(freshConfirmation.answerer ? { answerer: freshConfirmation.answerer } : {}),
+            ...(freshConfirmation.cause ? { cause: freshConfirmation.cause } : {}),
+            ...(freshConfirmation.promptSendFailure ? { promptSendFailure: freshConfirmation.promptSendFailure } : {}),
+            settledAt: Date.now()
+          } }])
+          if (input.request.signal?.aborted) {
+            await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
+            throwIfAborted(input.request.signal)
+          }
+          if (freshConfirmation.kind !== 'approved' || !freshConfirmation.receipt.trim()) {
+            const reason = `CONFIRMATION_${freshConfirmation.kind.toUpperCase()}`
+            await markNotDispatched(tool, reason, freshConfirmation.userMessage,
+              freshConfirmation.promptSendFailure ? { promptSendFailure: freshConfirmation.promptSendFailure } : undefined)
+            throw new ToolDeniedError(reason, freshConfirmation.userMessage)
+          }
+          confirmation = { receipt: freshConfirmation.receipt, answerer: freshConfirmation.answerer ?? 'user' }
+          try {
+            recheckBinding = await input.prepareTool(executionCall, {
+              kind: 'recheck', confirmation,
+              ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {})
+            })
+          } catch (error) {
+            throwIfAborted(input.request.signal)
+            const message = error instanceof Error ? error.message : ''
+            const reasonCode = error instanceof ToolDeniedError ? error.reasonCode
+              : /^[A-Z0-9_]{1,64}$/.test(message) ? message : 'PREPARED_RECHECK_FAILED'
+            await markNotDispatched(tool, reasonCode)
+            throw new ToolDeniedError(reasonCode)
+          }
+          if (!matchesRecheckBinding(initialBinding, recheckBinding)) {
+            await markNotDispatched(tool, 'STALE_AUTHORIZATION')
+            throw new ToolDeniedError('STALE_AUTHORIZATION')
+          }
+          authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
+          throwIfAborted(input.request.signal)
+        }
         if (authorization.kind !== 'allow') {
           const reason = authorization.kind === 'deny' ? authorization.reasonCode : 'RECHECK_REQUIRES_CONFIRMATION'
           await markNotDispatched(tool, reason)

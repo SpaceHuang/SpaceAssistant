@@ -34,6 +34,35 @@ function makeRuntime() {
 }
 
 describe('WeChat outbound prepared registrations', () => {
+  it('sends a user-approved desktop wechat_send after binding it to the active desktop session', async () => {
+    const sessionId = 'desktop-active-send-session'
+    const workDir = '/tmp'
+    const config = { ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true }
+    const platformSend = vi.fn(async () => undefined)
+    const executor = {
+      name: 'wechat_send',
+      execute: (input: Record<string, unknown>, context: { workDir: string; sessionId: string; signal?: AbortSignal;
+        outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) =>
+        executeWeChatSend(input as { userId: string; text: string }, {
+          workDir: context.workDir, sessionId: context.sessionId, signal: context.signal,
+          outboundDeliveryFacts: context.outboundDeliveryFacts,
+          botService: { getRawBot: () => ({ send: platformSend }) } as never,
+          getWeChatConfig: () => config
+        })
+    }
+    const [sendTool] = createWeChatOutboundRegisteredTools({ send: executor as never, reply: { name: 'wechat_reply', execute: vi.fn() } as never })
+
+    const result = await executeRegisteredTool(sendTool!, { userId: 'recipient', text: 'hello from desktop' }, {
+      requestId: 'desktop-active-send-request', toolUseId: 'desktop-active-send-call', signal: new AbortController().signal,
+      userConfirmationReceipt: 'confirmation:user-approved', userConfirmationAnswerer: 'user',
+      executionContext: { workDir, sessionId, lane: 'desktop', wechatConfig: config } as never
+    }, { confirm: async () => true, dispatch: async (_handle, _context, execute) => execute(new AbortController().signal) })
+
+    expect(result).toMatchObject({ success: true })
+    expect(platformSend).toHaveBeenCalledOnce()
+    expect(platformSend).toHaveBeenCalledWith('recipient', 'hello from desktop')
+  })
+
   it('classifies an ordinary text reply for the authenticated current task as controlled without requiring an attachment', async () => {
     const runtime = {
       ...makeRuntime(),

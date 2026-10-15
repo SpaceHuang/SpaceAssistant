@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { appendMessage, createSession } from '../database/operations'
@@ -95,7 +97,7 @@ describe('production IM deferred approval producer', () => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
     const sessionId = createSession(db, { name: 'standard-package-read' }).id
-    const workDir = await fs.mkdtemp('/private/var/folders/ty/_cyp42ys5m19qj_4_qhvst4m0000gn/T/im-standard-read-')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-standard-read-'))
     const { agentSdk } = assembleInvocation({ requestId: 'standard-read-request', turnId: 'standard-read-turn', sessionId, providerRouteId: 'standard-read-route',
       lane: 'feishu', model: 'model', locale: 'en-US', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
       appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
@@ -126,7 +128,7 @@ describe('production IM deferred approval producer', () => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
     const sessionId = createSession(db, { name: 'malformed-tool-input' }).id
-    const workDir = await fs.mkdtemp('/private/var/folders/ty/_cyp42ys5m19qj_4_qhvst4m0000gn/T/im-malformed-tool-input-')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-malformed-tool-input-'))
     const { agentSdk } = assembleInvocation({ requestId: 'malformed-input-request', turnId: 'malformed-input-turn', sessionId,
       providerRouteId: 'malformed-input-route', lane: 'feishu', model: 'model', locale: 'en-US', messages: [],
       toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key',
@@ -154,7 +156,7 @@ describe('production IM deferred approval producer', () => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
     const sessionId = createSession(db, { name: 'approval-agent-recursion-guard' }).id
-    const workDir = await fs.mkdtemp('/private/var/folders/ty/_cyp42ys5m19qj_4_qhvst4m0000gn/T/im-recursion-guard-')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-recursion-guard-'))
     const { agentSdk } = assembleInvocation({ requestId: 'recursion-guard-request', turnId: 'recursion-guard-turn', sessionId,
       lane: 'feishu', model: 'model', locale: 'en-US', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
       workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
@@ -189,7 +191,7 @@ describe('production IM deferred approval producer', () => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
     const sessionId = createSession(db, { name: 'critical-wiki-raw-deny' }).id
-    const workDir = await fs.mkdtemp('/private/var/folders/ty/_cyp42ys5m19qj_4_qhvst4m0000gn/T/im-critical-wiki-deny-')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-critical-wiki-deny-'))
     const { agentSdk } = assembleInvocation({ requestId: 'critical-wiki-request', turnId: 'critical-wiki-turn', sessionId,
       lane: 'feishu', model: 'model', locale: 'en-US', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
       wikiConfig: { ...DEFAULT_WIKI_CONFIG, enabled: true }, workDir, userDataDir: '/tmp', getApiKey: async () => 'key',
@@ -588,7 +590,7 @@ describe('production IM deferred approval producer', () => {
       adapter: { send: async () => ({ messageId: 'agent-recheck-notice' }) }, audit: vi.fn() })
     const producer = createImDeferredApprovalProducer({ db, channel: 'feishu', todoStore, capacity, intentStore: intents, envelopeStore,
       notificationDelivery, isEnabled: () => true, getAuthorizationEpoch: () => 5, resolveTaskDigest: () => 'Create a project note.' })
-    const workDir = await fs.mkdtemp('/private/var/folders/ty/_cyp42ys5m19qj_4_qhvst4m0000gn/T/im-agent-recheck-')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-agent-recheck-'))
     const target = `${workDir}/new.md`
     const remoteContext: RemoteContext = { source: 'feishu', messageId: 'platform-agent-recheck', confirmPolicy: 'im_confirm',
       chatId: 'chat-agent-recheck', userId: 'owner', authOwner: 'owner', originSessionId: sessionId, requestId: 'request-agent-recheck',
@@ -634,6 +636,8 @@ describe('production IM deferred approval producer', () => {
       if (agentOutcome.kind !== 'approved') throw new Error('EXPECTED_AGENT_APPROVAL')
 
       const recheckBinding = await registered.prepareTool(call, { kind: 'recheck', confirmation: { receipt: agentOutcome.receipt } })
+      const recheckGate = await evaluateToolCallGate(await agentSdk.resolveGateArgs(recheckBinding, call))
+      expect(recheckGate.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', disposition: 'auto-eligible', ruleId: 'im-write-ask' })
       const humanDecision = await safetyGate.evaluate(recheckBinding)
       expect(humanDecision).toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'im-write-ask',
         context: { decision: { disposition: 'human-required' } } })
@@ -696,7 +700,7 @@ describe('production IM deferred approval producer', () => {
     const context: RemoteContext = { source: 'feishu', messageId: 'script-recheck-origin', confirmPolicy: 'im_confirm', chatId: 'script-recheck-chat',
       userId: 'owner', authOwner: 'owner', originSessionId: sessionId, requestId: 'request-script-recheck', turnId: 'turn-script-recheck',
       currentUserMessageId: 'user-script-recheck', taskBinding: task.taskBinding, providerRouteId: 'route-script-recheck', model: 'model', workDirProfileId: 'profile' }
-    const workDir = await fs.mkdtemp('/private/var/folders/ty/_cyp42ys5m19qj_4_qhvst4m0000gn/T/im-script-recheck-')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-script-recheck-'))
     const { agentSdk } = assembleInvocation({ requestId: context.requestId!, turnId: context.turnId!, sessionId, lane: 'feishu',
       model: 'model', providerRouteId: context.providerRouteId!, locale: 'en-US', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
       appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(), remoteContext: context })
@@ -780,7 +784,7 @@ describe('production IM deferred approval producer', () => {
     const db = createMemoryAppDb()
     seedImPolicy(db)
     const sessionId = createSession(db, { name: 'hard-deny-pre-admission' }).id
-    const workDir = await fs.mkdtemp('/private/var/folders/ty/_cyp42ys5m19qj_4_qhvst4m0000gn/T/im-hard-deny-')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-hard-deny-'))
     const { agentSdk } = assembleInvocation({ requestId: 'hard-deny-pre-admission', sessionId, lane: 'feishu',
       remoteContext: { source: 'feishu', messageId: 'hard-deny-origin', chatId: 'hard-deny-chat', userId: 'owner' } as never,
       model: 'model', locale: 'en-US', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',

@@ -1363,6 +1363,49 @@ describe('runAgentTurn', () => {
     expect((await backing.read('parked-transcript-invocation')).events.at(-1)).toMatchObject({ kind: 'invocation-parked' })
   })
 
+  it('parks in a fresh human todo when final recheck raises a human-required decision', async () => {
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'recheck-human-todo', stream: () => stream(
+      { type: 'tool-call', toolCallId: 'recheck-human-tool', toolName: 'write_file', input: { path: 'report.md', content: 'content' } },
+      { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+    const invocationId = 'recheck-human-todo-invocation'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['write_file'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const executor = vi.fn(async () => ({ output: 'must not run before todo approval' }))
+    let confirmationCount = 0
+    const confirmation = vi.fn(async ({ call }: { call: { invocationId: string } }) => {
+      confirmationCount += 1
+      return confirmationCount === 1
+        ? { kind: 'approved' as const, receipt: 'agent-receipt', answerer: 'agent' as const }
+        : { kind: 'deferred' as const, todoId: 'fresh-human-todo', invocationId: call.invocationId,
+            checkpointRef: { checkpointId: 'fresh-human-checkpoint', workflowRevision: 2 },
+            cause: 'human-required', executionState: 'not-executed' as const, nextStep: 'await-user' as const }
+    })
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'write the report' }], maxTokens: 32 }, maxModelTurns: 2,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => binding.phase === 'initial-compat'
+        ? { kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: 'agent' as const, reasonCode: 'im-low-risk-create',
+            context: { decision: { disposition: 'auto-eligible' } } }
+        : { kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: 'user' as const, reasonCode: 'im-write-ask',
+            context: { decision: { disposition: 'human-required' } } }
+      } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => executor()), confirmation
+    })
+
+    expect(result).toMatchObject({ parked: true, parkedTodoId: 'fresh-human-todo' })
+    expect(confirmation).toHaveBeenCalledTimes(2)
+    expect(confirmation.mock.calls[1]?.[0]).toMatchObject({ answerer: 'user', reasonCode: 'im-write-ask',
+      context: { decision: { disposition: 'human-required' } } })
+    expect(executor).not.toHaveBeenCalled()
+    expect((await history.read(invocationId)).events.map(({ kind }) => kind)).toContain('approval-deferred')
+  })
+
   it('projects canonical assistant text blocks into the failed terminal message mirror', async () => {
     const backing = new MemoryHistory()
     const terminalCommits: import('../src/history').SessionTranscriptCommitIntent[] = []

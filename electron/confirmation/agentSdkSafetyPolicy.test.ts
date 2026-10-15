@@ -81,22 +81,26 @@ describe('createAgentSdkSafetyPolicy', () => {
     expect(selected).toHaveBeenCalledWith(key)
   })
 
-  it('denies a confirmed edit_file when the fresh gate reports a replaced target identity', async () => {
+  it('requires a fresh human decision when an approved edit target identity changes', async () => {
     const originalTarget = { rawPath: 'approved.txt', normalizedPath: '/workspace/approved.txt', zone: 'workdir-normal' as const, targetKind: 'file' as const, parentReal: '/workspace', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 0, mtimeMs: 1, nlink: 2 }, identity: { dev: 1, ino: 3, mode: 0o100644, size: 16, mtimeMs: 1, nlink: 1 } }
     const replacedTarget = { ...originalTarget, identity: { ...originalTarget.identity, ino: 4 } }
     const writeFacts: ContentFacts = { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit approved file' } }
-    const initial: ToolCallGateResult = { decision: { type: 'require-confirm', ruleId: 'edit-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts, memoryTiers: [], timeoutMs: 1000 }, facts: writeFacts, approvedFactIds: [], writePathFact: originalTarget }
+    const initial: ToolCallGateResult = { decision: { type: 'require-confirm', ruleId: 'edit-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts, memoryTiers: [], timeoutMs: 1000, disposition: 'human-required' }, facts: writeFacts, approvedFactIds: [], writePathFact: originalTarget }
     const replaced: ToolCallGateResult = { ...initial, writePathFact: replacedTarget }
     const input = { path: 'approved.txt', old_string: 'original content', new_string: 'changed content' }
     const args = { ...baseArgs, toolName: 'edit_file', toolInput: input, workDir: '/workspace' } as ToolCallGateArgs
     const testBinding = { ...binding, capabilityId: 'edit_file', inputSnapshotHash: createHash('sha256').update('{"new_string":"changed content","old_string":"original content","path":"approved.txt"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'edit_file' } }
-    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(replaced)
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(replaced)
     const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, evaluateGate })
 
     await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'edit-confirm' })
     markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
-    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1', phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
-    expect(evaluateGate).toHaveBeenCalledTimes(2)
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1', phase: 'recheck' }))
+      .resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'edit-confirm', context: { decision: { disposition: 'human-required' } } })
+    markAgentSdkSafetyDecisionConfirmed(policy, testBinding, 'user')
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1', phase: 'recheck' }))
+      .resolves.toEqual({ kind: 'allow', authorizationVersion: 'edit-v1' })
+    expect(evaluateGate).toHaveBeenCalledTimes(3)
   })
 
   it('allows a confirmed edit when only sibling creation changes parent directory size and mtime', async () => {
@@ -144,12 +148,12 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1', phase: 'recheck' })).resolves.toEqual({ kind: 'allow', authorizationVersion: 'write-v1' })
   })
 
-  it('still denies a confirmed write when the parent directory itself was replaced before recheck', async () => {
+  it('requires a fresh human decision when a write parent directory is replaced before recheck', async () => {
     const approvedTarget = { rawPath: 'new.txt', normalizedPath: '/workspace/new.txt', zone: 'workdir-normal' as const, targetKind: 'missing' as const, parentReal: '/workspace', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 4096, mtimeMs: 1000, nlink: 3 } }
-    // ino 变化意味着父目录本体被替换（symlink 攻击面），必须继续 FACTS_CHANGED。
+    // ino 变化意味着父目录本体被替换；旧批准失效，必须基于新目标重新请求人工决定。
     const swappedParent = { ...approvedTarget, parentIdentity: { ...approvedTarget.parentIdentity, ino: 9 } }
     const writeFacts: ContentFacts = { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'write new file' } }
-    const initial: ToolCallGateResult = { decision: { type: 'require-confirm', ruleId: 'write-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts, memoryTiers: [], timeoutMs: 1000 }, facts: writeFacts, approvedFactIds: [], writePathFact: approvedTarget }
+    const initial: ToolCallGateResult = { decision: { type: 'require-confirm', ruleId: 'write-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts, memoryTiers: [], timeoutMs: 1000, disposition: 'human-required' }, facts: writeFacts, approvedFactIds: [], writePathFact: approvedTarget }
     const swapped: ToolCallGateResult = { ...initial, writePathFact: swappedParent }
     const args = { ...baseArgs, toolName: 'write_file', toolInput: { path: 'new.txt', content: 'x' }, workDir: '/workspace' } as ToolCallGateArgs
     const testBinding = { ...binding, capabilityId: 'write_file', inputSnapshotHash: createHash('sha256').update('{"content":"x","path":"new.txt"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'write_file' } }
@@ -158,7 +162,8 @@ describe('createAgentSdkSafetyPolicy', () => {
 
     await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'write-confirm' })
     markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
-    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1', phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1', phase: 'recheck' }))
+      .resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'write-confirm', context: { decision: { disposition: 'human-required' } } })
   })
 
   it('rejects an approved ask when recheck becomes auto-allow under changed facts', async () => {
@@ -263,7 +268,7 @@ describe('createAgentSdkSafetyPolicy', () => {
       signals: [{ kind: 'feishu-media-target', boundary: 'inside' }], summary: { text: '飞书附件目标边界已检查' }
     }
     const initial = {
-      ...result({ type: 'require-confirm', ruleId: 'approved-attachment-rule', answerer: 'user', riskLevel: 'medium', facts: attachmentFacts, memoryTiers: [], timeoutMs: 1000 }),
+      ...result({ type: 'require-confirm', ruleId: 'approved-attachment-rule', answerer: 'user', riskLevel: 'medium', facts: attachmentFacts, memoryTiers: [], timeoutMs: 1000, disposition: 'human-required' }),
       feishuMediaFact: {
         boundary: 'inside' as const, attachmentId: 'attachment-1', normalizedPath: '/user-data/feishu-media/cache/m1/brief.txt', targetKind: 'file' as const,
         identity: { dev: 1, ino: 10, mode: 33188, size: 8, mtimeMs: 100 }
@@ -282,10 +287,10 @@ describe('createAgentSdkSafetyPolicy', () => {
 
     await expect(policy.evaluate(confirmedBinding)).resolves.toMatchObject({ kind: 'ask', reasonCode: 'approved-attachment-rule' })
     markAgentSdkSafetyDecisionConfirmed(policy, confirmedBinding)
-    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
+    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'approved-attachment-rule' })
   })
 
-  it('denies a confirmed Feishu attachment when its target identity changes before recheck', async () => {
+  it('requires a fresh human decision when a Feishu attachment identity changes before recheck', async () => {
     const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-feishu-confirmed-attachment-'))
     const mediaDir = path.join(userDataDir, 'feishu-media', 'cache', 'message-1')
     const attachmentPath = path.join(mediaDir, 'brief.txt')
@@ -331,7 +336,8 @@ describe('createAgentSdkSafetyPolicy', () => {
       expect(executionContext.readExecutionPermit).toMatchObject({ toolName: 'read_feishu_attachment', targets: [{ identity: { ino: expect.any(Number) } }] })
       await fs.rename(attachmentPath, `${attachmentPath}.approved`)
       await fs.writeFile(attachmentPath, 'replacement')
-      await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
+      await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' }))
+        .resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'test-confirm-feishu-attachment', context: { decision: { disposition: 'human-required' } } })
     } finally {
       await fs.rm(userDataDir, { recursive: true, force: true })
     }

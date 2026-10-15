@@ -677,9 +677,15 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
 
       const recheck = await composed.registeredTools.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'confirmation:agent-1' } })
       const renewedDecision = await safetyGate.evaluate(recheck)
-      expect(renewedDecision).toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
+      expect(renewedDecision).toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'im-write-ask',
+        context: { decision: { disposition: 'human-required' } } })
+      if (renewedDecision.kind !== 'ask') throw new Error('EXPECTED_FRESH_HUMAN_WRITE_CONFIRMATION')
+      await expect(composed.confirmation({ call, confirmationId: renewedDecision.confirmationId, answerer: renewedDecision.answerer,
+        reasonCode: renewedDecision.reasonCode, context: renewedDecision.context })).resolves.toMatchObject({
+        kind: 'deferred', todoId: 'fresh-human-write-todo', executionState: 'not-executed'
+      })
       expect(execute).not.toHaveBeenCalled()
-      expect(defer).toHaveBeenCalledTimes(1)
+      expect(defer).toHaveBeenCalledTimes(2)
     } finally {
       composed.registeredTools.discardPreparedTool(call)
       await composed.dispose()
