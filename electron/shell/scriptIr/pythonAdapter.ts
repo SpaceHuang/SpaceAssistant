@@ -216,7 +216,6 @@ function adaptStmt(node: TsNode): IrStmt | null {
       for (const child of namedChildren(node)) {
         if (child.type === 'except_clause') {
           const value = fieldNode(child, 'value')
-          const alias = fieldNode(child, 'alias')
           // value 形态：裸表达式或 as_pattern（except E as e）；body 为无字段名的 block 子节点
           let typeExpr: IrExpr | null = null
           let handlerName: string | undefined
@@ -441,21 +440,6 @@ function assignTargetName(target: TsNode): string {
     default:
       // 下标/属性赋值（a[0] = x / a.b = x）取整段文本为目标名，保持「目标非简单名」语义
       return nodeText(target)
-  }
-}
-
-function patternTargetName(node: TsNode): string {
-  switch (node.type) {
-    case 'identifier':
-      return nodeText(node)
-    case 'as_pattern': {
-      const target = fieldNode(node, 'alias')
-      return target ? patternTargetName(target) : nodeText(node)
-    }
-    case 'pattern_list':
-      return namedChildren(node).map((c) => patternTargetName(c)).join(',')
-    default:
-      return nodeText(node)
   }
 }
 
@@ -778,7 +762,6 @@ function adaptComprehension(node: TsNode): IrExpr {
   let dictKey: IrExpr | null = null
   const generators: Array<{ target: string; iter: IrExpr; conditions: IrExpr[] }> = []
   const body = fieldNode(node, 'body')
-  const keyNode = fieldNode(node, 'key')
   // v4 评审:条件子句必须进 IR(每轮迭代可能不求值;条件内调用/walrus 不得逃逸分析)。
   // tree-sitter 形态:if_clause 是 for_in_clause 的**兄弟节点**,按归属挂到最近的生成器上。
   for (const child of namedChildren(node)) {
@@ -1003,4 +986,3 @@ export function resolveIrChain(expr: IrExpr, scope: IrScope): IrResolvedChain {
 
   return { root: null, module: null, attrs: [], fullName: null }
 }
-
