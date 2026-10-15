@@ -1,7 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Alert, App, Button, Input, Modal, Tooltip, Typography } from 'antd'
-import { useTypedSelector } from '../../hooks'
-import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
@@ -31,8 +29,6 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
 ) {
   const { message } = App.useApp()
   const { t } = useTypedTranslation('wiki')
-  const cfg = useTypedSelector((s) => s.config.config)
-  const wiki = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
   const wikiRoot = WIKI_VOCABULARY_PREFIX // BLK-4（D9）：词汇根恒为常量
 
   const [wikiInitialized, setWikiInitialized] = useState<boolean | null>(null)
@@ -179,7 +175,6 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
             onFileSelect={handleWikiSelect}
             highlightRelPaths={highlightPaths}
             wikiRootPath={wikiRoot}
-            wikiEnabled={wiki.enabled}
             onCollectToWiki={onCollectToWiki}
             treeOptions={{
               rootRelPath: wikiRoot,

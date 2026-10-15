@@ -30,7 +30,6 @@ interface FileTreeProps {
   onSelectedKeyChange?: (key: string | null) => void
   highlightRelPaths?: string[]
   wikiRootPath?: string
-  wikiEnabled?: boolean
   onCollectToWiki?: (relPath: string) => void
 }
 
@@ -44,7 +43,6 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     onSelectedKeyChange,
     highlightRelPaths = [],
     wikiRootPath = WIKI_VOCABULARY_PREFIX,
-    wikiEnabled = false,
     onCollectToWiki
   },
   ref
@@ -115,7 +113,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
         tc: (key: string) => tc(key as Parameters<typeof tc>[0])
       })
     },
-    [message, onCollectToWiki, startNewDirectoryIn, t, tc, tree, wikiEnabled, wikiRootPath, workDir]
+    [message, onCollectToWiki, startNewDirectoryIn, t, tc, tree, wikiRootPath, workDir]
   )
 
   const openContextMenu = useCallback((key: string, x: number, y: number) => {

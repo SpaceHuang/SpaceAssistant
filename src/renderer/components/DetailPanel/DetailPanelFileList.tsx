@@ -69,7 +69,6 @@ export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: 
           onSelectedKeyChange={setSelectedKey}
           onFileSelect={handleFileSelect}
           wikiRootPath={wikiRoot}
-          wikiEnabled={wiki.enabled}
           onCollectToWiki={onCollectToWiki}
           treeOptions={treeOptions}
         />
