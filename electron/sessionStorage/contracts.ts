@@ -118,6 +118,11 @@ export interface ContinuationStore {
   claim(input: { continuationId: string; revalidatedFrozenConfig: Record<string, unknown> }): boolean
   settle(input: { continuationId: string; status: ContinuationTerminalStatus }): boolean
   settleForTurn(input: { targetTurnId: string; status: ContinuationTerminalStatus }): boolean
+  readByTarget(input: { sessionId: string; targetInvocationId: string }): SessionContinuationRecord | undefined
+  readByRequest(input: { sessionId: string; requestIdempotencyKey: string }): SessionContinuationRecord | undefined
+  readAwaitingBySource(input: { sessionId: string; sourceTurnId: string }): SessionContinuationRecord | undefined
+  readCancelledBySource(input: { sessionId: string; sourceTurnId: string }): SessionContinuationRecord | undefined
+  cancelPending(input: { continuationId: string }): boolean
 }
 export interface ContinuationLaunchStore {
   prepareAndClaim(input: {
@@ -126,7 +131,9 @@ export interface ContinuationLaunchStore {
     createdBy: string
     frozenConfig: Record<string, unknown>
     executionConfig: TurnExecutionConfig
-    acceptance: Pick<ContinuationIntentAcceptance, 'payloadSha256' | 'rawText' | 'attachments' | 'intentKind' | 'route'>
+    recoveryMode?: 'exact' | 'unknown-effects'
+    deferDispatch?: boolean
+    acceptance?: Pick<ContinuationIntentAcceptance, 'payloadSha256' | 'rawText' | 'attachments' | 'intentKind' | 'route'>
   }): ReturnType<typeof import('../runtime/agentContinuation').startAgentContinuation>
 }
 
@@ -163,6 +170,10 @@ export interface ContinuationSourceQueries {
     activeTurnIds: readonly string[]
     selectedAssistantMessageId?: string
   }): ContinuationSourceInspection
+  readRecoveryFacts(sessionId: string): Readonly<{
+    unresolvedEffects: readonly import('../runtime/agentContinuation').UnresolvedEffect[]
+    toolOutcomes: readonly Readonly<{ id: string; toolName?: string; outcome: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched' }>[]
+  }>
 }
 
 /** Bound, database-free business read capabilities for a session storage instance. */

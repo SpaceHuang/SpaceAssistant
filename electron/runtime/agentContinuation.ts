@@ -5,7 +5,7 @@ import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import { runInTransaction } from '../database/transaction'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { toCanonicalModelMessages } from './canonicalHistory'
-import { mirrorCanonicalContextMessages } from './sqliteAgentHistory'
+import { mirrorCanonicalContextMessages, SqliteAgentHistory } from './sqliteAgentHistory'
 
 export type AgentContinuationRecord = Readonly<{
   continuationId: string
@@ -35,7 +35,10 @@ function stableJson(value: unknown): string {
 
 function sha256(value: unknown): string { return createHash('sha256').update(stableJson(value)).digest('hex') }
 
-export function validateContinuationCheckpoint(snapshot: HistorySnapshot): Readonly<{ checkpointSequence: number; checkpointSha256: string; transcript: ReturnType<typeof rebuildClaudeMessagesFromHistory>; requiredUserMessage: Readonly<{ id: string; message: Record<string, unknown> }> }> {
+export type UnresolvedEffect = Readonly<{ id: string; originInvocationId: string; toolCallId: string; toolName?: string; inputHash?: string }>
+type ValidatedCheckpoint = Readonly<{ checkpointSequence: number; checkpointSha256: string; transcript: ReturnType<typeof rebuildClaudeMessagesFromHistory>; requiredUserMessage: Readonly<{ id: string; message: Record<string, unknown> }>; unresolvedEffects: readonly UnresolvedEffect[] }>
+
+function validateCheckpoint(snapshot: HistorySnapshot, allowUnknownEffects: boolean): ValidatedCheckpoint {
   const events = snapshot.events
   const terminalKinds = new Set(['invocation-completed', 'invocation-failed', 'invocation-interrupted'])
   const terminal = events.at(-1)
@@ -57,6 +60,7 @@ export function validateContinuationCheckpoint(snapshot: HistorySnapshot): Reado
   if (terminalPayload.status === 'denied' || terminalPayload.reason === 'POLICY_DENY' || terminalPayload.reason === 'CONFIRMATION_DENIED') throw new AgentContinuationRejectedError('SAFETY_REJECTION_NOT_RECOVERABLE')
   const started = new Set<string>()
   const settled = new Set<string>()
+  const starts = new Map<string, Record<string, unknown>>()
   let pendingProposals = new Set<string>()
   let unsettledProposals = new Set<string>()
   let crossedResponseWithUnsettledTools = false
@@ -76,10 +80,10 @@ export function validateContinuationCheckpoint(snapshot: HistorySnapshot): Reado
       pendingProposals = new Set((message?.toolCalls ?? []).flatMap((call) => typeof call.id === 'string' ? [call.id] : []))
       unsettledProposals = new Set(pendingProposals)
     }
-    if (event.kind === 'tool-call-started' && typeof payload.toolCallId === 'string') started.add(payload.toolCallId)
+    if (event.kind === 'tool-call-started' && typeof payload.toolCallId === 'string') { started.add(payload.toolCallId); starts.set(payload.toolCallId, payload) }
     if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && typeof payload.toolCallId === 'string') {
       if (!pendingProposals.has(payload.toolCallId) || settled.has(payload.toolCallId)) throw new AgentContinuationRejectedError('CHECKPOINT_TOOL_PAIR_CONFLICT')
-      settled.add(payload.toolCallId)
+      if (event.kind === 'tool-call-not-dispatched' || payload.executionOutcome !== 'unknown-after-dispatch') settled.add(payload.toolCallId)
       unsettledProposals.delete(payload.toolCallId)
     }
     if (event.kind === 'approval-waiting' && typeof payload.toolCallId === 'string') approvals.add(payload.toolCallId)
@@ -93,15 +97,25 @@ export function validateContinuationCheckpoint(snapshot: HistorySnapshot): Reado
       throw new AgentContinuationRejectedError('SAFETY_REJECTION_NOT_RECOVERABLE')
     }
   }
-  for (const toolCallId of started) if (!settled.has(toolCallId)) throw new AgentContinuationRejectedError('UNKNOWN_SIDE_EFFECT')
+  const locallyUnresolved = [...started].filter((toolCallId) => !settled.has(toolCallId)).map((toolCallId): UnresolvedEffect => {
+    const start = starts.get(toolCallId) ?? {}
+    return { id: `${snapshot.invocationId}:${toolCallId}`, originInvocationId: snapshot.invocationId, toolCallId,
+      ...(typeof start.toolName === 'string' ? { toolName: start.toolName } : {}), ...(typeof start.inputHash === 'string' ? { inputHash: start.inputHash } : {}) }
+  })
+  const inheritedEffects = Array.isArray(contextPayload?.unresolvedEffects) ? contextPayload.unresolvedEffects.filter((effect): effect is UnresolvedEffect =>
+    Boolean(effect && typeof effect === 'object' && !Array.isArray(effect) && typeof (effect as UnresolvedEffect).id === 'string' &&
+      typeof (effect as UnresolvedEffect).originInvocationId === 'string' && typeof (effect as UnresolvedEffect).toolCallId === 'string')) : []
+  const unresolvedEffects = [...new Map([...inheritedEffects, ...locallyUnresolved].map((effect) => [effect.id, effect])).values()]
+  if (unresolvedEffects.length && !allowUnknownEffects) throw new AgentContinuationRejectedError('UNKNOWN_SIDE_EFFECT')
   if (crossedResponseWithUnsettledTools) throw new AgentContinuationRejectedError('CHECKPOINT_TOOL_PAIR_CONFLICT')
   if (approvals.size) throw new AgentContinuationRejectedError('UNRESOLVED_APPROVAL')
-  if (unsettledProposals.size) throw new AgentContinuationRejectedError('CHECKPOINT_HAS_UNSETTLED_TOOL_CALL')
+  if ([...unsettledProposals].some((toolCallId) => !started.has(toolCallId) || settled.has(toolCallId))) throw new AgentContinuationRejectedError('CHECKPOINT_HAS_UNSETTLED_TOOL_CALL')
+  if (unsettledProposals.size && !allowUnknownEffects) throw new AgentContinuationRejectedError('CHECKPOINT_HAS_UNSETTLED_TOOL_CALL')
   if (latestResponse < 0) throw new AgentContinuationRejectedError('CHECKPOINT_RESPONSE_MISSING')
   const checkpointEvents = events.slice(0, -1)
   let transcript: ReturnType<typeof rebuildClaudeMessagesFromHistory>
   try {
-    transcript = rebuildClaudeMessagesFromHistory(checkpointEvents)
+    transcript = rebuildClaudeMessagesFromHistory(checkpointEvents, { synthesizeUnknownToolResults: allowUnknownEffects })
   } catch (error) {
     if (contextPayload?.requiredUserMessage) throw new AgentContinuationRejectedError('CHECKPOINT_REQUIRED_USER_MISMATCH')
     throw error
@@ -123,8 +137,11 @@ export function validateContinuationCheckpoint(snapshot: HistorySnapshot): Reado
     if (error instanceof AgentContinuationRejectedError) throw error
     throw new AgentContinuationRejectedError('CHECKPOINT_REQUIRED_USER_MISMATCH')
   }
-  return { checkpointSequence: checkpointEvents.at(-1)?.sequence ?? latestResponse, checkpointSha256: sha256(checkpointEvents), transcript, requiredUserMessage: requiredUser as { id: string; message: Record<string, unknown> } }
+  return { checkpointSequence: checkpointEvents.at(-1)?.sequence ?? latestResponse, checkpointSha256: sha256(checkpointEvents), transcript, requiredUserMessage: requiredUser as { id: string; message: Record<string, unknown> }, unresolvedEffects }
 }
+
+export function validateContinuationCheckpoint(snapshot: HistorySnapshot): ValidatedCheckpoint { return validateCheckpoint(snapshot, false) }
+export function validateUnknownRecoveryCheckpoint(snapshot: HistorySnapshot): ValidatedCheckpoint { return validateCheckpoint(snapshot, true) }
 
 type ContinuationRow = {
   continuation_id: string; source_invocation_id: string; source_turn_id: string; checkpoint_sequence: number; checkpoint_sha256: string
@@ -141,11 +158,11 @@ function rowToRecord(row: ContinuationRow, transcript: AgentContinuationRecord['
 
 export function createOrGetAgentContinuation(input: {
   conn: DatabaseSync; snapshot: HistorySnapshot; sessionId: string; requestIdempotencyKey: string; createdBy: string
-  frozenConfig: Record<string, unknown>; newId?: () => string; now?: () => number
+  frozenConfig: Record<string, unknown>; newId?: () => string; now?: () => number; recoveryMode?: 'exact' | 'unknown-effects'
 }): AgentContinuationRecord {
   const key = input.requestIdempotencyKey.trim()
   if (!key || !input.createdBy.trim() || !input.sessionId.trim()) throw new AgentContinuationRejectedError('CONTINUATION_IDENTITY_REQUIRED')
-  const checkpoint = validateContinuationCheckpoint(input.snapshot)
+  const checkpoint = validateCheckpoint(input.snapshot, input.recoveryMode === 'unknown-effects')
   const frozenConfigJson = JSON.stringify(input.frozenConfig)
   const newId = input.newId ?? randomUUID
   const now = (input.now ?? Date.now)()
@@ -157,11 +174,11 @@ export function createOrGetAgentContinuation(input: {
     }
     const byCheckpoint = input.conn.prepare('SELECT * FROM agent_continuations WHERE source_invocation_id=? AND checkpoint_sequence=?').get(input.snapshot.invocationId, checkpoint.checkpointSequence) as ContinuationRow | undefined
     if (byCheckpoint) {
-      if (byCheckpoint.status !== 'interrupted' || byCheckpoint.frozen_config_sha256 !== sha256(input.frozenConfig)) throw new AgentContinuationRejectedError('CONTINUATION_ALREADY_CLAIMED')
+      if ((byCheckpoint.status !== 'interrupted' && byCheckpoint.status !== 'cancelled') || byCheckpoint.frozen_config_sha256 !== sha256(input.frozenConfig)) throw new AgentContinuationRejectedError('CONTINUATION_ALREADY_CLAIMED')
       const priorEvents = input.conn.prepare("SELECT kind FROM agent_history_events WHERE invocation_id=? AND kind='tool-call-started' LIMIT 1").get(byCheckpoint.target_invocation_id)
       if (priorEvents) throw new AgentContinuationRejectedError('CONTINUATION_ALREADY_CLAIMED')
-      // Explicit user retry after startup recovery: rotate the target identity so a terminal Turn
-      // and provider history from the interrupted attempt can never be resumed or replayed.
+      // Explicit retry after startup recovery or user cancellation: rotate the target identity so
+      // prior provider history and any target-scoped recovery decision cannot be resumed or replayed.
       const retry = {
         ...byCheckpoint,
         request_idempotency_key: key,
@@ -170,8 +187,8 @@ export function createOrGetAgentContinuation(input: {
         target_start_token: newId(),
         status: 'pending' as const
       }
-      input.conn.prepare("UPDATE agent_continuations SET request_idempotency_key=?,target_invocation_id=?,target_turn_id=?,target_start_token=?,status='pending',updated_at=? WHERE continuation_id=? AND status='interrupted'")
-        .run(key, retry.target_invocation_id, retry.target_turn_id, retry.target_start_token, now, retry.continuation_id)
+      input.conn.prepare("UPDATE agent_continuations SET request_idempotency_key=?,target_invocation_id=?,target_turn_id=?,target_start_token=?,status='pending',updated_at=? WHERE continuation_id=? AND status=?")
+        .run(key, retry.target_invocation_id, retry.target_turn_id, retry.target_start_token, now, retry.continuation_id, byCheckpoint.status)
       const contextEvent = {
         invocationId: retry.target_invocation_id, turnId: retry.target_turn_id, sequence: 1, schemaVersion: input.snapshot.schemaVersion,
         eventId: `${retry.continuation_id}:context:${retry.target_invocation_id}`, idempotencyKey: `${retry.continuation_id}:context:${retry.target_invocation_id}`,
@@ -180,6 +197,7 @@ export function createOrGetAgentContinuation(input: {
           messages: toCanonicalModelMessages(checkpoint.transcript),
           continuationSource: { mode: 'checkpoint-resume', continuationId: retry.continuation_id, invocationId: retry.source_invocation_id, turnId: retry.source_turn_id, checkpointSequence: retry.checkpoint_sequence, checkpointSha256: retry.checkpoint_sha256 },
           requiredUserMessage: structuredClone(checkpoint.requiredUserMessage)
+          , ...(checkpoint.unresolvedEffects.length ? { unresolvedEffects: checkpoint.unresolvedEffects } : {})
         }
       }
       appendSqliteAgentHistoryBatchInTransaction(input.conn, [contextEvent], 0, { schemaVersion: input.snapshot.schemaVersion, sessionId: input.sessionId, now: () => now })
@@ -211,6 +229,7 @@ export function createOrGetAgentContinuation(input: {
           checkpointSha256: record.checkpoint_sha256
         },
         requiredUserMessage: structuredClone(requiredUserMessage)
+        , ...(checkpoint.unresolvedEffects.length ? { unresolvedEffects: checkpoint.unresolvedEffects } : {})
       }
     }
     appendSqliteAgentHistoryBatchInTransaction(input.conn, [contextEvent], 0, {
@@ -229,6 +248,54 @@ export function claimAgentContinuation(conn: DatabaseSync, continuationId: strin
     if (!row || row.frozen_config_sha256 !== sha256(revalidatedFrozenConfig)) return false
     return conn.prepare("UPDATE agent_continuations SET status='running',updated_at=? WHERE continuation_id=? AND status='pending'").run(now, continuationId).changes === 1
   })
+}
+
+export function cancelPendingAgentContinuation(conn: DatabaseSync, continuationId: string, now = Date.now()): boolean {
+  return conn.prepare("UPDATE agent_continuations SET status='cancelled',updated_at=? WHERE continuation_id=? AND status='pending'")
+    .run(now, continuationId).changes === 1
+}
+
+export function readAgentContinuationByTarget(conn: DatabaseSync, sessionId: string, targetInvocationId: string): AgentContinuationRecord | undefined {
+  const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
+    JOIN turns t ON t.turn_id=ac.source_turn_id
+    WHERE t.session_id=? AND ac.target_invocation_id=?`).get(sessionId, targetInvocationId) as ContinuationRow | undefined
+  if (!row) return undefined
+  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+  const snapshot = history.readSync(row.source_invocation_id)
+  return rowToRecord(row, validateUnknownRecoveryCheckpoint(snapshot).transcript)
+}
+
+export function readAgentContinuationByRequest(conn: DatabaseSync, sessionId: string, requestIdempotencyKey: string): AgentContinuationRecord | undefined {
+  const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
+    JOIN turns t ON t.turn_id=ac.source_turn_id
+    WHERE t.session_id=? AND ac.request_idempotency_key=?`).get(sessionId, requestIdempotencyKey) as ContinuationRow | undefined
+  if (!row) return undefined
+  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+  const snapshot = history.readSync(row.source_invocation_id)
+  return rowToRecord(row, validateUnknownRecoveryCheckpoint(snapshot).transcript)
+}
+
+export function readAwaitingAgentContinuationBySource(conn: DatabaseSync, sessionId: string, sourceTurnId: string): AgentContinuationRecord | undefined {
+  const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
+    JOIN turns t ON t.turn_id=ac.source_turn_id
+    WHERE t.session_id=? AND ac.source_turn_id=? AND ac.status='pending'
+    ORDER BY ac.updated_at DESC LIMIT 1`).get(sessionId, sourceTurnId) as ContinuationRow | undefined
+  if (!row) return undefined
+  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+  const snapshot = history.readSync(row.source_invocation_id)
+  return rowToRecord(row, validateUnknownRecoveryCheckpoint(snapshot).transcript)
+}
+
+export function readCancelledAgentContinuationBySource(conn: DatabaseSync, sessionId: string, sourceTurnId: string): AgentContinuationRecord | undefined {
+  const row = conn.prepare(`SELECT ac.* FROM agent_continuations ac
+    JOIN turns t ON t.turn_id=ac.source_turn_id
+    WHERE t.session_id=? AND ac.source_turn_id=? AND ac.status='cancelled'
+      AND NOT EXISTS (SELECT 1 FROM agent_history_events e WHERE e.invocation_id=ac.target_invocation_id AND e.kind='tool-call-started')
+    ORDER BY ac.updated_at DESC LIMIT 1`).get(sessionId, sourceTurnId) as ContinuationRow | undefined
+  if (!row) return undefined
+  const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+  const snapshot = history.readSync(row.source_invocation_id)
+  return rowToRecord(row, validateUnknownRecoveryCheckpoint(snapshot).transcript)
 }
 
 export function setAgentContinuationStatus(conn: DatabaseSync, continuationId: string, status: Extract<AgentContinuationRecord['status'], 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unknown_side_effect'>, now = Date.now()): boolean {
@@ -288,10 +355,12 @@ export async function startAgentContinuation(input: {
   conn: DatabaseSync; snapshot: HistorySnapshot; sessionId: string; userMessageId: string; requestIdempotencyKey: string
   createdBy: string; frozenConfig: Record<string, unknown>; executionConfig: import('../../src/shared/assistantFactAggregator').TurnExecutionConfig
   continuationAcceptance?: { payloadSha256: string; rawText: string; attachments?: unknown[]; intentKind: 'exact-continue' | 'follow-up'; route: string }
+  recoveryMode?: 'exact' | 'unknown-effects'
+  deferDispatch?: boolean
   runtime: import('../turnRuntime').TurnRuntime; now?: () => number; newId?: () => string
 }): Promise<{ accepted: true; started: boolean; continuation: AgentContinuationRecord; turn?: import('../../src/shared/turnCoordinator').TurnStarted }> {
   return runInTransaction(input.conn, () => {
-    const checkpoint = validateContinuationCheckpoint(input.snapshot)
+    const checkpoint = input.recoveryMode === 'unknown-effects' ? validateUnknownRecoveryCheckpoint(input.snapshot) : validateContinuationCheckpoint(input.snapshot)
     if (checkpoint.requiredUserMessage.id !== input.userMessageId) throw new AgentContinuationRejectedError('CONTINUATION_SOURCE_USER_MISMATCH')
     const sourceTurnId = input.snapshot.events.at(-1)?.turnId
     const sourceAssistant = sourceTurnId ? input.conn.prepare('SELECT m.sequence FROM turns t JOIN messages m ON m.id=t.assistant_message_id WHERE t.session_id=? AND t.turn_id=?').get(input.sessionId, sourceTurnId) as { sequence?: number } | undefined : undefined
@@ -302,6 +371,7 @@ export async function startAgentContinuation(input: {
       conn: input.conn, snapshot: input.snapshot, sessionId: input.sessionId,
       requestIdempotencyKey: input.requestIdempotencyKey, createdBy: input.createdBy,
       frozenConfig: input.frozenConfig, ...(input.newId ? { newId: input.newId } : {}), ...(input.now ? { now: input.now } : {})
+      , ...(input.recoveryMode ? { recoveryMode: input.recoveryMode } : {})
     })
     if (input.continuationAcceptance) {
       const accepted = input.continuationAcceptance
@@ -319,11 +389,11 @@ export async function startAgentContinuation(input: {
         checkpointSequence: continuation.checkpointSequence, checkpointSha256: continuation.checkpointSha256
       }
       const config = { ...input.executionConfig, continuationSource: source }
-      turn = input.runtime.prepareContinuation({
+      if (!input.deferDispatch) turn = input.runtime.prepareContinuation({
         requestId: continuation.targetInvocationId, sessionId: input.sessionId, userMessageId: input.userMessageId,
         turnId: continuation.targetTurnId, startToken: continuation.targetStartToken, config
       })
-      if (claimAgentContinuation(input.conn, continuation.continuationId, input.frozenConfig, (input.now ?? Date.now)())) {
+      if (!input.deferDispatch && claimAgentContinuation(input.conn, continuation.continuationId, input.frozenConfig, (input.now ?? Date.now)())) {
         started = true
         finalRecord = { ...continuation, status: 'running' }
       } else {

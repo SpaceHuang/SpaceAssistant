@@ -307,7 +307,10 @@ export type SpaceAssistantApi = {
     sessionId: string
     failedAssistantMessageId: string
   }) => Promise<import('./displayOrder').RetryContextTarget | null>
-  chatContinueFromCheckpoint: (payload: { sessionId: string; sourceTurnId: string; requestIdempotencyKey: string }) => Promise<{ accepted: boolean; reason?: string; continuationId?: string; targetInvocationId?: string; targetTurnId?: string; status?: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unknown_side_effect' }>
+  chatContinueFromCheckpoint: (payload: { sessionId: string; sourceTurnId: string; requestIdempotencyKey: string }) => Promise<{ accepted: boolean; reason?: string; continuationId?: string; targetInvocationId?: string; targetTurnId?: string; status?: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unknown_side_effect'; recoveryState?: { targetInvocationId: string; mode: 'verify-only'; unresolvedEffects: readonly { id: string; originInvocationId: string; toolCallId: string; toolName?: string; inputHash?: string }[]; verification: 'unavailable'; checkerAvailable: boolean; reason: 'NO_REVIEWED_READ_ONLY_CAPABILITY' } }>
+  chatAcceptUnknownEffectRisk: (payload: { sessionId: string; targetInvocationId: string; unresolvedEffectIds: string[] }) => Promise<{ accepted: boolean; reason?: string }>
+  chatApproveUnknownEffectRetry: (payload: { sessionId: string; targetInvocationId: string; unknownEffectId: string }) => Promise<{ accepted: boolean; reason?: string }>
+  chatCancelUnknownEffectRecovery: (payload: { sessionId: string; targetInvocationId: string }) => Promise<{ accepted: boolean; reason?: string }>
   chatGetMessageSequence: (payload: {
     sessionId: string
     messageId: string

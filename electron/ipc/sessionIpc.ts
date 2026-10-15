@@ -89,13 +89,15 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       const modelWindow = resolveModelContextWindow(session.model, readStoredModels(ctx.db))
       const trustedContextWindow = modelWindow.trusted ? modelWindow.contextWindow : undefined
       const totalInputBudget = Math.max(1, (trustedContextWindow ?? 100_000) - session.maxTokens)
+      const recoveryFacts = sessionStorage.queries.continuationSources.readRecoveryFacts(sessionId)
       const unbindContext = bindSessionStorageContextPort(sessionStorage.contexts, { kind: 'session', sessionId }, sessionContextAdapter.port)
       let result: Awaited<ReturnType<typeof compactSessionContext>>
       try {
       result = await compactSessionContext({
         sessionId, requestId, windowId, messages, totalInputBudget,
         locale: readAppLocale(ctx.db) === 'en-US' ? 'en-US' : 'zh-CN', contextAdapter: { ...sessionContextAdapter, port: sessionStorage.contexts },
-        summarize: async (summaryMessages, locale) => {
+        recoveryFacts,
+        summarize: async (summaryMessages, locale, summaryRecoveryFacts) => {
           const credentials = await resolveLlmCredentialsForModel(ctx.db, session.model, {
             serviceId: session.llmServiceId,
             models: readStoredModels(ctx.db)
@@ -108,7 +110,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
           try {
             return await summarizeSessionContext({
               model: session.model, apiKey, baseUrl: credentials.baseUrl, locale,
-              messages: summaryMessages, signal: controller.signal
+              messages: summaryMessages, recoveryFacts: summaryRecoveryFacts, signal: controller.signal
             })
           } finally {
             clearTimeout(timeout)

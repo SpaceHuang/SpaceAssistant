@@ -2,6 +2,8 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { AppIpcContext } from '../appIpc'
+import { validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
+import { approveOneTimeUnknownEffectRetry, hasPendingUnknownEffectRetryApproval, readUnknownEffectRecoveryState, recordUnknownEffectRiskAcceptance } from '../runtime/unknownEffectRecovery'
 import type { IpcMain } from 'electron'
 import { AUTO_CONTRACT } from '../processOutput/contracts'
 import { AgentLogEventName, AgentLogFields } from '../agentLogger/types'
@@ -111,7 +113,7 @@ export async function continueAgentFromCheckpoint(input: {
   dispatch: (sender: null, payload: TurnExecutePayload, continuationId?: string) => unknown
   resolveCurrentSafetySnapshot?: (sessionId: string) => ReturnType<typeof createContinuationSafetySnapshot>
 }): Promise<{ accepted: false; reason: string } | {
-  accepted: true; continuationId: string; targetInvocationId: string; targetTurnId: string; status: string
+  accepted: true; continuationId: string; targetInvocationId: string; targetTurnId: string; status: string; recoveryState?: import('../runtime/unknownEffectRecovery').UnknownEffectRecoveryState
 }> {
   const { ctx, turnRuntime, payload } = input
   if (!payload.sessionId?.trim() || !payload.sourceTurnId?.trim() || !payload.requestIdempotencyKey?.trim()) {
@@ -132,21 +134,66 @@ export async function continueAgentFromCheckpoint(input: {
     if (JSON.stringify(currentSnapshot) !== JSON.stringify(frozenSnapshot)) {
       return { accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' }
     }
-    const inspection = storage.queries.continuationSources.read({ sessionId: payload.sessionId, activeTurnIds: turnRuntime.listActive(payload.sessionId).map((turn) => turn.turnId), selectedAssistantMessageId: sourceTurn.assistantMessageId })
-    if (inspection.kind !== 'available' || inspection.selected.kind !== 'found' || inspection.selected.candidate.source.turnId !== payload.sourceTurnId) {
+    const priorContinuation = storage.execution.continuations.readByRequest({
+      sessionId: payload.sessionId, requestIdempotencyKey: payload.requestIdempotencyKey
+    }) ?? storage.execution.continuations.readAwaitingBySource({ sessionId: payload.sessionId, sourceTurnId: payload.sourceTurnId })
+    if (priorContinuation) {
+      if (priorContinuation.sourceTurnId !== payload.sourceTurnId) return { accepted: false, reason: 'CONTINUATION_SOURCE_IDENTITY_MISMATCH' }
+      if (JSON.stringify(priorContinuation.frozenConfig) !== JSON.stringify(currentSnapshot)) {
+        return { accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' }
+      }
+      const targetHistory = await storage.execution.historyFor({ sessionId: payload.sessionId }).read(priorContinuation.targetInvocationId)
+      const recoveryState = readUnknownEffectRecoveryState(targetHistory)
+      let recoveryLaunched = false
+      let status = priorContinuation.status
+      if (status === 'pending' && (recoveryState.mode === 'risk-accepted' ||
+        (recoveryState.mode === 'verify-only' && await hasPendingUnknownEffectRetryApproval(
+          storage.execution.historyFor({ sessionId: payload.sessionId }), priorContinuation.targetInvocationId)))) {
+        recoveryLaunched = await launchAwaitingUnknownEffectRecovery({ ctx, sessionId: payload.sessionId,
+          targetInvocationId: priorContinuation.targetInvocationId, dispatch: input.dispatch,
+          resolveCurrentSafetySnapshot: input.resolveCurrentSafetySnapshot })
+        if (recoveryLaunched) status = 'running'
+        else return { accepted: false, reason: 'UNKNOWN_EFFECT_TARGET_ACTIVATION_FAILED' }
+      }
+      return {
+        accepted: true, continuationId: priorContinuation.continuationId,
+        targetInvocationId: priorContinuation.targetInvocationId, targetTurnId: priorContinuation.targetTurnId, status,
+        ...(status === 'pending' && recoveryState.mode === 'verify-only' ? { recoveryState } : {})
+      }
+    }
+    const cancelledRetry = storage.execution.continuations.readCancelledBySource({ sessionId: payload.sessionId, sourceTurnId: payload.sourceTurnId })
+    const inspection = cancelledRetry ? undefined : storage.queries.continuationSources.read({ sessionId: payload.sessionId, activeTurnIds: turnRuntime.listActive(payload.sessionId).map((turn) => turn.turnId), selectedAssistantMessageId: sourceTurn.assistantMessageId })
+    if (!cancelledRetry && (inspection?.kind !== 'available' || inspection.selected.kind !== 'found' || inspection.selected.candidate.source.turnId !== payload.sourceTurnId)) {
       return { accepted: false, reason: 'CONTINUATION_SOURCE_IDENTITY_MISMATCH' }
     }
-    const candidate = inspection.selected.candidate
-    const contextEvent = candidate.snapshot.events.find((event) => event.kind === 'invocation-context-committed') as { payload?: { requiredUserMessage?: { message?: { content?: string } } } } | undefined
+    const candidate = cancelledRetry ? undefined : inspection!.kind === 'available' && inspection!.selected.kind === 'found' ? inspection!.selected.candidate : undefined
+    const sourceSnapshot = cancelledRetry
+      ? await storage.execution.historyFor({ sessionId: payload.sessionId }).read(cancelledRetry.sourceInvocationId)
+      : candidate!.snapshot
+    const sourceRef = cancelledRetry ? {
+      sessionId: payload.sessionId, invocationId: cancelledRetry.sourceInvocationId, turnId: cancelledRetry.sourceTurnId,
+      checkpointSequence: cancelledRetry.checkpointSequence, expectedHistoryVersion: sourceSnapshot.version
+    } : candidate!.source
+    const recoveryMode = (() => {
+      try { return validateUnknownRecoveryCheckpoint(sourceSnapshot).unresolvedEffects.length ? 'unknown-effects' as const : 'exact' as const }
+      catch { return 'exact' as const }
+    })()
+    const contextEvent = sourceSnapshot.events.find((event) => event.kind === 'invocation-context-committed') as { payload?: { requiredUserMessage?: { message?: { content?: string } } } } | undefined
     const started = await storage.execution.continuationLaunch.prepareAndClaim({
       payload: { requestId: payload.requestIdempotencyKey, sessionId: payload.sessionId, text: contextEvent?.payload?.requiredUserMessage?.message?.content ?? '' },
-      source: candidate.source, createdBy: payload.sessionId, frozenConfig: currentSnapshot,
+      source: sourceRef, createdBy: payload.sessionId, frozenConfig: currentSnapshot,
       executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: currentSnapshot },
+      ...(recoveryMode === 'unknown-effects' ? { recoveryMode } : {}),
+      ...(recoveryMode === 'unknown-effects' ? { deferDispatch: true } : {}),
       acceptance: {
         payloadSha256: createHash('sha256').update(JSON.stringify({ sessionId: payload.sessionId, sourceTurnId: payload.sourceTurnId, requestIdempotencyKey: payload.requestIdempotencyKey })).digest('hex'),
         rawText: '继续', intentKind: 'exact-continue', route: 'continuation'
       }
     })
+    const targetHistory = await storage.execution.historyFor({ sessionId: payload.sessionId }).read(started.continuation.targetInvocationId)
+    let recoveryState = readUnknownEffectRecoveryState(targetHistory)
+    let finalStatus = started.continuation.status
+    let recoveryLaunched = false
     if (started.started && started.turn) {
       void input.dispatch(null, {
         requestId: started.turn.requestId,
@@ -154,17 +201,68 @@ export async function continueAgentFromCheckpoint(input: {
         turnStartToken: started.turn.startToken,
         sessionId: started.turn.sessionId
       }, started.continuation.continuationId)
+    } else if (recoveryState.mode === 'risk-accepted' && started.continuation.status === 'pending') {
+      recoveryLaunched = await launchAwaitingUnknownEffectRecovery({ ctx, sessionId: payload.sessionId,
+        targetInvocationId: started.continuation.targetInvocationId, dispatch: input.dispatch,
+        resolveCurrentSafetySnapshot: input.resolveCurrentSafetySnapshot })
+      if (recoveryLaunched) finalStatus = 'running'
+    } else if (recoveryState.mode === 'verify-only' && started.continuation.status === 'pending' &&
+      await hasPendingUnknownEffectRetryApproval(storage.execution.historyFor({ sessionId: payload.sessionId }), started.continuation.targetInvocationId)) {
+      recoveryLaunched = await launchAwaitingUnknownEffectRecovery({ ctx, sessionId: payload.sessionId,
+        targetInvocationId: started.continuation.targetInvocationId, dispatch: input.dispatch,
+        resolveCurrentSafetySnapshot: input.resolveCurrentSafetySnapshot })
+      if (recoveryLaunched) finalStatus = 'running'
     }
     return {
       accepted: true,
       continuationId: started.continuation.continuationId,
       targetInvocationId: started.continuation.targetInvocationId,
       targetTurnId: started.continuation.targetTurnId,
-      status: started.continuation.status
+      status: finalStatus,
+      ...(recoveryState.mode === 'verify-only' && !recoveryLaunched ? { recoveryState } : {})
     }
   } catch (error) {
     return { accepted: false, reason: error instanceof Error ? error.message : 'CONTINUATION_UNAVAILABLE' }
   }
+}
+
+async function launchAwaitingUnknownEffectRecovery(input: {
+  ctx: AppIpcContext
+  sessionId: string
+  targetInvocationId: string
+  dispatch: (sender: null, payload: TurnExecutePayload, continuationId?: string) => unknown
+  resolveCurrentSafetySnapshot?: (sessionId: string) => ReturnType<typeof createContinuationSafetySnapshot>
+}): Promise<boolean> {
+  const storage = input.ctx.sessionStorage
+  if (!storage) return false
+  const continuation = storage.execution.continuations.readByTarget({ sessionId: input.sessionId, targetInvocationId: input.targetInvocationId })
+  if (!continuation || continuation.status !== 'pending') return false
+  const sourceTurn = storage.execution.readTurn({ sessionId: input.sessionId, turnId: continuation.sourceTurnId })
+  const sourceHistory = await storage.execution.historyFor({ sessionId: input.sessionId }).read(continuation.sourceInvocationId)
+  const checkpoint = validateUnknownRecoveryCheckpoint(sourceHistory)
+  if (!sourceTurn?.executionConfig || checkpoint.checkpointSequence !== continuation.checkpointSequence ||
+    checkpoint.checkpointSha256 !== continuation.checkpointSha256) return false
+  const currentSafety = (input.resolveCurrentSafetySnapshot ?? ((sessionId) => resolveContinuationSafetySnapshot(input.ctx, sessionId, 'desktop')))(input.sessionId)
+  if (JSON.stringify(currentSafety) !== JSON.stringify(continuation.frozenConfig)) return false
+  const userText = checkpoint.requiredUserMessage.message.content
+  const started = await storage.execution.continuationLaunch.prepareAndClaim({
+    payload: { requestId: continuation.requestIdempotencyKey, sessionId: input.sessionId, text: typeof userText === 'string' ? userText : '' },
+    source: {
+      sessionId: input.sessionId, invocationId: continuation.sourceInvocationId, turnId: continuation.sourceTurnId,
+      checkpointSequence: continuation.checkpointSequence,
+      expectedHistoryVersion: sourceHistory.version
+    },
+    createdBy: continuation.createdBy,
+    frozenConfig: continuation.frozenConfig,
+    executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: continuation.frozenConfig as typeof currentSafety },
+    recoveryMode: 'unknown-effects'
+  })
+  if (!started.started || !started.turn) return false
+  input.dispatch(null, {
+    requestId: started.turn.requestId, turnId: started.turn.turnId, turnStartToken: started.turn.startToken,
+    sessionId: started.turn.sessionId
+  }, started.continuation.continuationId)
+  return true
 }
 
 /** Typed continuation resolves the persisted Turn by turnId and the checkpoint by its History invocationId. */
@@ -217,6 +315,52 @@ export function registerAgentContinuationIpc(
   ipcMain.handle('chat:continue-from-checkpoint', (_event, payload: { sessionId: string; sourceTurnId: string; requestIdempotencyKey: string }) =>
     continueAgentFromCheckpoint({ ...dependencies, payload })
   )
+  ipcMain.handle('chat:accept-unknown-effect-risk', async (_event, payload: { sessionId: string; targetInvocationId: string; unresolvedEffectIds: string[] }) => {
+    if (!payload?.sessionId?.trim() || !payload.targetInvocationId?.trim() || !Array.isArray(payload.unresolvedEffectIds) ||
+      payload.unresolvedEffectIds.length === 0 || payload.unresolvedEffectIds.some((id) => typeof id !== 'string' || !id.trim())) {
+      return { accepted: false, reason: 'UNKNOWN_EFFECT_DECISION_INVALID' }
+    }
+    try {
+      const storage = dependencies.ctx.sessionStorage
+      if (!storage) return { accepted: false, reason: 'SESSION_STORAGE_NOT_CONFIGURED' }
+      const continuation = storage.execution.continuations.readByTarget({ sessionId: payload.sessionId, targetInvocationId: payload.targetInvocationId })
+      if (!continuation || continuation.status !== 'pending') return { accepted: false, reason: 'UNKNOWN_EFFECT_TARGET_NOT_AWAITING_DECISION' }
+      const history = storage.execution.historyFor({ sessionId: payload.sessionId })
+      await recordUnknownEffectRiskAcceptance({ history, targetInvocationId: payload.targetInvocationId, acceptedIds: payload.unresolvedEffectIds })
+      const launched = await launchAwaitingUnknownEffectRecovery({ ctx: dependencies.ctx,
+        sessionId: payload.sessionId, targetInvocationId: payload.targetInvocationId, dispatch: dependencies.dispatch,
+        resolveCurrentSafetySnapshot: dependencies.resolveCurrentSafetySnapshot })
+      return launched ? { accepted: true } : { accepted: false, reason: 'UNKNOWN_EFFECT_TARGET_ACTIVATION_FAILED' }
+    } catch (error) {
+      return { accepted: false, reason: error instanceof Error ? error.message : 'UNKNOWN_EFFECT_DECISION_FAILED' }
+    }
+  })
+  ipcMain.handle('chat:approve-unknown-effect-retry', async (_event, payload: { sessionId: string; targetInvocationId: string; unknownEffectId: string }) => {
+    if (!payload?.sessionId?.trim() || !payload.targetInvocationId?.trim() || !payload.unknownEffectId?.trim()) return { accepted: false, reason: 'UNKNOWN_EFFECT_DECISION_INVALID' }
+    try {
+      const storage = dependencies.ctx.sessionStorage
+      if (!storage) return { accepted: false, reason: 'SESSION_STORAGE_NOT_CONFIGURED' }
+      const continuation = storage.execution.continuations.readByTarget({ sessionId: payload.sessionId, targetInvocationId: payload.targetInvocationId })
+      if (!continuation || continuation.status !== 'pending') return { accepted: false, reason: 'UNKNOWN_EFFECT_TARGET_NOT_AWAITING_DECISION' }
+      const history = storage.execution.historyFor({ sessionId: payload.sessionId })
+      await approveOneTimeUnknownEffectRetry({ history, targetInvocationId: payload.targetInvocationId, unknownEffectId: payload.unknownEffectId })
+      const launched = await launchAwaitingUnknownEffectRecovery({ ctx: dependencies.ctx,
+        sessionId: payload.sessionId, targetInvocationId: payload.targetInvocationId, dispatch: dependencies.dispatch,
+        resolveCurrentSafetySnapshot: dependencies.resolveCurrentSafetySnapshot })
+      return launched ? { accepted: true } : { accepted: false, reason: 'UNKNOWN_EFFECT_TARGET_ACTIVATION_FAILED' }
+    } catch (error) {
+      return { accepted: false, reason: error instanceof Error ? error.message : 'UNKNOWN_EFFECT_DECISION_FAILED' }
+    }
+  })
+  ipcMain.handle('chat:cancel-unknown-effect-recovery', async (_event, payload: { sessionId: string; targetInvocationId: string }) => {
+    if (!payload?.sessionId?.trim() || !payload.targetInvocationId?.trim()) return { accepted: false, reason: 'UNKNOWN_EFFECT_DECISION_INVALID' }
+    const storage = dependencies.ctx.sessionStorage
+    if (!storage) return { accepted: false, reason: 'SESSION_STORAGE_NOT_CONFIGURED' }
+    const continuation = storage.execution.continuations.readByTarget({ sessionId: payload.sessionId, targetInvocationId: payload.targetInvocationId })
+    if (!continuation || continuation.status !== 'pending') return { accepted: false, reason: 'UNKNOWN_EFFECT_TARGET_NOT_AWAITING_DECISION' }
+    return storage.execution.continuations.cancelPending({ continuationId: continuation.continuationId })
+      ? { accepted: true } : { accepted: false, reason: 'UNKNOWN_EFFECT_TARGET_NOT_AWAITING_DECISION' }
+  })
 }
 
 /** 将持久 receipt 对账结果回接到仍在主进程等待的桌面确认项。 */

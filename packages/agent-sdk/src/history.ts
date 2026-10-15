@@ -5,7 +5,7 @@ export type HistoryEvent = {
   turnId: string
   sequence: number
   schemaVersion: number
-  kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'tool-call-deferred' | 'approval-waiting' | 'approval-resolved' | 'approval-deferred' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'
+  kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'tool-call-deferred' | 'unknown-effect-risk-accepted' | 'unknown-effect-retry-approved' | 'unknown-effect-retry-consumed' | 'unknown-effect-resolved' | 'approval-waiting' | 'approval-resolved' | 'approval-deferred' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'
   payload: unknown
 }
 
@@ -174,7 +174,7 @@ const HISTORY_EVENT_KINDS = new Set<string>([
   'session-input-committed', 'invocation-context-committed', 'transcript-compacted',
   'model-request-started', 'provider-retry-scheduled', 'model-attempt-discarded',
   'model-response-committed', 'replay-message-committed', 'tool-call-started',
-  'tool-call-finished', 'tool-call-not-dispatched', 'tool-call-deferred', 'approval-waiting', 'approval-resolved', 'approval-deferred',
+  'tool-call-finished', 'tool-call-not-dispatched', 'tool-call-deferred', 'unknown-effect-risk-accepted', 'unknown-effect-retry-approved', 'unknown-effect-retry-consumed', 'unknown-effect-resolved', 'approval-waiting', 'approval-resolved', 'approval-deferred',
   'approval-updated', 'invocation-parked', 'invocation-interrupted',
   'invocation-completed', 'invocation-failed'
 ])
@@ -243,13 +243,49 @@ export function validateHistoryTransition(previous: readonly HistoryEvent[], inc
   const pendingApprovals = new Set<string>()
   const deferredTodoIds = new Set<string>()
   const approvalIdentityByPendingId = new Map<string, string>()
+  const unknownRetryApprovals = new Map<string, { toolName: string; inputHash: string }>()
+  const consumedUnknownRetryApprovals = new Set<string>()
+  let pendingUnknownRetryStart: { toolName: string; inputHash: string } | undefined
   const history = [...previous, ...incoming]
   for (const event of history) {
     const payload = event.payload && typeof event.payload === 'object' ? event.payload as {
       status?: unknown; reason?: unknown; toolCallId?: unknown; approvalId?: unknown; approved?: unknown; outcome?: unknown; settledAt?: unknown; cause?: unknown
       answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown; todoId?: unknown; invocationId?: unknown
       checkpointId?: unknown; workflowRevision?: unknown; checkpointRef?: unknown; message?: { toolCalls?: readonly { id?: unknown }[] }
+      targetInvocationId?: unknown; unresolvedEffectIds?: unknown; acceptedAt?: unknown; unknownEffectId?: unknown; toolName?: unknown; inputHash?: unknown
+      approvedAt?: unknown; approvalEventId?: unknown; consumedAt?: unknown; trustedResolution?: unknown; evidence?: unknown
     } : undefined
+    if (pendingUnknownRetryStart && (event.kind !== 'tool-call-started' || payload?.toolName !== pendingUnknownRetryStart.toolName || payload?.inputHash !== pendingUnknownRetryStart.inputHash)) {
+      throw new HistoryBatchError('unknown effect retry consumption must be atomically followed by its matching tool start')
+    }
+    if (event.kind === 'unknown-effect-risk-accepted') {
+      const ids = payload?.unresolvedEffectIds
+      if (payload?.targetInvocationId !== event.invocationId || !Array.isArray(ids) || ids.length === 0 ||
+        ids.some((id) => typeof id !== 'string' || !id.trim()) || new Set(ids).size !== ids.length ||
+        typeof payload.acceptedAt !== 'number' || !Number.isFinite(payload.acceptedAt)) throw new HistoryBatchError('unknown effect risk acceptance is invalid')
+    }
+    if (event.kind === 'unknown-effect-retry-approved' && (payload?.targetInvocationId !== event.invocationId ||
+      typeof payload.unknownEffectId !== 'string' || !payload.unknownEffectId.trim() || typeof payload.toolName !== 'string' || !payload.toolName.trim() ||
+      typeof payload.inputHash !== 'string' || !/^[a-f0-9]{64}$/i.test(payload.inputHash) || typeof payload.approvedAt !== 'number' || !Number.isFinite(payload.approvedAt))) {
+      throw new HistoryBatchError('unknown effect retry approval is invalid')
+    }
+    if (event.kind === 'unknown-effect-retry-approved' && typeof payload?.toolName === 'string' && typeof payload.inputHash === 'string') {
+      unknownRetryApprovals.set(event.eventId, { toolName: payload.toolName, inputHash: payload.inputHash })
+    }
+    if (event.kind === 'unknown-effect-retry-consumed' && (payload?.targetInvocationId !== event.invocationId ||
+      typeof payload.approvalEventId !== 'string' || !payload.approvalEventId.trim() || typeof payload.consumedAt !== 'number' || !Number.isFinite(payload.consumedAt))) {
+      throw new HistoryBatchError('unknown effect retry consumption is invalid')
+    }
+    if (event.kind === 'unknown-effect-retry-consumed') {
+      const approvalEventId = payload?.approvalEventId as string
+      const approval = unknownRetryApprovals.get(approvalEventId)
+      if (!approval || consumedUnknownRetryApprovals.has(approvalEventId)) throw new HistoryBatchError('unknown effect retry approval is missing or already consumed')
+      consumedUnknownRetryApprovals.add(approvalEventId)
+      pendingUnknownRetryStart = approval
+    }
+    if (event.kind === 'tool-call-started' && pendingUnknownRetryStart) pendingUnknownRetryStart = undefined
+    if (event.kind === 'unknown-effect-resolved' && (payload?.trustedResolution !== true || typeof payload.unknownEffectId !== 'string' || !payload.unknownEffectId.trim() ||
+      !payload.evidence || typeof payload.evidence !== 'object' || Array.isArray(payload.evidence))) throw new HistoryBatchError('unknown effect resolution is invalid')
     if (event.kind === 'invocation-completed' && payload?.status !== 'completed') {
       throw new HistoryBatchError('completed invocation terminal requires completed status')
     }
@@ -330,6 +366,7 @@ export function validateHistoryTransition(previous: readonly HistoryEvent[], inc
       throw new HistoryBatchError('cannot terminally settle an invocation with pending tool calls or approvals')
     }
   }
+  if (pendingUnknownRetryStart) throw new HistoryBatchError('unknown effect retry consumption is missing its tool start')
   for (const event of incoming) {
     if (terminalSeen) throw new HistoryBatchError('terminal invocation event must be the final event in its batch')
     if (TERMINAL_INVOCATION_EVENTS.has(event.kind)) terminalSeen = true

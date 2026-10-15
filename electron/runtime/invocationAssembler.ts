@@ -326,6 +326,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
+      beforeDispatchLease?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
       refreshExecutionContext?: (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>
     }): ReturnType<typeof createHostedAgentTurnHost>
@@ -338,6 +339,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       maxToolRounds?: number
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
+      beforeDispatchLease?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']
       confirmationAdapter?: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
       refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
@@ -1234,6 +1236,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
+      beforeDispatchLease?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
       /** FR3：延迟名集合（hostedAgentTurnHost 的 capabilities.define 并入 known + authorized）。 */
       deferredToolNames?: ReadonlySet<string>
@@ -1302,6 +1305,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         toolExecution: input.registeredTools.toolExecution,
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.beforeToolDispatch ? { beforeToolDispatch: input.beforeToolDispatch } : {}),
+        ...(input.beforeDispatchLease ? { beforeDispatchLease: input.beforeDispatchLease } : {}),
         observer: ports.observer,
         recordProviderAttemptUsage: ports.recordProviderAttemptUsage,
         recoverProviderAttempt: input.recoverProviderAttempt,
@@ -1404,6 +1408,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
+      beforeDispatchLease?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']
       createExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>): unknown
       refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
       maxToolRounds?: number
@@ -1505,6 +1510,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.hostHistory ? { hostHistory: input.hostHistory } : {}),
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.beforeToolDispatch ? { beforeToolDispatch: input.beforeToolDispatch } : {}),
+        ...(input.beforeDispatchLease ? { beforeDispatchLease: input.beforeDispatchLease } : {}),
         ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
         policy,
         confirmation,

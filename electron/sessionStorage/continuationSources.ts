@@ -7,6 +7,46 @@ import type { ContinuationSourceQueries, FailedSourceCandidate, ContinuationSour
 /** Session-scoped canonical History inspection; callers choose policy but never enumerate storage. */
 export function inspectContinuationSources(db: AppDatabase): ContinuationSourceQueries {
   const queries: ContinuationSourceQueries = {
+    readRecoveryFacts: (sessionId) => {
+      if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('CONTINUATION_SOURCE_SESSION_ID_REQUIRED')
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId)
+      const inherited = new Map<string, import('../runtime/agentContinuation').UnresolvedEffect>()
+      const outcomes = new Map<string, { id: string; toolName?: string; outcome: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched' }>()
+      const resolutions = new Set<string>()
+      for (const invocationId of history.listInvocationIdsForSession(sessionId)) {
+        const snapshot = history.readSync(invocationId)
+        const context = snapshot.events.find((event) => event.kind === 'invocation-context-committed')?.payload as { unresolvedEffects?: unknown } | undefined
+        if (Array.isArray(context?.unresolvedEffects)) for (const raw of context.unresolvedEffects) {
+          if (raw && typeof raw === 'object' && typeof (raw as { id?: unknown }).id === 'string' && typeof (raw as { originInvocationId?: unknown }).originInvocationId === 'string' && typeof (raw as { toolCallId?: unknown }).toolCallId === 'string') {
+            inherited.set((raw as import('../runtime/agentContinuation').UnresolvedEffect).id, raw as import('../runtime/agentContinuation').UnresolvedEffect)
+          }
+        }
+        const started = new Map<string, { toolName?: string; inputHash?: string }>()
+        const settled = new Set<string>()
+        for (const event of snapshot.events) {
+          const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : {}
+          if (event.kind === 'tool-call-started' && typeof payload.toolCallId === 'string') started.set(payload.toolCallId, { ...(typeof payload.toolName === 'string' ? { toolName: payload.toolName } : {}), ...(typeof payload.inputHash === 'string' ? { inputHash: payload.inputHash } : {}) })
+          if (event.kind === 'tool-call-not-dispatched' && typeof payload.toolCallId === 'string') {
+            settled.add(payload.toolCallId)
+            outcomes.set(`${invocationId}:${payload.toolCallId}`, { id: `${invocationId}:${payload.toolCallId}`, outcome: 'not-dispatched' })
+          }
+          if (event.kind === 'tool-call-finished' && typeof payload.toolCallId === 'string') {
+            const unknown = payload.executionOutcome === 'unknown-after-dispatch'
+            if (!unknown) settled.add(payload.toolCallId)
+            const start = started.get(payload.toolCallId)
+            outcomes.set(`${invocationId}:${payload.toolCallId}`, { id: `${invocationId}:${payload.toolCallId}`, ...(start?.toolName ? { toolName: start.toolName } : {}), outcome: unknown ? 'unknown-after-dispatch' : payload.executionOutcome === 'succeeded' || payload.isError === false ? 'succeeded' : 'known-failure' })
+          }
+          if (event.kind === 'unknown-effect-resolved' && payload.trustedResolution === true && typeof payload.unknownEffectId === 'string') resolutions.add(payload.unknownEffectId)
+        }
+        for (const [toolCallId, start] of started) if (!settled.has(toolCallId)) {
+          const id = `${invocationId}:${toolCallId}`
+          inherited.set(id, { id, originInvocationId: invocationId, toolCallId, ...start })
+          outcomes.set(id, { id, ...(start.toolName ? { toolName: start.toolName } : {}), outcome: 'unknown-after-dispatch' })
+        }
+      }
+      for (const id of resolutions) inherited.delete(id)
+      return { unresolvedEffects: [...inherited.values()], toolOutcomes: [...outcomes.values()] }
+    },
     read: ({ sessionId, activeTurnIds, selectedAssistantMessageId }): ContinuationSourceInspection => {
       if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('CONTINUATION_SOURCE_SESSION_ID_REQUIRED')
       const conn = getDbConnection(db)

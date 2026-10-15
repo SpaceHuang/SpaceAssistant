@@ -20,7 +20,7 @@ import type { HistoryPort } from '../../packages/agent-sdk/src/history'
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { createTurnCoordinatorStorage } from './coordinator'
-import { claimAgentContinuation, createOrGetAgentContinuation, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint } from '../runtime/agentContinuation'
+import { cancelPendingAgentContinuation, claimAgentContinuation, createOrGetAgentContinuation, readAgentContinuationByRequest, readAgentContinuationByTarget, readAwaitingAgentContinuationBySource, readCancelledAgentContinuationBySource, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
 
 /** Narrow SQLite execution adapter for prepared acceptance and validated context loading. */
 export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQueries, options: { getTurnRuntime?: () => import('../turnRuntime').TurnRuntime } = {}): SessionExecutionStore {
@@ -40,7 +40,12 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       },
       claim: ({ continuationId, revalidatedFrozenConfig }: Parameters<SessionExecutionStore['continuations']['claim']>[0]) => claimAgentContinuation(liveConn(), continuationId, revalidatedFrozenConfig),
       settle: ({ continuationId, status }: Parameters<SessionExecutionStore['continuations']['settle']>[0]) => setAgentContinuationStatus(liveConn(), continuationId, status),
-      settleForTurn: ({ targetTurnId, status }: Parameters<SessionExecutionStore['continuations']['settleForTurn']>[0]) => setAgentContinuationStatusForTurn(liveConn(), targetTurnId, status)
+      settleForTurn: ({ targetTurnId, status }: Parameters<SessionExecutionStore['continuations']['settleForTurn']>[0]) => setAgentContinuationStatusForTurn(liveConn(), targetTurnId, status),
+      readByTarget: ({ sessionId, targetInvocationId }: Parameters<SessionExecutionStore['continuations']['readByTarget']>[0]) => readAgentContinuationByTarget(liveConn(), sessionId, targetInvocationId),
+      readByRequest: ({ sessionId, requestIdempotencyKey }: Parameters<SessionExecutionStore['continuations']['readByRequest']>[0]) => readAgentContinuationByRequest(liveConn(), sessionId, requestIdempotencyKey),
+      readAwaitingBySource: ({ sessionId, sourceTurnId }: Parameters<SessionExecutionStore['continuations']['readAwaitingBySource']>[0]) => readAwaitingAgentContinuationBySource(liveConn(), sessionId, sourceTurnId),
+      readCancelledBySource: ({ sessionId, sourceTurnId }: Parameters<SessionExecutionStore['continuations']['readCancelledBySource']>[0]) => readCancelledAgentContinuationBySource(liveConn(), sessionId, sourceTurnId),
+      cancelPending: ({ continuationId }: Parameters<SessionExecutionStore['continuations']['cancelPending']>[0]) => cancelPendingAgentContinuation(liveConn(), continuationId)
     }),
     continuationLaunch: Object.freeze({
       prepareAndClaim: async (input: Parameters<SessionExecutionStore['continuationLaunch']['prepareAndClaim']>[0]) => {
@@ -51,16 +56,18 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
         const history = new SqliteAgentHistory(conn, 1, Date.now, input.payload.sessionId)
         const snapshot = history.readSync(input.source.invocationId)
         if (snapshot.version !== input.source.expectedHistoryVersion) throw new Error('CONTINUATION_SOURCE_STALE')
-        const checkpoint = validateContinuationCheckpoint(snapshot)
+        const checkpoint = input.recoveryMode === 'unknown-effects' ? validateUnknownRecoveryCheckpoint(snapshot) : validateContinuationCheckpoint(snapshot)
         if (snapshot.events[0]?.turnId !== input.source.turnId || checkpoint.checkpointSequence !== input.source.checkpointSequence) throw new Error('CONTINUATION_SOURCE_STALE')
         return startAgentContinuation({
           conn, snapshot, sessionId: input.payload.sessionId, userMessageId: checkpoint.requiredUserMessage.id,
           requestIdempotencyKey: input.payload.requestId, createdBy: input.createdBy,
           frozenConfig: input.frozenConfig, executionConfig: input.executionConfig, runtime,
-          continuationAcceptance: {
+          ...(input.recoveryMode ? { recoveryMode: input.recoveryMode } : {}),
+          ...(input.deferDispatch ? { deferDispatch: true } : {}),
+          ...(input.acceptance ? { continuationAcceptance: {
             payloadSha256: input.acceptance.payloadSha256, rawText: input.acceptance.rawText,
             attachments: input.acceptance.attachments, intentKind: input.acceptance.intentKind, route: input.acceptance.route
-          }
+          } } : {})
         })
       }
     }),

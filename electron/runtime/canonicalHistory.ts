@@ -336,7 +336,7 @@ export function foldClaudeSessionSnapshots(snapshots: readonly CanonicalSessionS
 /** Rebuilds the accepted model/tool suffix from committed History events; incomplete dispatches fail closed. */
 export function rebuildClaudeMessagesFromHistory(
   events: readonly HistoryEvent[],
-  options: Readonly<{ omitAnonymousReplayFromSessionTranscript?: boolean; allowPendingToolCalls?: boolean }> = {}
+  options: Readonly<{ omitAnonymousReplayFromSessionTranscript?: boolean; allowPendingToolCalls?: boolean; synthesizeUnknownToolResults?: boolean }> = {}
 ): ClaudeChatMessageWithBlocks[] {
   const messages: ClaudeChatMessageWithBlocks[] = []
   const pendingToolCalls = new Set<string>()
@@ -434,7 +434,16 @@ export function rebuildClaudeMessagesFromHistory(
       })
     }
   }
+  const unresolvedToolOrder = toolCallOrder.filter((toolCallId) => pendingToolCalls.has(toolCallId))
   flushResults()
+  if (options.synthesizeUnknownToolResults && pendingToolCalls.size) {
+    const unknownResults = unresolvedToolOrder.map((toolCallId) => ({
+      type: 'tool_result' as const, tool_use_id: toolCallId,
+      content: 'The prior operation was dispatched but its outcome is unknown. Do not replay it; verify safely or ask the user.', is_error: true
+    }))
+    if (unknownResults.length) messages.push({ role: 'user', content: unknownResults })
+    pendingToolCalls.clear()
+  }
   if (pendingToolCalls.size && !options.allowPendingToolCalls) {
     throw new Error(`history contains unresolved tool calls: ${[...pendingToolCalls].join(',')}`)
   }

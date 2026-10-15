@@ -129,6 +129,40 @@ describe('agent continuation checkpoint', () => {
     expect(() => validateContinuationCheckpoint(unresolved)).toThrow('UNRESOLVED_APPROVAL')
   })
 
+  it('为显式 unknown recovery continuation 继承稳定来源 ID，并与目标 context 原子提交', async () => {
+    const conn = db()
+    const sourceEvents = [
+      event(1, 'invocation-context-committed', { messages: [{ id: 'source-user', role: 'user', content: 'start' }], requiredUserMessage: { id: 'source-user', message: { id: 'source-user', role: 'user', content: 'start' } } }),
+      event(2, 'model-response-committed', { message: { role: 'assistant', toolCalls: [{ id: 'tool-1', name: 'lookup', input: { q: 'x' } }] } }),
+      event(3, 'tool-call-started', { toolCallId: 'tool-1', toolName: 'lookup', inputHash: 'hash' }),
+      event(4, 'invocation-interrupted', { status: 'interrupted', reason: 'process-restart' })
+    ]
+    const source: HistorySnapshot = { invocationId: 'source-invocation', version: 4, schemaVersion: 1, events: sourceEvents }
+
+    expect(() => createOrGetAgentContinuation({ conn, snapshot: source, sessionId: 'ledger-session', requestIdempotencyKey: 'exact-unknown', createdBy: 'u', frozenConfig: {} }))
+      .toThrow('UNKNOWN_SIDE_EFFECT')
+    const continuation = createOrGetAgentContinuation({ conn, snapshot: source, sessionId: 'ledger-session', requestIdempotencyKey: 'recover-unknown', createdBy: 'u', frozenConfig: {}, recoveryMode: 'unknown-effects' })
+    const target = new SqliteAgentHistory(conn, 1, Date.now, 'ledger-session').readSync(continuation.targetInvocationId)
+
+    expect(target.events[0]).toMatchObject({
+      kind: 'invocation-context-committed',
+      payload: { unresolvedEffects: [{ id: 'source-invocation:tool-1', originInvocationId: 'source-invocation', toolCallId: 'tool-1' }] }
+    })
+    expect(() => createOrGetAgentContinuation({ conn, snapshot: source, sessionId: 'ledger-session', requestIdempotencyKey: 'recover-unknown', createdBy: 'u', frozenConfig: {}, recoveryMode: 'unknown-effects' })).not.toThrow()
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE invocation_id=?').get(continuation.targetInvocationId)).toEqual({ count: 1 })
+
+    const targetHistory = new SqliteAgentHistory(conn, 1, Date.now, 'ledger-session')
+    await targetHistory.appendBatch([
+      { invocationId: continuation.targetInvocationId, turnId: continuation.targetTurnId, sequence: 2, schemaVersion: 1, eventId: 'target-answer', idempotencyKey: 'target-answer', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'unable to verify yet' } } },
+      { invocationId: continuation.targetInvocationId, turnId: continuation.targetTurnId, sequence: 3, schemaVersion: 1, eventId: 'target-completed', idempotencyKey: 'target-completed', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 1)
+    const child = createOrGetAgentContinuation({ conn, snapshot: targetHistory.readSync(continuation.targetInvocationId), sessionId: 'ledger-session', requestIdempotencyKey: 'recover-again', createdBy: 'u', frozenConfig: {}, recoveryMode: 'unknown-effects' })
+    expect(targetHistory.readSync(child.targetInvocationId).events[0]?.payload).toMatchObject({
+      unresolvedEffects: [{ id: 'source-invocation:tool-1', originInvocationId: 'source-invocation', toolCallId: 'tool-1' }]
+    })
+    conn.close()
+  })
+
   it('允许安全取消的 invocation 从有效 checkpoint 继续，且拒绝已变更的 checkpoint 摘要', () => {
     const cancelled = snapshot()
     cancelled.events[cancelled.events.length - 1] = event(6, 'invocation-interrupted', { status: 'cancelled' })
