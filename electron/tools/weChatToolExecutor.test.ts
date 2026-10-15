@@ -4,7 +4,6 @@ import path from 'path'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { createMockWeChatBot } from '../wechat/__mocks__/wechatBotMock'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
-import { classifyImOutbound } from '../../src/shared/confirmation/outboundClassification'
 import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 
 const { getBundle, readWeChatConfig } = vi.hoisted(() => ({ getBundle: vi.fn(), readWeChatConfig: vi.fn() }))
@@ -452,7 +451,7 @@ describe('executeWeChatSend', () => {
         execute: async (input, context) => {
           expect(context.outboundDeliveryFacts).toMatchObject({ hasAttachment: true, attachmentAuthorized: true,
             attachmentPath: expect.stringContaining(fileName), contentCompleteness: 'complete' })
-          expect(classifyImOutbound(context.outboundDeliveryFacts!)).toEqual({ kind: 'controlled-reply', channel: 'wechat', recipient: 'wx-owner', sessionId: 'session-current' })
+          expect(context.outboundDeliveryFacts).toMatchObject({ channel: 'wechat', recipient: 'wx-owner', originSessionId: 'session-current', activeSessionId: 'session-current' })
           return executeWeChatReply({ text: String(input.text), filePath: String(input.filePath) }, {
           workDir: context.workDir,
           botService: { getRawBot: () => mockBot } as never,

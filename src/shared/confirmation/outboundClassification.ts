@@ -79,29 +79,6 @@ export function bindImOutboundAssessment(input: {
   }
 }
 
-export type ImOutboundClassification =
-  | { kind: 'controlled-reply'; channel: ImOutboundChannel; recipient: string; sessionId: string }
-  | { kind: 'active-outbound'; reason: string; channel: ImOutboundChannel }
-
-export function classifyImOutbound(facts: ImOutboundFacts): ImOutboundClassification {
-  const fail = (reason: string): ImOutboundClassification => ({ kind: 'active-outbound', reason, channel: facts.channel })
-  if (facts.modelRecipient !== undefined) return fail('untrusted-recipient')
-  if (facts.purpose !== 'task-reply') return fail('active-send')
-  if (!facts.originSessionId || facts.originSessionId !== facts.activeSessionId) return fail('session-mismatch')
-  if (!facts.identityKey || !facts.ownerId || !facts.trustedRecipient || facts.identityKey !== facts.trustedRecipient) return fail('owner-mismatch')
-  if (facts.chatType !== 'p2p') return fail(facts.chatType === 'group' ? 'group-destination' : 'unknown-destination')
-  if (facts.recipient && facts.recipient !== facts.trustedRecipient) return fail('third-party-recipient')
-  if (facts.contentCompleteness !== 'complete' || !facts.contentAssessment ||
-    facts.contentAssessment.source !== 'host' || !facts.contentAssessment.classifierVersion ||
-    facts.contentAssessment.content !== facts.content) return fail('unknown-content')
-  if (facts.contentAssessment.classification !== 'ordinary') return fail(facts.contentAssessment.classification)
-  if (facts.hasAttachment && (!facts.attachmentAuthorized || !facts.attachmentContentVersion || facts.attachmentContentVersion !== facts.checkedAttachmentContentVersion || !facts.attachmentPath || facts.attachmentPath !== facts.checkedAttachmentPath)) {
-    return fail('unverified-attachment')
-  }
-  return { kind: 'controlled-reply', channel: facts.channel, recipient: facts.trustedRecipient, sessionId: facts.originSessionId }
-}
-
-
 /** Fail closed immediately before a platform send unless all bound facts match. */
 export function assertImOutboundAllowed(facts: ImOutboundFacts, actual: { channel: ImOutboundChannel; body: string; sessionId: string; recipient: string; destinationId?: string }): void {
   const matchesApprovedObject = facts.channel === actual.channel && facts.content === actual.body &&

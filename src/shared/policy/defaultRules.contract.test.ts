@@ -32,6 +32,7 @@ const EXPECTED_RULE_IDS = [
   'remote-sensitive-workdir-switch-deny',
   'remote-unknown-workdir-switch-deny',
   'script-network-deny-remote',
+  'script-dangerous-deny',
   'remote-deny-lark-write-outbound',
   'remote-deny-wechat-outbound',
   'remote-browser-disabled',

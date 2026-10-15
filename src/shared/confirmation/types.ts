@@ -33,14 +33,6 @@ export interface ExecutionContext {
   outboundWriteBudgetRemaining?: number
   /** Policy package selected for this lane; used by explicit tier-scoped rules. */
   policyTier?: 'loose' | 'standard' | 'strict' | 'custom'
-  /** 套餐 B 预留：本期无人写入。 */
-  declaredCapabilities?: DeclaredCapability[]
-}
-
-/** 套餐 B 预留的能力声明。 */
-export interface DeclaredCapability {
-  actionClass: ActionClass
-  scope: string
 }
 
 /** 消息入口准入的输入事实（ingress 时机，此时尚无工具调用）。 */
@@ -660,7 +652,7 @@ export interface DecisionCacheView {
   lookup(key: CacheKey, lane?: ExecutionLane | '*'): DecisionCacheEntry | null
 }
 
-/** 第 4 步自动审批器：批准返回 Decision，不裁决（approve:false）交还规则链。 */
+/** 第 3 步自动审批器：批准返回 Decision，不裁决（approve:false）交还规则链。 */
 export type AutoEvaluator = (
   facts: ContentFacts,
   context: ExecutionContext
@@ -673,7 +665,7 @@ export interface PolicyEngineDeps {
   config: Record<string, unknown>
   /** 迁移完成位（参数化配置引用问询）。 */
   migrationComplete: boolean
-  /** 第 4 步自动审批器（可注入，缺省不裁决）。 */
+  /** 第 3 步自动审批器（可注入，缺省不裁决）。 */
   autoEvaluator?: AutoEvaluator
   /**
    * 档位动作变换（§2.1 LANE_PROFILES 按当前 lane+档位绑定；缺省恒等）。

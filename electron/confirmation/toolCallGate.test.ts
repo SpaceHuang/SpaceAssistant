@@ -1985,14 +1985,16 @@ describe('evaluateToolCallGate', () => {
 
   it('仅 Hosted recheck 重算无副作用的桌面文件快通道，旧 loop recheck 仍 fail closed', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-hosted-recheck-')))
+    const audit = auditSink()
     const fileAutoApproval = vi.fn(async () => ({ approve: true as const }))
     const common = {
       workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'write_file',
       toolInput: { path: 'created.txt', content: 'small write' }, phase: 'recheck' as const, fileAutoApproval
     }
     try {
-      const legacy = await evaluateToolCallGate(base(common))
+      const legacy = await evaluateToolCallGate(base({ ...common, audit }))
       expect(legacy.decision.type).toBe('deny')
+      expect(audit.events.find((event) => event.ruleId === 'recheck-requires-confirm')?.invariantId).toBe('SYS-APPROVAL-001')
       expect(fileAutoApproval).not.toHaveBeenCalled()
 
       const hosted = await evaluateToolCallGate(base({ ...common, evaluateFastTrackOnRecheck: true }))
@@ -2256,7 +2258,7 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('微信发送工作目录内普通附件继续服从既有出站规则', async () => {
+  it('微信发送工作目录内普通附件进入标准出站 Agent 审核规则', async () => {
     const workDir = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-inside-'))
     const mediaFile = path.join(workDir, 'report.txt')
     await fs.writeFile(mediaFile, 'shareable')
@@ -2268,13 +2270,13 @@ describe('evaluateToolCallGate', () => {
       }))
 
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-target', boundary: 'inside-workdir', zone: 'workdir-normal', targetKind: 'file' }))
-      expect(gate.decision.type).toBe('auto-allow')
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-mode-standard-review', answerer: 'agent' })
     } finally {
       await fs.rm(workDir, { recursive: true, force: true })
     }
   })
 
-  it('微信附件提取敏感内容证据但暂不改变兼容期策略 verdict，且不保存附件正文', async () => {
+  it('微信附件敏感内容证据触发真人 outbound 规则且不保存附件正文', async () => {
     const workDir = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-content-facts-'))
     const attachmentPath = path.join(workDir, 'report.txt')
     const secret = 'api_key=sk-1234567890abcdefghijklmnop'
@@ -2289,7 +2291,7 @@ describe('evaluateToolCallGate', () => {
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({
         kind: 'wechat-media-content-assessment', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern']
       }))
-      expect(gate.decision.type).toBe('auto-allow')
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-sensitive-standard-human', answerer: 'user' })
       expect(JSON.stringify(gate.facts)).not.toContain(secret)
     } finally {
       await fs.rm(workDir, { recursive: true, force: true })

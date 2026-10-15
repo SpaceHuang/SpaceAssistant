@@ -4,7 +4,7 @@
 
 | 场景 | 事实来源 | 旧动作/兼容消费者 | Phase 1 回归证据 | 对照结论 |
 |---|---|---|---|---|
-| IM outbound 普通内容 | `classifyImOutboundContent` + `createImOutboundFacts` | `assessImOutboundContent` 保留旧分类标签及路由 | `imOutboundFacts.test.ts`、`outboundClassification.test.ts`、`wechatOutboundRegisteredTools.test.ts` | 普通内容原判定保留；事实只附 digest、版本、覆盖和 evidence kinds |
+| IM outbound 普通内容 | `classifyImOutboundContent` + host facts binding | `assessImOutboundContent` 只产出 facts；policy rules 负责路由 | `imOutboundFacts.test.ts`、`outboundClassification.test.ts`、`wechatOutboundRegisteredTools.test.ts` | 普通内容原判定保留；事实只附 digest、版本、覆盖和 evidence kinds |
 | IM outbound 凭据/本地路径 | outbound facts evidence kinds | 原 `assessImOutboundContent` 和工具 gate | 同上及 `toolCallGate.test.ts` | 原敏感分类仍有效；事实不含正文 |
 | IM 附件凭据/个人信息/敏感路径名 | `createImAttachmentFacts`；gate 并行产 `wechat-media-content-assessment` | 既有附件内容摘要、目标路径分类和 gate 决策 | `imAttachmentFacts.test.ts`、`toolCallGate.test.ts`、`weChatToolExecutor.test.ts` | 当前策略仍由兼容路径决定；新 assessment 是观察信号，不自动 deny/confirm |
 | IM 附件内容不可解析/不可用 | inspection coverage `partial/unavailable` | 目标身份与既有路径/内容检查失败闭锁 | `imAttachmentFacts.test.ts`、`toolCallGate.test.ts` | 保留不确定状态，不凭空生成敏感标签 |

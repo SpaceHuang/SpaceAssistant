@@ -15,7 +15,7 @@ import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { executeWeChatSend, WeChatOutboundExecutionUncertainError } from './weChatToolExecutor'
-import { assertImOutboundAllowed, classifyImOutbound } from '../../src/shared/confirmation/outboundClassification'
+import { assertImOutboundAllowed } from '../../src/shared/confirmation/outboundClassification'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { createAgentSdkSafetyPolicy } from '../confirmation/agentSdkSafetyPolicy'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
@@ -98,7 +98,7 @@ describe('WeChat outbound prepared registrations', () => {
         taskBinding: { workflowId: 'im:request-text-reply', taskId: 'turn:request-text-reply', stepId: 'request', planRevision: 1, revision: 1 } }
     }
     const reply = vi.fn(async (_input: unknown, context: { outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) => ({
-      success: context.outboundDeliveryFacts ? classifyImOutbound(context.outboundDeliveryFacts).kind === 'controlled-reply' : false
+      success: context.outboundDeliveryFacts ? context.outboundDeliveryFacts.contentCompleteness === 'complete' : false
     }))
     const [, replyTool] = createWeChatOutboundRegisteredTools({
       send: { name: 'wechat_send', execute: vi.fn() } as never,
@@ -120,11 +120,11 @@ describe('WeChat outbound prepared registrations', () => {
 
   it('a cached allow and user approval still cannot turn a sensitive attachment into a task reply', async () => {
     const runtime = makeRuntime()
-    let preparedClassification: ReturnType<typeof classifyImOutbound> | undefined
+    let preparedFacts: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts | undefined
     const sideEffect = vi.fn(async () => undefined)
     const sendExecutor = vi.fn(async (_input: unknown, context: { outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) => {
-      preparedClassification = context.outboundDeliveryFacts ? classifyImOutbound(context.outboundDeliveryFacts) : undefined
-      if (preparedClassification?.kind !== 'controlled-reply') return { success: false, error: 'ACTIVE_OUTBOUND_REQUIRES_SEPARATE_AUTHORIZATION' }
+      preparedFacts = context.outboundDeliveryFacts
+      if (preparedFacts?.purpose !== 'task-reply' || preparedFacts.recipient !== preparedFacts.trustedRecipient) return { success: false, error: 'ACTIVE_OUTBOUND_REQUIRES_SEPARATE_AUTHORIZATION' }
       await sideEffect()
       return { success: true }
     })
@@ -145,7 +145,7 @@ describe('WeChat outbound prepared registrations', () => {
 
     expect(gateCalls).toBe(1)
     expect(sendExecutor).toHaveBeenCalledOnce()
-    expect(preparedClassification).toMatchObject({ kind: 'active-outbound' })
+    expect(preparedFacts).toMatchObject({ purpose: 'active-send', modelRecipient: 'wechat-user-approved' })
     expect(sideEffect).not.toHaveBeenCalled()
     expect(result).toMatchObject({ success: false, error: 'ACTIVE_OUTBOUND_REQUIRES_SEPARATE_AUTHORIZATION' })
   })
@@ -205,7 +205,7 @@ describe('WeChat outbound prepared registrations', () => {
       trustedRecipient: 'wechat-user-approved', modelRecipient: 'attacker-recipient',
       content: 'hello', contentAssessment: { source: 'host', content: 'hello', classification: 'ordinary' }
     })
-    expect(classifyImOutbound(context.outboundDeliveryFacts as never)).toMatchObject({ kind: 'active-outbound', reason: 'untrusted-recipient' })
+    expect(context.outboundDeliveryFacts).toMatchObject({ modelRecipient: expect.any(String) })
   })
 
   it.each(['wechat_send', 'wechat_reply'] as const)(

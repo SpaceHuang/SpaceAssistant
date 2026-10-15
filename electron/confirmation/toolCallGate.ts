@@ -43,6 +43,7 @@ import { validateDesktopReadV1 } from '../../src/shared/policy/readPolicyV1'
 import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
 import { matchSessionDirectoryGrant } from './sessionDirectoryGrantMatcher'
 import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmationTimeout'
+import { SYSTEM_INVARIANT_ID_BY_GATE_RULE } from '../../src/shared/security/systemInvariantIds'
 
 /**
  * T1.2/T1.3：以 resolveWikiMount 为本次路径入参构造探测锚点与敏感根豁免。
@@ -1256,6 +1257,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       policyDependencyFingerprint: policyDecision.dependencyFingerprint
     })
   }
+  const invariantId = SYSTEM_INVARIANT_ID_BY_GATE_RULE[decision.ruleId]
   audit.record({
     ts: Date.now(),
     event: 'policy.decision',
@@ -1289,6 +1291,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     pathZones: [...new Set(facts.signals.flatMap((s) => s.kind === 'path-target' ? [s.zone] : s.kind === 'wechat-media-target' && s.zone ? [s.zone] : []))],
     decision: decision.type,
     ruleId: decision.ruleId,
+    ...(invariantId ? { invariantId } : {}),
     reason: decision.type === 'require-confirm' ? decision.ruleId : decision.reason,
     ...(decision.type === 'require-confirm' ? { answerer: decision.answerer } : {}),
     ...(decision.type === 'deny' && decision.ruleId === 'recursion-guard'

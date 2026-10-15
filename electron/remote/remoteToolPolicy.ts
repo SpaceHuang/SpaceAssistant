@@ -70,47 +70,12 @@ export function applyMigrationConservativeOverlay(
   }
 }
 
-/**
- * run_script `allow` verdict may skip confirm only when migrated and script confirm disabled.
- *
- * Callers must only invoke this when `analyzeScriptContent(code, { remote: true })` itself
- * already returned `verdict === 'allow'` (see `electron/shell/scriptContentSecurity.ts`, WP3).
- * That remote `allow` is a positive-allowlist certification: the script is fully parseable, all
- * call chains are statically resolvable, every call is in the explicit safe-capability
- * whitelist, and any whitelisted file path is static and relative to the working directory. Any
- * `ask`, `deny`, parse failure, or otherwise-uncertified script never reaches `allow`, so this
- * switch can never resurrect a skip for dynamic import, reflection (`getattr`/`setattr`),
- * `eval`/`exec`, variable-borne call objects, or unmodeled syntax — those are forced to `ask`
- * upstream regardless of this config switch.
- */
-export function shouldSkipRemoteScriptConfirmOnAllow(config?: RemoteSecurityPolicyConfig | null): boolean {
-  return currentSnapshot(config)?.remoteScriptRequiresConfirm === false
-}
-
-/**
- * browser navigate: not gated by the conservative overlay. Uses the split switch when present,
- * otherwise the deprecated combined field (default: skip when combined is false).
- */
-export function shouldSkipRemoteBrowserNavigateConfirm(
-  config?: RemoteSecurityPolicyConfig | null
-): boolean {
-  const snapshot = currentSnapshot(config)
-  if (!snapshot) return false
-  const requires = snapshot.remoteBrowserNavigateRequiresConfirm
-  return requires === false
-}
-
 /** browser act: gated by migration; default effective is require-confirm. */
 export function shouldSkipRemoteBrowserActConfirm(config?: RemoteSecurityPolicyConfig | null): boolean {
   const snapshot = currentSnapshot(config)
   if (!snapshot) return false
   const requires = snapshot.remoteBrowserActRequiresConfirm
   return requires === false
-}
-
-/** Feishu lark write: gated by migration; skip only when explicitly disabled. */
-export function shouldSkipRemoteLarkWriteConfirm(config?: RemoteSecurityPolicyConfig | null): boolean {
-  return currentSnapshot(config)?.larkCliWriteRequiresConfirm === false
 }
 
 /** Shell meta never-trust helper (re-exported for policy consumers). */

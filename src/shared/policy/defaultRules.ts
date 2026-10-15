@@ -166,6 +166,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     locked: true,
     reason: '远程链路禁止执行含网络访问的脚本'
   },
+  {
+    id: 'script-dangerous-deny',
+    when: 'invocation',
+    match: { toolName: 'run_script', signals: ['dangerous'] },
+    denyClass: 'forbidden',
+    action: 'deny',
+    reason: '脚本事实包含明确危险行为'
+  },
   // 远程出站硬禁（等价现 evaluateRemoteToolBlock：remoteDenyOutbound 时禁止飞书写类 lark 子命令 /
   // 微信主动出站）。定序先于预算暂停条目（现 :878 远程阻断先于 :929 预算门控）。
   {

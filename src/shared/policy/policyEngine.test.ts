@@ -619,6 +619,16 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
     expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-sensitive-standard-human', answerer: 'user' })
   })
 
+  it('sensitive WeChat attachment evidence participates in the standard outbound policy', () => {
+    const facts = mkFacts('wechat_send', 'outbound', [
+      { kind: 'wechat-media-content-assessment', factId: 'fact-1', contentDigest: 'a'.repeat(64), extractorVersion: 'host-v1',
+        inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] }
+    ])
+    const result = decide(facts, { ...mkContext('wechat'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('wechat', 'standard', rule) }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-sensitive-standard-human', answerer: 'user' })
+  })
+
   it('ordinary outbound in standard IM is assigned to the policy-selected Agent reviewer', () => {
     const facts = mkFacts('wechat_reply', 'outbound', [])
     const result = decide(facts, { ...mkContext('wechat'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
@@ -783,7 +793,7 @@ describe('decide：远程写会话信任（decision_cache remote-write）', () =
 })
 
 describe('decide：安全不变量（硬约束先于缓存）+ 默认兜底', () => {
-  it('危险信号（script-analysis dangerous）在缓存查询之前被硬拒绝', () => {
+  it('危险脚本信号由显式规则在缓存查询前拒绝', () => {
     const d = decide(
       mkFacts('run_script', 'execute', [
         { kind: 'script-analysis', signal: 'dangerous', patterns: ['rm -rf'] }
@@ -792,7 +802,24 @@ describe('decide：安全不变量（硬约束先于缓存）+ 默认兜底', ()
       DEFAULT_POLICY_RULES,
       deps({ cache: cacheWith('allow') })
     )
-    expect(d.type).toBe('deny')
+    expect(d).toMatchObject({ type: 'deny', ruleId: 'script-dangerous-deny' })
+  })
+
+  it('没有危险脚本规则时不保留隐藏的危险信号终局拒绝', () => {
+    const rules = DEFAULT_POLICY_RULES.filter((rule) => rule.id !== 'script-dangerous-deny')
+    const d = decide(
+      mkFacts('run_script', 'execute', [
+        { kind: 'script-analysis', signal: 'dangerous', patterns: ['rm -rf'] }
+      ], 'high'),
+      mkContext('desktop'), rules, deps({ cache: cacheWith('allow') })
+    )
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'default-write-execute-ask' })
+  })
+
+  it('未受信来源的 declared capability 不绕过正常策略规则', () => {
+    const context = { ...mkContext('desktop'), declaredCapabilities: [{ actionClass: 'execute', scope: '*' }] } as ExecutionContext
+    const d = decide(mkFacts('run_script', 'execute', [], 'medium'), context, DEFAULT_POLICY_RULES, deps())
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'default-write-execute-ask' })
   })
 
   it('deniedTools 配置命中的工具被硬拒绝（第 1 步）', () => {
@@ -1081,7 +1108,7 @@ describe('shell signal tokens', () => {
 })
 
 describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () => {
-  it('desktop 第 6 步 ask → answerer=user（mcp-tool 默认确认）', () => {
+  it('desktop 第 5 步 ask → answerer=user（mcp-tool 默认确认）', () => {
     const d = decide(
       mkFacts('mcp_query', 'write', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
       mkContext('desktop'),
@@ -1093,7 +1120,7 @@ describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () =>
     expect(d.type === 'require-confirm' && d.answerer).toBe('user')
   })
 
-  it('wechat 第 6 步 ask → answerer=user（零行为变化硬回归）', () => {
+  it('wechat 第 5 步 ask → answerer=user（零行为变化硬回归）', () => {
     const d = decide(
       mkFacts('mcp_query', 'write', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
       mkContext('wechat'),
