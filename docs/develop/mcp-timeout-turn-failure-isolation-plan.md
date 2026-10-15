@@ -1,8 +1,8 @@
 # MCP 超时后的 Turn 故障隔离与恢复优化计划
 
 > 日期：2026-10-13
-> 文档性质：经评审批准的方案及实施记录
-> 状态：阶段 A-E 实现完成；完整全量套件仍受本机网络监听与真实进程清理的沙箱限制，详见验证记录
+> 文档性质：代码路径分析与实施计划；本次只记录方案，不含代码改动
+> 状态：复评 v3 提出 2 项 P1 生命周期合同阻断；按报告修订中，修订版尚未复评
 > 触发案例：会话 `0f57fb3d-b4ea-4763-9c30-6ceec4f84d1d` 末轮并发提出 4 次 `adhoc_get_query_status`：1 次成功、1 次约 39 秒超时、2 次未派发；Turn 以 `interrupted` 结束，后续“继续”没有恢复这批调用的进度
 > 关联计划：[工具错误恢复与 Turn 连续性改进计划](tool-error-recovery-and-turn-continuity-plan.md)、[工具并发派发缺陷计划](tool-dispatch-slot-abort-and-transcript-hole-improvement-plan.md)、[本计划评审报告](../review/2026-10-13-mcp-timeout-turn-failure-isolation-plan-review.md)、[复评通过报告](../review/2026-10-13-mcp-timeout-turn-failure-isolation-plan-review-v2.md)、[复评报告 v3](../review/2026-10-13-mcp-timeout-turn-failure-isolation-plan-review-v3.md)
 
@@ -464,7 +464,14 @@ History 对每个 tool call 记录统一的执行事实：
 
 ## 11. 监控与上线
 
-统一输出每个 completed/failed Turn 的 `tools.execution_summary` 结构化诊断，字段包含模型提案数、确认进入 executor 数、已知失败数、unknown 结果数及未派发数。日志不包含工具输入或原始参数；现有 dispatch-stop/error 诊断继续保留。日志平台可在采集层聚合为跨会话指标。
+统一统计：
+
+- `tool_execution_started_total`
+- `tool_result_known_failure_total`
+- `tool_result_unknown_total`
+- `tool_result_not_dispatched_total`
+- `tool_timeout_recovered_same_turn_total`
+- `invocation_interrupted_by_history_or_safety_total`
 
 先在内部/灰度环境开启 SDK 通用错误隔离，观察同一 Invocation 继续率、unknown 结果比例、批次结果完整率、重复失败循环和 History fatal 率。按工具名切分仅用于诊断，不配置不同的通用错误路径。
 
@@ -475,14 +482,3 @@ History 对每个 tool call 记录统一的执行事实：
 按 A → B → C → D → E 推进：先定 SDK 生命周期与 fatal 合同，再实现通用结果结算；随后让批次在工具错误后完整结算并继续 Invocation；然后修复 History 和 Hosted continuation 上下文；最后完善诊断并做通用故障注入验收。
 
 验收以 SDK 合成执行器和通用生命周期路径为主。具体 MCP 的语义盘点只能作为补充验证，不能成为实现前置条件、阶段门槛或不同错误处理分支的依据。该方案不要求第三方 MCP 服务端配合，也不承诺任意第三方操作的 exactly-once 或语义级去重。
-
-## 13. 实施进度（2026-10-14）
-
-- [x] 已在独立 worktree `codex/mcp-timeout-turn-isolation` 建立隔离开发分支；本计划文档随分支纳入。
-- [x] 阶段 A：接口文档和 SDK lifecycle boundary 已实现。合成回归覆盖 executor throw 与撤权、忽略 abort 后正常返回、lease-only 授权变更、Invocation timeout 与工具错误并发；四类失效均验证没有下一次模型请求。
-- [x] 阶段 B：executor entry 后未结构化异常统一结算为 `unknown-after-dispatch`；生命周期 disposition 独立记录并优先终止 Invocation；History 写入失败仍不回灌未持久化结果。
-- [x] 阶段 C：dispatch 后 unknown 停止领取同批新槽位、等待在途 sibling，按提案顺序结算全部槽位并回灌；并发上限 2、4 个提案的精确场景通过，SDK 不自动重试原调用。
-- [x] 阶段 D：started 事件显式记 `executorEntry: unknown`；旧 started-only History 映射为 unknown 并被拒绝 checkpoint replay；History append 失败不回灌未持久化结果；started-only 两种 crash-window 记录均作为 unknown 恢复。checkpoint、重启恢复、Track-scoped、既有 canonical History 与无前序 History 分支都验证了 supplemental context 进入最终 Hosted 请求且不进入普通 transcript。
-- [x] 阶段 E：桌面诊断包含 errorCode、outcome、executor entry 和 invocation disposition；每回合汇总提案数、executor entry、已知失败、unknown 与未派发数，汇总不包含工具参数；桌面与 IM 调用方统一 unknown 语义，UI/i18n 提示已更新。
-- 定向验证（2026-10-14）：SDK Turn 与执行租约用例 154/154 通过；History/continuation 当前 95 项通过；observer 21/21、日志脱敏投影 30/30、Invocation assembler 68/68 通过；Hosted 集成核心文件 120/120、butler 调用方 51/51 通过；跨 SDK、Hosted、MCP、IM 调用方集合此前 409/409 通过。renderer、shared、agent-sdk、Electron 类型检查全部通过；`node --import tsx scripts/i18n-check.ts` 通过（1297 个硬编码中文仅在测试中）；`git diff --check` 通过。
-- 全量验证（2026-10-14，计数诊断实现前）：`npm test -- --reporter=json` 执行 2676 个测试文件、9756 项测试：9604 通过、41 失败、111 跳过，0 个 unhandled error。失败限于本地网络监听受限的 MCP HTTP/OAuth/IPC 测试（`STACK_TRACE_ERROR`）及真实 detached 进程清理测试（观察结果为 `unverified`）；未见本次功能相关回归。之后新增计数诊断已由 Hosted 120 项和 observer 21 项定向测试验证；全量应在允许本机回环网络和进程组信号的环境重跑。
