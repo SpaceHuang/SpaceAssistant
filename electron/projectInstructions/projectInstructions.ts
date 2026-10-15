@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { constants as fsConstants } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TextDecoder } from 'node:util'
@@ -32,6 +33,8 @@ export type LoadAgentsMdOptions = Readonly<{
   maxBytes?: number
   /** Test seam for normal concurrent edits; at most one retry is made. */
   beforeRead?: (attempt: number, filePath: string) => void | Promise<void>
+  /** Test seam for deterministic path replacement after open but before validation. */
+  afterOpen?: (attempt: number, filePath: string) => void | Promise<void>
 }>
 
 function result(input: Omit<AgentsMdLoadResult, 'sourcePath' | 'workDir'> & { workDir: string }): AgentsMdLoadResult {
@@ -41,6 +44,12 @@ function result(input: Omit<AgentsMdLoadResult, 'sourcePath' | 'workDir'> & { wo
 function inside(root: string, target: string): boolean {
   const relative = path.relative(root, target)
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+type FileStat = Awaited<ReturnType<Awaited<ReturnType<typeof fs.open>>['stat']>>
+
+function sameFile(left: FileStat, right: FileStat): boolean {
+  return left.dev === right.dev && left.ino === right.ino
 }
 
 export async function loadAgentsMd(workDir: string, options: LoadAgentsMdOptions = {}): Promise<AgentsMdLoadResult> {
@@ -54,9 +63,13 @@ export async function loadAgentsMd(workDir: string, options: LoadAgentsMdOptions
 
   const maxBytes = Math.min(options.maxBytes ?? AGENTS_MD_MAX_BYTES, AGENTS_MD_MAX_BYTES)
   const filePath = path.join(rootPath, AGENTS_MD_FILE_NAME)
+  let authorizedRootRealPath: string | undefined
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const rootRealPath = await fs.realpath(rootPath)
+      const resolvedRootPath = await fs.realpath(rootPath)
+      if (authorizedRootRealPath && resolvedRootPath !== authorizedRootRealPath) return emptyResult('unstable')
+      authorizedRootRealPath ??= resolvedRootPath
+      const rootRealPath = authorizedRootRealPath
       let targetRealPath: string
       try {
         targetRealPath = await fs.realpath(filePath)
@@ -66,25 +79,65 @@ export async function loadAgentsMd(workDir: string, options: LoadAgentsMdOptions
         return emptyResult('read-error')
       }
       if (!inside(rootRealPath, targetRealPath)) return emptyResult('outside-workdir')
-      const before = await fs.stat(filePath)
-      if (!before.isFile()) return emptyResult('not-file')
-      if (before.size > maxBytes) return emptyResult('too-large', before.size)
+      const pathBeforeOpen = await fs.stat(filePath)
+      if (!pathBeforeOpen.isFile()) return emptyResult('not-file')
+      if (pathBeforeOpen.size > maxBytes) return emptyResult('too-large', pathBeforeOpen.size)
       await options.beforeRead?.(attempt, filePath)
-      const handle = await fs.open(filePath, 'r')
+      // Open first, then prove that the opened inode is still named by the
+      // in-workdir path. No bytes are read until this binding is verified.
+      // O_NONBLOCK avoids hanging if an attacker swaps in a FIFO before open;
+      // it has no effect on ordinary files.
+      let handle: Awaited<ReturnType<typeof fs.open>>
+      try {
+        handle = await fs.open(targetRealPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+          const currentRootPath = await fs.realpath(rootPath)
+          const currentTargetPath = await fs.realpath(filePath)
+          if (currentRootPath !== rootRealPath) return emptyResult('unstable')
+          if (!inside(currentRootPath, currentTargetPath)) return emptyResult('outside-workdir')
+          if (attempt === 0) continue
+          return emptyResult('unstable')
+        }
+        throw error
+      }
       let buffer: Buffer
+      let before: Awaited<ReturnType<typeof handle.stat>>
       let after: Awaited<ReturnType<typeof handle.stat>>
       try {
-        after = await handle.stat()
-        if (!after.isFile()) return emptyResult('not-file')
-        if (after.size > maxBytes) return emptyResult('too-large', after.size)
-        buffer = Buffer.alloc(Math.min(maxBytes + 1, after.size + 1))
+        await options.afterOpen?.(attempt, filePath)
+        before = await handle.stat()
+        if (!before.isFile()) return emptyResult('not-file')
+        if (before.size > maxBytes) return emptyResult('too-large', before.size)
+        if (!sameFile(before, pathBeforeOpen) || before.size !== pathBeforeOpen.size || before.mtimeMs !== pathBeforeOpen.mtimeMs) {
+          if (attempt === 0) continue
+          return emptyResult('unstable')
+        }
+
+        const verifiedRootPath = await fs.realpath(rootPath)
+        if (verifiedRootPath !== rootRealPath) return emptyResult('unstable')
+        const verifiedTargetPath = await fs.realpath(filePath)
+        if (!inside(verifiedRootPath, verifiedTargetPath)) return emptyResult('outside-workdir')
+        const verifiedPathStat = await fs.stat(verifiedTargetPath)
+        if (!sameFile(before, verifiedPathStat)) {
+          if (attempt === 0) continue
+          return emptyResult('unstable')
+        }
+
+        buffer = Buffer.alloc(Math.min(maxBytes + 1, before.size + 1))
         const read = await handle.read(buffer, 0, buffer.length, 0)
         buffer = buffer.subarray(0, read.bytesRead)
+        after = await handle.stat()
       } finally {
         await handle.close()
       }
-      const afterPath = await fs.stat(filePath)
-      const stableVersion = before.dev === after.dev && before.ino === after.ino && before.size === after.size &&
+
+      const finalRootPath = await fs.realpath(rootPath)
+      if (finalRootPath !== rootRealPath) return emptyResult('unstable')
+      const finalTargetPath = await fs.realpath(filePath)
+      if (!inside(finalRootPath, finalTargetPath)) return emptyResult('outside-workdir')
+      const afterPath = await fs.stat(finalTargetPath)
+      const stableVersion = sameFile(before, after) && before.size === after.size &&
         before.mtimeMs === after.mtimeMs && afterPath.dev === after.dev && afterPath.ino === after.ino &&
         afterPath.size === after.size && afterPath.mtimeMs === after.mtimeMs && buffer.length === after.size
       if (!stableVersion) {

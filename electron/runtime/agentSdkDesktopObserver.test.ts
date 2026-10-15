@@ -16,6 +16,7 @@ import { reduceAssistantFact, type AssistantFactEvent } from '../../src/shared/a
 import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivityTimeline'
 import type { Message } from '../../src/shared/domainTypes'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -73,6 +74,65 @@ describe('createAgentSdkDesktopObserver', () => {
         .toEqual(roots.map(({ name }) => 'rules for ' + name))
     } finally {
       await Promise.all(roots.map(({ root }) => rm(root, { recursive: true, force: true })))
+    }
+  })
+
+  it('does not put a raced outside-workdir AGENTS.md into provider requests or History', async () => {
+    const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-raced-workdir-'))
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-raced-outside-'))
+    const filePath = path.join(workDir, 'AGENTS.md')
+    const privateFile = path.join(outsideDir, 'private.txt')
+    await writeFile(filePath, 'project rules', 'utf8')
+    await writeFile(privateFile, 'PRIVATE_OUTSIDE_WORKDIR', 'utf8')
+    const realpath = fs.realpath.bind(fs)
+    let swapped = false
+    const realpathSpy = vi.spyOn(fs, 'realpath').mockImplementation(async (input: Parameters<typeof fs.realpath>[0], options?: Parameters<typeof fs.realpath>[1]) => {
+      const resolved = await realpath(input as string, options as never)
+      if (input === filePath && !swapped) {
+        swapped = true
+        await fs.unlink(filePath)
+        await fs.symlink(privateFile, filePath)
+      }
+      return resolved
+    })
+    try {
+      const route = { routeId: 'agents-race', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }
+      const registry = new ModelProviderRegistry()
+      const providerMessages: unknown[] = []
+      registry.register(route, { providerId: 'agents-race', stream: async function* (call) {
+        providerMessages.push(structuredClone(call.request.messages))
+        yield { type: 'text-delta', text: 'done' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      } })
+      const invocationId = 'agents-race'
+      const capabilities = new CapabilityRegistry()
+      capabilities.define(invocationId, [])
+      const permits = new InMemorySafetyPermitStore()
+      const history = new MemoryHistory()
+      await runAgentTurn({
+        registry, routeId: route.routeId, invocationId, history,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 100 },
+        observer: createAgentSdkDesktopObserver({ requestId: invocationId, sessionId: 'session', turnId: 'turn', getWorkDir: () => workDir, agentsMdEnabled: true }),
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
+        prepareTool: async () => { throw new Error('no tools expected') },
+        toolExecution: createPermitBoundToolExecutionPort({
+          permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+          resolveExpected: async () => { throw new Error('no tools expected') },
+          execute: async () => ({ output: 'no tools expected' })
+        }),
+        recordProviderAttemptUsage: vi.fn(),
+        maxModelTurns: 1
+      })
+
+      const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
+      expect(swapped).toBe(true)
+      expect(JSON.stringify(providerMessages)).not.toContain('PRIVATE_OUTSIDE_WORKDIR')
+      expect(JSON.stringify(requestEvents)).not.toContain('PRIVATE_OUTSIDE_WORKDIR')
+      expect(requestEvents[0]?.payload).toMatchObject({ requestMetadata: { agentsMdSnapshot: { status: 'outside-workdir' } } })
+    } finally {
+      realpathSpy.mockRestore()
+      await Promise.all([rm(workDir, { recursive: true, force: true }), rm(outsideDir, { recursive: true, force: true })])
     }
   })
   it('persists the committed run_shell input snapshot instead of the raw streamed chunk', async () => {

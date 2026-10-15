@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -56,6 +56,70 @@ describe('loadAgentsMd', () => {
     await expect(loadAgentsMd(root)).resolves.toMatchObject({ status: 'outside-workdir', content: null })
   })
 
+  it('rejects a workDir-external symlink swapped in after realpath validation', async () => {
+    const root = await makeRoot()
+    const outside = await makeRoot()
+    const filePath = path.join(root, 'AGENTS.md')
+    const privateFile = path.join(outside, 'private.txt')
+    await fs.writeFile(filePath, 'project rules')
+    await fs.writeFile(privateFile, 'PRIVATE_OUTSIDE_WORKDIR')
+    const realpath = fs.realpath.bind(fs)
+    let swapped = false
+    const spy = vi.spyOn(fs, 'realpath').mockImplementation(async (input: Parameters<typeof fs.realpath>[0], options?: Parameters<typeof fs.realpath>[1]) => {
+      const resolved = await realpath(input as string, options as never)
+      if (input === filePath && !swapped) {
+        swapped = true
+        await fs.unlink(filePath)
+        await fs.symlink(privateFile, filePath)
+      }
+      return resolved
+    })
+    try {
+      const result = await loadAgentsMd(root)
+      expect(result.status).toBe('outside-workdir')
+      expect(result.content).toBeNull()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('does not read an external target swapped in after the file handle is opened', async () => {
+    const root = await makeRoot()
+    const outside = await makeRoot()
+    const filePath = path.join(root, 'AGENTS.md')
+    const privateFile = path.join(outside, 'private.txt')
+    await fs.writeFile(filePath, 'project rules')
+    await fs.writeFile(privateFile, 'PRIVATE_OUTSIDE_WORKDIR')
+
+    const result = await loadAgentsMd(root, {
+      afterOpen: async () => {
+        await fs.unlink(filePath)
+        await fs.symlink(privateFile, filePath)
+      }
+    })
+    expect(result.status).toBe('outside-workdir')
+    expect(result.content).toBeNull()
+  })
+
+  it('rejects a workDir symlink retargeted outside before open', async () => {
+    const root = await makeRoot()
+    const outside = await makeRoot()
+    const aliasContainer = await makeRoot()
+    const workDirAlias = path.join(aliasContainer, 'workspace')
+    await fs.writeFile(path.join(root, 'AGENTS.md'), 'project rules')
+    await fs.writeFile(path.join(outside, 'AGENTS.md'), 'PRIVATE_OUTSIDE_WORKDIR')
+    await fs.symlink(root, workDirAlias)
+
+    const result = await loadAgentsMd(workDirAlias, {
+      beforeRead: async () => {
+        await fs.unlink(workDirAlias)
+        await fs.symlink(outside, workDirAlias)
+      }
+    })
+    expect(result.status).toBe('unstable')
+    expect(result.content).toBeNull()
+  })
+
   it('allows an in-workdir symlink and keeps simultaneous directories isolated', async () => {
     const a = await makeRoot()
     const b = await makeRoot()
@@ -67,14 +131,18 @@ describe('loadAgentsMd', () => {
     expect(resultB).toMatchObject({ status: 'loaded', content: 'B rule' })
   })
 
-  it('reads a stable version across atomic editor replacement', async () => {
+  it('retries an atomic editor replacement after opening and reads only the complete new version', async () => {
     const root = await makeRoot()
     const current = path.join(root, 'AGENTS.md')
     const replacement = path.join(root, '.AGENTS.md.tmp')
     await fs.writeFile(current, 'old')
     await fs.writeFile(replacement, 'complete new rule')
-    await fs.rename(replacement, current)
-    await expect(loadAgentsMd(root)).resolves.toMatchObject({ status: 'loaded', content: 'complete new rule' })
+    let replaced = false
+    await expect(loadAgentsMd(root, { afterOpen: async () => {
+      if (replaced) return
+      replaced = true
+      await fs.rename(replacement, current)
+    } })).resolves.toMatchObject({ status: 'loaded', content: 'complete new rule' })
   })
 
   it('retries a normal concurrent modification once and then reports an unstable read without old content', async () => {
