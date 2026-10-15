@@ -151,7 +151,7 @@ describe('WeChat outbound prepared registrations', () => {
   })
 
   it.each(['wechat_send', 'wechat_reply'] as const)(
-    'does not send a host-classified sensitive body through confirmed %s', async (toolName) => {
+    'dispatches host-classified sensitive content only through the user-approved policy path for %s', async (toolName) => {
       const body = 'api_key=sk-00000000000000000000000000000000'
       const runtime = {
         ...makeRuntime(),
@@ -179,8 +179,8 @@ describe('WeChat outbound prepared registrations', () => {
         signal: new AbortController().signal, executionContext: runtime as never,
         userConfirmationReceipt: 'confirmation:user-approved', userConfirmationAnswerer: 'user'
       }, { confirm: async () => true, dispatch: async (_handle, _context, dispatch) => dispatch(new AbortController().signal) }))
-        .rejects.toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
-      expect(platformSend).not.toHaveBeenCalled()
+        .resolves.toMatchObject({ success: true })
+      expect(platformSend).toHaveBeenCalledOnce()
     }
   )
 

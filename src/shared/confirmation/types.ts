@@ -492,6 +492,8 @@ export interface SecurityAuditEvent {
   policyRevision?: number
   /** Canonical identity and matched attribution of the policy decision. */
   decisionId?: string
+  /** Whether an execution veto can be joined to its originating policy decision. */
+  priorDecision?: 'available' | 'unavailable'
   policyDependencyFingerprint?: string
   decisionRuleIds?: string[]
   /** Source registry reference for a non-policy system invariant; never grants an exemption. */
@@ -522,7 +524,7 @@ export interface SecurityAuditEvent {
   /** 脱敏后的事实关联 id；路径事实不得把原始路径直接写入该字段。 */
   factId?: string
   pathZone?: PathZone
-  failureClass?: 'input' | 'mechanism' | 'environment' | 'integration-violation'
+  failureClass?: import('../security/executionAuthorizationCheck').ExecutionVetoFailureClass
   caseId?: string
   toolName?: string
   actionClass?: ActionClass

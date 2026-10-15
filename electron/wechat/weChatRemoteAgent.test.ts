@@ -2547,7 +2547,7 @@ describe('runWeChatRemoteAgent', () => {
       await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('created-during-approval')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-write-target-drift', reason: 'WRITE_PREPARED_PERMIT_CHANGED'
+        toolCallId: 'wechat-write-target-drift', reason: 'RECHECK_REQUIRES_CONFIRMATION'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -2628,7 +2628,7 @@ describe('runWeChatRemoteAgent', () => {
     }
   })
 
-  it('WeChat Hosted rechecks a confirmed write when its auto-approval threshold changes while waiting', async () => {
+  it('WeChat Hosted requires fresh confirmation when write approval settings change while waiting', async () => {
     const previousRuntime = getDefaultAgentRuntime()
     const runtime = createDesktopAgentRuntime()
     setDefaultAgentRuntime(runtime)
@@ -2644,7 +2644,9 @@ describe('runWeChatRemoteAgent', () => {
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, customSensitivePrefixes })
     }
     let channel!: ImChannel
+    let confirmationPrompts = 0
     channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+      confirmationPrompts += 1
       autoApproveMaxBytes = 1_000
       customSensitivePrefixes = [targetPath]
       queueMicrotask(() => channel.tryResolveFromInbound(
@@ -2690,13 +2692,12 @@ describe('runWeChatRemoteAgent', () => {
     try {
       await expect(runWeChatRemoteAgent(context)).resolves.toMatchObject({ ok: true, summary: '配置变化后已停止写入。', pendingConfirm: false })
       expect(providerCalls).toBe(2)
-      expect(executeWrite).not.toHaveBeenCalled()
-      await expect(fs.access(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(confirmationPrompts).toBe(2)
+      expect(executeWrite).toHaveBeenCalledTimes(1)
+      await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('must-not-use-stale-threshold')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
-      expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-write-config-drift', reason: 'WRITE_PREPARED_PERMIT_CHANGED'
-      })
-      expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      expect(history.events.filter((event) => event.kind === 'approval-resolved' && event.payload.toolCallId === 'wechat-write-config-drift')).toHaveLength(2)
+      expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === 'wechat-write-config-drift')).toBe(true)
     } finally {
       executeWrite.mockRestore()
       setDefaultAgentRuntime(previousRuntime)

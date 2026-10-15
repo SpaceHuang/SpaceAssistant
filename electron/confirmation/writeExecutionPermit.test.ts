@@ -28,4 +28,9 @@ describe('write execution permit', () => {
     expect(permit.target.parentIdentity.ino).toBe(2)
     expect(validateWriteExecutionPermit(permit, { requestId: 'r1', toolUseId: 'u1', toolName: 'write_file', input })).toEqual({ ok: true })
   })
+
+  it('对象键顺序变化不影响相同批准参数的 digest', () => {
+    const permit = buildWriteExecutionPermit({ requestId: 'r1', toolUseId: 'u1', toolName: 'write_file', input: { path: input.path, content: input.content }, target: fact, decisionRuleId: 'write-outside-confirm', approval: 'confirmed' })
+    expect(validateWriteExecutionPermit(permit, { requestId: 'r1', toolUseId: 'u1', toolName: 'write_file', input: { content: input.content, path: input.path } })).toEqual({ ok: true })
+  })
 })

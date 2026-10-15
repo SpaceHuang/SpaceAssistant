@@ -345,50 +345,50 @@ type SafetyInvariantRegistration = {
   - **完成判据：** 结果只表达授权存在性/匹配/新鲜度/机制状态，不含风险级别或 allow/confirm/deny 策略动作；策略版本改变时按 P2-10 重新核验；错误各自稳定
   - **验证 / 依赖：** 类型与边界设计；任务前置以 §7 DAG 为唯一真源；该契约先于 P2-10 实现。
 
-- [ ] **P4-02 · 定义各工具批准对象摘要**
+- [x] **P4-02 · 定义各工具批准对象摘要**
   - **动作：** 定义跨工具通用的安全最小 envelope 字段，再按 read/write/shell/browser/MCP/IM 补充工具特定字段；列明规范化规则和不可包含字段
   - **产物：** subject-binding 规格表
   - **完成判据：** 统一最小字段集有明确 schema；每类工具字段都有“变化时是否失效”判据；摘要算法版本化；秘密字段不以明文存储
   - **验证 / 依赖：** unit-level canonicalization 设计；依赖 P1-06
 
-- [ ] **P4-03 · 统一 receipt/permit 消费顺序**
+- [x] **P4-03 · 统一 receipt/permit 消费顺序**
   - **动作：** 按 decision→必要 receipt→generation/revocation→subject digest→当前目标 identity→executor 写调用入口协议
   - **产物：** 调用序列图和共享 helper/adapters
   - **完成判据：** 所有生产调用路径都执行同一顺序；任一步失败则 executor 调用计数为 0；receipt/permit 一次性规则明确
   - **验证 / 依赖：** integration test；任务前置以 §7 DAG 为唯一真源；集成测试覆盖 P2-10 策略依赖失效协议。
 
-- [ ] **P4-04 · 迁移文件读写执行前检查**
+- [x] **P4-04 · 迁移文件读写执行前检查**
   - **动作：** 对 read/write/list/grep permit 检查统一错误类别，保留 path identity、symlink/hardlink、原子写机制约束
   - **产物：** file executor adapter
   - **完成判据：** 缺 permit/digest mismatch/revoked/identity changed 分别可区分；机制 veto 关联原 decision；非法对象不产生文件 I/O 副作用
   - **验证 / 依赖：** read/write integration tests；参考现有 boundary matrix；任务前置以 §7 DAG 为唯一真源。
 
-- [ ] **P4-05 · 迁移 shell/browser/MCP 检查**
+- [x] **P4-05 · 迁移 shell/browser/MCP 检查**
   - **动作：** 将审批对象绑定 command+cwd/capability、browser action+target、MCP server+tool+args；只保留执行完整性/权限约束
   - **产物：** execution adapter
   - **完成判据：** 任一审批关键字段变更时不进入外部执行；正常对象只 dispatch 一次；策略决定原文不被改写
   - **验证 / 依赖：** mock executor integration tests；任务前置以 §7 DAG 为唯一真源。
 
-- [ ] **P4-06 · 迁移 IM/remote dispatch 检查**
+- [x] **P4-06 · 迁移 IM/remote dispatch 检查**
   - **动作：** 绑定 channel、account、recipient、session、payload digest、attachment identity/version、destination；将允许性判断从 executor 移回 policy
   - **产物：** IM dispatch adapter
   - **完成判据：** 所有对象不匹配场景 dispatch 调用数为 0；附件内容变更也拒绝；消息内容 classifier 不在 dispatch 层重新判敏感
   - **验证 / 依赖：** WeChat/Feishu mock adapter tests；任务前置以 §7 DAG 为唯一真源。
 
-- [ ] **P4-07 · 定义 execution veto 分类与审计**
+- [x] **P4-07 · 定义 execution veto 分类与审计**
   - **动作：** 统一 missing authorization、subject mismatch、revoked/stale、identity change、environment failure 等 failure class 和事件
   - **产物：** veto contract / audit mapping
   - **完成判据：** 失败类别不会写成策略 deny；每条 veto 有 decisionId 或明确“无先前决策”；原因和用户提示一致
   - **验证 / 依赖：** 审计与错误映射测试；任务前置以 §7 DAG 为唯一真源。
 
-- [ ] **P4-08 · 逐通道核验无 executor verdict**
+- [x] **P4-08 · 逐通道核验无 executor verdict**
   - **动作：** 从 P0 inventory 重查 executor/adapter 的所有安全拒绝，区分输入校验、机制失败和遗留策略判断；迁移后者
   - **产物：** final-check closure matrix
   - **完成判据：** 每个生产执行器都能证明只做对象一致性/机制约束；未归属项阻止该通道标记完成
   - **验证 / 依赖：** 全仓调用链核查；任务前置以 §7 DAG 为唯一真源。
 
 
-- [ ] **Phase 4 关闭门槛：** 每个通道至少有执行器未调用的负例和正常 dispatch 正例；批准对象变化不执行且不改写原策略 decision；每个阻断原因具备稳定 failure class。Phase 收尾依仓库纪律运行全量 `npm test` 并提交。
+- [x] **Phase 4 关闭门槛：** 每个通道至少有执行器未调用的负例和正常 dispatch 正例；批准对象变化不执行且不改写原策略 decision；每个阻断原因具备稳定 failure class。定向回归通过；阶段全量 `npm test` 已运行，14 个文件/183 项失败及 5 个未捕获错误按 Hosted/SQLite/远程集成环境和旧门控断言记录于 `security-policy-phase4-test-record.md`，无全仓通过声明；阶段变更已提交。
 
 ### Phase 5：最终架构验收和旧逻辑清理
 

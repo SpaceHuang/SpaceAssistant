@@ -564,7 +564,7 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
     ['loose', 'desktop', { type: 'auto-allow', ruleId: 'outbound-mode-loose-allow' }],
     ['standard', 'desktop', { type: 'require-confirm', ruleId: 'outbound-mode-standard-review', answerer: 'agent' }],
     ['strict', 'desktop', { type: 'require-confirm', ruleId: 'outbound-mode-strict-human', answerer: 'user' }],
-    ['standard', 'wechat', { type: 'auto-allow', ruleId: 'default-read-outbound-allow' }],
+    ['standard', 'wechat', { type: 'require-confirm', ruleId: 'outbound-mode-standard-review', answerer: 'agent' }],
     ['strict', 'feishu', { type: 'require-confirm', ruleId: 'outbound-mode-strict-human', answerer: 'user' }]
   ] as const)('outbound policy matrix %s/%s selects answerer before confirmation adapter', (tier, lane, expected) => {
     const outboundFacts = mkFacts('send_email', 'outbound', [{ kind: 'network-egress', domains: ['example.test'] }], 'medium')
@@ -608,6 +608,22 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
     ])
     expect(decide(facts, { ...mkContext('desktop'), policyTier: 'standard' }, DEFAULT_POLICY_RULES, deps()))
       .toMatchObject({ type: 'require-confirm', ruleId: 'outbound-incomplete-standard-review', answerer: 'agent' })
+  })
+
+  it('sensitive outbound in standard IM requires human approval through an explicit policy rule', () => {
+    const facts = mkFacts('wechat_send', 'outbound', [
+      { kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] }
+    ])
+    const result = decide(facts, { ...mkContext('wechat'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('wechat', 'standard', rule) }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-sensitive-standard-human', answerer: 'user' })
+  })
+
+  it('ordinary outbound in standard IM is assigned to the policy-selected Agent reviewer', () => {
+    const facts = mkFacts('wechat_reply', 'outbound', [])
+    const result = decide(facts, { ...mkContext('wechat'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('wechat', 'standard', rule) }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-mode-standard-review', answerer: 'agent' })
   })
 
   it('read_file 不被评估器截胡（默认放行）', () => {

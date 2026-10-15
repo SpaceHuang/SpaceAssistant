@@ -1249,6 +1249,13 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }, migrationComplete: deps.migrationComplete,
     disabledRuleIds: args.disabledPolicyRuleIds ?? []
   })
+  if (result.readExecutionPermit) {
+    result.readExecutionPermit = buildReadExecutionPermit({
+      ...result.readExecutionPermit,
+      decisionId: policyDecision.decisionId,
+      policyDependencyFingerprint: policyDecision.dependencyFingerprint
+    })
+  }
   audit.record({
     ts: Date.now(),
     event: 'policy.decision',

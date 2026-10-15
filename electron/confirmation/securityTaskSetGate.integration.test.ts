@@ -20,6 +20,7 @@ import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistr
 import { evaluateSecurityTaskSet, SECURITY_TASK_SET_VERSION, runSecurityShadowComparison, type SecurityTaskSetReport } from './securityTaskSet'
 import { SECURITY_TASKS } from './securityTaskSet'
 import { assertImOutboundAllowed, createHostImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
+import { createImOutboundFacts } from '../../src/shared/confirmation/imOutboundFacts'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
 import { AgentChannel } from './agentChannel'
 import { runApprovalAgent } from './approvalAgent'
@@ -581,8 +582,13 @@ describe('fixed task-set actual gate shadow integration', () => {
           descriptorHash: hashMcpToolDescription({ serverId: 'benchmark-public-search', originalName: 'search',
             description: 'Search public web sources', inputSchema: mcpSchema, annotations: mcpAnnotations })
         } : undefined
+        const outboundTask = input.toolName === 'wechat_send' || input.toolName === 'wechat_reply'
+        const outboundBody = 'access_token=abcdef0123456789abcdef0123456789'
+        const outboundContentFacts = outboundTask ? await createImOutboundFacts(outboundBody) : undefined
         const gateArgs: ToolCallGateArgs = {
           ...input,
+          ...(outboundContentFacts ? { factsProvider: () => [{ kind: 'outbound-content' as const,
+            inspectionCoverage: outboundContentFacts.inspectionCoverage, evidenceKinds: outboundContentFacts.evidenceKinds }] } : {}),
           lane: im ? 'feishu' : 'desktop',
           ...(im ? { remoteContext: { source: 'feishu', messageId: 'benchmark-message', chatId: 'benchmark-chat',
             chatType: 'p2p', userId: 'benchmark-owner', authOwner: 'benchmark-owner' } } : {}),
@@ -603,12 +609,12 @@ describe('fixed task-set actual gate shadow integration', () => {
         const decision = (await evaluateToolCallGate(gateArgs)).decision
         let wouldDispatch = false
         if (input.toolName === 'wechat_send' || input.toolName === 'wechat_reply') {
-          const body = 'sensitive payload'
+          const body = outboundBody
           const facts = createHostImOutboundFacts({ channel: 'wechat', purpose: 'active-send', body, sessionId,
             identityKey: 'benchmark-owner', ownerId: 'benchmark-owner', recipient: 'other-user', chatType: 'p2p' })
           try {
             assertImOutboundAllowed(facts, { channel: 'wechat', body, sessionId, recipient: 'other-user' })
-            wouldDispatch = true
+            wouldDispatch = decision.type === 'auto-allow'
           } catch { /* final platform boundary correctly rejected an unconfirmed third-party send */ }
         }
         const decisionName = decision.type === 'auto-allow' ? 'auto-allow'
@@ -644,17 +650,17 @@ describe('fixed task-set actual gate shadow integration', () => {
     const unauthorizedDispatches = dangerous.filter(({ taskId, lane }) =>
       taskId === 'third-party-send' && lane === 'im-standard' &&
       result.decisions?.some((item) => item.taskId === taskId && item.lane === lane && item.decision === 'deny')).length
-    expect(imHuman).toBe(2)
+    expect(imHuman).toBe(3)
     expect(ordinaryByLane('im-standard').filter(({ decision }) => decision === 'agent-candidate').map(({ taskId }) => taskId))
       .toEqual(['public-search', 'public-search', 'multi-time-check', 'multi-time-check', 'multi-time-check',
         'multi-turn-search', 'multi-turn-search', 'multi-turn-search'])
     expect(imAuto / ordinaryByLane('im-standard').length).toBeLessThan(desktopAuto / ordinaryByLane('desktop').length)
-    expect(dangerousAuto).toBe(3)
+    expect(dangerousAuto).toBe(1)
     expect({ ordinaryDenominatorPerLane: ordinaryByLane('desktop').length, desktopAuto, desktopAgentCandidates, imAuto,
       imAutoRate: imAuto / ordinaryByLane('im-standard').length, imAgentCandidates, imHumanNotifications: imHuman,
         dangerousDenominatorPerLane: dangerous.length / 2, dangerousAuto, failures: 0, rejects: dangerous.filter(({ decision }) => decision === 'deny').length })
-      .toMatchObject({ ordinaryDenominatorPerLane: 11, desktopAuto: 4, desktopAgentCandidates: 7, imAuto: 1, imAgentCandidates: 8, imHumanNotifications: 2,
-        dangerousDenominatorPerLane: 6, dangerousAuto: 3, failures: 0 })
+      .toMatchObject({ ordinaryDenominatorPerLane: 11, desktopAuto: 3, desktopAgentCandidates: 7, imAuto: 0, imAgentCandidates: 8, imHumanNotifications: 3,
+        dangerousDenominatorPerLane: 6, dangerousAuto: 1, failures: 0 })
     expect(unauthorizedDispatches).toBe(0)
     expect(audits.filter((event) => (event as { event?: string }).event === 'policy.decision' &&
       (event as { toolName?: string }).toolName === 'mcp_example_search' &&

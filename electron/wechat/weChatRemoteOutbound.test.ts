@@ -17,7 +17,7 @@ describe('sendWeChatRemoteOutbound', () => {
   const reply = vi.fn().mockResolvedValue(undefined)
   const bot = { reply, sendTyping: vi.fn() } as unknown as WeChatReplyBot
   const inbound = { messageId: 'm1', userId: 'owner-user' } as never
-const facts = (body: string, sessionId = SESSION_ID) => ({ channel: 'wechat' as const, purpose: 'system-reply' as const, originSessionId: sessionId, activeSessionId: sessionId, identityKey: 'owner-user', ownerId: 'owner-user', trustedRecipient: 'owner-user', recipient: 'owner-user', chatType: 'p2p' as const, content: body, contentAssessment: { source: 'host' as const, content: body, classification: 'ordinary' as const, classifierVersion: 'test-host-v1' }, contentCompleteness: 'complete' as const, hasAttachment: false, attachmentAuthorized: false })
+const facts = (body: string, sessionId = SESSION_ID) => ({ channel: 'wechat' as const, purpose: 'system-reply' as const, originSessionId: sessionId, activeSessionId: sessionId, identityKey: 'owner-user', ownerId: 'owner-user', trustedRecipient: 'owner-user', recipient: 'owner-user', chatType: 'p2p' as const, content: body, contentAssessment: { source: 'host' as const, content: body, classification: 'ordinary' as const, classifierVersion: 'test-host-v1' }, contentCompleteness: 'complete' as const, hasAttachment: false, attachmentAuthorized: false, destinationId: 'inbound-message' })
 
   beforeEach(() => {
     vi.clearAllMocks()

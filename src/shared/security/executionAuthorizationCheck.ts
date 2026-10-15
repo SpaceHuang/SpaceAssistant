@@ -10,6 +10,8 @@ export interface ApprovalReceiptBinding {
   readonly answerer: 'user' | 'agent'
 }
 
+export type ExecutionVetoFailureClass = 'input' | 'mechanism' | 'environment' | 'integration-violation'
+
 export interface ExecutionPermitBinding {
   readonly permitId: string
   readonly invocationId: string

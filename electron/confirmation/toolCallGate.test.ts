@@ -574,6 +574,7 @@ describe('evaluateToolCallGate', () => {
         expect(standard.readPathFact?.zone).toBe(target.zone)
         expect(standard.decision).toMatchObject({ type: 'auto-allow', ruleId: target.ruleId })
         expect(standard.readExecutionPermit).toBeDefined()
+        expect(standard.readExecutionPermit).toMatchObject({ schemaVersion: 'execution-subject-v1', subjectDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/), decisionId: standard.policyDecision?.decisionId, policyDependencyFingerprint: standard.policyDecision?.dependencyFingerprint })
 
         writePolicyPackages(db, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
         const strictRegistry = new ReadConfirmationRegistry()

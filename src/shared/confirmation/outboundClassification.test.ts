@@ -63,8 +63,9 @@ describe('classifyImOutbound', () => {
       .toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
     expect(() => assertImOutboundAllowed({ ...approved, recipient: 'other-user' },
       { channel: 'feishu', body: base.content, sessionId: 'session-1', recipient: 'other-user' })).toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+    // Sensitivity is a facts/policy decision. The final check only verifies the prepared object.
     expect(() => assertImOutboundAllowed({ ...approved, contentAssessment: { ...approved.contentAssessment, classification: 'sensitive' } },
-      { channel: 'feishu', body: base.content, sessionId: 'session-1', recipient: 'chat-1' })).toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+      { channel: 'feishu', body: base.content, sessionId: 'session-1', recipient: 'chat-1' })).not.toThrow()
   })
 
   it('does not trust a model recipient for a system reply', () => {
@@ -78,11 +79,11 @@ describe('classifyImOutbound', () => {
       kind: 'active-outbound', reason: 'unknown-content'
     })
   })
-  it('requires a user confirmation receipt bound to the exact active-send facts', () => {
+  it('checks only that dispatch matches the approved active-send object', () => {
     const facts = { ...base, purpose: 'active-send' as const, recipient: 'third-party', trustedRecipient: undefined,
       contentAssessment: { source: 'host' as const, content: base.content, classification: 'ordinary' as const, classifierVersion: 'host-v1' } }
     expect(() => assertImOutboundAllowed(facts, { channel: 'feishu', body: base.content, sessionId: 'session-1', recipient: 'third-party' }))
-      .toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+      .not.toThrow()
     expect(() => assertImOutboundAllowed({ ...facts, userConfirmationReceipt: 'receipt-1' },
       { channel: 'feishu', body: base.content, sessionId: 'session-1', recipient: 'third-party' })).not.toThrow()
     expect(() => assertImOutboundAllowed({ ...facts, userConfirmationReceipt: 'receipt-1' },

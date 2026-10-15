@@ -36,7 +36,7 @@ describe('sendFeishuRemoteOutbound', () => {
       identityKey: 'owner-user', ownerId: 'owner-user', recipient: 'owner-user', chatType: 'p2p', destinationId: 'inbound' })
 
     await expect(sendFeishuRemoteOutbound({ runner, messageId: 'inbound', body, sessionId: SESSION_ID,
-      recipient: 'owner-user', outboundDeliveryFacts })).rejects.toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+      recipient: 'owner-user', outboundDeliveryFacts })).rejects.toThrow('IM_OUTBOUND_POLICY_REVIEW_REQUIRED')
 
     expect(replyFeishuTextRaw).not.toHaveBeenCalled()
     expect(runner.run).not.toHaveBeenCalled()
@@ -49,7 +49,7 @@ describe('sendFeishuRemoteOutbound', () => {
       runner,
       messageId: 'm1',
       body: longBody,
-      sessionId: SESSION_ID, recipient: 'owner-user', outboundDeliveryFacts: facts(longBody),
+      sessionId: SESSION_ID, recipient: 'owner-user', outboundDeliveryFacts: { ...facts(longBody), destinationId: 'm1' },
       touch: { sessionCommands: {} as never, sessionId: SESSION_ID }
     })).resolves.toBeUndefined()
     const sent = vi.mocked(replyFeishuTextRaw).mock.calls[0]![2] as string
@@ -82,7 +82,7 @@ describe('sendFeishuRemoteOutbound', () => {
       originSessionId: session.id, occurredAt: 1 })
     vi.mocked(replyFeishuTextRaw).mockResolvedValue({ messageId: 'feishu-final-reply' })
 
-    const result = await sendFeishuRemoteOutbound({ runner: { run: vi.fn() } as never, messageId: 'inbound-root', body: 'done', sessionId: SESSION_ID, recipient: 'owner-user', outboundDeliveryFacts: facts('done'),
+    const result = await sendFeishuRemoteOutbound({ runner: { run: vi.fn() } as never, messageId: 'inbound-root', body: 'done', sessionId: SESSION_ID, recipient: 'owner-user', outboundDeliveryFacts: { ...facts('done'), destinationId: 'inbound-root' },
       trackDelivery: { db, track: { trackId: 'feishu-outbound-track', channel: 'feishu', identityKey: 'chat', ownerId: 'owner',
         authorizationEpoch: 1, rootMessageId: 'inbound-root', attributionEventId: 'feishu-outbound-root' }, requestId: 'request-1', turnId: 'turn-1' } })
 

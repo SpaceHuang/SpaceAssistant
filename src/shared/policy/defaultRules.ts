@@ -52,7 +52,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   {
     id: 'outbound-mode-standard-review', when: 'invocation',
-    match: { lane: ['desktop'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['policy-tier:standard'], excludeSignals: ['outbound-evidence-present', 'outbound-inspection-incomplete'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['policy-tier:standard'], excludeSignals: ['outbound-evidence-present', 'outbound-inspection-incomplete'] },
     denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '标准档普通出站交由安全审核 Agent'
   },
   {
@@ -62,7 +62,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   {
     id: 'outbound-sensitive-standard-human', when: 'invocation',
-    match: { lane: ['desktop'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-evidence-present', 'policy-tier:standard'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-evidence-present', 'policy-tier:standard'] },
     denyClass: 'insufficient-info', action: 'ask', humanRequired: true, reason: '标准档敏感出站内容需真人逐次确认'
   },
   {

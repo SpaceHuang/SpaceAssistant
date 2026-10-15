@@ -4,6 +4,7 @@ import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuTextRaw, replyFeishuTextRawWithId } from './feishuReply'
 import { sendImOutbound } from '../remote/imRemoteOutbound'
 import { sendRemoteTrackOutbound, type RemoteTrackOutboundDeliveryContext } from '../remote/remoteTrackOutbound'
+import { assertSystemImOutboundPolicy } from '../../src/shared/policy/imOutboundPolicy'
 
 const FEISHU_REPLY_MAX = 4000
 const FEISHU_TRUNCATION_SUFFIX = '…（完整结果请查看桌面会话）'
@@ -24,6 +25,7 @@ export async function sendFeishuRemoteOutbound(args: {
   const outboundFacts = args.outboundDeliveryFacts ?? createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body,
     sessionId, identityKey: args.outboundIdentity!.identityKey, ownerId: args.outboundIdentity!.ownerId,
     recipient: args.recipient, chatType: args.outboundIdentity!.chatType, destinationId: messageId })
+  assertSystemImOutboundPolicy(outboundFacts)
   assertImOutboundAllowed(outboundFacts, { channel: 'feishu', body, sessionId, recipient: args.recipient, destinationId: messageId })
   const send = () => sendImOutbound({
     reply: (text) => replyFeishuTextRaw(runner, messageId, text),
@@ -58,6 +60,7 @@ export async function sendFeishuRemoteOutboundWithId(args: {
   touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
 }): Promise<{ messageId: string }> {
   const { runner, messageId, body, sessionId, touch } = args
+  assertSystemImOutboundPolicy(args.outboundDeliveryFacts)
   assertImOutboundAllowed(args.outboundDeliveryFacts, { channel: 'feishu', body, sessionId, recipient: args.recipient, destinationId: messageId })
   const result = await sendImOutbound({
     reply: (text) => replyFeishuTextRawWithId(runner, messageId, text),

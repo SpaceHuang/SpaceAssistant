@@ -104,25 +104,9 @@ export function classifyImOutbound(facts: ImOutboundFacts): ImOutboundClassifica
 
 /** Fail closed immediately before a platform send unless all bound facts match. */
 export function assertImOutboundAllowed(facts: ImOutboundFacts, actual: { channel: ImOutboundChannel; body: string; sessionId: string; recipient: string; destinationId?: string }): void {
-  const bound = facts.channel === actual.channel && facts.content === actual.body && (!facts.destinationId || facts.destinationId === actual.destinationId) && facts.activeSessionId === actual.sessionId &&
-    facts.originSessionId === actual.sessionId && (facts.recipient ?? facts.trustedRecipient) === actual.recipient
-  const classification = classifyImOutbound(facts)
-  const controlledTaskReply = classification.kind === 'controlled-reply'
-  const controlledSystemReply = facts.purpose === 'system-reply' && !facts.modelRecipient && bound &&
-    facts.originSessionId === facts.activeSessionId && facts.identityKey && facts.ownerId &&
-    (facts.recipient === facts.ownerId || facts.recipient === facts.identityKey) && facts.trustedRecipient === facts.recipient && facts.chatType === 'p2p' && facts.contentCompleteness === 'complete' &&
-    facts.contentAssessment?.source === 'host' && facts.contentAssessment.content === actual.body &&
-    facts.contentAssessment.classification === 'ordinary' && !facts.hasAttachment
-  const confirmedActiveSend = facts.purpose === 'active-send' && Boolean(facts.userConfirmationReceipt?.trim()) &&
-    bound && facts.recipient === actual.recipient && facts.contentAssessment?.content === actual.body &&
-    facts.contentAssessment.source === 'host' && facts.contentAssessment.classification !== 'sensitive'
-  const confirmedTaskReply = facts.purpose === 'task-reply' && Boolean(facts.userConfirmationReceipt?.trim()) && bound &&
-    !facts.modelRecipient && facts.identityKey && facts.ownerId && facts.trustedRecipient === facts.identityKey &&
-    facts.recipient === facts.trustedRecipient && actual.recipient === facts.trustedRecipient && facts.chatType === 'p2p' &&
-    facts.contentCompleteness === 'unknown' && facts.contentAssessment?.source === 'host' &&
-    facts.contentAssessment.content === actual.body && facts.contentAssessment.classification !== 'sensitive' &&
-    (!facts.hasAttachment || (facts.attachmentAuthorized && Boolean(facts.attachmentContentVersion) &&
-      facts.attachmentContentVersion === facts.checkedAttachmentContentVersion && Boolean(facts.attachmentPath) &&
-      facts.attachmentPath === facts.checkedAttachmentPath))
-  if (!bound || (!controlledTaskReply && !controlledSystemReply && !confirmedActiveSend && !confirmedTaskReply)) throw new Error('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+  const matchesApprovedObject = facts.channel === actual.channel && facts.content === actual.body &&
+    facts.destinationId === actual.destinationId && facts.activeSessionId === actual.sessionId &&
+    facts.originSessionId === actual.sessionId && (facts.recipient ?? facts.trustedRecipient) === actual.recipient &&
+    (facts.purpose === 'active-send' || !facts.trustedRecipient || facts.recipient === facts.trustedRecipient)
+  if (!matchesApprovedObject) throw new Error('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
 }
