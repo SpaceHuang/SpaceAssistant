@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { definePlannedTool, type RegisteredTool, type ToolExecutionContext } from './plannedToolRegistry'
+import { definePlannedTool, type RegisteredTool } from './plannedToolRegistry'
 import type { ToolExecutionContext as RuntimeExecutionContext, ToolExecutorResult } from './types'
 
 type PreparedSnapshotRead = Readonly<{

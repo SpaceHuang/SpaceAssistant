@@ -1,7 +1,7 @@
 import { classifyBrowserLlmError } from './browserLlmErrors'
 import { containsInternalDetails, isIntentionalUserHint } from '../tools/toolErrorCommon'
 import type { BrowserDependencyFailureCode, BrowserDependencyToolError, BrowserDetectResult } from '../../src/shared/browserTypes'
-import { CHROMIUM_INSTALL_CMD, NPM_INSTALL_CMD } from '../../src/shared/browserTypes'
+import { CHROMIUM_INSTALL_CMD } from '../../src/shared/browserTypes'
 import { isChromiumRecoveryFailure } from './browserDependencyDetect'
 
 export type BrowserUserErrorKind =

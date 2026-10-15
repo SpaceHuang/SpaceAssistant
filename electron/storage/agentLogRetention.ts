@@ -1,7 +1,7 @@
 import fs from 'fs/promises'
 import path from 'node:path'
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { formatAgentLogDateKey, formatAgentLogFileName } from '../agentLogger/agentLogPaths'
+import { formatAgentLogDateKey } from '../agentLogger/agentLogPaths'
 
 /**
  * Agent 日志保留期清理(S3,偏差 14):日志按日文件天然轮转(Agent-YYYYMMDD.log),
