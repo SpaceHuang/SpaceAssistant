@@ -26,3 +26,14 @@
 ## 抽样复核建议（用户抽 3 条）
 
 A3、A6、A7。
+
+## 完备性补充（`ls` 全量复算，2026-10-14）
+
+> 本节为**独立复算**结果：上表核验的是「断言的点是否存在」，本节核验的是「现状文档是否**列全**」——后者原文件未覆盖。
+
+| 维度 | 上表断言 | 全量实测 | 补充判定 |
+| --- | --- | --- | --- |
+| A8 远程 Track 件簇 | 「4 件」 | `ls electron/database/remoteTrack*.ts` = **6 件**（`remoteTrackStore`、`AttributionMetrics`、`AttributionObservationStore`、`DiagnosticStore`、`RuntimeDiagnosticStore`、`OperationalMetrics`） | **计数偏差**；现状文档已更正为 6 件 |
+| §3 空间回收 | 只提 `spillProtocol` | **实际 9 件**：`spillStore`、`spillReferenceIndex`(+`Safety`)、`spillReferenceBackfill`(+`Scheduler`)、`spillReferenceCollectorWorker`、`spillReferenceWorker`(+`Ack`)、`spillReferenceReconciliation` | **漂移（不完备）** → 现状文档已补齐 |
+| §4 数据库层 | 列了 7 类 | 另漏 `sessionTranscript`、`taskControl`、`wakeEvents`、`workflowState`、`schema`、`scopeVersion`、`sessionStorageProfile`、`sqliteStore` | **漂移（缺项）** → 现状文档已补齐 |
+| §1 存储内核 | 12+ 文件 | 17 件（含 `routingQueries`、`sqliteSessionStorage`、`recoveryHelpers`） | 一致（仅计数表述） |

@@ -25,3 +25,14 @@
 ## 抽样复核建议（用户抽 3 条）
 
 A1、A5、A7。
+
+## 完备性补充（`ls` 全量复算，2026-10-14）
+
+> 本节为**独立复算**结果：上表核验的是「断言的点是否存在」，本节核验的是「现状文档是否**列全**」——后者原文件未覆盖。
+
+| 维度 | 全量实测 | 补充判定 |
+| --- | --- | --- |
+| §1 组件面板 | `ls src/renderer/components` = **13 项** | 与现状文档**完全一致** |
+| §2 渲染服务 | **实际 60+ 件** —— 初版只列 8 族，漏：轮次展示与失败态（`turnDisplay*` / `turnFailure*` / `runRequestIndex`）、工具详情与暴露面（`toolCallDetails*` / `toolExposureService` / `mcpToolCatalog` / `terminalToolCallDisplay`）、搜索语料扩展（`domSearch*` / `fileMarkdownSearchAdapter` / `fileSourceSearchAdapter` / `markdownSearchProjection`）、文件与工作区同步（`fileContentSyncBus` / `fileTreeSyncBus` / `filePaneNavigation` / `workDirSessionSync` / `invalidationService`）、待确认与远程（`pendingConfirm*` / `remoteSessionSwitchService` / `wechatPollFeedback`）等 7 族 | **漂移（严重不完备）** → 现状文档已补写 |
+| §2 状态切片 | `src/renderer/store/` = `chatSlice` / `chatLaunchSlice` / `sessionSlice` / `configSlice` / `browserDetectSlice`（+ `index.ts`） | 初版**未列** → 已补 |
+| §3 工作目录 | `workDirManager` / `workDirBinding` / `workDirSnapshot` / `sessionDirectoryGrants` | 一致 |
