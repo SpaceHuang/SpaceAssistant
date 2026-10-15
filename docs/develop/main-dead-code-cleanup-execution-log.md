@@ -53,11 +53,11 @@
 
 | 阶段 | 状态 | 交付 / 验证 |
 |---|---|---|
-| 0. 边界与依赖清单 | 完成 | 本文件；本阶段批准删除数为 0，候选先保留/待映射；外部验收交付形态待用户选择 |
+| 0. 边界与依赖清单 | 完成 | 本文件；逐候选 owner/仓库外兼容证据未提供处均保留，不据此推断可删除 |
 | 1. 未使用绑定分批清理 | 完成 | 28 批完成；noUnused 仅保留 `configSetTypeGate.ts` 的刻意 type gate。Renderer/shared typecheck、Electron 增量构建和目标测试通过；阶段全量测试有 14 项 `approvalAgent` 失败，基线归档隔离复现同样失败，作为已有验收限制记录 |
-| 2. SDK permit / browser recovery | 未开始 | 需先完成合同矩阵及定向测试 |
-| 3. 其余候选 | 未开始 | 按行为域逐批映射和验收 |
-| 4. 防回流检查与最终验收 | 未开始 | 强制 `npm run build` 干净构建；本地与外部运行结果分开记录 |
+| 2. SDK permit / browser recovery | 完成（保留） | 4 个 permit dispatch 文件均仍有职责链引用，合同矩阵相关定向测试 88/88 通过；browser recovery wrapper 仍承载 tool loop 的 JSON 协议，共享实现被 Renderer 使用 |
+| 3. 其余候选 | 完成（审计处置） | 23 项逐域核对完成；仅无静态生产 import 不足以证明行为退役或外部兼容窗口结束，均按下表保留，暂不删除产品模块 |
+| 4. 防回流检查与最终验收 | 完成（本地范围） | 不新增会误报动态/外部合同的源码图门禁；`npm run build` 通过，Electron 干净产物 `dist-electron/electron/main.js` 存在；本次未删除模块，源文件→JS/map 缺失项不适用 |
 
 ### 阶段 1 批次记录
 
@@ -89,3 +89,26 @@
 | 24. SQLite agent history 遗留绑定 | 对导出的 retry delay helper 保留参数位置并将未读 `invocationRepairCount` 改 `_invocationRepairCount`；删除未被后续 repair 调用使用的 `repairId` 字符串临时值。 | 修改前、后运行 `sqliteAgentHistory.test.ts`：1/1 通过（187/187）；`git diff --check` 通过。目标文件 noUnused 诊断归零；Electron/shared 扫描由 14 降至 12。 |
 | 25. Python content-security 遗留分析器 | 移除 analyzer 中无引用的旧 `wouldB11` 私有方法和 `IrCoverageError` 的运行时导入；现行 `checkB11` 等规则、IR coverage error 文档/抛错通道均未改动。 | 修改前、后运行 3 个 `scriptContentSecurity` 测试文件：3/3 通过（54/54）；`git diff --check` 通过。目标文件 noUnused 诊断归零；Electron/shared 扫描由 12 降至 9。 |
 | 26. Python IR adapter 私有冗余 | 从 except-clause adapter 删除未使用的 alias 读取；删除无调用方的 `patternTargetName` helper 与未读取的 comprehension-level `keyNode`，保持现行 import alias 与 dict-pair key 解析不变。 | 修改前、后运行 `pythonAdapter` 与 3 个 `scriptContentSecurity` 测试文件：4/4 通过（119/119）；第一次修改后测试捕获到 import alias 绑定误删，已恢复 import-statement alias 读取并重跑全组通过；`git diff --check` 通过。目标文件 noUnused 诊断归零；Electron/shared 扫描由 9 降至 6。 |
+
+### 阶段 2：SDK permit 与 browser recovery 合同复核
+
+| 候选组 | 生产调用链与合同证据 | 处置 |
+|---|---|---|
+| `agentSdkTurnDispatch.ts`、`permitBoundCoordinatorDispatch.ts`、`permitRevocationBridge.ts`、`preparedInvocationStore.ts` | `createAgentSdkTurnDispatch` 被 `hostedAgentTurnHost.test.ts` 的 Hosted 集成矩阵使用；共享低层 `createPermitBoundCoordinatorDispatch` 被多个 executor/MCP 适配器及其实现测试直接使用。Hosted 实际组装路径当前由 `invocationAssembler.ts` 的 `createRegisteredAgentTurnTools` 组合 SDK 原生 `createPermitBoundToolExecutionPort`，它不是 `createAgentSdkTurnDispatch` 的同一路实现。低层测试覆盖 canonical input mismatch、撤权/授权变更在 claim 前阻止 executor、claim 后撤权/取消时未知结果与租约结算；本轮 8 个相关测试文件 88/88、`typecheck:agent-sdk`、`check:agent-sdk` 均通过。 | 保留。审计表中 SDK 孤岛“生产源码没有调用点”的表述只适用于 Hosted wrapper `agentSdkTurnDispatch.ts`；共享低层 permit 适配有当前产品 executor 调用点，不可按孤岛组整体删除。Hosted 入口已有更直接的 production integration coverage。 |
+| `electron/browser/browserDependencyRecovery.ts` 与 shared recovery | Electron wrapper 仍由 `electron/toolChatLoop.ts` 使用其 JSON 内容生成逻辑；tool loop dependency recovery 测试验证协议字段、引导文案和 stack 不泄露。Shared recovery 实现在 Renderer skill service / ChatView 被调用，shared 与 Electron tests 分别验证技能解析、状态更新和 payload。 | 保留；Electron 文件承载 tool protocol formatter，共享实现承载 Renderer 状态行为，不是冗余重导出模块。 |
+
+### 阶段 3：剩余模块候选处置
+
+| 行为域 | 候选与核对结论 | 处置 |
+|---|---|---|
+| 旧 stream / 输入拼接 | `anthropicStreamDelta.ts`、`modelEventSource.ts`、`toolUseInputMerge.ts` 仅见候选自身测试引用；方案要求与当前 pi-ai/Hosted provider、Anthropic 原始事件和 RegisteredTool 输入合同逐断言映射。此次工作未证明旧事件/输入合同没有外部消费者，或新版解析在异常事件、增量分块与 tool call 多块拼接上完全等价。 | 保留；需 provider/IM owner 确认兼容窗口并补当前 adapter 的断言映射后再退役。 |
+| 确认 / 安全辅助 | `confirmCardPayload.ts`、`decisionCache.ts`（候选旧读取器；现用 writer 为 `decisionCacheWriter.ts`）、`deferredApprovalCachePolicy.ts`、`remoteAsyncApprovalAcceptanceMatrix.ts`、`securityActionIntentRecovery.ts`、`shellConfirmationAdapter.ts` 涉及授权事实、信任缓存、异步审批验收、动作恢复和 shell 风险投影。仅 `decisionCache.ts` 的旧读取器有明显迁移迹象，其余均可能承载测试外合同；尚无安全 owner 对缓存版本/历史审批/恢复数据给出退役决定。 | 全组保留；对 `decisionCache.ts` 单独待核对旧缓存升级/恢复窗口，不因 writer 已迁移就删读路径。 |
+| Remote / IM | `deferredApprovalNotificationSender.ts`、`weChatQuoteBinding.ts` 涉及真实用户通知与 quote 身份关联；`imWorkflowSkillHarness.ts` 虽为 harness 风格名称，仍需确认它是纯测试夹具还是早期 IM workflow 兼容面。当前没有 IM owner 对 CLI/SDK schema 或旧引用窗口的确认。 | 保留，待 Feishu/WeChat 功能 owner 评估；需要真实 IM 环境验收，仓库单测不能代替。 |
+| Renderer pending confirmation | `useActionablePendingConfirms.ts`、`confirmationSnapshotGate.ts`、`pendingConfirmationService.ts` 为测试独立路径，当前 renderer 主要走 `pendingConfirmStore` / ToolCallCard。但旧 snapshot 的 turnVersion、requestId、toolCallId fail-closed 语义尚未逐断言迁移到 IPC/渲染接线测试。 | 保留；先将 stale turn / stale request / duplicate answer 断言迁移到现行 caller smoke，再决定删旧实现和测试。 |
+| Shared 逻辑 | `outputMaxTokens.ts`、`chatOutboundClassifier.ts`、`promptSerialization.ts`、`spillSemantics.ts`、`surfaceProjection.ts` 无当前产品 import 或仅保留测试路径。它们定义模型 token 上限、命令分类、prompt 拼接、spill 保留/恢复及 context surface 选择；缺少当前产品路径的等价语义/边界对照，spill 与 surface 尤其关联历史恢复和 prompt 完整性。 | 保留；分类算法需迁移到现用 outbound/provider/context builder 并先证明边界行为等价。 |
+| Session projection 诊断 | `sessionProjectionConsistencyAudit.ts` 是 boundary checker 明确登记的 privileged reader；`sessionProjectionRetirementCandidates.ts` 消费它并由候选测试验证。 | 保留；只有数据库迁移/清理 owner gate 完成、脚本豁免可移除时才能退役。 |
+| Attribution metrics | `remoteTrackAttributionMetrics.ts` 未见 app import，但可能是离线报表或维护流程的读接口；没有 report/schema/version 消费证据。 | 保留；等待数据 owner 证明无外部 reader 且版本兼容窗口结束。 |
+
+阶段 3 结果：23 个候选均已给出可复核处置，没有满足“当前生产路径等价覆盖 + owner 退役决定”的模块删除项。本阶段不改产品模块；缺少 owner/真机证据的项作为明确待办，不以单测通过替代外部验收。
+
+最终本地验收：首次沙箱内 `npm run build` 在 `tsx` 创建本地 pipe 时遇到 `EPERM`；获准允许构建所需的本地 IPC 后重跑完整命令通过，包括 tray assets、i18n type generation、Vite Renderer production build、`rimraf dist-electron` 后 Electron 边界门禁、provider adapter build 与 Electron `tsc`。Renderer 有既有 `INEFFECTIVE_DYNAMIC_IMPORT` 和 chunk size warnings。未运行真实 Electron UI/preload、真实 IM 或旧用户 profile 验收。阶段 1 的全量 `npm test` 记录在上文：基线归档与清理分支隔离运行均在 `approvalAgent.test.ts` 报同样 14 项失败（基线 14 failed / 30 passed），其余全量结果为 9,726 passed / 111 skipped。
