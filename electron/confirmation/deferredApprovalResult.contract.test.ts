@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import type { ApprovalInvocationResult } from './types'
-import type { ToolConfirmationResult } from '../../../packages/agent-sdk/src/turn'
-import { mapDeferredApprovalResult, parseDeferredApprovalResult, type DeferredApprovalResult, type DeferredApprovalEligibility } from './deferredApprovalResult'
+import type { ApprovalInvocationResult } from '../../src/shared/confirmation/types'
+import type { ToolConfirmationResult } from '../../packages/agent-sdk/src/turn'
+import { mapDeferredApprovalResult, parseDeferredApprovalResult, type DeferredApprovalResult, type DeferredApprovalEligibility } from '../../src/shared/confirmation/deferredApprovalResult'
 
 const eligible: DeferredApprovalEligibility = { kind: 'eligible', todoId: 'todo-contract-1' }
 
