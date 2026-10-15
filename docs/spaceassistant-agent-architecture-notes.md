@@ -1,6 +1,6 @@
 # SpaceAssistant Agent 架构说明与代码量
 
-本文档对应架构图 [spaceassistant-agent-architecture.html](./spaceassistant-agent-architecture.html)，按图中的模块逐项说明职责，并标注对应的源码位置与代码量。
+本文档按原架构图中的模块逐项说明职责，并标注对应的源码位置与代码量。（原架构图 `spaceassistant-agent-architecture.html` / `.json` 与 `visual-check` 截图、清单已于 2026-10-15 删除，仅保留本说明。）
 
 ## 统计口径
 
