@@ -16,6 +16,18 @@ beforeEach(() => setKnownHomeDir('/Users/alice'))
 afterEach(() => setKnownHomeDir(undefined))
 
 describe('process result projections', () => {
+  it('保留 unknown 执行事实用于本地与 IM 会话投影，但不扩展遥测字段', () => {
+    const result = {
+      success: false, error: 'TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH', data: null,
+      executionOutcome: 'unknown-after-dispatch' as const, executorEntry: 'entered' as const,
+      executionErrorCode: 'ETIMEDOUT', invocationDisposition: 'timed-out' as const
+    }
+    expect(projectAgentToolResultForSink(result)).toMatchObject(result)
+    expect(projectLocalHistoryToolResult(result)).toMatchObject(result)
+    expect(projectTelemetryToolResult(result)).not.toHaveProperty('executionOutcome')
+    expect(projectTelemetryToolResult(result)).not.toHaveProperty('executorEntry')
+  })
+
   it('保留自动批准写入元数据用于 Agent 与本地历史，但不把它暴露到 telemetry', () => {
     const autoApprovedWrite = { path: 'notes.txt', added: 2, removed: 0, bytesWritten: 5 }
     const result = {

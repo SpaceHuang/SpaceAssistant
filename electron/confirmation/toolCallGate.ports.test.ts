@@ -7,6 +7,7 @@ import { persistShellConfig, readShellConfigFromDb } from '../shell/shellConfigD
 import { DEFAULT_TOOLS_CONFIG, type ToolsConfig, type TrustedShellCommand } from '../../src/shared/domainTypes'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
+import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 
 /**
  * P2 门控入参端口化（B1 修订）：evaluateToolCallGate 不再持有 appDb——
@@ -43,7 +44,10 @@ const readonlyEntry = {
   mappedName: 'mcp__srv1__list_issues',
   description: '',
   inputSchema: {},
-  annotations: { readOnlyHint: true }
+  annotations: { readOnlyHint: true, destructiveHint: false },
+  schemaHash: hashMcpToolSchema({}),
+  descriptorHash: hashMcpToolDescription({ serverId: 'srv1', originalName: 'list_issues', description: '', inputSchema: {},
+    annotations: { readOnlyHint: true, destructiveHint: false } })
 }
 
 /** 装配期等价物：从 db 解析门控端口材料（与 invocationAssembler 同一机制的最小内联版） */
@@ -185,7 +189,7 @@ describe('evaluateToolCallGate 端口语义等价（与 appDb 路径同判）', 
 
     const noCacheMaterials = gateMaterialsFromDb(db)
     const noCache = await evaluateToolCallGate(base({
-      toolName: readonlyEntry.mappedName, toolInput: {}, mcpEntry: readonlyEntry,
+      toolName: readonlyEntry.mappedName, toolInput: {}, mcpEntry: readonlyEntry, mcpQuerySource: 'public', mcpAccountAuthorization: 'authorized',
       audit: noCacheMaterials.audit, effectiveRules: noCacheMaterials.effectiveRules,
       decisionCache: noCacheMaterials.decisionCache, shellPrecheck: noCacheMaterials.shellPrecheck
     }))
@@ -199,7 +203,7 @@ describe('evaluateToolCallGate 端口语义等价（与 appDb 路径同判）', 
     })
     const withCacheMaterials = gateMaterialsFromDb(db)
     const withCache = await evaluateToolCallGate(base({
-      toolName: readonlyEntry.mappedName, toolInput: {}, mcpEntry: readonlyEntry,
+      toolName: readonlyEntry.mappedName, toolInput: {}, mcpEntry: readonlyEntry, mcpQuerySource: 'public', mcpAccountAuthorization: 'authorized',
       audit: withCacheMaterials.audit, effectiveRules: withCacheMaterials.effectiveRules,
       decisionCache: withCacheMaterials.decisionCache, shellPrecheck: withCacheMaterials.shellPrecheck
     }))

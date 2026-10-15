@@ -4,6 +4,7 @@ import { appendMessage, createPersistedTurn, createSession, openDatabase, setCon
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 /**
  * P0 特征化基线（桌面调用方）：桌面 execute → runToolChatSession 入参契约。
@@ -220,6 +221,33 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     // 偏差 11/3c:文件树失效归一为统一出口(scope:invalidated),不再直发 file:tree-changed
     expect(() => invocation.events.onFileTreeChanged?.({ kind: 'paths', relPaths: ['a.txt'] })).not.toThrow()
     expect(notifyMainWindow).not.toHaveBeenCalledWith('file:tree-changed', expect.anything())
+    db.close()
+  })
+
+  it.each(['wechat', 'feishu'] as const)('desktop submit keeps desktop lane when the existing session metadata says %s', async (source) => {
+    const db = makeDb()
+    seedTrustedModel(db)
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const session = createSession(db, { name: 'desktop-entry-over-wechat-session', model: modelId, maxTokens: 2048,
+      metadata: { source, ...(source === 'wechat' ? { wechatMeta: { userId: 'wx-user@test' } } : { feishuMeta: { userId: 'fs-user' } }) } })
+    const user = appendMessage(db, { id: 'entry-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'entry-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'entry-turn', requestId: 'entry-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: user.sequence,
+      state: 'prepared', startToken: 'entry-token', executionConfig: { lane: 'desktop', model: modelId, maxTokens: 2048, enableThinking: false } })
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
+      getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      turnRuntime: { bindRequest: vi.fn() } as never, notifyMainWindow: vi.fn(), floatingNotificationManager: { onConfirmRequest: vi.fn() } as never
+    })
+
+    await execute(makeSender(), { requestId: 'entry-request', turnId: 'entry-turn', turnStartToken: 'entry-token', sessionId: session.id })
+
+    const accepted = (mockRunToolChatSession.mock.calls[0]![0] as { acceptedTurn: { requestId: string; lane: string; sessionId: string } }).acceptedTurn
+    expect(accepted).toMatchObject({ requestId: 'entry-request', sessionId: session.id, lane: 'desktop' })
+    expect(createSqliteSessionStorage(db).execution.readAccepted({ sessionId: session.id, requestId: 'entry-request' })).toMatchObject(accepted)
     db.close()
   })
 

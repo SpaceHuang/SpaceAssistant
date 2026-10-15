@@ -526,7 +526,7 @@ export class SessionEventWriter implements SessionEventSink {
 
   /** @deprecated 兼容旧调用方；新代码使用 appendCritical。 */
   append(input: SessionEventInput): Promise<SessionEvent | undefined> {
-    return this.appendCritical(input).catch((error) => {
+    return this.appendCritical(input).catch(() => {
       return undefined
     })
   }

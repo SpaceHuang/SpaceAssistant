@@ -23,6 +23,7 @@ import { stagehandService } from './browser/stagehandService'
 import { createRemoteAuthorizationEpochStore } from './remote/remoteAuthorizationEpochStore'
 import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry'
 import { createDeferredTodoStore } from './confirmation/deferredTodoStore'
+import { ensureImPolicySnapshotAtStartup } from './confirmation/legacyImConfigBoundary'
 import { createDeferredTodoCapacityController } from './confirmation/deferredTodoCapacity'
 import { createImTaskControlCoordinator } from './remote/imTaskControlCoordinator'
 import { createDeferredTodoTaskControlSafetyPort } from './remote/deferredTodoTaskControlAdapter'
@@ -478,6 +479,12 @@ app.whenReady().then(async () => {
     return
   }
   appDb = db
+  try {
+    ensureImPolicySnapshotAtStartup(db)
+  } catch (error) {
+    // Keep startup available, but leave IM dispatch fail-closed when legacy policy cannot be read.
+    console.error('[im-policy] startup snapshot migration failed; IM tool calls will remain blocked:', error instanceof Error ? error.message : String(error))
+  }
   let turnRuntime!: TurnRuntime
   let sessionHistoryRepairFailureCount = 0
   let recoveredInvocationCount = 0
@@ -1186,7 +1193,7 @@ app.whenReady().then(async () => {
   const executeTurn = async (sender: Electron.WebContents | null, payload: ClaudeChatCreateWithToolsPayload) => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     turnRuntime.bindRequest(payload.requestId, payload.turnId)
-    return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (turn) => {
+    return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (_turn) => {
       const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
       if (result.ok) {
         turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' }, payload.turnId)

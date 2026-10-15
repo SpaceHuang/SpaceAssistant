@@ -22,12 +22,14 @@ import {
 } from './llmServiceResolver'
 import type { ModelEntry } from '../src/shared/domainTypes'
 import { normalizeModelEntry } from '../src/shared/llmModelConfig'
-import { decryptSecret, isSecretStorageAvailable } from './secureApiKey'
+import { decryptSecret } from './secureApiKey'
 
 vi.mock('./secureApiKey', () => ({
-  isSecretStorageAvailable: vi.fn(() => true),
-  encryptSecret: (plain: string) => `enc:${plain}`,
-  decryptSecret: vi.fn((b64: string) => b64.replace(/^enc:/, ''))
+  encryptSecret: vi.fn((plain: string) => `aes:${plain}`),
+  decryptSecret: vi.fn((b64: string) => b64.startsWith('aes:') ? b64.slice(4) : b64.replace(/^safe:/, '')),
+  isSecretEncrypted: (value: string) => value.startsWith('aes:'),
+  isLegacySecret: (value: string) => !value.startsWith('aes:'),
+  markLegacySecret: (value: string) => `legacy:${value}`
 }))
 
 function makeModels(): ModelEntry[] {
@@ -51,8 +53,7 @@ describe('llmServiceResolver', () => {
   })
 
   afterEach(() => {
-    vi.mocked(decryptSecret).mockReset().mockImplementation((b64) => b64.replace(/^enc:/, ''))
-    vi.mocked(isSecretStorageAvailable).mockReturnValue(true)
+    vi.mocked(decryptSecret).mockReset().mockImplementation((b64) => b64.startsWith('aes:') ? b64.slice(4) : b64.replace(/^safe:/, ''))
     cleanup()
   })
 
@@ -67,7 +68,7 @@ describe('llmServiceResolver', () => {
     expect(String(thrown)).toContain('LLM_KEY_ACCESS_DENIED')
     expect(String(thrown)).not.toContain('system detail')
     expect(String(thrown)).not.toContain('new-secret')
-    expect(readLlmServiceKeysMap(db)[id]).toBe('enc:old-secret')
+    expect(readLlmServiceKeysMap(db)[id]).toBe('aes:old-secret')
   })
 
   it('rolls back service metadata if storing the verified key fails', () => {
@@ -77,7 +78,7 @@ describe('llmServiceResolver', () => {
     getDbConnection(db).exec("CREATE TRIGGER fail_key_update BEFORE UPDATE ON configs WHEN NEW.key = 'secrets.llmServiceKeys' BEGIN SELECT RAISE(ABORT, 'write failed'); END")
     expect(() => persistLlmServices(db, [{ ...services[0]!, name: 'New name' }], [id], { [id]: 'new-secret' })).toThrow()
     expect(readLlmServices(db)[0]!.name).toBe('Old name')
-    expect(readLlmServiceKeysMap(db)[id]).toBe('enc:old-secret')
+    expect(readLlmServiceKeysMap(db)[id]).toBe('aes:old-secret')
   })
 
   it('verifies each service before committing a multi-service save', () => {
@@ -85,18 +86,15 @@ describe('llmServiceResolver', () => {
       { id: 'one', name: 'First', baseUrl: '', apiKeyPresent: false, supportedModelIds: ['1'] },
       { id: 'two', name: 'Second', baseUrl: '', apiKeyPresent: false, supportedModelIds: ['1'] }
     ]
-    vi.mocked(decryptSecret).mockImplementationOnce((enc) => enc.replace(/^enc:/, '')).mockImplementationOnce(() => { throw new Error('denied') })
+    vi.mocked(decryptSecret).mockImplementationOnce((enc) => enc.startsWith('aes:') ? enc.slice(4) : enc.replace(/^safe:/, '')).mockImplementationOnce(() => { throw new Error('denied') })
     expect(() => persistLlmServices(db, services, ['one', 'two'], { one: 'first-key', two: 'second-key' })).toThrow('LLM_KEY_ACCESS_DENIED')
     expect(readLlmServiceKeysMap(db)).toEqual({})
   })
 
-  it('distinguishes unavailable storage and denied reads from an absent key', async () => {
+  it('distinguishes denied reads from an absent key', async () => {
     const id = 'service-1'
     const services = [{ id, name: 'Service', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['1'] }]
     persistLlmServices(db, services, [id], { [id]: 'secret' })
-    vi.mocked(isSecretStorageAvailable).mockReturnValue(false)
-    await expect(getLlmServiceApiKey(db, id)).rejects.toThrow('LLM_KEY_STORAGE_UNAVAILABLE')
-    vi.mocked(isSecretStorageAvailable).mockReturnValue(true)
     vi.mocked(decryptSecret).mockImplementationOnce(() => { throw new Error('secret system detail') })
     await expect(verifyLlmServiceApiKey(db, id)).rejects.toThrow('LLM_KEY_ACCESS_DENIED')
     await expect(getLlmServiceApiKey(db, 'missing')).resolves.toBeNull()
@@ -114,7 +112,7 @@ describe('llmServiceResolver', () => {
   })
 
   it('migrates legacy apiKeyEnc and baseUrl into default service', () => {
-    setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.apiKeyEnc, 'enc:sk-test')
+    setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.apiKeyEnc, 'safe:sk-test')
     setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.baseUrl, 'https://proxy.example.com')
 
     migrateLegacyLlmServicesIfNeeded(db)
@@ -129,7 +127,7 @@ describe('llmServiceResolver', () => {
     expect(activeIds).toEqual([services[0]!.id])
 
     const keys = readLlmServiceKeysMap(db)
-    expect(keys[services[0]!.id]).toBe('enc:sk-test')
+    expect(keys[services[0]!.id]).toBe('legacy:safe:sk-test')
   })
 
   it('does not migrate when llmServices already exists', () => {
@@ -159,7 +157,7 @@ describe('llmServiceResolver', () => {
     persistLlmServices(db, services, [id], { [id]: 'sk-b-key' })
 
     expect(getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.baseUrl)).toBe('https://b.example.com')
-    expect(getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.apiKeyEnc)).toBe(`enc:sk-b-key`)
+    expect(getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.apiKeyEnc)).toBe(`aes:sk-b-key`)
   })
 
   it('supports multiple active services', () => {

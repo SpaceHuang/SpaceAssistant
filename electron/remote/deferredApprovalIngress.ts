@@ -9,6 +9,7 @@ type NotificationBinding = {
   identityKey: string
   ownerId: string
   todoId: string
+  originSessionId: string
   notificationVersion: number
   currentNotificationVersion?: number
   trustedMessageId: string
@@ -20,7 +21,7 @@ type NotificationBinding = {
 type ParsedReply = { action: 'approve' | 'reject'; shortCode: string }
 
 export function parseDeferredApprovalReply(text: string): ParsedReply | null {
-  const match = /^(批准|拒绝) (0[1-9]|[1-9][0-9])$/.exec(text)
+  const match = /^(批准|拒绝)\s*(0[1-9]|[1-9][0-9])$/.exec(text)
   if (!match) return null
   return { action: match[1] === '批准' ? 'approve' : 'reject', shortCode: match[2]! }
 }
@@ -53,7 +54,7 @@ export function createDeferredApprovalIngress(input: {
   isEnabled: () => boolean
   resolveNotification(channel: Channel, identityKey: string, ownerId: string, shortCode: string): NotificationBinding[]
   requestResume(request: {
-    requestId: string; todoId: string; channel: Channel; identityKey: string; ownerId: string
+    requestId: string; todoId: string; sessionId: string; channel: Channel; identityKey: string; ownerId: string
     authorizationEpoch: number; rule: { ruleId: string; factsHash: string }; notificationVersion: number
     messageId: string; reasonKey: string; now: number
   }, commitReceipt?: () => boolean): Promise<{ status: 'resume_requested' | 'invalidated'; duplicate?: boolean }>
@@ -76,21 +77,23 @@ export function createDeferredApprovalIngress(input: {
       if (binding.channel !== request.channel || binding.identityKey !== request.identityKey || binding.ownerId !== request.ownerId ||
         binding.shortCode !== parsed.shortCode || binding.currentNotificationVersion !== binding.notificationVersion ||
         binding.expiresAt <= now || request.replyToMessageId !== binding.trustedMessageId) return { status: 'rejected' as const }
+      const todo = input.getTodo?.(binding.todoId, binding)
+      if (input.getTodo && (!todo || todo.expiresAt <= now || !todo.originSessionId?.trim())) return { status: 'rejected' as const }
+      if (!todo) return { status: 'rejected' as const }
+      if (todo.status === 'consumed') return { status: 'already_consumed' as const }
+      if (todo.status !== 'pending') return { status: 'rejected' as const }
       const seen = liveConn().prepare(`SELECT 1 FROM deferred_approval_ingress_receipts WHERE channel=? AND identity_key=? AND message_id=?`)
         .get(request.channel, request.identityKey, request.messageId)
       if (seen) return { status: 'rejected' as const }
-      const todo = input.getTodo?.(binding.todoId, binding)
-      if (input.getTodo && (!todo || todo.status !== 'pending' || todo.expiresAt <= now)) return { status: 'rejected' as const }
-      if (!todo) return { status: 'rejected' as const }
       const reasonKey = `${request.channel}:${request.messageId}:${binding.todoId}:${binding.notificationVersion}`
       const commitReceipt = () => {
         const changed = liveConn().prepare(`INSERT OR IGNORE INTO deferred_approval_ingress_receipts(channel,identity_key,message_id,created_at) VALUES(?,?,?,?)`)
           .run(request.channel, request.identityKey, request.messageId, now)
         return Number(changed.changes) === 1
       }
-      const result = await input.requestResume({
-        requestId: `approval:${reasonKey}`, todoId: binding.todoId, channel: binding.channel,
-        identityKey: binding.identityKey, ownerId: binding.ownerId, authorizationEpoch: todo.authorizationEpoch,
+    const result = await input.requestResume({
+      requestId: `approval:${reasonKey}`, todoId: binding.todoId, channel: binding.channel,
+      sessionId: todo.originSessionId!, identityKey: binding.identityKey, ownerId: binding.ownerId, authorizationEpoch: todo.authorizationEpoch,
         rule: todo.rule, notificationVersion: binding.notificationVersion, messageId: binding.trustedMessageId,
         reasonKey, now
       }, commitReceipt)

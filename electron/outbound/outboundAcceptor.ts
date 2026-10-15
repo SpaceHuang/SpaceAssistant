@@ -16,16 +16,13 @@ import {
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../src/shared/contextUsageEstimate'
-import { appendMessage, getSessionUsage, type AppDatabase } from '../database'
+import { getSessionUsage, type AppDatabase } from '../database'
 import { readStoredModels } from '../llmServiceResolver'
 import { createHash } from 'node:crypto'
-import { summarizeFailedInvocation } from '../runtime/continuationSummary'
 export { summarizeFailedInvocation } from '../runtime/continuationSummary'
-import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import type { SessionCommands, SessionExecutionStore } from '../sessionStorage/contracts'
-import type { ContinuationSourceQueries, ContinuationSourceRef, SessionQueries } from '../sessionStorage/contracts'
-import { runInTransaction, TransactionCommitUnknownError } from '../database/transaction'
-import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
+import type { ContinuationSourceRef, SessionQueries } from '../sessionStorage/contracts'
+import { TransactionCommitUnknownError } from '../database/transaction'
 
 /** 出站受理时的主进程状态快照（全部由主进程权威源构建，渲染端不再提供其中任何一项） */
 export type OutboundSnapshot = {
@@ -276,10 +273,19 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       ...rawIntent,
       attachments: rawIntent.attachments?.length ? rawIntent.attachments : (rawIntent.contextIntent?.kind === 'create-user' ? rawIntent.contextIntent.attachments : undefined)
     }
-    let routedContinuationSource: { invocationId: string; turnId: string; sequence: number; summary: string; state: 'known' | 'unknown' } | undefined
+    let routedContinuationSource: { invocationId: string; turnId: string; sequence: number; summary: string; state: 'known' | 'unknown'; fallbackReason: import('../../src/shared/assistantFactAggregator').ContinuationFallbackReason } | undefined
     let continuationRouting = false
+    const continuationContext = () => routedContinuationSource ? {
+      mode: 'context-fallback' as const,
+      fallbackReason: routedContinuationSource.fallbackReason,
+      sourceInvocationId: routedContinuationSource.invocationId,
+      sourceTurnId: routedContinuationSource.turnId,
+      historySequence: routedContinuationSource.sequence,
+      summary: routedContinuationSource.summary,
+      state: routedContinuationSource.state
+    } : undefined
     const queueContinuation = (sessionId: string, text: string) => {
-      const context = routedContinuationSource ? { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } : undefined
+      const context = continuationContext()
       const attachments = intent.attachments ?? (intent.contextIntent?.kind === 'create-user' ? intent.contextIntent.attachments : undefined)
       const queued = sessionExecution.enqueueAndRecordContinuation({
         enqueue: { sessionId, requestId: intent.requestId!, content: text, attachments },
@@ -318,7 +324,6 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       if (locked) return { rejected: { reason: 'CONTINUATION_INTENT_IN_PROGRESS' } }
       intentInFlight.set(intent.requestId, fingerprint)
       try {
-        const now = Date.now()
         const exact = ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(intent.text.trim()) && !intent.attachments?.length
         const activeTurnIds = new Set(deps.turnRuntime.listActive(intent.sessionId).map((turn) => turn.turnId))
         const sourceInspection = sessionQueries.continuationSources.read({ sessionId: intent.sessionId, activeTurnIds: [...activeTurnIds], ...(intent.sourceSelection?.sourceAssistantMessageId ? { selectedAssistantMessageId: intent.sourceSelection.sourceAssistantMessageId } : {}) })
@@ -352,7 +357,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           const relationCue = /^(继续|接着|刚才|上次)/u.test(intent.text.trim())
           if (relationCue && sourceInspection.kind === 'available' && sourceInspection.fallback) {
             const summary = sourceInspection.fallback.summary
-            routedContinuationSource = { invocationId: summary.invocationId, turnId: summary.turnId, sequence: summary.sequence, summary: summary.summary, state: summary.state }
+            routedContinuationSource = { invocationId: summary.invocationId, turnId: summary.turnId, sequence: summary.sequence, summary: summary.summary, state: summary.state, fallbackReason: summary.state === 'unknown' ? 'UNKNOWN_SIDE_EFFECT' : 'CHECKPOINT_UNAVAILABLE' }
           }
         }
         if (source && exact && !intent.attachments?.length && deps.startContinuation) {
@@ -376,12 +381,12 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
               // Keep the input as an ordinary new Turn without inheriting an out-of-date failure.
             } else {
             const summary = source.summary
-            routedContinuationSource = { invocationId: summary.invocationId, turnId: summary.turnId, sequence: summary.sequence, summary: summary.summary, state: summary.state }
+            routedContinuationSource = { invocationId: summary.invocationId, turnId: summary.turnId, sequence: summary.sequence, summary: summary.summary, state: summary.state, fallbackReason: (error instanceof Error && error.message === 'UNKNOWN_SIDE_EFFECT') || summary.state === 'unknown' ? 'UNKNOWN_SIDE_EFFECT' : 'CHECKPOINT_UNAVAILABLE' }
             }
           }
         } else if (source && !(exact && !intent.attachments?.length && deps.startContinuation)) {
           const summary = source.summary
-          routedContinuationSource = { invocationId: summary.invocationId, turnId: summary.turnId, sequence: summary.sequence, summary: summary.summary, state: summary.state }
+          routedContinuationSource = { invocationId: summary.invocationId, turnId: summary.turnId, sequence: summary.sequence, summary: summary.summary, state: summary.state, fallbackReason: exact ? (summary.state === 'unknown' ? 'UNKNOWN_SIDE_EFFECT' : 'CHECKPOINT_UNAVAILABLE') : 'FOLLOW_UP_CONTEXT' }
         }
       } catch (error) {
         if (error instanceof TransactionCommitUnknownError) {
@@ -508,11 +513,11 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           try {
           target = await deps.startTurn({ turnIntent: contextIntent?.kind === 'reuse-user' ? {
             mode: 'reuse-user', requestId: intent.requestId, sessionId, userMessageId: contextIntent.currentUser.message.id,
-            excludeMessageIds: contextIntent.excludeMessageIds ?? [], config: routedContinuationSource ? { continuationContext: { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } } : {}
+            excludeMessageIds: contextIntent.excludeMessageIds ?? [], config: continuationContext() ? { continuationContext: continuationContext() } : {}
           } : {
             mode: 'create-user', requestId: intent.requestId, sessionId,
             input: { text: decision.text, attachments: intent.attachments ?? (contextIntent?.kind === 'create-user' ? contextIntent.attachments : undefined) },
-            config: routedContinuationSource ? { continuationContext: { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } } : {},
+            config: continuationContext() ? { continuationContext: continuationContext() } : {},
             continuationAcceptance: {
               payloadSha256: createHash('sha256').update(JSON.stringify({ sessionId, text: intent.text, attachments: intent.attachments ?? null })).digest('hex'),
               rawText: intent.text,
@@ -569,7 +574,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
                   text: decision.text,
                   attachments: intent.attachments ?? (contextIntent?.kind === 'create-user' ? contextIntent.attachments : undefined)
                 },
-                config: routedContinuationSource ? { continuationContext: { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } } : {},
+                config: continuationContext() ? { continuationContext: continuationContext() } : {},
                 ...(decision.continuationIntent ? { continuationIntent: { ...decision.continuationIntent, ...(intent.requestId ? { requestId: intent.requestId } : {}) } } : {})
               }
         try {

@@ -29,6 +29,7 @@ const todoAuth = {
   identityKey: 'identity-1',
   ownerId: 'owner-1',
   authorizationEpoch: 8,
+  originSessionId: 'origin-session-1',
   rule: { ruleId: 'rule-write', factsHash: 'a'.repeat(64) }
 }
 

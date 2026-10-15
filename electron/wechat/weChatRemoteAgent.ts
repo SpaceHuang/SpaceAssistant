@@ -39,6 +39,7 @@ export async function runWeChatRemoteAgent(ctx: {
   emitFactEvent?: (event: AssistantFactEvent) => void
   confirmationAdapter?: NonNullable<Parameters<typeof runImRemoteAgent>[0]['confirmationAdapter']>
   taskControlSafetyPort?: Parameters<typeof runImRemoteAgent>[0]['taskControlSafetyPort']
+  resolveAgentSdkGateSupplement?: import('../runtime/invocationAssembler').AgentInvocationMaterials['resolveAgentSdkGateSupplement']
   inboundRaw: IncomingMessage
   userId: string
 }): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean; parked?: true }> {
@@ -67,6 +68,7 @@ export async function runWeChatRemoteAgent(ctx: {
       createWeChatProgressAdapter({
         botService: ctx.botService,
         userId: ctx.userId,
+        ownerId: ctx.remoteContext.authOwner ?? ctx.userId,
         inboundRaw: ctx.inboundRaw,
         getSessionId,
         config: ctx.wechatConfig,
@@ -74,16 +76,17 @@ export async function runWeChatRemoteAgent(ctx: {
         ...(ctx.remoteContext.trackContext ? { trackDelivery: { db: ctx.db, track: ctx.remoteContext.trackContext,
           requestId: ctx.requestId, turnId: ctx.turnId } } : {})
       }),
-    buildSystemAppendix: ({ browserRemoteHint }) =>
+    buildSystemAppendix: ({ browserRemoteHint, policySnapshot }) =>
       buildWeChatRemoteSystemAppendix({
         userId: ctx.userId,
-        confirmPolicy: ctx.wechatConfig.remoteConfirmPolicy,
+        policySnapshot,
         browserRemoteHint
       }),
     progressDefaults: DEFAULT_REMOTE_PROGRESS_CONFIG,
     progressConfig: pickWeChatProgressConfig(ctx.wechatConfig),
     toolChatExtras: {
-      wechatConfig: ctx.wechatConfig
+      wechatConfig: ctx.wechatConfig,
+      ...(ctx.resolveAgentSdkGateSupplement ? { resolveAgentSdkGateSupplement: ctx.resolveAgentSdkGateSupplement } : {})
     },
     rethrowAsError: true,
     onFinally: () => {

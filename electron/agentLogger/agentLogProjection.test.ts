@@ -2,6 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { projectAgentLogFields } from './agentLogProjection'
 
 describe('projectAgentLogFields', () => {
+  it('retains only safe per-turn tool execution counts', () => {
+    const projected = projectAgentLogFields('tools.execution_summary', {
+      requestId: 'request-1', turnId: 'turn-1', proposalCount: 4, executorEntryCount: 1,
+      knownFailureCount: 0, unknownOutcomeCount: 1, notDispatchedCount: 2,
+      input: { token: 'private' }, toolCalls: ['private']
+    })
+    expect(projected).toMatchObject({
+      requestId: 'request-1', turnId: 'turn-1', proposalCount: 4, executorEntryCount: 1,
+      knownFailureCount: 0, unknownOutcomeCount: 1, notDispatchedCount: 2
+    })
+    expect(projected.inputFingerprint).toEqual(expect.any(String))
+    expect(projected).not.toHaveProperty('input')
+    expect(projected).not.toHaveProperty('toolCalls')
+    expect(JSON.stringify(projected)).not.toContain('private')
+  })
+
   it('retains cutover and transcript reconciliation counters without message content', () => {
     expect(projectAgentLogFields('history.cutover', {
       requestId: 'request-1', turnId: 'turn-1', sessionId: 'session-1', stage: 'match-current-message',

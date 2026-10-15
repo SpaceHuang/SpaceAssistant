@@ -33,4 +33,21 @@ describe('SDK resource locks', () => {
     await expect(pending).rejects.toThrow('resource-lock-cancelled')
     held.release()
   })
+
+  it('treats Windows workspace parent and child paths as conflicting', async () => {
+    const locks = new ResourceLockRegistry()
+    const directory = await locks.acquire(['workspace:C:\\project\\folder'])
+    let childStarted = false
+    const child = locks.acquire(['workspace:C:\\project\\folder\\file.txt']).then((lease) => {
+      childStarted = true
+      return lease
+    })
+
+    await Promise.resolve()
+    expect(childStarted).toBe(false)
+    directory.release()
+    const childLease = await child
+    expect(childStarted).toBe(true)
+    childLease.release()
+  })
 })

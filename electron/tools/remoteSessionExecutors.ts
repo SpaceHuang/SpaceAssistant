@@ -12,7 +12,7 @@ import { beginTool, endTool } from '../remote/remoteSessionSwitchState'
 import { adoptRemoteSessionAfterSwitch } from '../remote/remoteSessionSwitchFollow'
 import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
 import type { RemoteContext } from './types'
-import type { ToolExecutionContext, ToolExecutor } from './types'
+import type { ToolExecutor } from './types'
 import type { Session } from '../../src/shared/domainTypes'
 
 const REMOTE_ONLY_ERROR = '该工具仅在远程会话中可用'
@@ -67,12 +67,23 @@ export const switchSessionExecutor: ToolExecutor = {
       return { success: false, error: MISSING_CONTEXT_ERROR }
     }
 
-    const targetSessionId = typeof input.session_id === 'string' ? input.session_id.trim() : ''
-    if (!targetSessionId) {
+    const targetInput = typeof input.session_id === 'string' ? input.session_id.trim() : ''
+    if (!targetInput) {
       return { success: false, error: '缺少 session_id' }
     }
 
-    const target = ctx.sessionQueries.readSession(targetSessionId)
+    let target = ctx.sessionQueries.readSession(targetInput)
+    if (!target && /^[0-9a-fA-F]{8}$/.test(targetInput)) {
+      const matches = ctx.sessionQueries.listSessions({ view: 'all' }).filter((candidate) =>
+        candidate.id.replace(/-/g, '').toLowerCase().startsWith(targetInput.toLowerCase())
+        && sessionIdentityMatches(candidate, remoteContext)
+      )
+      if (matches.length === 1) target = matches[0]
+      else if (matches.length > 1) {
+        return { success: false, error: '会话短引用不唯一，请使用完整会话 ID' }
+      }
+    }
+    const targetSessionId = target?.id ?? targetInput
     if (!sessionIdentityMatches(target, remoteContext)) {
       recordSessionSwitchDenied(remoteContext, {
         callerSessionId: sessionId,

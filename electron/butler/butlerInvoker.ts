@@ -395,6 +395,7 @@ async function runButlerModelTurn(
     baseUrl: creds.baseUrl,
     messages,
     system,
+    agentsMdEnabled: args.acceptedTurn.config.agentsMdEnabled ?? session.metadata.agentsMdEnabled !== false,
     options: { maxTokens: 8192 },
     effort: args.runConfig.effectiveEffort ?? 'off',
     currentUserMessageId: args.currentUserMessageId,

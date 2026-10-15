@@ -331,6 +331,21 @@ describe('SQLite session storage public queries', () => {
     expect(storage.commands.updateDirectoryGrants(session.id, [])?.metadata).toEqual({ source: 'desktop', custom: 7, sessionDirectoryGrants: [] })
   })
 
+  it('persists agentsMdEnabled per session and defaults legacy metadata to enabled', () => {
+    db = createMemoryAppDb()
+    const storage = createSqliteSessionStorage(db)
+    const first = storage.commands.createSession({ name: 'agents-enabled', model: 'test' })
+    const second = storage.commands.createSession({ name: 'agents-legacy', model: 'test', metadata: { projectMemoryEnabled: false } })
+
+    expect(first.metadata.agentsMdEnabled).toBe(true)
+    expect(second.metadata.agentsMdEnabled ?? true).toBe(true)
+    expect(storage.commands.updateSettings({ sessionId: first.id, agentsMdEnabled: false })?.metadata).toMatchObject({ agentsMdEnabled: false })
+    expect(storage.commands.updateSettings({ sessionId: second.id, agentsMdEnabled: true })?.metadata).toMatchObject({ projectMemoryEnabled: false, agentsMdEnabled: true })
+    expect(createSqliteSessionStorage(db).queries.readSession(first.id)?.metadata.agentsMdEnabled).toBe(false)
+    expect(createSqliteSessionStorage(db).queries.readSession(second.id)?.metadata).toMatchObject({ projectMemoryEnabled: false, agentsMdEnabled: true })
+    expect(storage.commands.updateUserMetadata(first.id, { agentsMdEnabled: false })?.metadata.agentsMdEnabled).toBe(false)
+  })
+
   it('appends a non-turn message through a named command and preserves its sequence result', () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'non-turn append', model: 'test' })

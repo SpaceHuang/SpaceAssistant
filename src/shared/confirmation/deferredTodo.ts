@@ -11,5 +11,9 @@ export type DeferredTodo = {
   stepId: string
   planRevision: number
   originSessionId: string
+  /** Shared IM policy fence captured when the approval todo was created. Legacy rows omit it and fail closed on resume. */
+  policyBehaviorVersion?: string
+  policyRevision?: number
+  policyEpoch?: number
   status: DeferredTodoStatus
 }

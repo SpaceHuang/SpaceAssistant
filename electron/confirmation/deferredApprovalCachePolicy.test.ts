@@ -24,8 +24,10 @@ describe('deferred approval cache policy', () => {
 
   it('deferred result contract carries no cache key or remembered decision', () => {
     expectTypeOf<DeferredApprovalResult>().not.toHaveProperty('memory')
-    const result: DeferredApprovalResult = { kind: 'deferred', todoId: 'todo-no-memory' }
-    expect(result).toEqual({ kind: 'deferred', todoId: 'todo-no-memory' })
+    const result: DeferredApprovalResult = { kind: 'deferred', todoId: 'todo-no-memory', cause: 'human-required',
+      executionState: 'not-executed', retryable: false, nextStep: 'await-user' }
+    expect(result).toEqual({ kind: 'deferred', todoId: 'todo-no-memory', cause: 'human-required',
+      executionState: 'not-executed', retryable: false, nextStep: 'await-user' })
     // @ts-expect-error deferred outcomes have no memory write payload
     expect(result.memory).toBeUndefined()
   })

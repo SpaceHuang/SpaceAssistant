@@ -80,6 +80,16 @@ describe('toolkit 网关工具（docs/requirement/agent-toolkit-capability-gatew
 })
 
 describe('run_shell 能力拒绝话术边界', () => {
+  it('公开可选调用理由并要求说明与用户目标的关系', () => {
+    const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'run_shell')!
+    expect(def.input_schema.properties.justification).toMatchObject({ type: 'string' })
+    expect(def.input_schema.required).not.toContain('justification')
+    expect(def.input_schema.properties.justification).toMatchObject({ description: expect.stringContaining('用户的当前目标') })
+    expect(def.input_schema.properties.justification.description).toContain('调用参数')
+    expect(def.description).toContain('justification')
+    expect(def.description).toContain('提交')
+  })
+
   it('明确区分能力拒绝与安全策略，不诱导绕过', () => {
     const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'run_shell')!
     expect(def.description).toContain('能力拒绝不等于安全策略拒绝')

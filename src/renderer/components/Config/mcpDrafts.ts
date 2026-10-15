@@ -42,6 +42,10 @@ export type McpServerDraft = {
   }
   http?: { endpoint: string; allowPrivateNetwork?: boolean }
   enabledToolNames: string[]
+  /** Exact descriptor hashes the user explicitly marked as returning public data. */
+  publicReadOnlyTools?: Record<string, string>
+  /** Exact descriptor hashes the user explicitly authorized for the configured MCP connection. */
+  accountAuthorizedTools?: Record<string, string>
   /** FR6：始终全量加载（跳过延迟与索引）；undefined = 跟随全局档位。 */
   alwaysLoad?: boolean
   createdAt?: string
@@ -106,6 +110,8 @@ export function initMcpServerDraft(profile: McpServerProfile): McpServerDraft {
       ? { http: { endpoint: profile.http.endpoint, allowPrivateNetwork: profile.http.allowPrivateNetwork === true } }
       : {}),
     enabledToolNames: profile.enabledToolNames,
+    ...(profile.publicReadOnlyTools ? { publicReadOnlyTools: { ...profile.publicReadOnlyTools } } : {}),
+    ...(profile.accountAuthorizedTools ? { accountAuthorizedTools: { ...profile.accountAuthorizedTools } } : {}),
     ...(profile.alwaysLoad !== undefined ? { alwaysLoad: profile.alwaysLoad } : {}),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt
@@ -158,6 +164,8 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
     ...(stdio ? { stdio } : {}),
     ...(http ? { http } : {}),
     enabledToolNames: draft.enabledToolNames,
+    ...(draft.publicReadOnlyTools ? { publicReadOnlyTools: { ...draft.publicReadOnlyTools } } : {}),
+    ...(draft.accountAuthorizedTools ? { accountAuthorizedTools: { ...draft.accountAuthorizedTools } } : {}),
     ...(draft.alwaysLoad !== undefined ? { alwaysLoad: draft.alwaysLoad } : {}),
     ...(draft.createdAt ? { createdAt: draft.createdAt } : {}),
     ...(draft.updatedAt ? { updatedAt: draft.updatedAt } : {}),
@@ -196,6 +204,8 @@ export function isMcpDraftDirty(
     (profile.http?.endpoint ?? '') !== (draft.http?.endpoint ?? '') ||
     (profile.http?.allowPrivateNetwork === true) !== (draft.http?.allowPrivateNetwork === true) ||
     !jsonEqual(profile.enabledToolNames, draft.enabledToolNames) ||
+    !jsonEqual(profile.publicReadOnlyTools ?? {}, draft.publicReadOnlyTools ?? {}) ||
+    !jsonEqual(profile.accountAuthorizedTools ?? {}, draft.accountAuthorizedTools ?? {}) ||
     (profile.alwaysLoad === true) !== (draft.alwaysLoad === true) ||
     (draft.clearSecretKinds?.length ?? 0) > 0 ||
     (draft.stdio?.env.some((e) => e.clear) ?? false)

@@ -45,6 +45,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       toolName: 'write_file',
       messageId: 'orig',
       matchKey: 'wx-user@test',
+      authOwner: 'wx-user@test',
       context: inbound
     })
     await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('wechat-confirm-prompt'))
@@ -80,7 +81,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       sendToUser: (userId, content, signal) => adapter.send(userId, content, signal),
       sendTyping: vi.fn()
     }) })
-    const pending = im.request(req(), { sessionId: 'quoted-roundtrip', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test' })
+    const pending = im.request(req(), { sessionId: 'quoted-roundtrip', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test', authOwner: 'wx-user@test' })
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
     await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe(exactId))
     const confirmId = im.listPending()[0]!.confirmId!
@@ -121,8 +122,8 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       sendToUser: (userId, content, signal) => adapter.send(userId, content, signal),
       sendTyping: vi.fn()
     }) })
-    const firstPending = im.request(req('first_tool'), { sessionId: 'parallel', toolName: 'first_tool', messageId: 'origin-1', matchKey: 'wx-user@test' })
-    const secondPending = im.request(req('second_tool'), { sessionId: 'parallel', toolName: 'second_tool', messageId: 'origin-2', matchKey: 'wx-user@test' })
+    const firstPending = im.request(req('first_tool'), { sessionId: 'parallel', toolName: 'first_tool', messageId: 'origin-1', matchKey: 'wx-user@test', authOwner: 'wx-user@test' })
+    const secondPending = im.request(req('second_tool'), { sessionId: 'parallel', toolName: 'second_tool', messageId: 'origin-2', matchKey: 'wx-user@test', authOwner: 'wx-user@test' })
     await vi.waitFor(() => expect(im.listPending().every((entry) => entry.promptMessageId)).toBe(true))
 
     const [first, second] = im.listPending()
@@ -154,7 +155,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     const inbound = makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: 'orig-no-quote' } })
     const pending = im.request(req(), {
       sessionId: 'sess-no-quote', toolName: 'write_file', messageId: 'orig-no-quote',
-      matchKey: 'wx-user@test', context: inbound
+      matchKey: 'wx-user@test', authOwner: 'wx-user@test', context: inbound
     })
     await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('wechat-confirm-prompt'))
     const confirmId = im.listPending()[0]!.confirmId!
@@ -166,6 +167,21 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
     await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
+  })
+
+  it('MCP confirmation shows the human tool name, untrusted server description and redacted request arguments', () => {
+    const prompt = buildWeChatConfirmPrompt({
+      id: 'mcp-1', sessionId: 's-mcp', toolName: 'mcp_fetch_fetch_deadbeef',
+      toolInput: { url: 'https://example.com/search?q=pricing', api_key: 'sensitive-value' },
+      mcp: { serverName: 'Fetch Server', originalToolName: 'fetch', description: 'Fetch a URL and extract its contents.' },
+      messageId: 'm1', channel: 'wechat', memoryTiers: [], createdAt: 0, expiresAt: 0, confirmId: '08'
+    })
+    expect(prompt).toContain('MCP 工具：fetch（服务：Fetch Server）')
+    expect(prompt).toContain('Fetch a URL and extract its contents.')
+    expect(prompt).toContain('https://example.com/search?q=pricing')
+    expect(prompt).toContain('[已隐藏]')
+    expect(prompt).not.toContain('mcp_fetch_fetch_deadbeef')
+    expect(prompt).not.toContain('sensitive-value')
   })
 
   it('heartbeat-style prompt excludes duplicate Y/N when using default builder', () => {
@@ -191,6 +207,58 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     expect(prompt).not.toMatch(/(?:回复|或)\s+Y\/N\b/)
   })
 
+  it('把 run_shell 命令、调用理由和截断状态纳入微信确认文本', () => {
+    const prompt = buildWeChatConfirmPrompt({
+      id: 'shell-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification: '查看目录\n确定项目根路径', _justificationTruncated: true },
+      messageId: 'm1', channel: 'wechat', memoryTiers: [], createdAt: 1, expiresAt: 2
+    })
+    expect(prompt).toContain('命令：pwd')
+    expect(prompt).toContain('调用理由（内容已截断）：\n查看目录\n确定项目根路径')
+  })
+
+  it('微信确认文本完整保留 2,000 个 Unicode 码点的合法理由', () => {
+    const justification = '😀'.repeat(1_500)
+    const prompt = buildWeChatConfirmPrompt({
+      id: 'shell-unicode-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification },
+      messageId: 'm1', channel: 'wechat', memoryTiers: [], createdAt: 1, expiresAt: 2
+    })
+    expect(prompt).toContain(`调用理由：\n${justification}\n`)
+    expect(prompt).not.toContain('调用理由（内容已截断）')
+  })
+
+  it('并行 run_shell 确认通过微信发送入口保留各自命令和调用理由', async () => {
+    const im = new WeChatImChannel({ getReplyBot })
+    const start = (suffix: string) => im.request(req('run_shell'), {
+      sessionId: `s-parallel-${suffix}`, toolName: 'run_shell',
+      toolInput: { command: `echo ${suffix}`, justification: `用户要求检查 ${suffix}` },
+      messageId: `origin-${suffix}`, matchKey: 'wx-user@test', authOwner: 'wx-user@test',
+      context: makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: `origin-${suffix}` } })
+    })
+    const first = start('alpha')
+    const second = start('beta')
+    await vi.waitFor(() => expect(im.listPending()).toHaveLength(2))
+    await vi.waitFor(() => expect(sendToUser).toHaveBeenCalledTimes(2))
+
+    const sent = sendToUser.mock.calls.map((call) => call[1])
+    expect(sent).toEqual(expect.arrayContaining([
+      expect.stringContaining('命令：echo alpha\n调用理由：\n用户要求检查 alpha'),
+      expect.stringContaining('命令：echo beta\n调用理由：\n用户要求检查 beta')
+    ]))
+    const pendingByCommand = new Map(im.listPending().map((entry) => [String(entry.toolInput?.command), entry]))
+    for (const command of ['echo alpha', 'echo beta']) {
+      const entry = pendingByCommand.get(command)!
+      expect(im.tryResolveFromInboundMessage({
+        messageId: `answer-${command}`, quotedMessageId: entry.promptMessageId,
+        userId: 'wx-user@test', text: `Y ${entry.confirmId}`, type: 'text',
+        timestamp: new Date().toISOString(), contextToken: 'ctx'
+      }, { allowedUserIds: ['wx-user@test'] })).toBe(true)
+    }
+    await expect(first).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
+    await expect(second).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
+  })
+
   it.each([
     ['bot 缺失', {}, 'bot-unavailable'],
     ['发送器缺少消息 ID 能力', { getReplyBot: () => ({ reply, sendTyping: vi.fn() }) }, 'bot-unavailable']
@@ -198,7 +266,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     const im = new WeChatImChannel(deps)
     const outcome = await im.request(req(), {
       sessionId: 'sess-preflight', toolName: 'write_file', messageId: 'orig-preflight',
-      matchKey: 'wx-user@test', ...(deps.getReplyBot ? { context: undefined } : {})
+      matchKey: 'wx-user@test', authOwner: 'wx-user@test', ...(deps.getReplyBot ? { context: undefined } : {})
     })
     expect(outcome).toMatchObject({ kind: 'rejected', cause: 'unavailable', promptSendFailure: {
       sendCall: 'not-attempted', delivery: 'not-attempted', errorCategory
@@ -208,7 +276,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
 
   it('微信发送成功但 SDK 响应缺少消息 ID 时不开放确认', async () => {
     const im = new WeChatImChannel({ getReplyBot: () => ({ reply, sendToUser: async () => ({ ok: true } as never), sendTyping: vi.fn() }) })
-    const outcome = await im.request(req(), { sessionId: 'missing-wechat-id', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test' })
+    const outcome = await im.request(req(), { sessionId: 'missing-wechat-id', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test', authOwner: 'wx-user@test' })
     expect(outcome).toMatchObject({ kind: 'rejected', cause: 'unavailable', promptSendFailure: { sendCall: 'rejected', delivery: 'unknown' } })
     expect(im.countPending()).toBe(0)
   })
@@ -219,7 +287,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       sendToUser: async () => ({ kind: 'binding-unavailable', sendCall: 'fulfilled', delivery: 'unbound', errorCategory: 'message-binding-unavailable' }),
       sendTyping: vi.fn()
     }) })
-    const outcome = await im.request(req(), { sessionId: 'binding-unavailable', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test' })
+    const outcome = await im.request(req(), { sessionId: 'binding-unavailable', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test', authOwner: 'wx-user@test' })
     expect(outcome).toMatchObject({
       kind: 'rejected', cause: 'unavailable',
       promptSendFailure: { sendCall: 'fulfilled', delivery: 'unavailable', errorCategory: 'message-binding-unavailable' }
@@ -238,7 +306,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       return adapter.send(userId, content, requestSignal)
     }
     const im = new WeChatImChannel({ getReplyBot: () => ({ reply, sendToUser, sendTyping: vi.fn() }) })
-    const pending = im.request(req(), { sessionId: 'cancel-echo', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test' })
+    const pending = im.request(req(), { sessionId: 'cancel-echo', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test', authOwner: 'wx-user@test' })
     expect(adapter.pendingCount).toBe(1)
     im.cancel(im.listPending()[0]!.id)
     await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
@@ -260,7 +328,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     const inbound = makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: 'orig-early-echo' } })
     const pending = im.request(req(), {
       sessionId: 'sess-early-echo', toolName: 'write_file', messageId: 'orig-early-echo',
-      matchKey: 'wx-user@test', context: inbound
+      matchKey: 'wx-user@test', authOwner: 'wx-user@test', context: inbound
     })
     const payload = bot.sendRaw.mock.calls[0]![0] as Record<string, unknown>
     bot.poller.emit('messages', [{ ...payload, message_type: 2, message_id: 123456 }])
@@ -294,6 +362,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       toolName: 'write_file',
       messageId: 'orig',
       matchKey: 'wx-user@test',
+      authOwner: 'wx-user@test',
       context: inbound
     })
     const ynMsg = {
@@ -326,6 +395,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       toolInput: { command: 'npm test' },
       messageId: 'orig-retry',
       matchKey: 'wx-user@test',
+      authOwner: 'wx-user@test',
       context: inbound,
       memoryTiers: [tier],
       authorizationGeneration: 0

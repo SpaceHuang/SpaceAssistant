@@ -1,6 +1,5 @@
 // Phase 2 拆分:本文件自 appIpc.ts 纯移动而来,通道名与行为不变(driver-authority-refactor Phase 2)。
 import fs from 'fs/promises'
-import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'path'
 import { createRequire } from 'node:module'
@@ -21,7 +20,7 @@ import { resolveSafeReadPath } from '../pathSecurity'
 import { resolveWikiMount } from '../wiki/wikiMount'
 import { readWikiConfig } from './ipcShared'
 import { assertInsideDir } from '../skills/skillPaths'
-import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
+import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 
 /**
  * T1.15（§7.4）：fileIpc 子通道的挂载解析入口。wiki 停用返回 undefined（行为与现状逐字节一致）。
@@ -415,7 +414,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 }
 
 /** T1.15：目录条目读取（entryPathBase=条目 path 字段的相对基准）。 */
-async function listDirectoryEntries(ctx: AppIpcContext, target: string, entryPathBase: string): Promise<FileInfo[]> {
+async function listDirectoryEntries(_ctx: AppIpcContext, target: string, entryPathBase: string): Promise<FileInfo[]> {
   const entries = await fs.readdir(target, { withFileTypes: true })
   const out: FileInfo[] = []
   for (const ent of entries) {

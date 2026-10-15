@@ -1,5 +1,4 @@
 import os from 'os'
-import path from 'path'
 import { buildReadExecutionPermit } from '../confirmation/readExecutionPermit'
 import { probeReadPathFact } from '../confirmation/extractors/readPathFacts'
 import { extractPathField } from '../toolPathField'

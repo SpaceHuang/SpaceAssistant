@@ -3,7 +3,7 @@ export const CURRENT_SCHEMA_VERSION = 1
 import type { BrowserDependencyToolError } from './browserTypes'
 import type { AppLocale } from './locale'
 import { getBuiltinToolMetadata } from './builtinToolMetadata'
-import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from './wikiConstants'
+import { WIKI_VOCABULARY_PREFIX } from './wikiConstants'
 
 export type { AppLocale }
 
@@ -650,6 +650,10 @@ export interface AutoApprovedWriteMeta {
 
 export interface ToolCallResultPersisted {
   success: boolean
+  executionOutcome?: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched'
+  executorEntry?: 'not-entered' | 'entered' | 'unknown'
+  executionErrorCode?: string
+  invocationDisposition?: 'cancelled' | 'timed-out' | 'authorization-invalidated'
   /** Opaque host audit correlation for the canonical execution record. */
   auditRef?: string
   /** Gate 决策规则 ID，用于串联 policy.decision 与执行结果审计。 */
@@ -879,12 +883,10 @@ export interface ModelEntry {
 }
 
 import type { FeishuConfig, WorkDirProfile } from './feishuTypes'
-import { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 export type { FeishuConfig, WorkDirProfile } from './feishuTypes'
 export { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 
 import type { WeChatConfig } from './wechatTypes'
-import { DEFAULT_WECHAT_CONFIG, mergeWeChatConfig } from './wechatTypes'
 export type { WeChatConfig } from './wechatTypes'
 export { DEFAULT_WECHAT_CONFIG, mergeWeChatConfig } from './wechatTypes'
 
@@ -905,8 +907,6 @@ export interface LlmServiceProfile {
 }
 
 export interface AppConfig {
-  /** 仅启动时一次性提示：当前版本首次运行且已有已保存的模型服务 Key */
-  apiKeyAccessUpgradeNoticeRequired?: boolean
   /** 界面语言，遵循 BCP 47 标签 */
   locale: AppLocale
   /** 是否已配置 API Key（激活服务的镜像，兼容旧逻辑） */

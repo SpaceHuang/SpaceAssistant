@@ -35,4 +35,13 @@ describe('resolvePermittedWriteTarget', () => {
     await fs.writeFile(target, 'after!')
     await expect(resolvePermittedWriteTarget(fact)).rejects.toThrow(/write-(?:parent|target)-identity-mismatch/)
   })
+
+  it('3.2.5: 新建目标在派发前出现时拒绝旧缺失事实', async () => {
+    const { root, workDir } = await roots()
+    const target = path.join(workDir, 'new.txt')
+    const fact = await probeWritePathFact({ rawPath: target, workDir, userDataDir: path.join(root, 'userdata'), homeDir: root, customSensitivePrefixes: [] })
+    expect(fact).toMatchObject({ zone: 'workdir-normal', targetKind: 'missing' })
+    await fs.writeFile(target, 'created concurrently')
+    await expect(resolvePermittedWriteTarget(fact)).rejects.toThrow('write-target-appeared')
+  })
 })

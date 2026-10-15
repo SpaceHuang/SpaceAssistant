@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { CanonicalModelMessage, CanonicalToolCall } from './model'
-import type { HistoryAppendResult, HistoryEvent } from './history'
+import type { HistoryAppendResult } from './history'
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 export type ContextScope =

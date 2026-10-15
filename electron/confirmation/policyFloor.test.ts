@@ -16,6 +16,7 @@ import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../../src/shared/domainT
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { assembleInvocation } from '../testSupport/invocationAssembler'
+import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 
 /**
  * P3（偏差 3 语义收口）：
@@ -125,7 +126,6 @@ describe('evaluateToolCallGate 底线违规拒绝（cause 可区分）', () => {
       effectiveRules: relaxed,
       decisionCache: m.decisionCache,
       shellPrecheck: m.shellPrecheck,
-      remoteContext: { source: 'feishu', messageId: 'm1', confirmPolicy: 'always' } as never,
       toolName: 'run_shell',
       toolInput: { command: 'echo hi' }
     }))
@@ -201,11 +201,14 @@ describe('P0-1 评审回归：来源标注装配 → 门控审计全链路（键
     const readonlyEntry = {
       serverId: 'srv1', serverName: 'Srv', originalName: 'list_issues',
       mappedName: 'mcp__srv1__list_issues', description: '', inputSchema: {},
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true }, schemaHash: hashMcpToolSchema({}),
+      descriptorHash: hashMcpToolDescription({ serverId: 'srv1', originalName: 'list_issues', description: '', inputSchema: {}, annotations: { readOnlyHint: true } })
     }
     const r = await evaluateToolCallGate(base(db, {
       toolName: readonlyEntry.mappedName,
       toolInput: {},
+      mcpQuerySource: 'public',
+      mcpAccountAuthorization: 'authorized',
       mcpEntry: readonlyEntry,
       audit,
       effectiveRules: (ports.policy as { effectiveRules: import('../../src/shared/confirmation/types').PolicyRule[] }).effectiveRules,

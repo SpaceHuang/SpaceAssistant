@@ -7,29 +7,8 @@ import {
 
 export type ImChannel = 'feishu' | 'wechat'
 
-/**
- * @deprecated Behavior is no longer consumed at runtime. Prefer remoteAllowLocalWrite /
- * remoteDenyOutbound and per-tool confirm switches. Field retained for stored-config compat.
- */
-export type ImConfirmPolicy = 'inherit' | 'always' | 'remote_read_only' | 'im_confirm'
-
-/** @deprecated Prefer ImConfirmPolicy; retained for compatibility with old stored values. */
-export type LegacyImConfirmPolicy =
-  | ImConfirmPolicy
-  | 'feishu_confirm'
-  | 'wechat_confirm'
-
-/** Current remote-security config schema version. Advanced only after the user confirms summary. */
-export const CURRENT_REMOTE_SECURITY_CONFIG_VERSION = 1
 /** Independent schema marker for the shared remote model/thinking migration. */
 export const CURRENT_REMOTE_MODEL_CONFIG_VERSION = 1
-
-/** Provenance of the remote security preset the user last confirmed. */
-export type RemoteSecurityPresetSource =
-  | 'new-install'
-  | 'upgrade-recommended'
-  | 'upgrade-safer'
-  | 'custom'
 
 /** Per-remote-task damage budget (§2.5). Enforced before confirm/execution. */
 export interface RemoteTaskBudget {
@@ -49,35 +28,6 @@ export const DEFAULT_REMOTE_TASK_BUDGET: RemoteTaskBudget = {
 export interface RemoteImCommonConfig extends RemoteProgressConfig {
   remoteEnabled: boolean
   remoteNotifyOnReceive: boolean
-  /**
-   * @deprecated Runtime no longer consumes this for confirm/deny decisions.
-   * Old `remote_read_only` values migrate to remoteAllowLocalWrite=false + remoteDenyOutbound=true.
-   */
-  remoteConfirmPolicy: ImConfirmPolicy
-  remoteAllowLocalWrite: boolean
-  /** When true, hard-deny wechat_reply/send and Feishu lark write ops. */
-  remoteDenyOutbound: boolean
-  /**
-   * @deprecated Combined browser confirm switch. Only used for conservative migration:
-   * `true` maps both navigate/act to require-confirm; `false` must NOT silently make act
-   * skip confirm for stock upgrades. Prefer remoteBrowserNavigate/ActRequiresConfirm.
-   */
-  remoteBrowserRequiresConfirm: boolean
-  /**
-   * Remote-only: controls whether browser `navigate` needs confirm. When missing (raw legacy),
-   * treated as unmigrated — see remoteToolPolicy conservative overlay.
-   */
-  remoteBrowserNavigateRequiresConfirm?: boolean
-  /**
-   * Remote-only: controls whether browser `act` needs confirm. Default effective is `true`;
-   * high-impact acts always ask regardless.
-   */
-  remoteBrowserActRequiresConfirm?: boolean
-  /**
-   * Remote-only: when analysis verdict is `allow`, whether the script still needs confirm.
-   * Missing / true means confirm (conservative) until the security migration completes.
-   */
-  remoteScriptRequiresConfirm?: boolean
   remoteSessionIdleMinutes: number
   remoteSessionMergeMinutes?: number
   remoteRateLimitPerMinute: number
@@ -94,13 +44,6 @@ export interface RemoteImCommonConfig extends RemoteProgressConfig {
   remoteCommandPrefix?: string
   /** Owner bind window length in minutes (Feishu). Default 5. */
   remoteOwnerBindWindowMinutes?: number
-  /**
-   * Persisted remote-security config schema version. Only advanced after the user
-   * confirms the one-time security summary. Absent = raw legacy / unmigrated.
-   */
-  remoteSecurityConfigVersion?: number
-  /** Where the last-confirmed security preset came from. */
-  remoteSecurityPresetSource?: RemoteSecurityPresetSource
   /** Per-remote-task damage budget. */
   remoteTaskBudget?: RemoteTaskBudget
 }
@@ -108,10 +51,6 @@ export interface RemoteImCommonConfig extends RemoteProgressConfig {
 export const DEFAULT_REMOTE_IM_COMMON_CONFIG: RemoteImCommonConfig = {
   remoteEnabled: false,
   remoteNotifyOnReceive: true,
-  remoteConfirmPolicy: 'always',
-  remoteAllowLocalWrite: true,
-  remoteDenyOutbound: false,
-  remoteBrowserRequiresConfirm: false,
   remoteSessionIdleMinutes: 10,
   remoteRateLimitPerMinute: 60,
   remoteModelSelectionMode: 'inherit',
@@ -123,42 +62,6 @@ export const DEFAULT_REMOTE_IM_COMMON_CONFIG: RemoteImCommonConfig = {
   remoteProgressMinIntervalSec: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMinIntervalSec,
   remoteProgressMaxChars: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMaxChars,
   remoteProgressFallbackText: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressFallbackText
-}
-
-export function normalizeImConfirmPolicy(
-  policy: LegacyImConfirmPolicy | string | undefined | null
-): ImConfirmPolicy | undefined {
-  if (policy == null) return undefined
-  if (policy === 'feishu_confirm' || policy === 'wechat_confirm') return 'im_confirm'
-  if (
-    policy === 'inherit' ||
-    policy === 'always' ||
-    policy === 'remote_read_only' ||
-    policy === 'im_confirm'
-  ) {
-    return policy
-  }
-  return undefined
-}
-
-/**
- * Apply legacy remote_read_only → explicit access-control switches.
- * While policy remains `remote_read_only`, force deny-write + deny-outbound even if
- * stored configs still carry historical defaults (`allowLocalWrite: true`).
- */
-export function migrateRemoteReadOnlyPolicy(args: {
-  policy: ImConfirmPolicy
-  remoteAllowLocalWrite?: boolean
-  remoteDenyOutbound?: boolean
-  defaults: Pick<RemoteImCommonConfig, 'remoteAllowLocalWrite' | 'remoteDenyOutbound'>
-}): { remoteAllowLocalWrite: boolean; remoteDenyOutbound: boolean } {
-  if (args.policy === 'remote_read_only') {
-    return { remoteAllowLocalWrite: false, remoteDenyOutbound: true }
-  }
-  return {
-    remoteAllowLocalWrite: args.remoteAllowLocalWrite ?? args.defaults.remoteAllowLocalWrite,
-    remoteDenyOutbound: args.remoteDenyOutbound ?? args.defaults.remoteDenyOutbound
-  }
 }
 
 function numOrDefault(value: unknown, fallback: number): number {
@@ -188,7 +91,7 @@ export function resolveRemoteTaskBudget(
 }
 
 export function mergeRemoteImCommonConfig(
-  partial?: Partial<RemoteImCommonConfig & { remoteConfirmPolicy?: LegacyImConfirmPolicy }> | null,
+  partial?: Partial<RemoteImCommonConfig> | null,
   defaults: RemoteImCommonConfig = DEFAULT_REMOTE_IM_COMMON_CONFIG
 ): RemoteImCommonConfig {
   if (!partial || typeof partial !== 'object') {
@@ -209,27 +112,9 @@ export function mergeRemoteImCommonConfig(
       defaults.remoteProgressFallbackText ?? DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressFallbackText
   })
 
-  const policy =
-    normalizeImConfirmPolicy(partial.remoteConfirmPolicy) ?? defaults.remoteConfirmPolicy
-
-  const access = migrateRemoteReadOnlyPolicy({
-    policy,
-    remoteAllowLocalWrite: partial.remoteAllowLocalWrite,
-    remoteDenyOutbound: partial.remoteDenyOutbound,
-    defaults: {
-      remoteAllowLocalWrite: defaults.remoteAllowLocalWrite,
-      remoteDenyOutbound: defaults.remoteDenyOutbound
-    }
-  })
-
   return {
     remoteEnabled: partial.remoteEnabled ?? defaults.remoteEnabled,
     remoteNotifyOnReceive: partial.remoteNotifyOnReceive ?? defaults.remoteNotifyOnReceive,
-    remoteConfirmPolicy: policy,
-    remoteAllowLocalWrite: access.remoteAllowLocalWrite,
-    remoteDenyOutbound: access.remoteDenyOutbound,
-    remoteBrowserRequiresConfirm:
-      partial.remoteBrowserRequiresConfirm ?? defaults.remoteBrowserRequiresConfirm,
     remoteSessionIdleMinutes:
       partial.remoteSessionIdleMinutes ?? defaults.remoteSessionIdleMinutes,
     remoteSessionMergeMinutes:
@@ -247,34 +132,9 @@ export function mergeRemoteImCommonConfig(
     remoteCommandPrefix: partial.remoteCommandPrefix ?? defaults.remoteCommandPrefix,
     remoteOwnerBindWindowMinutes:
       partial.remoteOwnerBindWindowMinutes ?? defaults.remoteOwnerBindWindowMinutes,
-    // Raw vs normalized: never fabricate a config version just because fields are missing.
-    remoteSecurityConfigVersion:
-      partial.remoteSecurityConfigVersion ?? defaults.remoteSecurityConfigVersion,
-    remoteSecurityPresetSource:
-      partial.remoteSecurityPresetSource ?? defaults.remoteSecurityPresetSource,
-    remoteBrowserNavigateRequiresConfirm:
-      partial.remoteBrowserNavigateRequiresConfirm ?? defaults.remoteBrowserNavigateRequiresConfirm,
-    remoteBrowserActRequiresConfirm:
-      partial.remoteBrowserActRequiresConfirm ?? defaults.remoteBrowserActRequiresConfirm,
-    remoteScriptRequiresConfirm:
-      partial.remoteScriptRequiresConfirm ?? defaults.remoteScriptRequiresConfirm,
     remoteTaskBudget: partial.remoteTaskBudget
       ? resolveRemoteTaskBudget(partial.remoteTaskBudget)
       : defaults.remoteTaskBudget,
     ...progress
   }
-}
-
-/** Convenience: one-click “restrict remote writes & outbound”. */
-export function applyRemoteRestrictWritesAndOutbound(
-  enabled: boolean
-): Pick<RemoteImCommonConfig, 'remoteAllowLocalWrite' | 'remoteDenyOutbound'> {
-  if (enabled) {
-    return { remoteAllowLocalWrite: false, remoteDenyOutbound: true }
-  }
-  return { remoteAllowLocalWrite: true, remoteDenyOutbound: false }
-}
-
-export function isRemoteRestrictWritesAndOutbound(config: RemoteImCommonConfig): boolean {
-  return config.remoteAllowLocalWrite === false && config.remoteDenyOutbound === true
 }

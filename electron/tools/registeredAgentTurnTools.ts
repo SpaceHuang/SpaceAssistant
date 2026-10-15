@@ -11,35 +11,22 @@ import { isProcessToolName } from '../../src/shared/processResultProjection'
 import { compactOversizedToolResultContent } from '../../src/shared/oversizedToolResult'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { validateToolExecutorResultForTool, validateToolExecutorResultWithViolations } from './types'
-import { classifyFileReadError, isExecutionOutcomeUncertainError, isUserAbortError } from './toolExecutionResource'
-import { toToolUserError } from './toolUserErrors'
+import { isExecutionOutcomeUncertainError } from './toolExecutionResource'
 
-export type ExecutorUnhandledSettlement = { rethrow: true; error: unknown } | { rethrow: false; result: Record<string, unknown> }
+export type ExecutorUnhandledSettlement = { rethrow: true; error: unknown }
 
-/**
- * Executor 进入后抛出的漏网异常的结算决策：Uncertain（副作用不确定）、取消/中断，以及
- * 写/执行类工具（write/execute/未声明——动作可能已发生）都必须穿透继续向上，整轮按
- * unknown-after-dispatch / interrupted 结算；仅读类（actionClass 'read'，无副作用）的
- * 漏网异常降级为工具级错误结果，让模型可直接重试。
- */
-export function settleExecutorUnhandledError(error: unknown, toolName: string, actionClass: string | undefined): ExecutorUnhandledSettlement {
-  if (isExecutionOutcomeUncertainError(error)) return { rethrow: true, error }
-  if (isUserAbortError(error) || (error instanceof Error && error.name === 'AbortError')) return { rethrow: true, error }
-  if (actionClass !== 'read') return { rethrow: true, error }
-  const friendly = toToolUserError(error, { toolName })
-  // toToolUserError 对含绝对路径/超长的原始消息会退到通用文案，errno 码是对模型最有
-  // 诊断价值的信号，单独补回（EBADF/EBUSY/ENOENT…），避免技术细节完全丢失。
-  const code = (error as NodeJS.ErrnoException)?.code
-  // retryable 与 executor 内降级（degradedFsReadResult）保持同一信号：errno 瞬态类可重试。
-  const retryable = classifyFileReadError(error) === 'transient'
-  return {
-    rethrow: false,
-    result: {
-      success: false,
-      error: code && !friendly.includes(code) ? `${friendly}（系统错误码 ${code}）` : friendly,
-      diagnostic: { caseId: 'executor-unhandled-error', retryable, category: 'executor' }
-    }
+/** A deferred call was rejected before the executor dispatch claim, so no tool side effect started. */
+export class DeferredToolPreDispatchError extends Error {
+  constructor(cause: unknown) {
+    super('DEFERRED_TOOL_PRE_DISPATCH_REJECTED', { cause })
+    this.name = 'DeferredToolPreDispatchError'
   }
+}
+
+/** 执行器 entry 后的异常由 SDK 统一结算为 unknown，不按工具分类降级或重试。 */
+export function settleExecutorUnhandledError(error: unknown): ExecutorUnhandledSettlement {
+  if (isExecutionOutcomeUncertainError(error)) return { rethrow: true, error }
+  return { rethrow: true, error }
 }
 
 type TurnToolCall = Readonly<{
@@ -59,6 +46,8 @@ type PreparedRecord = {
   disposeSignal(): void
   unregisterActiveCancellation?: () => void
   binding: PermitBinding
+  userConfirmationReceipt?: string
+  userConfirmationAnswerer?: 'user' | 'agent'
   cleaned?: boolean
 }
 
@@ -165,6 +154,8 @@ export function createRegisteredAgentTurnTools(input: {
     const record = prepared.get(key)
     if (!record || !sameCall(record.call, call)) throw new Error('PREPARED_CALL_MISMATCH')
     if (stage.confirmation && !stage.confirmation.receipt.trim()) throw new Error('CONFIRMATION_RECEIPT_REQUIRED')
+    record.userConfirmationReceipt = stage.confirmation?.receipt
+    record.userConfirmationAnswerer = stage.confirmation?.answerer
     try {
       if (input.refreshExecutionContext) {
         const currentContext = record.runtimeContext
@@ -176,9 +167,34 @@ export function createRegisteredAgentTurnTools(input: {
         if (!isRecord(refreshed)) throw new Error('REFRESHED_EXECUTION_CONTEXT_INVALID')
         record.runtimeContext = { ...refreshed, ...safetyOwned }
       }
+      if (stage.replanAfterFreshApproval) {
+        if (!stage.confirmation?.receipt.trim()) throw new Error('FRESH_APPROVAL_REQUIRED_FOR_REPLAN')
+        const planningContext = {
+          requestId: input.requestId,
+          toolUseId: call.toolCallId,
+          signal: record.signal,
+          executionContext: record.runtimeContext as ToolExecutionContext['runtimeContext']
+        } as Parameters<RegisteredTool['beginPlanning']>[1] & { signal: AbortSignal }
+        const planning = record.registeredTool.beginPlanning(call.input, planningContext)
+        const replannedHandle = await planning.result
+        if (record.signal.aborted) {
+          replannedHandle.fail()
+          replannedHandle.release()
+          throw new Error('REQUEST_CANCELLED')
+        }
+        if (replannedHandle.prepared.requestId !== input.requestId || replannedHandle.prepared.toolUseId !== call.toolCallId || replannedHandle.prepared.toolName !== record.registeredTool.name) {
+          replannedHandle.fail()
+          replannedHandle.release()
+          throw new Error('PREPARED_TOOL_IDENTITY_MISMATCH')
+        }
+        const supersededHandle = record.handle
+        record.handle = replannedHandle
+        if (supersededHandle.state !== 'settled' && supersededHandle.state !== 'failed') supersededHandle.fail()
+        supersededHandle.release()
+      }
       if (record.handle.state === 'planned') record.handle.awaitConfirmation()
-      if (record.handle.state !== 'awaiting-confirm') throw new Error('PREPARED_TOOL_NOT_AWAITING_CONFIRMATION')
-      record.handle.confirm()
+      if (record.handle.state === 'awaiting-confirm') record.handle.confirm()
+      else if (record.handle.state !== 'confirmed') throw new Error('PREPARED_TOOL_NOT_AWAITING_CONFIRMATION')
       record.handle.beginValidation()
       await record.handle.validatePrepared(executionContextFor(record, call.signal ?? record.signal))
       record.handle.finishValidation()
@@ -246,14 +262,7 @@ export function createRegisteredAgentTurnTools(input: {
         try {
           raw = await record.handle.execute(executionContextFor(record, combined.signal))
         } catch (error) {
-          // Executor 已进入（dispatch 后）。副作用是否发生不确定的失败必须抛 *UncertainError
-          // （库内约定），连同取消/中断一起保持向上传播、整轮按 unknown-after-dispatch 结算；
-          // 其余漏网异常（fs 瞬态、环境错误等）视为无副作用失败，降级为工具级错误结果，
-          // 让模型可直接重试而不是把整轮打成 interrupted。
-          const settlement = settleExecutorUnhandledError(error, call.toolName, record.registeredTool?.actionClass)
-          if (settlement.rethrow) throw error
-          logAgentEvent('warn', 'tool.result.executor-unhandled-error', { requestId: input.requestId, toolUseId: call.toolCallId, toolName: call.toolName, error: error instanceof Error ? error.message : String(error) })
-          raw = settlement.result
+          throw settleExecutorUnhandledError(error).error
         }
         const runtimeContext = record.runtimeContext && typeof record.runtimeContext === 'object' && !Array.isArray(record.runtimeContext)
           ? record.runtimeContext as Record<string, unknown>
@@ -287,14 +296,17 @@ export function createRegisteredAgentTurnTools(input: {
     authorize(initial: PermitBinding, recheck: PermitBinding): Promise<{ kind: 'allow'; permitId: string } | { kind: 'deny'; reasonCode?: string }>
   }): Promise<TurnToolResult> => {
     if (!request.confirmationReceipt.trim()) throw new Error('DEFERRED_CONFIRMATION_RECEIPT_REQUIRED')
-    let initial: PermitBinding | undefined
+    let dispatchClaimed = false
     try {
-      initial = await prepareTool(call, { kind: 'initial' })
-      const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt } })
+      const initial = await prepareTool(call, { kind: 'initial' })
+      const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt, answerer: 'user' } })
       if (!sameRecheckSubject(initial, recheck)) throw new Error('DEFERRED_RECHECK_BINDING_CHANGED')
       const authorization = await request.authorize(initial, recheck)
       if (authorization.kind !== 'allow') throw new Error(`DEFERRED_SAFETY_RECHECK_DENIED:${authorization.reasonCode ?? 'POLICY_DENY'}`)
-      return await toolExecution.execute(call, authorization.permitId)
+      return await toolExecution.execute(call, authorization.permitId, () => { dispatchClaimed = true })
+    } catch (error) {
+      if (!dispatchClaimed) throw new DeferredToolPreDispatchError(error)
+      throw error
     } finally {
       discardPreparedTool(call)
     }
@@ -378,6 +390,8 @@ function executionContextFor(record: PreparedRecord, signal: AbortSignal): ToolE
     toolUseId: record.handle.prepared.toolUseId,
     toolName: record.handle.prepared.toolName,
     runtimeContext: record.runtimeContext as ToolExecutionContext['runtimeContext'],
+    ...(record.userConfirmationReceipt ? { userConfirmationReceipt: record.userConfirmationReceipt } : {}),
+    ...(record.userConfirmationAnswerer ? { userConfirmationAnswerer: record.userConfirmationAnswerer } : {}),
     signal
   }
 }

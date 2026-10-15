@@ -4,6 +4,7 @@ import {
   sessionSuffixLength as defaultSessionSuffixLength
 } from '../../src/shared/remoteOutboundFormat'
 import { touchRemoteSessionActivity } from './remoteSessionActivity'
+import { assertImOutboundAllowed, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 
 export function maybeTouchOutboundActivity(
   sessionId: string | undefined,
@@ -78,9 +79,16 @@ export async function sendImLifecycleMessage(args: {
   reply: (text: string) => Promise<void>
   stage: ImLifecycleStage
   text: string
+  sessionId: string
+  recipient: string
+  destinationId?: string
+  outboundDeliveryFacts?: ImOutboundFacts
 }): Promise<void> {
   if (!IM_LIFECYCLE_STAGES.has(args.stage)) throw new TypeError('UNSUPPORTED_IM_LIFECYCLE_STAGE')
   const text = args.text.trim()
   if (!text) throw new TypeError('IM_LIFECYCLE_MESSAGE_REQUIRED')
+  if (!args.outboundDeliveryFacts) throw new Error('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+  assertImOutboundAllowed(args.outboundDeliveryFacts, { channel: args.outboundDeliveryFacts.channel, body: text,
+    sessionId: args.sessionId, recipient: args.recipient, ...(args.destinationId ? { destinationId: args.destinationId } : {}) })
   await args.reply(text)
 }

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IpcMain } from 'electron';
 import { createTempDatabase } from './database/testHelpers';
 import { getConfigValue, setConfigValue } from './database';
@@ -23,9 +23,10 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('./secureApiKey', () => ({
-  isSecretStorageAvailable: () => true,
   encryptSecret: (plain: string) => `enc:${plain}`,
   decryptSecret: vi.fn((enc: string) => enc.replace(/^enc:/, '')),
+  isSecretEncrypted: (value: string) => value.startsWith('enc:'),
+  isLegacySecret: (value: string) => !value.startsWith('enc:'),
 }));
 
 function makeIpc() {
@@ -72,41 +73,10 @@ function makeContext(db: AppIpcContext['db']): AppIpcContext {
 
 describe('config:set API Key transaction boundary', () => {
   let cleanup: (() => void) | undefined;
-  // config:get 的 apiKeyAccessUpgradeNoticeRequired 带 process.platform === 'darwin' 守卫，
-  // 断言与运行平台无关，统一 stub 为 darwin（沿用 bashPathFork.test.ts 的恢复式写法）。
-  const platformDesc = Object.getOwnPropertyDescriptor(process, 'platform');
-
-  beforeEach(() => {
-    Object.defineProperty(process, 'platform', { value: 'darwin' });
-  });
 
   afterEach(() => {
-    if (platformDesc) Object.defineProperty(process, 'platform', platformDesc);
     cleanup?.();
     cleanup = undefined;
-  });
-
-  it('announces an app-version change once when a saved API Key exists', async () => {
-    const temp = createTempDatabase('sa-config-key-upgrade-notice-');
-    cleanup = temp.cleanup;
-    const db = temp.db;
-    const serviceId = 'service-1';
-    persistLlmServices(
-      db,
-      [{ id: serviceId, name: 'Service', baseUrl: '', apiKeyPresent: false, supportedModelIds: ['model-1'] }],
-      [serviceId],
-      { [serviceId]: 'saved-secret' },
-    );
-
-    const ipc = makeIpc();
-    registerConfigIpc(ipc as unknown as IpcMain, makeContext(db));
-    const getConfig = ipc.getHandler('config:get')!;
-
-    const upgradedConfig = await getConfig();
-    expect(upgradedConfig).toMatchObject({ apiKeyAccessUpgradeNoticeRequired: true });
-    await ipc.getHandler('config:ack-key-access-upgrade-notice')!();
-    const sameVersionConfig = await getConfig();
-    expect(sameVersionConfig).toMatchObject({ apiKeyAccessUpgradeNoticeRequired: false });
   });
 
   it('keeps the old key and service metadata when a later model validation fails', async () => {
@@ -142,9 +112,7 @@ describe('config:set API Key transaction boundary', () => {
     vi.mocked(decryptSecret).mockImplementationOnce(() => {
       throw new Error('authorization denied');
     });
-    await expect(getLlmServiceApiKey(db, serviceId)).rejects.toThrow(
-      'LLM_KEY_ACCESS_DENIED',
-    );
+    await expect(getLlmServiceApiKey(db, serviceId)).rejects.toThrow('LLM_KEY_ACCESS_DENIED');
     vi.mocked(decryptSecret).mockClear();
 
     const ipc = makeIpc();
@@ -180,9 +148,21 @@ describe('config:set API Key transaction boundary', () => {
     expect(JSON.parse(getConfigValue(db, 'config.models') ?? '[]')).toEqual([
       oldModel,
     ]);
-    await expect(ipc.getHandler('config:get')!()).resolves.toMatchObject({
-      apiKeyAccessUpgradeNoticeRequired: true,
-    });
+    const config = await ipc.getHandler('config:get')!() as Record<string, unknown>;
+    expect(config).not.toHaveProperty('apiKeyAccessUpgradeNoticeRequired');
+  });
+
+  it('returns only the generic key access failure code when verification cannot decrypt a key', async () => {
+    const temp = createTempDatabase('sa-config-key-verify-failure-');
+    cleanup = temp.cleanup;
+    const db = temp.db;
+    const serviceId = 'service-verify-failure';
+    persistLlmServices(db, [{ id: serviceId, name: 'Service', baseUrl: '', apiKeyPresent: false, supportedModelIds: ['model-1'] }], [serviceId], { [serviceId]: 'saved-secret' });
+    vi.mocked(decryptSecret).mockImplementationOnce(() => { throw new Error('decrypt failed'); });
+
+    const ipc = makeIpc();
+    registerConfigIpc(ipc as unknown as IpcMain, makeContext(db));
+    await expect(ipc.getHandler('config:verify-llm-key')!({}, serviceId)).resolves.toEqual({ ok: false, code: 'LLM_KEY_ACCESS_DENIED' });
   });
 
   it('invalidates both remote channels when a workdir profile boundary changes', async () => {
@@ -224,7 +204,7 @@ describe('config:set API Key transaction boundary', () => {
 
     await setConfig({}, { feishu: { remoteEnabled: false } });
     expect(epochStore.current('feishu')).toBe(2);
-    expect(todos.get('close-reenable-todo', { channel: 'feishu', identityKey: 'identity-a', ownerId: 'owner-a', authorizationEpoch: 1, rule })?.status).toBe('invalidated');
+    expect(todos.get('close-reenable-todo', { channel: 'feishu', identityKey: 'identity-a', ownerId: 'owner-a', authorizationEpoch: 1, originSessionId: 'origin', rule })?.status).toBe('invalidated');
     await setConfig({}, { feishu: { remoteEnabled: true } });
     expect(epochStore.current('feishu')).toBe(2);
     await setConfig({}, { feishu: { remoteSenderAllowlist: ['owner-b'] } });

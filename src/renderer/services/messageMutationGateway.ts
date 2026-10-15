@@ -1,6 +1,4 @@
-import type { ChatImageAttachment, Message } from '../../shared/domainTypes'
-import { CURRENT_SCHEMA_VERSION } from '../../shared/domainTypes'
-import type { ApiContextEntry, ApiContextRequest } from '../../shared/displayOrder'
+import type { Message } from '../../shared/domainTypes'
 import {
   getApiContextOverlaySnapshot,
   removeApiContextMessage,
@@ -14,7 +12,6 @@ import {
 import { removeLiveMessage, routePatchMessage } from './chatRunnerService'
 import { store } from '../store'
 import {
-  ackDisplayMessagePersisted,
   patchDisplayMessage,
   reorderDisplayMessageSequences,
   removeDisplayMessage,

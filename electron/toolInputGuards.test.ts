@@ -119,6 +119,12 @@ describe('assertSafeToolInput', () => {
     ).not.toThrow()
   })
 
+  it('accepts optional run_shell justification but rejects non-string values', () => {
+    expect(() => assertSafeToolInput('run_shell', { command: 'git status', justification: '核对工作区状态' })).not.toThrow()
+    expect(() => assertSafeToolInput('run_shell', { command: 'git status', justification: 42 })).toThrow(/justification.*字符串/)
+    expect(() => assertSafeToolInput('run_shell', { command: 'git status', justification: null })).toThrow(/justification.*字符串/)
+  })
+
   it('rejects run_shell without command', () => {
     expect(() => assertSafeToolInput('run_shell', {})).toThrow(/command/)
   })

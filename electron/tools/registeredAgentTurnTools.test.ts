@@ -12,7 +12,7 @@ import { ResourceLockRegistry } from '../../packages/agent-sdk/src/resourceLock'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { ModelProviderRegistry, type StreamChunk } from '../../packages/agent-sdk/src/model'
 import { defineDirectTool, definePlannedTool, TypedToolRegistry } from './plannedToolRegistry'
-import { createRegisteredAgentTurnTools } from './registeredAgentTurnTools'
+import { createRegisteredAgentTurnTools, DeferredToolPreDispatchError } from './registeredAgentTurnTools'
 import { createReadRegisteredTools } from './readRegisteredTools'
 import { buildReadExecutionPermit } from '../confirmation/readExecutionPermit'
 import { createWriteFileRegisteredTools } from './writeFileRegisteredTools'
@@ -87,6 +87,23 @@ describe('createRegisteredAgentTurnTools', () => {
     expect(result).toMatchObject({ output: { success: true, data: 'approved execution' }, isError: false })
   })
 
+  it('classifies approval recheck denial before dispatch as a known non-execution', async () => {
+    const execute = vi.fn(async () => ({ success: true }))
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw, execute }))
+    const tools = createRegisteredAgentTurnTools({
+      requestId: 'deferred-predispatch-request', turnId: 'deferred-predispatch-turn', registry,
+      permits: new InMemorySafetyPermitStore(), admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ sessionId: 'deferred-predispatch-session', lane: 'wechat' }),
+      resolveAuthorizationVersion: () => 'policy-v2'
+    })
+    await expect(tools.executeDeferred({ invocationId: 'deferred-predispatch-invocation', toolCallId: 'deferred-predispatch-call',
+      toolName: 'write_file', input: { path: 'report.txt', content: 'approved' } }, {
+      confirmationReceipt: 'approval:reply-predispatch', authorize: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+    })).rejects.toBeInstanceOf(DeferredToolPreDispatchError)
+    expect(execute).not.toHaveBeenCalled()
+  })
+
   it('IM 异步审批持久化待办并 park invocation，不继续模型循环或执行原工具', async () => {
     const db = createMemoryAppDb()
     const execute = vi.fn(async () => ({ success: true, data: 'must not execute' }))
@@ -137,19 +154,24 @@ describe('createRegisteredAgentTurnTools', () => {
             ttlMs: 60_000, checkpoint: { checkpointId: 'checkpoint-real-turn', workflowRevision: 2 },
             policy: { lane: 'wechat', enabled: true, actionClass: 'write', gate: 'eligible', evidence: { kind: 'material', restrictionsComplete: false } } })
           expect(intentStore.authorizeResume(invocationId)).toBe(true)
-          return { kind: 'deferred', todoId: todo.todoId, invocationId, checkpointRef: { checkpointId: 'checkpoint-real-turn', workflowRevision: 2 } }
+          return { kind: 'deferred', todoId: todo.todoId, invocationId, cause: 'insufficient-delegation-evidence',
+            executionState: 'not-executed', retryable: false, nextStep: 'await-user',
+            checkpointRef: { checkpointId: 'checkpoint-real-turn', workflowRevision: 2 } }
         }
       })
 
       expect(execute).not.toHaveBeenCalled()
       expect(readExecute).not.toHaveBeenCalled()
       expect(admission.todoStore.get(todo.todoId, {
-        channel: 'wechat', identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: 1, rule: todo.rule
+        channel: 'wechat', identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: 1,
+        originSessionId: todo.originSessionId, rule: todo.rule
       })).toMatchObject({ status: 'pending', invocationId })
       expect(intentStore.get(invocationId)).toMatchObject({ state: 'checkpoint_committed', todoId: todo.todoId, checkpointId: 'checkpoint-real-turn' })
       expect(persistentDispatch).not.toHaveBeenCalled()
       expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({
-        kind: 'approval-deferred', payload: { toolCallId: 'async-write', approvalId: 'async-write', todoId: todo.todoId, invocationId, checkpointId: 'checkpoint-real-turn', workflowRevision: 2 }
+        kind: 'approval-deferred', payload: { toolCallId: 'async-write', approvalId: 'async-write', todoId: todo.todoId, invocationId,
+          cause: 'insufficient-delegation-evidence', executionState: 'not-executed', retryable: false, nextStep: 'await-user',
+          checkpointId: 'checkpoint-real-turn', workflowRevision: 2 }
       }))
       expect(responses).toHaveLength(1)
       expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({
@@ -296,15 +318,15 @@ describe('createRegisteredAgentTurnTools', () => {
           return { kind: 'approved', receipt: 'feishu-confirmed' }
         },
         maxModelTurns: 2, history
-      })).rejects.toMatchObject({ reasonCode: 'PREPARED_RECHECK_FAILED' })
+      })).rejects.toMatchObject({ reasonCode: 'MISSING_MATERIAL' })
       const events = (await history.read(invocationId)).events
       expect(executor).not.toHaveBeenCalled()
       expect(providerCalls).toBe(1)
       expect(events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'confirmed-attachment', reason: 'PREPARED_RECHECK_FAILED'
+        toolCallId: 'confirmed-attachment', reason: 'MISSING_MATERIAL'
       })
       expect(events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
-      expect(events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { status: 'denied', reason: 'PREPARED_RECHECK_FAILED' } })
+      expect(events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { status: 'denied', reason: 'MISSING_MATERIAL' } })
     } finally {
       executor.mockRestore()
       await fs.rm(userDataDir, { recursive: true, force: true })
@@ -373,7 +395,7 @@ describe('createRegisteredAgentTurnTools', () => {
       requestId, turnId, registry, permits, admission: new InMemoryExecutionAdmissionCoordinator(),
       createExecutionContext: () => ({ workDir: '/workspace/initial', toolUserConfirmed: false }),
       refreshExecutionContext: (_call, stage, current) => {
-        expect(stage).toEqual({ kind: 'recheck', confirmation: { receipt: 'approved' } })
+        expect(stage).toEqual({ kind: 'recheck', confirmation: { receipt: 'approved', answerer: 'user' } })
         current.readExecutionPermit = 'mutated-in-place'
         return { workDir: '/workspace/current', toolUserConfirmed: true, readExecutionPermit: 'spoofed-replacement' }
       },
@@ -714,6 +736,31 @@ describe('createRegisteredAgentTurnTools', () => {
     })
   })
 
+  it('allows a confirmed prepared tool to re-enter validation after a renewed confirmation', async () => {
+    const validate = vi.fn()
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({
+      name: 'read_file', parseInput: (raw) => raw as { path: string },
+      plan: async (input) => input, validate, execute: async () => ({ success: true })
+    }))
+    const tools = createRegisteredAgentTurnTools({
+      requestId, turnId, registry,
+      permits: new InMemorySafetyPermitStore(), admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ workDir: '/workspace' } as never),
+      resolveAuthorizationVersion: () => 'policy-material-v1'
+    })
+    const call = { invocationId, toolCallId: 'read-renewed-confirmation', toolName: 'read_file', input: { path: 'note.txt' } }
+
+    await tools.prepareTool(call, { kind: 'initial' })
+    await tools.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'first-approval' } })
+    await expect(tools.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'renewed-approval' } })).resolves.toMatchObject({
+      phase: 'recheck', invocationId, toolCallId: call.toolCallId
+    })
+
+    expect(validate).toHaveBeenCalledTimes(2)
+    tools.discardPreparedTool(call)
+  })
+
   it('未获批准或复检拒绝时不进入 registered executor', async () => {
     const execute = vi.fn(async () => 'must not execute')
     const registry = new TypedToolRegistry()
@@ -776,12 +823,13 @@ describe('createRegisteredAgentTurnTools', () => {
 
   it('SDK 用户确认 receipt 绑定到同一个 planned handle 后才 dispatch', async () => {
     const events: string[] = []
+    let executionReceipt: string | undefined
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({
       name: 'write_file', parseInput: (raw) => raw as { path: string },
       plan: async (input) => { events.push('plan'); return input },
       validate: async () => { events.push('validate') },
-      execute: async () => { events.push('execute'); return 'written' }
+      execute: async (_plan, execution) => { executionReceipt = execution.userConfirmationReceipt; events.push('execute'); return 'written' }
     }))
     const permits = new InMemorySafetyPermitStore()
     const admission = new InMemoryExecutionAdmissionCoordinator()
@@ -814,6 +862,7 @@ describe('createRegisteredAgentTurnTools', () => {
       }
     })
     expect(events).toEqual(['plan', 'confirm:confirm-1', 'validate', 'validate', 'execute'])
+    expect(executionReceipt).toBe('receipt-1')
     expect(admission.executorEntries).toBe(1)
   })
 
@@ -867,12 +916,12 @@ describe('createRegisteredAgentTurnTools', () => {
     revoked = true
     for (const listener of [...listeners]) listener({ requestId, executionId: turnId, lane: 'desktop', toolName: 'write_file' })
     expect(executorSignal.aborted).toBe(true)
-    await expect(runningTurn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(runningTurn).rejects.toMatchObject({ code: 'INVOCATION_LIFECYCLE_INVALIDATED' })
     expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
     expect(listeners.size).toBe(0)
     const events = (await history.read(invocationId)).events
-    expect(events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'authorization-invalidated' }) }))
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'authorization-revoked' } })
   })
 
   it('Hosted WeChat send executor 收到 claim 后撤权 signal，记录失败结果并释放 lease', async () => {
@@ -938,14 +987,14 @@ describe('createRegisteredAgentTurnTools', () => {
     expect(executorSignal.aborted).toBe(false)
     expect(revocations.revokeToolForLane('wechat', 'wechat_send')).toBe(1)
     expect(executorSignal.aborted).toBe(true)
-    await expect(running).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(running).rejects.toMatchObject({ code: 'INVOCATION_LIFECYCLE_INVALIDATED' })
     expect(send).toHaveBeenCalledTimes(1)
     expect(providerCalls).toBe(1)
     expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
     const events = (await history.read(invocationId)).events
     expect(events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: 'hosted-wechat-send-revoke' })
-    expect(events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: 'authorization-invalidated' }) }))
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'authorization-revoked' } })
   })
 
   it('Hosted run_script 进程执行中撤权时以 unknown-after-dispatch 收尾', async () => {
@@ -999,10 +1048,10 @@ describe('createRegisteredAgentTurnTools', () => {
     expect(executionSignal.aborted).toBe(false)
     expect(revocations.revokeToolForLane('desktop', 'run_script')).toBe(1)
     expect(executionSignal.aborted).toBe(true)
-    await expect(running).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(running).rejects.toMatchObject({ code: 'INVOCATION_LIFECYCLE_INVALIDATED' })
     const events = (await history.read(invocationId)).events
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'authorization-revoked' } })
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: 'authorization-invalidated' }) }))
     expect(providerCalls).toBe(1)
     expect(runScript).toHaveBeenCalledOnce()
     expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
@@ -1060,7 +1109,8 @@ describe('createRegisteredAgentTurnTools', () => {
     expect(executionSignal.aborted).toBe(false)
     expect(cancelActiveAgentTool(sessionId, activeTurnId, activeToolCallId)).toBe(true)
     expect(executionSignal.aborted).toBe(true)
-    await expect(running).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(running).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
+    expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: 'cancelled' }) }))
     expect(runScript).toHaveBeenCalledOnce()
     expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
     expect(cancelActiveAgentTool(sessionId, activeTurnId, activeToolCallId)).toBe(false)
@@ -1172,8 +1222,9 @@ describe('createRegisteredAgentTurnTools', () => {
     } })
     const providers = new ModelProviderRegistry()
     let providerCalls = 0
-    providers.register(route, { providerId: 'run-script-timeout', stream: () => {
+    providers.register(route, { providerId: 'run-script-timeout', stream: (call) => {
       providerCalls += 1
+      if (call.request.messages.some((message) => message.role === 'tool')) return stream({ type: 'text-delta', text: 'reported the unknown script result' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
       return stream(
         { type: 'tool-call', toolCallId: 'script-timeout-call', toolName: 'run_script', input: {
           language: 'javascript',
@@ -1192,11 +1243,11 @@ describe('createRegisteredAgentTurnTools', () => {
         toolExecution: tools.toolExecution, maxModelTurns: 2, history
       })
 
-      await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+      await expect(turn).resolves.toMatchObject({ text: 'reported the unknown script result' })
       const events = (await history.read(invocationId)).events
-      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-      expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
-      expect(providerCalls).toBe(1)
+      expect(events.at(-1)?.kind).toBe('invocation-completed')
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered' }) }))
+      expect(providerCalls).toBe(2)
       expect(await fs.readFile(markerPath, 'utf8')).toBe('written')
       expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
     } finally {
@@ -1252,12 +1303,12 @@ describe('createRegisteredAgentTurnTools', () => {
 
     await spawned
     expect(revocations.revokeToolForLane('desktop', 'run_shell')).toBe(1)
-    await expect(running).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(running).rejects.toMatchObject({ code: 'INVOCATION_LIFECYCLE_INVALIDATED' })
     const events = (await history.read(invocationId)).events
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'authorization-revoked' } })
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch', invocationDisposition: 'authorization-invalidated' }) }))
     expect(providerCalls).toBe(1)
-    expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
+    await vi.waitFor(() => expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0), { timeout: 10_000 })
   }, 20_000)
 
   it('Hosted run_shell 命令超时后以 unknown-after-dispatch 收尾且不再次请求模型', async () => {
@@ -1284,8 +1335,9 @@ describe('createRegisteredAgentTurnTools', () => {
     } })
     const providers = new ModelProviderRegistry()
     let providerCalls = 0
-    providers.register(route, { providerId: 'run-shell-timeout', stream: () => {
+    providers.register(route, { providerId: 'run-shell-timeout', stream: (call) => {
       providerCalls += 1
+      if (call.request.messages.some((message) => message.role === 'tool')) return stream({ type: 'text-delta', text: 'reported the unknown command result' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
       return stream(
         { type: 'tool-call', toolCallId: 'shell-timeout-call', toolName: 'run_shell', input: {
           command: process.platform === 'win32'
@@ -1304,11 +1356,11 @@ describe('createRegisteredAgentTurnTools', () => {
       toolExecution: tools.toolExecution, maxModelTurns: 2, history
     })
 
-    await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(turn).resolves.toMatchObject({ text: 'reported the unknown command result' })
     const events = (await history.read(invocationId)).events
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
-    expect(providerCalls).toBe(1)
+    expect(events.at(-1)?.kind).toBe('invocation-completed')
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered' }) }))
+    expect(providerCalls).toBe(2)
     expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
   }, 20_000)
 
@@ -1351,8 +1403,9 @@ describe('createRegisteredAgentTurnTools', () => {
       const route = { routeId: 'write-unknown-route', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
       const providers = new ModelProviderRegistry()
       let providerCalls = 0
-      providers.register(route, { providerId: 'write-unknown-provider', stream: () => {
+      providers.register(route, { providerId: 'write-unknown-provider', stream: (call) => {
         providerCalls += 1
+        if (call.request.messages.some((message) => message.role === 'tool')) return stream({ type: 'text-delta', text: 'reported the unknown write result' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
         return stream(
           { type: 'tool-call', toolCallId, toolName: 'write_file', input },
           { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
@@ -1366,11 +1419,11 @@ describe('createRegisteredAgentTurnTools', () => {
         toolExecution: tools.toolExecution, maxModelTurns: 2, history
       })
 
-      await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+      await expect(turn).resolves.toMatchObject({ text: 'reported the unknown write result' })
       const events = (await history.read(invocationId)).events
-      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-      expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
-      expect(providerCalls).toBe(1)
+      expect(events.at(-1)?.kind).toBe('invocation-completed')
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }) }))
+      expect(providerCalls).toBe(2)
       expect(worker).toHaveBeenCalledOnce()
       expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
     } finally {
@@ -1425,8 +1478,9 @@ describe('createRegisteredAgentTurnTools', () => {
       } })
       const providers = new ModelProviderRegistry()
       let providerCalls = 0
-      providers.register(route, { providerId: 'write-post-commit-drift-provider', stream: () => {
+      providers.register(route, { providerId: 'write-post-commit-drift-provider', stream: (call) => {
         providerCalls += 1
+        if (call.request.messages.some((message) => message.role === 'tool')) return stream({ type: 'text-delta', text: 'reported the unknown write result' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
         return stream(
           { type: 'tool-call', toolCallId, toolName: 'write_file', input },
           { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
@@ -1440,11 +1494,11 @@ describe('createRegisteredAgentTurnTools', () => {
         toolExecution: tools.toolExecution, maxModelTurns: 2, history
       })
 
-      await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+      await expect(turn).resolves.toMatchObject({ text: 'reported the unknown write result' })
       const events = (await history.read(invocationId)).events
-      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-      expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
-      expect(providerCalls).toBe(1)
+      expect(events.at(-1)?.kind).toBe('invocation-completed')
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }) }))
+      expect(providerCalls).toBe(2)
       expect(worker).toHaveBeenCalledOnce()
       expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
       expect(await fs.readFile(path.join(movedDir, 'maybe-written.txt'), 'utf8')).toBe(input.content)
@@ -1498,8 +1552,9 @@ describe('createRegisteredAgentTurnTools', () => {
       const route = { routeId: 'edit-unknown-route', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
       const providers = new ModelProviderRegistry()
       let providerCalls = 0
-      providers.register(route, { providerId: 'edit-unknown-provider', stream: () => {
+      providers.register(route, { providerId: 'edit-unknown-provider', stream: (call) => {
         providerCalls += 1
+        if (call.request.messages.some((message) => message.role === 'tool')) return stream({ type: 'text-delta', text: 'reported the unknown edit result' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
         return stream(
           { type: 'tool-call', toolCallId, toolName: 'edit_file', input },
           { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
@@ -1513,11 +1568,11 @@ describe('createRegisteredAgentTurnTools', () => {
         toolExecution: tools.toolExecution, maxModelTurns: 2, history
       })
 
-      await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+      await expect(turn).resolves.toMatchObject({ text: 'reported the unknown edit result' })
       const events = (await history.read(invocationId)).events
-      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-      expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
-      expect(providerCalls).toBe(1)
+      expect(events.at(-1)?.kind).toBe('invocation-completed')
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }) }))
+      expect(providerCalls).toBe(2)
       expect(worker).toHaveBeenCalledOnce()
       expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
     } finally {

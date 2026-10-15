@@ -42,6 +42,7 @@ async function gateWrite(args: {
     userDataDir: path.join(args.workDir, '.userdata'),
     remoteContext: remoteContext(args.lane),
     toolsConfig: { ...DEFAULT_TOOLS_CONFIG, deniedTools: [] },
+    imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: {} },
     effectiveRules: DEFAULT_POLICY_RULES,
     lanePackage: 'standard',
     decisionCache: {

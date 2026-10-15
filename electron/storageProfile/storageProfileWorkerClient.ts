@@ -2,7 +2,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
 import type { StorageAudit, StorageOverview } from '../../src/shared/storageTypes'
@@ -51,9 +50,8 @@ tsImport(pathToFileURL(process.env.SA_TSX_TARGET).href, pathToFileURL(process.en
 `
 
 function spawnSourceWorkerTsx(workerPath: string): Worker {
-  let tsxCjsApiPath: string
   try {
-    tsxCjsApiPath = createRequire(path.join(process.cwd(), 'package.json')).resolve('tsx/cjs/api')
+    createRequire(path.join(process.cwd(), 'package.json')).resolve('tsx/cjs/api')
   } catch (error) {
     throw new StorageProfileWorkerError('STORAGE_PROFILE_WORKER_ERROR', `tsx loader unavailable for source worker: ${error instanceof Error ? error.message : String(error)}`)
   }

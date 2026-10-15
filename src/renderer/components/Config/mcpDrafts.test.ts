@@ -46,6 +46,22 @@ describe('mcpDrafts', () => {
     expect(draft.auth.accessToken).toBeUndefined()
   })
 
+  it('round-trips explicit descriptor-bound public read trust and tracks edits', () => {
+    const profile = makeProfile({
+      enabledToolNames: ['search'],
+      publicReadOnlyTools: { search: 'a'.repeat(64) },
+      accountAuthorizedTools: { search: 'a'.repeat(64) }
+    })
+    const draft = initMcpServerDraft(profile)
+    expect(draft.publicReadOnlyTools).toEqual({ search: 'a'.repeat(64) })
+    expect(draftToWriteInput(draft).publicReadOnlyTools).toEqual({ search: 'a'.repeat(64) })
+    expect(draft.accountAuthorizedTools).toEqual({ search: 'a'.repeat(64) })
+    expect(draftToWriteInput(draft).accountAuthorizedTools).toEqual({ search: 'a'.repeat(64) })
+    expect(isMcpDraftDirty(profile, draft)).toBe(false)
+    expect(isMcpDraftDirty(profile, { ...draft, publicReadOnlyTools: {} })).toBe(true)
+    expect(isMcpDraftDirty(profile, { ...draft, accountAuthorizedTools: {} })).toBe(true)
+  })
+
   it('converts a draft to a write input carrying one-time secrets', () => {
     const draft = initMcpServerDraft(makeProfile())
     draft.auth = { mode: 'bearer-token', accessToken: 'ghp_x' }

@@ -23,6 +23,7 @@ export function recordSettingsChange(
     ts: Date.now(),
     event: args.kind === 'policy-change' ? 'settings.policy-change' : 'settings.tool-toggle',
     lane: args.lane,
+    ...(args.lane === 'wechat' || args.lane === 'feishu' ? { policyDomain: 'im' as const } : { policyDomain: 'desktop' as const }),
     sessionId: args.sessionId,
     origin: args.origin,
     reason: args.reason,

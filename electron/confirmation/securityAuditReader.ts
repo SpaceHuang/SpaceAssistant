@@ -1,6 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { ExecutionLane, SecurityAuditEvent } from '../../src/shared/confirmation/types'
+import { sanitizeAuditEvent } from './securityAuditLog'
 
 /** 审计查询过滤条件（设置页第 5 区；均为可选，组合取交集）。 */
 export interface SecurityAuditQuery {
@@ -27,7 +28,7 @@ export function parseSecurityAuditLines(text: string): SecurityAuditEvent[] {
     if (!trimmed) continue
     try {
       const ev = JSON.parse(trimmed) as SecurityAuditEvent
-      if (typeof ev.ts === 'number' && typeof ev.event === 'string') out.push(ev)
+      if (typeof ev.ts === 'number' && typeof ev.event === 'string') out.push(sanitizeAuditEvent(ev))
     } catch {
       /* 跳过坏行 */
     }

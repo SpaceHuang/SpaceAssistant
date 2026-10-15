@@ -1,4 +1,4 @@
-import { Button, Collapse, Input, InputNumber, Popover, Select, Space, Switch, Tabs, Typography } from 'antd'
+import { Button, Checkbox, Collapse, Input, InputNumber, Popover, Select, Space, Switch, Tabs, Typography } from 'antd'
 import { HelpCircle, Plus, X } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { McpServerProfile, McpToolDescriptor } from '../../../shared/mcpTypes'
@@ -447,6 +447,10 @@ export function McpServerForm({
           <div className="mcp-server-tools">
             {tools.map((tool) => {
               const on = draft.enabledToolNames.includes(tool.originalName)
+              const trustedHash = draft.publicReadOnlyTools?.[tool.originalName]
+              const trusted = Boolean(tool.descriptorHash && trustedHash === tool.descriptorHash)
+              const authorizedHash = draft.accountAuthorizedTools?.[tool.originalName]
+              const accountAuthorized = Boolean(tool.descriptorHash && authorizedHash === tool.descriptorHash)
               return (
                 <div key={tool.originalName} className="config-tool-row">
                   <Switch
@@ -470,12 +474,42 @@ export function McpServerForm({
                     <span className="config-tool-row__summary" title={tool.description}>
                       {tool.description}
                     </span>
+                    <Checkbox
+                      checked={trusted}
+                      disabled={!on || !tool.descriptorHash}
+                      onChange={(event) => {
+                        const next = { ...(draft.publicReadOnlyTools ?? {}) }
+                        if (event.target.checked && tool.descriptorHash) next[tool.originalName] = tool.descriptorHash
+                        else delete next[tool.originalName]
+                        onPatch({ publicReadOnlyTools: next })
+                      }}
+                    >
+                      {t('form.publicReadTrustLabel')}
+                    </Checkbox>
+                    <Checkbox
+                      checked={accountAuthorized}
+                      disabled={!on || !tool.descriptorHash}
+                      onChange={(event) => {
+                        const next = { ...(draft.accountAuthorizedTools ?? {}) }
+                        if (event.target.checked && tool.descriptorHash) next[tool.originalName] = tool.descriptorHash
+                        else delete next[tool.originalName]
+                        onPatch({ accountAuthorizedTools: next })
+                      }}
+                    >
+                      {t('form.accountAuthorizationLabel')}
+                    </Checkbox>
                   </div>
                 </div>
               )
             })}
           </div>
         )}
+        <Typography.Paragraph type="warning" style={{ margin: 0 }}>
+          {t('form.publicReadTrustHelp')}
+        </Typography.Paragraph>
+        <Typography.Paragraph type="warning" style={{ margin: 0 }}>
+          {t('form.accountAuthorizationHelp')}
+        </Typography.Paragraph>
         {skippedCount > 0 ? (
           <Typography.Paragraph type="warning" style={{ margin: 0 }}>
             {t('form.skippedHint', { count: skippedCount })}

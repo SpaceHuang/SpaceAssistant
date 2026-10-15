@@ -52,6 +52,7 @@ export function createRemoteProgressT(locale: AppConfig['locale'] = 'zh-CN'): (
     'streaming.thinking': '思考中',
     'streaming.inProgress': '生成中',
     'streaming.segmentReady': '已生成一段回复，继续处理中',
+    'streaming.agentsMdNotLoaded': '本次请求未采用工作目录 AGENTS.md 指令',
     'streaming.preparing': '准备中…',
     'streaming.awaitingConfirm': '等待确认：{{action}}'
   }
@@ -59,6 +60,7 @@ export function createRemoteProgressT(locale: AppConfig['locale'] = 'zh-CN'): (
     'streaming.thinking': 'Thinking',
     'streaming.inProgress': 'Generating',
     'streaming.segmentReady': 'Reply segment ready; continuing',
+    'streaming.agentsMdNotLoaded': 'This request did not use the work directory AGENTS.md instructions',
     'streaming.preparing': 'Preparing…',
     'streaming.awaitingConfirm': 'Awaiting confirmation: {{action}}'
   }

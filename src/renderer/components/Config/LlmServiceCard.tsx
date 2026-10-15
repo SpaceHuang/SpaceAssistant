@@ -102,7 +102,7 @@ export function LlmServiceCard({
     try {
       const result = await window.api.configVerifyLlmKey(draft.id)
       if (result.ok) message.success(t('llmService.keyVerified'))
-      else message.error(t(result.code === 'LLM_KEY_STORAGE_UNAVAILABLE' ? 'llmService.storageUnavailable' : 'llmService.keyAccessFailed'))
+      else message.error(t('llmService.keyAccessFailed'))
     } catch {
       message.error(t('llmService.keyAccessFailed'))
     } finally {

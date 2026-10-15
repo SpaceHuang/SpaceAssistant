@@ -51,7 +51,8 @@ export function createDeferredApprovalAdapter(input: {
           : { kind: 'deny', cause: 'config-error' }
       }
       const mapped: DeferredApprovalResult = disposition?.kind === 'deferred'
-        ? { kind: 'deferred', todoId: typeof request.todo.todoId === 'string' ? request.todo.todoId : '', cause: disposition.cause }
+        ? { kind: 'deferred', todoId: typeof request.todo.todoId === 'string' ? request.todo.todoId : '', cause: disposition.cause,
+          executionState: 'not-executed', retryable: false, nextStep: 'await-user' }
         : mapDeferredApprovalResult(request.approval, request.eligibility)
       if (mapped.kind !== 'deferred') return mapped
       let admittedTodoId: string | undefined

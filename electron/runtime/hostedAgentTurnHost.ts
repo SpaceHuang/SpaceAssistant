@@ -68,6 +68,8 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   isApprovalCandidate?(call: TCall): boolean
   sessionLedgerForToolResult?(call: TCall, result: Readonly<{ output: unknown; replayContent?: unknown; isError?: boolean; auditRef?: string }>): Record<string, unknown> | Promise<Record<string, unknown>>
   afterToolResult?(call: TCall, result: Readonly<{ output: unknown; replayContent?: unknown; isError?: boolean; auditRef?: string }>): void | Promise<void>
+  /** Revalidate host-owned invocation lifecycle before each model request. */
+  beforeModelRequest?(): void | Promise<void>
   beforeToolDispatch?: AgentTurnPorts['beforeToolDispatch']
   sessionLedgerForNotDispatched?(call: TCall, reason: string, result: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
   sessionLedgerForModelResponse?(message: import('../../packages/agent-sdk/src/turn').CanonicalTurnMessage, modelTurn: number, attempt: number): Record<string, unknown> | Promise<Record<string, unknown>>
@@ -182,6 +184,7 @@ export function createHostedAgentTurnHost<
         ...(dependencies.isApprovalCandidate ? { isApprovalCandidate: dependencies.isApprovalCandidate as AgentTurnPorts['isApprovalCandidate'] } : {}),
         ...(dependencies.sessionLedgerForToolResult ? { sessionLedgerForToolResult: dependencies.sessionLedgerForToolResult as AgentTurnPorts['sessionLedgerForToolResult'] } : {}),
         ...(dependencies.afterToolResult ? { afterToolResult: dependencies.afterToolResult as AgentTurnPorts['afterToolResult'] } : {}),
+        ...(dependencies.beforeModelRequest ? { beforeModelRequest: dependencies.beforeModelRequest } : {}),
         ...(dependencies.beforeToolDispatch ? { beforeToolDispatch: dependencies.beforeToolDispatch } : {}),
         ...(dependencies.sessionLedgerForNotDispatched ? { sessionLedgerForNotDispatched: dependencies.sessionLedgerForNotDispatched as AgentTurnPorts['sessionLedgerForNotDispatched'] } : {}),
         ...(dependencies.sessionLedgerForModelResponse ? { sessionLedgerForModelResponse: dependencies.sessionLedgerForModelResponse } : {}),

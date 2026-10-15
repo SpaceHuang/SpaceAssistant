@@ -26,54 +26,6 @@ export function parseFrontMatter(raw: string): { frontMatter: Record<string, unk
   return { frontMatter, content }
 }
 
-function parseSimpleYaml(text: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {}
-  let currentArrayKey: string | null = null
-
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-
-    const arrayItem = trimmed.match(/^-\s+(.+)$/)
-    if (arrayItem && currentArrayKey) {
-      const arr = result[currentArrayKey]
-      if (Array.isArray(arr)) arr.push(unquote(arrayItem[1].trim()))
-      continue
-    }
-
-    const kv = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/)
-    if (!kv) continue
-    const key = kv[1]
-    const valueRaw = kv[2].trim()
-    currentArrayKey = null
-
-    if (valueRaw === '' || valueRaw === '|' || valueRaw === '>') {
-      result[key] = []
-      currentArrayKey = key
-      continue
-    }
-
-    if (valueRaw.startsWith('[') && valueRaw.endsWith(']')) {
-      const inner = valueRaw.slice(1, -1).trim()
-      result[key] = inner
-        ? inner.split(',').map((s) => unquote(s.trim())).filter(Boolean)
-        : []
-      continue
-    }
-
-    result[key] = unquote(valueRaw)
-  }
-
-  return result
-}
-
-function unquote(s: string): string {
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    return s.slice(1, -1)
-  }
-  return s
-}
-
 export function validateSkillMeta(frontMatter: Record<string, unknown>): SkillValidationOk | SkillValidationError {
   const missing: string[] = []
   if (frontMatter.name === undefined) missing.push('name')

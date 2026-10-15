@@ -66,7 +66,8 @@ function resourceConflict(a: string, b: string): boolean {
   if (!a.startsWith(prefix) || !b.startsWith(prefix)) return false
   const normalize = (key: string) => {
     const value = key.slice(prefix.length)
-    return value.length > 1 ? value.replace(/\/+$/, '') : value
+    const path = value.replace(/\\/g, '/')
+    return path.length > 1 ? path.replace(/\/+$/, '') : path
   }
   const [left, right] = [normalize(a), normalize(b)]
   return left.startsWith(`${right}/`) || right.startsWith(`${left}/`)

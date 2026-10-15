@@ -60,6 +60,7 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.enableThinking !== undefined ? { enableThinking: config.enableThinking } : {}),
     ...(config.locale?.trim() ? { locale: config.locale.trim() } : {}),
     ...(config.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: config.projectMemoryEnabled } : {}),
+    ...(config.agentsMdEnabled !== undefined ? { agentsMdEnabled: config.agentsMdEnabled } : {}),
     ...(config.effectiveModelForUsage?.trim() ? { effectiveModelForUsage: config.effectiveModelForUsage.trim() } : {}),
     ...(config.continuationSafetySnapshot ? { continuationSafetySnapshot: { ...config.continuationSafetySnapshot } } : {}),
     ...(config.continuationSource ? { continuationSource: { ...config.continuationSource } } : {}),
@@ -462,7 +463,6 @@ export class TurnCoordinator {
       if (m.role !== 'assistant' || m.status !== 'streaming') continue
       if (this.recovered.has(m.id)) continue
       const owned = [...this.turns.values()].find((turn) => turn.assistantMessage.id === m.id)
-      const cancelled = residue.turnOutcome === 'cancelled' || owned?.persistedOutcome === 'cancelled'
       const terminalOutcome = residue.turnOutcome ?? owned?.persistedOutcome
       const terminalStatus = terminalOutcome === 'completed' ? 'completed'
         : terminalOutcome === 'parked' ? 'sent'

@@ -20,7 +20,8 @@ export class ToolExecutionRejectedError extends Error {
 /** The executor was entered, so a thrown error cannot prove that no side effect occurred. */
 export class ToolExecutionAfterDispatchError extends Error {
   readonly code = 'TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH'
-  constructor(readonly originalError: unknown) {
+  readonly executorEntry = 'entered' as const
+  constructor(readonly originalError: unknown, readonly lifecycleInvalidation?: 'cancelled' | 'revoked' | 'authorization-changed', readonly executorSettled?: Promise<void>) {
     const detail = originalError instanceof Error ? originalError.message : String(originalError)
     super(`tool execution failed after dispatch: ${detail}`)
     this.name = 'ToolExecutionAfterDispatchError'
@@ -62,6 +63,7 @@ export function createPermitBoundToolExecutionPort<TCall extends PermitBoundTool
       }
       let removeRevocationListener: () => void = () => undefined
       let removeAuthorizationListener: () => void = () => undefined
+      let deferCleanup = false
       let authorizationStale = false
       const invalidateAuthorization = () => {
         authorizationStale = true
@@ -120,25 +122,71 @@ export function createPermitBoundToolExecutionPort<TCall extends PermitBoundTool
 
         dispatch.lease.markEntered()
         let outcome: 'completed' | 'failed' | 'cancelled' | 'unknown-after-dispatch' = 'unknown-after-dispatch'
+        let executorSettled: Promise<void> | undefined
+        let cleanupDeferred = false
+        const cleanup = () => {
+          dispatch.lease.close(outcome)
+          call.signal?.removeEventListener('abort', onAbort)
+          removeRevocationListener()
+          removeAuthorizationListener()
+          deps.admission.settle(permitId)
+          deps.permits.settle(permitId)
+        }
+        let executor: Promise<TResult> | undefined
         try {
-          const result = await deps.execute(call, dispatch.signal)
+          let removeAbortListener: () => void = () => undefined
+          const aborted = new Promise<never>((_resolve, reject) => {
+            const onAbort = () => reject(new Error('Execution lease aborted before acknowledgement'))
+            if (dispatch.signal.aborted) onAbort()
+            else {
+              dispatch.signal.addEventListener('abort', onAbort, { once: true })
+              removeAbortListener = () => dispatch.signal.removeEventListener('abort', onAbort)
+            }
+          })
+          let result: TResult
+          const runningExecutor = Promise.resolve().then(() => deps.execute(call, dispatch.signal))
+          executor = runningExecutor
+          try {
+            // Do not let an executor that ignores AbortSignal hold a revoked or cancelled
+            // Invocation open indefinitely. Promise.race keeps a rejection handler attached
+            // to the executor promise, so a late failure cannot become unhandled.
+            result = await Promise.race([runningExecutor, aborted])
+          } finally {
+            removeAbortListener()
+          }
           if (dispatch.signal.aborted) throw new Error('Execution lease aborted before acknowledgement')
           outcome = 'completed'
           return result
         } catch (error) {
-          outcome = dispatch.signal.aborted ? 'unknown-after-dispatch' : 'failed'
+          outcome = 'unknown-after-dispatch'
+          if (dispatch.signal.aborted && executor) {
+            // Keep the dispatch lease alive until an executor that ignored cancellation
+            // really settles. The turn uses this promise to retain resource ownership too.
+            executorSettled = executor.then(() => undefined, () => undefined)
+            cleanupDeferred = true
+            deferCleanup = true
+            void executorSettled.then(cleanup)
+          }
           // Once the executor has entered, an exception cannot prove that its side effect did not happen.
           // Preserve the uncertain outcome even when cancellation/revocation also aborted the lease.
-          throw new ToolExecutionAfterDispatchError(error)
+          const lifecycleInvalidation = dispatch.signal.aborted
+            ? dispatch.signal.reason === 'revoked' ? 'revoked'
+              : dispatch.signal.reason === 'authorization-changed' ? 'authorization-changed'
+                : 'cancelled'
+            : undefined
+          throw new ToolExecutionAfterDispatchError(error, lifecycleInvalidation, executorSettled)
         } finally {
-          dispatch.lease.close(outcome)
+          if (!cleanupDeferred) dispatch.lease.close(outcome)
         }
       } finally {
-        call.signal?.removeEventListener('abort', onAbort)
-        removeRevocationListener()
-        removeAuthorizationListener()
-        deps.admission.settle(permitId)
-        deps.permits.settle(permitId)
+        // Deferred cleanup is owned by the underlying executor's settlement handler.
+        if (!deferCleanup) {
+          call.signal?.removeEventListener('abort', onAbort)
+          removeRevocationListener()
+          removeAuthorizationListener()
+          deps.admission.settle(permitId)
+          deps.permits.settle(permitId)
+        }
       }
     }
   }

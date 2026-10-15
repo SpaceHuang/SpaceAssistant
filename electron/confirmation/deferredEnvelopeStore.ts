@@ -14,7 +14,7 @@ export type DeferredCallEnvelope = {
   toolName: string
   canonicalArgs: Record<string, unknown>
   canonicalArgsHash: string
-  contentVersions: Record<string, number>
+  contentVersions: Record<string, number | string>
   contentVersionsHash: string
   executionContext: Record<string, unknown>
   executionContextHash: string
@@ -29,7 +29,7 @@ export type DeferredCallEnvelopeInput = {
   toolCallId?: string
   toolName: string
   canonicalArgs: Record<string, unknown>
-  contentVersions: Record<string, number>
+  contentVersions: Record<string, number | string>
   executionContext: Record<string, unknown>
   now?: number
 }
@@ -139,7 +139,7 @@ export function createDeferredEnvelopeStore(db: AppDatabase) {
       toolCallId?: string
       toolName: string
       canonicalArgs: Record<string, unknown>
-      contentVersions: Record<string, number>
+      contentVersions: Record<string, number | string>
       executionContext: Record<string, unknown>
     }): { ok: true } | { ok: false; reason: 'integrity_mismatch' | 'call_changed' | 'tool_changed' | 'content_changed' | 'args_changed' | 'context_changed' } {
       validateVersion(envelope)

@@ -46,6 +46,26 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it('persists and restores the exact bounded run_shell justification in the canonical response snapshot', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const input = { command: 'pwd', justification: '核对工作目录', _justificationTruncated: true }
+    await history.appendBatch([{
+      ...event('shell-justification-response', 1),
+      kind: 'model-response-committed',
+      payload: {
+        modelTurn: 1,
+        finishReason: 'tool-calls',
+        usage: { type: 'usage', inputTokens: 1, outputTokens: 1 },
+        message: { role: 'assistant', toolCalls: [{ id: 'shell-call', name: 'run_shell', input }] }
+      }
+    }], 0)
+    await expect(history.read('inv-1')).resolves.toMatchObject({
+      events: [{ kind: 'model-response-committed', payload: { message: { toolCalls: [{ id: 'shell-call', input }] } } }]
+    })
+    conn.close()
+  })
+
   it('commits a real SDK parked terminal and transcript participant atomically to SQLite', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'sqlite-sdk-parked-transcript', model: 'test-model' })
@@ -80,6 +100,7 @@ describe('SqliteAgentHistory', () => {
           toolCallId: call.toolCallId, capabilityId: call.toolName, inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts',
           authorizationVersion: 'auth-v1', phase: 'recheck' }), execute: vi.fn(async () => ({ output: 'unused' })) }),
       confirmation: async ({ call }) => ({ kind: 'deferred' as const, todoId: 'park-sqlite-todo', invocationId: call.invocationId,
+        cause: 'human-required' as const, executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
         checkpointRef: { checkpointId: 'park-sqlite-checkpoint', workflowRevision: 1 } })
     })
 
@@ -3654,6 +3675,34 @@ describe('SqliteAgentHistory', () => {
     await expect(history.read('inv-1')).resolves.toMatchObject({
       events: expect.arrayContaining([expect.objectContaining({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } })])
     })
+    conn.close()
+  })
+
+  it('restores each request instruction snapshot after restart and leaves the invocation interrupted', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const snapshot = (version: string) => ({
+      status: 'loaded', source: 'AGENTS.md', scope: 'workdir-root', workDir: '/workspace/a',
+      digest: `digest-${version}`, byteLength: version.length, loadedAt: 100, tokenCount: 1, content: `rule ${version}`
+    })
+    await history.appendBatch([
+      { ...event('agents-request-a', 1), kind: 'model-request-started', payload: {
+        requestId: 'inv-1:round:1', modelTurn: 1, attempt: 1, routeId: 'route-1',
+        requestMetadata: { agentsMdSnapshot: snapshot('A') }
+      } },
+      { ...event('agents-request-b', 2), kind: 'model-request-started', payload: {
+        requestId: 'inv-1:round:2', modelTurn: 2, attempt: 1, routeId: 'route-1',
+        requestMetadata: { agentsMdSnapshot: snapshot('B') }
+      } }
+    ], 0)
+
+    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([{ invocationId: 'inv-1', state: 'interrupted' }])
+    const restartedHistory = new SqliteAgentHistory(conn)
+    const restored = await restartedHistory.read('inv-1')
+    const snapshots = restored.events.filter((entry) => entry.kind === 'model-request-started')
+      .map((entry) => (entry.payload as { requestMetadata: { agentsMdSnapshot: { digest: string; content: string } } }).requestMetadata.agentsMdSnapshot)
+    expect(snapshots.map(({ digest, content }) => ({ digest, content }))).toEqual([{ digest: 'digest-A', content: 'rule A' }, { digest: 'digest-B', content: 'rule B' }])
+    expect(restored.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } })
     conn.close()
   })
 

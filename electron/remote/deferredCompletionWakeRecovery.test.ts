@@ -74,7 +74,7 @@ describe('deferred completion wake recovery', () => {
       results.commitResult('todo-1', { kind: 'completed', outputRef: 'result-1' }, 2)
       const send = vi.fn(async () => undefined)
 
-      await deliverInterruptedDeferredCompletionNotice(db, { todoId: 'todo-1', sessionId: 'session-1', now: 3, send })
+      await deliverInterruptedDeferredCompletionNotice(db, { todoId: 'todo-1', sessionId: 'session-1', now: 3, channel: 'wechat', identityKey: 'owner', ownerId: 'owner', recipient: 'owner', send })
 
       expect(send).toHaveBeenCalledWith(expect.stringContaining('原操作结果已保存'))
       expect(results.getByTodo('todo-1')?.state).toBe('delivered')
@@ -91,7 +91,7 @@ describe('deferred completion wake recovery', () => {
       results.beginDispatch({ todoId: 'todo-2', invocationId: 'invocation-2', dispatchKey: 'dispatch-2', now: 1 })
       results.commitResult('todo-2', { kind: 'completed', outputRef: 'result-2' }, 2)
 
-      await expect(deliverInterruptedDeferredCompletionNotice(db, { todoId: 'todo-2', sessionId: 'session-2', now: 3,
+      await expect(deliverInterruptedDeferredCompletionNotice(db, { todoId: 'todo-2', sessionId: 'session-2', now: 3, channel: 'wechat', identityKey: 'owner', ownerId: 'owner', recipient: 'owner',
         send: async () => { throw new Error('platform unavailable') } })).rejects.toThrow('platform unavailable')
 
       expect(results.getByTodo('todo-2')?.state).toBe('completion_outboxed')

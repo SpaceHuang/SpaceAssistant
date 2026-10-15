@@ -1,6 +1,7 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { createImLifecycleOutbox } from './imLifecycleOutbox'
 import { markDeferredCompletionWakeDelivered } from './deferredCompletionWake'
+import { createHostImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 
 export type DeferredCompletionWakeTurn = Readonly<{ state: string; outcome?: string | null }>
 export type DeferredCompletionWakeRecoveryDecision =
@@ -32,11 +33,17 @@ export async function deliverInterruptedDeferredCompletionNotice(db: AppDatabase
   todoId: string
   sessionId: string
   now?: number
+  channel: 'wechat' | 'feishu'
+  identityKey: string
+  ownerId: string
+  recipient: string
   send: (text: string) => Promise<void>
 }): Promise<void> {
   const eventId = `deferred-completion-interrupted:${input.todoId}`
   const text = '原操作结果已保存，但后续回复在恢复时中断。为避免重复操作，系统没有重跑任务；请检查桌面会话中的状态后再继续。'
-  await createImLifecycleOutbox(db).deliver({ eventId, sessionId: input.sessionId, stage: 'failed', text }, input.send)
+  await createImLifecycleOutbox(db).deliver({ eventId, sessionId: input.sessionId, stage: 'failed', text }, input.send,
+    () => createHostImOutboundFacts({ channel: input.channel, body: text, sessionId: input.sessionId,
+      identityKey: input.identityKey, ownerId: input.ownerId, recipient: input.recipient, chatType: 'p2p' }))
   if (!markDeferredCompletionWakeDelivered(db, input.todoId, input.now)) {
     throw new Error('DEFERRED_COMPLETION_INTERRUPTION_ACK_FAILED')
   }

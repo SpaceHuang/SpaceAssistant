@@ -1,5 +1,6 @@
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
 import type { ImLifecycleStage } from './imRemoteOutbound'
+import { assertImOutboundAllowed, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 
 type OutboxRecord = { eventId: string; sessionId: string; stage: ImLifecycleStage; text: string; state: 'pending' | 'delivered'; createdAt: number }
 type OutboxRow = { event_id: string; session_id: string; stage: ImLifecycleStage; text: string; state: OutboxRecord['state']; created_at: number }
@@ -18,7 +19,7 @@ export function createImLifecycleOutbox(db: AppDatabase) {
         WHERE session_id=? AND state='pending' ORDER BY created_at,event_id`).all(sessionId) as OutboxRow[]
       return rows.map(toRecord)
     },
-    async deliver(event: { eventId: string; sessionId: string; stage: ImLifecycleStage; text: string }, send: (text: string) => Promise<void>): Promise<OutboxRecord & { duplicate?: boolean }> {
+    async deliver(event: { eventId: string; sessionId: string; stage: ImLifecycleStage; text: string }, send: (text: string) => Promise<void>, authorize?: () => ImOutboundFacts): Promise<OutboxRecord & { duplicate?: boolean }> {
       if (![event.eventId, event.sessionId, event.text].every((value) => value.trim())) throw new TypeError('IM_LIFECYCLE_IDENTITY_REQUIRED')
       const existing = get(event.eventId)
       if (existing) {
@@ -30,6 +31,11 @@ export function createImLifecycleOutbox(db: AppDatabase) {
           .run(event.eventId, event.sessionId, event.stage, event.text, now, now)
         db.save()
       }
+      if (!authorize) throw new Error('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
+      const facts = authorize()
+      const recipient = facts.recipient ?? facts.trustedRecipient ?? ''
+      try { assertImOutboundAllowed(facts, { channel: facts.channel, body: event.text, sessionId: event.sessionId, recipient }) }
+      catch { throw new Error('IM_OUTBOUND_FINAL_CHECK_REQUIRED') }
       await send(event.text)
       conn.prepare("UPDATE im_lifecycle_outbox SET state='delivered',updated_at=? WHERE event_id=? AND state='pending'").run(Date.now(), event.eventId)
       db.save()

@@ -9,9 +9,7 @@ type FeishuAuthorizationBinding = Readonly<{
   cliPath?: string
   useBundledCli?: boolean
   larkCliDefaultTimeoutSec?: number
-  larkCliWriteRequiresConfirm?: boolean
   remoteEnabled?: boolean
-  remoteDenyOutbound?: boolean
   userAuthorized?: boolean
 }>
 
@@ -44,9 +42,7 @@ function feishuBinding(config: FeishuConfig | undefined): FeishuAuthorizationBin
     ...(config.cliPath !== undefined ? { cliPath: config.cliPath } : {}),
     ...(config.useBundledCli !== undefined ? { useBundledCli: config.useBundledCli } : {}),
     ...(config.larkCliDefaultTimeoutSec !== undefined ? { larkCliDefaultTimeoutSec: config.larkCliDefaultTimeoutSec } : {}),
-    ...(config.larkCliWriteRequiresConfirm !== undefined ? { larkCliWriteRequiresConfirm: config.larkCliWriteRequiresConfirm } : {}),
     ...(config.remoteEnabled !== undefined ? { remoteEnabled: config.remoteEnabled } : {}),
-    ...(config.remoteDenyOutbound !== undefined ? { remoteDenyOutbound: config.remoteDenyOutbound } : {}),
     ...(config.userAuthorized !== undefined ? { userAuthorized: config.userAuthorized } : {})
   }
 }

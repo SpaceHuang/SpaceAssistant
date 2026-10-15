@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Typography } from 'antd'
 import { useTypedSelector } from '../../hooks'
-import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { classifyWikiReferencedPath } from '../../../shared/wikiMarkdown'
 import { useDetailPanel } from './DetailPanelContext'
 import { useReferencedFiles } from './useReferencedFiles'

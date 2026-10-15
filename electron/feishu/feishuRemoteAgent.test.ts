@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import { AppDatabase, createSession, openDatabase, prepareTurnAtomically, setConfigValue } from '../database'
+import { AppDatabase, createSession, getDbConnection, openDatabase, prepareTurnAtomically, setConfigValue } from '../database'
+import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
@@ -149,10 +150,19 @@ describe('runFeishuRemoteAgent locale', () => {
     })
 
     const sender = { send: vi.fn() } as unknown as WebContents
-    await runFeishuRemoteAgent(baseCtx(() => sender))
+    const ctx = baseCtx(() => sender)
+    commitImPolicySnapshot(getDbConnection(ctx.db), {
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard', enabled: false },
+      updatedAt: 1, eventId: 'feishu-prompt-policy'
+    })
+    await runFeishuRemoteAgent(ctx)
 
     expect(mockRunToolChatSession).toHaveBeenCalledTimes(1)
     expect(capturedSystem).toContain('feishu_remote_command')
+    expect(capturedSystem).toContain('im-standard-v2')
+    expect(capturedSystem).toContain('自动审核规则已配置')
+    expect(capturedSystem).toContain('异步人工审批通知由独立安全门禁控制')
+    expect(capturedSystem).not.toContain('remoteConfirmPolicy=')
   })
 
   it('I9: getMainWebContents null still invokes runToolChatSession with appDb', async () => {
@@ -167,8 +177,6 @@ describe('runFeishuRemoteAgent locale', () => {
 
   it('I10: feishu appendix is passed as base system before locale injection in tool loop', async () => {
     const appendix = buildFeishuRemoteSystemAppendix({
-      messageId: 'msg-1',
-      confirmPolicy: 'always',
       browserRemoteHint: undefined
     })
 

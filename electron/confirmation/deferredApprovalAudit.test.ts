@@ -32,4 +32,12 @@ describe('deferred approval audit attribution contract', () => {
     expect((event as unknown as { executionState?: string }).executionState).toBe('consumed')
     expect(auditLine(event)).not.toContain('completed')
   })
+
+  it('binds dispatch evidence to the policy snapshot and durable request key', () => {
+    const event = buildDeferredApprovalAuditEvent({ kind: 'dispatch', lane: 'wechat', sessionId: 'session-3',
+      todoId: 'todo-3', invocationId: 'invocation-3', consumed: true,
+      policyBehaviorVersion: 'im-standard-v2', policyRevision: 12, dispatchKey: 'dispatch-request-3' })
+    expect(event).toMatchObject({ policyDomain: 'im', lane: 'wechat', policyBehaviorVersion: 'im-standard-v2',
+      policyRevision: 12, todoId: 'todo-3', invocationId: 'invocation-3', dispatchKey: 'dispatch-request-3', executionState: 'consumed' })
+  })
 })

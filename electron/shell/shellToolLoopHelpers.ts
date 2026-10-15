@@ -3,10 +3,8 @@ import { analyzeShellCommand } from './analyzeShellCommand'
 import {
   canShowShellTrustOption,
   matchesTrustedCommand,
-  touchTrustedCommand,
   parseSimpleShellCommand
 } from './shellCommandTrust'
-import type { AppDatabase } from '../database'
 import type { ShellAnalysisResult } from './shellTypes'
 import type { ShellConfig, ShellSecurityHints } from '../../src/shared/domainTypes'
 import { adaptLegacyShellConfig, type LegacyShellPolicyInput } from './legacyShellPolicyAdapter'

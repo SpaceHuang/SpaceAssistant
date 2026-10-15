@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
 import { createRemoteAuthorizationEpochStore } from './remoteAuthorizationEpochStore'
 
 type Scope = { channel: 'feishu' | 'wechat'; identityKey: string; ownerId: string; sessionId: string }
@@ -55,7 +54,6 @@ export function createDeferredApprovalCloseCoordinator(input: { db: AppDatabase;
     } catch {
       return { status: 'reconciliation_required', failedAt: 'advanceAuthorizationEpoch' }
     }
-    const now = Date.now()
     try {
       await input.port.blockNewDispatch({ ...scope, authorizationEpoch: closure.authorization_epoch, tombstone: closure.tombstone })
     } catch {

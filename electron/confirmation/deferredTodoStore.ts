@@ -5,6 +5,7 @@ import { appendRemoteTrackEvent, applyRemoteTrackLifecycleEvent } from '../datab
 import { recordRemoteTrackRuntimeDiagnostic } from '../database/remoteTrackRuntimeDiagnosticStore'
 import { runInTransaction } from '../database/transaction'
 import type { DeferredTodoCapacityLifecycle } from './deferredTodoCapacity'
+import { readImPolicySnapshot } from './imPolicyStore'
 
 export const DEFAULT_DEFERRED_TODO_TTL_MS = 24 * 60 * 60_000
 
@@ -24,6 +25,7 @@ export type DeferredTodoAuthorization = {
   identityKey: string
   ownerId: string
   authorizationEpoch: number
+  originSessionId: string
   rule: { ruleId: string; factsHash: string }
 }
 
@@ -39,6 +41,7 @@ type TodoRow = {
   todo_id: string; invocation_id: string; channel: 'feishu' | 'wechat'; identity_key: string; owner_id: string
   authorization_epoch: number; rule_id: string; facts_hash: string; workflow_id: string; task_id: string; step_id: string
   plan_revision: number; origin_session_id: string; track_id: string | null; state: DeferredTodoStatus; created_at: number; expires_at: number; updated_at: number
+  policy_behavior_version: string | null; policy_revision: number | null; policy_epoch: number | null
 }
 
 function rowToTodo(row: TodoRow): DeferredTodoRecord {
@@ -46,17 +49,23 @@ function rowToTodo(row: TodoRow): DeferredTodoRecord {
     todoId: row.todo_id, ...(row.track_id ? { trackId: row.track_id } : {}), invocationId: row.invocation_id, channel: row.channel, identityKey: row.identity_key,
     ownerId: row.owner_id, authorizationEpoch: row.authorization_epoch, rule: { ruleId: row.rule_id, factsHash: row.facts_hash },
     workflowId: row.workflow_id, taskId: row.task_id, stepId: row.step_id, planRevision: row.plan_revision,
-    originSessionId: row.origin_session_id, status: row.state, createdAt: row.created_at, expiresAt: row.expires_at,
+    originSessionId: row.origin_session_id,
+    ...(row.policy_behavior_version !== null ? { policyBehaviorVersion: row.policy_behavior_version } : {}),
+    ...(row.policy_revision !== null ? { policyRevision: row.policy_revision } : {}),
+    ...(row.policy_epoch !== null ? { policyEpoch: row.policy_epoch } : {}),
+    status: row.state, createdAt: row.created_at, expiresAt: row.expires_at,
     updatedAt: row.updated_at
   }
 }
 
 const TODO_COLUMNS = `todo_id,invocation_id,channel,identity_key,owner_id,authorization_epoch,rule_id,facts_hash,
-  workflow_id,task_id,step_id,plan_revision,origin_session_id,state,created_at,expires_at,updated_at,track_id`
+  workflow_id,task_id,step_id,plan_revision,origin_session_id,state,created_at,expires_at,updated_at,track_id,
+  policy_behavior_version,policy_revision,policy_epoch`
 
 function isAuthorized(todo: DeferredTodoRecord, context: DeferredTodoAuthorization): boolean {
   return todo.channel === context.channel && todo.identityKey === context.identityKey && todo.ownerId === context.ownerId
-    && todo.authorizationEpoch === context.authorizationEpoch && todo.rule.ruleId === context.rule.ruleId
+    && todo.authorizationEpoch === context.authorizationEpoch && todo.originSessionId === context.originSessionId
+    && todo.rule.ruleId === context.rule.ruleId
     && todo.rule.factsHash === context.rule.factsHash
 }
 
@@ -152,10 +161,20 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
         }
         const todoId = input.todoId || randomUUID()
         const now = input.updatedAt ?? input.createdAt
-        conn.prepare(`INSERT INTO deferred_todos(${TODO_COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        let policyFence: { policyBehaviorVersion: string; policyRevision: number; policyEpoch: number } | undefined
+        const hasSharedPolicy = conn.prepare("SELECT 1 FROM policy_behavior_snapshots WHERE domain='im'").get() !== undefined
+        if (hasSharedPolicy) {
+          const snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+          const epoch = conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='im'").get() as { epoch: number } | undefined
+          if (!epoch || !Number.isSafeInteger(epoch.epoch) || epoch.epoch < 0) throw new Error('IM_POLICY_EPOCH_INVALID')
+          policyFence = { policyBehaviorVersion: snapshot.policyBehaviorVersion,
+            policyRevision: snapshot.revision, policyEpoch: epoch.epoch }
+        }
+        conn.prepare(`INSERT INTO deferred_todos(${TODO_COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
           todoId, input.invocationId, input.channel, input.identityKey, input.ownerId, input.authorizationEpoch,
           input.rule.ruleId, input.rule.factsHash, input.workflowId, input.taskId, input.stepId, input.planRevision,
-          input.originSessionId, 'pending', input.createdAt, expiresAt, now, input.trackId ?? null
+          input.originSessionId, 'pending', input.createdAt, expiresAt, now, input.trackId ?? null,
+          policyFence?.policyBehaviorVersion ?? null, policyFence?.policyRevision ?? null, policyFence?.policyEpoch ?? null
         )
         if (input.trackId) {
           const track = conn.prepare('SELECT state FROM remote_tracks WHERE track_id=?').get(input.trackId) as { state: string } | undefined
@@ -227,6 +246,10 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
 
     invalidate(todoId: string, now = Date.now()): boolean {
       return transition(todoId, 'pending', 'invalidated', now)
+    },
+
+    invalidateDispatching(todoId: string, now = Date.now()): boolean {
+      return transition(todoId, 'dispatching', 'invalidated', now)
     },
 
     invalidateByScope(scope: { channel: 'feishu' | 'wechat'; identityKey: string; ownerId: string; originSessionId: string }, now = Date.now()): { invalidatedTodoIds: string[]; dispatchingTodoIds: string[] } {

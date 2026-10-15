@@ -5,14 +5,9 @@ import fs from 'fs/promises'
 import path from 'path'
 import { AppConfig, Message, SearchResult, Session, SkillsConfig, ToolsConfig } from '../../src/shared/domainTypes'
 import { AppDatabase } from '../database'
-import { BrowserDetectContext } from '../browser/browserDependencyDetect'
-import { ClaudeTurnExecution } from '../claudeStreamHandlers'
-import { DebouncedSessionBackupManager } from '../debouncedSessionBackupManager'
 import { LLM_SERVICE_CONFIG_KEYS } from '../llmServiceResolver'
-import { TurnRuntime } from '../turnRuntime'
 import { WikiConfig, FeishuConfig } from '../../src/shared/domainTypes'
-import { WorkDirManager } from '../workDirManager'
-import { app, shell } from 'electron'
+import { app } from 'electron'
 import { detectLocaleFromSystem, isAppLocale } from '../../src/shared/locale'
 import { getConfigValue, setConfigValue, deleteConfigValue, updateSession } from '../database'
 import { readWikiConfig as readWikiConfigFromDb } from '../wiki/wikiConfigReader'
@@ -132,8 +127,7 @@ export const CONFIG_KEYS = {
   activeWorkDirProfileId: 'config.activeWorkDirProfileId',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   browser: 'config.browser',
-  locale: 'config.locale',
-  apiKeyAccessNoticeVersion: 'config.apiKeyAccessNoticeVersion'
+  locale: 'config.locale'
 } as const
 
 export function readAppLocale(db: AppDatabase): AppConfig['locale'] {

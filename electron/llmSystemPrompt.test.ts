@@ -120,3 +120,21 @@ describe('buildFinalSystemPrompt - tool convention hint', () => {
     expect(prompt).toMatch(/\n\n## Tool call conventions/)
   })
 })
+
+describe('AGENTS.md prompt section', () => {
+  it('keeps project instructions separate from project memory and identifies scope and precedence', async () => {
+    const { buildFinalSystemPrompt: build } = await import('./llmSystemPrompt')
+    const prompt = build({ locale: 'en-US', memoryEnabled: true, memoryContent: 'workspace context', agentsMdContent: 'Run the focused test suite.' })!
+    expect(prompt).toContain('<project_memory>')
+    expect(prompt).toContain('<project_instructions source="AGENTS.md" scope="workdir-root">')
+    expect(prompt).toContain('Run the focused test suite.')
+    expect(prompt).toContain('Product safety and tool permissions take precedence')
+    expect(prompt).not.toContain('<project_instructions source="AGENTS.md" scope="workdir-root">\nRun the focused test suite.\n</project_instructions>\n\nRun the focused test suite.')
+  })
+
+  it('omits the instruction section when disabled or not loaded', async () => {
+    const { buildFinalSystemPrompt: build } = await import('./llmSystemPrompt')
+    expect(build({ locale: 'zh-CN', memoryEnabled: false, memoryContent: null, agentsMdContent: null })).not.toContain('project_instructions')
+    expect(build({ locale: 'zh-CN', memoryEnabled: false, memoryContent: null, agentsMdContent: 'hidden', agentsMdEnabled: false })).not.toContain('hidden')
+  })
+})

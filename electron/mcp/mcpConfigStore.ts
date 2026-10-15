@@ -15,7 +15,7 @@ import {
   type McpServerWriteInput,
   type McpToolCacheEntry
 } from '../../src/shared/mcpTypes'
-import { isSecretStorageAvailable, encryptSecret } from '../secureApiKey'
+import { encryptSecret } from '../secureApiKey'
 import {
   assertValidSecretRef,
   deleteSecretsForServerRaw,
@@ -48,22 +48,13 @@ type SecretChange =
 function buildSecretChanges(input: McpServerWriteInput): SecretChange[] {
   const changes: SecretChange[] = []
   if (input.auth.accessToken?.trim()) {
-    if (!isSecretStorageAvailable()) {
-      throw new Error('系统不支持安全存储（safeStorage），无法保存 MCP Secret')
-    }
     changes.push({ serverId: input.id, kind: 'access-token', enc: encryptSecret(input.auth.accessToken.trim()) })
   }
   if (input.auth.headerValue?.trim()) {
-    if (!isSecretStorageAvailable()) {
-      throw new Error('系统不支持安全存储（safeStorage），无法保存 MCP Secret')
-    }
     changes.push({ serverId: input.id, kind: 'auth-header', enc: encryptSecret(input.auth.headerValue.trim()) })
   }
   for (const env of input.stdio?.env ?? []) {
     if (env.value !== undefined && env.value !== '') {
-      if (!isSecretStorageAvailable()) {
-        throw new Error('系统不支持安全存储（safeStorage），无法保存 MCP Secret')
-      }
       changes.push({ serverId: input.id, kind: `env:${env.key}`, enc: encryptSecret(env.value) })
     } else if (env.clear) {
       changes.push({ serverId: input.id, kind: `env:${env.key}`, clear: true })
@@ -96,9 +87,10 @@ function modeSecretKinds(mode: McpServerWriteInput['auth']['mode']): string[] {
  */
 export async function saveProfiles(
   db: AppDatabase,
-  inputs: McpServerWriteInput[]
+  inputs: McpServerWriteInput[],
+  options: { allowPublicReadTrustChanges?: boolean; allowAccountAuthorizationChanges?: boolean } = {}
 ): Promise<McpServerProfile[]> {
-  return withMcpSecretWriteLock(() => saveProfilesLocked(db, inputs))
+  return withMcpSecretWriteLock(() => saveProfilesLocked(db, inputs, options))
 }
 
 /**
@@ -140,9 +132,53 @@ function existingProfilesAsWriteInputs(profiles: McpServerProfile[]): McpServerW
       ? { http: { endpoint: p.http.endpoint, ...(p.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {}) } }
       : {}),
     enabledToolNames: p.enabledToolNames,
+    ...(p.publicReadOnlyTools ? { publicReadOnlyTools: { ...p.publicReadOnlyTools } } : {}),
+    ...(p.accountAuthorizedTools ? { accountAuthorizedTools: { ...p.accountAuthorizedTools } } : {}),
+    ...(p.alwaysLoad !== undefined ? { alwaysLoad: p.alwaysLoad } : {}),
     createdAt: p.createdAt,
     updatedAt: p.updatedAt
   }))
+}
+
+function hasCredentialMutation(input: McpServerWriteInput): boolean {
+  return Boolean(input.auth.accessToken?.trim() || input.auth.headerValue?.trim() || input.clearSecretKinds?.length ||
+    input.stdio?.env.some((env) => env.value !== undefined || env.clear === true))
+}
+
+function sameConnectionIdentity(profile: McpServerProfile, input: McpServerWriteInput): boolean {
+  if (hasCredentialMutation(input) || profile.transport !== input.transport || profile.auth.mode !== input.auth.mode ||
+    profile.auth.headerName !== input.auth.headerName || profile.auth.valuePrefix !== input.auth.valuePrefix ||
+    profile.auth.oauthClientId !== input.auth.oauthClientId ||
+    JSON.stringify(profile.auth.oauthScopes ?? []) !== JSON.stringify(input.auth.oauthScopes ?? [])) return false
+  if (profile.transport === 'stdio') {
+    return Boolean(profile.stdio && input.stdio && profile.stdio.command === input.stdio.command &&
+      JSON.stringify(profile.stdio.args) === JSON.stringify(input.stdio.args) && profile.stdio.cwd === input.stdio.cwd &&
+      JSON.stringify(profile.stdio.env.map(({ key }) => key)) === JSON.stringify(input.stdio.env.map(({ key }) => key)))
+  }
+  return Boolean(profile.http && input.http && profile.http.endpoint === input.http.endpoint &&
+    profile.http.allowPrivateNetwork === input.http.allowPrivateNetwork)
+}
+
+function trustedToolsForSave(
+  previous: McpServerProfile | undefined,
+  input: McpServerWriteInput
+): Record<string, string> | undefined {
+  if (!previous) return input.publicReadOnlyTools
+  if (!sameConnectionIdentity(previous, input)) return undefined
+  // Never accept trust escalation through a write payload. Trust can only be
+  // added/rebound after an explicit checkbox edit from the UI, which sends a
+  // selected map that differs from the stored profile. However, preserve old
+  // trust when appendServer round-trips an unchanged profile.
+  return input.publicReadOnlyTools ?? previous.publicReadOnlyTools
+}
+
+function accountAuthorizedToolsForSave(
+  previous: McpServerProfile | undefined,
+  input: McpServerWriteInput
+): Record<string, string> | undefined {
+  if (!previous) return input.accountAuthorizedTools
+  if (!sameConnectionIdentity(previous, input)) return undefined
+  return input.accountAuthorizedTools ?? previous.accountAuthorizedTools
 }
 
 export async function appendServer(
@@ -155,9 +191,22 @@ export async function appendServer(
   })
 }
 
+/** A fresh interactive OAuth authorization may select a different account, so prior per-tool grants must be reviewed again. */
+export async function clearMcpAccountAuthorizations(db: AppDatabase, serverId: string): Promise<McpServerProfile[]> {
+  return withMcpSecretWriteLock(() => {
+    const profiles = listProfiles(db)
+    if (!profiles.some((profile) => profile.id === serverId)) return profiles
+    const inputs = existingProfilesAsWriteInputs(profiles).map((input) => input.id === serverId
+      ? { ...input, accountAuthorizedTools: {} }
+      : input)
+    return saveProfilesLocked(db, inputs, { allowAccountAuthorizationChanges: true })
+  })
+}
+
 function saveProfilesLocked(
   db: AppDatabase,
-  inputs: McpServerWriteInput[]
+  inputs: McpServerWriteInput[],
+  options: { allowPublicReadTrustChanges?: boolean; allowAccountAuthorizationChanges?: boolean } = {}
 ): McpServerProfile[] {
   const parsedInputs = inputs.map((i) => McpServerWriteInputSchema.parse(i))
 
@@ -186,6 +235,12 @@ function saveProfilesLocked(
 
   const nextProfiles: McpServerProfile[] = parsedInputs.map((input) => {
     const prev = previousById.get(input.id)
+    const publicReadOnlyTools = options.allowPublicReadTrustChanges
+      ? trustedToolsForSave(prev, input)
+      : prev?.publicReadOnlyTools
+    const accountAuthorizedTools = options.allowAccountAuthorizationChanges
+      ? accountAuthorizedToolsForSave(prev, input)
+      : prev?.accountAuthorizedTools
     const env = (input.stdio?.env ?? []).map((e) => ({ key: e.key, valuePresent: e.valuePresent }))
     return {
       id: input.id,
@@ -217,6 +272,9 @@ function saveProfilesLocked(
         ? { http: { endpoint: input.http.endpoint, ...(input.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {}) } }
         : {}),
       enabledToolNames: input.enabledToolNames,
+      ...(publicReadOnlyTools && Object.keys(publicReadOnlyTools).length ? { publicReadOnlyTools: { ...publicReadOnlyTools } } : {}),
+      ...(accountAuthorizedTools && Object.keys(accountAuthorizedTools).length ? { accountAuthorizedTools: { ...accountAuthorizedTools } } : {}),
+      ...(input.alwaysLoad !== undefined ? { alwaysLoad: input.alwaysLoad } : {}),
       ...(prev?.discoveredAt ? { discoveredAt: prev.discoveredAt } : {}),
       ...(prev?.discoveredProtocolVersion ? { discoveredProtocolVersion: prev.discoveredProtocolVersion } : {}),
       status: prev?.status ?? 'untested',

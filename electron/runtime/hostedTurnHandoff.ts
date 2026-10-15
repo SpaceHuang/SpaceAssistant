@@ -3,9 +3,7 @@ import type { HostCommittedModelResponse } from '../../packages/agent-sdk/src/tu
 import { runHostedAgentTurn } from '../../packages/agent-sdk/src/turn'
 import { ToolLoopRoundLimitError } from '../../packages/agent-sdk/src/turn'
 import type { HistoryPort } from '../../packages/agent-sdk/src/history'
-import { InvocationHistoryWriter } from '../../packages/agent-sdk/src/history'
 import type { RunToolChatSessionArgs, RunToolChatSessionResult } from '../toolChatLoop'
-import type { AgentInvocationMaterials } from './invocationAssembler'
 import type { SessionExecutionStore, SessionHistoryPort, SessionQueries } from '../sessionStorage/contracts'
 import type { createAgentSdkConfirmationPort } from '../confirmation/agentSdkConfirmationPort'
 import { HostedTurnFinalizedError, type HostedTurnFinalization } from './hostedTurnFinalization'
@@ -13,6 +11,7 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { resolveCanonicalRequestCutover } from './sessionHistoryCutover'
 import { decodeTerminalOutcome } from './terminalOutcome'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
+import type { ContinuationContext } from '../../src/shared/assistantFactAggregator'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
@@ -155,6 +154,7 @@ export function createHostedTurnHandoff(input: {
   recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
   refreshExecutionContext?: NonNullable<Parameters<HostedRuntimeFactory['createHostedTurnRuntime']>[0]['refreshExecutionContext']>
   confirmationAdapter?: Partial<Parameters<typeof createAgentSdkConfirmationPort>[0]>
+  continuationContext?: ContinuationContext
   /** When true, request.messages is already built from a verified Track view. */
   trackScopedModelInput?: boolean
 }): NonNullable<RunToolChatSessionArgs['onHostedTurnHandoff']> {
@@ -275,6 +275,18 @@ export function createHostedTurnHandoff(input: {
           logSessionHistoryShadowDiagnostic({ requestId: input.invocationId, turnId: input.turnId, sessionId: input.sessionId, stage: 'match-current-message', reasonCode: reason, historyStreamId: latest.snapshot.invocationId, previousTurnId: latest.snapshot.events.at(-1)?.turnId, snapshotVersion: latest.snapshot.version })
           throw new Error('Canonical session History could not safely provide the Hosted transcript')
         }
+      }
+    }
+    if (input.continuationContext) {
+      const context = input.continuationContext
+      const summary = context.summary.slice(0, 6_000)
+      const fallbackReason = context.fallbackReason ?? (context.state === 'unknown' ? 'UNKNOWN_SIDE_EFFECT' : 'CHECKPOINT_UNAVAILABLE')
+      request = {
+        ...request,
+        messages: [...request.messages, {
+          role: 'system',
+          content: `[Continuation mode: ${context.mode ?? 'context-fallback'}; fallback reason: ${fallbackReason}; source invocation ${context.sourceInvocationId}, turn ${context.sourceTurnId}, History sequence ${context.historySequence}, state ${context.state}]\n${summary}`
+        }]
       }
     }
     const transcriptFailureMessages = ownership && checkpoint && handoff.requiredUserMessage

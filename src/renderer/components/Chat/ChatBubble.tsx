@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Brain } from 'lucide-react'
+import { Brain, CornerUpLeft } from 'lucide-react'
 import type { Message, ShellConfig, ToolCallRecord } from '../../../shared/domainTypes'
 import {
   buildAssistantActivityTimeline,
@@ -474,7 +474,7 @@ export const ChatBubble = memo(function ChatBubble({
         keepExpanded={keepExpanded}
         searchReveal={searchReveal}
         summary={buildBatchSummary(segment.items.filter((item) => item.kind !== 'text'), { toolById, thinkingSegments, t })}
-        renderItem={(item, itemIndex) =>
+        renderItem={(item, _itemIndex) =>
           renderActivityItem(item, `${message.id}-batch-${activityItemKey(item)}`)
         }
       />
@@ -560,8 +560,11 @@ export const ChatBubble = memo(function ChatBubble({
         ) : null}
 
         {retryOfMessageId ? (
-          <div className="chat-message-error__reason" data-retry-source={retryOfMessageId}>
-            {t('bubble.retrySourceLabel')}: <button type="button" onClick={() => document.querySelector(`[data-message-id="${CSS.escape(retryOfMessageId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>{retryOfMessageId}</button>
+          <div className="chat-message-source" data-retry-source={retryOfMessageId}>
+            <CornerUpLeft size={13} aria-hidden="true" />
+            <button type="button" onClick={() => [...document.querySelectorAll<HTMLElement>('[data-message-id]')].find((node) => node.dataset.messageId === retryOfMessageId)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
+              {t('bubble.continuationSourceLink')}
+            </button>
           </div>
         ) : null}
 

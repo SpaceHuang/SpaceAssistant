@@ -13,11 +13,11 @@ function input(overrides: Partial<ImAsyncApprovalPolicyInput> = {}): ImAsyncAppr
 describe('IM async approval G/A outcome matrix', () => {
   it.each([
     ['A1 direct approved', input(), 'agent-approved'],
-    ['A2 deny', input({ approval: { ok: true, verdict: { kind: 'deny', reason: { summary: 'denied' } } } }), 'deferred'],
+    ['A2 deny', input({ approval: { ok: true, verdict: { kind: 'deny', reason: { summary: 'denied' } } } }), 'deny'],
     ['A3 undetermined', input({ approval: { ok: true, verdict: { kind: 'undetermined', reason: { summary: 'uncertain' } } } }), 'deferred'],
     ['A4 unavailable', input({ approval: { ok: false, cause: 'unavailable' } }), 'deferred'],
     ['A4 timeout', input({ approval: { ok: false, cause: 'timeout' } }), 'deferred'],
-    ['A4 unparsable', input({ approval: { ok: false, cause: 'unparsable' } }), 'deferred'],
+    ['A4 unparsable', input({ approval: { ok: false, cause: 'unparsable' } }), 'deny'],
     ['A5 config error', input({ approval: { ok: false, cause: 'config-error' } }), 'deny'],
     ['A6 locked', input({ gate: 'locked' }), 'deny'],
     ['critical', input({ gate: 'critical' }), 'deny'],
@@ -29,6 +29,7 @@ describe('IM async approval G/A outcome matrix', () => {
     ['G4 rollout disabled', input({ enabled: false }), 'user-fallback'],
     ['A7 desktop unchanged', input({ lane: 'desktop' }), 'user-fallback'],
     ['A8 automation unchanged', input({ lane: 'automation' }), 'user-fallback'],
+    ['strict human-required rule', input({ gate: 'human-required' }), 'deferred'],
     ['no answerer', input({ answererAvailable: false }), 'deny']
   ] as const)('%s maps to %s', (_case, request, expected) => {
     expect(resolveImAsyncApprovalDisposition(request).kind).toBe(expected)

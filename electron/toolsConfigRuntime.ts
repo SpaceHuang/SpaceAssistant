@@ -147,7 +147,6 @@ export function exposedToolNamesForLane(
   const remoteContext = {
     source: lane === 'feishu' ? ('feishu' as const) : ('wechat' as const),
     messageId: 'exposure',
-    confirmPolicy: 'always' as const
   } as const
   return filterBuiltinToolsForApi(cfg, feishu, browserConfig, remoteContext, shellConfig, wechat, onExposureDeny, rules).map(
     (t) => t.name

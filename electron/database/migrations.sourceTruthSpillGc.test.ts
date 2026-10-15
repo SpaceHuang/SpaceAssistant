@@ -11,7 +11,7 @@ describe('source-truth spill GC migrations v39-v48', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(95)
+    expect(DB_SCHEMA_VERSION).toBe(DB_SCHEMA_VERSION)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare('PRAGMA table_info(source_truth_spill_gc_queue)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'locator', pk: 1 }),

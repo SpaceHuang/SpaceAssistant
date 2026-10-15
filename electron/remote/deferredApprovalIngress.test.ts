@@ -42,16 +42,17 @@ const binding: NotificationBinding = {
 describe('deferred approval ingress binding contract', () => {
   it('keeps an identical two digit display value in separate command namespaces', () => {
     expect(parseDeferredApprovalReply('批准 07')).toEqual({ action: 'approve', shortCode: '07' })
+    expect(parseDeferredApprovalReply('批准07')).toEqual({ action: 'approve', shortCode: '07' })
     expect(parseDeferredApprovalReply('Y 07')).toBeNull()
     expect(parseImConfirmReply('Y 07')).toEqual({ kind: 'approve', confirmId: '07' })
     expect(parseImConfirmReply('批准 07')).toEqual({ kind: 'not_confirm' })
   })
 
-  it.each(['feishu', 'wechat'] as const)('parses the dedicated short approval syntax for %s only', async (channel) => {
+  it.each(['feishu', 'wechat'] as const)('parses the dedicated short approval syntax with or without a space for %s', async (channel) => {
     const channelBinding = { ...binding, channel }
     const { db, ingress, requestResume } = setup([channelBinding])
     await expect(ingress.handle({ channel, identityKey: 'identity-a', ownerId: 'owner-a', messageId: `${channel}-reply`,
-      replyToMessageId: 'trusted-origin-message', text: '批准 07', now: 100 })).resolves.toMatchObject({ status: 'resume_requested' })
+      replyToMessageId: 'trusted-origin-message', text: '批准07', now: 100 })).resolves.toMatchObject({ status: 'resume_requested' })
     expect(requestResume).toHaveBeenCalledTimes(1)
     db.close()
   })
@@ -119,10 +120,12 @@ describe('deferred approval ingress binding contract', () => {
     duplicate.db.close()
   })
 
-  it.each(['consumed', 'invalidated', 'expired'])('rejects a todo already marked %s and does not request resume', async (status) => {
+  it.each(['consumed', 'invalidated', 'expired'])('does not resume a todo already marked %s', async (status) => {
     const { db, ingress, requestResume } = setup([binding], status)
     await expect(ingress.handle({ channel: 'wechat', identityKey: 'identity-a', ownerId: 'owner-a', messageId: 'used-reply',
-      replyToMessageId: 'trusted-origin-message', text: '批准 07', now: 100 })).resolves.toMatchObject({ status: 'rejected' })
+      replyToMessageId: 'trusted-origin-message', text: '批准 07', now: 100 })).resolves.toMatchObject({
+        status: status === 'consumed' ? 'already_consumed' : 'rejected'
+      })
     expect(requestResume).not.toHaveBeenCalled()
     db.close()
   })

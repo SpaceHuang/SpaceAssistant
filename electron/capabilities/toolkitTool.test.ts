@@ -218,7 +218,7 @@ describe('toolkit prepared registrations', () => {
     const typed = new TypedToolRegistry()
     typed.register(createToolkitCallTool(capabilityRegistry))
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('toolkit-revoke-request', 'desktop', 'toolkit-revoke-request')
+    revocations.registerToolRevocationRequest('toolkit-revoke-request', 'desktop', 'toolkit-revoke-turn')
     const permits = new InMemorySafetyPermitStore()
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const tools = createRegisteredAgentTurnTools({
@@ -255,10 +255,10 @@ describe('toolkit prepared registrations', () => {
     try {
       await atHandler
       expect(revocations.revokeToolForLane('desktop', 'toolkit.call')).toBe(1)
-      await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+      await expect(turn).rejects.toMatchObject({ name: 'AgentTurnLifecycleInvalidatedError' })
       const events = (await history.read('toolkit-revoke-invocation')).events
-      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-      expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'authorization-revoked' } })
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ toolCallId: 'toolkit-revoke-call', executionOutcome: 'unknown-after-dispatch' }) }))
       expect(providerCalls).toBe(1)
       expect(sideEffectCompleted).toBe(false)
       releaseHandler()

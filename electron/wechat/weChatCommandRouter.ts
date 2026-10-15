@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
-import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { ToolsConfig } from '../../src/shared/domainTypes'
 import type { WeChatConfig, WeChatInboundMessage } from '../../src/shared/wechatTypes'
 import { mergeWeChatConfig } from '../../src/shared/wechatTypes'
@@ -27,7 +26,7 @@ import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFol
 import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
-import { WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
+const WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE = '用户确认超时（5分钟），工具调用已取消'
 import type { TurnRuntime } from '../turnRuntime'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, getImInboxMessageContext, listImInboxMessages, parkImInboxMessageForClarification, resumeClarificationInboxMessage } from '../database/imInbox'
@@ -36,6 +35,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { expireDuePendingClarifications, finishClarificationSendAttempt, listPendingClarificationNotices,
   listRecoverableClarificationPrompts, startClarificationSendAttempt, hasPendingClarificationForScope } from '../database/clarificationStore'
 import { createImLifecycleOutbox } from '../remote/imLifecycleOutbox'
+import { createHostImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import { formatRemoteOutboundMessage } from '../../src/shared/remoteOutboundFormat'
 import { buildClarificationPrompt } from '../remote/clarificationPrompt'
 import { canResumePreparedRemoteTurn, inspectRemoteTrackWorkRecovery, isRemoteTrackWorkSettled, settleRemoteTrackWorkFromTurn } from '../remote/remoteTrackWorkRecovery'
@@ -118,6 +118,7 @@ export type WeChatCommandRouterDeps = {
   handleDeferredApprovalReply?: (input: { message: WeChatInboundMessage; text: string; replyToMessageId?: string }) => Promise<void>
   handleClarificationReply?: (input: ClarificationResolverInput) => Promise<ClarificationResolverResult>
   createDeferredConfirmationAdapter?: (remoteContext: import('../tools/types').RemoteContext) => NonNullable<Parameters<typeof runWeChatRemoteAgent>[0]['confirmationAdapter']>
+  resolveAgentSdkGateSupplement?: import('../runtime/invocationAssembler').AgentInvocationMaterials['resolveAgentSdkGateSupplement']
   taskControlSafetyPort?: ImTaskSafetyPort
 }
 
@@ -146,7 +147,8 @@ export class WeChatCommandRouter {
           const bot = this.deps.botService.getRawBot()
           if (!bot) throw new Error('WECHAT_CLARIFICATION_NOTICE_BOT_UNAVAILABLE')
           await bot.send(notice.ownerId, formatRemoteOutboundMessage(text, notice.sessionId))
-        })
+        }, () => createHostImOutboundFacts({ channel: 'wechat', body: notice.text, sessionId: notice.sessionId,
+          identityKey: notice.identityKey, ownerId: notice.ownerId, recipient: notice.ownerId, chatType: 'p2p' }))
       }
       for (const prompt of listRecoverableClarificationPrompts(this.deps.db, 'wechat', now)) {
         if (this.activeClarificationSends.has(prompt.clarificationId)) continue
@@ -220,8 +222,10 @@ export class WeChatCommandRouter {
         if (recovery.kind === 'notify-interrupted') {
           const bot = this.deps.botService.getRawBot()
           if (!bot) throw new Error('WECHAT_COMPLETION_WAKE_NOTICE_BOT_UNAVAILABLE')
+          const ownerId = metadata.wechatMeta!.userId as string
           await deliverInterruptedDeferredCompletionNotice(this.deps.db, { todoId: event.payloadRef.approvalId, sessionId: input.sessionId,
-            send: (text) => bot.send(metadata.wechatMeta!.userId as string, formatRemoteOutboundMessage(text, input.sessionId)) })
+            channel: 'wechat', identityKey: ownerId, ownerId, recipient: ownerId,
+            send: (text) => bot.send(ownerId, formatRemoteOutboundMessage(text, input.sessionId)) })
           continue
         }
         if (recovery.kind === 'start') {
@@ -293,7 +297,7 @@ export class WeChatCommandRouter {
               workId: terminalContext.clarificationWorkId })
             if (!work || work.sessionId !== input.sessionId || !settleRemoteTrackWorkFromTurn(this.deps.db, { claim: work,
               outcome: priorTurn.outcome, now: Date.now(),
-              noticeText: '原始消息未重新执行，以避免重复操作；此前进度或外部调用结果无法确认，请检查桌面会话后再重发。' })) {
+              noticeText: '原始消息未重新执行，以避免重复操作；此前进度或外部调用结果无法确认。请先不要重发，可在此聊天说明要核对的内容。' })) {
               throw new Error('WECHAT_CLARIFICATION_WORK_RECOVERY_UNAVAILABLE')
             }
           }
@@ -311,8 +315,8 @@ export class WeChatCommandRouter {
           const inboundRaw = createReplayIncomingMessage({ userId: metadata.wechatMeta.userId, text: originalMessage.content,
             timestamp: originalMessage.timestamp, messageId: channelContext.platformMessageId, contextToken: channelContext.contextToken })
           await replyWeChatSummary(bot, inboundRaw,
-            '这条微信会话的历史状态需要在桌面端恢复，本次请求尚未执行。请恢复会话后重新发送。',
-            { sessionId: input.sessionId, touch: { sessionCommands: this.deps.sessionStorage.commands, sessionId: input.sessionId } })
+            '这条请求尚未执行，因为历史状态无法安全核对。请先不要重发，可在此聊天说明要核对的内容。',
+            { sessionId: input.sessionId, ownerId: input.ownerId, touch: { sessionCommands: this.deps.sessionStorage.commands, sessionId: input.sessionId } })
         }
         if (!ackImInboxMessage(this.deps.db, { queueScope: scope, messageId: completedMessageId, ownerId: input.ownerId })) {
           const claim = claimImInboxMessage(this.deps.db, { queueScope: scope, messageId: completedMessageId, ownerId: input.ownerId })
@@ -416,7 +420,7 @@ export class WeChatCommandRouter {
       modelViewVersion: trackModelInputView?.viewVersion ?? 'track-model-view-unavailable', now: Date.now() })
     if (!bindRemoteSessionExecutionId(input.sessionId, input.leaseRequestId, prepared.turnId)) throw new Error('REMOTE_SESSION_LEASE_LOST')
     const remoteContext = { source: 'wechat' as const, messageId: input.messageId, userId: input.userId, authOwner: input.authSnapshot.owner,
-      contextToken: input.contextToken, confirmPolicy: input.config.remoteConfirmPolicy, wechatConfig: input.config,
+      contextToken: input.contextToken, wechatConfig: input.config,
       imChannel: this.deps.imChannel, confirmTimeoutMessage: WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
       originSessionId: input.sessionId, outboundSessionId: input.sessionId, workDirProfileId: input.workDirProfileId,
       ...(input.deferredContinuation ? { deferredContinuation: input.deferredContinuation } : {}),
@@ -443,6 +447,7 @@ export class WeChatCommandRouter {
         imChannel: this.deps.imChannel, getToolsConfig: this.deps.getToolsConfig, getBrowserConfig: this.deps.getBrowserConfig,
         getWikiConfig: this.deps.getWikiConfig, getShellConfig: this.deps.getShellConfig, userDataDir: this.deps.getUserDataPath(),
         remoteContext, confirmationAdapter: this.deps.createDeferredConfirmationAdapter?.(remoteContext),
+        resolveAgentSdkGateSupplement: this.deps.resolveAgentSdkGateSupplement,
         taskControlSafetyPort: this.deps.taskControlSafetyPort,
         inboundRaw: input.inboundRaw, userId: input.userId,
         emitFactEvent: (event) => { if (!['source-completed', 'source-failed', 'source-cancelled', 'source-timeout'].includes(event.type)) this.deps.turnRuntime!.consumeForRequest(input.requestId, event, prepared.turnId) }
@@ -456,8 +461,8 @@ export class WeChatCommandRouter {
         if (bot) {
           try {
             await replyWeChatSummary(bot, input.inboundRaw,
-            '这条微信会话的历史状态需要在桌面端恢复，本次请求尚未执行。请恢复会话后重新发送。',
-              { sessionId: input.sessionId, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: input.sessionId },
+            '这条请求尚未执行，因为历史状态无法安全核对。请先不要重发，可在此聊天说明要核对的内容。',
+              { sessionId: input.sessionId, ownerId: input.authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: input.sessionId },
                 ...(input.trackContext ? { trackDelivery: { db: this.deps.db, track: input.trackContext, requestId: input.requestId, turnId: prepared.turnId } } : {}) })
           } catch { /* Preserve the durable turn failure when the delivery reply itself fails. */ }
         }
@@ -469,7 +474,7 @@ export class WeChatCommandRouter {
     if (result.parked && outcome === 'parked') return
     if (outcome !== 'completed') throw new Error('WECHAT_WAKE_TURN_NOT_DURABLY_COMPLETED')
     const bot = this.deps.botService.getBot()
-    if (bot) await replyWeChatSummary(bot, input.inboundRaw, result.summary, { sessionId: input.sessionId,
+    if (bot) await replyWeChatSummary(bot, input.inboundRaw, result.summary, { sessionId: input.sessionId, ownerId: input.authSnapshot.owner,
       touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: input.sessionId },
       ...(input.trackContext ? { trackDelivery: { db: this.deps.db, track: input.trackContext, requestId: input.requestId, turnId: prepared.turnId } } : {}) })
   }
@@ -547,7 +552,6 @@ export class WeChatCommandRouter {
 
     // Remote WeChat is text-only — never download media.
     if (!accept.accept && accept.reason === 'unsupported_type' && (msg.type === 'image' || msg.type === 'file')) {
-      if (bot) await bot.reply(raw, '远程仅支持文本指令')
       logWeChatCliEvent('info', 'wechat.inbound.reject', { reason: 'media_text_only', type: msg.type })
       return
     }
@@ -569,10 +573,17 @@ export class WeChatCommandRouter {
     })
     if (!guard.ok) {
       logWeChatCliEvent('warn', 'wechat.inbound.guard_reject', { reason: guard.reason, userId: msg.userId })
-      if (guard.reason === 'not_owner' && bot) {
-        await bot.reply(raw, '您不是已绑定的远程使用者，无法发送指令。')
-      }
       return
+    }
+
+    const sendAuthorizedReply = async (body: string): Promise<void> => {
+      if (!bot) return
+      const sessionId = `inbound:${msg.messageId}`
+      const destinationId = raw.raw?.client_id || `${raw.userId}-${raw.timestamp.getTime()}`
+      const outboundDeliveryFacts = createHostImOutboundFacts({ channel: 'wechat', purpose: 'system-reply', body,
+        sessionId, identityKey: guard.snapshot.owner, ownerId: guard.snapshot.owner, recipient: guard.snapshot.owner,
+        chatType: 'p2p', destinationId })
+      await sendWeChatRemoteOutbound({ bot, inbound: raw, body, sessionId, ownerId: guard.snapshot.owner, outboundDeliveryFacts })
     }
 
     await this.deps.auditLogger.append({
@@ -600,7 +611,7 @@ export class WeChatCommandRouter {
     if (!rateLimiter.check(msg.userId, config.remoteRateLimitPerMinute)) {
       logWeChatCliEvent('warn', 'wechat.inbound.rate_limit', { userId: msg.userId })
       await this.deps.auditLogger.append({ type: 'rate_limit', senderId: msg.userId })
-      if (bot) await bot.reply(raw, '当前指令过于频繁，请稍后再试')
+      await sendAuthorizedReply('当前指令过于频繁，请稍后再试')
       return
     }
 
@@ -677,7 +688,7 @@ export class WeChatCommandRouter {
       }
       logWeChatCliEvent('info', 'wechat.inbound.clarification_reply', { messageId: msg.messageId, result: clarificationControl.resultKind })
       try {
-        if (bot) await bot.reply(raw, clarificationControl.reply)
+        await sendAuthorizedReply(clarificationControl.reply)
       } finally {
         await this.deps.processedStore.markCompleted(msg.messageId, claimResult.claimId, `clarification_${clarificationControl.resultKind}`)
       }
@@ -757,7 +768,7 @@ export class WeChatCommandRouter {
         const resolved = await resolveSession()
         if (bot) await sendWeChatRemoteOutbound({ bot, inbound: inboundRaw,
           body: '远程任务恢复通道暂不可用，本次未执行，请稍后重发。', sessionId: resolved.sessionId,
-          touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: resolved.sessionId } })
+          ownerId: authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: resolved.sessionId } })
         await claimFinalizer.complete('track_execution_recovery_unavailable')
         return
       }
@@ -807,7 +818,7 @@ export class WeChatCommandRouter {
             })
             if (candidates.length !== attribution.decision.candidateTrackIds.length || candidates.length === 0) {
               await sendWeChatRemoteOutbound({ bot, inbound: inboundRaw, body: '目前无法安全确认这条消息的任务归属，请重新描述完整指令。', sessionId,
-                touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
+                ownerId: authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
               await claimFinalizer.complete('track_attribution_ambiguous_candidates_unavailable')
               return
             }
@@ -815,7 +826,7 @@ export class WeChatCommandRouter {
             const handle = generateClarificationHandle()
             const expiresAt = Date.now() + 5 * 60_000
             const queueScope = buildImQueueScope('wechat', sessionId)
-            const parked = parkImInboxMessageForClarification(this.deps.db, {
+            parkImInboxMessageForClarification(this.deps.db, {
               sessionId, channel: 'wechat', queueScope, channelMessageId: msg.messageId, content, contextToken: msg.contextToken,
               clarificationId, identityKey: msg.userId, ownerId: authSnapshot.owner, authorizationEpoch: epoch,
               handle, candidates, expiresAt
@@ -826,7 +837,7 @@ export class WeChatCommandRouter {
             this.activeClarificationSends.add(clarificationId)
             try {
               await sendWeChatRemoteOutbound({ bot, inbound: inboundRaw, body: prompt, sessionId,
-                touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
+                ownerId: authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
               finishClarificationSendAttempt(this.deps.db, { sendAttemptId, state: 'send-fulfilled', finishedAt: Date.now() })
             } catch (error) {
               finishClarificationSendAttempt(this.deps.db, { sendAttemptId, state: 'send-outcome-unknown', finishedAt: Date.now() })
@@ -846,7 +857,7 @@ export class WeChatCommandRouter {
             ? '暂时无法确定这条消息属于哪项任务。为避免接错任务，本次没有执行；请引用相关提示后重发。'
             : '这条消息引用的任务已失效，本次没有执行。请重新描述要处理的事项。'
           if (bot) await sendWeChatRemoteOutbound({ bot, inbound: inboundRaw, body: message, sessionId,
-            touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
+            ownerId: authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
           await claimFinalizer.complete(`track_attribution_${attribution.decision.kind}`)
           return
         }
@@ -860,7 +871,7 @@ export class WeChatCommandRouter {
             isNew = resolved.isNew
             if (bot) await sendWeChatRemoteOutbound({ bot, inbound: inboundRaw,
               body: '这项任务原来的会话已不可用。为避免丢失上下文，本次没有执行，请重新发送完整指令。', sessionId,
-              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
+              ownerId: authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId } })
             await claimFinalizer.complete('track_origin_session_unavailable')
             return
           }
@@ -903,7 +914,7 @@ export class WeChatCommandRouter {
           if (config.remoteAckOnReceive && (isNew || config.remoteNotifyOnReceive) && bot) {
             await sendWeChatRemoteOutbound({
               bot, inbound: inboundRaw, body: '已收到，正在处理…', sessionId,
-              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
+              ownerId: authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
             })
           }
           void this.deps.wakeEventDispatcher.dispatchSession(sessionId, { retryExhausted: true }).catch((error) => {
@@ -926,7 +937,7 @@ export class WeChatCommandRouter {
             inbound: inboundRaw,
             body: claim.message,
             sessionId,
-            touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
+            ownerId: authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
           })
         }
         await claimFinalizer.complete(claim.reason)
@@ -978,7 +989,7 @@ export class WeChatCommandRouter {
               inbound: inboundRaw,
               body: '已收到，正在处理…',
               sessionId,
-              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
+              ownerId: authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
             })
           }
           try {
@@ -1004,7 +1015,7 @@ export class WeChatCommandRouter {
             inbound: inboundRaw,
             body: '已收到，正在处理…',
             sessionId,
-            touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
+            ownerId: authSnapshot.owner, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
           })
           const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig, isLoggedIn })
           if (!re.ok) {
@@ -1066,8 +1077,6 @@ export class WeChatCommandRouter {
         if (!bindRemoteSessionExecutionId(sessionId, requestId, prepared.turnId)) {
           throw new Error('REMOTE_SESSION_LEASE_LOST')
         }
-        const assistantMessageId = prepared.assistantMessage.id
-
         let trackModelInputView: import('../../src/shared/remoteTrack').TrackModelInputViewRef | undefined
         if (trackContext) {
           if (!prepared.userMessage) throw new Error('WECHAT_TRACK_ACCEPTED_USER_MESSAGE_MISSING')
@@ -1088,7 +1097,6 @@ export class WeChatCommandRouter {
           userId: msg.userId,
           authOwner: authSnapshot.owner,
           contextToken: msg.contextToken,
-          confirmPolicy: config.remoteConfirmPolicy,
           wechatConfig: config,
           imChannel: this.deps.imChannel,
           confirmTimeoutMessage: WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
@@ -1142,6 +1150,7 @@ export class WeChatCommandRouter {
             userDataDir: this.deps.getUserDataPath(),
             remoteContext,
             confirmationAdapter: this.deps.createDeferredConfirmationAdapter?.(remoteContext),
+            resolveAgentSdkGateSupplement: this.deps.resolveAgentSdkGateSupplement,
             taskControlSafetyPort: this.deps.taskControlSafetyPort,
             inboundRaw,
             userId: msg.userId
@@ -1155,7 +1164,7 @@ export class WeChatCommandRouter {
         } catch (e) {
           const err = e instanceof Error ? e.message : String(e)
           result = {
-            summary: `执行失败：${err}\n请打开 SpaceAssistant 查看详情`,
+            summary: '执行未完成，当前结果无法确认。请先不要直接重复操作；可以在此聊天说明要核对的内容。',
             pendingConfirm: false,
             ok: false
           }
@@ -1169,7 +1178,7 @@ export class WeChatCommandRouter {
 
         if (bot && !result.pendingConfirm) {
           await replyWeChatSummary(bot, inboundRaw, result.summary, {
-            sessionId: outboundSessionId,
+            sessionId: outboundSessionId, ownerId: authSnapshot.owner,
             touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: outboundSessionId },
             ...(trackContext && prepared ? { trackDelivery: { db: this.deps.db, track: trackContext, requestId, turnId: prepared.turnId } } : {})
           })

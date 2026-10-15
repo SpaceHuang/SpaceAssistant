@@ -22,11 +22,44 @@ export function createAgentSdkSafetyPolicy(input: {
   /** Finalize user-approved structural permits after the existing confirmation channel approves. */
   onConfirmed?(binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs, answerer: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): void
 }): SafetyPolicyPort & { markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer?: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): void } {
-  const initial = new Map<string, { binding: PermitBinding; result: ToolCallGateResult; args: ToolCallGateArgs; confirmed: boolean }>()
+  const initial = new Map<string, { binding: PermitBinding; result: ToolCallGateResult; args: ToolCallGateArgs; confirmed: boolean; confirmedAnswerer?: 'user' | 'agent' }>()
   const callKey = (binding: PermitBinding) => JSON.stringify([binding.invocationId, binding.toolCallId])
   const deny = (binding: PermitBinding, reasonCode: SafetyDenyReason) => {
     if (binding.phase === 'recheck') initial.delete(callKey(binding))
     return { kind: 'deny' as const, reasonCode }
+  }
+  const ask = (binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs) => {
+    const decision = result.decision
+    if (decision.type !== 'require-confirm') return deny(binding, 'POLICY_DENY')
+    return {
+      kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId,
+      context: {
+        toolName: args.toolName,
+        ...(args.toolName === 'run_shell' && typeof args.toolInput.justification === 'string'
+          ? { modelJustification: args.toolInput.justification }
+          : {}),
+        ...(args.toolName === 'run_shell' && args.toolInput._justificationTruncated === true
+          ? { modelJustificationTruncated: true }
+          : {}),
+        ...(args.lane ? { lane: args.lane } : {}),
+        ...(args.currentPageUrl ? { currentPageUrl: args.currentPageUrl } : {}),
+        ...(args.dangerAssessment ? { dangerAssessment: args.dangerAssessment } : {}),
+        ...(args.remoteBudgetState ? { remoteBudgetState: args.remoteBudgetState } : {}),
+        decision: { riskLevel: decision.riskLevel, memoryTiers: decision.memoryTiers, timeoutMs: decision.timeoutMs,
+          answerer: decision.answerer, disposition: decision.disposition },
+        facts: result.facts,
+        approvedFactIds: result.approvedFactIds,
+        ...(result.readTargetMapping ? { readTargetMapping: result.readTargetMapping } : {}),
+        ...(result.readPathFact ? { readPathFact: result.readPathFact } : {}),
+        ...(result.readExecutionPermit ? { readExecutionPermit: result.readExecutionPermit } : {}),
+        ...(result.writePathFact ? { writePathFact: result.writePathFact } : {}),
+        ...(result.writeExecutionPermit ? { writeExecutionPermit: result.writeExecutionPermit } : {}),
+        ...(result.shellPrecheck ? { shellPrecheck: result.shellPrecheck } : {}),
+        ...(result.autoApproveFallback ? { autoApproveFallback: result.autoApproveFallback } : {}),
+        ...(result.mcpEntry ? { mcpEntry: result.mcpEntry } : {}),
+        ...(result.scriptPathHint ? { scriptPathHint: result.scriptPathHint } : {})
+      }
+    }
   }
   return {
     markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer: 'user' | 'agent' = 'user', memory?: import('../../src/shared/confirmation/types').CacheKey) {
@@ -34,6 +67,7 @@ export function createAgentSdkSafetyPolicy(input: {
       if (decision) {
         input.onConfirmed?.(decision.binding, decision.result, decision.args, answerer, memory)
         decision.confirmed = true
+        decision.confirmedAnswerer = answerer
       }
     },
     async evaluate(binding) {
@@ -71,7 +105,7 @@ export function createAgentSdkSafetyPolicy(input: {
           if (!previous) return deny(binding, 'MISSING_MATERIAL')
           const sameFacts = createHash('sha256').update(JSON.stringify(previous.result.facts)).digest('hex') === createHash('sha256').update(JSON.stringify(result.facts)).digest('hex')
           const sameAuthorizationVersion = previous.binding.authorizationVersion === binding.authorizationVersion
-          const sameWriteTarget = writeTargetScopeKey(previous.result.writePathFact) === writeTargetScopeKey(result.writePathFact)
+          const sameWriteTarget = sameWritePathTarget(previous.result.writePathFact, result.writePathFact)
           const sameReadTarget = stableSerialize(previous.result.readPathFact) === stableSerialize(result.readPathFact)
           const sameFeishuMediaTarget = stableSerialize(previous.result.feishuMediaFact) === stableSerialize(result.feishuMediaFact)
           const sameWriteApprovalConfiguration = !previous.result.writePathFact ||
@@ -85,10 +119,25 @@ export function createAgentSdkSafetyPolicy(input: {
             (previous.confirmed ? sameConfirmedDecision : decision.type === 'auto-allow')
           initial.delete(key)
           if (!recheckAllowed) {
-            const confirmationScopeChanged = Boolean(previous.confirmed) && (
+            const confirmationScopeChanged = previous.confirmed && (
               !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget ||
               !sameWriteApprovalConfiguration || !sameConfirmedDecision
             )
+            const humanBottomLine = decision.type === 'require-confirm' && (
+              decision.answerer === 'user' && decision.disposition === 'human-required' ||
+              previous.confirmedAnswerer === 'agent' && decision.answerer === 'agent' && decision.disposition === 'auto-eligible'
+            )
+            if (confirmationScopeChanged && humanBottomLine) {
+              // The previous receipt no longer covers the latest facts. Preserve only the fresh
+              // decision so the confirmation port can create a new, precisely bound human todo.
+              // A changed target/risk cannot be re-approved by reusing the prior Agent verdict.
+              // A second recheck is required after that new decision is approved.
+              const humanResult = decision.answerer === 'user' && decision.disposition === 'human-required'
+                ? result
+                : { ...result, decision: { ...decision, answerer: 'user' as const, disposition: 'human-required' as const } }
+              initial.set(key, { binding: structuredClone(binding), result: structuredClone(humanResult), args: gateArgs, confirmed: false })
+              return ask(binding, humanResult, gateArgs)
+            }
             return { kind: 'deny', reasonCode: confirmationScopeChanged ? 'FACTS_CHANGED' : 'POLICY_DENY' }
           }
           return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
@@ -100,28 +149,7 @@ export function createAgentSdkSafetyPolicy(input: {
         }
         if (decision.type === 'require-confirm') {
           initial.set(key, { binding: structuredClone(binding), result: structuredClone(result), args: gateArgs, confirmed: false })
-          return {
-            kind: 'ask', confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId,
-            context: {
-              toolName: gateArgs.toolName,
-              ...(gateArgs.lane ? { lane: gateArgs.lane } : {}),
-              ...(args.currentPageUrl ? { currentPageUrl: args.currentPageUrl } : {}),
-              ...(args.dangerAssessment ? { dangerAssessment: args.dangerAssessment } : {}),
-              ...(args.remoteBudgetState ? { remoteBudgetState: args.remoteBudgetState } : {}),
-              decision: { riskLevel: decision.riskLevel, memoryTiers: decision.memoryTiers, timeoutMs: decision.timeoutMs, answerer: decision.answerer },
-              facts: result.facts,
-              approvedFactIds: result.approvedFactIds,
-              ...(result.readTargetMapping ? { readTargetMapping: result.readTargetMapping } : {}),
-              ...(result.readPathFact ? { readPathFact: result.readPathFact } : {}),
-              ...(result.readExecutionPermit ? { readExecutionPermit: result.readExecutionPermit } : {}),
-              ...(result.writePathFact ? { writePathFact: result.writePathFact } : {}),
-              ...(result.writeExecutionPermit ? { writeExecutionPermit: result.writeExecutionPermit } : {}),
-              ...(result.shellPrecheck ? { shellPrecheck: result.shellPrecheck } : {}),
-              ...(result.autoApproveFallback ? { autoApproveFallback: result.autoApproveFallback } : {}),
-              ...(result.mcpEntry ? { mcpEntry: result.mcpEntry } : {}),
-              ...(result.scriptPathHint ? { scriptPathHint: result.scriptPathHint } : {})
-            }
-          }
+          return ask(binding, result, gateArgs)
         }
         initial.delete(key)
         return { kind: 'deny', reasonCode: 'POLICY_DENY' }
@@ -197,14 +225,24 @@ function stableSerialize(value: unknown): string {
 }
 
 /**
- * 写目标范围比对不得比 writePermitExecutor 的父目录身份语义更严：父目录的 size/mtimeMs/nlink
- * 会随良性宿主活动漂移（防抖会话备份在审批窗口内创建 sessions/ 子树是常态），执行器只钉住
- * dev/ino/mode；范围比对沿用同一口径，否则已批准写入被 FACTS_CHANGED 误拒。目标文件自身的
- * identity（存在时）仍整体参与比对——目标在审批后被改动必须拒绝。
+ * Bind approval to the exact target and parent directory object, permissions, and target identity.
+ * Directory size, mtime, and link count describe sibling entries; unrelated writes in the same
+ * directory must not invalidate an edit that still targets the same unchanged file.
  */
-function writeTargetScopeKey(fact: ToolCallGateResult['writePathFact']): string {
-  if (!fact) return 'absent'
-  return stableSerialize({ ...fact, parentIdentity: { dev: fact.parentIdentity.dev, ino: fact.parentIdentity.ino, mode: fact.parentIdentity.mode } })
+function sameWritePathTarget(
+  previous: ToolCallGateResult['writePathFact'],
+  current: ToolCallGateResult['writePathFact']
+): boolean {
+  if (!previous || !current) return previous === current
+  const stableTarget = (fact: NonNullable<ToolCallGateResult['writePathFact']>) => ({
+    ...fact,
+    parentIdentity: {
+      dev: fact.parentIdentity.dev,
+      ino: fact.parentIdentity.ino,
+      mode: fact.parentIdentity.mode
+    }
+  })
+  return stableSerialize(stableTarget(previous)) === stableSerialize(stableTarget(current))
 }
 
 /** File-write approval is tied to the threshold and sensitive-path configuration shown at approval time. */

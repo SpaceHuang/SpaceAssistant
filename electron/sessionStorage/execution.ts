@@ -351,6 +351,7 @@ function createSessionHistoryPort(db: AppDatabase, sessionId: string): SessionHi
   // 不跨压缩换入持有，故此处函数体内现取连接即安全；勿将其提升为长寿命单例。
   const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId)
   return Object.freeze({
+    listInvocationIds: () => history.listInvocationIdsForSession(sessionId),
     appendBatch: (events: Parameters<HistoryPort['appendBatch']>[0], expectedVersion: number, transcriptCommit?: Parameters<HistoryPort['appendBatch']>[2]) => history.appendBatch(events, expectedVersion, transcriptCommit),
     read: (invocationId: string) => history.read(invocationId),
     readLatestInvocationForSession: async (requestedSessionId: string, options?: { excludeInvocationId?: string; excludeInvocationIds?: readonly string[] }) => {

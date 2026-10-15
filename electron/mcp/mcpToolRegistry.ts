@@ -1,4 +1,5 @@
 import type { AppDatabase } from '../database'
+import { createHash } from 'node:crypto'
 import { deleteConfigValue, getConfigValue, setConfigValue } from '../database'
 import {
   MCP_TOOL_SCHEMA_MAX_BYTES,
@@ -54,6 +55,31 @@ export type McpToolSchemaValidationResult =
       }
     }
   | { ok: false; reason: string }
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+export function hashMcpToolSchema(inputSchema: Record<string, unknown>): string {
+  return sha256(canonicalJson(inputSchema))
+}
+
+export function hashMcpToolDescription(input: {
+  serverId: string
+  originalName: string
+  description: string
+  inputSchema: Record<string, unknown>
+  annotations?: McpToolAnnotations
+}): string {
+  return sha256(canonicalJson(input))
+}
 
 export function validateMcpToolSchema(input: unknown): McpToolSchemaValidationResult {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -120,6 +146,20 @@ export function buildMappedToolDescriptors(
   const descriptors: McpToolDescriptor[] = []
   const skipped: Array<{ name: string; reason: string }> = []
   const now = new Date().toISOString()
+  const duplicateFingerprints = new Map<string, Set<string>>()
+
+  for (const raw of rawTools) {
+    const validation = validateMcpToolSchema(raw)
+    if (!validation.ok) continue
+    const fingerprint = hashMcpToolDescription({ serverId, originalName: validation.tool.name,
+      description: validation.tool.description, inputSchema: validation.tool.inputSchema,
+      ...(validation.tool.annotations ? { annotations: validation.tool.annotations } : {}) })
+    const values = duplicateFingerprints.get(validation.tool.name) ?? new Set<string>()
+    values.add(fingerprint)
+    duplicateFingerprints.set(validation.tool.name, values)
+  }
+  const conflictingNames = new Set([...duplicateFingerprints].filter(([, fingerprints]) => fingerprints.size > 1).map(([name]) => name))
+  const emittedNames = new Set<string>()
 
   for (const raw of rawTools) {
     const rawName =
@@ -131,6 +171,14 @@ export function buildMappedToolDescriptors(
       skipped.push({ name: rawName || '<unknown>', reason: validation.reason })
       continue
     }
+    if (conflictingNames.has(validation.tool.name)) {
+      if (!skipped.some((item) => item.name === validation.tool.name && item.reason === '重复工具描述或 schema 冲突')) {
+        skipped.push({ name: validation.tool.name, reason: '重复工具描述或 schema 冲突' })
+      }
+      continue
+    }
+    if (emittedNames.has(validation.tool.name)) continue
+    emittedNames.add(validation.tool.name)
     const base = generateMappedToolName({ serverId, serverName, toolName: validation.tool.name })
     const previousMappedName = options?.previousMappedNames?.get(validation.tool.name)
     const mappedName = previousMappedName && !used.has(previousMappedName)
@@ -143,6 +191,10 @@ export function buildMappedToolDescriptors(
       mappedName,
       description: validation.tool.description,
       inputSchema: validation.tool.inputSchema,
+      schemaHash: hashMcpToolSchema(validation.tool.inputSchema),
+      descriptorHash: hashMcpToolDescription({ serverId, originalName: validation.tool.name,
+        description: validation.tool.description, inputSchema: validation.tool.inputSchema,
+        ...(validation.tool.annotations ? { annotations: validation.tool.annotations } : {}) }),
       ...(validation.tool.annotations ? { annotations: validation.tool.annotations } : {}),
       discoveredAt: now
     })
@@ -230,6 +282,8 @@ export type McpToolSnapshotEntry = {
   mappedName: string
   description: string
   inputSchema: Record<string, unknown>
+  schemaHash?: string
+  descriptorHash?: string
   annotations?: McpToolAnnotations
 }
 
@@ -294,7 +348,14 @@ export function buildSnapshotTools(
     const byOriginal = new Map(cache.tools.map((t) => [t.originalName, t]))
     for (const originalName of profile.enabledToolNames) {
       const tool = byOriginal.get(originalName)
-      if (tool) ordered.push(tool)
+      if (!tool || tool.serverId !== profile.id) continue
+      const schemaHash = hashMcpToolSchema(tool.inputSchema)
+      if (tool.schemaHash !== undefined && tool.schemaHash !== schemaHash) continue
+      const descriptorHash = hashMcpToolDescription({ serverId: profile.id, originalName: tool.originalName,
+        description: tool.description, inputSchema: tool.inputSchema,
+        ...(tool.annotations ? { annotations: tool.annotations } : {}) })
+      if (tool.descriptorHash !== undefined && tool.descriptorHash !== descriptorHash) continue
+      ordered.push({ ...tool, schemaHash, descriptorHash })
     }
   }
 
@@ -311,6 +372,8 @@ export function buildSnapshotTools(
       mappedName: tool.mappedName,
       description: tool.description,
       inputSchema: tool.inputSchema,
+      ...(tool.schemaHash ? { schemaHash: tool.schemaHash } : {}),
+      ...(tool.descriptorHash ? { descriptorHash: tool.descriptorHash } : {}),
       ...(tool.annotations ? { annotations: tool.annotations } : {})
     })
   }

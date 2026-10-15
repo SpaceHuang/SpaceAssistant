@@ -39,7 +39,7 @@ import { appendRemoteTrackEvent, createRemoteTrack, mapRemoteTrackMessage } from
 import { formatClarificationHandle } from '../remote/clarificationHandle'
 import { startClarificationSendAttempt, finishClarificationSendAttempt } from '../database/clarificationStore'
 
-vi.mock('../secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') }))
+vi.mock('../secureApiKey', () => ({ encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') , isSecretEncrypted: (value: string) => value.startsWith('enc:'), isLegacySecret: (value: string) => !value.startsWith('enc:'), }))
 vi.mock('../anthropicClientFactory', () => ({ createAnthropicClient: () => ({ messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: '{"scores":[]}' }] })) } }) }))
 
 const mockRunAgent = vi.fn()
@@ -133,7 +133,7 @@ describe('WeChatCommandRouter', () => {
   let sessionId: string
   let closeDb: () => void
 
-  function makeRouter(wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }, handleDeferredApprovalReply?: (input: { message: import('../../src/shared/wechatTypes').WeChatInboundMessage; text: string }) => Promise<void>, approvalGate?: boolean, retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>): WeChatCommandRouter {
+  function makeRouter(wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }, handleDeferredApprovalReply?: (input: { message: import('../../src/shared/wechatTypes').WeChatInboundMessage; text: string }) => Promise<void>, approvalGate?: boolean, retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>, resolveAgentSdkGateSupplement?: unknown): WeChatCommandRouter {
     const mockWorkDirManager = {
       listProfiles: () => [],
       getActiveProfileId: () => 'p1',
@@ -171,6 +171,7 @@ describe('WeChatCommandRouter', () => {
       handleDeferredApprovalReply,
       retryDeferredApprovalNotifications,
       isRemoteAsyncApprovalEnabled: () => approvalGate ?? true
+      ,resolveAgentSdkGateSupplement
     } as never)
   }
 
@@ -213,6 +214,25 @@ describe('WeChatCommandRouter', () => {
     expect(reply).toHaveBeenCalled()
   })
 
+  it('passes the trusted gate evidence resolver from the authenticated router into the remote agent', async () => {
+    const resolver = vi.fn()
+    router = makeRouter(undefined, undefined, undefined, undefined, resolver)
+    await router.handleSdkInbound(makeIncomingMessage({ text: 'inspect this script' }))
+    expect(mockRunAgent).toHaveBeenCalledWith(expect.objectContaining({ resolveAgentSdkGateSupplement: resolver }))
+  })
+
+  it.each(['desktop', 'feishu'] as const)('uses the authenticated WeChat entry when the existing session metadata says %s', async (source) => {
+    const current = getSession(db, sessionId)!
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?')
+      .run(JSON.stringify({ ...current.metadata, source }), sessionId)
+
+    await router.handleSdkInbound(makeIncomingMessage({ text: 'list files' }))
+
+    const accepted = (mockRunAgent.mock.calls[0]![0] as { acceptedTurn: { requestId: string; lane: string; sessionId: string } }).acceptedTurn
+    expect(accepted).toMatchObject({ lane: 'wechat', sessionId })
+    expect(createSqliteSessionStorage(db).execution.readAccepted({ sessionId, requestId: accepted.requestId })).toMatchObject(accepted)
+  })
+
   it('consumes clarification control text before Agent routing and invokes only the resolver', async () => {
     const resolve = vi.fn(async () => ({ kind: 'resolved' as const, trackId: 'track-1', workId: 'work-1' }))
     ;(router as unknown as { deps: { handleClarificationReply?: typeof resolve } }).deps.handleClarificationReply = resolve
@@ -225,7 +245,7 @@ describe('WeChatCommandRouter', () => {
       handle: 'ABCDEFGHJK345', option: 2
     }))
     expect(mockRunAgent).not.toHaveBeenCalled()
-    expect(reply).toHaveBeenCalledWith(expect.anything(), '已收到选择，正在继续处理。')
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('已收到选择，正在继续处理。'))
   })
 
   it('does not send malformed clarification control syntax to the Agent', async () => {
@@ -815,7 +835,7 @@ describe('WeChatCommandRouter', () => {
     expect(turn).toMatchObject({ state: 'terminal', outcome: 'failed' })
     expect(assistant).toEqual({ status: 'failed' })
     expect(mockRunAgent).not.toHaveBeenCalled()
-    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED'))
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('执行未完成'))
   })
 
   it('持久化微信 wake 遇到 transcript 未恢复时终结 turn 并告知用户本次未执行', async () => {
@@ -837,9 +857,19 @@ describe('WeChatCommandRouter', () => {
     expect(getTurnByRequestId(db, sessionId, `wake:${inbox.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'failed' })
     expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=(SELECT assistant_message_id FROM turns WHERE request_id=?)')
       .get(`wake:${inbox.eventId}`)).toEqual({ status: 'failed' })
-    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('本次请求尚未执行'))
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('这条请求尚未执行'))
     expect(mockRunAgent).not.toHaveBeenCalled()
     await dispatcher.dispose()
+  })
+
+  it('provider 执行异常以当前聊天可理解的失败状态回执，不泄露内部错误或桌面引导', async () => {
+    mockRunAgent.mockRejectedValueOnce(new Error('E_PROVIDER_TIMEOUT'))
+    await router.handleSdkInbound(makeIncomingMessage({ text: '查询状态' }))
+    const sent = reply.mock.calls.map((call) => String(call[1])).join('\n')
+    expect(sent).toContain('执行未完成')
+    expect(sent).not.toContain('E_PROVIDER_TIMEOUT')
+    expect(sent).not.toContain('SpaceAssistant')
+    expect(sent).not.toContain('桌面')
   })
 
   it('恢复已有 transcript 失败终态的 wake 时补发此前无法送出的确定性失败回执', async () => {
@@ -858,7 +888,7 @@ describe('WeChatCommandRouter', () => {
 
     await dispatcher.dispatchSession(sessionId, { retryExhausted: true })
 
-    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('本次请求尚未执行'))
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('这条请求尚未执行'))
     expect(mockRunAgent).not.toHaveBeenCalled()
     expect(listWakeEvents(db, sessionId).find(({ eventId }) => eventId === inbox.eventId)?.status).toBe('acked')
     await dispatcher.dispose()
@@ -958,7 +988,7 @@ describe('WeChatCommandRouter', () => {
     })
     await r2.handleSdkInbound(raw)
     expect(mockRunAgent).not.toHaveBeenCalled()
-    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('不是已绑定'))
+    expect(reply).not.toHaveBeenCalled()
   })
 
   it('rejects when allowlist is empty', async () => {
@@ -998,7 +1028,7 @@ describe('WeChatCommandRouter', () => {
     })
     await r2.handleSdkInbound(raw)
     expect(mockRunAgent).not.toHaveBeenCalled()
-    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('不是已绑定'))
+    expect(reply).not.toHaveBeenCalled()
   })
 
   it('rejects second inbound when session is busy', async () => {
@@ -1011,7 +1041,7 @@ describe('WeChatCommandRouter', () => {
     expect(reply).toHaveBeenCalledTimes(1)
     const sent = reply.mock.calls[0]![1] as string
     expect(sent).toContain(REMOTE_SESSION_BUSY_MESSAGE)
-    expect(sent).toContain(`会话$${sessionId}$`)
+    expect(sent).toContain(`会话#${sessionId.replace(/-/g, '').slice(0, 8).toUpperCase()}`)
     // Persist terminal claim state — must not leave a sticky `claimed` row.
     const entry = (
       processed as unknown as {
@@ -1071,18 +1101,13 @@ describe('WeChatCommandRouter', () => {
     const raw = makeIncomingMessage({ text: 'switch then reply' })
     await r2.handleSdkInbound(raw)
 
-    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`会话$${target.id}$`))
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`会话#${target.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`))
   })
 
-  // 评审 1.1：入站处理链的 bot.reply 在 session 过期/凭据缺失时 reject——handleInbound 顶层
-  // 兜底必须吞掉并只记日志，否则 rejection 沿 fire-and-forget 分发链逃逸崩溃主进程。
-  it('handleInbound 顶层兜底：bot.reply reject 时 promise 链不向调用方逃逸', async () => {
-    reply.mockRejectedValueOnce(new Error('session expired: credentials missing'))
+  it('does not reply to an unbound sender or disclose the owner-only remote endpoint', async () => {
     const raw = makeIncomingMessage({ userId: 'stranger@test' })
-
-    // stranger 不在 allowlist → not_owner 拒答 reply（reject）——若顶层无兜底，此 await 会 reject
     await expect(router.handleSdkInbound(raw)).resolves.toBeUndefined()
-    expect(reply).toHaveBeenCalledTimes(1)
+    expect(reply).not.toHaveBeenCalled()
   })
 
   it('handleInbound 顶层兜底：auditLogger.append reject 同样不逃逸', async () => {

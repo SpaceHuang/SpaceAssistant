@@ -6,7 +6,7 @@
  */
 import { scriptParserService } from './scriptParserService'
 import { adaptPythonModule, foldStringIr } from './scriptIr/pythonAdapter'
-import { IrCoverageError, type IrExpr, type IrModule, type IrStmt } from './scriptIr/types'
+import { type IrExpr, type IrModule, type IrStmt } from './scriptIr/types'
 
 export type ScriptVerdict = 'allow' | 'ask' | 'deny'
 
@@ -887,22 +887,6 @@ class Analyzer {
         void parent
       }
     }
-  }
-
-  private wouldB11(
-    arg: IrExpr,
-    scope: Scope,
-    decodeBindings: { name: string; stmtOffset: number }[],
-    stmtIndex: number,
-    sameExpr: boolean
-  ): boolean {
-    if (sameExpr && isDecodeCall(arg)) return true
-    if (arg.kind === 'name') {
-      for (const b of decodeBindings) {
-        if (b.name === arg.id && stmtIndex - b.stmtOffset <= 3) return true
-      }
-    }
-    return false
   }
 
   private checkGetattr(call: IrExpr & { kind: 'call' }, scope: Scope, isHas: boolean, fromBuiltins = false): void {

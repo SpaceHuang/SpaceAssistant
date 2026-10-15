@@ -122,11 +122,11 @@ describe('ConfigSettingsPage 优选默认模型', () => {
     store.dispatch(setSettingsOpen(true))
   })
 
-  it('在手动验证前展示钥匙串说明，且仅点击验证时请求读取已保存 Key', async () => {
+  it('在手动验证前说明本地加密存储，且仅点击验证时请求读取已保存 Key', async () => {
     renderPage()
     const verify = (window.api as unknown as { configVerifyLlmKey: ReturnType<typeof vi.fn> }).configVerifyLlmKey
     expect(verify).not.toHaveBeenCalled()
-    expect(screen.getByText(/macOS 可能要求批准钥匙串访问/)).toBeDefined()
+    expect(screen.getByText('API Key 会在本地加密保存。')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: '验证已保存 Key' }))
     await waitFor(() => expect(verify).toHaveBeenCalledWith('ds'))
   })
@@ -185,9 +185,27 @@ describe('ConfigSettingsPage 优选默认模型', () => {
 })
 
 describe('ConfigSettingsPage 远程操作导航', () => {
+  it('将安全策略作为独立顶层设置入口显示', async () => {
+    store.dispatch(setConfig(cfg))
+    store.dispatch(setSettingsActiveTab('models'))
+    store.dispatch(setSettingsOpen(true))
+    renderPage()
+    const security = screen.getByRole('button', { name: '安全策略' })
+    const toolsGroup = screen.getByRole('group', { name: '工具' })
+    expect(toolsGroup.contains(security)).toBe(false)
+    expect(security.className).not.toContain('config-settings-page__nav-item--sub')
+    fireEvent.click(security)
+    await waitFor(() => expect(screen.getByRole('heading', { name: '安全策略' })).toBeTruthy())
+  })
+
   it('将远程通用设置、飞书和微信收进远程操作分组并可切换', async () => {
     expect(REMOTE_SETTINGS_KEYS).toEqual(['remoteIm', 'feishu', 'wechat'])
     expect(REMOTE_SETTINGS_KEYS.every(isRemoteSettingsKey)).toBe(true)
     expect(isRemoteSettingsKey('tools')).toBe(false)
+  })
+
+  it('安全策略是独立的全局设置页，不属于工具或远程操作分组', () => {
+    expect(REMOTE_SETTINGS_KEYS).not.toContain('security' as never)
+    expect(isRemoteSettingsKey('security')).toBe(false)
   })
 })

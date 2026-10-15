@@ -161,6 +161,33 @@ describe('switchSessionExecutor', () => {
     expect(revoked).toEqual([[caller.id, 'session_switch']])
   })
 
+  it('resolves a unique short session reference to the canonical session ID', async () => {
+    const { db, manager } = setup()
+    const caller = createSession(db, { name: 'short-ref-caller', metadata: { source: 'feishu', feishuChatId: 'chat-short' } })
+    const target = createSession(db, { name: 'short-ref-target', metadata: { source: 'feishu', feishuChatId: 'chat-short' } })
+    const shortRef = target.id.replace(/-/g, '').slice(0, 8)
+    const result = await switchSessionExecutor.execute({ session_id: shortRef }, makeCtx(db, manager, caller.id,
+      { source: 'feishu', messageId: 'm-short', confirmPolicy: 'always', chatId: 'chat-short' }))
+    expect(result.success).toBe(true)
+    expect(requestRendererSessionSwitch).toHaveBeenCalledWith(expect.anything(), target.id)
+    expect((result.data as { sessionId: string }).sessionId).toBe(target.id)
+  })
+
+  it('rejects an ambiguous short session reference', async () => {
+    const { db, manager } = setup()
+    const caller = createSession(db, { name: 'ambiguous-caller', metadata: { source: 'feishu', feishuChatId: 'chat-ambiguous' } })
+    const first = createSession(db, { name: 'ambiguous-target-one', metadata: { source: 'feishu', feishuChatId: 'chat-ambiguous' } })
+    const second = createSession(db, { name: 'ambiguous-target-two', metadata: { source: 'feishu', feishuChatId: 'chat-ambiguous' } })
+    const baseQueries = createSqliteSessionStorage(db).queries
+    const collidingSecond = { ...second, id: `${first.id.slice(0, 8)}${second.id.slice(8)}` }
+    const queries = { ...baseQueries, listSessions: () => [first, collidingSecond] }
+    const ctx = makeCtx(db, manager, caller.id, { source: 'feishu', messageId: 'm-ambiguous', confirmPolicy: 'always', chatId: 'chat-ambiguous' })
+    ctx.sessionQueries = queries
+    const result = await switchSessionExecutor.execute({ session_id: first.id.replace(/-/g, '').slice(0, 8) }, ctx)
+    expect(result.success).toBe(false)
+    expect(requestRendererSessionSwitch).not.toHaveBeenCalled()
+  })
+
   it('确认后目标会话的远程身份变化时在 dispatch 前拒绝切换', async () => {
     const { db, manager } = setup()
     const caller = createSession(db, { name: 'caller' })
@@ -412,7 +439,7 @@ describe('switchSessionExecutor', () => {
     const remoteContext = { source: 'feishu' as const, messageId: 'm1', confirmPolicy: 'always' as const, chatId: 'chat-1', outboundSessionId: caller.id }
     const ctx = makeCtx(db, manager, caller.id, remoteContext, requestId)
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
+    revocations.registerToolRevocationRequest(requestId, 'feishu', turnId)
     let reachedRenderer!: () => void
     let rejectRenderer!: (error: Error) => void
     const rendererRequested = new Promise<void>((resolve) => { reachedRenderer = resolve })
@@ -459,10 +486,12 @@ describe('switchSessionExecutor', () => {
       expect(revocations.revokeToolForLane('feishu', 'switch_session')).toBe(1)
       rejectRenderer(new Error('renderer acknowledgement lost after request dispatch'))
 
-      await expect(running).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+      await expect(running).rejects.toMatchObject({ name: 'AgentTurnLifecycleInvalidatedError', reason: 'revoked' })
       const events = (await history.read(invocationId)).events
-      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-      expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+      expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'authorization-revoked' } })
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({
+        toolCallId: 'switch-session-unknown-call', executionOutcome: 'unknown-after-dispatch', invocationDisposition: 'authorization-invalidated'
+      }) }))
       expect(providerCalls).toBe(1)
       expect(remoteContext.outboundSessionId).toBe(caller.id)
       expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)

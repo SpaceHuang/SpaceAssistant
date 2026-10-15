@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FeishuImChannel, buildFeishuConfirmPromptText, commitFeishuAction } from './feishuImChannel'
+import { assertImOutboundAllowed, assessImOutboundContent, createHostImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import type { ConfirmRequest } from '../../src/shared/confirmation/types'
 import { createAgentRuntime } from '../runtime/agentRuntime'
 import { setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
@@ -83,6 +84,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolName: 'write_file',
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1'
     })
     expect(
@@ -100,6 +102,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolName: 'write_file',
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1'
     })
     expect(
@@ -111,15 +114,16 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
   })
 
   it('asks the owner to quote the current prompt when a valid code arrives unquoted', async () => {
-    const { replyFeishuText: sendHint } = await import('./feishuReply')
+    const { sendFeishuRemoteOutbound: sendHint } = await import('./feishuRemoteOutbound')
     const im = new FeishuImChannel({ runner: {} as LarkCliRunner })
     const pending = im.request(req(), {
-      sessionId: 's-no-quote', toolName: 'write_file', messageId: 'm1', matchKey: 'c1'
+      sessionId: 's-no-quote', toolName: 'write_file', messageId: 'm1', matchKey: 'c1', authOwner: owner
     })
     await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('feishu-confirm-prompt'))
     const confirmId = im.listPending()[0]!.confirmId!
     expect(im.tryResolveFromInboundMessage(p2p({ content: `Y ${confirmId}`, replyToMessageId: null }), confirmOpts)).toBe(true)
-    expect(sendHint).toHaveBeenCalledWith(expect.anything(), 'm1', expect.stringMatching(/引用.*确认提示/))
+    expect(sendHint).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'm1', recipient: owner,
+      body: expect.stringMatching(/引用.*确认提示/), outboundDeliveryFacts: expect.objectContaining({ channel: 'feishu', ownerId: owner }) }))
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
     await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
@@ -132,6 +136,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolName: 'write_file',
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1'
     })
     expect(im.tryResolveFromInboundMessage(p2p({ content: 'Y' }), {})).toBe(false)
@@ -154,6 +159,91 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     })
     expect(text).toContain('https://example.com/article')
     expect(text).toContain('回复 Y')
+  })
+
+  it('safely displays ordinary absolute paths and secrets in synchronous confirmation prompts', () => {
+    const shellInput = { command: 'cat /Users/example/Documents/report.txt && echo api_key=sk-00000000000000000000000000000000' }
+    const shellPrompt = buildFeishuConfirmPromptText({ id: 'path-confirm', sessionId: 's-path', toolName: 'run_shell',
+      toolInput: shellInput, messageId: 'm-path', channel: 'feishu', authOwner: owner, memoryTiers: [], createdAt: 0, expiresAt: 1_000 })
+    expect(shellPrompt).toContain('~/Documents/report.txt')
+    expect(shellPrompt).not.toContain('/Users/example')
+    expect(shellPrompt).not.toContain('sk-00000000000000000000000000000000')
+    expect(shellInput.command).toContain('/Users/example')
+    expect(assessImOutboundContent(shellPrompt)).toBe('ordinary')
+    const shellFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body: shellPrompt,
+      sessionId: 's-path', identityKey: owner, ownerId: owner, recipient: owner, chatType: 'p2p', destinationId: 'm-path' })
+    expect(() => assertImOutboundAllowed(shellFacts, { channel: 'feishu', body: shellPrompt, sessionId: 's-path', recipient: owner,
+      destinationId: 'm-path' })).not.toThrow()
+
+    const mcpPrompt = buildFeishuConfirmPromptText({ id: 'path-mcp-confirm', sessionId: 's-path', toolName: 'mcp_file_read',
+      toolInput: { path: '/Users/example/Documents/report.txt', token: 'sk-00000000000000000000000000000000' },
+      mcp: { serverName: 'Local Files', originalToolName: 'read', description: 'Read a user selected file.' }, messageId: 'm-path',
+      channel: 'feishu', authOwner: owner, memoryTiers: [], createdAt: 0, expiresAt: 1_000 })
+    expect(mcpPrompt).toContain('~/Documents/report.txt')
+    expect(mcpPrompt).not.toContain('/Users/example')
+    expect(mcpPrompt).not.toContain('sk-00000000000000000000000000000000')
+    expect(assessImOutboundContent(mcpPrompt)).toBe('ordinary')
+  })
+
+  it('MCP confirmation explains the tool and request instead of showing its internal mapped name', () => {
+    const text = buildFeishuConfirmPromptText({
+      id: 'mcp-1', sessionId: 's-mcp', toolName: 'mcp_fetch_fetch_deadbeef',
+      toolInput: { url: 'https://example.com/pricing' },
+      mcp: { serverName: 'Fetch Server', originalToolName: 'fetch', description: 'Fetch a URL and extract its contents.' },
+      messageId: 'm1', channel: 'feishu', memoryTiers: [], createdAt: 0, expiresAt: 0, confirmId: '09'
+    })
+    expect(text).toContain('MCP 工具：fetch（服务：Fetch Server）')
+    expect(text).toContain('Fetch a URL and extract its contents.')
+    expect(text).toContain('https://example.com/pricing')
+    expect(text).not.toContain('mcp_fetch_fetch_deadbeef')
+  })
+  it('把 run_shell 调用理由和截断状态放入同一飞书确认文本', () => {
+    const text = buildFeishuConfirmPromptText({
+      id: 'shell-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification: '<script>检查目录', _justificationTruncated: true },
+      messageId: 'm1', channel: 'feishu', memoryTiers: [], createdAt: 0, expiresAt: 0
+    })
+    expect(text).toContain('命令：pwd')
+    expect(text).toContain('调用理由（内容已截断）：\n<script>检查目录')
+  })
+
+  it('飞书确认文本完整保留 2,000 个 Unicode 码点的合法理由', () => {
+    const justification = '😀'.repeat(1_500)
+    const text = buildFeishuConfirmPromptText({
+      id: 'shell-unicode-reason', sessionId: 's', toolName: 'run_shell',
+      toolInput: { command: 'pwd', justification },
+      messageId: 'm1', channel: 'feishu', memoryTiers: [], createdAt: 0, expiresAt: 0
+    })
+    expect(text).toContain(`调用理由：\n${justification}\n`)
+    expect(text).not.toContain('调用理由（内容已截断）')
+  })
+
+  it('并行 run_shell 确认通过真实飞书发送入口保留各自命令和调用理由', async () => {
+    const { sendFeishuRemoteOutboundWithId: sendPrompt } = await import('./feishuRemoteOutbound')
+    vi.mocked(sendPrompt).mockClear()
+    const im = new FeishuImChannel({ runner: {} as LarkCliRunner })
+    const start = (suffix: string) => im.request(req('run_shell'), {
+      sessionId: `s-parallel-${suffix}`, toolName: 'run_shell',
+      toolInput: { command: `echo ${suffix}`, justification: `用户要求检查 ${suffix}` },
+      messageId: `m-${suffix}`, matchKey: `chat-${suffix}`, authOwner: owner, context: `chat-${suffix}`
+    })
+    const first = start('alpha')
+    const second = start('beta')
+    await vi.waitFor(() => expect(im.listPending()).toHaveLength(2))
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(2))
+
+    const sent = vi.mocked(sendPrompt).mock.calls.map((call) => call[0].body)
+    expect(sent).toEqual(expect.arrayContaining([
+      expect.stringContaining('命令：echo alpha\n调用理由：\n用户要求检查 alpha'),
+      expect.stringContaining('命令：echo beta\n调用理由：\n用户要求检查 beta')
+    ]))
+    const pendingByCommand = new Map(im.listPending().map((entry) => [String(entry.toolInput?.command), entry]))
+    for (const command of ['echo alpha', 'echo beta']) {
+      const entry = pendingByCommand.get(command)!
+      expect(im.tryResolveFromInboundMessage(p2p({ chatId: entry.matchKey, content: `Y ${entry.confirmId}` }), confirmOpts)).toBe(true)
+    }
+    await expect(first).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
+    await expect(second).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
   })
 
   it('includes progress prefix in confirm text', async () => {
@@ -187,6 +277,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolInput: { command: 'npm test' },
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1',
       trustEligible: true
     })
@@ -208,6 +299,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolInput: { command: 'rm -rf /' },
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1',
       trustEligible: false
     })
@@ -232,6 +324,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolInput: { command: 'npm test' },
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1',
       memoryTiers: [tier],
       authorizationGeneration: 0

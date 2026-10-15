@@ -22,7 +22,7 @@ function setup() {
     workDir: '/workspace', userDataDir: '/data', requestId: 'r', toolUseId: 'u', sessionId: 's',
     sendProgress: () => undefined, signal: new AbortController().signal,
     fileStateCache: new Map() as never, toolsConfig: {} as never,
-    feishuConfig: { cliPath: '/configured/lark-cli', larkCliDefaultTimeoutSec: 45, larkCliWriteRequiresConfirm: true } as never,
+    feishuConfig: { cliPath: '/configured/lark-cli', larkCliDefaultTimeoutSec: 45 } as never,
     lane: 'feishu',
     remoteContext: { source: 'feishu', messageId: 'm1', confirmPolicy: {} as never, authOwner: 'owner', authorizationGeneration: 7 },
     larkCliRunner: { resolveExecutable: () => executable, run } as never
@@ -263,14 +263,18 @@ describe('run_lark_cli planned registration', () => {
       controller.abort()
     }
     expect(observedSignal?.aborted).toBe(true)
-    await expect(running).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(running).rejects.toMatchObject(invalidation === 'revoke'
+      ? { name: 'AgentTurnLifecycleInvalidatedError', reason: 'revoked' }
+      : { name: 'AgentTurnCancelledError' })
     expect(run).toHaveBeenCalledTimes(1)
     expect(providerCalls).toBe(1)
     expect(admission.activeLeaseCount('r')).toBe(0)
     const events = (await history.read('inv-feishu-claim-revoke')).events
     expect(events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: 'lark-hosted-claim-revoke' })
-    expect(events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }) }))
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: invalidation === 'revoke'
+      ? { status: 'interrupted', reason: 'authorization-revoked' }
+      : { status: 'cancelled' } })
   })
 
   it('Hosted Feishu SDK turn 在 permit consume 后授权版本变化时不调用生产 RegisteredTool executor', async () => {

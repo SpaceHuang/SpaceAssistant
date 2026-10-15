@@ -110,6 +110,7 @@ describe('channelFor 远程分支（ImChannel 直连）', () => {
       requestId: 'req-2',
       sessionId: 's2',
       toolName: 'run_shell',
+      answererPolicy: { kind: 'user' },
       imChannel: im,
       buildImPending: buildPending
     })
@@ -131,6 +132,7 @@ describe('channelFor 远程分支（ImChannel 直连）', () => {
       requestId: 'req-3',
       sessionId: 's2',
       toolName: 'run_shell',
+      answererPolicy: { kind: 'user' },
       imChannel: im,
       buildImPending: buildPending
     })
@@ -140,7 +142,8 @@ describe('channelFor 远程分支（ImChannel 直连）', () => {
     await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
     expect(audit.events.at(-1)!.outcome).toBe('rejected')
 
-    const noIm = channelFor({ lane: 'wechat', requestId: 'r', sessionId: 's', toolName: 'run_shell' })
+    const noIm = channelFor({ lane: 'wechat', requestId: 'r', sessionId: 's', toolName: 'run_shell',
+      answererPolicy: { kind: 'user' } })
     await expect(noIm.request(req())).resolves.toEqual({ kind: 'rejected', cause: 'no-answerer' })
   })
 })
@@ -220,27 +223,38 @@ describe('P0 审计如实归因（B1 收窄范围）：confirm.* 事件 actor �
 })
 
 describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通道）', () => {
-  it('async approval strategy selects the safety Agent only for enabled IM lanes', () => {
-    expect(selectConfirmationAnswerer({ lane: 'wechat', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'agent' })
-    expect(selectConfirmationAnswerer({ lane: 'feishu', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'agent' })
-    expect(selectConfirmationAnswerer({ lane: 'desktop', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'user' })
-    expect(selectConfirmationAnswerer({ lane: 'automation', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'user' })
-    expect(selectConfirmationAnswerer({ lane: 'wechat', remoteAsyncApprovalEnabled: false })).toEqual({ kind: 'user' })
-    const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => undefined })
-    expect(resolveConfirmChannel({ ...baseArgs, lane: 'wechat', imChannel: im, buildImPending: buildPending })).toBeInstanceOf(ImRequestChannel)
+  it('uses Agent as the default answerer for IM while desktop and automation remain user answered', () => {
+    expect(selectConfirmationAnswerer({ lane: 'wechat' })).toEqual({ kind: 'agent' })
+    expect(selectConfirmationAnswerer({ lane: 'feishu' })).toEqual({ kind: 'agent' })
+    expect(selectConfirmationAnswerer({ lane: 'desktop' })).toEqual({ kind: 'user' })
+    expect(selectConfirmationAnswerer({ lane: 'automation' })).toEqual({ kind: 'user' })
     const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
-    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', remoteAsyncApprovalEnabled: true, agentChannelFactory: factory })
+    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', toolUseId: 'outer-tool-use', agentChannelFactory: factory })
+    expect(factory).toHaveBeenCalledOnce()
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({ toolUseId: 'outer-tool-use' }))
+  })
+
+  it('honors an explicit Agent answerer selected by policy', () => {
+    const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
+    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, agentChannelFactory: factory })
     expect(factory).toHaveBeenCalledOnce()
   })
 
-  it('IM explicit agent policy is fenced by the independent rollout switch', () => {
+  it('keeps an explicit human-required IM decision on the user confirmation channel', () => {
     const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
     const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
-    const closed = resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, imChannel: im,
-      buildImPending: () => ({ sessionId: 's-rcc', messageId: 'm1', matchKey: 'u1' }) })
-    expect(closed).toBeInstanceOf(ImRequestChannel)
+    const channel = resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'user' },
+      imChannel: im, buildImPending: buildPending,
+      agentChannelFactory: factory })
+    expect(channel).toBeInstanceOf(ImRequestChannel)
     expect(factory).not.toHaveBeenCalled()
-    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, remoteAsyncApprovalEnabled: true, agentChannelFactory: factory })
+  })
+
+  it('allows policy-selected Agent auto-review', () => {
+    const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
+    const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
+    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, imChannel: im,
+      buildImPending: buildPending, agentChannelFactory: factory })
     expect(factory).toHaveBeenCalledOnce()
   })
 
@@ -261,14 +275,14 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     expect(ch).toBeInstanceOf(DesktopChannel)
   })
 
-  it('user × wechat / feishu（有 imChannel）→ ImRequestChannel（现状等价）', () => {
+  it('explicit user × wechat / feishu（有 imChannel）→ ImRequestChannel', () => {
     const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => undefined })
     expect(
-      resolveConfirmChannel({ ...baseArgs, lane: 'wechat', imChannel: im, buildImPending: buildPending })
+      resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'user' }, imChannel: im, buildImPending: buildPending })
     ).toBeInstanceOf(ImRequestChannel)
     const imF = createImChannelForTest({ lane: 'feishu', timeoutMs: 1000, sendPrompt: () => undefined })
     expect(
-      resolveConfirmChannel({ ...baseArgs, lane: 'feishu', imChannel: imF, buildImPending: buildPending })
+      resolveConfirmChannel({ ...baseArgs, lane: 'feishu', answererPolicy: { kind: 'user' }, imChannel: imF, buildImPending: buildPending })
     ).toBeInstanceOf(ImRequestChannel)
   })
 
@@ -282,7 +296,7 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     expect(audit.events.at(-1)!.cause).toBe('no-answerer')
   })
 
-  it('P3 收缩：回答者缺省 = user（由 gate 决策派生，不再按 lane 查默认表）；automation 无 IM 传输 → no-answerer deny 兜底', async () => {
+  it('automation 无 IM 传输 → no-answerer deny 兜底', async () => {
     const ch = resolveConfirmChannel({ ...baseArgs, lane: 'automation' })
     expect(ch).toBeInstanceOf(DenyChannel)
     const outcome = await ch.request(req())

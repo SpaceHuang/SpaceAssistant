@@ -2,7 +2,6 @@ import { randomBytes } from 'crypto'
 import http from 'http'
 import { shell } from 'electron'
 import {
-  auth,
   discoverOAuthServerInfo,
   UnauthorizedError,
   type OAuthClientProvider

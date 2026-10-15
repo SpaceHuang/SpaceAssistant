@@ -22,6 +22,10 @@ export interface ProjectableToolResult {
   diagnostic?: unknown
   decisionRuleId?: string
   autoApprovedWrite?: import('./domainTypes').AutoApprovedWriteMeta
+  executionOutcome?: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched'
+  executorEntry?: 'not-entered' | 'entered' | 'unknown'
+  executionErrorCode?: string
+  invocationDisposition?: 'cancelled' | 'timed-out' | 'authorization-invalidated'
 }
 
 export interface ProjectedTelemetryResult {
@@ -658,6 +662,10 @@ export function projectToolResultForSink(
     ...(safeUserMessage ? { userMessage: safeUserMessage } : {}),
     ...(result.decisionRuleId ? { decisionRuleId: result.decisionRuleId } : {}),
     ...(result.autoApprovedWrite ? { autoApprovedWrite: result.autoApprovedWrite } : {}),
+    ...(result.executionOutcome ? { executionOutcome: result.executionOutcome } : {}),
+    ...(result.executorEntry ? { executorEntry: result.executorEntry } : {}),
+    ...(result.executionErrorCode && /^[A-Z0-9_.-]{1,128}$/.test(result.executionErrorCode) ? { executionErrorCode: result.executionErrorCode } : {}),
+    ...(result.invocationDisposition ? { invocationDisposition: result.invocationDisposition } : {}),
     data: processData ? projectProcessDataForSink(result.data as Record<string, unknown>, sink, options) : projectGenericData(result.data, options),
     ...(diagnostic ? { diagnostic } : {})
   }

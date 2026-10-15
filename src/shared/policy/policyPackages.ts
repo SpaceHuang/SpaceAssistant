@@ -1,5 +1,26 @@
 import type { ExecutionLane, PolicyAction, PolicyRule } from '../confirmation/types'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
+export { resolveImPolicyAction } from './imPolicyBehavior'
+export { imEffectiveActionFor } from './imPolicyBehavior'
+export { resolveImPolicyRulesForVersion } from './imPolicyBehaviorResolvers'
+export type { ResolveImPolicyRulesForVersionInput } from './imPolicyBehaviorResolvers'
+export type {
+  ImPolicyAction,
+  ImPolicyPackage,
+  ImPolicyScenario,
+  ResolveImPolicyActionInput
+} from './imPolicyBehavior'
+export { policyDomainForTrustedOrigin } from './policyDomain'
+export type { PolicyDomain, TrustedPolicyOrigin } from './policyDomain'
+export { resolvePolicyBehavior } from './policyBehaviorVersion'
+export type {
+  PolicyBehaviorResolver,
+  PolicyBehaviorResolverInput,
+  PolicyBehaviorResolvers,
+  ResolvePolicyBehaviorInput
+} from './policyBehaviorVersion'
+import type { PolicyDomain } from './policyDomain'
+
 
 /**
  * 策略套餐（顶层设计 §4 第 1 区 / §5）：每条链路选择 严格/标准/宽松/自定义 之一。

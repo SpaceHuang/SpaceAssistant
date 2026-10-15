@@ -7,6 +7,7 @@ import { MCP_MAX_SERVERS } from '../../src/shared/mcpTypes'
 import { MCP_SECRETS_CONFIG_KEY, getSecret } from './mcpSecretStore'
 import {
   clearToolCache,
+  clearMcpAccountAuthorizations,
   deleteServer,
   getToolCache,
   appendServer,
@@ -17,13 +18,7 @@ import {
   updateServerStatus
 } from './mcpConfigStore'
 import { appendDiagnostic, clearDiagnostics, getDiagnostics } from './mcpDiagnostics'
-import { encryptSecret, isSecretStorageAvailable } from '../secureApiKey'
-
-vi.mock('../secureApiKey', () => ({
-  isSecretStorageAvailable: vi.fn(() => true),
-  encryptSecret: vi.fn((plain: string) => `enc:${plain}`),
-  decryptSecret: vi.fn((b64: string) => b64.replace(/^enc:/, ''))
-}))
+import * as secureApiKey from '../secureApiKey'
 
 function makeWriteInput(overrides: Partial<McpServerWriteInput> = {}): McpServerWriteInput {
   return {
@@ -48,6 +43,10 @@ describe('mcpConfigStore', () => {
   let cleanup: () => void
 
   beforeEach(() => {
+    vi.spyOn(secureApiKey, 'encryptSecret').mockImplementation((plain) => `aes:${plain}`)
+    vi.spyOn(secureApiKey, 'decryptSecret').mockImplementation((value) => value.startsWith('aes:') ? value.slice(4) : value.replace(/^enc:/, ''))
+    vi.spyOn(secureApiKey, 'isSecretEncrypted').mockImplementation((value) => value.startsWith('aes:'))
+    vi.spyOn(secureApiKey, 'isLegacySecret').mockImplementation((value) => !value.startsWith('aes:'))
     const temp = createTempDatabase('sa-mcp-config-')
     db = temp.db
     cleanup = temp.cleanup
@@ -55,10 +54,62 @@ describe('mcpConfigStore', () => {
 
   afterEach(() => {
     cleanup()
+    vi.restoreAllMocks()
   })
 
   it('listProfiles returns an empty list when nothing is stored', () => {
     expect(listProfiles(db)).toEqual([])
+  })
+
+  it('persists descriptor-bound public-read trust, preserves it on append, and clears it when the endpoint changes', async () => {
+    const input = makeWriteInput({
+      enabled: true,
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint: 'https://public.example.com/mcp' },
+      enabledToolNames: ['search'],
+      publicReadOnlyTools: { search: 'a'.repeat(64) }
+    })
+    await saveProfiles(db, [input], { allowPublicReadTrustChanges: true })
+    expect(listProfiles(db)[0]?.publicReadOnlyTools).toEqual({ search: 'a'.repeat(64) })
+
+    await appendServer(db, makeWriteInput({ id: 'server-b', name: 'Other' }))
+    expect(listProfiles(db).find(({ id }) => id === input.id)?.publicReadOnlyTools).toEqual({ search: 'a'.repeat(64) })
+
+    await saveProfiles(db, [{ ...input, publicReadOnlyTools: { search: 'b'.repeat(64) } }])
+    expect(listProfiles(db)[0]?.publicReadOnlyTools).toEqual({ search: 'a'.repeat(64) })
+
+    await saveProfiles(db, [{ ...input, http: { endpoint: 'https://changed.example.com/mcp' } }], { allowPublicReadTrustChanges: true })
+    expect(listProfiles(db)[0]?.publicReadOnlyTools).toBeUndefined()
+  })
+
+  it('persists account-use authorization only through its explicit settings path and clears it on connection changes', async () => {
+    const input = makeWriteInput({ enabled: true, transport: 'streamable-http', stdio: undefined,
+      http: { endpoint: 'https://account.example.test/mcp' }, enabledToolNames: ['search'],
+      accountAuthorizedTools: { search: 'a'.repeat(64) } })
+    await saveProfiles(db, [input])
+    expect(listProfiles(db)[0]?.accountAuthorizedTools).toBeUndefined()
+
+    await saveProfiles(db, [input], { allowAccountAuthorizationChanges: true })
+    expect(listProfiles(db)[0]?.accountAuthorizedTools).toEqual({ search: 'a'.repeat(64) })
+
+    await saveProfiles(db, [{ ...input, accountAuthorizedTools: {} }])
+    expect(listProfiles(db)[0]?.accountAuthorizedTools).toEqual({ search: 'a'.repeat(64) })
+
+    await saveProfiles(db, [{ ...input, http: { endpoint: 'https://different-account.example.test/mcp' } }],
+      { allowAccountAuthorizationChanges: true })
+    expect(listProfiles(db)[0]?.accountAuthorizedTools).toBeUndefined()
+  })
+
+  it('clears per-tool account grants after an interactive account reauthorization', async () => {
+    const input = makeWriteInput({ enabled: true, transport: 'streamable-http', stdio: undefined,
+      http: { endpoint: 'https://account.example.test/mcp' }, enabledToolNames: ['search'],
+      accountAuthorizedTools: { search: 'a'.repeat(64) }, alwaysLoad: true })
+    await saveProfiles(db, [input], { allowAccountAuthorizationChanges: true })
+    expect(listProfiles(db)[0]?.alwaysLoad).toBe(true)
+    await clearMcpAccountAuthorizations(db, input.id)
+    expect(listProfiles(db)[0]?.accountAuthorizedTools).toBeUndefined()
+    expect(listProfiles(db)[0]?.alwaysLoad).toBe(true)
   })
 
   it('persists allowPrivateNetwork through save and append round-trips', async () => {
@@ -89,7 +140,7 @@ describe('mcpConfigStore', () => {
     expect(listProfiles(db).find((p) => p.id === httpInput.id)?.http?.allowPrivateNetwork).toBeUndefined()
   })
 
-  it('saveProfiles persists profiles and marks secretPresent from stored secrets', async () => {
+  it('saveProfiles stores secrets without requiring system safeStorage', async () => {
     const input = makeWriteInput({
       auth: { mode: 'bearer-token', accessToken: 'ghp_abc' },
       enabled: true
@@ -176,28 +227,18 @@ describe('mcpConfigStore', () => {
   })
 
   it('saveProfiles rolls back metadata when encryption fails (no half-finished state)', async () => {
-    vi.mocked(encryptSecret).mockImplementationOnce(() => {
-      throw new Error('safeStorage unavailable')
+    vi.mocked(secureApiKey.encryptSecret).mockImplementation(() => {
+      throw new Error('AES-GCM encryption failed')
     })
 
     await expect(
       saveProfiles(db, [
         makeWriteInput({ auth: { mode: 'bearer-token', accessToken: 'token-a' } })
       ])
-    ).rejects.toThrow(/safeStorage/)
+    ).rejects.toThrow(/AES-GCM/)
 
     expect(listProfiles(db)).toEqual([])
     expect(getConfigValue(db, MCP_SECRETS_CONFIG_KEY)).toBeUndefined()
-  })
-
-  it('saveProfiles fails entirely when safe storage is unavailable', async () => {
-    vi.mocked(isSecretStorageAvailable).mockReturnValueOnce(false)
-    await expect(
-      saveProfiles(db, [
-        makeWriteInput({ auth: { mode: 'bearer-token', accessToken: 'token-a' } })
-      ])
-    ).rejects.toThrow(/安全存储/)
-    expect(listProfiles(db)).toEqual([])
   })
 
   it('deleteServer removes profile, secrets, cache and diagnostics', async () => {

@@ -12,6 +12,7 @@ const TARGET_EVENTS = new Set<AgentLogEventName>([
   'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
   'trust.remove',
   'history.cutover', 'session.storage.shadow', 'session.history.recovery', 'session.history.repair.failed', 'session.transcript.read', 'session.transcript.reconciliation',
+  'tools.execution_summary',
   'shell.security.deny', 'shell.trust.command', 'shell.path.confirm', 'shell.path.reject', 'shell.precheck', 'shell.confirm',
   'shell.exec.start', 'shell.exec.plan_failed', 'shell.exec.spawned', 'shell.exec.auto_background',
   'shell.exec.background', 'shell.exec.finish', 'shell.exec.error', 'grep.terminate'
@@ -34,7 +35,8 @@ const COMMON_KEYS = new Set([
   'accepted', 'abortToCatchMs', 'cancelledTools',
   'consumer', 'source', 'differenceCount', 'fieldNames', 'legacyHash', 'canonicalHash', 'acceptedInputFingerprint',
   'appVersion',
-  'releasedUnstarted', 'markedUncertain', 'repairedCheckpoints', 'phase', 'pending', 'completed', 'sharedReference', 'failed'
+  'releasedUnstarted', 'markedUncertain', 'repairedCheckpoints', 'phase', 'pending', 'completed', 'sharedReference', 'failed',
+  'proposalCount', 'executorEntryCount', 'knownFailureCount', 'unknownOutcomeCount', 'notDispatchedCount'
 ])
 
 function hash(value: unknown): string {

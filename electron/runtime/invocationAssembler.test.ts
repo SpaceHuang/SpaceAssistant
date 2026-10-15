@@ -17,6 +17,7 @@ import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegist
 import type { McpConnectionManager } from '../mcp/mcpConnectionManager'
 import { cancelToolConfirm, isPendingConfirm, submitToolConfirmResponse } from '../toolConfirmRegistry'
 import { createMemoryAppDb } from '../database/testHelpers'
+import { acceptTurnContext } from '../database/acceptedTurnStorage'
 import { getDbConnection, setConfigValue } from '../database'
 import { createSession, getUsageStepFactsForTurn as readUsageStepFactsForTurn, updateSession } from '../database/operations'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
@@ -25,11 +26,33 @@ import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStora
 import { createImOrchestrationToolRegistry } from '../remote/imOrchestrationTools'
 import { ImChannel } from '../confirmation/imChannel'
 import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
+import { buildMappedToolDescriptors, hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { executeToolSearch } from '../tools/toolSearchTool'
+import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { evaluateToolCallGate } from '../confirmation/toolCallGate'
+import { AgentChannel } from '../confirmation/agentChannel'
 import { RunShellPlanError } from '../tools/runShellPlan'
 import { PlanRejectedError } from '../../packages/agent-sdk/src/turn'
 
+function createImPolicyTestDb(name: string) {
+  const db = createMemoryAppDb(name)
+  commitImPolicySnapshot(getDbConnection(db), {
+    policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: `${name}-policy`
+  })
+  return db
+}
+
 describe('AcceptedTurn propagation', () => {
+  it('preserves the per-session AGENTS.md setting in the invocation profile', () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'agents-md-setting' })
+    const { invocation } = assembleInvocation({ requestId: 'agents-md-disabled', sessionId: session.id, model: 'test', locale: 'zh-CN',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', agentsMdEnabled: false,
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    expect(invocation.profile.agentsMdEnabled).toBe(false)
+    db.close()
+  })
+
   it('does not associate IM confirmations with a Track while the confirmation-link gate is off', async () => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: 'track-confirmation-link-disabled' })
@@ -43,7 +66,7 @@ describe('AcceptedTurn propagation', () => {
       requestId: 'track-confirmation-link-disabled', sessionId: session.id, lane: 'wechat', model: 'test-model', locale: 'zh-CN',
       messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
       getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
-      remoteContext: { source: 'wechat', messageId: 'inbound-1', confirmPolicy: 'always', userId: 'user-1', imChannel,
+      remoteContext: { source: 'wechat', messageId: 'inbound-1', confirmPolicy: 'always', userId: 'user-1', authorizationGeneration: 1, imChannel,
         trackContext } as never
     })
     const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, { cancel: vi.fn() })
@@ -67,7 +90,7 @@ describe('AcceptedTurn propagation', () => {
   })
 
   it('associates IM confirmations with the exact Track when the confirmation-link gate is on', async () => {
-    const db = createMemoryAppDb('zh-CN')
+    const db = createImPolicyTestDb('zh-CN')
     const session = createSession(db, { name: 'track-confirmation-link-enabled' })
     for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["wechat"]', remoteTrackExecution: 'true',
       remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackConfirmationLink: 'true' })) setConfigValue(db, key, value)
@@ -79,7 +102,7 @@ describe('AcceptedTurn propagation', () => {
       requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', sessionId: session.id, lane: 'wechat', model: 'test-model', locale: 'zh-CN',
       messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
       getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
-      remoteContext: { source: 'wechat', messageId: 'inbound-1', confirmPolicy: 'always', userId: 'user-1', imChannel,
+      remoteContext: { source: 'wechat', messageId: 'inbound-1', confirmPolicy: 'always', userId: 'user-1', authorizationGeneration: 1, imChannel,
         trackContext } as never
     })
     const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, { cancel: vi.fn() })
@@ -93,9 +116,13 @@ describe('AcceptedTurn propagation', () => {
     try {
       await vi.waitFor(() => expect(imChannel.listPending()).toHaveLength(1))
       expect(imChannel.listPending()[0]).toMatchObject({ trackId: 'track-1', trackAttributionEventId: 'event-1',
-        requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', toolUseId: 'tool-1' })
+        requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', toolUseId: 'tool-1', authorizationGeneration: 1,
+        envelopeHash: expect.stringMatching(/^[a-f0-9]{64}$/), factsHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        policyBehaviorVersion: 'im-v1.6', policySnapshotRevision: 1, policyRevision: expect.any(String) })
       expect(onTrackConfirmationChild).toHaveBeenCalledWith(expect.objectContaining({ trackId: 'track-1', trackAttributionEventId: 'event-1',
-        requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', toolUseId: 'tool-1' }), 'pending')
+        requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', toolUseId: 'tool-1', authorizationGeneration: 1,
+        envelopeHash: expect.stringMatching(/^[a-f0-9]{64}$/), factsHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        policyBehaviorVersion: 'im-v1.6', policySnapshotRevision: 1, policyRevision: expect.any(String) }), 'pending')
       imChannel.resolveFromDesktop(imChannel.listPending()[0]!.id, false)
       await expect(pending).resolves.toMatchObject({ kind: 'denied' })
       expect(onTrackConfirmationChild).toHaveBeenLastCalledWith(expect.objectContaining({ trackId: 'track-1' }), 'settled')
@@ -125,6 +152,47 @@ describe('AcceptedTurn propagation', () => {
     })
     expect((ports.mcp?.snapshot as { entries: Map<string, unknown> }).entries.has('mcp_docs_search_12345678')).toBe(true)
     expect(saved[0]?.enabledToolNames).toEqual(['search'])
+    db.close()
+  })
+
+  it('injects public source and account authorization only from their separate current descriptor grants', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'mcp-public-trust' })
+    const serverId = 'mcp-public-trust-server'
+    const schema = { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }
+    const annotations = { readOnlyHint: true, destructiveHint: false }
+    const description = 'Search public documentation'
+    const descriptorHash = hashMcpToolDescription({ serverId, originalName: 'search', description, inputSchema: schema, annotations })
+    const profileInput = { id: serverId, name: 'Docs', enabled: true, transport: 'stdio' as const, timeoutSec: 10,
+      auth: { mode: 'none' as const }, stdio: { command: 'node', args: ['server.js'], env: [] },
+      enabledToolNames: ['search'], publicReadOnlyTools: { search: descriptorHash } }
+    await saveProfiles(db, [profileInput], { allowPublicReadTrustChanges: true })
+    await saveToolCache(db, serverId, { tools: [{ serverId, originalName: 'search', mappedName: 'mcp_docs_search_12345678', description,
+      inputSchema: schema, annotations, schemaHash: hashMcpToolSchema(schema), descriptorHash, discoveredAt: new Date().toISOString() }],
+      protocolVersion: '2025-06-18', discoveredAt: new Date().toISOString() })
+    const { agentSdk } = assembleInvocation({ requestId: 'mcp-public-trust', sessionId: session.id, lane: 'feishu', model: 'test',
+      locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const binding = { requestId: 'mcp-public-trust', turnId: 'turn-mcp-public-trust', invocationId: 'mcp-public-trust',
+      toolCallId: 'search-call', capabilityId: 'mcp_docs_search_12345678', inputSnapshotHash: 'hash', planDigest: 'plan',
+      factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: binding.capabilityId,
+      input: { query: 'public docs' } }
+    await expect(agentSdk.resolveGateArgs(binding, call)).resolves.toMatchObject({
+      mcpQuerySource: 'public', mcpAccountAuthorization: 'unknown'
+    })
+
+    await saveProfiles(db, [{ ...profileInput, accountAuthorizedTools: { search: descriptorHash } }],
+      { allowAccountAuthorizationChanges: true })
+    await expect(agentSdk.resolveGateArgs(binding, call)).resolves.toMatchObject({
+      mcpQuerySource: 'public', mcpAccountAuthorization: 'authorized'
+    })
+
+    const mismatchedTrustInput = { ...profileInput, publicReadOnlyTools: { search: 'b'.repeat(64) } }
+    await saveProfiles(db, [mismatchedTrustInput], { allowPublicReadTrustChanges: true })
+    await expect(agentSdk.resolveGateArgs(binding, call)).resolves.toMatchObject({
+      mcpQuerySource: 'unknown', mcpAccountAuthorization: 'authorized'
+    })
     db.close()
   })
 
@@ -236,6 +304,7 @@ describe('AcceptedTurn propagation', () => {
       transcriptVersion: 1,
       config: Object.freeze({ lane: 'feishu' as const, model: 'test-model', llmServiceId: 'service-id', thinkingEffort: 'medium' as const, requestedThinkingEffort: 'low' as const })
     })
+    acceptTurnContext(db, acceptedTurn as never)
     const { invocation } = assembleInvocation({
       requestId: acceptedTurn.requestId, sessionId: session.id, lane: 'feishu', acceptedTurn,
       model: 'test-model', modelId: 'model-id', effort: 'medium', requestedThinkingEffort: 'low',
@@ -260,6 +329,51 @@ describe('AcceptedTurn propagation', () => {
       workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })).toThrow('ACCEPTED_TURN_USER_MESSAGE_ID_MISMATCH')
+  })
+
+  it('4.1.2a RED: rejects caller lane and remote source conflicts with the accepted turn', () => {
+    const acceptedTurn = Object.freeze({
+      turnId: 'origin-turn', requestId: 'origin-request', sessionId: 'origin-session', lane: 'feishu' as const,
+      startToken: 'origin-start', currentUserMessageId: 'origin-user', transcriptVersion: 1,
+      config: Object.freeze({ lane: 'feishu' as const })
+    })
+    expect(() => assembleInvocation({
+      requestId: acceptedTurn.requestId, sessionId: acceptedTurn.sessionId, acceptedTurn,
+      lane: 'wechat', remoteContext: { source: 'feishu' } as never,
+      model: 'test-model', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })).toThrow('ACCEPTED_TURN_ORIGIN_MISMATCH')
+  })
+
+  it('4.1.2a RED: rejects missing or unknown remote source at runtime', () => {
+    const base = { requestId: 'unknown-origin-request', sessionId: 'unknown-origin-session', lane: 'wechat' as const,
+      model: 'test-model', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() }
+    expect(() => assembleInvocation({ ...base, remoteContext: {} as never })).toThrow('INVOCATION_REMOTE_SOURCE_INVALID')
+    expect(() => assembleInvocation({ ...base, remoteContext: { source: 'desktop' } as never })).toThrow('INVOCATION_REMOTE_SOURCE_INVALID')
+  })
+
+  it('4.1.2a RED: rejects stale session metadata when it conflicts with the persisted accepted origin', () => {
+    const persisted = Object.freeze({
+      turnId: 'persisted-turn', requestId: 'persisted-request', sessionId: 'persisted-session', lane: 'feishu' as const,
+      startToken: 'persisted-start', currentUserMessageId: 'persisted-user', transcriptVersion: 7,
+      config: Object.freeze({ lane: 'feishu' as const, model: 'trusted-model' })
+    })
+    const staleMetadataAcceptedTurn = Object.freeze({
+      ...persisted, lane: 'wechat' as const, config: Object.freeze({ lane: 'wechat' as const, model: 'trusted-model' })
+    })
+    const readAccepted = vi.fn(() => persisted)
+
+    expect(() => assembleInvocation({
+      requestId: persisted.requestId, sessionId: persisted.sessionId, lane: 'wechat',
+      acceptedTurn: staleMetadataAcceptedTurn,
+      remoteContext: { source: 'wechat' } as never,
+      sessionStorage: { execution: { readAccepted } } as never,
+      model: 'trusted-model', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key',
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })).toThrow('ACCEPTED_TURN_PERSISTED_CONTEXT_MISMATCH')
+    expect(readAccepted).toHaveBeenCalledWith({ sessionId: persisted.sessionId, requestId: persisted.requestId })
   })
 })
 
@@ -387,6 +501,257 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
 
   afterEach(() => {
     resetDefaultAgentRuntimeForTests()
+  })
+
+  it.each(['wechat', 'feishu'] as const)('loads the same validated IM policy snapshot for %s runtime gates', async (lane) => {
+    const db = createMemoryAppDb(`im-policy-assembly-${lane}`)
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, {
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { denyOutbound: true, selectedPackage: 'strict' }, updatedAt: 1, eventId: `assembly-${lane}`
+    })
+    const { agentSdk } = assembleInvocation({
+      requestId: `assembly-${lane}`, sessionId: `session-${lane}`, lane, model: 'test-model', locale: 'zh-CN',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: lane, messageId: 'inbound', confirmPolicy: 'always' } as never
+    })
+    const binding = { requestId: `assembly-${lane}`, turnId: `turn-${lane}`, invocationId: `assembly-${lane}`, toolCallId: 'tool',
+      capabilityId: 'probe-tool', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: 'tool', toolName: 'probe-tool', input: {} })
+    expect(args.imPolicySnapshot).toEqual(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] }))
+    expect(args.lanePackage).toBe('strict')
+    db.close()
+  })
+
+  it('carries the current versioned IM package from assembler into the real gate decision without a release switch', async () => {
+    const db = createImPolicyTestDb('zh-CN')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-v2-agent-workdir-'))
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'im-standard-v2-assembler-gate' })
+    const { agentSdk } = assembleInvocation({ requestId: 'im-standard-v2-assembler-gate', sessionId: 'im-v2-session', lane: 'feishu',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'feishu', messageId: 'inbound-v2', confirmPolicy: 'always' } as never })
+    const binding = { requestId: 'im-standard-v2-assembler-gate', turnId: 'im-v2-turn', invocationId: 'im-standard-v2-assembler-gate',
+      toolCallId: 'browser-tool', capabilityId: 'browser', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const gateArgs = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+      toolName: 'browser', input: { action: 'navigate', url: 'https://example.com' } })
+    expect(gateArgs.imPolicySnapshot?.policyBehaviorVersion).toBe('im-standard-v2')
+    await expect(evaluateToolCallGate(gateArgs)).resolves.toMatchObject({ decision: {
+      type: 'require-confirm', ruleId: 'browser-navigate-ask-remote', answerer: 'agent', disposition: 'auto-eligible'
+    } })
+    const invokeApproval = vi.fn(async () => ({ ok: true as const, verdict: { kind: 'approve' as const, reason: { summary: 'approved' } } }))
+    const agentChannelFactory = vi.fn((deps) => new AgentChannel({ ...deps, invokeApproval }))
+    const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never,
+      { cancel: vi.fn(), agentChannelFactory: agentChannelFactory as never })
+    const decision = (await evaluateToolCallGate(gateArgs)).decision
+    if (decision.type !== 'require-confirm' || decision.answerer !== 'agent') throw new Error('EXPECTED_AGENT_DECISION')
+    await expect(confirmation({ call: { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: 'browser',
+      input: { action: 'navigate', url: 'https://example.com' } }, modelTurn: 1, confirmationId: binding.toolCallId,
+      answerer: decision.answerer, reasonCode: decision.ruleId,
+      context: { facts: decision.facts, decision: { riskLevel: decision.riskLevel, memoryTiers: decision.memoryTiers,
+        timeoutMs: decision.timeoutMs, answerer: decision.answerer, disposition: decision.disposition }, lane: 'feishu' } }))
+      .resolves.toMatchObject({ kind: 'denied', answerer: 'agent', cause: 'rules-violated' })
+    expect(agentChannelFactory).toHaveBeenCalledOnce()
+    expect(invokeApproval).toHaveBeenCalledOnce()
+    expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
+
+    const writeCall = { invocationId: binding.invocationId, toolCallId: 'write-candidate-call', toolName: 'write_file',
+      input: { path: 'new-review.md', content: 'ordinary new workspace file' } }
+    const writeBinding = { ...binding, toolCallId: writeCall.toolCallId, capabilityId: writeCall.toolName }
+    const writeGateArgs = await agentSdk.resolveGateArgs(writeBinding, writeCall)
+    const writeGate = await evaluateToolCallGate(writeGateArgs)
+    expect(writeGate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-low-risk-create', answerer: 'agent', disposition: 'auto-eligible' })
+    await expect(confirmation({ call: writeCall, modelTurn: 2, confirmationId: writeCall.toolCallId,
+      answerer: 'agent', reasonCode: writeGate.decision.type === 'require-confirm' ? writeGate.decision.ruleId : '',
+      context: { facts: writeGate.facts, decision: writeGate.decision.type === 'require-confirm' ? {
+        riskLevel: writeGate.decision.riskLevel, memoryTiers: writeGate.decision.memoryTiers,
+        timeoutMs: writeGate.decision.timeoutMs, answerer: writeGate.decision.answerer, disposition: writeGate.decision.disposition
+      } : {}, lane: 'feishu' } }))
+      .resolves.toMatchObject({ kind: 'approved', answerer: 'agent', cause: 'agent-approved' })
+    expect(agentChannelFactory).toHaveBeenCalledTimes(2)
+    expect(invokeApproval).toHaveBeenCalledTimes(2)
+    db.close()
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
+  it('preserves a persisted user ask override from assembler through the real IM gate', async () => {
+    const db = createImPolicyTestDb('im-standard-v2-user-ask-override')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-user-ask-override-'))
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'im-time-query-review': 'ask' } },
+      updatedAt: 1, eventId: 'im-standard-v2-user-ask-override' })
+    const { agentSdk } = assembleInvocation({ requestId: 'im-standard-v2-user-ask-override', sessionId: 'im-user-ask-session', lane: 'wechat',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'wechat', messageId: 'inbound-user-ask', confirmPolicy: 'always' } as never })
+    const binding = { requestId: 'im-standard-v2-user-ask-override', turnId: 'im-user-ask-turn',
+      invocationId: 'im-standard-v2-user-ask-override', toolCallId: 'time-query-tool', capabilityId: 'toolkit.call',
+      inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const gateArgs = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+      toolName: 'toolkit.call', input: { id: 'env.time', params: {} } })
+    const gate = await evaluateToolCallGate(gateArgs)
+    expect(gateArgs.effectiveRules.find((rule) => rule.id === 'im-time-query-review')?.action).toBe('ask')
+    expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-time-query-review', answerer: 'user', disposition: 'human-required' })
+    db.close()
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
+  it.each([
+    { override: 'ask' as const, expected: { type: 'require-confirm', answerer: 'user', ruleId: 'mcp-tool-ask', disposition: 'human-required' } },
+    { override: 'deny' as const, expected: { type: 'deny', ruleId: 'mcp-tool-ask' } }
+  ])('honors persisted MCP $override override over the generic IM write candidate after real assembly', async ({ override, expected }) => {
+    const db = createImPolicyTestDb(`im-standard-v2-mcp-${override}-override`)
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `im-mcp-${override}-override-`))
+    const schema = { type: 'object', properties: { body: { type: 'string' } } }
+    const entry = buildMappedToolDescriptors('im-mcp-override-server', 'MCP Override Server', [{
+      name: 'create_record', description: 'Create a record', inputSchema: schema
+    }]).descriptors[0]!
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'mcp-tool-ask': override } }, updatedAt: 1,
+      eventId: `im-standard-v2-mcp-${override}-override` })
+    const { agentSdk } = assembleInvocation({ requestId: `im-standard-v2-mcp-${override}-override`,
+      sessionId: `im-mcp-${override}-session`, lane: 'wechat', model: 'test-model', locale: 'zh-CN', messages: [],
+      toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: path.join(workDir, '.userdata'),
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'wechat', messageId: `mcp-${override}-override`, confirmPolicy: 'always' } as never })
+    const binding = { requestId: `im-standard-v2-mcp-${override}-override`, turnId: `im-mcp-${override}-turn`,
+      invocationId: `im-standard-v2-mcp-${override}-override`, toolCallId: `mcp-${override}-call`,
+      capabilityId: entry.mappedName, inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: entry.mappedName,
+      input: { body: 'record' } }
+    try {
+      const args = await agentSdk.resolveGateArgs(binding, call)
+      args.mcpEntry = { ...entry, serverName: 'MCP Override Server' }
+      expect(args.effectiveRules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe(override)
+      expect(args.effectiveRules.find((rule) => rule.id === 'mcp-tool-ask')?.userOverride).toBe(true)
+      const gate = await evaluateToolCallGate(args)
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'mcp-invocation', completeness: 'complete' }))
+      expect(gate.decision).toMatchObject(expected)
+    } finally { db.close(); await fs.rm(workDir, { recursive: true, force: true }) }
+  })
+
+  it('invalidates an IM Agent candidate when the write target changes before the Hosted recheck', async () => {
+    const db = createMemoryAppDb('im-write-candidate-facts-change')
+    const session = createSession(db, { name: 'im-write-candidate-facts-change' })
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-write-recheck-'))
+    const target = path.join(workDir, 'new.md')
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'im-write-candidate-facts-change' })
+    const { agentSdk } = assembleInvocation({ requestId: 'im-write-candidate-facts-change', sessionId: session.id, lane: 'feishu',
+      remoteContext: { source: 'feishu', messageId: 'candidate-origin', chatId: 'candidate-chat', userId: 'owner' } as never,
+      model: 'test-model', providerRouteId: 'route-im-write-candidate', agentSdkHistory: new MemoryHistory(), locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
+      workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const execute = vi.fn(async () => ({ success: true }))
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw as { path: string; content: string },
+      plan: async (input) => input, execute }))
+    const agentRequest = vi.fn(async () => {
+      await fs.writeFile(target, 'created between review and recheck')
+      return { kind: 'approved' as const, cause: 'agent-approved' as const, answererKind: 'agent' as const }
+    })
+    const defer = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce({ kind: 'deferred' as const, todoId: 'fresh-human-write-todo',
+      invocationId: 'im-write-candidate-facts-change', cause: 'human-required' as const,
+      executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
+      checkpointRef: { checkpointId: 'fresh-human-write-checkpoint', workflowRevision: 2 } })
+    const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']), confirmationAdapter: {
+      cancel: vi.fn(), defer, createChannel: () => ({ request: agentRequest, cancel: vi.fn() }) as never
+    } })
+    const call = { invocationId: 'im-write-candidate-facts-change', toolCallId: 'write-candidate', toolName: 'write_file',
+      input: { path: 'new.md', content: 'reviewed content' } }
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(call.invocationId, ['write_file'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: new InMemorySafetyPermitStore(), policy: composed.policy })
+    try {
+      const initial = await composed.registeredTools.prepareTool(call, { kind: 'initial' })
+      const decision = await safetyGate.evaluate(initial)
+      expect(decision).toMatchObject({ kind: 'ask', answerer: 'agent', reasonCode: 'im-low-risk-create' })
+      if (decision.kind !== 'ask') throw new Error('EXPECTED_AGENT_WRITE_CANDIDATE')
+      await expect(composed.confirmation({ call, confirmationId: decision.confirmationId, answerer: decision.answerer,
+        reasonCode: decision.reasonCode, context: decision.context })).resolves.toMatchObject({ kind: 'approved', answerer: 'agent' })
+      expect(agentRequest).toHaveBeenCalledOnce()
+      expect(await fs.readFile(target, 'utf8')).toBe('created between review and recheck')
+
+      const recheck = await composed.registeredTools.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'confirmation:agent-1' } })
+      const renewedDecision = await safetyGate.evaluate(recheck)
+      expect(renewedDecision).toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'im-write-ask',
+        context: { decision: { disposition: 'human-required' } } })
+      if (renewedDecision.kind !== 'ask') throw new Error('EXPECTED_FRESH_HUMAN_WRITE_CONFIRMATION')
+      await expect(composed.confirmation({ call, confirmationId: renewedDecision.confirmationId, answerer: renewedDecision.answerer,
+        reasonCode: renewedDecision.reasonCode, context: renewedDecision.context })).resolves.toMatchObject({
+        kind: 'deferred', todoId: 'fresh-human-write-todo', executionState: 'not-executed'
+      })
+      expect(execute).not.toHaveBeenCalled()
+      expect(defer).toHaveBeenCalledTimes(2)
+    } finally {
+      composed.registeredTools.discardPreparedTool(call)
+      await composed.dispose()
+      db.close()
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the real assembled legacy write gate on the human answerer after a v2 rollout', async () => {
+    const db = createImPolicyTestDb('im-legacy-write-after-rollout')
+    const conn = getDbConnection(db)
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-legacy-write-after-rollout-'))
+    // Simulate upgrade/restart: migration retained the persisted v1.6 package even though the
+    // current configuration is capable of selecting v2.
+    const { agentSdk } = assembleInvocation({ requestId: 'im-legacy-write-after-rollout', sessionId: 'im-legacy-write-session',
+      lane: 'feishu', model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
+      workDir, userDataDir: path.join(workDir, '.userdata'), getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'feishu', messageId: 'legacy-after-rollout', confirmPolicy: 'always' } as never })
+    const binding = { requestId: 'im-legacy-write-after-rollout', turnId: 'im-legacy-write-turn', invocationId: 'im-legacy-write-after-rollout',
+      toolCallId: 'legacy-write', capabilityId: 'write_file', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: 'write_file',
+      input: { path: 'new-legacy.md', content: 'draft' } }
+    try {
+      expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })?.policyBehaviorVersion).toBe('im-v1.6')
+      const args = await agentSdk.resolveGateArgs(binding, call)
+      const gate = await evaluateToolCallGate(args)
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'path-target', zone: 'workdir-normal' }))
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
+      const agentChannelFactory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }) as never)
+      const userRequest = vi.fn(async () => ({ kind: 'approved' as const, cause: 'user-approved' as const }))
+      const userConfirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, {
+        cancel: vi.fn(), agentChannelFactory, createChannel: () => ({ request: userRequest, cancel: vi.fn() }) as never
+      })
+      const result = await userConfirmation({ call, confirmationId: binding.toolCallId, answerer: 'user', reasonCode: 'im-write-ask',
+        context: { facts: gate.facts, decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: null,
+          answerer: 'user', disposition: 'human-required' }, lane: 'feishu' } })
+      expect(result).toMatchObject({ kind: 'approved', answerer: 'user' })
+      expect(userRequest).toHaveBeenCalledOnce()
+      expect(agentChannelFactory).not.toHaveBeenCalled()
+      expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
+    } finally { db.close(); await fs.rm(workDir, { recursive: true, force: true }) }
+  })
+  it('refuses a source request tool recheck after the session work directory changes', async () => {
+    let currentWorkDir = '/workspace/A'
+    const requestId = 'workdir-source-binding'
+    const { agentSdk } = assembleInvocation({
+      requestId, sessionId: requestId, turnId: requestId, model: 'test-model', providerRouteId: 'hosted-route',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/workspace/A', resolveWorkDir: () => currentWorkDir,
+      userDataDir: '/tmp', getApiKey: async () => 'key', agentSdkHistory: new MemoryHistory(),
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'probe-tool', parseInput: (raw) => raw as Record<string, unknown>, plan: async () => ({}), execute: async () => ({ success: true }) }))
+    runtime.modelProviders.register({ routeId: 'hosted-route', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, {
+      providerId: 'workdir-source-binding', stream: async function* () { yield { type: 'finish' as const, reason: 'stop' as const } }
+    })
+    const hosted = await agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['probe-tool']) })
+    const ports = await hosted.host.createPorts({ invocationId: requestId, turnId: requestId, routeId: 'hosted-route', request: { messages: [], maxTokens: 10 } })
+    const call = { invocationId: requestId, toolCallId: 'stale-call', toolName: 'probe-tool', input: {} }
+    await ports.prepareTool(call, { kind: 'initial' })
+    currentWorkDir = '/workspace/B'
+    await expect(ports.prepareTool(call, {
+      kind: 'recheck', requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/A' } }
+    })).rejects.toMatchObject({ reasonCode: 'WORKDIR_BINDING_CHANGED' })
+    await hosted.dispose()
   })
 
   it('preserves registry methods and forwards revocation events to the runtime instance', () => {
@@ -664,7 +1029,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       request: { messages: [{ role: 'user', content: 'run probe' }], maxTokens: 10, tools: [{ name: 'probe-tool', description: 'probe', inputSchema: {} }] }
     })
 
-    expect(ports).toMatchObject({ invocationId: turnId, turnId, routeId, confirmation: composed.confirmation, observer: expect.any(Object) })
+    expect(ports).toMatchObject({ invocationId: turnId, turnId, routeId, confirmation: composed.confirmation, observer: expect.any(Object), maxModelTurns: 1000 })
     // FR12②：ports.prepareTool 是注册表 prepareTool 的结构化拒绝包装（共享同一 prepared 状态机，行为透传）
     expect(typeof ports.prepareTool).toBe('function')
     const binding = await ports.prepareTool!({ invocationId: turnId, toolCallId: 'probe-identity', toolName: 'probe-tool', input: { value: 1 } } as never, { kind: 'initial' })
@@ -687,8 +1052,9 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write',
       parseInput: (raw) => raw as { path: string; content: string }, plan: async (input) => input, execute }))
+    const appDb = createImPolicyTestDb('deferred-execute-policy')
     const { agentSdk } = assembleInvocation({ requestId, turnId, sessionId: 'session-deferred-execute', model: 'test-model', providerRouteId: routeId,
-      lane: 'wechat', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+      lane: 'wechat', appDb, messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
       agentSdkHistory: new MemoryHistory(), emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
     const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']) })
     try {
@@ -700,6 +1066,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       expect(providerStream).not.toHaveBeenCalled()
     } finally {
       await composed.dispose()
+      appDb.close()
     }
   })
 
@@ -712,14 +1079,15 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw as { path: string; content: string },
       plan: async (input) => input, execute }))
+    const appDb = createImPolicyTestDb('deferred-distinct-policy')
     const { agentSdk } = assembleInvocation({ requestId: 'request-origin', turnId: 'turn-origin', sessionId: 'session-origin', model: 'test-model',
-      providerRouteId: routeId, lane: 'wechat', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      providerRouteId: routeId, lane: 'wechat', appDb, messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
       getApiKey: async () => 'test-key', agentSdkHistory: new MemoryHistory(), emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
     const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']) })
     try {
       await expect(composed.executeDeferred({ invocationId: 'request-origin', toolCallId: 'persisted-tool-call', toolName: 'write_file',
         input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-2')).resolves.toMatchObject({ isError: false })
-    } finally { await composed.dispose() }
+    } finally { await composed.dispose(); appDb.close() }
     expect(execute).toHaveBeenCalledOnce()
   })
 
@@ -922,6 +1290,93 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     expect(isPendingConfirm('req-remote-confirm', 'remote-1', 'session-remote-confirm')).toBe(false)
   })
 
+  it('keeps a real assembled IM confirmation on the synchronous user path while async approval is default-off', async () => {
+    const requestId = 'req-async-gate-disabled'
+    const sessionId = 'session-async-gate-disabled'
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: sessionId })
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'async-gate-disabled-policy' })
+    const imRequest = vi.fn(async () => ({ kind: 'rejected' as const, cause: 'unavailable' as const }))
+    const agentRequest = vi.fn(async () => ({ kind: 'approved' as const, cause: 'agent-approved' as const }))
+    const { agentSdk } = assembleInvocation({ requestId, sessionId: session.id, lane: 'feishu',
+      remoteContext: { source: 'feishu', messageId: 'inbound-disabled', chatId: 'chat-disabled', userId: 'owner-disabled',
+        imChannel: { request: imRequest, cancelByRequestId: vi.fn() } } as never,
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw as { path: string; content: string },
+      plan: async (input) => input, execute: async () => ({ success: true }) }))
+    const registered = agentSdk.createRegisteredTools({ registry })
+    const policy = agentSdk.createSafetyPolicy(registered, (name) => name)
+    const call = { invocationId: requestId, toolCallId: 'async-gate-disabled-call', toolName: 'write_file', input: { path: 'note.txt', content: 'write' } }
+    try {
+      const binding = await registered.prepareTool(call, { kind: 'initial' })
+      const capabilities = new CapabilityRegistry()
+      capabilities.define(requestId, ['write_file'])
+      const gate = new SafetyGate({ capabilities, permitStore: new InMemorySafetyPermitStore(), policy })
+      const decision = await gate.evaluate(binding)
+      expect(decision).toMatchObject({ kind: 'ask', answerer: 'user' })
+      if (decision.kind !== 'ask') throw new Error('EXPECTED_CONFIRMATION_WHILE_ASYNC_GATE_DISABLED')
+      const confirmation = agentSdk.createConfirmationPort(policy, { cancel: vi.fn(), agentChannelFactory: () => ({
+        request: agentRequest, cancel: vi.fn()
+      }) as never })
+
+      await expect(confirmation({ call, confirmationId: decision.confirmationId, answerer: decision.answerer, reasonCode: decision.reasonCode,
+        context: decision.context })).resolves.toMatchObject({ kind: 'unavailable' })
+
+      expect(imRequest).toHaveBeenCalledOnce()
+      expect(imRequest.mock.calls[0]?.[0]).toMatchObject({
+        facts: expect.objectContaining({ toolName: 'write_file', actionClass: 'write', summary: { text: expect.stringContaining('write_file') }, signals: expect.any(Array) }),
+        riskLevel: 'medium', memoryTiers: [], timeoutMs: null, answerer: 'user'
+      })
+      expect(agentRequest).not.toHaveBeenCalled()
+      expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
+    } finally {
+      registered.discardPreparedTool(call)
+      db.close()
+    }
+  })
+
+  it.each([
+    ['unavailable', { kind: 'rejected', cause: 'unavailable', answererKind: 'agent' }],
+    ['timeout', { kind: 'rejected', cause: 'timeout', answererKind: 'agent' }],
+    ['undetermined', { kind: 'rejected', cause: 'agent-undetermined', answererKind: 'agent' }],
+    ['deny', { kind: 'rejected', cause: 'agent-deny', answererKind: 'agent' }]
+  ] as const)('does not route IM Agent %s into a desktop confirmation or approval todo', async (_name, agentOutcome) => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: `im-agent-${_name}` })
+    const imRequest = vi.fn(async () => ({ kind: 'approved' as const, cause: 'user-approved' as const }))
+    const onConfirmRequest = vi.fn()
+    const agentRequest = vi.fn(async () => agentOutcome as never)
+    const agentChannelFactory = vi.fn(() => ({ request: agentRequest, cancel: vi.fn() }))
+    const { agentSdk } = assembleInvocation({ requestId: `im-agent-${_name}`, sessionId: session.id, lane: 'feishu',
+      remoteContext: { source: 'feishu', messageId: 'inbound', chatId: 'chat', userId: 'owner',
+        imChannel: { request: imRequest, cancelByRequestId: vi.fn() } } as never,
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      floatingNotificationManager: { onConfirmRequest } as never })
+    const policy = { evaluate: vi.fn(), markConfirmed: vi.fn() } as never
+    const confirmation = agentSdk.createConfirmationPort(policy, { cancel: vi.fn(), agentChannelFactory: agentChannelFactory as never })
+    try {
+      const outcome = await confirmation({
+        call: { invocationId: `im-agent-${_name}`, toolCallId: `call-${_name}`, toolName: 'write_file', input: { path: 'x', content: 'y' } },
+        confirmationId: `call-${_name}`, answerer: 'agent', reasonCode: 'im-auto-evaluator',
+        context: { lane: 'feishu', facts: { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'write' } },
+          decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: 1000, answerer: 'agent' } }
+      })
+
+      expect(outcome.kind).not.toBe('approved')
+      expect(agentChannelFactory).toHaveBeenCalledOnce()
+      expect(agentRequest).toHaveBeenCalledOnce()
+      expect(imRequest).not.toHaveBeenCalled()
+      expect(onConfirmRequest).not.toHaveBeenCalled()
+      expect(policy.markConfirmed).not.toHaveBeenCalled()
+      expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
+    } finally {
+      db.close()
+    }
+  })
+
   it('passes Hosted agent answerer decisions to the injected AgentChannel factory', async () => {
     const { agentSdk } = assembleInvocation({
       requestId: 'req-agent-confirm', sessionId: 'session-agent-confirm', turnId: 'turn-agent-confirm', model: 'test-model', locale: 'zh-CN',
@@ -1107,6 +1562,71 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     }
   })
 
+  it('routes policy-selected IM auto-review to the Agent without a release gate row', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'im-test-auto-review' })
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-test-auto-review-'))
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'im-test-auto-review-policy' })
+    expect(getDbConnection(db).prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_async_approval_gate_state'").get()).toBeUndefined()
+    const { agentSdk } = assembleInvocation({ requestId: 'im-test-auto-review', sessionId: session.id, lane: 'feishu',
+      remoteContext: { source: 'feishu', messageId: 'origin', chatId: 'chat', userId: 'owner', imChannel: { request: vi.fn(), cancelByRequestId: vi.fn() } } as never,
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write',
+      parseInput: (raw) => raw as { path: string; content: string }, plan: async (input) => input, execute: async () => ({ success: true }) }))
+    const registered = agentSdk.createRegisteredTools({ registry })
+    const policy = agentSdk.createSafetyPolicy(registered, (name) => name)
+    const agentRequest = vi.fn(async () => ({ kind: 'approved' as const, cause: 'agent-approved' as const }))
+    const agentChannelFactory = vi.fn(() => ({ request: agentRequest, cancel: vi.fn() }))
+    const confirmation = agentSdk.createConfirmationPort(policy, { cancel: vi.fn(), agentChannelFactory: () => agentChannelFactory() as never })
+    const call = { invocationId: 'im-test-auto-review', toolCallId: 'auto-review-call', toolName: 'write_file',
+      input: { path: 'new-review.md', content: 'candidate for review' } }
+    try {
+      const binding = await registered.prepareTool(call, { kind: 'initial' })
+      const capabilities = new CapabilityRegistry()
+      capabilities.define('im-test-auto-review', ['write_file'])
+      const gate = new SafetyGate({ capabilities, permitStore: new InMemorySafetyPermitStore(), policy })
+      const decision = await gate.evaluate(binding)
+      expect(decision).toMatchObject({ kind: 'ask', answerer: 'agent' })
+      if (decision.kind !== 'ask') throw new Error('EXPECTED_AGENT_AUTO_REVIEW_CANDIDATE')
+      await expect(confirmation({ call, confirmationId: decision.confirmationId, answerer: decision.answerer,
+        reasonCode: decision.reasonCode, context: decision.context })).resolves.toMatchObject({ kind: 'approved', answerer: 'agent' })
+      expect(agentChannelFactory).toHaveBeenCalledOnce()
+      expect(agentRequest).toHaveBeenCalledOnce()
+    } finally {
+      registered.discardPreparedTool(call)
+      db.close()
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('4.1.14 RED: resolves an IM standard-v2 low-risk navigation candidate to the Agent answerer', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'im-standard-navigation-answerer' })
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'im-standard-navigation' })
+    const { agentSdk } = assembleInvocation({ requestId: 'im-standard-navigation', sessionId: session.id, lane: 'feishu',
+      remoteContext: { source: 'feishu', messageId: 'origin', chatId: 'chat', userId: 'owner', imChannel: { request: vi.fn(), cancelByRequestId: vi.fn() } } as never,
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, navigateRequiresConfirm: true }, appDb: db,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'browser', parseInput: (raw) => raw as Record<string, unknown>, plan: async (input) => input,
+      execute: async () => ({ success: true }) }))
+    const registered = agentSdk.createRegisteredTools({ registry })
+    const call = { invocationId: 'im-standard-navigation', toolCallId: 'navigation-call', toolName: 'browser',
+      input: { action: 'navigate', mode: 'open', url: 'https://public.example/path' } }
+    try {
+      const binding = await registered.prepareTool(call, { kind: 'initial' })
+      const args = await agentSdk.resolveGateArgs(binding, call)
+      const result = await evaluateToolCallGate(args)
+      expect(result.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'browser-navigate-ask-remote' })
+    } finally {
+      registered.discardPreparedTool(call)
+      db.close()
+    }
+  })
+
   it('does not persist browser session trust when the original agent approves', async () => {
     const requestId = 'req-hosted-browser-agent-approval'
     const toolCallId = 'hosted-browser-agent-approval-call'
@@ -1222,6 +1742,19 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })
     expect(first.ports.policy.authorizationVersion).toMatch(/^[a-f0-9]{64}$/)
     expect(second.ports.policy.authorizationVersion).toBe(first.ports.policy.authorizationVersion)
+  })
+
+  it('4.1.4a RED: authorization version changes when the shared IM policy revision changes', () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'im-policy-revision-fence' })
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'revision-fence-1' })
+    const compose = (requestId: string) => assembleInvocation({ requestId, sessionId: session.id, lane: 'feishu', model: 'test-model', locale: 'zh-CN', messages: [],
+      toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const first = compose('revision-fence-a')
+    commitImPolicySnapshot(getDbConnection(db), { expectedRevision: 1, policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 2, eventId: 'revision-fence-2' })
+    const second = compose('revision-fence-b')
+    expect(second.ports.policy.authorizationVersion).not.toBe(first.ports.policy.authorizationVersion)
+    db.close()
   })
 
   it('passes the runtime-owned dispatch admission and safety permit stores by identity', () => {

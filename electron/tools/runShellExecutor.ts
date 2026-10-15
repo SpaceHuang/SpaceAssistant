@@ -37,7 +37,6 @@ import { shouldAttemptHostDegrade } from '../shell/shellHostFallback'
 const PROGRESS_TAIL = 4000
 /** 进度用滚动文本窗口：只需覆盖 PROGRESS_TAIL，避免为进度保留全量文本。 */
 const PROGRESS_TEXT_KEEP = 8 * 1024
-const DEFAULT_IO_MAX = 100 * 1024
 
 export function appendRawTailBuffer(prev: Buffer, chunk: Buffer): Buffer {
   const combined = Buffer.concat([prev, chunk])
@@ -209,7 +208,6 @@ export async function executePreparedShellExecution(
       duration: Date.now() - started
     }
   }
-  const command = prepared.command
   const timeoutSec = prepared.timeoutMs / 1000
   const ioMax = prepared.ioMaxBytes
   const contract = prepared.profile.outputEncoding
@@ -427,7 +425,6 @@ export async function executePreparedShellExecution(
         caseId: SHELL_CASE_IDS.spawnError,
         durationMs: Date.now() - started
       })
-      const spawnErrorMessage = err.message
       void (async () => {
         if (artifactPrefixBytes > 0) activateArtifact()
         await artifactWriter.close().catch(() => undefined)

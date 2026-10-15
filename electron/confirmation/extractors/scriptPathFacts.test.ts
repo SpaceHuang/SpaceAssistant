@@ -13,6 +13,18 @@ describe('extractScriptPathFacts', () => {
     expect(extractScriptPathFacts('print("hello")', 'python')).toEqual({ paths: [], completeness: 'complete', dynamicAccess: false, unknownReason: null, unknownEvidence: [] })
   })
 
+  it.each([
+    { label: '未建模但无害 API', code: 'time.time()', completeness: 'unknown', dynamicAccess: false },
+    { label: '动态执行', code: 'eval(source)', completeness: 'unknown', dynamicAccess: true },
+    { label: '危险进程执行', code: 'import os\nos.system("rm -rf /tmp/x")', completeness: 'unknown', dynamicAccess: true },
+    { label: '敏感路径', code: 'open("~/.ssh/id_rsa", "r")', completeness: 'complete', dynamicAccess: false },
+    { label: '越界路径', code: 'open("../../outside.txt", "w")', completeness: 'complete', dynamicAccess: false },
+  ] as const)('3.2.3 RED: $label preserves the analyzer result for the gate to classify', ({ code, completeness, dynamicAccess }) => {
+    const result = extractScriptPathFacts(code, 'python')
+    expect(result.completeness).toBe(completeness)
+    expect(result.dynamicAccess).toBe(dynamicAccess)
+  })
+
   it('从语法树识别 open、pathlib、os 和 shutil 的静态路径参数', () => {
     const result = extractScriptPathFacts([
       'from pathlib import Path',

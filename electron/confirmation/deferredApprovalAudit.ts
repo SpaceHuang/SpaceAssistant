@@ -6,6 +6,9 @@ export function buildDeferredApprovalAuditEvent(input: {
   sessionId: string
   todoId: string
   invocationId: string
+  policyBehaviorVersion?: string
+  policyRevision?: number
+  dispatchKey?: string
   consumed?: boolean
   executionState?: 'completed' | 'failed' | 'outcome_unknown'
   notificationState?: 'undelivered' | 'delivered'
@@ -27,7 +30,10 @@ export function buildDeferredApprovalAuditEvent(input: {
     : input.kind === 'result' ? input.executionState : undefined
   return {
     ts: input.ts ?? Date.now(), event: eventByKind[input.kind], lane: input.lane, sessionId: input.sessionId,
-    todoId: input.todoId, invocationId: input.invocationId, actor,
+    policyDomain: 'im', todoId: input.todoId, invocationId: input.invocationId, actor,
+    ...(input.policyBehaviorVersion ? { policyBehaviorVersion: input.policyBehaviorVersion } : {}),
+    ...(input.policyRevision !== undefined ? { policyRevision: input.policyRevision } : {}),
+    ...(input.dispatchKey ? { dispatchKey: input.dispatchKey } : {}),
     ...(executionState ? { executionState } : {}),
     ...(input.notificationState ? { notificationState: input.notificationState } : {})
   }

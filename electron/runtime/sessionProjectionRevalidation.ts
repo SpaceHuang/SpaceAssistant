@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { AppDatabase } from '../database'
-import { getMessages, getMessageSkeletons } from '../database/operations'
+import { getMessages } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import {
@@ -9,7 +9,7 @@ import {
 } from './sessionProjectionRejection'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { drainSessionProjectionRevalidationQueue, enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
-import { hasSessionProjectionEligibility, markSessionProjectionEligible, refreshSessionTranscriptProjectionFastPath } from './sessionTranscriptProjection'
+import { markSessionProjectionEligible, refreshSessionTranscriptProjectionFastPath } from './sessionTranscriptProjection'
 
 /**
  * P0-③ background revalidation executor (plan §4 保障链 / §5 ③). Full rebuild+compare runs
@@ -94,7 +94,6 @@ export async function runDueSessionProjectionRevalidations(db: AppDatabase,
   const maxSessions = Math.max(1, options.maxSessions ?? 4)
   const now = options.now ?? Date.now()
   let revalidated = 0
-  let deferred = 0
   let skipped = 0
   const entries = drainSessionProjectionRevalidationQueue(db)
   const requeue: typeof entries = []

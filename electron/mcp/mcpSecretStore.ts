@@ -1,10 +1,10 @@
 import type { AppDatabase } from '../database'
 import { getConfigValue, setConfigValue } from '../database'
-import { decryptSecret, encryptSecret, isSecretStorageAvailable } from '../secureApiKey'
+import { decryptSecret, encryptSecret, isLegacySecret } from '../secureApiKey'
 
 /**
- * MCP Secret Store：以 `secrets.mcp.credentials` 单键 JSON（`Record<'<serverId>:<kind>', encBase64>`）
- * 复用 safeStorage 加密读写，模式对齐 `secrets.llmServiceKeys`。
+ * MCP Secret Store：以 `secrets.mcp.credentials` 单键 JSON（`Record<'<serverId>:<kind>', versionedCiphertext>`）
+ * 使用版本化 AES-GCM 密文，模式对齐 `secrets.llmServiceKeys`。
  *
  * 写互斥（评审 A1）：所有写操作必须经单一 Promise 链串行化「读→改→写」临界区，
  * 避免与 OAuth 后台刷新等第二写入源交错时丢更新。
@@ -83,9 +83,6 @@ export function withMcpSecretWriteLock<T>(fn: () => T | Promise<T>): Promise<T> 
 export async function setSecret(db: AppDatabase, serverId: string, kind: string, plain: string): Promise<void> {
   return withMcpSecretWriteLock(() => {
     assertValidSecretRef(serverId, kind)
-    if (!isSecretStorageAvailable()) {
-      throw new Error('系统不支持安全存储（safeStorage），无法保存 MCP Secret')
-    }
     const enc = encryptSecret(plain)
     const map = readSecretMapRaw(db)
     map[secretMapKey(serverId, kind)] = enc
@@ -98,9 +95,18 @@ export async function getSecret(db: AppDatabase, serverId: string, kind: string)
   const map = readSecretMapRaw(db)
   const enc = map[secretMapKey(serverId, kind)]
   if (!enc) return null
-  if (!isSecretStorageAvailable()) return null
   try {
-    return decryptSecret(enc)
+    const plain = decryptSecret(enc)
+    if (isLegacySecret(enc)) {
+      await withMcpSecretWriteLock(() => {
+        const current = readSecretMapRaw(db)
+        if (current[secretMapKey(serverId, kind)] === enc) {
+          current[secretMapKey(serverId, kind)] = encryptSecret(plain)
+          writeSecretMapRaw(db, current)
+        }
+      })
+    }
+    return plain
   } catch {
     return null
   }

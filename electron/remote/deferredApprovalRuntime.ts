@@ -3,7 +3,7 @@ import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import type { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import type { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import type { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
-import { createDeferredApprovalIngress, type parseDeferredApprovalReply } from './deferredApprovalIngress'
+import { createDeferredApprovalIngress } from './deferredApprovalIngress'
 import { createDeferredResumeCoordinator } from './deferredResumeCoordinator'
 
 type TodoStore = ReturnType<typeof createDeferredTodoStore>
@@ -31,7 +31,7 @@ export function createDeferredApprovalRuntime(input: {
   const scheduledCompletionSessions = new Set<string>()
   const resume = createDeferredResumeCoordinator({
     db: input.db, channel: input.channel, todoStore: input.todoStore, envelopeStore: input.envelopeStore,
-    maxParallel: input.maxParallel, recheck: input.recheck, dispatch: input.dispatch, audit: input.audit
+    maxParallel: input.maxParallel, requirePolicyFence: true, recheck: input.recheck, dispatch: input.dispatch, audit: input.audit
   })
   const ingress = createDeferredApprovalIngress({
     db: input.db,
@@ -43,15 +43,19 @@ export function createDeferredApprovalRuntime(input: {
       })
       return row ? [{
         channel: row.channel, identityKey: row.identityKey, ownerId: row.ownerId, todoId: row.todoId,
+        originSessionId: row.originSessionId,
         notificationVersion: row.notificationVersion, currentNotificationVersion: row.notificationVersion,
         trustedMessageId: row.trustedMessageId ?? '', shortCode: row.shortCode, expiresAt: row.expiresAt,
         authorizationEpoch: row.authorizationEpoch, rule: row.rule
       }] : []
     },
-    getTodo: (todoId, binding) => input.todoStore.get(todoId, {
-      channel: binding.channel, identityKey: binding.identityKey, ownerId: binding.ownerId,
-      authorizationEpoch: binding.authorizationEpoch, rule: binding.rule
-    }),
+    getTodo: (todoId, binding) => {
+      const todo = input.todoStore.get(todoId, {
+        channel: binding.channel, identityKey: binding.identityKey, ownerId: binding.ownerId,
+        authorizationEpoch: binding.authorizationEpoch, originSessionId: binding.originSessionId, rule: binding.rule
+      })
+      return todo
+    },
     requestResume: (request, commitReceipt) => resume.requestResume(request, commitReceipt),
     audit: input.audit
   })
