@@ -363,9 +363,6 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       if (payload.feishu !== undefined) {
         // §5.6-6：链路硬约束/确认开关变更落 settings.policy-change（含新旧值）
         const prevFeishu = readFeishuConfigFromDb(ctx.db)
-        const feishuAuthorizationChanged = (payload.feishu.enabled === false && prevFeishu.enabled)
-          || (payload.feishu.remoteEnabled === false && prevFeishu.remoteEnabled)
-          || (payload.feishu.remoteSenderAllowlist !== undefined && JSON.stringify(payload.feishu.remoteSenderAllowlist ?? []) !== JSON.stringify(prevFeishu.remoteSenderAllowlist ?? []))
         for (const key of [
           'remoteAllowLocalWrite',
           'remoteDenyOutbound',
@@ -382,10 +379,6 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       }
       if (payload.wechat !== undefined) {
         const prevWechat = readWeChatConfigFromDb(ctx.db)
-        const wechatAuthorizationChanged = (payload.wechat.enabled === false && prevWechat.enabled)
-          || (payload.wechat.remoteEnabled === false && prevWechat.remoteEnabled)
-          || (payload.wechat.loggedIn === false && prevWechat.loggedIn)
-          || (payload.wechat.remoteSenderAllowlist !== undefined && JSON.stringify(payload.wechat.remoteSenderAllowlist ?? []) !== JSON.stringify(prevWechat.remoteSenderAllowlist ?? []))
         for (const key of [
           'remoteAllowLocalWrite',
           'remoteDenyOutbound',

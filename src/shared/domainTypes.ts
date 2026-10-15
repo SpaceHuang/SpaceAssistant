@@ -3,7 +3,7 @@ export const CURRENT_SCHEMA_VERSION = 1
 import type { BrowserDependencyToolError } from './browserTypes'
 import type { AppLocale } from './locale'
 import { getBuiltinToolMetadata } from './builtinToolMetadata'
-import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from './wikiConstants'
+import { WIKI_VOCABULARY_PREFIX } from './wikiConstants'
 
 export type { AppLocale }
 
