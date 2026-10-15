@@ -95,6 +95,8 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      # 在 macOS Vitest threads 启动前串行解析 Electron 路径，避免多个 worker 同时触发首次解压。
+      - run: node -e "require('electron')"
       - run: npm run i18n:generate-types
       - run: npm run test:shell-lifecycle
       - run: npm run typecheck:shared

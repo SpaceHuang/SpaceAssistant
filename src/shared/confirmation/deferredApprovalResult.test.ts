@@ -1,6 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { ApprovalInvocationResult } from './types'
-import type { ToolConfirmationResult } from '../../../packages/agent-sdk/src/turn'
 import { mapDeferredApprovalResult, parseDeferredApprovalResult, type DeferredApprovalResult, type DeferredApprovalEligibility } from './deferredApprovalResult'
 
 const eligible: DeferredApprovalEligibility = { kind: 'eligible', todoId: 'todo-contract-1' }
@@ -27,16 +26,11 @@ describe('shared deferred approval result contract', () => {
       executionState: 'not-executed', retryable: false, nextStep: 'await-user' })
   })
 
-  it('requires structured execution state, retryability, and next step on tool and shared deferred results', () => {
+  it('requires structured execution state, retryability, and next step on shared deferred results', () => {
     type SharedDeferred = Extract<DeferredApprovalResult, { kind: 'deferred' }>
-    type ToolDeferred = Extract<ToolConfirmationResult, { kind: 'deferred' }>
     expectTypeOf<SharedDeferred>().toHaveProperty('executionState')
     expectTypeOf<SharedDeferred>().toHaveProperty('retryable')
     expectTypeOf<SharedDeferred>().toHaveProperty('nextStep')
-    expectTypeOf<ToolDeferred>().toHaveProperty('cause')
-    expectTypeOf<ToolDeferred>().toHaveProperty('executionState')
-    expectTypeOf<ToolDeferred>().toHaveProperty('retryable')
-    expectTypeOf<ToolDeferred>().toHaveProperty('nextStep')
   })
 
   it('never maps config error, locked or critical policy, or recursion block to deferred', () => {

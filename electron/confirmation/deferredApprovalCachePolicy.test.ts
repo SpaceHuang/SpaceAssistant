@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest'
+import type { ToolConfirmationResult } from '../../packages/agent-sdk/src/turn'
 import type { DeferredApprovalResult } from '../../src/shared/confirmation/deferredApprovalResult'
 import { createDeferredApprovalAdapter } from './deferredApprovalAdapter'
 import { deferredApprovalCachePolicy } from './deferredApprovalCachePolicy'
@@ -30,6 +31,14 @@ describe('deferred approval cache policy', () => {
       executionState: 'not-executed', retryable: false, nextStep: 'await-user' })
     // @ts-expect-error deferred outcomes have no memory write payload
     expect(result.memory).toBeUndefined()
+  })
+
+  it('tool confirmation deferred results carry structured execution metadata', () => {
+    type ToolDeferred = Extract<ToolConfirmationResult, { kind: 'deferred' }>
+    expectTypeOf<ToolDeferred>().toHaveProperty('cause')
+    expectTypeOf<ToolDeferred>().toHaveProperty('executionState')
+    expectTypeOf<ToolDeferred>().toHaveProperty('retryable')
+    expectTypeOf<ToolDeferred>().toHaveProperty('nextStep')
   })
 
   it('adapter accepts no cache writer and does not return one with a deferred outcome', async () => {
