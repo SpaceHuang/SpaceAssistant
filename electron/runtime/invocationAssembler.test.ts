@@ -6,7 +6,7 @@ import { markAgentSdkSafetyDecisionConfirmed } from '../confirmation/agentSdkSaf
 import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
 import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
 import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
-import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
+import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { createAgentRuntime } from './agentRuntime'
 import { resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from './agentRuntimeDefaults'
@@ -1452,5 +1452,17 @@ describe('P0-A：计划期失败降级为可回传拒绝（T-3，断言打在生
     } finally {
       await composed.dispose()
     }
+  })
+})
+describe('wikiConfig passthrough (W3 lane parity)', () => {
+  it('propagates the assembled wikiConfig into the invocation tools profile', () => {
+    const wikiConfig = { ...DEFAULT_WIKI_CONFIG, enabled: true }
+    const { invocation } = assembleInvocation({
+      requestId: 'req-wiki-passthrough', sessionId: 'session-wiki-passthrough', model: 'test-model', lane: 'automation',
+      locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, wikiConfig,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    expect(invocation.profile.tools.wikiConfig).toMatchObject({ enabled: true, rootPath: 'llm-wiki' })
   })
 })

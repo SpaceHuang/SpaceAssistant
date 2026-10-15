@@ -437,6 +437,8 @@ async function compactSessionDatabaseImpl(
       db.close()
     } catch (closeError) {
       // N4：close 抛错也必须尽力恢复连接可用性，否则全部持有方挂到重启。
+      // 已知盲区（低概率）：若抛错发生在 arm 之前的 flushNow/checkpoint 阶段，旧 conn 未武装
+      // 旧连接哨兵且可能仍打开——换入后旧 conn 会静默读写旧文件句柄，不触发哨兵打点。
       try { reopenDatabaseConnection(db) } catch { /* 连接不可恢复时保持关闭，仅上抛 */ }
       throw closeError
     }

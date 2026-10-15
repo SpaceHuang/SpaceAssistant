@@ -20,6 +20,7 @@ export type AgentLogEventName =
   | 'storage.maintenance.compact'
   | 'storage.maintenance.compact_failed'
   | 'storage.archives.pruned'
+  | 'storage.closed_connection_used'
   | 'storage.profile.request_failed'
   | 'agent.tools.trim_widen_denied'
   | 'driver.deferred.invalidated'

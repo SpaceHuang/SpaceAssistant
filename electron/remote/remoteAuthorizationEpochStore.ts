@@ -12,9 +12,11 @@ function validateEpoch(row: unknown, channel: 'feishu' | 'wechat'): number {
 
 /** Durable monotonic authority epoch and revocation journal. Missing/corrupt state is never reset. */
 export function createRemoteAuthorizationEpochStore(db: AppDatabase) {
-  const conn = getDbConnection(db)
+  // 压缩换入会整体替换底层 DatabaseSync：连接必须每函数入口现取，禁止工厂期捕获进闭包
+  const liveConn = () => getDbConnection(db)
 
   function current(channel: 'feishu' | 'wechat'): number {
+    const conn = liveConn()
     const row = conn.prepare('SELECT epoch FROM remote_authorization_epochs WHERE channel=?').get(channel)
     if (!row) throw new Error(`REMOTE_AUTHORIZATION_EPOCH_MISSING:${channel}`)
     return validateEpoch(row, channel)
@@ -28,6 +30,7 @@ export function createRemoteAuthorizationEpochStore(db: AppDatabase) {
     current,
     advance(channel: 'feishu' | 'wechat', reason: string, now = Date.now(), sessionId?: string): number {
       if (!reason.trim()) throw new TypeError('REMOTE_AUTHORIZATION_REVOCATION_REASON_REQUIRED')
+      const conn = liveConn()
       const next = runInTransaction(conn, () => {
         const epoch = current(channel) + 1
         if (!Number.isSafeInteger(epoch)) throw new Error(`REMOTE_AUTHORIZATION_EPOCH_EXHAUSTED:${channel}`)
@@ -40,13 +43,13 @@ export function createRemoteAuthorizationEpochStore(db: AppDatabase) {
       return next
     },
     completeRevocation(channel: 'feishu' | 'wechat', epoch: number, now = Date.now()): boolean {
-      const result = conn.prepare(`UPDATE remote_authorization_revocations SET state='completed',updated_at=?
+      const result = liveConn().prepare(`UPDATE remote_authorization_revocations SET state='completed',updated_at=?
         WHERE channel=? AND epoch=? AND state='pending'`).run(now, channel, epoch)
       if (Number(result.changes) === 1) db.save()
       return Number(result.changes) === 1
     },
     pendingRevocations(): PendingAuthorizationRevocation[] {
-      return (conn.prepare(`SELECT channel,epoch,reason,created_at AS createdAt,session_id AS sessionId FROM remote_authorization_revocations
+      return (liveConn().prepare(`SELECT channel,epoch,reason,created_at AS createdAt,session_id AS sessionId FROM remote_authorization_revocations
         WHERE state='pending' ORDER BY created_at,channel,epoch`).all() as Array<PendingAuthorizationRevocation & { createdAt: number }>)
         .map((row) => ({ ...row, ...(row.sessionId ? { sessionId: row.sessionId } : {}), epoch: validateEpoch({ epoch: row.epoch }, row.channel) }))
     },

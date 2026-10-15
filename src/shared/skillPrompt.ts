@@ -58,7 +58,8 @@ const SOURCE_HINT_LABEL: Record<SkillActivationSource, string> = {
   manual: '手动激活',
   alwaysLoad: '始终加载',
   feishu: '飞书',
-  legacy: '本地匹配'
+  legacy: '本地匹配',
+  'wiki-trigger': '知识库'
 }
 
 export function formatSkillRouteHint(
