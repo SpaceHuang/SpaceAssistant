@@ -26,6 +26,19 @@
 | B5 浏览器宿主与依赖恢复 | 现状 §4 | `ls electron/browser/playwrightBrowserHost.ts electron/browser/browserDependencyRecovery.ts` | 命中 | 一致 |
 | B6 工具重试策略 | 现状 §5 | `rg -n 'shouldStopToolRetry' electron/toolErrorRetryPolicy.ts` | 命中 | 一致 |
 
+## 完备性核验（本轮补充，2026-10-14）
+
+**判定：初版现状文档严重不完备 → 已按 `ls` 全量重写。**
+
+| 节 | 初版列出的件数 | 实际 `ls` 件数 | 主要缺口 |
+| --- | --- | --- | --- |
+| §1 shell | 14 | **40+** | 脚本安全族（`scriptContentSecurity` / `scriptParserService` / `scriptIr/`）、PowerShell 族（`powershellCommandFacts` / `psSecurityRules`）、权限族（`shellPermissions` / `shellSensitivePaths` / `shellSpawnEnv`）、进程族（`processSupervisor` / `startupOrphanCleanup`） |
+| §2 tools | 14 | **48** | 各工具执行器族（`runShell*` / `read*` / `writeFile*` / `runScript*` / `runLarkCli*`）、`toolInvocationCoordinator`、`toolSearchTool`、`skillsReadTool` |
+| §3 MCP | 14 | **25** | **传输层整族缺失**（`stdioTransport` / `sseTransport` / `streamableHttpTransport`）、工具暴露层（`mcpToolRegistry` / `mcpToolExecutor` / `mcpToolResultAdapter` / `registeredMcpTool`）、`mcpSessionTrust`、`semaphore` |
+| §4 browser | 14 | **17** | `stagehandService` / `stagehandModelInit`、`urlSecurity`、`rateLimiter`、`browserUserErrors` |
+
+**处置**：已重写 §1–§4（改为按**机制族**归纳，不再逐件罗列）；教训固化于 [`../_consolidation/docs-consolidation-rules.md`](../_consolidation/docs-consolidation-rules.md) §3.4。
+
 ## 抽样复核建议（用户抽 3 条）
 
-A1、A2、A4（交付前核验）＋ B1、B3（现状文档断言）。
+A1、A2、A4（交付前核验）＋ B3（许可绑定派发）＋ 上表 §3 的传输层（`ls electron/mcp/*Transport.ts`）。

@@ -25,6 +25,19 @@
 | B4 出站受理 | 现状 §4 | `ls electron/outbound/outboundAcceptor.ts` | 命中（4 文件引用） | 一致 |
 | B5 Track 契约与归因 | 现状 §5 | `ls src/shared/remoteTrack.ts electron/database/remoteTrack*.ts` | 命中（`remoteTrack` 被 61 文件引用） | 一致 |
 
+## 完备性核验（本轮补充，2026-10-14）
+
+**判定：初版现状文档严重不完备 → 已重写。**
+
+| 节 | 初版列出的件数 | 实际 `ls` 件数 | 主要缺口 |
+| --- | --- | --- | --- |
+| §1 飞书 | 12 | **45** | `feishuRemoteAgent` / `feishuRemoteOutbound` / `feishuRemoteProgress` / `feishuReply`、`feishuSessionResolver` / `feishuWorkDirResolver`、`larkCli*`（`Runner`/`Security`/`ImpactPolicy`/`Errors`）、`npmCommandRunner`、`remoteCommandRouter` |
+| §2 微信 | 10 | **30** | `weChatRemoteAgent` / `weChatRemoteOutbound` / `weChatReplyService` / `weChatSessionResolver` / `weChatConfig` |
+| §3 远程核心 | 11 | **110+** | 9 个机制族：远程 Agent、入站守卫、会话切换守卫（`remoteSessionSwitch*`）、授权族（`remoteAuthorization*` / `remoteWriteGrant*`）、任务控制与工作流（`imTaskControl*` / `imWorkflow*`）、Track 与归因（`remoteTrack*` / `track*`）、唤醒（`wakeEvent*` / `deferredCompletionWake`）等 |
+| §4 出站 | 1 | 2 | 漏 `outboundDrainer.ts` |
+
+**处置**：已重写 §1–§3（改为按**机制族**归纳，共 26 个族）；教训固化于 [`../_consolidation/docs-consolidation-rules.md`](../_consolidation/docs-consolidation-rules.md) §3.4。
+
 ## 抽样复核建议（用户抽 3 条）
 
-A1（关键分歧点）、A2、A3（交付前核验）＋ B3、B5（现状文档断言）。
+A1（关键分歧点）、A2、A3（交付前核验）＋ `ls electron/feishu/feishuRemoteAgent.ts`、`ls electron/remote/remoteAuthorization*`（完备性抽查）。
