@@ -15,6 +15,26 @@ type RecoveryInput = Readonly<{
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
 }>
 
+function retryAfterMs(error: unknown, now = Date.now()): number | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const headers = (error as { headers?: unknown }).headers
+  const value = headers && typeof headers === 'object' ? (headers as Record<string, unknown>)['retry-after'] ?? (headers as Record<string, unknown>)['Retry-After'] : undefined
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined
+  const seconds = Number(value)
+  const delay = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : Date.parse(String(value)) - now
+  return Number.isFinite(delay) && delay >= 0 ? Math.min(30_000, delay) : undefined
+}
+
+function transientProviderError(error: unknown): { reasonCode: string; code: string } | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const record = error as { status?: unknown; code?: unknown; cause?: unknown }
+  if (record.status === 429) return { reasonCode: 'PROVIDER_RATE_LIMIT', code: 'provider_rate_limit' }
+  if (typeof record.status === 'number' && record.status >= 500 && record.status <= 599) return { reasonCode: 'PROVIDER_SERVER_ERROR', code: 'provider_server_error' }
+  const code = typeof record.code === 'string' ? record.code : record.cause && typeof record.cause === 'object' && typeof (record.cause as { code?: unknown }).code === 'string' ? (record.cause as { code: string }).code : ''
+  if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENETUNREACH', 'ECONNABORTED'].includes(code)) return { reasonCode: 'PROVIDER_NETWORK_ERROR', code: 'provider_network_error' }
+  return undefined
+}
+
 /** Bridges the existing provider overflow policy into the SDK's bounded recovery port. */
 export function createAgentSdkProviderRecovery(input: {
   contextWindow?: number
@@ -22,8 +42,14 @@ export function createAgentSdkProviderRecovery(input: {
   model?: string
   llmServiceId?: string
   onEffortUnsupported?(error: unknown): void | Promise<void>
-}): (request: RecoveryInput) => Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalModelMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string }> | undefined> {
+}): (request: RecoveryInput) => Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalModelMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; maxAttempts?: number; retryAfterMs?: number; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string }> | undefined> {
   return async (request) => {
+    const transient = request.error ? transientProviderError(request.error) : undefined
+    if (transient) {
+      if (request.attempt >= 3) return { kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' }
+      return { kind: 'retry', reasonCode: transient.reasonCode, messages: request.messages, retryEvent: { attempt: request.attempt, code: transient.code }, recordTranscriptCompaction: false,
+        maxAttempts: 3, ...(retryAfterMs(request.error) !== undefined ? { retryAfterMs: retryAfterMs(request.error) } : {}) }
+    }
     if (request.attempt === 1 && request.request?.thinking?.effort && isOutputConfigRejectedError(request.error)) {
       memoizeEffortUnsupported(input.llmServiceId, input.model ?? request.routeId)
       await input.onEffortUnsupported?.(request.error)

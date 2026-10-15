@@ -86,12 +86,24 @@ describe('createAgentSdkProviderRecovery', () => {
     expect(result).toBeUndefined()
   })
 
-  it('does not retry rate limits or a second context overflow attempt', async () => {
+  it('retries rate limits and rejects a second context overflow attempt', async () => {
     const recover = createAgentSdkProviderRecovery({ contextWindow: 100, contextWindowTrusted: true })
     const rateLimit = await recover({ error: Object.assign(new Error('rate limit'), { status: 429 }), attempt: 1, modelTurn: 1, routeId: 'r', messages })
     const secondOverflow = await recover({ response: { finishReason: 'stop', usage: { inputTokens: 101, outputTokens: 0 }, hasOutputContent: true }, attempt: 2, modelTurn: 1, routeId: 'r', messages })
-    expect(rateLimit).toBeUndefined()
+    expect(rateLimit).toMatchObject({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', maxAttempts: 3 })
     expect(secondOverflow).toEqual({ kind: 'reject', reasonCode: 'SILENT_CONTEXT_OVERFLOW_RETRY_LIMIT' })
+  })
+
+  it('对有限次数的瞬时 provider 错误给出 Retry-After 等待并拒绝认证错误', async () => {
+    const recover = createAgentSdkProviderRecovery({ contextWindow: 100, contextWindowTrusted: true })
+    const rateLimit = await recover({ error: Object.assign(new Error('busy'), { status: 429, headers: { 'retry-after': '2' } }), attempt: 1, modelTurn: 1, routeId: 'r', messages })
+    const server = await recover({ error: Object.assign(new Error('unavailable'), { status: 503 }), attempt: 2, modelTurn: 1, routeId: 'r', messages })
+    const exhausted = await recover({ error: Object.assign(new Error('unavailable'), { status: 503 }), attempt: 3, modelTurn: 1, routeId: 'r', messages })
+    const auth = await recover({ error: Object.assign(new Error('unauthorized'), { status: 401 }), attempt: 1, modelTurn: 1, routeId: 'r', messages })
+    expect(rateLimit).toMatchObject({ kind: 'retry', reasonCode: 'PROVIDER_RATE_LIMIT', retryAfterMs: 2000, maxAttempts: 3 })
+    expect(server).toMatchObject({ kind: 'retry', reasonCode: 'PROVIDER_SERVER_ERROR', maxAttempts: 3 })
+    expect(exhausted).toEqual({ kind: 'reject', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' })
+    expect(auth).toBeUndefined()
   })
 
   it('fails closed when recovery selection drops the required user message', async () => {

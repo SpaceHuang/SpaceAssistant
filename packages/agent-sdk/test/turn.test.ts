@@ -1943,6 +1943,120 @@ describe('runAgentTurn', () => {
     expect(events.at(-1)?.kind).toBe('invocation-completed')
   })
 
+  it('consumes the host attempt budget for two transient failures in one invocation', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      calls += 1
+      if (calls < 3) return (async function* () { throw Object.assign(new Error('temporarily unavailable'), { status: 503 }) })()
+      return stream({ type: 'text-delta', text: 'recovered' }, { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv-retry-budget', [])
+    const permits = new InMemorySafetyPermitStore()
+    const recoverProviderAttempt = vi.fn(async ({ messages, attempt, error }: { messages: readonly CanonicalModelMessage[]; attempt: number; error?: unknown }) => error ? ({
+      kind: 'retry' as const, reasonCode: 'PROVIDER_SERVER_ERROR', messages, maxAttempts: 3,
+      retryEvent: { attempt, code: 'provider_server_error' }
+    }) : undefined)
+
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'inv-retry-budget', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' }))), recoverProviderAttempt
+    })
+
+    expect(result.text).toBe('recovered')
+    expect(calls).toBe(3)
+    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.attempt)).toEqual([1, 2])
+    const events = (await history.read('inv-retry-budget')).events
+    expect(events.filter((event) => event.kind === 'provider-retry-scheduled')).toHaveLength(2)
+    expect(events.filter((event) => event.kind === 'model-request-started').map((event) => (event.payload as { attempt: number }).attempt)).toEqual([1, 2, 3])
+  })
+
+  it('returns the host stable exhaustion code after the final transient provider attempt', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('temporarily unavailable'), { status: 503 }) })()
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv-retry-exhausted', [])
+    const permits = new InMemorySafetyPermitStore()
+    const recoverProviderAttempt = vi.fn(async ({ messages, attempt }: { messages: readonly CanonicalModelMessage[]; attempt: number }) => attempt < 3
+      ? { kind: 'retry' as const, reasonCode: 'PROVIDER_SERVER_ERROR', messages, maxAttempts: 3, retryEvent: { attempt, code: 'provider_server_error' } }
+      : { kind: 'reject' as const, reasonCode: 'PROVIDER_RETRY_EXHAUSTED' })
+
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'inv-retry-exhausted', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' }))), recoverProviderAttempt
+    })).rejects.toMatchObject({ code: 'MODEL_ATTEMPT_RECOVERY_REJECTED', reasonCode: 'PROVIDER_RETRY_EXHAUSTED' })
+    expect(calls).toBe(3)
+    expect(recoverProviderAttempt.mock.calls.map(([input]) => input.attempt)).toEqual([1, 2, 3])
+  })
+
+  it('cancels during Retry-After backoff without starting another provider attempt', async () => {
+    const registry = new ModelProviderRegistry()
+    let calls = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      calls += 1
+      return (async function* () { throw Object.assign(new Error('rate limited'), { status: 429 }) })()
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv-retry-cancel', [])
+    const permits = new InMemorySafetyPermitStore()
+    const controller = new AbortController()
+    const recoverProviderAttempt = vi.fn(async ({ messages }: { messages: readonly CanonicalModelMessage[] }) => ({
+      kind: 'retry' as const, reasonCode: 'PROVIDER_RATE_LIMIT', messages, maxAttempts: 3, retryAfterMs: 10_000,
+      retryEvent: { attempt: 1, code: 'provider_rate_limit' }
+    }))
+    const attempt = runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'inv-retry-cancel', history,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10, signal: controller.signal }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' }))), recoverProviderAttempt
+    })
+    setTimeout(() => controller.abort(), 10)
+    await expect(attempt).rejects.toThrow()
+    expect(calls).toBe(1)
+  })
+
+  it('rechecks the host recovery gate inside the final dispatch lease before recording start', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      providerCalls += 1
+      return providerCalls === 1 ? stream(
+        { type: 'tool-call', toolCallId: 'new-call-id', toolName: 'write_file', input: { path: 'x', content: 'y' } },
+        { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+      ) : stream({ type: 'text-delta', text: 'stopped' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv-recovery-gate', ['write_file'])
+    const permits = new InMemorySafetyPermitStore()
+    const execute = vi.fn(async () => ({ output: 'written' }))
+    const beforeDispatchLease = vi.fn(async () => ({ kind: 'reject' as const, reasonCode: 'VERIFY_ONLY_UNREVIEWED_CAPABILITY', message: 'unresolved effect' }))
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'inv-recovery-gate', history,
+      request: { messages: [{ role: 'user', content: 'write' }], maxTokens: 10 }, maxModelTurns: 2,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } }),
+      prepareTool: async (_call, stage) => ({ ...toolBinding, invocationId: 'inv-recovery-gate', toolCallId: 'new-call-id', capabilityId: 'write_file', phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, execute), beforeDispatchLease
+    })).resolves.toMatchObject({ text: 'stopped' })
+    expect(beforeDispatchLease).toHaveBeenCalledOnce()
+    expect(execute).not.toHaveBeenCalled()
+    const events = (await history.read('inv-recovery-gate')).events
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'new-call-id', reason: 'VERIFY_ONLY_UNREVIEWED_CAPABILITY' }) }))
+    expect(events.some((event) => event.kind === 'tool-call-started')).toBe(false)
+  })
+
   it('retries an unsupported effort request with effort removed and records the authorized request change', async () => {
     const registry = new ModelProviderRegistry()
     const providerRequests: Array<unknown> = []
