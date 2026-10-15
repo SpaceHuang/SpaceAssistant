@@ -28,22 +28,22 @@ export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: 
   const fileTreeRef = useRef<FileTreeHandle>(null)
 
   const excludePaths = useMemo(
-    () => (wiki.enabled && wiki.hideWikiFromFileTree ? [wikiRoot] : []),
-    [wiki.enabled, wiki.hideWikiFromFileTree, wikiRoot]
+    () => (wiki.hideWikiFromFileTree ? [wikiRoot] : []),
+    [wiki.hideWikiFromFileTree, wikiRoot]
   )
   const treeOptions = useMemo(() => ({ excludePaths }), [excludePaths])
 
   useEffect(() => {
     return subscribeFilePaneSelect((req) => {
       const preferWiki = req.preferWiki ?? isUnderWikiRoot(req.relPath, wikiRoot)
-      if (preferWiki && wiki.enabled) {
+      if (preferWiki) {
         setSelectedKey(null)
         return
       }
       void fileTreeRef.current?.selectPath(req.relPath)
       setSelectedKey(req.relPath.replace(/\\/g, '/'))
     })
-  }, [wiki.enabled, wikiRoot])
+  }, [wikiRoot])
 
   const handleFileSelect = (relPath: string) => {
     setSelectedKey(relPath)
