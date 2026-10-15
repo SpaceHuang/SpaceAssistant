@@ -90,8 +90,8 @@ export function collectHardRuleSkills(args: {
   }
 
   // W1-a 确定性激活：llm 路由模式不做 keywordMatch 且 triggers 不进 catalog，
-  // 「提及即激活」必须由硬规则保证，不依赖路由 LLM 概率；仅在知识库启用时生效。
-  if (wikiConfig?.enabled && userInput) {
+  // 「提及即激活」必须由硬规则保证，不依赖路由 LLM 概率。
+  if (wikiConfig && userInput) {
     const wikiSkill = available.find((s) => s.meta.name === WIKI_VOCABULARY_PREFIX)
     if (wikiSkill && keywordMatch(userInput, wikiSkill.meta.triggers)) upsert(wikiSkill, 'wiki-trigger')
   }

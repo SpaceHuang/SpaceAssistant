@@ -132,27 +132,6 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
     }
   })
 
-  it('!wikiConfig.enabled 时即便输入含触发词也不激活 llm-wiki', async () => {
-    const dirs = makeTempDirs()
-    try {
-      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG, enabled: false })
-      createClientMock.mockReturnValue({
-        messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: '{"skills":[]}' }] })) }
-      } as never)
-
-      const result = await manager.route({
-        userInput: '把这段存入知识库',
-        sessionState: emptyState,
-        model: 'test-model',
-        getApiKey: async () => 'test-key'
-      })
-
-      expect(result.skills.map((s) => s.meta.name)).not.toContain('llm-wiki')
-    } finally {
-      dirs.cleanup()
-    }
-  })
-
   it('enabled 但输入不含任何触发词时不做确定性激活（交给路由 LLM）', async () => {
     const dirs = makeTempDirs()
     try {
@@ -174,43 +153,9 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
       dirs.cleanup()
     }
   })
-
-  it('!enabled 时 llm-wiki 不进路由候选，手动点名也不挤占 maxConcurrent 名额（P2-5）', async () => {
-    const dirs = makeTempDirs()
-    try {
-      createUserSkill(dirs.userDataPath, 'note-tool', '笔记工具')
-      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG, enabled: false }, { maxConcurrent: 1 })
-      createClientMock.mockReturnValue({
-        messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: '{"skills":["note-tool"]}' }] })) }
-      } as never)
-
-      const result = await manager.route({
-        userInput: '记录一下今天的工作',
-        sessionState: { manualActivated: ['llm-wiki'], manualDisabled: [] },
-        model: 'test-model',
-        getApiKey: async () => 'test-key'
-      })
-
-      expect(result.skills.map((s) => s.meta.name)).toEqual(['note-tool'])
-    } finally {
-      dirs.cleanup()
-    }
-  })
 })
 
 describe('skillManager.match wiki 过滤（既有契约）', () => {
-  it('!enabled 时 match 结果剔除 llm-wiki', () => {
-    const dirs = makeTempDirs()
-    try {
-      ensureSkillsDirs(dirs.userDataPath, dirs.workDir)
-      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG, enabled: false })
-      const matched = manager.match('把这段存入知识库', emptyState)
-      expect(matched.map((s) => s.meta.name)).not.toContain('llm-wiki')
-    } finally {
-      dirs.cleanup()
-    }
-  })
-
   it('enabled 时 match 命中触发词（keyword 激活保留）', () => {
     const dirs = makeTempDirs()
     try {

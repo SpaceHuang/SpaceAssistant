@@ -197,7 +197,7 @@ describe('skillRouter wiki-trigger hard rule (W1-a)', () => {
     expect(SOURCE_SCORE['wiki-trigger']).toBeLessThanOrEqual(SOURCE_SCORE.llm)
   })
 
-  it('wikiConfig.enabled 且输入含触发词 → upsert llm-wiki（source=wiki-trigger）', () => {
+  it('wikiConfig 存在且输入含触发词 → upsert llm-wiki（source=wiki-trigger）', () => {
     const available = [wikiSkill, skill('other', 'user', 'other')]
     const scored = collectHardRuleSkills({
       available,
@@ -219,18 +219,6 @@ describe('skillRouter wiki-trigger hard rule (W1-a)', () => {
       sessionState: emptyState,
       userInput: '帮我写一个排序算法',
       wikiConfig
-    })
-    expect(mergeRouteSkills(scored, config.maxConcurrent).skills.map((s) => s.meta.name)).not.toContain(WIKI_VOCABULARY_PREFIX)
-  })
-
-  it('!wikiConfig.enabled → 触发词命中也不激活', () => {
-    const available = [wikiSkill]
-    const scored = collectHardRuleSkills({
-      available,
-      config,
-      sessionState: emptyState,
-      userInput: '把这段存入知识库',
-      wikiConfig: { ...wikiConfig, enabled: false }
     })
     expect(mergeRouteSkills(scored, config.maxConcurrent).skills.map((s) => s.meta.name)).not.toContain(WIKI_VOCABULARY_PREFIX)
   })
