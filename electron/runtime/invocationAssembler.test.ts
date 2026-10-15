@@ -553,7 +553,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       answerer: decision.answerer, reasonCode: decision.ruleId,
       context: { facts: decision.facts, decision: { riskLevel: decision.riskLevel, memoryTiers: decision.memoryTiers,
         timeoutMs: decision.timeoutMs, answerer: decision.answerer, disposition: decision.disposition }, lane: 'feishu' } }))
-      .resolves.toMatchObject({ kind: 'denied', answerer: 'agent', cause: 'rules-violated' })
+      .resolves.toMatchObject({ kind: 'approved', answerer: 'agent', cause: 'agent-approved' })
     expect(agentChannelFactory).toHaveBeenCalledOnce()
     expect(invokeApproval).toHaveBeenCalledOnce()
     expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })

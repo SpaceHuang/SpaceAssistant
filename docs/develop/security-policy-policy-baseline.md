@@ -16,6 +16,8 @@
 
 ## 当前实现映射与差异
 
+Phase 2 实施状态（源码）：桌面 `send_email`/`send_message`/微信发送和飞书 CLI 出站按显式 stable rule ID 选择档位；IM 旧标准行为和现有 locked remote deny 保持优先。facts 投影只携带检查覆盖度和 evidenceKinds，策略规则基于证据 token 选择 sensitive/incomplete verdict。Decision audit 已携带 `decisionId` 和包括 lane、tier、规则顺序/条件/动作、启停、配置与 migration state 的依赖指纹。策略映射和规则分层回归见 `policyEngine.test.ts`、`toolCallGate.test.ts`、`policyDecisionBoundary.test.ts`。
+
 | 基线项 | 当前源码 | 当前语义/顺序 | 缺口（本次计划范围） |
 |---|---|---|---|
 | outbound | `agentSdkConfirmationPort.ts` 的 `actionClass === 'outbound'` agent-approved 后拒绝；`policyEngine.ts` 对没有更早 rule match 的 read/outbound 默认 allow；`defaultRules.ts` 另有 exposure `im-no-wechat-send` 和受 `remoteDenyOutbound` 控制的 invocation deny | 规则决策、工具暴露控制、channel approval adapter 分散，按调用路径作用；port veto 在审批结果后 | 逐 lane/tool 移入显式档位规则，保留现有远程暴露/强制禁用能力的既有含义；移除 adapter 的产品 veto |

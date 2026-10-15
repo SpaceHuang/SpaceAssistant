@@ -31,6 +31,71 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'deny', locked: true, reason: '远程会话只能写入当前工作目录内的文件'
   },
   {
+    id: 'write-outside-standard-review', when: 'invocation',
+    match: { lane: ['desktop'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:outside-workdir', 'policy-tier:standard'] },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '工作目录外写入由安全审核 Agent 审核'
+  },
+  {
+    id: 'write-outside-strict-human', when: 'invocation',
+    match: { lane: ['desktop'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:outside-workdir', 'policy-tier:strict'] },
+    denyClass: 'insufficient-info', action: 'ask', humanRequired: true, reason: '严格档工作目录外写入需真人逐次确认'
+  },
+  {
+    id: 'write-outside-loose-review', when: 'invocation',
+    match: { lane: ['desktop'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:outside-workdir', 'policy-tier:loose'] },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '宽松档工作目录外写入由安全审核 Agent 审核'
+  },
+  {
+    id: 'outbound-mode-loose-allow', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['policy-tier:loose'], excludeSignals: ['outbound-evidence-present', 'outbound-inspection-incomplete'] },
+    action: 'allow', reason: '宽松档普通出站按策略放行'
+  },
+  {
+    id: 'outbound-mode-standard-review', when: 'invocation',
+    match: { lane: ['desktop'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['policy-tier:standard'], excludeSignals: ['outbound-evidence-present', 'outbound-inspection-incomplete'] },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '标准档普通出站交由安全审核 Agent'
+  },
+  {
+    id: 'outbound-mode-strict-human', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['policy-tier:strict'] },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'user', reason: '严格档出站动作需真人逐次确认'
+  },
+  {
+    id: 'outbound-sensitive-standard-human', when: 'invocation',
+    match: { lane: ['desktop'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-evidence-present', 'policy-tier:standard'] },
+    denyClass: 'insufficient-info', action: 'ask', humanRequired: true, reason: '标准档敏感出站内容需真人逐次确认'
+  },
+  {
+    id: 'outbound-sensitive-strict-human', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-evidence-present', 'policy-tier:strict'] },
+    denyClass: 'insufficient-info', action: 'ask', humanRequired: true, reason: '严格档敏感出站内容需真人逐次确认'
+  },
+  {
+    id: 'outbound-sensitive-loose-review', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-evidence-present', 'policy-tier:loose'] },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '宽松档敏感出站内容由安全审核 Agent 审核'
+  },
+  {
+    id: 'outbound-incomplete-strict-human', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete', 'policy-tier:strict'] },
+    denyClass: 'insufficient-info', action: 'ask', humanRequired: true, reason: '严格档出站事实检查不完整需真人确认'
+  },
+  {
+    id: 'outbound-incomplete-review', when: 'invocation',
+    match: { lane: ['desktop'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete'] },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '出站事实检查不完整，进入审核'
+  },
+  {
+    id: 'outbound-incomplete-standard-review', when: 'invocation',
+    match: { lane: ['desktop'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete', 'policy-tier:standard'] },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '标准档出站检查不完整，交由安全审核 Agent'
+  },
+  {
+    id: 'outbound-incomplete-loose-review', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete', 'policy-tier:loose'] },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '宽松档出站检查不完整，交由安全审核 Agent'
+  },
+  {
     id: 'remote-write-scope-unknown-deny',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:unknown'] },

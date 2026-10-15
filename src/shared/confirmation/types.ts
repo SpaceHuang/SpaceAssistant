@@ -31,6 +31,8 @@ export interface ExecutionContext {
   sessionId: string
   /** 出站写额度余量（只读，由执行链路注入）。 */
   outboundWriteBudgetRemaining?: number
+  /** Policy package selected for this lane; used by explicit tier-scoped rules. */
+  policyTier?: 'loose' | 'standard' | 'strict' | 'custom'
   /** 套餐 B 预留：本期无人写入。 */
   declaredCapabilities?: DeclaredCapability[]
 }
@@ -138,6 +140,8 @@ export type FactSignal =
   | { kind: 'write-target-new' }
   | { kind: 'write-target-existing' }
   | { kind: 'write-target-scope'; scope: 'inside-workdir' | 'outside-workdir' | 'unknown' }
+  | { kind: 'policy-tier'; tier: 'loose' | 'standard' | 'strict' | 'custom' }
+  | { kind: 'outbound-content'; inspectionCoverage: 'complete' | 'partial' | 'unavailable'; evidenceKinds: readonly string[] }
   | { kind: 'network-egress'; domains: string[] }
   | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }
   | { kind: 'script-analysis'; signal: 'clean' | 'suspicious' | 'dangerous'; patterns: string[] }
@@ -486,6 +490,10 @@ export interface SecurityAuditEvent {
   /** Versioned behavior snapshot and revision used for the decision. */
   policyBehaviorVersion?: string
   policyRevision?: number
+  /** Canonical identity and matched attribution of the policy decision. */
+  decisionId?: string
+  policyDependencyFingerprint?: string
+  decisionRuleIds?: string[]
   /** Stable identifier of the exact fact snapshot consumed by policy/approval. */
   factsSnapshotId?: string
   extractorVersion?: string
@@ -621,6 +629,8 @@ export interface PolicyRule {
   userOverride?: true
   /** 安全语义标记：即使 rule.action 被档位映射为 auto-evaluator，也必须原渠道逐次人工确认。 */
   humanRequired?: boolean
+  /** Explicit reviewer for an ask rule; defaults to the lane's established reviewer. */
+  answerer?: 'user' | 'agent'
   /** 系统保护条目：UI 只读、自定义套餐不可调松。 */
   locked?: boolean
   /** R2：拒绝分类声明（O4 全量标注；会产 ask/deny/confirm-every-time 的规则必须标，放行类不标）。 */

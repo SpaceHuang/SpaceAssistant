@@ -81,6 +81,7 @@ export function createRegisteredAgentTurnTools(input: {
   prepareTool(call: TurnToolCall, stage: ToolPreparationStage): Promise<PermitBinding>
   discardPreparedTool(call: TurnToolCall): void
   getPreparedCall(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): TurnToolCall | undefined
+  getPreparedFacts(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): unknown
   updateExecutionContext(call: TurnToolCall, update: (context: Record<string, unknown>) => void): void
   toolExecution: ReturnType<typeof createPermitBoundToolExecutionPort<TurnToolCall, TurnToolResult>>
   executeDeferred(call: TurnToolCall, input: {
@@ -219,6 +220,11 @@ export function createRegisteredAgentTurnTools(input: {
     return record ? snapshotCall(record.call) : undefined
   }
 
+  const getPreparedFacts = (identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): unknown => {
+    const record = prepared.get(JSON.stringify([identity.invocationId, identity.toolCallId]))
+    return record ? record.registeredTool.getPreparedFacts?.(record.handle.prepared) : undefined
+  }
+
   const updateExecutionContext = (call: TurnToolCall, update: (context: Record<string, unknown>) => void): void => {
     const record = prepared.get(keyFor(call))
     const resolveName = input.resolveRegisteredToolName ?? ((name: string) => resolveRegisteredToolName(name, input.registry))
@@ -316,6 +322,7 @@ export function createRegisteredAgentTurnTools(input: {
     prepareTool,
     discardPreparedTool,
     getPreparedCall,
+    getPreparedFacts,
     updateExecutionContext,
     toolExecution,
     executeDeferred,
@@ -341,8 +348,7 @@ function sameRecheckSubject(initial: PermitBinding, recheck: PermitBinding): boo
   return recheck.phase === 'recheck' && initial.requestId === recheck.requestId && initial.turnId === recheck.turnId &&
     initial.invocationId === recheck.invocationId && initial.toolCallId === recheck.toolCallId &&
     initial.capabilityId === recheck.capabilityId && initial.inputSnapshotHash === recheck.inputSnapshotHash &&
-    initial.planDigest === recheck.planDigest && initial.factsDigest === recheck.factsDigest &&
-    initial.authorizationVersion === recheck.authorizationVersion
+    initial.planDigest === recheck.planDigest && initial.factsDigest === recheck.factsDigest
 }
 
 function mapSafeExecutionResult(raw: unknown, call: TurnToolCall, workspaceRoot?: string): TurnToolResult {

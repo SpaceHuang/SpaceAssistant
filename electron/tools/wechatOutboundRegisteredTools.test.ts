@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
-import { createWeChatOutboundRegisteredTools } from './wechatOutboundRegisteredTools'
+import { createWeChatOutboundRegisteredTools, projectOutboundDeliveryPolicyFacts } from './wechatOutboundRegisteredTools'
 import { executeRegisteredTool } from './toolInvocationCoordinator'
 import { createPermitBoundCoordinatorDispatch } from './permitBoundCoordinatorDispatch'
 import { createRegisteredAgentTurnTools } from './registeredAgentTurnTools'
@@ -15,6 +16,9 @@ import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { executeWeChatSend, WeChatOutboundExecutionUncertainError } from './weChatToolExecutor'
 import { assertImOutboundAllowed, classifyImOutbound } from '../../src/shared/confirmation/outboundClassification'
+import { evaluateToolCallGate } from '../confirmation/toolCallGate'
+import { createAgentSdkSafetyPolicy } from '../confirmation/agentSdkSafetyPolicy'
+import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 
 function makeRuntime() {
   return {
@@ -34,6 +38,30 @@ function makeRuntime() {
 }
 
 describe('WeChat outbound prepared registrations', () => {
+  it('projects only host assessment evidence into policy facts and ignores model supplied contentFacts', async () => {
+    const send = vi.fn()
+    const [tool] = createWeChatOutboundRegisteredTools({ send: { name: 'wechat_send', execute: send } as never, reply: { name: 'wechat_reply', execute: vi.fn() } as never })
+    const prepared = await tool!.begin({ userId: 'friend', text: 'token=sk-1234567890abcdefghijklmnop', contentFacts: { evidenceKinds: [] } }, {
+      requestId: 'r', toolUseId: 't', executionContext: { workDir: '/tmp', sessionId: 's', lane: 'desktop' } as never
+    })
+    const gateFacts = tool!.getPreparedFacts?.(prepared.prepared) as { outboundPolicyFacts?: Array<{ kind: string; classification?: string }> }
+    expect(gateFacts.outboundPolicyFacts).toEqual([expect.objectContaining({ kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] })])
+    expect(gateFacts.outboundPolicyFacts?.[0]).not.toHaveProperty('classification')
+    expect(JSON.stringify(gateFacts)).not.toContain('sk-1234567890')
+    const callInput = { userId: 'friend', text: 'token=sk-1234567890abcdefghijklmnop' }
+    const binding = { requestId: 'r', turnId: 'turn', invocationId: 'inv', toolCallId: 't', capabilityId: 'wechat_send', inputSnapshotHash: createHash('sha256').update('{"text":"token=sk-1234567890abcdefghijklmnop","userId":"friend"}').digest('hex'), planDigest: prepared.prepared.planDigest, factsDigest: prepared.prepared.factsDigest, authorizationVersion: 'v1', phase: 'initial-compat' as const, capability: { state: 'known-authorized' as const, id: 'wechat_send' } }
+    const call = { invocationId: 'inv', toolCallId: 't', toolName: 'wechat_send', input: callInput }
+    const policy = createAgentSdkSafetyPolicy({
+      resolveToolCall: () => call,
+      resolveGateArgs: async () => ({ toolName: 'wechat_send', toolInput: { userId: 'friend', text: 'token=sk-1234567890abcdefghijklmnop' }, sessionId: 's', lane: 'desktop', workDir: '/tmp', userDataDir: '/tmp', toolsConfig: {}, effectiveRules: DEFAULT_POLICY_RULES, lanePackage: 'standard', decisionCache: { lookup: () => null }, shellPrecheck: { touchTrustedCommand() {} } } as never),
+      getPreparedFacts: (identity) => identity.toolCallId === 't' ? tool!.getPreparedFacts?.(prepared.prepared) : undefined,
+      evaluateGate: evaluateToolCallGate
+    })
+    await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'outbound-sensitive-standard-human' })
+    prepared.fail()
+    prepared.release()
+  })
+
   it('sends a user-approved desktop wechat_send after binding it to the active desktop session', async () => {
     const sessionId = 'desktop-active-send-session'
     const workDir = '/tmp'

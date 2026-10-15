@@ -160,6 +160,23 @@ describe('IM standard policy override is final at the gate', () => {
 })
 
 describe('evaluateToolCallGate 诊断契约（R2）', () => {
+  it('policy dependency fingerprint ignores unmatched rules and changes for a newly matching deny rule', async () => {
+    const unrelated = await evaluateToolCallGate(base({ effectiveRules: [
+      ...DEFAULT_POLICY_RULES,
+      { id: 'unrelated-browser-rule', when: 'invocation', match: { toolName: 'browser' }, action: 'deny', reason: 'browser only' }
+    ] }))
+    const baseline = await evaluateToolCallGate(base({ effectiveRules: DEFAULT_POLICY_RULES }))
+    const protectedResult = await evaluateToolCallGate(base({ effectiveRules: [
+      ...DEFAULT_POLICY_RULES,
+      { id: 'new-read-protection', when: 'invocation', match: { toolName: 'read_file' }, action: 'deny', locked: true, reason: 'new protection' }
+    ] }))
+
+    expect(unrelated.policyDecision?.dependencyFingerprint).toBe(baseline.policyDecision?.dependencyFingerprint)
+    expect(protectedResult.decision).toMatchObject({ type: 'deny', ruleId: 'new-read-protection' })
+    expect(protectedResult.policyDecision?.dependencyFingerprint).not.toBe(baseline.policyDecision?.dependencyFingerprint)
+    expect(protectedResult.policyDecision?.dependencyRuleIds).toContain('new-read-protection')
+  })
+
   it('persists the shared IM policy and decision evidence on policy.decision events', async () => {
     const audit = auditSink()
     const result = await evaluateToolCallGate(base({
@@ -190,7 +207,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
       imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 2, snapshot: {} },
       mcpEntry: { serverId: 'server', toolName: 'read', inputSchema: {}, annotations: {} } as never }))
     expect(audit.events.find((entry) => entry.event === 'policy.decision')?.factsCompleteness).toBe('capability-description-stale')
-    expect(audit.events.find((entry) => entry.event === 'policy.decision')).toMatchObject({ factsSnapshotId: expect.stringMatching(/^fact-[0-9a-f]{24}$/), extractorVersion: 'host-tool-facts-v1', factsRevision: 1 })
+    expect(audit.events.find((entry) => entry.event === 'policy.decision')).toMatchObject({ factsSnapshotId: expect.stringMatching(/^fact-[0-9a-f]{24}$/), extractorVersion: 'host-tool-facts-v1', factsRevision: 1, decisionId: expect.stringMatching(/^decision-[0-9a-f]{24}$/), policyDependencyFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/), decisionRuleIds: expect.any(Array) })
   })
 
   it('assigns the same snapshot id to result and policy decision audit without logging the envelope', async () => {
@@ -936,7 +953,7 @@ describe('evaluateToolCallGate', () => {
     expect(gate.readExecutionPermit?.targets[0]).toMatchObject({ factId, decisionRuleId: 'read-target-workdir-allow' })
   })
 
-  it('V2 写入 gate 先生成写目标事实，越界目标即使快通道返回批准也不能自动放行', async () => {
+  it('V2 写入 gate 先生成写目标事实，越界授权由标准档策略规则交给 Agent', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/write-gate-root-'))
     const outside = await fs.realpath(await fs.mkdtemp('/tmp/write-gate-outside-'))
     const fileAutoApproval = vi.fn(async () => ({ approve: true as const }))
@@ -954,7 +971,7 @@ describe('evaluateToolCallGate', () => {
       expect(gate.facts.signals).toContainEqual({ kind: 'path-target', path: target, zone: 'outside-workdir' })
       expect(fileAutoApproval).toHaveBeenCalledWith(expect.objectContaining({ writePathFact: gate.writePathFact }))
       expect(gate.fileAutoApproved).toBe(false)
-      expect(gate.decision.type).not.toBe('auto-allow')
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'write-outside-standard-review', answerer: 'agent' })
       expect(gate.autoApproveFallback?.reasonCode).toBe('outside_workdir')
     } finally {
       await fs.rm(root, { recursive: true, force: true })
@@ -1240,12 +1257,12 @@ describe('evaluateToolCallGate', () => {
     await fs.writeFile(file, 'hello')
     try {
       const read = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: `cat ${file}` } }))
-      expect(read.decision).toMatchObject({ type: 'auto-allow', ruleId: 'shell-outside-readonly-allow' })
+      expect(read.decision).toMatchObject({ type: 'auto-allow', ruleId: 'shell-precheck-auto-allow' })
       expect(read.facts.signals).toContainEqual({ kind: 'command-effect', effect: 'read-only' })
 
       const write = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_shell', toolInput: { command: `touch ${file}` } }))
       expect(write.decision.type).toBe('require-confirm')
-      expect(write.decision.ruleId).not.toBe('shell-outside-readonly-allow')
+      expect(write.decision).not.toMatchObject({ type: 'auto-allow', ruleId: 'shell-precheck-auto-allow' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
       await fs.rm(outside, { recursive: true, force: true })
@@ -1283,7 +1300,7 @@ describe('evaluateToolCallGate', () => {
         })
       }))
       expect(gate.decision.type).toBe(expected)
-      if (expected === 'require-confirm') expect(gate.decision.ruleId).not.toBe('shell-outside-readonly-allow')
+      if (expected === 'require-confirm') expect(gate.decision.type).toBe('require-confirm')
       if (expected === 'deny') expect(gate.decision.ruleId).toBe('recursion-guard')
     } finally {
       await fs.rm(root, { recursive: true, force: true })

@@ -152,9 +152,6 @@ export function createAgentSdkConfirmationPort(input: {
         result.outcome.answererKind === 'agent' && !confirmation.signal?.aborted && input.fallback) {
         outcome = await input.fallback(confirmation.call, confirmation, confirmation.context as GateConfirmationContext, result.outcome) ?? outcome
       }
-      if (outcome.kind === 'approved' && outcome.answerer === 'agent' && confirmation.context.facts.actionClass === 'outbound') {
-        outcome = { kind: 'denied', answerer: 'agent', cause: 'rules-violated', userMessage: '外发动作必须由真人逐次确认。' }
-      }
       if ('outcome' in result && (outcome as { answerer?: unknown }).answerer === 'agent' &&
         !confirmation.signal?.aborted && input.defer) {
         const deferred = await input.defer(confirmation.call, outcome, confirmation,

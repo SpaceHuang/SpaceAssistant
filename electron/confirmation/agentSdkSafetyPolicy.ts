@@ -15,6 +15,7 @@ export type AgentSdkGateEvaluator = (args: ToolCallGateArgs) => Promise<ToolCall
 export function createAgentSdkSafetyPolicy(input: {
   resolveGateArgs: AgentSdkGateArgsResolver
   resolveToolCall?(binding: PermitBinding): Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }> | undefined
+  getPreparedFacts?(identity: Pick<PermitBinding, 'invocationId' | 'toolCallId'>): unknown
   evaluateGate?: AgentSdkGateEvaluator
   resolveToolName?(providerToolName: string): string
   /** Attach structural read/write permits from the initial host gate to the call-private execution context. */
@@ -88,6 +89,12 @@ export function createAgentSdkSafetyPolicy(input: {
         }
         const args = await input.resolveGateArgs(binding, call, binding.signal)
         if (binding.signal?.aborted) return deny(binding, 'POLICY_DENY')
+        if (call && (call.toolName === 'wechat_send' || call.toolName === 'wechat_reply')) {
+          const prepared = input.getPreparedFacts?.(call)
+          const projection = prepared && typeof prepared === 'object' ? (prepared as { outboundPolicyFacts?: unknown }).outboundPolicyFacts : undefined
+          const facts = Array.isArray(projection) ? projection as import('../../src/shared/confirmation/types').FactSignal[] : []
+          args.factsProvider = () => facts
+        }
         const resolvedInputHash = createHash('sha256').update(stableSerialize(args.toolInput)).digest('hex')
         if (resolvedInputHash !== binding.inputSnapshotHash) return deny(binding, 'STALE_AUTHORIZATION')
         const gateArgs = buildToolCallGateArgs(args, {
@@ -105,18 +112,23 @@ export function createAgentSdkSafetyPolicy(input: {
         if (binding.phase === 'recheck') {
           if (!previous) return deny(binding, 'MISSING_MATERIAL')
           const sameFacts = createHash('sha256').update(JSON.stringify(previous.result.facts)).digest('hex') === createHash('sha256').update(JSON.stringify(result.facts)).digest('hex')
-          const sameAuthorizationVersion = previous.binding.authorizationVersion === binding.authorizationVersion
+          const samePolicyDependencies = previous.result.policyDecision && result.policyDecision
+            ? previous.result.policyDecision.dependencyFingerprint === result.policyDecision.dependencyFingerprint &&
+              previous.result.policyDecision.verdict === result.policyDecision.verdict &&
+              previous.result.policyDecision.reasonCode === result.policyDecision.reasonCode &&
+              previous.result.policyDecision.answerer === result.policyDecision.answerer
+            : previous.binding.authorizationVersion === binding.authorizationVersion
           const sameWriteTarget = sameWritePathTarget(previous.result.writePathFact, result.writePathFact)
           const sameReadTarget = stableSerialize(previous.result.readPathFact) === stableSerialize(result.readPathFact)
           const sameFeishuMediaTarget = stableSerialize(previous.result.feishuMediaFact) === stableSerialize(result.feishuMediaFact)
-          const sameWriteApprovalConfiguration = !previous.result.writePathFact ||
+          const sameWriteApprovalConfiguration = previous.result.facts.actionClass !== 'write' ||
             writeApprovalConfigurationSnapshot(previous.args) === writeApprovalConfigurationSnapshot(gateArgs)
           const sameConfirmedDecisionRule = decision.ruleId === previous.result.decision.ruleId ||
             (decision.type === 'auto-allow' && decision.ruleId === 'cache-hit' && previous.result.decision.type === 'require-confirm')
           const sameConfirmedDecision = previous.confirmed &&
             (decision.type === 'auto-allow' || decision.type === 'require-confirm') &&
             sameConfirmedDecisionRule && sameFacts
-          const recheckAllowed = sameAuthorizationVersion && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget && sameWriteApprovalConfiguration &&
+          const recheckAllowed = samePolicyDependencies && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget && sameWriteApprovalConfiguration &&
             (previous.confirmed ? sameConfirmedDecision : decision.type === 'auto-allow')
           initial.delete(key)
           if (!recheckAllowed) {

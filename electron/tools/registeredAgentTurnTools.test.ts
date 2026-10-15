@@ -51,6 +51,37 @@ const invocationId = 'inv-sdk-host'
 async function* stream(...chunks: StreamChunk[]) { yield* chunks }
 
 describe('createRegisteredAgentTurnTools', () => {
+  it('rechecks policy after a policy snapshot changes and accepts a fresh authorization version', async () => {
+    const execute = vi.fn(async () => ({ success: true, data: 'fresh policy approved' }))
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw, execute }))
+    const permits = new InMemorySafetyPermitStore()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('policy-drift-invocation', ['write_file'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: {
+      evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion })
+    } })
+    let resolveCount = 0
+    const tools = createRegisteredAgentTurnTools({
+      requestId: 'policy-drift-request', turnId: 'policy-drift-turn', registry, permits,
+      admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ sessionId: 'policy-drift-session', lane: 'wechat' }),
+      resolveAuthorizationVersion: () => ++resolveCount === 1 ? 'before-change' : 'after-change'
+    })
+    const call = { invocationId: 'policy-drift-invocation', toolCallId: 'policy-drift-call', toolName: 'write_file', input: { path: 'report.txt', content: 'approved' } }
+    const authorize = async (initial: import('../../packages/agent-sdk/src/safetyPermit').PermitBinding, recheck: import('../../packages/agent-sdk/src/safetyPermit').PermitBinding) => {
+      const prior = await safetyGate.evaluate(initial)
+      if (prior.kind !== 'allow') return { kind: 'deny' as const, reasonCode: 'POLICY_DENY' }
+      const fresh = await safetyGate.authorize(recheck)
+      return fresh.kind === 'allow' ? fresh : { kind: 'deny' as const, reasonCode: 'POLICY_DENY' }
+    }
+
+    await expect(tools.executeDeferred(call, { confirmationReceipt: 'approval:policy-drift', authorize }))
+      .resolves.toMatchObject({ output: { success: true, data: 'fresh policy approved' } })
+    expect(resolveCount).toBe(3)
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
   it('executes a deferred original tool without a model turn, after fresh recheck and one-shot permit admission', async () => {
     const execute = vi.fn(async () => ({ success: true, data: 'approved execution' }))
     const registry = new TypedToolRegistry()

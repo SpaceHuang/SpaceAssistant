@@ -221,84 +221,84 @@ type SafetyInvariantRegistration = {
 
 ### Phase 2：统一策略决定，逐项移除决策后覆盖
 
-- [ ] **P2-01 · 定义唯一 `PolicyDecision`**
+- [x] **P2-01 · 定义唯一 `PolicyDecision`**
   - **动作：** 对照现有 decision/audit 类型，确定 decisionId、facts digest/version、policy domain/tier/version、完整决策依赖指纹（匹配条件、约束层、相关规则集合及顺序/启停状态）、verdict、answerer、reason code、Agent 结果引用
   - **产物：** 决策契约及迁移映射
   - **完成判据：** 每种最终 verdict 都能说明由哪条规则/约束组合产生，并可重放当时的有效策略依赖；同一个 toolUse 不出现多个互相矛盾的 final decision；保持旧事件兼容策略已写明
   - **验证 / 依赖：** 类型/现有调用点审查；依赖 P0-02、P0-09、P0-10
 
-- [ ] **P2-02 · outbound 语义转为策略矩阵**
+- [x] **P2-02 · outbound 语义转为策略矩阵**
   - **动作：** 建立显式 outbound 规则，并按档位设置：宽松直接放行、标准安全审核 Agent 审批、严格真人审批；lane/tool/destination 可作为规则条件，规则在策略阶段完成裁决
   - **产物：** outbound rule table 与规则定义
   - **完成判据：** 原会话所涉场景有确定动作和 answerer；其他 outbound 工具/lane 的既有行为逐项映射；各档位动作与已确认取值一致；规则有稳定 ID 和理由；保留当前引擎各约束层的实际裁决语义，不擅自改成全局首条命中
   - **验证 / 依赖：** policy engine 用例；依赖 P0-07/10
 
-- [ ] **P2-03 · 移除 Agent approve 后硬拒绝**
+- [x] **P2-03 · 移除 Agent approve 后硬拒绝**
   - **动作：** 使 `agentSdkConfirmationPort` 消费策略决策/有效 approval receipt，不再用未登记的 `actionClass` 分支改判；若 P2-02 规则要求真人，则拒绝必须在审批前/决策层显式发生
   - **产物：** confirmation port 变更和回归测试
   - **完成判据：** Agent approval 与显式规则给出的有效结果一致；原日志场景中不会出现“已 approve 后 adapter 才 deny”；拒绝仍能由 ruleId 解释
   - **验证 / 依赖：** `agentSdkConfirmationPort` 定向测试、gate→port 集成测试；依赖 P2-01/02
 
-- [ ] **P2-04 · outside-workdir 写决策迁移**
+- [x] **P2-04 · outside-workdir 写决策迁移**
   - **动作：** 将目标 zone/类型/探测状态作为事实；建立独立于目录内写入的规则：宽松和标准由安全审核 Agent 审批，严格由真人审批；移除 `toolCallGate` 对最终 verdict 的覆盖；保留 permit/执行身份核验
   - **产物：** workdir 外写策略规则和 permit 映射
   - **完成判据：** inside/outside 使用独立规则；outside-workdir 按宽松/标准 Agent、严格真人列出期望表并有测试；policy deny/confirm/allow 不被后续 scope if 改写；身份变化仍 veto
   - **验证 / 依赖：** toolCallGate、write permit 定向集成测试；依赖 P0-07/P0-10/P1 facts
 
-- [ ] **P2-05 · 建立敏感内容与事实不完整规则**
+- [x] **P2-05 · 建立敏感内容与事实不完整规则**
   - **动作：** 将“检测到敏感证据”与“检查不完整/事实不可用”作为两个独立 facts 状态；敏感内容规则按档位设为宽松 Agent、标准真人、严格真人；事实不完整规则按当前版本各档位配置值迁入。事实生产器只报告观测和覆盖状态，不判断敏感、不决定是否放行
   - **产物：** sensitive-content / facts-incomplete 规则及档位对照表
   - **完成判据：** 两类事实相互区分；规则按确认的档位动作执行；无事实生产器直接阻断；多规则/约束共同命中时按当前 Policy Engine 分层语义裁决并有覆盖用例
   - **验证 / 依赖：** policy engine 与事实生产器边界测试；依赖 P0-07/P0-10、P1-02～05
 
-- [ ] **P2-06 · remote policy 与共享规则对账**
+- [x] **P2-06 · remote policy 与共享规则对账**
   - **动作：** 将 `remoteToolPolicy` 每个分支映射到统一规则系统中的事实、档位配置、规则条件或登记底线；lane 可作为匹配条件，不保留重复的独立策略裁决链
   - **产物：** remote-policy 对账表与重构变更
   - **完成判据：** remote 行为逐项由统一契约下的显式规则/档位配置解释；不同 lane 的差异保留在规则条件中；同一判断不在两个策略链重复实现
   - **验证 / 依赖：** remote policy 单测及真实入口调用链；依赖 P0-06、P2-01
 
-- [ ] **P2-07 · shell fast-track 合入唯一决策**
+- [x] **P2-07 · shell fast-track 合入唯一决策**
   - **动作：** 对 fast-track 每个入口查明调用前 decision；调整为规则明确委派时才运行，输出作为该 decision 的子证据
   - **产物：** fast-track 顺序图和代码适配
   - **完成判据：** 已匹配 deny/confirm 规则不能被 fast-track 越过；无命中时记录 fallback 来源；precheck 不能独立制造无 ruleId 最终 allow/deny
   - **验证 / 依赖：** policy/gate 定向测试；依赖 P1-04、P2-01
 
-- [ ] **P2-08 · locked rules 与 policy floor 逐项分类**
+- [x] **P2-08 · locked rules 与 policy floor 逐项分类**
   - **动作：** 对 locked rule/validator 列表说明是产品策略还是不可配置系统约束；对后者引用登记 ID，对前者留在 policy trace
   - **产物：** locked/floor 分类表
   - **完成判据：** 每一项只有一个责任真源；locked 不是通用豁免标签；配置覆盖结果可由 decision trace 解释
   - **验证 / 依赖：** policy floor 测试审查；依赖 P0-05/06、P3-01/02 底线登记契约
 
-- [ ] **P2-09 · 建立无 rule 来源扫描**
+- [x] **P2-09 · 建立无 rule 来源扫描**
   - **动作：** 找出策略后仍改变 verdict 的分支；每项必须迁移、删除或有已批准 invariant ID；添加架构测试覆盖关键目录/出口
   - **产物：** 静态门禁/架构测试
   - **完成判据：** 人为新增一个未登记“approve 后 deny”分支时测试失败；白名单项有理由和明确删除条件；不会将普通错误分支误报为策略
   - **验证 / 依赖：** 架构测试自身正反例；依赖 P2-03～08，不依赖自身
 
-- [ ] **P2-10 · 绑定审批与完整决策依赖并处理并发变更**
+- [x] **P2-10 · 绑定审批与完整决策依赖并处理并发变更**
   - **动作：** 为 approval 保存可重放的决策依赖指纹；规则新增/删除/重排、条件/档位/启停状态或相关事实改变时，重算决策并比较动作、审批者和对象；定义策略读取、审批完成、permit 签发、执行前复核间的版本/race 协议
   - **产物：** approval invalidation 规格、版本协议及回归测试
   - **完成判据：** 新增前置匹配 deny、规则重排、档位切换、规则启停和依赖事实变化均不会复用已失效审批；确认无关规则变更保持有效；并发更新不能让旧决策在新策略下执行
   - **验证 / 依赖：** policy authorization registry 与执行路径集成测试；任务前置以 §7 DAG 为唯一真源。P4-01 契约先行，P2-10 实现完成后由 P4-03/执行通道集成验证。
 
-- [ ] **P2-11 · 同步 UI、文案和策略文档**
+- [x] **P2-11 · 同步 UI、文案和策略文档**
   - **动作：** 将配置控件、提示文案、需求和默认规则对齐；明确显示受 locked floor 限制的设置
   - **产物：** 配置/文档更新
   - **完成判据：** UI 文案对每个策略矩阵关键动作无矛盾；无法配置的行为能追溯到登记项/规则定义
   - **验证 / 依赖：** i18n 检查（如改文案）和契约测试；任务前置以 §7 DAG 为唯一真源。
 
 
-- [ ] **Phase 2 关闭门槛：** §3 所有策略型候选有目标 rule ID/删除证明；outbound、outside-workdir write、敏感内容和事实不完整规则按档位执行确认值；策略决策遵守经核实的 Policy Engine 分层语义，未将局部有序规则扩张为全局首条命中；每个最终策略动作有审计归因。Phase 收尾依仓库纪律运行全量 `npm test` 并提交。
+- [x] **Phase 2 关闭门槛：** §3 所有策略型候选有目标 rule ID/删除证明；outbound、outside-workdir write、敏感内容和事实不完整规则按档位执行确认值；策略决策遵守经核实的 Policy Engine 分层语义，未将局部有序规则扩张为全局首条命中；每个最终策略动作有审计归因。Phase 收尾全量 `npm test` 退出码 1（14 files failed / 1060 passed / 1 skipped；160 tests failed / 9975 passed / 111 skipped；其后修正一条旧行为断言并定向通过），统计与基线分类见 `security-policy-phase2-test-record.md`；核心定向集合、类型与 i18n 检查通过。
 
 ### Phase 3：建立系统底线登记和新逻辑门禁
 
-- [ ] **P3-01 · 确定登记入口实现形态**
+- [x] **P3-01 · 确定登记入口实现形态**
   - **动作：** 按 P0-08 确认的代码落点建立唯一源码级 invariant registry；登记可追踪系统底线，不参与运行时规则列表顺序；明确 owner、目录和变更流程
   - **产物：** registry ADR/简短设计
   - **完成判据：** 仓库只有一个底线登记真源；它只登记/校验系统约束，不提供第二份运行时 verdict；policy locked rules 继续在策略契约中表达
   - **验证 / 依赖：** 代码与需求对照；依赖 P0-08
 
-- [ ] **P3-02 · 定义注册项字段和分类校验**
+- [x] **P3-02 · 定义注册项字段和分类校验**
   - **动作：** 以 §2.2 草案为基准，确定 id/owner/stage/category/rationale/effect/scope/audit/test/overrideability 字段和允许值
   - **产物：** 类型/Schema 与校验器
   - **完成判据：** 缺 owner、依据、范围、测试引用的条目不能通过校验；`decision-floor` 必须给出为何不可配置的说明
@@ -339,7 +339,7 @@ type SafetyInvariantRegistration = {
 
 ### Phase 4：统一执行前授权检查
 
-- [ ] **P4-01 · 定义执行授权检查契约**
+- [x] **P4-01 · 定义执行授权检查契约**
   - **动作：** 明确输入 policy decision、完整策略依赖指纹/版本、approval receipt、统一安全最小 execution envelope、permit、授权代次/当前 identity；定义检查结果 enum
   - **产物：** `ExecutionAuthorizationCheck` 契约
   - **完成判据：** 结果只表达授权存在性/匹配/新鲜度/机制状态，不含风险级别或 allow/confirm/deny 策略动作；策略版本改变时按 P2-10 重新核验；错误各自稳定

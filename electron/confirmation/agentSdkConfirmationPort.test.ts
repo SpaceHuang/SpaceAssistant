@@ -143,15 +143,15 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(result).toMatchObject({ kind: 'approved', answerer: 'user', cause: 'user-approved' })
   })
 
-  it('Agent cannot turn an IM outbound action into agent-approved', async () => {
+  it('Agent outbound result follows the policy answerer; the port does not add a second veto', async () => {
     const channel: ConfirmationChannel = { request: async () => ({ kind: 'approved', answererKind: 'agent', cause: 'agent-approved' }), cancel: vi.fn() }
     const onApproved = vi.fn()
     const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: async () => undefined, cancel: vi.fn(), onApproved })
     await expect(port({ call: { invocationId: 'inv', toolCallId: 'outbound-agent', toolName: 'send_message', input: {} },
       confirmationId: 'outbound-agent', answerer: 'agent', reasonCode: 'agent-approval',
       context: { ...context, facts: { ...facts, toolName: 'send_message', actionClass: 'outbound' } } }))
-      .resolves.toMatchObject({ kind: 'denied', answerer: 'agent', cause: 'rules-violated' })
-    expect(onApproved).not.toHaveBeenCalled()
+      .resolves.toMatchObject({ kind: 'approved', answerer: 'agent', cause: 'agent-approved' })
+    expect(onApproved).toHaveBeenCalledOnce()
   })
 
   it('从 policy context 还原 ConfirmRequest，并在发布卡片前登记 channel waiter', async () => {

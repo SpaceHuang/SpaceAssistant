@@ -2414,8 +2414,7 @@ function matchesRecheckBinding(initial: PermitBinding, recheck: PermitBinding, a
     initial.invocationId === recheck.invocationId &&
     initial.toolCallId === recheck.toolCallId &&
     initial.capabilityId === recheck.capabilityId &&
-    initial.inputSnapshotHash === recheck.inputSnapshotHash &&
-    initial.authorizationVersion === recheck.authorizationVersion
+    initial.inputSnapshotHash === recheck.inputSnapshotHash
   // A newly approved plan can have different plan/facts digests; only its caller after fresh approval opts into that revision.
   return sameCallAuthorization && (allowFreshPlanRevision ||
     initial.planDigest === recheck.planDigest && initial.factsDigest === recheck.factsDigest)

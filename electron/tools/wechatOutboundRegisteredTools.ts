@@ -24,6 +24,14 @@ type PreparedOutbound = Readonly<{
   outboundDeliveryFacts: ImOutboundFacts
 }>
 
+export function projectOutboundDeliveryPolicyFacts(value: unknown): import('../../src/shared/confirmation/types').FactSignal[] {
+  if (!value || typeof value !== 'object') return []
+  const facts = value as ImOutboundFacts
+  const content = facts.contentFacts
+  if (!content) return facts.contentCompleteness === 'complete' ? [] : [{ kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: [] }]
+  return [{ kind: 'outbound-content', inspectionCoverage: content.inspectionCoverage, evidenceKinds: content.evidenceKinds }]
+}
+
 function runtimeContext(context: ToolExecutionContext): RuntimeExecutionContext {
   const runtime = context.runtimeContext as RuntimeExecutionContext | undefined
   if (!runtime) throw new Error('WECHAT_OUTBOUND_RUNTIME_CONTEXT_REQUIRED')
@@ -168,7 +176,8 @@ function registerOutbound(name: 'wechat_send' | 'wechat_reply', executor: ToolEx
     },
     facts: (prepared) => ({
       bindingHash: fingerprint(preparedSnapshot(prepared)),
-      inputHash: createHash('sha256').update(JSON.stringify(prepared.input)).digest('hex')
+      inputHash: createHash('sha256').update(JSON.stringify(prepared.input)).digest('hex'),
+      outboundPolicyFacts: projectOutboundDeliveryPolicyFacts(prepared.outboundDeliveryFacts)
     }),
     display: (prepared) => ({
       toolName: name,

@@ -837,6 +837,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       return createAgentSdkSafetyPolicy({
         resolveGateArgs: (binding, call, signal) => resolveAgentSdkGateArgs(binding, call, signal),
         resolveToolCall: registered.getPreparedCall,
+        getPreparedFacts: registered.getPreparedFacts,
         resolveToolName,
         evaluateGate: evaluateToolCallGate,
         ...permitHandoff,

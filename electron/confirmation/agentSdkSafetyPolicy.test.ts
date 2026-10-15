@@ -11,6 +11,12 @@ import { ReadConfirmationRegistry } from './readConfirmationRegistry'
 import { finalizeReadConfirmation } from './readConfirmationFlow'
 import { readInputDigest } from './readExecutionPermit'
 import { createAgentSdkRecheckPort, createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff, createSafetyPolicyFromRecheck, markAgentSdkSafetyDecisionConfirmed } from './agentSdkSafetyPolicy'
+import { createWeChatOutboundRegisteredTools } from '../tools/wechatOutboundRegisteredTools'
+import { createRegisteredAgentTurnTools } from '../tools/registeredAgentTurnTools'
+import { TypedToolRegistry } from '../tools/plannedToolRegistry'
+import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
+import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
+import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
 
 const binding: PermitBinding & { capability: { state: 'known-authorized'; id: string } } = {
   requestId: 'req', turnId: 'turn', invocationId: 'inv', toolCallId: 'call', capabilityId: 'read_file',
@@ -361,6 +367,21 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate({ ...initialBinding, authorizationVersion: 'policy-after-confirm', phase: 'recheck' }))
       .resolves.toEqual({ kind: 'deny', reasonCode: 'POLICY_DENY' })
     expect(evaluateGate).toHaveBeenCalledTimes(2)
+  })
+
+  it('allows an approved recheck when only an unrelated policy rule changes', async () => {
+    const decision = { type: 'require-confirm', ruleId: 'read-ask', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 } as const
+    const policyDecision = { dependencyFingerprint: 'sha256:relevant-rules-v1', verdict: 'require-confirm', reasonCode: 'read-ask', answerer: 'user' } as ToolCallGateResult['policyDecision']
+    const approved: ToolCallGateResult = { ...result(decision), policyDecision }
+    const rechecked: ToolCallGateResult = { ...approved, policyDecision: { ...policyDecision! } }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(approved).mockResolvedValueOnce(rechecked)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
+    const before = { ...binding, authorizationVersion: 'policy-before' }
+    expect(await policy.evaluate(before)).toMatchObject({ kind: 'ask' })
+    markAgentSdkSafetyDecisionConfirmed(policy, { invocationId: binding.invocationId, toolCallId: binding.toolCallId })
+
+    await expect(policy.evaluate({ ...before, authorizationVersion: 'policy-after', phase: 'recheck' }))
+      .resolves.toEqual({ kind: 'allow', authorizationVersion: 'policy-after' })
   })
 
   it('resolves fresh gate material separately for initial and recheck bindings', async () => {
