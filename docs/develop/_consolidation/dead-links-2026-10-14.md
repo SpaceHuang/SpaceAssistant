@@ -32,3 +32,32 @@ rg -n '\]\(\s*\.\.?/' docs/develop --glob '!**/archive/**'
 ```
 
 > 注：本项目内**不提供**批量改写脚本（策略禁止脚本直接读写仓库文档），残余项请用受控编辑工具逐个处理。
+
+## 第二轮复查（2026-10-14 晚，全量 444 篇）
+
+**口径**：排除 `archive/`（内容零改动）、`_consolidation/` 模板占位符，以及目标落在未入库目录（`docs/review/` / `docs/analyze/` / `docs/references/`）的情形。
+
+| 类别 | 数量 | 处置 |
+| --- | --- | --- |
+| 活跃文档断链（总计） | **76** | 见下 |
+| 模板占位符（`./<模块>-现状.md`、`./history.md` 等） | 5 | 预期，非断链 |
+| 记录文档内的示例文本（`](目标)`） | 1 | 预期 |
+| 指向未入库 / 已删的评审件与历史件（`../review/…`、`../analyze/…`、`../references/…`、`../废弃/…`） | 25 | **接受**：目标在本地也不存在，属**原本即断** |
+| `docs/废弃/`、`docs/knowledge/`、`docs/i18n/` 等**边界目录**内的旧链接 | 38 | **接受**：§2.5 约定这些目录不动 |
+| **本次修复** | **7** | 见下表 |
+
+**已修复的 7 处**：
+
+| 文件 | 问题 | 修法 |
+| --- | --- | --- |
+| `_consolidation/docs-consolidation-rules.md` | 3 处链接多写一层 `../`（`../../agent-sdk/runtime/README.md`、`../../desktop-ui/README.md`、`../../platform-eng/README.md`） | 改为 `../…`（本文件位于 `docs/develop/_consolidation/`） |
+| `requirement/tools-mcp/tools-requirement.md` | 4 处代码引用缺层级（`electron/tools/…`） | 改为 `../../../electron/…` |
+
+**复查结论**：搬迁引入的断链**已清零**；其余 69 处均属「预期 / 原本即断 / 边界目录内」，无需处理。归档件内部的 398 处按 §2.4「内容零改动」保留。
+
+## 复核命令
+
+```text
+git -c core.quotepath=false ls-files '*.md' > /tmp/md-list.txt   # 全量清单（本次 444 篇）
+# 再用脚本解析 ](...)：跳过 archive/ 与 _consolidation/；目标在主工作目录存在则记为「未入库」
+```

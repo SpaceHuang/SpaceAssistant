@@ -148,7 +148,7 @@ git log --date=short --format='%ad %h %s' --grep='<方案关键词>'
 - §2.2 约定它是完整的设计系列，**零搬迁**（不搬入 `in-flight/`）；
 - §3.0 核验结论（2026-10-14）：目标设计独有符号 `wake_one`、`bWaitAll`、`namedQuota`、`quotaLease`、`callStateMachine` 在代码中**全部 0 命中**，且无实现提交（`git log --grep='调用分片' / --grep='named quota'` 为空）→ 它是**未开工的大规划**，属 C（草稿箱）语义。
 
-处置：状态口径按 C（[`../../agent-sdk/runtime/README.md`](../../agent-sdk/runtime/README.md) 头部统一声明「草稿（未实施）」，01–10 各篇不再逐篇标注）；`docs-inventory.tsv` 中这 11 篇记为 **C**（说明列标注「原地保留」）。**判断依据是核验证据，不是目录位置。**
+处置：状态口径按 C（[`../agent-sdk/runtime/README.md`](../agent-sdk/runtime/README.md) 头部统一声明「草稿（未实施）」，01–10 各篇不再逐篇标注）；`docs-inventory.tsv` 中这 11 篇记为 **C**（说明列标注「原地保留」）。**判断依据是核验证据，不是目录位置。**
 
 > **教训**：不要因为「原地保留」就把它当 A（现状素材）。A 的判据是「目标形态今天仍成立**且代码可对照**」；本系列**代码不可对照**（符号 0 命中），故只能是 C。反过来，`in-flight/` 里的文档也不能因为「在 in-flight」就免于核验（§3.5/§3.6 的 25 篇更正即是教训）。
 
@@ -160,7 +160,7 @@ git log --date=short --format='%ad %h %s' --grep='<方案关键词>'
 | --- | --- |
 | 是否进主题体系 | **否** —— 它记录的是「某次开发怎么拆的、怎么跑的」，属工具的过程产物，与 `docs/plan/`（TDD 计划/todo）、`docs/review/`（本地评审报告）同类 |
 | 是否搬迁 | **否**（§2.5）。硬理由：`docs/knowledge/SCHEMA.md:145-146` 以 `docs/superpowers/{specs,plans}` 作为 `design` / `plan` 两类 docType 的**来源目录**，搬迁会让知识库分类规则指向空目录 |
-| 如何被发现 | 主题 README 的「关联过程产物」节（[`desktop-ui`](../../desktop-ui/README.md) 12 篇、[`platform-eng`](../../platform-eng/README.md) 2 篇） |
+| 如何被发现 | 主题 README 的「关联过程产物」节（[`desktop-ui`](../desktop-ui/README.md) 12 篇、[`platform-eng`](../platform-eng/README.md) 2 篇） |
 | 与需求的关系 | 与已归档的 requirement **成对**（需求 ↔ 实现计划），口径以需求基线为准 |
 
 > **推广**：遇到「工具生成的过程文档」目录（插件、脚手架、自动化 Agent 的产出），先判**归属**（产品文档 or 过程产物），再决定是否进主题体系；**不要因为它"看起来像文档"就并入**。

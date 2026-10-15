@@ -1284,10 +1284,10 @@ export type SpaceAssistantApi = {
 
 | 原 ID | 需求出处 | 实现说明 |
 |-------|----------|----------|
-| ~~D-01~~ | §5.6 工具执行超时 | `read_file` / `list_directory` / `edit_file` / `write_file` 使用 [`combineUserAbortAndTimeout`](electron/tools/toolExecutionResource.ts)（默认 30s）与文档所列超时错误文案；`readFile` 支持 `{ signal }` 处已传入合成 signal。 |
+| ~~D-01~~ | §5.6 工具执行超时 | `read_file` / `list_directory` / `edit_file` / `write_file` 使用 [`combineUserAbortAndTimeout`](../../../electron/tools/toolExecutionResource.ts)（默认 30s）与文档所列超时错误文案；`readFile` 支持 `{ signal }` 处已传入合成 signal。 |
 | ~~D-02~~ | §5.6 用户取消 | 同上合成 signal 与用户 `tool:cancel` 联动；目录列举在条目循环中 `throwIfAborted`；写盘步骤间亦检查。 |
-| ~~D-03~~ | §6.3 原子写入 + fsync | [`atomicWriteFile`](electron/tools/builtinExecutors.ts)：`writeFile` → `open`(`r+`) → `sync` → `close` → `rename`，失败 `unlink` 临时文件。 |
-| ~~D-04~~ | §11 工具入参校验 | [`assertSafeToolInput`](electron/toolInputGuards.ts) 在 [`toolChatLoop`](electron/toolChatLoop.ts) 执行器调用前校验路径/大字段/grep/run_script 边界。 |
+| ~~D-03~~ | §6.3 原子写入 + fsync | [`atomicWriteFile`](../../../electron/tools/builtinExecutors.ts)：`writeFile` → `open`(`r+`) → `sync` → `close` → `rename`，失败 `unlink` 临时文件。 |
+| ~~D-04~~ | §11 工具入参校验 | [`assertSafeToolInput`](../../../electron/toolInputGuards.ts) 在 [`toolChatLoop`](../../../electron/toolChatLoop.ts) 执行器调用前校验路径/大字段/grep/run_script 边界。 |
 | ~~D-05~~ | §7.2 / §7.3 `allowedTools` | 设置「工具」Tab 增加 **「仅允许选中的工具（白名单）」**；开启时保存 `allowedTools` 为勾选列表且 `deniedTools: []`，关闭时 `allowedTools: []` 并维护 `deniedTools`。 |
 
 ### 15.2 渲染与体验（相对 §8 正文）
