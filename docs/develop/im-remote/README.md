@@ -8,7 +8,8 @@
 
 | 文档 | 类型 | 说明 |
 | --- | --- | --- |
-| [远程与IM-现状.md](./远程与IM-现状.md) | **现状文档** | 飞书链路、微信链路、远程澄清与延迟审批、出站受理、Track 归因 |
+| [远程与IM-现状.md](./远程与IM-现状.md) | **现状文档** | 飞书链路（8 族）、微信链路（6 族）、远程核心（12 族，110+ 件）、出站受理、Track 归因 |
+| [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) | **核验记录** | 6 条断言复算；3 条判为「严重不完备」并已重写现状文档 §1–§3 |
 | [im-architecture-refactor.md](./im-architecture-refactor.md) | 架构设计（v2.1） | IM 架构重构 |
 | [feishu-integration-phase1-design.md](./feishu-integration-phase1-design.md) | 设计 | 飞书集成 Phase 1（MVP） |
 | [feishu-integration-phase2-design.md](./feishu-integration-phase2-design.md) | 设计 | 飞书集成 Phase 2（增强） |
@@ -30,6 +31,10 @@
 ## 相关需求口径
 
 见 [`../../requirement/im-remote/`](../../requirement/im-remote/)（飞书/微信集成、远程工作目录、进度同步、异步审批安全、产物决策）。
+
+## 核验记录
+
+- [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) —— 基线 `17236274`；断言逐条带可复现命令，含「矛盾与时间线检查」「无法核验项」「抽样复核建议」。
 
 ## 取证命令
 

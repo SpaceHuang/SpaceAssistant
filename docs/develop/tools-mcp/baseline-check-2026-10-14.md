@@ -15,6 +15,17 @@
 
 - shell 方言错配的**端到端真机行为**（Windows 宿主初始化失败、cmd 方言信号）：需 Windows 真机，标 `待真机核验`（相关用例已按 `a7f9e72f` 去端到端化，自动化覆盖下降）。
 
+## 现状文档断言核验（对 [`工具能力-现状.md`](./工具能力-现状.md)，2026-10-14 新写）
+
+| 断言 | 出处 | 命令 | 实测 | 判定 |
+| --- | --- | --- | --- | --- |
+| B1 shell 命令分析与安全规则齐备 | 现状 §1 | `ls electron/shell/analyzeShellCommand.ts electron/shell/bashSecurityRules.ts` | 命中（`analyzeShellCommand` 被 11 文件引用） | 一致 |
+| B2 输出管线三件 | 现状 §1 | `ls electron/shell/outputPipeline.ts electron/shell/boundedOutput.ts electron/shell/outputArtifactWriter.ts` | 命中 | 一致 |
+| B3 许可绑定派发 | 现状 §2 | `ls electron/tools/permitBoundCoordinatorDispatch.ts` | 命中（9 文件引用） | 一致 |
+| B4 MCP 连接管理 | 现状 §3 | `ls electron/mcp/mcpConnectionManager.ts` | 命中（17 文件引用） | 一致 |
+| B5 浏览器宿主与依赖恢复 | 现状 §4 | `ls electron/browser/playwrightBrowserHost.ts electron/browser/browserDependencyRecovery.ts` | 命中 | 一致 |
+| B6 工具重试策略 | 现状 §5 | `rg -n 'shouldStopToolRetry' electron/toolErrorRetryPolicy.ts` | 命中 | 一致 |
+
 ## 抽样复核建议（用户抽 3 条）
 
-A1、A2、A4。
+A1、A2、A4（交付前核验）＋ B1、B3（现状文档断言）。

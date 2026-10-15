@@ -30,6 +30,10 @@
 
 见 [`../../requirement/platform-eng/`](../../requirement/platform-eng/)（i18n 架构、后台任务机制移除）。
 
+## 核验记录
+
+- [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) —— 基线 `17236274`；断言逐条带可复现命令，含「矛盾与时间线检查」「无法核验项」「抽样复核建议」。
+
 ## 取证命令
 
 ```text

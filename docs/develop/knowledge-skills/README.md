@@ -28,6 +28,10 @@ rg -n 'wikiProjectStore|wikiMount|wikiMigration|wikiWriteMutex' electron/wiki
 
 配套开发/测试计划：`docs/plan/wiki-shared-centralized-storage-dev-test-plan.md`（不动、只引用）。
 
+## 核验记录
+
+- [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) —— 基线 `17236274`；断言逐条带可复现命令，含「矛盾与时间线检查」「无法核验项」「抽样复核建议」。
+
 ## 取证命令
 
 ```text

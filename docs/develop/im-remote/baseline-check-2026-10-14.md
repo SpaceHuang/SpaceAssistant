@@ -15,6 +15,16 @@
 
 - 真实 IM 链路（飞书/微信真实 Bot 收发、远程确认投递）：需真实外部系统凭据与真机，标 `待真机核验`。
 
+## 现状文档断言核验（对 [`远程与IM-现状.md`](./远程与IM-现状.md)，2026-10-14 新写）
+
+| 断言 | 出处 | 命令 | 实测 | 判定 |
+| --- | --- | --- | --- | --- |
+| B1 飞书 CLI 流 | 现状 §1 | `ls electron/feishu/feishuCliFlow.ts` | 命中（2 文件引用） | 一致 |
+| B2 微信命令路由 | 现状 §2 | `ls electron/wechat/weChatCommandRouter.ts` | 命中（3 文件引用） | 一致 |
+| B3 延迟审批族 | 现状 §3 | `ls electron/remote/deferredApproval*.ts` | 命中 6 件（`deferredApprovalRuntime` 被 4 文件引用） | 一致 |
+| B4 出站受理 | 现状 §4 | `ls electron/outbound/outboundAcceptor.ts` | 命中（4 文件引用） | 一致 |
+| B5 Track 契约与归因 | 现状 §5 | `ls src/shared/remoteTrack.ts electron/database/remoteTrack*.ts` | 命中（`remoteTrack` 被 61 文件引用） | 一致 |
+
 ## 抽样复核建议（用户抽 3 条）
 
-A1（关键分歧点）、A2、A3。
+A1（关键分歧点）、A2、A3（交付前核验）＋ B3、B5（现状文档断言）。

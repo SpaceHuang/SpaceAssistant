@@ -11,6 +11,7 @@
 | 文档 | 位置 | 说明 |
 | --- | --- | --- |
 | [确认与审批-现状.md](./确认与审批-现状.md) | **本目录** | **现状文档**：策略内核（`decide` / package / floor）、工具闸门与调用准入、审批回答者（3 轮 · haiku · 授权上限 low）、通道与延迟/异步审批、执行许可（读/写 permit + 路径租约）、决策缓存与安全审计、迁移收口 |
+| [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) | **本目录** | **核验记录**：现状文档 20 条断言逐条复算（20/20 一致） |
 | `tool-confirmation-top-level-design-v2.md` | `docs/requirement/safety-approval/` | 确认与授权机制顶层设计（四轮评审，可进入 P0） |
 | `security-policy-single-entry-requirement.md` | `docs/requirement/safety-approval/` | 安全策略单一入口（口径仍在生效） |
 | `confirmation-answerer-and-auto-approval-design.md` | `docs/develop/architect/` | 回答者与自动审批设计 |
@@ -34,6 +35,10 @@
 | `script-security-parser-treesitter-upgrade-plan.md` | P0–P3 全部 29 项任务完成 |
 | `script-security-parser-upgrade-golden-review.md` | 金标准评审（过程产物） |
 | `tool-confirmation-framework-implementation-plan.md` | 框架部分已落地（v8 可进入 P0） |
+
+## 核验记录
+
+- [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) —— 基线 `17236274`；断言逐条带可复现命令，含「矛盾与时间线检查」「无法核验项」「抽样复核建议」。
 
 ## 取证命令
 

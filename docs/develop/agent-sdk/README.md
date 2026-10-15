@@ -149,6 +149,10 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 
 已完成迭代原件见 [`../archive/agent-sdk/`](../archive/agent-sdk/)（16 件），含生命周期改进与契约矩阵、上下文 token 成本优化、`agent-core-contract-path-refactor-plan.md`（旧称，文件名保留）、驱动权限重构、失败 turn 续跑、工具错误恢复与 turn 连续性、`batch3-p0-evidence-audit.md`。映射见 [`../archive/INDEX.md`](../archive/INDEX.md)。
 
+## 核验记录
+
+- [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) —— 基线 `17236274`；断言逐条带可复现命令，含「矛盾与时间线检查」「无法核验项」「抽样复核建议」。
+
 ## 迭代历史
 
 见 [history.md](./history.md)。

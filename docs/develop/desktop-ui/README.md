@@ -8,7 +8,8 @@
 
 | 文档 | 类型 | 说明 |
 | --- | --- | --- |
-| [桌面交互与工作区-现状.md](./桌面交互与工作区-现状.md) | **现状文档** | 渲染组件与服务、工作目录与目录授权、已落地性能优化 |
+| [桌面交互与工作区-现状.md](./桌面交互与工作区-现状.md) | **现状文档** | 渲染组件（13 面板）、渲染服务（15 机制族）+ store 切片、工作目录与目录授权、已落地性能优化 |
+| [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) | **核验记录** | 5 条断言复算；2 条判为「严重不完备/缺项」并已补写现状文档 §2 |
 | [multi-workdir-technical-design.md](./multi-workdir-technical-design.md) | 技术设计（v1.0） | 多工作目录 |
 | [explicit-output-directory-candidate-technical-design.md](./explicit-output-directory-candidate-technical-design.md) | 候选技术设计 | 显式产出目录（现行「工作产物管理」口径） |
 | [chat-vision-image-context-design.md](./chat-vision-image-context-design.md) | 设计（v1.2） | 聊天视觉上下文（图片附件 → 多模态 API） |
@@ -53,6 +54,10 @@
 ## 相关需求口径
 
 见 [`../../requirement/desktop-ui/`](../../requirement/desktop-ui/)（35 件归档 + 2 件在途）。
+
+## 核验记录
+
+- [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) —— 基线 `17236274`；断言逐条带可复现命令，含「矛盾与时间线检查」「无法核验项」「抽样复核建议」。
 
 ## 取证命令
 

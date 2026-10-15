@@ -1,0 +1,27 @@
+# desktop-ui baseline 核验记录（2026-10-14）
+
+> 基线：`17236274`｜执行：Agent｜窗口：`git log 17236274..HEAD -- src/renderer electron/workDir*` = **0 条**
+> 被核验对象：[`桌面交互与工作区-现状.md`](./桌面交互与工作区-现状.md)（2026-10-14 新写）
+
+| 断言 | 出处 | 命令 | 实测 | 判定 |
+| --- | --- | --- | --- | --- |
+| A1 渲染层组件面板齐备 | 现状 §1 | `ls src/renderer/components` | 命中 12 个目录（Chat / SessionList / FileTree / DetailPanel / Search / Config / Browser / UsageStats / WikiPane / FloatingNotification / TitleBar / shared / ui） | 一致 |
+| A2 轮次投影服务存在 | 现状 §2 | `ls src/renderer/services/turnProjectionService.ts` | 命中（3 文件引用，含 `App.tsx`） | 一致 |
+| A3 会话运行服务存在 | 现状 §2 | `ls src/renderer/services/chatRunnerService.ts` | 命中（13 文件引用，含 `ChatView.tsx`） | 一致 |
+| A4 搜索语料/适配器族 | 现状 §2 | `ls src/renderer/services/chatSearch*.ts` | 命中（`chatSearchCorpus` 3 文件引用） | 一致 |
+| A5 工作目录管理与绑定 | 现状 §3 | `ls electron/workDirManager.ts electron/workDirBinding.ts electron/workDirSnapshot.ts` | 命中（`workDirManager` 被 67 文件引用） | 一致 |
+| A6 会话目录授权 | 现状 §3 | `ls electron/sessionDirectoryGrants.ts` | 命中 | 一致 |
+| A7 性能优化两批已落地 | 现状 §4 | `ls docs/develop/archive/desktop-ui/chat-message-list-*` | 命中（含复测门禁与结果 json） | 一致 |
+
+## 矛盾与时间线检查
+
+- **双入口检查（有冲突，未消解）**：`archive/desktop-ui/渲染进程卡顿优化方案.md`（v3.25，多阶段已落地）与 `in-flight/../streaming-ui-performance-analysis.md`（v1.0「分析完成，待实施」，已核验为已实现并归档）在**「流式卡顿」话题上重叠**。二者口径不矛盾（前者是总方案、后者是专题分析），但**同话题两条线索**需拍板是否合并为一条现状描述 —— 已在 [`history.md`](./history.md) 「存疑」节记录，**待用户拍板**。
+- **history 抽样**（3 条，均可命中）：`810d38e2`（composer 加号菜单）、`86d613cf`（列表停止按钮提示 Phase 3）、`6fe55d43`（死文件与孤儿 i18n key 清理）。
+
+## 无法核验项
+
+- 渲染性能的**实测帧率/耗时**需真机与性能基线（原复测门禁在归档件里，未重跑），标 `待真机核验`。
+
+## 抽样复核建议（用户抽 3 条）
+
+A1、A5、A7。

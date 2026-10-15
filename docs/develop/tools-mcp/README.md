@@ -8,7 +8,8 @@
 
 | 文档 | 类型 | 说明 |
 | --- | --- | --- |
-| [工具能力-现状.md](./工具能力-现状.md) | **现状文档** | shell 执行链、工具注册与派发、MCP、浏览器、工具可靠性 |
+| [工具能力-现状.md](./工具能力-现状.md) | **现状文档** | shell 执行链（9 机制族）、工具注册与派发（8 族）、MCP（8 族，含传输层）、浏览器（6 族）、工具可靠性 |
+| [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) | **核验记录** | 7 条断言复算；4 条判为「严重不完备」并已重写现状文档 §1–§4 |
 | [web-browser-tools-design.md](./web-browser-tools-design.md) | 设计（v1.1） | 浏览器自动化工具设计 |
 | [cli-subagent-integration-design.md](./cli-subagent-integration-design.md) | 设计（v1.0） | 子代理集成设计 |
 | [ripgrep-integration-technical-design.md](./ripgrep-integration-technical-design.md) | 设计（评审整改版） | rg 集成；本地必做项已完成 |
@@ -35,6 +36,10 @@
 | `mcp-timeout-turn-failure-isolation-plan.md`（已归档） | 「复评修订版尚未复评」 | 阶段 A–E 已实现：`a01a6d49 fix(agent): isolate timed out turn execution`（2026-10-14）、`e6f1c510`（merge） |
 
 核验命令：`git log --date=short --format='%ad %h %s' --grep='isolation' -30`、`rg -n 'timed out\|timeout' electron/mcp`.
+
+## 核验记录
+
+- [baseline-check-2026-10-14.md](./baseline-check-2026-10-14.md) —— 基线 `17236274`；断言逐条带可复现命令，含「矛盾与时间线检查」「无法核验项」「抽样复核建议」。
 
 ## 取证命令
 
