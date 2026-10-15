@@ -12,7 +12,7 @@ import { beginTool, endTool } from '../remote/remoteSessionSwitchState'
 import { adoptRemoteSessionAfterSwitch } from '../remote/remoteSessionSwitchFollow'
 import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
 import type { RemoteContext } from './types'
-import type { ToolExecutionContext, ToolExecutor } from './types'
+import type { ToolExecutor } from './types'
 import type { Session } from '../../src/shared/domainTypes'
 
 const REMOTE_ONLY_ERROR = '该工具仅在远程会话中可用'

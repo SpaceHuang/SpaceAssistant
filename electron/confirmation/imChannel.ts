@@ -8,7 +8,6 @@ import type {
   ConfirmationPromptSendFailure,
   ConfirmRequest,
   MemoryTier,
-  OriginInfo,
   RiskLevel
 } from '../../src/shared/confirmation/types'
 import type { PromptSendErrorCategory, PromptSendNotAttemptedErrorCategory, PromptSendResult } from './promptSend'

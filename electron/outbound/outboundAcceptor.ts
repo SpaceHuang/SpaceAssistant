@@ -23,7 +23,7 @@ import { summarizeFailedInvocation } from '../runtime/continuationSummary'
 export { summarizeFailedInvocation } from '../runtime/continuationSummary'
 import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import type { SessionCommands, SessionExecutionStore } from '../sessionStorage/contracts'
-import type { ContinuationSourceQueries, ContinuationSourceRef, SessionQueries } from '../sessionStorage/contracts'
+import type { ContinuationSourceRef, SessionQueries } from '../sessionStorage/contracts'
 import { runInTransaction, TransactionCommitUnknownError } from '../database/transaction'
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 

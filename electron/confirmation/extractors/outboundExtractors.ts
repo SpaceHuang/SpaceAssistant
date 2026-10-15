@@ -1,5 +1,5 @@
 import { classifyLarkCliImpact } from '../../feishu/larkCliImpactPolicy'
-import type { EnvFacts, FactSignal } from '../../../src/shared/confirmation/types'
+import type { FactSignal } from '../../../src/shared/confirmation/types'
 
 /** 出站目标提取器：wechat_send/reply 的接收者 → outbound-target 信号。 */
 export function extractOutboundTarget(toolInput: Record<string, unknown>): {
