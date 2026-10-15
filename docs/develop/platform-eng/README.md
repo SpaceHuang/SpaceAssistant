@@ -22,6 +22,10 @@
 | 本地/云端 main 分叉接入 | `2026-10-01-main-divergence-hosted-runtime-integration-plan.md`、`-execution-record.md` |
 | 其他 | `automated-test-suite-cleanup-audit.md`、`dependency-upgrade-plan-2026-08.md`、`legacy-workspace-layout-cleanup-plan.md`（Done 2026-07-24） |
 
+## 关联过程产物（`docs/superpowers/`，按 §2.5 不搬迁）
+
+- `docs/superpowers/plans/2026-06-03-i18n-phase4.md` + `docs/superpowers/specs/2026-06-03-i18n-phase4-design.md` —— i18n 第四期收尾与验证；口径见 [`../../requirement/platform-eng/需求基线.md`](../../requirement/platform-eng/需求基线.md)
+
 ## 相关需求口径
 
 见 [`../../requirement/platform-eng/`](../../requirement/platform-eng/)（i18n 架构、后台任务机制移除）。

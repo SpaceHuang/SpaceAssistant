@@ -35,6 +35,21 @@
 | 队列任务栏 | `2026-09-30-queued-task-bar-implementation-plan.md` |
 | 已废弃 | `plan_mode_optimization_design.md`（D：头部与结尾状态自相矛盾，按代码判定为废弃，见 `remove-plan-mode-requirement.md`） |
 
+## 关联过程产物（`docs/superpowers/`，按 §2.5 不搬迁）
+
+以下 12 篇是 2026-05~06 的实现计划/设计稿（**另一套工作流的产出**，文档头含 `superpowers:subagent-driven-development` 标记），与已归档的同名需求成对；此处只做交叉引用：
+
+| 件（前缀 `docs/superpowers/`） | 对应口径 |
+| --- | --- |
+| `plans/2026-05-15-file-pane-tree.md` + `specs/2026-05-15-file-pane-tree-design.md` | `file-pane-tree-requirement.md`（已归档） |
+| `plans/2026-05-15-vertical-icon-activity-bar.md` + `specs/2026-05-15-vertical-icon-activity-bar-design.md` | 活动栏布局（无独立需求件） |
+| `plans/2026-05-18-referenced-files.md` | `referenced-files-requirement.md`（已归档） |
+| `plans/2026-05-24-context-usage-ring.md` + `specs/2026-05-24-context-usage-ring-design.md` | `context-usage-ring-requirement.md`（已归档） |
+| `plans/2026-05-26-composer-hint-responsive.md` + `specs/2026-05-26-composer-hint-responsive-design.md` | `composer-hint-responsive-requirement.md`（已归档） |
+| `plans/2026-06-12-floating-notification.md` + `specs/2026-06-12-floating-notification-design.md` | `pending-confirm-floating-notification.md`（已归档） |
+| `plans/2026-06-14-poster-zero-base64-upload.md` | 海报零 base64（社交图文生成器系列） |
+| `plans/2026-06-30-file-write-directory-layout.md` | `file-write-directory-layout-requirement.md`（**D 类已废弃**，替代见「工作产物管理」） |
+
 ## 相关需求口径
 
 见 [`../../requirement/desktop-ui/`](../../requirement/desktop-ui/)（35 件归档 + 2 件在途）。
