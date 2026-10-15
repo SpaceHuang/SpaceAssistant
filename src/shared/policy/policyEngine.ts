@@ -283,7 +283,7 @@ function requireConfirm(
   }
 }
 
-function autoAllow(ruleId: string, facts: ContentFacts, cacheKey?: CacheKey): Decision {
+function autoAllow(ruleId: string, _facts: ContentFacts, cacheKey?: CacheKey): Decision {
   return { type: 'auto-allow', ruleId, reason: ruleId, ...(cacheKey ? { cacheKey } : {}) }
 }
 
