@@ -144,10 +144,6 @@ function onTreeChanged(event: import('../../shared/fileTreeSync').FileTreeChange
   for (const p of event.relPaths) enqueuePath(p, 'paths')
 }
 
-function onContentChanged(event: import('../../shared/fileContentSync').FileContentChangedEvent): void {
-  enqueuePath(event.relPath, 'watch')
-}
-
 export function subscribeFileContentSync(listener: ReadyListener): () => void {
   readyListeners.add(listener)
   return () => readyListeners.delete(listener)

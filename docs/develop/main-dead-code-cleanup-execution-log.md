@@ -64,3 +64,4 @@
 | 批次 | 改动与行为证据 | 验证 |
 |---|---|---|
 | 1. WeChat clarification router | 清除 `weChatCommandRouter.ts` 中未使用的 `CURRENT_SCHEMA_VERSION` import 和 `assistantMessageId` 读取；将未使用的 `parked` 绑定改为原调用表达式，保留 `parkImInboxMessageForClarification` 持久化调用、参数求值和后续创建/发送 attempt 的先后顺序。现有 `ambiguous Track 消息会原子暂存并发送带句柄的选项` 测试已在修改前验证澄清记录、parked 消息与发送 attempt 状态。 | 修改前、后均 `npm exec -- vitest run electron/wechat/weChatCommandRouter.test.ts`：36/36 通过；全项目 noUnused 诊断由 277 降至 274（TS6133 234→231），该文件剩余诊断 0。 |
+| 2. 无副作用绑定 | 删除 `readPermitTestUtils.ts` 的未使用 Node `path` import；`UsageStatsDrawer` 将仅用作类型的 `Dayjs` import 改为 type-only；删除无调用方的私有 `onContentChanged`；`database/index.ts` 去掉冗余的 `openSqliteDatabaseReadOnly` 本地绑定，但保留同名公开再导出。 | 修改前、后定向跑 `builtinExecutors.pathAlias.test.ts`、`fileContentSyncBus.test.ts`、`UsageStatsDrawer.test.tsx`：3 个文件 / 41 项通过；noUnused 诊断由 274 降至 270，4 个目标文件均无剩余诊断。 |
