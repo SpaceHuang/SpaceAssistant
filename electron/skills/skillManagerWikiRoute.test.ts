@@ -43,8 +43,8 @@ author: "test"
 `)
 }
 
-function buildManager(dirs: { userDataPath: string; workDir: string }, wikiConfig: WikiConfig) {
-  const config: SkillsConfig = { ...DEFAULT_SKILLS_CONFIG }
+function buildManager(dirs: { userDataPath: string; workDir: string }, wikiConfig: WikiConfig, configOverrides?: Partial<SkillsConfig>) {
+  const config: SkillsConfig = { ...DEFAULT_SKILLS_CONFIG, ...configOverrides }
   return createSkillManager({
     getUserDataPath: () => dirs.userDataPath,
     getWorkDir: () => dirs.workDir,
@@ -175,6 +175,28 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
     }
   })
 })
+
+  it('!enabled 时 llm-wiki 不进路由候选，手动点名也不挤占 maxConcurrent 名额（P2-5）', async () => {
+    const dirs = makeTempDirs()
+    try {
+      createUserSkill(dirs.userDataPath, 'note-tool', '笔记工具')
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG, enabled: false }, { maxConcurrent: 1 })
+      createClientMock.mockReturnValue({
+        messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: '{"skills":["note-tool"]}' }] })) }
+      } as never)
+
+      const result = await manager.route({
+        userInput: '记录一下今天的工作',
+        sessionState: { manualActivated: ['llm-wiki'], manualDisabled: [] },
+        model: 'test-model',
+        getApiKey: async () => 'test-key'
+      })
+
+      expect(result.skills.map((s) => s.meta.name)).toEqual(['note-tool'])
+    } finally {
+      dirs.cleanup()
+    }
+  })
 
 describe('skillManager.match wiki 过滤（既有契约）', () => {
   it('!enabled 时 match 结果剔除 llm-wiki', () => {

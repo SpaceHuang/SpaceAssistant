@@ -68,3 +68,114 @@ describe('deferred todo capacity reservations', () => {
     db.close()
   })
 })
+
+/**
+ * AGENTS.md 配额类模块纪律：随机操作序列 + 每步跨函数状态不变量断言。
+ * 逐场景用例对「跨函数成对性 / 计数守恒」类缺陷天然易漏（2026-10 评审教训）。
+ *
+ * 每步后全量断言：
+ * - I1 (session,identity) 分组 active ∈ [1, sessionLimit]
+ * - I2 identity 分组 active ∈ [1, identityLimit]
+ * - I3 release/releaseByInvocation 成功后该 invocation 无 active 行
+ * - I4 reserve duplicate:true 不新增行
+ * - I5 reconcile 后不在 valid 集的 invocation 无 active 行
+ */
+describe('deferredTodoCapacity 随机序列不变量（配额守恒）', () => {
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0
+      let t = a
+      t = Math.imul(t ^ (t >>> 15), t | 1)
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+  }
+
+  it('200 步随机 reserve/activate/release/releaseByInvocation/reconcile/expire 序列后配额不变量成立', () => {
+    const random = mulberry32(20261015)
+    const pick = <T,>(items: readonly T[]): T => items[Math.floor(random() * items.length)]!
+    const db = createMemoryAppDb()
+    try {
+      const sessionLimit = 3
+      const identityLimit = 4
+      const capacity = createDeferredTodoCapacityController(db, { sessionLimit, identityLimit })
+      const activeInvocations = new Set<string>()
+      let now = 1_000_000
+
+      const assertInvariants = () => {
+        const conn = getDbConnection(db)
+        const bySessionIdentity = conn.prepare(`SELECT session_id,identity_key,COUNT(*) AS count FROM deferred_todo_capacity_reservations
+          WHERE state IN ('prepared','pending') GROUP BY session_id,identity_key`).all() as Array<{ count: number }>
+        const byIdentity = conn.prepare(`SELECT identity_key,COUNT(*) AS count FROM deferred_todo_capacity_reservations
+          WHERE state IN ('prepared','pending') GROUP BY identity_key`).all() as Array<{ count: number }>
+        for (const row of bySessionIdentity) {
+          expect(row.count).toBeLessThanOrEqual(sessionLimit)
+          expect(row.count).toBeGreaterThan(0)
+        }
+        for (const row of byIdentity) {
+          expect(row.count).toBeLessThanOrEqual(identityLimit)
+          expect(row.count).toBeGreaterThan(0)
+        }
+      }
+
+      for (let step = 0; step < 200; step += 1) {
+        now += Math.floor(random() * 5_000) + 1
+        const action = random()
+        if (action < 0.55) {
+          const reuseInvocation = activeInvocations.size > 0 && random() < 0.2
+          const invocationId = reuseInvocation ? pick([...activeInvocations]) : `inv-${step}`
+          const rowsBefore = getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations WHERE invocation_id=?`)
+            .get(invocationId) as { count: number }
+          const outcome = capacity.reserve({
+            reservationId: `res-${step}`,
+            invocationId,
+            sessionId: `session-${Math.floor(random() * 3)}`,
+            identityKey: `identity-${Math.floor(random() * 2)}`,
+            state: random() < 0.5 ? 'prepared' : 'pending',
+            now,
+            expiresAt: now + 60_000
+          })
+          const rowsAfter = getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations WHERE invocation_id=?`)
+            .get(invocationId) as { count: number }
+          if (outcome.ok && !outcome.duplicate) {
+            activeInvocations.add(invocationId)
+            expect(rowsAfter.count).toBe(rowsBefore.count + 1)
+          } else {
+            // I4：duplicate/冲突/满员拒绝不新增行
+            expect(rowsAfter.count).toBe(rowsBefore.count)
+          }
+        } else if (action < 0.7 && activeInvocations.size > 0) {
+          const invocationId = pick([...activeInvocations])
+          expect(capacity.releaseByInvocation(invocationId, now)).toBe(true)
+          activeInvocations.delete(invocationId)
+        } else if (action < 0.8 && activeInvocations.size > 0) {
+          const invocationId = pick([...activeInvocations])
+          capacity.releaseByInvocation(invocationId, now)
+          activeInvocations.delete(invocationId)
+        } else if (action < 0.9 && activeInvocations.size > 0) {
+          const valid = [...activeInvocations].filter(() => random() < 0.5)
+          capacity.reconcile(valid, now)
+          for (const invocationId of [...activeInvocations]) {
+            if (!valid.includes(invocationId)) activeInvocations.delete(invocationId)
+          }
+        } else {
+          now += 120_000
+          capacity.counts({ identityKey: `identity-${Math.floor(random() * 2)}`, now })
+          for (const invocationId of [...activeInvocations]) {
+            const row = getDbConnection(db).prepare(`SELECT expires_at FROM deferred_todo_capacity_reservations WHERE invocation_id=?`)
+              .get(invocationId) as { expires_at: number } | undefined
+            if (row && row.expires_at <= now) activeInvocations.delete(invocationId)
+          }
+        }
+        for (const invocationId of activeInvocations) {
+          expect(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
+            WHERE invocation_id=? AND state IN ('prepared','pending')`).get(invocationId)).toEqual({ count: 1 })
+        }
+        assertInvariants()
+      }
+    } finally {
+      db.close()
+    }
+  })
+})

@@ -47,15 +47,17 @@ export function createRemoteAsyncApprovalGate(input: {
   getEvidence: () => RemoteAsyncApprovalGateEvidence | null | undefined
   closeAll: () => Promise<CloseResult>
 }) {
-  const conn = getDbConnection(input.db)
+  // 注：本工厂当前无生产调用方（去留待确认，评审 2026-10-15）；连接遵循全局现取化约定，
+  // 若确认保留请保持每函数入口现取，勿回退为工厂期捕获。
+  const liveConn = () => getDbConnection(input.db)
   function state(): GateState {
-    const row = conn.prepare('SELECT state,close_required FROM remote_async_approval_gate_state WHERE singleton=1')
+    const row = liveConn().prepare('SELECT state,close_required FROM remote_async_approval_gate_state WHERE singleton=1')
       .get() as { state: GateState['state']; close_required: number } | undefined
     const value = row ?? { state: 'disabled' as const, close_required: 0 }
     return { state: value.state, enabled: value.state === 'enabled', closeRequired: value.close_required === 1 }
   }
   function write(next: GateState['state'], closeRequired: boolean): GateState {
-    conn.prepare(`INSERT INTO remote_async_approval_gate_state(singleton,state,close_required,updated_at) VALUES(1,?,?,?)
+    liveConn().prepare(`INSERT INTO remote_async_approval_gate_state(singleton,state,close_required,updated_at) VALUES(1,?,?,?)
       ON CONFLICT(singleton) DO UPDATE SET state=excluded.state,close_required=excluded.close_required,updated_at=excluded.updated_at`)
       .run(next, closeRequired ? 1 : 0, Date.now())
     input.db.save()

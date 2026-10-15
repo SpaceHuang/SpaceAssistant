@@ -241,6 +241,14 @@ describe('skillRouter wiki-trigger hard rule (W1-a)', () => {
     expect(mergeRouteSkills(scored, config.maxConcurrent).skills.map((s) => s.meta.name)).not.toContain(WIKI_VOCABULARY_PREFIX)
   })
 
+  it('LLM 推荐与 wiki-trigger 同分并列时保留 wiki-trigger 归因（纯审计不失真）', () => {
+    const available = [wikiSkill]
+    const scored = collectHardRuleSkills({ available, config, sessionState: emptyState, userInput: '把这段存入知识库', wikiConfig })
+    applyLlmRecommendations({ scored, llmRecommended: [WIKI_VOCABULARY_PREFIX], available, excluded: new Set() })
+    const { sources } = mergeRouteSkills(scored, config.maxConcurrent)
+    expect(sources[WIKI_VOCABULARY_PREFIX]).toBe('wiki-trigger')
+  })
+
   it('manual 显式激活分数更高，可覆盖 wiki-trigger 来源', () => {
     const available = [wikiSkill]
     const scored = collectHardRuleSkills({

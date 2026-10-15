@@ -1506,7 +1506,7 @@ app.whenReady().then(async () => {
   // 归档保留策略（B1/N5）：放 whenReady 尾部而非 reconcile 旁——此时 initAgentLogger 已执行（否则
   // logAgentEvent 静默 no-op，删除完全无可观测性）；fire-and-forget，不占启动关键路径。
   // 无 protect：若 --safe-db-maintenance 的压缩仍在飞行，按宽限期整体延后。
-  void pruneSessionArchives(app.getPath('userData'))
+  void pruneSessionArchives(app.getPath('userData')).catch(() => undefined)
 }).catch((err) => {
   console.error('[main] whenReady failed:', err instanceof Error ? err.stack ?? err.message : err)
 })

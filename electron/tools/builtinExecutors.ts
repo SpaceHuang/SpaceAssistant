@@ -2129,7 +2129,8 @@ export const grepExecutor: ToolExecutor = {
       }
     }
     const gargs: GrepExecArgs = normalized.args
-    const explicitGrepPath = typeof input.path === 'string' ? input.path : ''
+    // 与其余四个文件工具一致走 extractPathField（覆盖 filePath/file_path 别名），防止别名绕过兜底拦截（评审 P2-4）。
+    const explicitGrepPath = extractPathField(input) ?? ''
     if (!ctx.wikiConfig?.enabled && explicitGrepPath && isWikiVocabularyPath(explicitGrepPath, ctx)) {
       return wikiVocabularyDisabledResult(explicitGrepPath, started)
     }

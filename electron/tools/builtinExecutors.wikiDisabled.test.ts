@@ -128,7 +128,8 @@ describe('知识库未启用时 llm-wiki/ 前缀兜底引导（W3）', () => {
 
   it.each([
     ['write_file 大小写变体', (ctx: ToolExecutionContext) => writeFileExecutor.execute({ path: 'LLM-WIKI/notes/a.md', content: 'body' }, ctx)],
-    ['grep 大小写变体', (ctx: ToolExecutionContext) => grepExecutor.execute({ pattern: 'wiki', path: 'LLM-WIKI' }, ctx)]
+    ['grep 大小写变体', (ctx: ToolExecutionContext) => grepExecutor.execute({ pattern: 'wiki', path: 'LLM-WIKI' }, ctx)],
+    ['grep filePath 别名（P2-4）', (ctx: ToolExecutionContext) => grepExecutor.execute({ pattern: 'wiki', filePath: 'llm-wiki' }, ctx)]
   ])('%s → 同样拦截', async (_name, run) => {
     const ctx = await setupCtx(false)
     const res = await run(ctx)

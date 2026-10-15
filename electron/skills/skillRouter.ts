@@ -141,7 +141,9 @@ export function applyLlmRecommendations(args: {
     }
     const cur = scored.get(name)
     if (!cur || next.score > cur.score || (next.score === cur.score && next.llmOrder < cur.llmOrder)) {
-      scored.set(name, next)
+      // 同分并列（如 wiki-trigger 0.9）且 LLM 排序靠前时：排序键采纳 llmOrder，但保留原激活来源——
+      // 该 skill 确实被硬规则激活过，归因改写为 'llm' 是纯审计失真（激活结果不变）。
+      scored.set(name, cur && next.score === cur.score ? { ...next, source: cur.source } : next)
     } else if (cur && cur.source === 'llm' && cur.llmOrder === Number.MAX_SAFE_INTEGER) {
       scored.set(name, { ...cur, llmOrder: index })
     }
