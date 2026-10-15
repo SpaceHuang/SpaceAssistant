@@ -328,3 +328,6 @@ docs/develop/main-dead-code-cleanup-execution-log.md	platform-eng	B	merge main �
 docs/develop/main-dead-code-unused-diagnostic-baseline-2026-10-15.md	platform-eng	B	merge main 后补录（新增）：未用诊断基线
 docs/requirement/agents-md-workdir-instructions-requirement.md	agent-sdk	B	merge main 后补录（新增）：需求已通过评审，口径进需求基线
 docs/requirement/im-security-agent-agency-principles-requirement.md	im-remote	A	merge main 后补录（新增）：讨论共识（产品原则），未拆方案
+docs/develop/agent-long-task-stability-improvement-plan.md	agent-sdk	C	（2026-10-15 新增）长程任务稳定性改进方案；自述「分阶段改造方案，首批不改运行时代码」→ 未实施，进 in-flight/
+docs/develop/security-policy-three-stage-architecture-development-plan.md	safety-approval	C	（2026-10-15 新增）安全策略三阶段架构；自述「已审批，尚未开始代码实现」→ 进 in-flight/
+docs/requirement/run-shell-justification-requirement.md	tools-mcp	B	（2026-10-15 新增）自述「需求细化稿」，但实现已在代码（packages/agent-sdk/src/runShellJustification.ts、src/shared/runShellJustification.ts、builtinToolDefinitions）→ 状态滞后，归档

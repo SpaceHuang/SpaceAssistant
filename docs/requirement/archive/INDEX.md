@@ -14,7 +14,7 @@
 | 主题 | 件数 | 说明 |
 | --- | --- | --- |
 | `desktop-ui/` | 37 | 聊天 UI、文件面板/查看器、composer、上下文占用、设置与托盘；含 Plan 模式 4 篇（已废弃）+ 核验更正补入 2 件 |
-| `tools-mcp/` | 16 | shell 输出与编码、grep/文件读取、browser、subagent、MCP 系列 |
+| `tools-mcp/` | 17 | shell 输出与编码、grep/文件读取、browser、subagent、MCP 系列 + 新增（run_shell justification 需求） |
 | `im-remote/` | 14 | 飞书/微信集成、远程工作目录、进度同步、异步审批、产物决策 + 核验更正补入 1 件 |
 | `agent-sdk/` | 13 | 模型服务与配置、思考强度、token 用量、API Key 授权、工具配对 + 核验更正补入 3 件 |
 | `knowledge-skills/` | 9 | Skills 系列、LLM Wiki、Wiki 导入、项目记忆 |

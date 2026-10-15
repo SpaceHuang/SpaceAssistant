@@ -19,7 +19,9 @@
 
 ## 在途（in-flight）
 
-**（本次核验后为空）** —— 全部移入 `../archive/safety-approval/`（共 10 件）。
+- [security-policy-three-stage-architecture-development-plan.md](./in-flight/security-policy-three-stage-architecture-development-plan.md) —— **草稿（未实施）**：安全策略三阶段架构与硬编码规则收敛开发计划（2026-10-15，`main` 新增）；自述「已审批，可以进入源码实施阶段」，但**尚未开始代码实现**。
+
+> 此前核验后 `in-flight/` 为空；归档件共 10 件见 `../archive/safety-approval/`。
 
 > **2026-10-14 两轮核验更正（原判 C 有误）**：`approval-agent-shortest-path-plan.md`（`c725896e`）、`security-approval-skill-v2.1-improvement-plan.md`（`b9b68d74` + `6db05ab0`）、`security-approval-experience-improvement-plan.md`（`CallAdmissionGate` 见 `electron/runtime/callAdmissionGate.ts`）、`run-shell-agent-safe-boundary-hardening-plan.md`（redaction/sanitize 链路见 `electron/agentLogger/*`）。
 

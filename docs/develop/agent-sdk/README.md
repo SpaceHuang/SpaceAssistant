@@ -139,7 +139,9 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 
 ## 在途 / 草稿箱（in-flight）
 
-`in-flight/` 目录**为空**，但本主题**有一个未开工的大规划**（按 §2.2 约定原地保留，未搬入 `in-flight/`）：
+`in-flight/` 目录**不再为空**（2026-10-15 新增一篇），另有一个按 §2.2 约定**原地保留**的未开工大规划：
+
+- [agent-long-task-stability-improvement-plan.md](./in-flight/agent-long-task-stability-improvement-plan.md) —— **草稿（未实施）**：长程任务稳定性改进方案（2026-10-15，`main` 新增）；自述「当前实现分析与分阶段改造方案；首批不改运行时代码」。
 
 - [runtime/](./runtime/)（01–10 + README，11 篇）—— **草稿（未实施）**：Runtime 目标形态设计与实施计划。核验（2026-10-14）：独有符号 `wake_one`、`bWaitAll`、`namedQuota`、`quotaLease`、`callStateMachine` **全部 0 命中**，无实现提交 → 真正在途。
 
