@@ -591,6 +591,8 @@ export interface PolicyRule {
   when: PolicyWhen
   match?: PolicyRuleMatch
   action: PolicyAction
+  /** Trusted main-process marker: this action came from a validated persisted user override. */
+  userOverride?: true
   /** 安全语义标记：即使 rule.action 被档位映射为 auto-evaluator，也必须原渠道逐次人工确认。 */
   humanRequired?: boolean
   /** 系统保护条目：UI 只读、自定义套餐不可调松。 */

@@ -470,6 +470,17 @@ export function decide(
     return requireConfirm(humanRequiredRule, facts, context.sessionId, context.lane, constraints, 'user')
   }
 
+  // A concrete MCP ask is an explicit authorization boundary. Generic IM write
+  // auto-review may classify the call, but must not replace that user's choice.
+  const explicitMcpAsk = invocationRules.find(
+    (r) => (context.lane === 'wechat' || context.lane === 'feishu') &&
+      r.id === 'mcp-tool-ask' && r.userOverride === true && r.action === 'ask' &&
+      ruleMatchesInvocation(r, facts, context, deps)
+  )
+  if (explicitMcpAsk) {
+    return requireConfirm(explicitMcpAsk, facts, context.sessionId, context.lane, constraints, 'user')
+  }
+
   // 系统 locked confirm-every-time 规则位于缓存之前：即使存在旧 allow cache，也必须逐次确认。
   const confirmEveryTime = invocationRules.find(
     (r) => r.locked && r.action === 'confirm-every-time' && ruleMatchesInvocation(r, facts, context, deps)

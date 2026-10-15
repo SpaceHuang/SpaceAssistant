@@ -28,6 +28,24 @@ function db(): AppDatabase {
 }
 
 describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
+  it('marks only validated persisted MCP actions as user overrides, leaving legacy defaults unmarked', () => {
+    const legacyDb = db()
+    commitImPolicySnapshot(getDbConnection(legacyDb), {
+      policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'legacy-default-mcp'
+    })
+    const legacyRule = resolveEffectivePolicyRulesWithOrigin(legacyDb, 'wechat').rules.find((rule) => rule.id === 'mcp-tool-ask')
+    expect(legacyRule).toMatchObject({ action: 'ask' })
+    expect(legacyRule?.userOverride).toBeUndefined()
+
+    const overriddenDb = db()
+    commitImPolicySnapshot(getDbConnection(overriddenDb), {
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard', ruleOverrides: { 'mcp-tool-ask': 'ask' } },
+      updatedAt: 1, eventId: 'explicit-mcp-ask'
+    })
+    const explicitRule = resolveEffectivePolicyRulesWithOrigin(overriddenDb, 'wechat').rules.find((rule) => rule.id === 'mcp-tool-ask')
+    expect(explicitRule).toMatchObject({ action: 'ask', userOverride: true })
+  })
+
   it('未配置时各 lane 规则集恒等返回 DEFAULT_POLICY_RULES 引用（「自动」在引擎产出层变换）', () => {
     const d = db()
     expect(loadEffectivePolicyRules(d, 'desktop')).toBe(DEFAULT_POLICY_RULES)

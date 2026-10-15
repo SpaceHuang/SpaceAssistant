@@ -146,8 +146,10 @@ export function resolveEffectivePolicyRulesWithOrigin(
         // rule's conditional gates (configRequires / askUnless / requiresContext).
         const withOverrides = resolvePolicyRules({ lane, packages: { ...DEFAULT_POLICY_PACKAGES, [lane]: 'custom' },
           overrides: validatedOverrides, rules })
+        const userOverrideIds = new Set(validatedOverrides.map(({ ruleId }) => ruleId))
         for (let index = 0; index < rules.length; index += 1) {
-          rules[index] = withOverrides[index]!
+          const resolvedRule = withOverrides[index]!
+          rules[index] = userOverrideIds.has(resolvedRule.id) ? { ...resolvedRule, userOverride: true } : resolvedRule
         }
         for (const [ruleId, action] of Object.entries(overrides)) {
           const validation = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, action, lane)
@@ -172,9 +174,10 @@ export function resolveEffectivePolicyRulesWithOrigin(
   const resolved = resolvePolicyRules({ lane, packages, overrides, rules: baseRules })
   const overrideById = new Map(overrides.map((o) => [o.ruleId, o]))
   const baseById = new Map(baseRules.map((r) => [r.id, r]))
-  for (const rule of resolved) {
+  const resolvedWithUserOverrides = resolved.map((rule) => overrideById.has(rule.id) ? { ...rule, userOverride: true as const } : rule)
+  for (const rule of resolvedWithUserOverrides) {
     const override = overrideById.get(rule.id)
-    if (override && rule.action !== baseById.get(rule.id)?.action) {
+    if (override) {
       origins[rule.id] = { source: 'user-override', shadowed: [{ source: 'builtin' }] }
     } else if (baseById.get(rule.id)?.action !== rule.action) {
       // 档位范围条目（scope-*，S1 偏差 15）改变了默认动作来源
@@ -183,7 +186,7 @@ export function resolveEffectivePolicyRulesWithOrigin(
       origins[rule.id] = { source: 'builtin' }
     }
   }
-  return { rules: resolved, origins, disabledRuleIds: safeDisabledRuleIds }
+  return { rules: resolvedWithUserOverrides, origins, disabledRuleIds: safeDisabledRuleIds }
 }
 
 export function loadLanePolicyContext(db: AppDatabase, lane: ExecutionLane): { rules: PolicyRule[]; pkg: PolicyPackage } {

@@ -526,6 +526,40 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
     }
   })
 
+  it('persisted IM MCP ask override takes precedence over generic automatic write review', () => {
+    const facts = mkFacts('mcp__srv__create', 'write', [
+      { kind: 'mcp-tool', serverId: 'srv', toolName: 'create' },
+      { kind: 'mcp-invocation', serverId: 'srv', toolName: 'create', actionClass: 'write', completeness: 'complete' }
+    ])
+    const rules = [
+      { id: 'mcp-tool-ask', when: 'invocation' as const, match: { signals: ['mcp-tool'] }, action: 'ask' as const, userOverride: true as const, reason: 'MCP confirmation' },
+      { id: 'im-write-ask', when: 'invocation' as const, match: { lane: ['wechat', 'feishu'] as const, actionClass: 'write' as const, excludeSignals: ['write-target-new', 'write-target-existing'] }, action: 'auto-evaluator' as const, reason: 'Generic write review' }
+    ]
+    const lookup = vi.fn(() => ({ id: 'stale-session-allow', key: { kind: 'mcp-tool', serverId: 'srv', toolName: 'create', sessionId: 's1' },
+      decision: 'allow' as const, lane: 'wechat' as const, scope: 'session' as const, createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' as const }))
+    const decision = decide(facts, mkContext('wechat'), rules, deps({ cache: { lookup },
+      transform: (rule) => rule.id === 'mcp-tool-ask' ? 'ask' : rule.action,
+      autoEvaluator: () => ({ approve: true as const, reason: 'generic reviewer approved' })
+    }))
+    expect(decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'mcp-tool-ask', disposition: 'human-required' })
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
+  it('legacy default MCP ask still honors an existing session allow cache', () => {
+    const lookup = vi.fn((key: import('../confirmation/types').CacheKey) => ({
+      id: 'session-mcp-allow', key, decision: 'allow' as const, lane: 'wechat' as const, scope: 'session' as const,
+      createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' as const
+    }))
+    const decision = decide(
+      mkFacts('mcp__srv__query', 'read', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
+      mkContext('wechat'),
+      [{ id: 'mcp-tool-ask', when: 'invocation', match: { signals: ['mcp-tool'] }, action: 'ask', reason: 'MCP tool call requires confirmation' }],
+      deps({ cache: { lookup } })
+    )
+    expect(decision).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
+    expect(lookup).toHaveBeenCalledOnce()
+  })
+
   it('read_file 不被评估器截胡（默认放行）', () => {
     const d = decide(
       mkFacts('read_file', 'read', [], 'low'),

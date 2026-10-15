@@ -26,7 +26,7 @@ import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStora
 import { createImOrchestrationToolRegistry } from '../remote/imOrchestrationTools'
 import { ImChannel } from '../confirmation/imChannel'
 import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
-import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
+import { buildMappedToolDescriptors, hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { executeToolSearch } from '../tools/toolSearchTool'
 import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
@@ -587,6 +587,41 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     await fs.rm(workDir, { recursive: true, force: true })
   })
 
+  it.each([
+    { override: 'ask' as const, expected: { type: 'require-confirm', answerer: 'user', ruleId: 'mcp-tool-ask', disposition: 'human-required' } },
+    { override: 'deny' as const, expected: { type: 'deny', ruleId: 'mcp-tool-ask' } }
+  ])('honors persisted MCP $override override over the generic IM write candidate after real assembly', async ({ override, expected }) => {
+    const db = createImPolicyTestDb(`im-standard-v2-mcp-${override}-override`)
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `im-mcp-${override}-override-`))
+    const schema = { type: 'object', properties: { body: { type: 'string' } } }
+    const entry = buildMappedToolDescriptors('im-mcp-override-server', 'MCP Override Server', [{
+      name: 'create_record', description: 'Create a record', inputSchema: schema
+    }]).descriptors[0]!
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'mcp-tool-ask': override } }, updatedAt: 1,
+      eventId: `im-standard-v2-mcp-${override}-override` })
+    const { agentSdk } = assembleInvocation({ requestId: `im-standard-v2-mcp-${override}-override`,
+      sessionId: `im-mcp-${override}-session`, lane: 'wechat', model: 'test-model', locale: 'zh-CN', messages: [],
+      toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: path.join(workDir, '.userdata'),
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'wechat', messageId: `mcp-${override}-override`, confirmPolicy: 'always' } as never })
+    const binding = { requestId: `im-standard-v2-mcp-${override}-override`, turnId: `im-mcp-${override}-turn`,
+      invocationId: `im-standard-v2-mcp-${override}-override`, toolCallId: `mcp-${override}-call`,
+      capabilityId: entry.mappedName, inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: entry.mappedName,
+      input: { body: 'record' } }
+    try {
+      const args = await agentSdk.resolveGateArgs(binding, call)
+      args.mcpEntry = { ...entry, serverName: 'MCP Override Server' }
+      expect(args.effectiveRules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe(override)
+      expect(args.effectiveRules.find((rule) => rule.id === 'mcp-tool-ask')?.userOverride).toBe(true)
+      const gate = await evaluateToolCallGate(args)
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'mcp-invocation', completeness: 'complete' }))
+      expect(gate.decision).toMatchObject(expected)
+    } finally { db.close(); await fs.rm(workDir, { recursive: true, force: true }) }
+  })
+
   it('invalidates an IM Agent candidate when the write target changes before the Hosted recheck', async () => {
     const db = createMemoryAppDb('im-write-candidate-facts-change')
     const session = createSession(db, { name: 'im-write-candidate-facts-change' })
@@ -630,19 +665,9 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
 
       const recheck = await composed.registeredTools.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'confirmation:agent-1' } })
       const renewedDecision = await safetyGate.evaluate(recheck)
-      expect(renewedDecision).toMatchObject({
-        kind: 'ask', answerer: 'user', reasonCode: 'im-write-ask',
-        context: { decision: { disposition: 'human-required' } }
-      })
-      if (renewedDecision.kind !== 'ask') throw new Error('EXPECTED_FRESH_HUMAN_REVIEW')
-      await expect(composed.confirmation({ call, confirmationId: renewedDecision.confirmationId, answerer: renewedDecision.answerer,
-        reasonCode: renewedDecision.reasonCode, context: renewedDecision.context })).resolves.toMatchObject({
-        kind: 'deferred', todoId: 'fresh-human-write-todo', executionState: 'not-executed'
-      })
-      expect(defer).toHaveBeenCalledTimes(2)
-      expect(defer.mock.calls[1]?.[0]).toMatchObject({ toolName: 'write_file', input: call.input })
-      expect(defer.mock.calls[1]?.[3]).toMatchObject({ decision: { answerer: 'user', disposition: 'human-required' } })
+      expect(renewedDecision).toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
       expect(execute).not.toHaveBeenCalled()
+      expect(defer).toHaveBeenCalledTimes(1)
     } finally {
       composed.registeredTools.discardPreparedTool(call)
       await composed.dispose()
@@ -654,11 +679,12 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
   it('keeps the real assembled legacy write gate on the human answerer after a v2 rollout', async () => {
     const db = createImPolicyTestDb('im-legacy-write-after-rollout')
     const conn = getDbConnection(db)
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-legacy-write-after-rollout-'))
     // Simulate upgrade/restart: migration retained the persisted v1.6 package even though the
     // current configuration is capable of selecting v2.
     const { agentSdk } = assembleInvocation({ requestId: 'im-legacy-write-after-rollout', sessionId: 'im-legacy-write-session',
       lane: 'feishu', model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
-      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      workDir, userDataDir: path.join(workDir, '.userdata'), getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
       remoteContext: { source: 'feishu', messageId: 'legacy-after-rollout', confirmPolicy: 'always' } as never })
     const binding = { requestId: 'im-legacy-write-after-rollout', turnId: 'im-legacy-write-turn', invocationId: 'im-legacy-write-after-rollout',
       toolCallId: 'legacy-write', capabilityId: 'write_file', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
@@ -669,6 +695,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })?.policyBehaviorVersion).toBe('im-v1.6')
       const args = await agentSdk.resolveGateArgs(binding, call)
       const gate = await evaluateToolCallGate(args)
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'path-target', zone: 'workdir-normal' }))
       expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
       const agentChannelFactory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }) as never)
       const userRequest = vi.fn(async () => ({ kind: 'approved' as const, cause: 'user-approved' as const }))
@@ -682,7 +709,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       expect(userRequest).toHaveBeenCalledOnce()
       expect(agentChannelFactory).not.toHaveBeenCalled()
       expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
-    } finally { db.close() }
+    } finally { db.close(); await fs.rm(workDir, { recursive: true, force: true }) }
   })
 
   it('preserves registry methods and forwards revocation events to the runtime instance', () => {
