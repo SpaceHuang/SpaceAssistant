@@ -174,7 +174,6 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
       dirs.cleanup()
     }
   })
-})
 
   it('!enabled 时 llm-wiki 不进路由候选，手动点名也不挤占 maxConcurrent 名额（P2-5）', async () => {
     const dirs = makeTempDirs()
@@ -197,6 +196,7 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
       dirs.cleanup()
     }
   })
+})
 
 describe('skillManager.match wiki 过滤（既有契约）', () => {
   it('!enabled 时 match 结果剔除 llm-wiki', () => {

@@ -76,9 +76,10 @@ describe('deferred todo capacity reservations', () => {
  * 每步后全量断言：
  * - I1 (session,identity) 分组 active ∈ [1, sessionLimit]
  * - I2 identity 分组 active ∈ [1, identityLimit]
- * - I3 release/releaseByInvocation 成功后该 invocation 无 active 行
- * - I4 reserve duplicate:true 不新增行
- * - I5 reconcile 后不在 valid 集的 invocation 无 active 行
+ * - I3 DB active 集合 === 跟踪集（集合相等一条覆盖 release/releaseByInvocation/reconcile/expire 后零残留）
+ * - I4 reserve duplicate/冲突/满员拒绝不新增行
+ * - I5 reserve 以 session_limit/identity_limit 拒绝 ⇔ 对应分组已满（拒绝⇔满员守恒）
+ * - 活性：序列必须包含至少一次成功的新增 reserve（防止不变量 vacuously 成立）
  */
 describe('deferredTodoCapacity 随机序列不变量（配额守恒）', () => {
   function mulberry32(seed: number): () => number {
@@ -101,6 +102,7 @@ describe('deferredTodoCapacity 随机序列不变量（配额守恒）', () => {
       const identityLimit = 4
       const capacity = createDeferredTodoCapacityController(db, { sessionLimit, identityLimit })
       const activeInvocations = new Set<string>()
+      let successfulReserves = 0
       let now = 1_000_000
 
       const assertInvariants = () => {
@@ -125,25 +127,36 @@ describe('deferredTodoCapacity 随机序列不变量（配额守恒）', () => {
         if (action < 0.55) {
           const reuseInvocation = activeInvocations.size > 0 && random() < 0.2
           const invocationId = reuseInvocation ? pick([...activeInvocations]) : `inv-${step}`
-          const rowsBefore = getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations WHERE invocation_id=?`)
-            .get(invocationId) as { count: number }
-          const outcome = capacity.reserve({
+          const input = {
             reservationId: `res-${step}`,
             invocationId,
             sessionId: `session-${Math.floor(random() * 3)}`,
             identityKey: `identity-${Math.floor(random() * 2)}`,
-            state: random() < 0.5 ? 'prepared' : 'pending',
+            state: random() < 0.5 ? 'prepared' as const : 'pending' as const,
             now,
             expiresAt: now + 60_000
-          })
+          }
+          const rowsBefore = getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations WHERE invocation_id=?`)
+            .get(invocationId) as { count: number }
+          const outcome = capacity.reserve(input)
           const rowsAfter = getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations WHERE invocation_id=?`)
             .get(invocationId) as { count: number }
           if (outcome.ok && !outcome.duplicate) {
             activeInvocations.add(invocationId)
             expect(rowsAfter.count).toBe(rowsBefore.count + 1)
+            successfulReserves += 1
           } else {
             // I4：duplicate/冲突/满员拒绝不新增行
             expect(rowsAfter.count).toBe(rowsBefore.count)
+          }
+          // I5：拒绝 ⇔ 满员守恒（reserve 的分组键即本次入参）
+          if (!outcome.ok && outcome.reason === 'session_limit') {
+            expect(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
+              WHERE session_id=? AND identity_key=? AND state IN ('prepared','pending')`).get(input.sessionId, input.identityKey)).toEqual({ count: sessionLimit })
+          }
+          if (!outcome.ok && outcome.reason === 'identity_limit') {
+            expect(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
+              WHERE identity_key=? AND state IN ('prepared','pending')`).get(input.identityKey)).toEqual({ count: identityLimit })
           }
         } else if (action < 0.7 && activeInvocations.size > 0) {
           const invocationId = pick([...activeInvocations])
@@ -168,12 +181,14 @@ describe('deferredTodoCapacity 随机序列不变量（配额守恒）', () => {
             if (row && row.expires_at <= now) activeInvocations.delete(invocationId)
           }
         }
-        for (const invocationId of activeInvocations) {
-          expect(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM deferred_todo_capacity_reservations
-            WHERE invocation_id=? AND state IN ('prepared','pending')`).get(invocationId)).toEqual({ count: 1 })
-        }
+        // I3：DB active 集合与跟踪集严格相等（release/reconcile/expire 任一遗漏立即暴露）
+        const dbActive = (getDbConnection(db).prepare(`SELECT invocation_id FROM deferred_todo_capacity_reservations
+          WHERE state IN ('prepared','pending')`).all() as Array<{ invocation_id: string }>).map((row) => row.invocation_id).sort()
+        expect(dbActive).toEqual([...activeInvocations].sort())
         assertInvariants()
       }
+      // 活性：序列确实产生了成功的新增 reserve，不变量非 vacuously 成立
+      expect(successfulReserves).toBeGreaterThan(0)
     } finally {
       db.close()
     }

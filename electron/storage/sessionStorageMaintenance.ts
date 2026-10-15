@@ -470,8 +470,10 @@ async function compactSessionDatabaseImpl(
       renameWithRetry(dbPath, archivedDbPath)
       renameWithRetry(stagingPath, dbPath)
     } catch (swapError) {
-      if (!fs.existsSync(dbPath) && fs.existsSync(archivedDbPath)) renameWithRetry(archivedDbPath, dbPath)
-      reopenDatabaseConnection(db)
+      try {
+        if (!fs.existsSync(dbPath) && fs.existsSync(archivedDbPath)) renameWithRetry(archivedDbPath, dbPath)
+      } catch { /* 回滚 rename 失败不掩盖原 swapError，连接仍须尽力恢复（评审跟进） */ }
+      try { reopenDatabaseConnection(db) } catch { /* 连接不可恢复时保持关闭，仅上抛 */ }
       removeStagingArtifacts(stagingPath)
       // 归档 DB 已移回 live：归档目录不再含数据库副本（空心），不得按已验证归档保留（评审 P2-3）。
       archiveVerified = false
@@ -489,8 +491,10 @@ async function compactSessionDatabaseImpl(
     if (!swapVerified) {
       db.close()
       for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true })
-      renameWithRetry(archivedDbPath, dbPath)
-      reopenDatabaseConnection(db)
+      try {
+        renameWithRetry(archivedDbPath, dbPath)
+      } catch { /* 回滚 rename 失败仍须尽力恢复连接，验证失败继续上抛（评审跟进） */ }
+      try { reopenDatabaseConnection(db) } catch { /* 连接不可恢复时保持关闭，仅上抛 */ }
       // 归档 DB 已移回 live（空心归档）：外层 catch 不得按已验证归档保留（评审 P2-3）。
       archiveVerified = false
       throw new Error('compaction swap verification failed; restored the pre-compaction database from the archive')
