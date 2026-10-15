@@ -93,7 +93,7 @@ describe('deferredTodoCapacity 随机序列不变量（配额守恒）', () => {
     }
   }
 
-  it('200 步随机 reserve/activate/release/releaseByInvocation/reconcile/expire 序列后配额不变量成立', () => {
+  it('200 步随机 reserve/release/releaseByInvocation/reconcile/expire 序列后配额不变量成立', () => {
     const random = mulberry32(20261015)
     const pick = <T,>(items: readonly T[]): T => items[Math.floor(random() * items.length)]!
     const db = createMemoryAppDb()
@@ -103,6 +103,7 @@ describe('deferredTodoCapacity 随机序列不变量（配额守恒）', () => {
       const capacity = createDeferredTodoCapacityController(db, { sessionLimit, identityLimit })
       const activeInvocations = new Set<string>()
       let successfulReserves = 0
+      let rejections = 0
       let now = 1_000_000
 
       const assertInvariants = () => {
@@ -148,6 +149,7 @@ describe('deferredTodoCapacity 随机序列不变量（配额守恒）', () => {
           } else {
             // I4：duplicate/冲突/满员拒绝不新增行
             expect(rowsAfter.count).toBe(rowsBefore.count)
+            rejections += 1
           }
           // I5：拒绝 ⇔ 满员守恒（reserve 的分组键即本次入参）
           if (!outcome.ok && outcome.reason === 'session_limit') {
@@ -181,14 +183,21 @@ describe('deferredTodoCapacity 随机序列不变量（配额守恒）', () => {
             if (row && row.expires_at <= now) activeInvocations.delete(invocationId)
           }
         }
+        // 过期剔除统一提到 I3 前：reserve/reconcile 内部会隐式 expire(now)，跟踪集须同口径
+        for (const invocationId of [...activeInvocations]) {
+          const row = getDbConnection(db).prepare(`SELECT expires_at FROM deferred_todo_capacity_reservations WHERE invocation_id=?`)
+            .get(invocationId) as { expires_at: number } | undefined
+          if (row && row.expires_at <= now) activeInvocations.delete(invocationId)
+        }
         // I3：DB active 集合与跟踪集严格相等（release/reconcile/expire 任一遗漏立即暴露）
         const dbActive = (getDbConnection(db).prepare(`SELECT invocation_id FROM deferred_todo_capacity_reservations
           WHERE state IN ('prepared','pending')`).all() as Array<{ invocation_id: string }>).map((row) => row.invocation_id).sort()
         expect(dbActive).toEqual([...activeInvocations].sort())
         assertInvariants()
       }
-      // 活性：序列确实产生了成功的新增 reserve，不变量非 vacuously 成立
+      // 活性：序列确实产生了成功的新增与拒绝，不变量非 vacuously 成立
       expect(successfulReserves).toBeGreaterThan(0)
+      expect(rejections).toBeGreaterThan(0)
     } finally {
       db.close()
     }

@@ -470,13 +470,21 @@ async function compactSessionDatabaseImpl(
       renameWithRetry(dbPath, archivedDbPath)
       renameWithRetry(stagingPath, dbPath)
     } catch (swapError) {
-      try {
-        if (!fs.existsSync(dbPath) && fs.existsSync(archivedDbPath)) renameWithRetry(archivedDbPath, dbPath)
-      } catch { /* 回滚 rename 失败不掩盖原 swapError，连接仍须尽力恢复（评审跟进） */ }
-      try { reopenDatabaseConnection(db) } catch { /* 连接不可恢复时保持关闭，仅上抛 */ }
+      // 回滚 rename 失败时 live 缺失、归档 DB 是压缩前唯一完好副本：复位 archiveVerified 会让外层
+      // catch 删除归档（数据丢失），reopen 会对缺失路径静默建空库——两者都必须以「live 真正恢复」为前提。
+      let liveRestored = fs.existsSync(dbPath)
+      if (!liveRestored && fs.existsSync(archivedDbPath)) {
+        try {
+          renameWithRetry(archivedDbPath, dbPath)
+          liveRestored = fs.existsSync(dbPath)
+        } catch { /* 回滚 rename 失败不掩盖原 swapError（评审跟进 P1） */ }
+      }
+      if (liveRestored) {
+        // 归档 DB 已移回 live（空心归档）：外层 catch 不得按已验证归档保留（评审 P2-3）。
+        archiveVerified = false
+        try { reopenDatabaseConnection(db) } catch { /* 连接不可恢复时保持关闭，仅上抛 */ }
+      }
       removeStagingArtifacts(stagingPath)
-      // 归档 DB 已移回 live：归档目录不再含数据库副本（空心），不得按已验证归档保留（评审 P2-3）。
-      archiveVerified = false
       throw swapError
     }
     reopenDatabaseConnection(db)
@@ -491,12 +499,17 @@ async function compactSessionDatabaseImpl(
     if (!swapVerified) {
       db.close()
       for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true })
+      // 同上：回滚 rename 失败时归档是唯一完好副本，归档保护与 reopen 都以 live 恢复为前提（评审跟进 P1）。
+      let liveRestored = false
       try {
         renameWithRetry(archivedDbPath, dbPath)
-      } catch { /* 回滚 rename 失败仍须尽力恢复连接，验证失败继续上抛（评审跟进） */ }
-      try { reopenDatabaseConnection(db) } catch { /* 连接不可恢复时保持关闭，仅上抛 */ }
-      // 归档 DB 已移回 live（空心归档）：外层 catch 不得按已验证归档保留（评审 P2-3）。
-      archiveVerified = false
+        liveRestored = fs.existsSync(dbPath)
+      } catch { /* 回滚 rename 失败：验证失败继续上抛 */ }
+      if (liveRestored) {
+        // 归档 DB 已移回 live（空心归档）：外层 catch 不得按已验证归档保留（评审 P2-3）。
+        archiveVerified = false
+        try { reopenDatabaseConnection(db) } catch { /* 连接不可恢复时保持关闭，仅上抛 */ }
+      }
       throw new Error('compaction swap verification failed; restored the pre-compaction database from the archive')
     }
     const swapDurationMs = performance.now() - swapStartedAt
