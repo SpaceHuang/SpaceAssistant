@@ -372,6 +372,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'ask',
     reason: '浏览器高危操作需确认'
   },
+  {
+    id: 'im-browser-act-danger-human',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act-dangerous'] },
+    denyClass: 'insufficient-info',
+    action: 'ask', locked: true, humanRequired: true,
+    reason: 'IM 浏览器高危操作需真人逐次确认'
+  },
   // act 确认总开关关闭 → 免确认（等价现 browserActionNeedsConfirmation: !actRequiresConfirm → false，
   // 桌面/远程同一开关；configRequires 门控不满足即不命中，可先于 ask 条目）。
   // 评审 B2：allow 动作必须带 lane 限定——automation 无人类应答者，不消费该放行。
@@ -388,7 +396,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'browser-act-ask-remote',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act'] },
+    match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act'], excludeSignals: ['browser-act-dangerous'] },
     denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'remoteActSkipConfirm', equals: true },
@@ -596,13 +604,21 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'ask',
     reason: '普通工作区内既有文件编辑属于 IM standard 审核候选'
   },
+  // 高危路径具有人审底线，独立于 IM standard 的兜底自动审核，且在任何缓存/审核器之前执行。
+  {
+    id: 'im-write-sensitive-path-confirm',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], actionClass: 'write', signals: ['path-target:sensitive-file'] },
+    action: 'confirm-every-time', locked: true, humanRequired: true,
+    reason: 'IM 写入敏感位置需真人逐次确认'
+  },
   {
     id: 'im-write-ask',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], actionClass: 'write' },
+    match: { lane: ['wechat', 'feishu'], actionClass: 'write', excludeSignals: ['write-target-new', 'write-target-existing'] },
     denyClass: 'insufficient-info',
     action: 'ask',
-    reason: '远程链路写本地文件默认需要确认'
+    reason: '未被低风险分类或人工确认底线覆盖的 IM 写入，交由标准档审核 Agent 评估'
   },
 
   // ===== automation lane（偏差 21/22：无人值守链路的显式规则集，§P2-4）=====

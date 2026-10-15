@@ -64,7 +64,7 @@ import {
 import { AuditedDecisionCache } from './auditedDecisionCache'
 import { getSecurityAuditLog } from './audit'
 import { auditFactId } from './auditFactId'
-import { effectiveActionFor, resolveImPolicyRulesForVersion, type PolicyPackage } from '../../src/shared/policy/policyPackages'
+import { effectiveActionFor, type PolicyPackage } from '../../src/shared/policy/policyPackages'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import { classifyWikiPath, resolveWikiRelPath } from '../wiki/wikiPaths'
 import { buildSafetyDiagnostics, type SafetyDiagnostics } from '../../src/shared/confirmation/diagnostics'
@@ -411,13 +411,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
   // ===== 生效规则集（§4 第 1 区 + §2.1「自动」语义）：装配期解析注入（B1，门控不持库）=====
-  // 规则集由装配期按 lane+档位解析（resolveEffectivePolicyRulesWithOrigin），引擎合成规则的
-  // 档位变换经 lanePackage 同源注入（desktop standard 非 locked ask→auto-evaluator）。
+  // IM 的套餐动作与持久化用户覆盖已由 resolveEffectivePolicyRulesWithOrigin 合并；这里直接消费最终规则，
+  // 避免按套餐再次映射覆盖动作。lanePackage 仍用于引擎合成规则及桌面「自动」动作变换。
   const lanePackage = args.lanePackage ?? 'standard'
-  const rules = (lane === 'wechat' || lane === 'feishu') && args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
-    ? resolveImPolicyRulesForVersion({ policyBehaviorVersion: args.imPolicySnapshot.policyBehaviorVersion, pkg: lanePackage,
-      rules: args.effectiveRules })
-    : args.effectiveRules
+  const rules = args.effectiveRules
 
   // ===== 环境事实 =====
   const env: EnvFacts = {

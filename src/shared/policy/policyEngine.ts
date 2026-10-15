@@ -42,6 +42,11 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`write-target-scope:${signal.scope}`)
         break
+      case 'write-target-new':
+      case 'write-target-existing':
+      case 'write-target-unsupported':
+        tokens.add(signal.kind)
+        break
       case 'command-effect':
         tokens.add(signal.kind)
         tokens.add(`command-effect:${signal.effect}`)
@@ -250,6 +255,10 @@ function ruleMatchesInvocation(
   if (m.signals) {
     const tokens = signalTokenSet(facts)
     if (!m.signals.every((s) => tokens.has(s))) return false
+    if (m.excludeSignals?.some((s) => tokens.has(s))) return false
+  } else if (m.excludeSignals) {
+    const tokens = signalTokenSet(facts)
+    if (m.excludeSignals.some((s) => tokens.has(s))) return false
   }
   // M1：owner-only 出站目标约束——仅信源为 direct-owner 时命中
   if (m.target === 'owner-only' && context.origin.kind !== 'direct-owner') return false

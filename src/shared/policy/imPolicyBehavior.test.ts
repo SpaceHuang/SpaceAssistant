@@ -14,7 +14,8 @@ const SCENARIOS: readonly ImPolicyScenario[] = [
   'low-risk-feishu-write',
   'overwrite-delete',
   'unknown-write-execute',
-  'outbound'
+  'outbound',
+  'human-required'
 ] as const
 
 describe('common IM policy behavior', () => {
@@ -29,19 +30,19 @@ describe('common IM policy behavior', () => {
     expect(matrix).toEqual({
       strict: {
         'ordinary-read': 'allow', 'low-risk-create': 'ask', 'low-risk-edit': 'ask', 'ordinary-navigation': 'ask', 'public-search': 'ask', 'time-query': 'ask', 'certified-clean-script': 'ask', 'ordinary-browser-action': 'ask', 'low-risk-feishu-write': 'ask', 'overwrite-delete': 'ask',
-        'unknown-write-execute': 'ask', outbound: 'ask'
+        'unknown-write-execute': 'ask', outbound: 'ask', 'human-required': 'ask'
       },
       standard: {
         'ordinary-read': 'allow', 'low-risk-create': 'auto-evaluator', 'low-risk-edit': 'auto-evaluator', 'ordinary-navigation': 'auto-evaluator', 'public-search': 'auto-evaluator', 'time-query': 'auto-evaluator', 'certified-clean-script': 'auto-evaluator', 'ordinary-browser-action': 'auto-evaluator', 'low-risk-feishu-write': 'auto-evaluator', 'overwrite-delete': 'ask',
-        'unknown-write-execute': 'ask', outbound: 'ask'
+        'unknown-write-execute': 'auto-evaluator', 'human-required': 'ask', outbound: 'ask'
       },
       loose: {
         'ordinary-read': 'allow', 'low-risk-create': 'allow', 'low-risk-edit': 'allow', 'ordinary-navigation': 'allow', 'public-search': 'allow', 'time-query': 'allow', 'certified-clean-script': 'allow', 'ordinary-browser-action': 'ask', 'low-risk-feishu-write': 'ask', 'overwrite-delete': 'ask',
-        'unknown-write-execute': 'ask', outbound: 'ask'
+        'unknown-write-execute': 'ask', outbound: 'ask', 'human-required': 'ask'
       },
       custom: {
         'ordinary-read': 'allow', 'low-risk-create': 'ask', 'low-risk-edit': 'ask', 'ordinary-navigation': 'ask', 'public-search': 'ask', 'time-query': 'ask', 'certified-clean-script': 'ask', 'ordinary-browser-action': 'ask', 'low-risk-feishu-write': 'ask', 'overwrite-delete': 'ask',
-        'unknown-write-execute': 'ask', outbound: 'ask'
+        'unknown-write-execute': 'ask', outbound: 'ask', 'human-required': 'ask'
       }
     })
   })

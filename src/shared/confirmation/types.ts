@@ -581,6 +581,8 @@ export interface PolicyRuleMatch {
   actionClass?: ActionClass
   /** 「包含」语义：所列信号全部出现在事实信号集即命中。 */
   signals?: string[]
+  /** 信号存在时不匹配；用于把已分类候选排除在通用兜底规则之外。 */
+  excludeSignals?: string[]
   target?: 'owner-only'
 }
 

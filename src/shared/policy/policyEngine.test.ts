@@ -312,6 +312,17 @@ describe('decide：IM effective action 覆盖契约', () => {
       .toMatchObject({ type: 'require-confirm', ruleId: 'im-time-query-review', answerer: 'agent' })
   })
 
+  it('routes an ordinary new IM workspace file through the dedicated low risk rule', () => {
+    const imRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const transform = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
+    const result = decide(mkFacts('write_file', 'write', [
+      { kind: 'path-target', path: '/work/new.md', zone: 'workdir-normal' },
+      { kind: 'write-target-scope', scope: 'inside-workdir' },
+      { kind: 'write-target-new' }
+    ]), context, imRules, deps({ transform }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'im-low-risk-create', answerer: 'agent' })
+  })
+
   it('routes ordinary browser actions and classified Feishu writes to Agent, while dangerous actions and message sends stay with the user', () => {
     const imRules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
     const transform = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
@@ -321,6 +332,9 @@ describe('decide：IM effective action 覆盖契约', () => {
     const browserDanger = decide(mkFacts('browser', 'execute', [
       { kind: 'browser-action', action: 'act', dangerous: true, sideEffect: 'delete', completeness: 'complete' }
     ], 'high'), context, imRules, deps({ transform }))
+    const browserUnclassified = decide(mkFacts('browser', 'execute', [
+      { kind: 'browser-action', action: 'act', dangerous: false, sideEffect: 'unknown', completeness: 'partial' }
+    ], 'medium'), context, imRules, deps({ transform }))
     const larkDocWrite = decide(mkFacts('run_lark_cli', 'execute', [
       { kind: 'lark-subcommand', impact: 'low_write', category: 'doc_write', completeness: 'complete' }
     ], 'medium'), mkContext('feishu'), imRules, deps({ transform }))
@@ -338,7 +352,8 @@ describe('decide：IM effective action 覆盖契约', () => {
     ], 'medium'), mkContext('feishu'), imRules, deps({ transform }))
 
     expect(browserRead).toMatchObject({ type: 'require-confirm', ruleId: 'im-browser-act-review', answerer: 'agent' })
-    expect(browserDanger).toMatchObject({ type: 'require-confirm', ruleId: 'browser-act-danger-ask', answerer: 'user' })
+    expect(browserDanger).toMatchObject({ type: 'require-confirm', ruleId: 'im-browser-act-danger-human', answerer: 'user' })
+    expect(browserUnclassified).toMatchObject({ type: 'require-confirm', ruleId: 'browser-act-ask-remote', answerer: 'agent' })
     expect(larkDocWrite).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-low-write-review', answerer: 'agent' })
     expect(larkSelf).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
     expect(larkDirect).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-direct-review', answerer: 'agent' })
@@ -593,6 +608,22 @@ describe('decide：远程写会话信任（decision_cache remote-write）', () =
     )
     expect(d.type).toBe('require-confirm')
     if (d.type === 'require-confirm') expect(d.ruleId).toBe('im-write-ask')
+  })
+
+  it('新版 IM 标准将普通未分类写入交审核 Agent，敏感路径仍由 humanRequired 底线拦截', () => {
+    const standardRules = resolveImPolicyRulesForVersion({
+      policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES
+    })
+    const transform = (candidate: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', candidate)
+    const ordinary = decide(mkFacts('write_file', 'write', []), mkContext('wechat'), standardRules,
+      deps({ transform, autoEvaluator: () => ({ approve: false, reason: 'needs review' }) }))
+    expect(ordinary).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'agent', disposition: 'auto-eligible' })
+
+    const sensitive = decide(mkFacts('write_file', 'write', [
+      { kind: 'path-target', path: '.env', zone: 'sensitive-file' }
+    ]), mkContext('wechat'), standardRules,
+      deps({ transform, autoEvaluator: () => ({ approve: true }) }))
+    expect(sensitive).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-sensitive-path-confirm', answerer: 'user' })
   })
 
   it('会话写信任（remote-write allow 缓存）→ 远程写免确认（cache-hit 先于 im-write-ask）', () => {

@@ -3,11 +3,13 @@ import { getConfigValue, openSqliteDatabase, setConfigValue, type AppDatabase } 
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { PolicyRuleStore } from './policyRuleStore'
 import { getDbConnection } from '../database'
+import { commitImPolicySnapshot } from './imPolicyStore'
 import {
   DEFAULT_SECURITY_AUDIT_RETENTION_DAYS,
   DISABLED_POLICY_RULE_IDS_CONFIG_KEY,
   listPolicyRulesWithOverrides,
   loadEffectivePolicyRules,
+  resolveEffectivePolicyRulesWithOrigin,
   readDisabledPolicyRuleIds,
   readPolicyPackages,
   readSecurityAuditRetentionDays,
@@ -33,6 +35,18 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(loadEffectivePolicyRules(d, 'feishu')).toBe(DEFAULT_POLICY_RULES)
     expect(loadEffectivePolicyRules(d, 'automation')).toBe(DEFAULT_POLICY_RULES)
     expect(readPolicyPackages(d).desktop).toBe('standard')
+  })
+
+  it('新版 IM 标准将 im-write-ask 解析为审核 Agent 候选，但敏感路径仍是人工确认底线', () => {
+    const d = db()
+    commitImPolicySnapshot(getDbConnection(d), {
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: 1, eventId: 'standard-im-write-auto-review'
+    })
+    const rules = resolveEffectivePolicyRulesWithOrigin(d, 'wechat').rules
+    expect(rules.find((rule) => rule.id === 'im-write-ask')?.action).toBe('auto-evaluator')
+    expect(rules.find((rule) => rule.id === 'im-write-sensitive-path-confirm'))
+      .toMatchObject({ action: 'confirm-every-time', locked: true, humanRequired: true })
   })
 
   it('strict 范围档：lark-read-allow 被 scope-strict ask 条目取代（S1，偏差 15）；locked 不动', () => {

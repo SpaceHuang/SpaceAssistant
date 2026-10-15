@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { resolveImPolicyRulesForVersion } from './policyPackages'
 
 const rules = [
-  { id: 'im-low-risk-create', when: 'invocation' as const, action: 'ask' as const, reason: 'new file' },
+  { id: 'im-low-risk-create', when: 'invocation' as const, action: 'ask' as const, reason: 'new file', match: { lane: ['wechat', 'feishu'], toolName: 'write_file', signals: ['write-target-new', 'write-target-scope:inside-workdir', 'path-target:workdir-normal'] } },
   { id: 'im-low-risk-edit', when: 'invocation' as const, action: 'ask' as const, reason: 'edit file' },
+  { id: 'im-write-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'other IM writes' },
   { id: 'browser-navigate-ask-remote', when: 'invocation' as const, action: 'ask' as const, reason: 'navigation' },
   { id: 'im-mcp-public-read-review', when: 'invocation' as const, action: 'ask' as const, reason: 'public search' },
   { id: 'im-time-query-review', when: 'invocation' as const, action: 'ask' as const, reason: 'time' },
   { id: 'script-clean-certified-remote', when: 'invocation' as const, action: 'ask' as const, reason: 'certified clean script' },
   { id: 'script-dynamic-execution-confirm', when: 'invocation' as const, action: 'confirm-every-time' as const, locked: true, reason: 'dynamic script floor' },
-  { id: 'browser-act-ask-remote', when: 'invocation' as const, action: 'ask' as const, reason: 'not a candidate' },
+  { id: 'browser-act-ask-remote', when: 'invocation' as const, action: 'ask' as const, reason: 'ordinary remote browser act', match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act'], excludeSignals: ['browser-act-dangerous'] } },
+  { id: 'im-browser-act-danger-human', when: 'invocation' as const, action: 'ask' as const, locked: true, humanRequired: true, reason: 'dangerous IM browser action' },
   { id: 'im-browser-act-review', when: 'invocation' as const, action: 'ask' as const, reason: 'low-risk browser action' },
   { id: 'lark-write-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'classified low-impact Feishu write' },
   { id: 'im-lark-low-write-review', when: 'invocation' as const, action: 'ask' as const, reason: 'classified ordinary Feishu write' },
@@ -32,12 +34,14 @@ describe('version-pinned IM behavior candidates', () => {
     expect(v2.map(({ id, action }) => [id, action])).toEqual([
       ['im-low-risk-create', 'auto-evaluator'],
       ['im-low-risk-edit', 'auto-evaluator'],
+      ['im-write-ask', 'auto-evaluator'],
       ['browser-navigate-ask-remote', 'auto-evaluator'],
       ['im-mcp-public-read-review', 'auto-evaluator'],
       ['im-time-query-review', 'auto-evaluator'],
       ['script-clean-certified-remote', 'auto-evaluator'],
       ['script-dynamic-execution-confirm', 'confirm-every-time'],
-      ['browser-act-ask-remote', 'ask'],
+      ['browser-act-ask-remote', 'auto-evaluator'],
+      ['im-browser-act-danger-human', 'ask'],
       ['im-browser-act-review', 'auto-evaluator'],
       ['lark-write-ask', 'ask'],
       ['im-lark-low-write-review', 'auto-evaluator'],
@@ -68,18 +72,25 @@ describe('version-pinned IM behavior candidates', () => {
       expect(resolved[1]?.action).toBe('ask')
       expect(resolved.find((rule) => rule.id === 'hard-deny')?.action).toBe('deny')
     }
-    expect(resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'strict', rules })[5]?.action).toBe('ask')
-    expect(resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules })[6]?.action).toBe('confirm-every-time')
+    expect(resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'strict', rules })[6]?.action).toBe('ask')
+    expect(resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules })[7]?.action).toBe('confirm-every-time')
     const standard = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules })
     expect(standard.find((rule) => rule.id === 'lark-write-ask')?.action).toBe('ask')
     expect(standard.find((rule) => rule.id === 'im-lark-low-write-review')?.action).toBe('auto-evaluator')
+    expect(standard.find((rule) => rule.id === 'im-write-ask')?.action).toBe('auto-evaluator')
     expect(standard.find((rule) => rule.id === 'lark-high-impact-ask')?.action).toBe('ask')
+    expect(resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'strict', rules })
+      .find((rule) => rule.id === 'im-write-ask')?.action).toBe('ask')
     expect(standard.find((rule) => rule.id === 'lark-unknown-ask')?.action).toBe('ask')
     expect(standard.find((rule) => rule.id === 'im-lark-message-self-review')?.action).toBe('auto-evaluator')
     expect(standard.find((rule) => rule.id === 'im-lark-message-direct-review')?.action).toBe('auto-evaluator')
     expect(standard.find((rule) => rule.id === 'lark-message-group-human')?.action).toBe('ask')
     expect(standard.find((rule) => rule.id === 'lark-message-target-unknown-human')?.action).toBe('ask')
     expect(standard.find((rule) => rule.id === 'browser-act-danger-ask')?.action).toBe('ask')
+    expect(standard.find((rule) => rule.id === 'im-browser-act-danger-human'))
+      .toMatchObject({ action: 'ask', locked: true, humanRequired: true })
+    expect(resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'strict', rules })
+      .find((rule) => rule.id === 'browser-act-ask-remote')?.action).toBe('ask')
     expect(standard.find((rule) => rule.id === 'path-sensitive-read-confirm')?.action).toBe('confirm-every-time')
     expect(standard.find((rule) => rule.id === 'remote-deny-lark-write-outbound')?.action).toBe('deny')
     expect(resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'loose', rules })[1]?.action).toBe('allow')

@@ -44,7 +44,7 @@ const IM_ACTION_MATRIX: Record<ImPolicyPackage, Record<AdjustableScenario, ImPol
   },
   standard: {
     'ordinary-read': 'allow', 'low-risk-create': 'auto-evaluator', 'low-risk-edit': 'auto-evaluator', 'ordinary-navigation': 'auto-evaluator', 'public-search': 'auto-evaluator', 'mcp-execution': 'auto-evaluator', 'time-query': 'auto-evaluator', 'certified-clean-script': 'auto-evaluator', 'ordinary-browser-action': 'auto-evaluator', 'low-risk-feishu-write': 'auto-evaluator', 'overwrite-delete': 'ask',
-    'unknown-write-execute': 'ask', outbound: 'ask'
+    'unknown-write-execute': 'auto-evaluator', outbound: 'ask'
   },
   loose: {
     'ordinary-read': 'allow', 'low-risk-create': 'allow', 'low-risk-edit': 'allow', 'ordinary-navigation': 'allow', 'public-search': 'allow', 'mcp-execution': 'ask', 'time-query': 'allow', 'certified-clean-script': 'allow', 'ordinary-browser-action': 'ask', 'low-risk-feishu-write': 'ask', 'overwrite-delete': 'ask',
@@ -68,6 +68,9 @@ export function resolveImPolicyAction(input: ResolveImPolicyActionInput): ImPoli
 const IM_SCENARIO_BY_RULE_ID: Readonly<Record<string, ImPolicyScenario>> = {
   'im-low-risk-create': 'low-risk-create',
   'im-low-risk-edit': 'low-risk-edit',
+  'im-write-sensitive-path-confirm': 'human-required',
+  'im-write-ask': 'unknown-write-execute',
+  'browser-act-ask-remote': 'ordinary-browser-action',
   'browser-navigate-ask-remote': 'ordinary-navigation',
   'im-mcp-public-read-review': 'public-search',
   'mcp-tool-ask': 'mcp-execution',
@@ -87,10 +90,11 @@ export function imEffectiveActionFor(
   customAction?: ImPolicyAction
 ): ImPolicyAction {
   if (domain !== 'im') throw new Error(`Unsupported policy domain: ${domain}`)
+  const scenario = rule.id ? IM_SCENARIO_BY_RULE_ID[rule.id] : undefined
+  if (scenario === 'human-required') return 'confirm-every-time'
   if (rule.locked || rule.action === 'deny' || rule.action === 'confirm-every-time' || pkg === 'custom') {
     return pkg === 'custom' && customAction ? customAction : rule.action
   }
-  const scenario = rule.id ? IM_SCENARIO_BY_RULE_ID[rule.id] : undefined
   if (!scenario) return rule.action
   return resolveImPolicyAction({ domain, pkg, scenario, customAction })
 }

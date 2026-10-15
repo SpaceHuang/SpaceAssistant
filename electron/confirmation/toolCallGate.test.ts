@@ -4,12 +4,13 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { canCreateSymlinks } from '../../src/test/symlinkCapability'
-import { loadEffectivePolicyRules, readPolicyPackages } from './policyRulesRuntime'
+import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from './policyRulesRuntime'
 import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getDbConnection, openSqliteDatabase, type AppDatabase } from '../database'
+import { commitImPolicySnapshot, readImPolicySnapshot } from './imPolicyStore'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
-import { effectiveActionFor } from '../../src/shared/policy/policyPackages'
+import { effectiveActionFor, resolveImPolicyRulesForVersion } from '../../src/shared/policy/policyPackages'
 import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
 import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { canonicalKeyJson } from './sqliteDecisionCache'
@@ -131,6 +132,32 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
   const events: SecurityAuditEvent[] = []
   return { record: (e) => events.push(e), events }
 }
+
+describe('IM standard policy override is final at the gate', () => {
+  it('keeps a persisted user ask override as user confirmation instead of remapping it to Agent review', async () => {
+    const db = openDb()
+    commitImPolicySnapshot(getDbConnection(db), {
+      policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'im-time-query-review': 'ask' } },
+      updatedAt: 1,
+      eventId: 'time-query-user-ask-override'
+    })
+    const effective = resolveEffectivePolicyRulesWithOrigin(db, 'wechat')
+    const imPolicySnapshot = readImPolicySnapshot(getDbConnection(db), { supportedBehaviorVersions: ['im-standard-v2'] })
+    expect(effective.rules.find((rule) => rule.id === 'im-time-query-review')?.action).toBe('ask')
+
+    const result = await evaluateToolCallGate(base({
+      lane: 'wechat',
+      toolName: 'toolkit.call',
+      toolInput: { id: 'env.time', params: {} },
+      effectiveRules: effective.rules,
+      lanePackage: 'standard',
+      imPolicySnapshot
+    }))
+
+    expect(result.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-time-query-review', answerer: 'user', disposition: 'human-required' })
+  })
+})
 
 describe('evaluateToolCallGate 诊断契约（R2）', () => {
   it('persists the shared IM policy and decision evidence on policy.decision events', async () => {
@@ -1074,26 +1101,34 @@ describe('evaluateToolCallGate', () => {
   it('applies the version-pinned IM standard candidate map in the real policy gate', async () => {
     const legacy = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(),
       toolName: 'browser', toolInput: { action: 'navigate', url: 'https://example.com' },
-      effectiveRules: loadEffectivePolicyRules(openDb(), 'feishu'),
+      effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-v1.6', pkg: 'standard',
+        rules: loadEffectivePolicyRules(openDb(), 'feishu') }),
       imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: {} } }))
     expect(legacy.decision).toMatchObject({ type: 'require-confirm', ruleId: 'browser-navigate-ask-remote', answerer: 'user' })
 
     const current = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(),
       toolName: 'browser', toolInput: { action: 'navigate', url: 'https://example.com' },
-      effectiveRules: loadEffectivePolicyRules(openDb(), 'feishu'),
-      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: {} } }))
+      effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard',
+        rules: loadEffectivePolicyRules(openDb(), 'feishu') }),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } } }))
     expect(current.decision).toMatchObject({ type: 'require-confirm', ruleId: 'browser-navigate-ask-remote', answerer: 'agent', disposition: 'auto-eligible' })
   })
 
   it('routes only a new ordinary in-workspace IM write through the standard review candidate', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/im-low-risk-create-'))
     const candidateDb = openDb()
-    const imSnapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: {} }
-    try {
+      const imSnapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
+      try {
       const makeArgs = (input: Record<string, unknown>, overrides: Partial<ToolCallGateArgs> = {}) => base({
         lane: 'feishu', remoteContext: remoteContext(), workDir: root, userDataDir: path.join(root, '.userdata'),
-        toolName: 'write_file', toolInput: input, effectiveRules: loadEffectivePolicyRules(candidateDb, 'feishu'),
-        imPolicySnapshot: imSnapshot, ...overrides
+        toolName: 'write_file', toolInput: input,
+        effectiveRules: overrides.effectiveRules ?? (overrides.imPolicySnapshot?.policyBehaviorVersion === 'im-v1.6'
+          ? loadEffectivePolicyRules(candidateDb, 'feishu')
+          : resolveImPolicyRulesForVersion({
+            policyBehaviorVersion: overrides.imPolicySnapshot?.policyBehaviorVersion ?? imSnapshot.policyBehaviorVersion,
+            pkg: overrides.lanePackage ?? 'standard', rules: loadEffectivePolicyRules(candidateDb, 'feishu') })),
+        imPolicySnapshot: overrides.imPolicySnapshot ?? imSnapshot,
+        ...overrides
       })
       const fresh = await evaluateToolCallGate(makeArgs({ path: 'new.md', content: 'draft' }))
       expect(fresh).toMatchObject({ decision: { type: 'require-confirm', ruleId: 'im-low-risk-create', answerer: 'agent', disposition: 'auto-eligible' },
@@ -1102,18 +1137,20 @@ describe('evaluateToolCallGate', () => {
         imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: {} }
       }))
       expect(legacy.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
-      const strict = await evaluateToolCallGate(makeArgs({ path: 'strict.md', content: 'draft' }, { lanePackage: 'strict' }))
+      const strict = await evaluateToolCallGate(makeArgs({ path: 'strict.md', content: 'draft' }, { lanePackage: 'strict',
+        imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'strict' } } }))
       expect(strict.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-low-risk-create', answerer: 'user' })
 
       const existingPath = path.join(root, 'existing.md')
       await fs.writeFile(existingPath, 'prior')
       const overwrite = await evaluateToolCallGate(makeArgs({ path: existingPath, content: 'replacement' }))
-      expect(overwrite.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
+      expect(overwrite.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'agent', disposition: 'auto-eligible' })
 
       const editCandidate = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(), workDir: root,
         userDataDir: path.join(root, '.userdata'), toolName: 'edit_file',
         toolInput: { path: existingPath, old_string: 'prior', new_string: 'updated' },
-        effectiveRules: loadEffectivePolicyRules(candidateDb, 'feishu'), imPolicySnapshot: imSnapshot }))
+        effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard',
+          rules: loadEffectivePolicyRules(candidateDb, 'feishu') }), imPolicySnapshot: imSnapshot }))
       expect(editCandidate).toMatchObject({ decision: { type: 'require-confirm', ruleId: 'im-low-risk-edit', answerer: 'agent', disposition: 'auto-eligible' },
         writePathFact: { targetKind: 'file', zone: 'workdir-normal' } })
 
@@ -1135,7 +1172,10 @@ describe('evaluateToolCallGate', () => {
       const sensitive = await evaluateToolCallGate(makeArgs({ path: path.join(sensitiveDir, 'new.md'), content: 'private' }, {
         shellConfig: { ...DEFAULT_SHELL_CONFIG, customSensitivePrefixes: [sensitiveDir] }
       }))
-      expect(sensitive.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
+      expect(sensitive.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-sensitive-path-confirm', answerer: 'user' })
+
+      const system = await evaluateToolCallGate(makeArgs({ path: '/etc/im-security-review-test-new.md', content: 'private' }))
+      expect(system.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-write-deny' })
 
       const outside = await evaluateToolCallGate(makeArgs({ path: '/etc/im-security-review-test-new.md', content: 'blocked' }))
       expect(outside.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-write-deny' })
@@ -2081,6 +2121,7 @@ describe('evaluateToolCallGate', () => {
   it('IM standard compares Feishu message targets to the authenticated actor and splits policy outcomes', async () => {
     const run = async (args: string[]) => evaluateToolCallGate(base({
       toolName: 'run_lark_cli', toolInput: { args },
+      effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES }),
       remoteContext: remoteContext({ authOwner: 'ou_owner' }),
       imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
     }))
@@ -2232,7 +2273,7 @@ describe('evaluateToolCallGate', () => {
 
   it.each([
     { path: '/etc/spaceassistant-policy-test-new-file', zone: 'system-dir', scope: 'outside-workdir', decision: { type: 'deny', ruleId: 'remote-outside-write-deny' } },
-    { path: '.env', zone: 'sensitive-file', scope: 'inside-workdir', decision: { type: 'require-confirm', ruleId: 'im-write-ask' } }
+    { path: '.env', zone: 'sensitive-file', scope: 'inside-workdir', decision: { type: 'require-confirm', ruleId: 'im-write-sensitive-path-confirm' } }
   ] as const)('远程写入 $zone 目标按真实工作目录范围裁决', async ({ path: target, zone, scope, decision }) => {
     const workDir = await fs.realpath(await fs.mkdtemp('/tmp/remote-write-special-work-'))
     try {
