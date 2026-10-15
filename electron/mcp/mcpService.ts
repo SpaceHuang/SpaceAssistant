@@ -5,7 +5,6 @@ import {
   MCP_TIMEOUT_SEC_MAX,
   MCP_TIMEOUT_SEC_MIN,
   McpServerWriteInputSchema,
-  type McpServerProfile,
   type McpServerWriteInput,
   type McpTestConnectionResult
 } from '../../src/shared/mcpTypes'
@@ -13,10 +12,10 @@ import { validateMcpEndpoint } from './endpointPolicy'
 import { createSafeDiscoveryFetch, DISCOVERY_TIMEOUT_MS } from './discoveryPolicyFetch'
 import { appendServer } from './mcpConfigStore'
 import { getSecret } from './mcpSecretStore'
-import { McpConnectionManager, testConnection } from './mcpConnectionManager'
+import { testConnection } from './mcpConnectionManager'
 import { discoverOAuthServerInfo } from '@modelcontextprotocol/sdk/client/auth.js'
 import { matchOauthClientPreset, MCP_OAUTH_CLIENT_PRESETS, type McpOAuthClientPreset } from './oauthClientPresets'
-import { createMcpOAuthClientProvider, isOAuthFlowActive, MCP_AUTH_REQUIRED_MESSAGE, startOAuthFlow } from './mcpOauthService'
+import { createMcpOAuthClientProvider, MCP_AUTH_REQUIRED_MESSAGE, startOAuthFlow } from './mcpOauthService'
 import { buildMappedToolDescriptors } from './mcpToolRegistry'
 
 /**
@@ -334,4 +333,3 @@ export function writeProfileFromInput(input: McpServerWriteInput) {
     updatedAt: input.updatedAt ?? now
   }
 }
-
