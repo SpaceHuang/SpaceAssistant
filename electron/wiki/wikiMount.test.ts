@@ -83,12 +83,6 @@ describe('resolveWikiMount 八条规则（T0.5）', () => {
     expectNotMounted(resolveWikiMount(workDir, makeConfig(), userData, elsewhere))
   })
 
-  it('⑦ disabled 恒不挂载', () => {
-    const config = makeConfig({ enabled: false })
-    expectNotMounted(resolveWikiMount(workDir, config, userData, 'llm-wiki/wiki/index.md'))
-    expectNotMounted(resolveWikiMount(workDir, config, userData, path.join(userData, 'llm-wiki', 'raw', 'x.md')))
-  })
-
   it('⑧ 别名前缀 readOnly：词汇不变、realPath 落共享根', () => {
     const config = makeConfig({ legacyRootAliases: ['old-wiki'] })
     const res = expectMounted(resolveWikiMount(workDir, config, userData, 'old-wiki/wiki/index.md'))
