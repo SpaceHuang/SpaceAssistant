@@ -164,6 +164,7 @@ export function configModalSnapshotsEqual(a: string, b: string): boolean {
 export function normalizeSettingsTabKey(tab?: string): string | undefined {
   if (!tab) return undefined
   if (tab === 'browser') return 'tools'
+  if (tab === 'remote-security' || tab === 'remote-security-upgrade' || tab === 'remote-im-security') return 'security'
   if (tab === 'llm-service' || tab === 'llm-defaults') return 'models'
   return tab
 }

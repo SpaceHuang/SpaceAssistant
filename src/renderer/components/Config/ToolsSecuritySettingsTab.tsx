@@ -13,7 +13,6 @@ import type {
   SecuritySettingsRuleView
 } from '../../../shared/confirmation/settingsCenter'
 import type { PolicyPackage } from '../../../shared/policy/policyPackages'
-import { IM_ADAPTER_CAPABILITIES } from '../../../shared/policy/imAdapterCapabilities'
 import { IM_STANDARD_BEHAVIOR_DIFF_IDS } from '../../../shared/policy/imPolicyBehavior'
 import { LANE_PROFILES, effectiveActionFor, imEffectiveActionFor, isPolicyPackage, resolvePolicyRules } from '../../../shared/policy/policyPackages'
 import type { PolicyRule } from '../../../shared/confirmation/types'
@@ -69,8 +68,6 @@ function PolicyPackageSection({
   const [imPolicyVersion, setImPolicyVersion] = useState<string | null>(null)
   const [imRuleOverrides, setImRuleOverrides] = useState<Record<string, string>>({})
   const [imDisabledRuleIds, setImDisabledRuleIds] = useState<string[]>([])
-  const [imGateDisabled, setImGateDisabled] = useState(false)
-  const [imGateReason, setImGateReason] = useState<string | null>(null)
 
   const actionLabel = (action: PolicyAction): string =>
     action === 'deny'
@@ -89,34 +86,8 @@ function PolicyPackageSection({
     ? imEffectiveActionFor('im', pkg, rule, override)
     : (override as PolicyAction | undefined) ?? rule.action
 
-  const renderImCapabilitySupport = (pkg: PolicyPackage) => (
-    <div className="config-shell-section">
-      <h4>{t('toolsSecurity.policy.capabilitySupportTitle')}</h4>
-      {IM_ADAPTER_CAPABILITIES.map((capability) => {
-        const rule = model?.rules.find((candidate) => candidate.id === capability.policyRuleId)
-        const action = effectiveImAction(pkg, {
-          id: capability.policyRuleId,
-          action: rule?.action ?? 'ask',
-          locked: rule?.locked
-        }, imRuleOverrides[capability.policyRuleId] as PolicyAction | undefined)
-        const channelLabels = capability.supportedChannels.map((channel) => channel === 'wechat'
-          ? t('toolsSecurity.policy.laneWechat')
-          : t('toolsSecurity.policy.laneFeishu'))
-        return (
-          <div key={capability.id} className="config-field__hint" data-testid={`im-capability-${capability.id}`}>
-            <strong>{t(capability.labelKey as never)}</strong>
-            <div>{t('toolsSecurity.policy.capabilitySupportedChannels')}: {channelLabels.join('、')}</div>
-            <div>{t('toolsSecurity.policy.capabilityPolicyPermission')}: {actionLabel(action)}</div>
-          </div>
-        )
-      })}
-    </div>
-  )
-
   const applyImSnapshot = (snapshot: Record<string, unknown>) => {
     if (isPolicyPackage(snapshot.selectedPackage)) setImPackageOverride(snapshot.selectedPackage)
-    setImGateDisabled(snapshot.enabled !== true)
-    setImGateReason(typeof snapshot.disabledReason === 'string' ? snapshot.disabledReason : null)
     setImRuleOverrides(snapshot.ruleOverrides && typeof snapshot.ruleOverrides === 'object' && !Array.isArray(snapshot.ruleOverrides)
       ? snapshot.ruleOverrides as Record<string, string> : {})
     setImDisabledRuleIds(Array.isArray(snapshot.disabledRuleIds)
@@ -402,7 +373,7 @@ function PolicyPackageSection({
                 : t('toolsSecurity.policy.whenIngress')
         },
         {
-          title: t('toolsSecurity.policy.capabilityPolicyPermission'),
+          title: t('toolsSecurity.policy.actionColumn'),
           width: 140,
           render: (_, r) => {
             // 生效动作（显示=实际）：按当前链路 + 档位经 LANE_PROFILES 计算（standard 桌面「询问」→「自动」）；
@@ -469,7 +440,6 @@ function PolicyPackageSection({
   return (
     <ConfigSettingsStack>
       <p className="config-field__hint">{t('toolsSecurity.policy.hint')}</p>
-      <p className="config-field__hint">{t('toolsSecurity.policy.imSharedScope')}</p>
       <Tabs
         items={LANES.map((lane) => {
           const pkg = lane === 'wechat'
@@ -494,16 +464,6 @@ function PolicyPackageSection({
                         <Button onClick={switchImStandard}>{t('toolsSecurity.policy.switchToCurrentStandard')}</Button>
                       </Space>
                     )}
-                  />
-                ) : null}
-                {lane === 'wechat' && imGateDisabled ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message={t('toolsSecurity.policy.imGateDisabled')}
-                    description={imGateReason === 'rollback_required'
-                      ? t('toolsSecurity.policy.imGateRollbackRequired')
-                      : t('toolsSecurity.policy.imGateDisabledReasonUnknown')}
                   />
                 ) : null}
                 <div className="config-policy-selector">
@@ -538,7 +498,6 @@ function PolicyPackageSection({
                     </p>
                   ) : null}
                 </div>
-                {lane === 'wechat' ? renderImCapabilitySupport(pkg) : null}
                 {renderRulesTable(lane)}
               </ConfigSettingsStack>
             )
@@ -863,9 +822,9 @@ function AuditSection({
 /**
  * 「安全策略」设置页（§7，P4）：1. 策略套餐（含规则列表；规则行展示当前链路+档位的生效动作，
  * custom 档动作域按 lane）2. 确认记忆管理 3. 安全审计记录。
- * 工具开关（Agent 可用能力面）在「工具 → 工具开关」独立子 Tab，与安全策略管控并列。
+ * 安全策略同时覆盖工具调用和 IM 操作策略，因此作为全局设置页单独展示。
  */
-export function ToolsSecuritySettingsTab({ active, browser, onBrowserChange }: Props) {
+export function SecuritySettingsTab({ active, browser, onBrowserChange }: Props) {
   const { t } = useTypedTranslation('config')
   const [model, setModel] = useState<SecuritySettingsModelPayload | null>(null)
 
@@ -886,7 +845,7 @@ export function ToolsSecuritySettingsTab({ active, browser, onBrowserChange }: P
       <p className="config-field__hint">{t('toolsSecurity.intro')}</p>
       <Collapse
         ghost
-        className="config-tools-security"
+        className="config-security-settings"
         defaultActiveKey={['policy']}
         items={[
           {

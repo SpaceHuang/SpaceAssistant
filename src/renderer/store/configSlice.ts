@@ -2,7 +2,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { AppConfig } from '../../shared/domainTypes'
 import type { RemoteImCommonConfig } from '../../shared/imTypes'
 
-export type ToolsSettingsSubTab = 'switches' | 'mcp' | 'file' | 'script' | 'shell' | 'browser' | 'security'
+export type ToolsSettingsSubTab = 'switches' | 'mcp' | 'file' | 'script' | 'shell' | 'browser'
 
 interface ConfigState {
   config: AppConfig | null
@@ -71,7 +71,7 @@ export const configSlice = createSlice({
     },
     openSettings(
       state,
-      action: PayloadAction<{ tab?: string; toolsSubTab?: ToolsSettingsSubTab } | undefined>
+      action: PayloadAction<{ tab?: string; toolsSubTab?: ToolsSettingsSubTab | 'security' } | undefined>
     ) {
       state.settingsOpen = true
       if (action.payload?.tab) {
@@ -80,8 +80,8 @@ export const configSlice = createSlice({
           state.settingsActiveTab = 'tools'
           state.settingsToolsSubTab = 'browser'
         } else if (tab === 'remote-security' || tab === 'remote-security-upgrade' || tab === 'remote-im-security') {
-          state.settingsActiveTab = 'tools'
-          state.settingsToolsSubTab = 'security'
+          state.settingsActiveTab = 'security'
+          state.settingsToolsSubTab = undefined
         } else if (tab === 'llm-service' || tab === 'llm-defaults') {
           state.settingsActiveTab = 'models'
         } else {
@@ -91,7 +91,10 @@ export const configSlice = createSlice({
           }
         }
       }
-      if (action.payload?.toolsSubTab) {
+      if (action.payload?.toolsSubTab === 'security') {
+        state.settingsActiveTab = 'security'
+        state.settingsToolsSubTab = undefined
+      } else if (action.payload?.toolsSubTab) {
         state.settingsActiveTab = 'tools'
         state.settingsToolsSubTab = action.payload.toolsSubTab
       }

@@ -376,10 +376,6 @@
       "browser": {
         "label": "网络访问",
         "hint": "浏览器自动化与依赖检测"
-      },
-      "security": {
-        "label": "安全策略",
-        "hint": "策略套餐、确认记忆与安全审计的统一入口"
       }
     },
     "file": {
@@ -769,7 +765,7 @@
     "allowRemoteBrowserHint": "开启后，飞书/微信等 IM 远程指令可使用 browser 访问网页；默认关闭以降低远程滥用风险。"
   },
   "toolsSecurity": {
-    "intro": "统一管理工具确认策略、确认记忆与安全审计；确认模式与工具开关也集中在这里配置。本页变更立即生效，并记入安全审计日志。",
+    "intro": "统一管理桌面与 IM 远程操作的安全策略、确认记忆与安全审计。本页变更立即生效，并记入安全审计日志。",
     "policy": {
       "title": "策略套餐",
       "hint": "为每条链路选择策略套餐。自定义套餐可调整规则动作；系统保护规则用「启用/不启用」控制是否生效。",
@@ -777,10 +773,6 @@
       "laneWechat": "微信",
       "laneFeishu": "飞书",
       "laneImRemote": "IM 远程",
-      "imSharedScope": "此策略由现有的微信和飞书远程入口共享。",
-      "imGateDisabled": "异步人工审批通知尚未启用",
-      "imGateDisabledReasonUnknown": "异步人工审批通知尚未启用。需要人工确认的操作会在当前微信或飞书会话中等待你同步确认；符合策略的操作仍按自动审核流程处理。",
-      "imGateRollbackRequired": "正式渠道的安全关闭或回退状态仍生效。",
       "currentStandardAvailable": "有新版 IM 标准策略可用",
       "currentStandardAvailableHint": "查看规则变化并确认后，将为微信和飞书远程入口共同切换策略。",
       "switchToCurrentStandard": "查看变化并切换",
@@ -793,7 +785,7 @@
       "behaviorDiffs": {
         "mcpPublicReadAuto": "公开网页抓取等已分类的只读 MCP 调用，将进入自动审核，不再直接要求你逐次确认。",
         "lowRiskBrowserAndFeishuAuto": "普通网页浏览，以及已分类的低风险飞书操作，将进入自动审核。",
-        "sensitiveWriteAndExternalOutboundManual": "敏感目录写入、覆盖或删除、无法分类的操作，以及发给他人或群组的消息，仍需你审批。"
+        "sensitiveWriteAndExternalOutboundManual": "敏感文件或系统目录写入，以及发给他人或群组的消息，仍需你审批。普通文件覆盖等其他写入会交由审核 Agent 评估。"
       },
       "packageStrict": "严格",
       "packageStandard": "标准",
@@ -801,7 +793,7 @@
       "packageCustom": "自定义",
       "strictHint": "严格：自动放行的域（脚本免确认、shell 预检快通道、只读豁免等）全部纳入确认范围，宁可多问；其余规则动作不变。",
       "standardHint": "标准：桌面链路「询问」将升级为「自动」（先跑确定性预检，无法判定时交审批 Agent 裁决）；远程链路保持原样。",
-      "imStandardHint": "新版标准：IM 只对明确分类的低风险操作进行自动审核；敏感目录写入、覆盖/删除及对外发送仍需人工批准。",
+      "imStandardHint": "新版标准：普通 IM 写入会交由审核 Agent 评估；敏感文件、系统目录写入，以及发给他人或群组的消息仍需你确认。",
       "looseHint": "宽松：打开网页、MCP 工具调用等显式低风险域免确认直接执行，清单外的高危操作仍按标准确认。请确认你了解风险，避免长期保持该档位。",
       "customHint": "自定义：在下表中调整每条规则的动作（桌面链路可选 拒绝/允许/询问/自动；远程链路 拒绝/允许/询问）。",
       "ruleColumn": "规则",
@@ -826,11 +818,6 @@
       "packageLabel": "当前安全套餐",
       "actionAutoShort": "自动审核",
       "applicableCapabilities": "适用能力",
-      "capabilityFeishuResourceWrite": "飞书资源写入",
-      "capabilityWorkspaceFileWrite": "本地文件写入",
-      "capabilityPolicyPermission": "策略许可",
-      "capabilitySupportedChannels": "支持渠道",
-      "capabilitySupportTitle": "IM 能力支持与策略许可",
       "packageSelectHint": "选择套餐后，下方规则的动作将按套餐预设生效；自定义套餐可逐条覆盖。",
       "larkWriteRequiresConfirm": "飞书写操作需确认",
       "larkWriteRequiresConfirmHint": "默认关闭：飞书 CLI 写操作（发消息、改文档、日历等）免确认。可影响群消息、共享文档与日历等第三方资源；误操作外部影响面大于微信「只回自己」。需要时可开启确认。自定义套餐下对 lark-write-ask 的规则覆盖优先于本开关。"

@@ -376,10 +376,6 @@
       "browser": {
         "label": "Web access",
         "hint": "Browser automation and dependency checks"
-      },
-      "security": {
-        "label": "Security Policy",
-        "hint": "Single home for policy packages, confirmation memory and audit"
       }
     },
     "file": {
@@ -769,7 +765,7 @@
     "allowRemoteBrowserHint": "When enabled, Feishu/WeChat IM remote commands can use the browser to access the web. Off by default to reduce remote abuse risk."
   },
   "toolsSecurity": {
-    "intro": "Manage tool confirmation policies, confirmation memory and security audit in one place; confirm mode and tool switches now live here too. Changes apply immediately and are written to the audit log.",
+    "intro": "Manage security policies for desktop and remote IM actions, confirmation memory and security audit in one place. Changes apply immediately and are written to the audit log.",
     "policy": {
       "title": "Policy Packages",
       "hint": "Choose a policy package per lane. The custom package lets you adjust rule actions; system-protection rules are toggled via Enabled/Disabled.",
@@ -777,10 +773,6 @@
       "laneWechat": "WeChat",
       "laneFeishu": "Feishu",
       "laneImRemote": "Remote IM",
-      "imSharedScope": "This policy is shared by the existing WeChat and Feishu remote entry points.",
-      "imGateDisabled": "Asynchronous human approval notifications are not enabled",
-      "imGateDisabledReasonUnknown": "Asynchronous human approval notifications are not enabled. Actions requiring human approval wait for your synchronous confirmation in the current WeChat or Feishu conversation; actions eligible for automatic review continue through policy review.",
-      "imGateRollbackRequired": "A production safety shutdown or rollback state is still active.",
       "currentStandardAvailable": "A newer IM standard policy is available",
       "currentStandardAvailableHint": "Review the changes and confirm to switch the shared WeChat and Feishu policy.",
       "switchToCurrentStandard": "Review changes and switch",
@@ -793,7 +785,7 @@
       "behaviorDiffs": {
         "mcpPublicReadAuto": "Public web fetching and other classified read-only MCP calls enter automatic review instead of asking you directly each time.",
         "lowRiskBrowserAndFeishuAuto": "Ordinary browser navigation and classified low-risk Feishu actions enter automatic review.",
-        "sensitiveWriteAndExternalOutboundManual": "Sensitive directory writes, overwrites or deletes, unclassified actions, and messages to other people or groups still require your approval."
+        "sensitiveWriteAndExternalOutboundManual": "Writes to sensitive files or system directories, and messages to other people or groups, still require your approval. Ordinary file overwrites are reviewed by the approval agent."
       },
       "packageStrict": "Strict",
       "packageStandard": "Standard",
@@ -801,7 +793,7 @@
       "packageCustom": "Custom",
       "strictHint": "Strict: all auto-allowed domains (script auto-allow, shell pre-check fast path, read-only exemptions) are brought into the confirmation scope; other rule actions stay unchanged.",
       "standardHint": "Standard: on the desktop lane, Ask is upgraded to Auto (deterministic pre-checks run first; the approval agent decides when they cannot). Remote lanes stay unchanged.",
-      "imStandardHint": "Current standard: automatic review applies only to classified low-risk IM actions. Sensitive directory writes, overwrites/deletes, and external messages still require manual approval.",
+      "imStandardHint": "Current standard: ordinary IM writes are reviewed by the approval agent. Writes to sensitive files or system directories, and messages to other people or groups, still require your confirmation.",
       "looseHint": "Relaxed: explicitly low-risk domains (opening web pages, MCP tool calls) run without approval; high-risk operations outside the list still follow standard confirmations. Make sure you understand the risk.",
       "customHint": "Custom: adjust each rule action below (desktop lane: deny/allow/ask/auto; remote lanes: deny/allow/ask).",
       "ruleColumn": "Rule",
@@ -826,11 +818,6 @@
       "packageLabel": "Current security package",
       "actionAutoShort": "Automatic review",
       "applicableCapabilities": "Applicable capabilities",
-      "capabilityFeishuResourceWrite": "Feishu resource writes",
-      "capabilityWorkspaceFileWrite": "Local file writes",
-      "capabilityPolicyPermission": "Policy permission",
-      "capabilitySupportedChannels": "Supported channels",
-      "capabilitySupportTitle": "IM capability support and policy permission",
       "packageSelectHint": "The package sets the default for all rules below; choose Custom to override per rule.",
       "larkWriteRequiresConfirm": "Confirm Feishu write operations",
       "larkWriteRequiresConfirmHint": "Off by default: Feishu CLI writes (messages, docs, calendar, etc.) skip confirmation. Writes can affect group chats, shared docs, and calendars—broader external impact than WeChat private reply. Turn on when you want confirmation. Under the custom package, rule overrides for lark-write-ask take precedence over this switch."

@@ -24,6 +24,8 @@ describe('normalizeSettingsTabKey', () => {
     expect(normalizeSettingsTabKey('llm-service')).toBe('models')
     expect(normalizeSettingsTabKey('llm-defaults')).toBe('models')
     expect(normalizeSettingsTabKey('browser')).toBe('tools')
+    expect(normalizeSettingsTabKey('remote-security')).toBe('security')
+    expect(normalizeSettingsTabKey('remote-im-security')).toBe('security')
     expect(normalizeSettingsTabKey('general')).toBe('general')
     expect(normalizeSettingsTabKey('storage')).toBe('storage')
   })

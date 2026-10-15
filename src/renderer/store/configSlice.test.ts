@@ -45,13 +45,23 @@ describe('applyRemoteImCommonPatch', () => {
 })
 
 describe('legacy settings deep links', () => {
-  it('routes old remote security links to the single shared policy settings tab', () => {
+  it('routes old remote security links to the global security settings page', () => {
     const store = configureStore({ reducer: { config: configReducer } })
     store.dispatch(openSettings({ tab: 'remote-security' }))
     expect(store.getState().config).toMatchObject({
       settingsOpen: true,
-      settingsActiveTab: 'tools',
-      settingsToolsSubTab: 'security'
+      settingsActiveTab: 'security',
+      settingsToolsSubTab: undefined
+    })
+  })
+
+  it('routes the former Tools > Security Policy subtab to the global page', () => {
+    const store = configureStore({ reducer: { config: configReducer } })
+    store.dispatch(openSettings({ tab: 'tools', toolsSubTab: 'security' }))
+    expect(store.getState().config).toMatchObject({
+      settingsOpen: true,
+      settingsActiveTab: 'security',
+      settingsToolsSubTab: undefined
     })
   })
 })

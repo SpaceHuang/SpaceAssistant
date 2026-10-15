@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { App, ConfigProvider } from 'antd'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
-import { ToolsSecuritySettingsTab } from './ToolsSecuritySettingsTab'
+import { SecuritySettingsTab } from './ToolsSecuritySettingsTab'
 import configReducer from '../../store/configSlice'
 import { changeAppLocale } from '../../i18n/localeSync'
 import type { SecuritySettingsModelPayload } from '../../../shared/confirmation/settingsCenter'
@@ -91,7 +91,7 @@ function renderTab(overrides?: {
     <Provider store={store}>
       <ConfigProvider>
         <App>
-          <ToolsSecuritySettingsTab
+          <SecuritySettingsTab
             active
             browser={overrides?.browser ?? DEFAULT_BROWSER_CONFIG}
             onBrowserChange={overrides?.onBrowserChange ?? (() => {})}
@@ -105,10 +105,11 @@ function renderTab(overrides?: {
 /** 切到指定链路 Tab 并等待其规则表出现。 */
 async function openLaneTab(name: string) {
   fireEvent.click(await screen.findByRole('tab', { name }))
-  return screen.findByRole('tabpanel')
+  await waitFor(() => expect(screen.getAllByRole('tabpanel').some((panel) => panel.getAttribute('aria-hidden') === 'false')).toBe(true))
+  return screen.getAllByRole('tabpanel').find((panel) => panel.getAttribute('aria-hidden') === 'false')!
 }
 
-describe('ToolsSecuritySettingsTab（§7 五区）', () => {
+describe('SecuritySettingsTab（§7 五区）', () => {
   beforeEach(async () => {
     await changeAppLocale('zh-CN')
     window.api = {
@@ -193,27 +194,27 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     await waitFor(() => expect(within(panel).getByText('严格')).toBeTruthy())
   })
 
-  it('IM 自动审核门禁关闭时显示未启用状态和快照原因', { timeout: 20000 }, async () => {
+  it('does not show a stale release-gate warning from an old IM policy snapshot', { timeout: 20000 }, async () => {
     window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
       domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 8,
       snapshot: { selectedPackage: 'standard', enabled: false, disabledReason: 'rollback_required' }
     })
     renderTab()
     const panel = await openLaneTab('IM 远程')
-    expect(await within(panel).findByText('异步人工审批通知尚未启用')).toBeTruthy()
-    expect(within(panel).getByText('正式渠道的安全关闭或回退状态仍生效。')).toBeTruthy()
+    expect(await within(panel).findByText('标准')).toBeTruthy()
+    expect(within(panel).queryByText(/异步人工审批通知尚未启用/)).toBeNull()
+    expect(within(panel).queryByText(/安全关闭或回退状态仍生效/)).toBeNull()
   })
 
-  it('普通 gate 关闭时只说明当前审批仍由用户确认', { timeout: 20000 }, async () => {
+  it('does not describe asynchronous approval as disabled when reading legacy snapshot fields', { timeout: 20000 }, async () => {
     window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
       domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 8,
       snapshot: { selectedPackage: 'standard', enabled: false }
     })
     renderTab()
     const panel = await openLaneTab('IM 远程')
-    expect(await within(panel).findByText(/需要人工确认的操作会在当前微信或飞书会话中等待你同步确认/)).toBeTruthy()
-    expect(within(panel).queryByText(/灰度账号范围/)).toBeNull()
-    expect(within(panel).queryByText(/引用\/短码匹配验证/)).toBeNull()
+    expect(await within(panel).findByText('标准')).toBeTruthy()
+    expect(within(panel).queryByText(/异步人工审批通知尚未启用/)).toBeNull()
   })
 
   it('共同快照 revision 冲突时说明需刷新重试', { timeout: 20000 }, async () => {
@@ -299,13 +300,12 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     })
   })
 
-  it('策略套餐区只提供桌面与共享 IM 两个区域，并说明当前覆盖微信与飞书', { timeout: 20000 }, async () => {
+  it('策略套餐区只提供桌面与共享 IM 两个区域', { timeout: 20000 }, async () => {
     renderTab()
     expect(await screen.findByRole('tab', { name: '桌面' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'IM 远程' })).toBeTruthy()
     expect(screen.queryByRole('tab', { name: '微信' })).toBeNull()
     expect(screen.queryByRole('tab', { name: '飞书' })).toBeNull()
-    expect(screen.getByText(/现有的微信和飞书远程入口/)).toBeTruthy()
     const panel = await screen.findByRole('tabpanel')
     expect(await within(panel).findByText('script-clean-allow-desktop')).toBeTruthy()
     expect(within(panel).getByText('universal-no-lane')).toBeTruthy()
@@ -315,24 +315,13 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     expect(within(panel).queryByText('链路硬约束')).toBeNull()
   })
 
-  it('分开显示 IM 能力支持渠道与当前策略许可', { timeout: 20000 }, async () => {
-    const supportRules = [
-      { id: 'im-low-risk-create', when: 'invocation', action: 'ask', defaultAction: 'ask', enabled: true, locked: false,
-        reason: 'low risk create', overridden: false, lanes: ['wechat', 'feishu'], capabilities: ['write_file'] },
-      { id: 'lark-write-ask', when: 'invocation', action: 'ask', defaultAction: 'ask', enabled: true, locked: false,
-        reason: 'Feishu resource write', overridden: false, lanes: ['feishu'], capabilities: ['run_lark_cli'] }
-    ] as unknown as SecuritySettingsModelPayload['rules']
-    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({ ...MODEL, rules: [...MODEL.rules, ...supportRules] })
+  it('IM 远程策略页不显示重复且容易误读的能力许可概览', { timeout: 20000 }, async () => {
     renderTab()
     const panel = await openLaneTab('IM 远程')
-    const fileWrite = within(panel).getByTestId('im-capability-workspace.file.write')
-    expect(fileWrite.textContent).toContain('本地文件写入')
-    expect(fileWrite.textContent).toContain('微信、飞书')
-    expect(fileWrite.textContent).toContain('策略许可: 自动审核')
-    const feishuWrite = within(panel).getByTestId('im-capability-feishu.resource.write')
-    expect(feishuWrite.textContent).toContain('飞书资源写入')
-    expect(feishuWrite.textContent).toContain('支持渠道: 飞书')
-    expect(feishuWrite.textContent).toContain('策略许可: 自动审核')
+    expect(within(panel).queryByText('IM 能力支持与策略许可')).toBeNull()
+    expect(within(panel).queryByText('本地文件写入')).toBeNull()
+    expect(within(panel).queryByText('飞书资源写入')).toBeNull()
+    expect(within(panel).getByText('im-write-ask')).toBeTruthy()
   })
 
   it('IM 远程 Tab 展示系统保护规则（locked）的「启用/不启用」开关，不渲染锁定标记', { timeout: 20000 }, async () => {
