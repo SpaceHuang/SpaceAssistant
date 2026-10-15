@@ -15,7 +15,7 @@
 
 ## 矛盾与时间线检查
 
-- **双入口检查（有冲突，未消解）**：`archive/desktop-ui/渲染进程卡顿优化方案.md`（v3.25，多阶段已落地）与 `in-flight/../streaming-ui-performance-analysis.md`（v1.0「分析完成，待实施」，已核验为已实现并归档）在**「流式卡顿」话题上重叠**。二者口径不矛盾（前者是总方案、后者是专题分析），但**同话题两条线索**需拍板是否合并为一条现状描述 —— 已在 [`history.md`](./history.md) 「存疑」节记录，**待用户拍板**。
+- **双入口检查（已消解，2026-10-14）**：`archive/desktop-ui/渲染进程卡顿优化方案.md`（v3.25）与 `archive/desktop-ui/streaming-ui-performance-analysis.md`（v1.0）曾被记为「同话题两条线索待拍板」。经读原文复核：前者管**工具调用高频事件**链路（`bounded display meta → renderer coalescing → on-demand tool detail`），后者管**流式 token 渲染**链路（`ChatView` / `chatRunnerService` / `ChatBubble` / `ChatMarkdown` / `ShikiCodeBlock`）—— **问题域不同，不构成双入口**。用户已拍板按「两条独立主线」组织现状文档（见 [`桌面交互与工作区-现状.md`](./桌面交互与工作区-现状.md) §4.1 / §4.2）。
 - **history 抽样**（3 条，均可命中）：`810d38e2`（composer 加号菜单）、`86d613cf`（列表停止按钮提示 Phase 3）、`6fe55d43`（死文件与孤儿 i18n key 清理）。
 
 ## 无法核验项
