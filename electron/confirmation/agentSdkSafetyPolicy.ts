@@ -48,6 +48,7 @@ export function createAgentSdkSafetyPolicy(input: {
         decision: { riskLevel: decision.riskLevel, memoryTiers: decision.memoryTiers, timeoutMs: decision.timeoutMs,
           answerer: decision.answerer, disposition: decision.disposition },
         facts: result.facts,
+        ...(result.factsSnapshot ? { factsProvenance: { factId: result.factsSnapshot.factId, extractorVersion: result.factsSnapshot.extractorVersion, completeness: result.factsSnapshot.completeness, factsRevision: result.factsSnapshot.factsRevision, policyVersion: result.factsSnapshot.policyVersion } } : {}),
         approvedFactIds: result.approvedFactIds,
         ...(result.readTargetMapping ? { readTargetMapping: result.readTargetMapping } : {}),
         ...(result.readPathFact ? { readPathFact: result.readPathFact } : {}),

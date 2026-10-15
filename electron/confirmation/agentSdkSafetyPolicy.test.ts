@@ -40,6 +40,13 @@ describe('createAgentSdkSafetyPolicy', () => {
     })
   })
 
+  it('passes the gate snapshot provenance unchanged into approval context', async () => {
+    const snapshot = { factId: 'fact-0123456789abcdef01234567', invocationId: 'req', envelopeHash: 'a'.repeat(64), factsHash: 'b'.repeat(64), extractorVersion: 'host-tool-facts-v1', completeness: 'partial' as const, evidenceReferences: [], environmentVersion: 'darwin:/tmp', policyVersion: 'desktop-policy-v1', factsRevision: 1, facts }
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs,
+      evaluateGate: async () => ({ ...result({ type: 'require-confirm', ruleId: 'human', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 }), factsSnapshot: snapshot }) })
+    await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', context: { factsProvenance: { factId: snapshot.factId, extractorVersion: snapshot.extractorVersion, completeness: snapshot.completeness, factsRevision: snapshot.factsRevision, policyVersion: snapshot.policyVersion } } })
+  })
+
   it('拒绝理由变化后沿用旧 run_shell 输入快照绑定', async () => {
     const toolInput = { command: 'pwd', justification: '核对当前目录' }
     const staleBinding = {

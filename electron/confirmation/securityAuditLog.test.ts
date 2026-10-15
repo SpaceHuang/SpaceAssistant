@@ -90,6 +90,9 @@ describe('安全审计日志：独立文件 + JSON Lines 落盘', () => {
     const parsed = JSON.parse(content.trim().split('\n')[0]!)
     expect(parsed.event).toBe('policy.decision')
     expect(parsed.sessionId).toBe('s1')
+    log.record({ ...baseEvent(), factsSnapshotId: 'fact-0123456789abcdef01234567', extractorVersion: 'host-tool-facts-v1', factsRevision: 2 })
+    await log.flush()
+    await expect(querySecurityAuditLog(dir, { lane: 'desktop', event: 'policy.decision' })).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ factsSnapshotId: 'fact-0123456789abcdef01234567', extractorVersion: 'host-tool-facts-v1', factsRevision: 2 })]))
   })
 
   it('round-trips policy provenance, review path, and deferred causal references through persistent query', async () => {

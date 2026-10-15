@@ -190,6 +190,17 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
       imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 2, snapshot: {} },
       mcpEntry: { serverId: 'server', toolName: 'read', inputSchema: {}, annotations: {} } as never }))
     expect(audit.events.find((entry) => entry.event === 'policy.decision')?.factsCompleteness).toBe('capability-description-stale')
+    expect(audit.events.find((entry) => entry.event === 'policy.decision')).toMatchObject({ factsSnapshotId: expect.stringMatching(/^fact-[0-9a-f]{24}$/), extractorVersion: 'host-tool-facts-v1', factsRevision: 1 })
+  })
+
+  it('assigns the same snapshot id to result and policy decision audit without logging the envelope', async () => {
+    const audit = auditSink()
+    const result = await evaluateToolCallGate(base({ audit, toolInput: { path: 'secret-token=sk-1234567890abcdefghijklmnop' } }))
+    const event = audit.events.find((entry) => entry.event === 'policy.decision')!
+    expect(event.factsSnapshotId).toBe(result.factsSnapshot?.factId)
+    expect(event.extractorVersion).toBe('host-tool-facts-v1')
+    expect(event.factsRevision).toBe(1)
+    expect(JSON.stringify(event)).not.toContain('sk-1234567890abcdefghijklmnop')
   })
 
   it('fails closed before policy evaluation when an IM invocation has no validated shared snapshot', async () => {
@@ -2240,6 +2251,28 @@ describe('evaluateToolCallGate', () => {
 
       expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'wechat-media-target', boundary: 'inside-workdir', zone: 'workdir-normal', targetKind: 'file' }))
       expect(gate.decision.type).toBe('auto-allow')
+    } finally {
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('微信附件提取敏感内容证据但暂不改变兼容期策略 verdict，且不保存附件正文', async () => {
+    const workDir = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-content-facts-'))
+    const attachmentPath = path.join(workDir, 'report.txt')
+    const secret = 'api_key=sk-1234567890abcdefghijklmnop'
+    await fs.writeFile(attachmentPath, secret)
+    try {
+      const gate = await evaluateToolCallGate(base({
+        lane: 'wechat', remoteContext: remoteContext({ source: 'wechat' }), workDir,
+        userDataDir: path.join(workDir, '.userdata'), toolName: 'wechat_send',
+        toolInput: { userId: 'recipient', text: 'report', filePath: 'report.txt' }
+      }))
+
+      expect(gate.facts.signals).toContainEqual(expect.objectContaining({
+        kind: 'wechat-media-content-assessment', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern']
+      }))
+      expect(gate.decision.type).toBe('auto-allow')
+      expect(JSON.stringify(gate.facts)).not.toContain(secret)
     } finally {
       await fs.rm(workDir, { recursive: true, force: true })
     }

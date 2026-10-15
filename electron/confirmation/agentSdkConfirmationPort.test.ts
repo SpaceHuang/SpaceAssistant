@@ -279,6 +279,16 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(channel.cancel).toHaveBeenCalledWith('tool-1', 'cancelled')
   })
 
+  it('passes snapshot provenance intact to the confirmation channel', async () => {
+    const channel = { request: vi.fn(async () => ({ kind: 'rejected' as const, cause: 'agent-deny' as const, answererKind: 'agent' as const })), cancel: vi.fn() }
+    const publish = vi.fn()
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish, cancel: vi.fn() })
+    const factsProvenance = { factId: 'fact-0123456789abcdef01234567', extractorVersion: 'host-tool-facts-v1', completeness: 'partial' as const, factsRevision: 2, policyVersion: 'policy-v1' }
+    await port({ call: { invocationId: 'inv', toolCallId: 'tool-provenance', toolName: 'write_file', input: {} }, confirmationId: 'tool-provenance', answerer: 'agent', reasonCode: 'ask', context: { ...context, factsProvenance } })
+    expect(channel.request).toHaveBeenCalledWith(expect.objectContaining({ factsProvenance }))
+    expect(publish).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ factsProvenance }), 'tool-provenance', expect.objectContaining({ factsProvenance }))
+  })
+
   it('Desktop request cancellation resolves the real confirmation waiter and SDK port', async () => {
     const requestId = 'desktop-confirm-cancel-request'
     const toolCallId = 'desktop-confirm-cancel-tool'

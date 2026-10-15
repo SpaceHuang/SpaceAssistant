@@ -6,6 +6,7 @@ export type GateConfirmationContext = Readonly<{
   facts: ConfirmRequest['facts']
   /** Host-derived references to controlled evidence used for the current facts snapshot. */
   evidenceReferences?: readonly string[]
+  factsProvenance?: ConfirmRequest['factsProvenance']
   decision: Pick<ConfirmRequest, 'riskLevel' | 'memoryTiers' | 'timeoutMs'> & {
     answerer?: 'user' | 'agent'
     disposition?: 'human-required' | 'auto-eligible'
@@ -88,6 +89,7 @@ export function createAgentSdkConfirmationPort(input: {
     }
     const request: ConfirmRequest = {
       facts: confirmation.context.facts,
+      ...(confirmation.context.factsProvenance ? { factsProvenance: confirmation.context.factsProvenance } : {}),
       ...confirmation.context.decision,
       ...(typeof confirmation.context.modelJustification === 'string' ? { modelJustification: confirmation.context.modelJustification } : {}),
       ...(confirmation.context.modelJustificationTruncated === true ? { modelJustificationTruncated: true } : {})

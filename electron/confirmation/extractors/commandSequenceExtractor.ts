@@ -86,7 +86,7 @@ export function extractCommandSignals(command: string, _env: EnvFacts): {
   const segments = parseShellSegments(command)
   if (segments.length === 0) {
     return {
-      signals: [{ kind: 'extraction-failed', reason: 'empty-command' }],
+      signals: [{ kind: 'extraction-failed', reason: 'empty-command' }, { kind: 'command-effect', effect: 'unknown' }, { kind: 'shell-analysis-completeness', completeness: 'partial', unknownReasons: ['empty-command'] }],
       summary: { text: '无法解析的空命令' }
     }
   }
@@ -111,8 +111,13 @@ export function extractCommandSignals(command: string, _env: EnvFacts): {
   const signature = renderCommandSequence(
     commands.map((c) => ({ text: c.signature ?? '', connector: c.connector }))
   )
+  const supported = segments.every((segment) => Boolean(tokenizeShellArgv(segment)?.length)) && connectors.every((connector) => ['&&', '||', ';', '|'].includes(connector))
+  const readOnlyVerbs = new Set(['cat', 'head', 'tail', 'wc', 'grep', 'rg', 'find', 'sed', 'date', 'pwd', 'whoami', 'which', 'file', 'stat', 'du', 'df', 'echo', 'printf', 'sort', 'uniq', 'comm', 'diff', 'tree'])
+  const hasRedirection = /(?:^|[^<])(?:>>?|2>|&>)/.test(command)
+  const effect = !supported || hasRedirection || commands.some((entry) => !readOnlyVerbs.has(entry.verb.toLowerCase())) ? 'unknown' : 'read-only'
+  const completeness = supported ? 'complete' : 'partial'
   return {
-    signals: [{ kind: 'command-sequence', commands, ...(persistable ? { persistable } : {}) }],
+    signals: [{ kind: 'command-sequence', commands, ...(persistable ? { persistable } : {}) }, { kind: 'command-effect', effect }, { kind: 'shell-analysis-completeness', completeness, unknownReasons: supported ? [] : ['unsupported-shell-structure'] }],
     summary: {
       text: signature ? `${CONFIRMATION_LABELS.summaryCommandSequencePrefix}${signature}` : CONFIRMATION_LABELS.summaryEmptyCommand
     }

@@ -1,5 +1,7 @@
+import { classifyImOutboundContent, type ImOutboundContentClass, type ImOutboundContentFacts } from './imOutboundFacts'
+
+export type { ImOutboundContentClass } from './imOutboundFacts'
 export type ImOutboundChannel = 'wechat' | 'feishu'
-export type ImOutboundContentClass = 'ordinary' | 'sensitive' | 'bulk-local-export' | 'permission-change' | 'private-query' | 'upload' | 'unknown'
 
 export interface ImOutboundFacts {
   channel: ImOutboundChannel
@@ -13,6 +15,7 @@ export interface ImOutboundFacts {
   modelRecipient?: string
   chatType?: 'p2p' | 'group' | 'unknown'
   content?: string
+  contentFacts?: ImOutboundContentFacts
   contentAssessment?: Readonly<{
     source: 'host'
     content: string
@@ -34,11 +37,7 @@ export interface ImOutboundFacts {
 
 
 export function assessImOutboundContent(body: string): ImOutboundContentClass {
-  if (!body.trim() || body.length > 20_000) return 'unknown'
-  if (/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:api[_-]?key|access[_-]?token|password)\s*[:=]|(?:sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{16,})|(?:\/Users\/|\/home\/|[A-Z]:\\Users\\)/i.test(body)) return 'sensitive'
-  if (/\b(?:all|bulk|entire|every)\s+(?:customer|user|message|record|file)s?\b|批量|全部客户|所有用户|所有记录|通讯录导出/i.test(body)) return 'bulk-local-export'
-  if (/\b(?:permission|privilege|access control)\s+(?:change|grant|revoke)|权限变更|授权变更/i.test(body)) return 'permission-change'
-  return 'ordinary'
+  return classifyImOutboundContent(body)
 }
 
 export function createHostImOutboundFacts(input: {

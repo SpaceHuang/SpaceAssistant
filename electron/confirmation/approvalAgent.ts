@@ -118,6 +118,7 @@ function renderCluePack(clue: ApprovalCluePack): string {
   // E2（评审 2026-09-28）：argsDigest 是 MCP 入参的脱敏归一摘要（不可信素材，留在围栏内）——
   // 它进 CluePack 却不渲染 = R3「审批可见入参」对裁决模型不可达。依赖 E1 的递归脱敏先落地。
   if (clue.argsDigest) evidence.push(`[入参摘要（脱敏后）] ${neutralizeFence(clue.argsDigest)}`)
+  if (clue.factsProvenance) evidence.push(`[事实快照] ID=${neutralizeFence(clue.factsProvenance.factId)}；提取器=${neutralizeFence(clue.factsProvenance.extractorVersion)}；完整性=${clue.factsProvenance.completeness}；修订=${clue.factsProvenance.factsRevision}；策略版本=${neutralizeFence(clue.factsProvenance.policyVersion)}`)
   const lines = [
     '## 待裁决调用',
     `- 工具：${clue.toolName}`,

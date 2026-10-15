@@ -28,3 +28,6 @@
 - 审批 Agent 的 clue/evidence 原文；只留安全摘要、证据计数和引用。
 
 Phase 1/2/3/4 需要补齐：稳定 decision ID、facts snapshot hash/revision、规则依赖指纹、receipt/approval 关联键、执行 envelope digest、invariant ID 与 failure class 的统一链路；在不破坏历史事件读取的前提下增加。
+
+
+Phase 1 新增 policy event 仅记录 `factsSnapshotId`（稳定短 hash）、`extractorVersion`、`factsRevision`，与已有路径/目标 `factId` 分开；同一快照 provenance 沿 gate → SDK confirmation → Agent clue 传递。JSONL 测试验证字段 round-trip；原始 envelope、正文、secret 不写入。

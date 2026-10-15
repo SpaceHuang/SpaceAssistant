@@ -124,6 +124,15 @@ export type FactSignal =
   | { kind: 'wechat-media-target'; boundary: 'inside-workdir' | 'outside-workdir' | 'unknown'; zone?: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown' }
   /** Host-measured exact attachment version, included in confirmation and deferred-approval facts. */
   | { kind: 'wechat-media-content'; sha256: string; byteSize: number; fileName: string; displayPath: string }
+  /** Content/path observations for IM attachments; never includes attachment bytes or a policy verdict. */
+  | {
+      kind: 'wechat-media-content-assessment'
+      factId: string
+      contentDigest: string
+      extractorVersion: string
+      inspectionCoverage: 'complete' | 'partial' | 'unavailable'
+      evidenceKinds: readonly ('credential-like-pattern' | 'personal-data-pattern' | 'sensitive-path-name')[]
+    }
   | { kind: 'workdir-profile-target'; status: 'normal' | 'sensitive' | 'unknown' }
   | { kind: 'write-target-unsupported' }
   | { kind: 'write-target-new' }
@@ -197,6 +206,7 @@ export type FactSignal =
    * 对 automation 由 lane 限定 locked deny 规则收敛为拒绝（O9 用户决策）。
    */
   | { kind: 'shell-unsupported-structure'; structures: string[]; reason: 'structure' | 'too-many-segments' }
+  | { kind: 'shell-analysis-completeness'; completeness: 'complete' | 'partial'; unknownReasons: readonly string[] }
   /**
    * R3：审批载荷构造不完整信号——表述纪律：只能报「载荷构造不完整（缺字段 X）」，
    * 禁止表述为「调用参数缺失」（需求 §R3 第 4 点根因）。
@@ -246,6 +256,8 @@ export interface ConfirmRequest {
   riskLevel: RiskLevel
   memoryTiers: MemoryTier[]
   timeoutMs: number | null
+  /** Provenance of the exact host facts snapshot used by policy. */
+  factsProvenance?: { factId: string; extractorVersion: string; completeness: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale'; factsRevision: number; policyVersion: string }
   /** Per-call model claim; untrusted and shown only as review context. */
   modelJustification?: string
   modelJustificationTruncated?: boolean
@@ -325,6 +337,8 @@ export interface ApprovalCluePack {
   signals: string[]
   targetPath?: string
   command?: string
+  /** Provenance of the exact facts reviewed by policy and approval; contains no raw input. */
+  factsProvenance?: { factId: string; extractorVersion: string; completeness: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale'; factsRevision: number; policyVersion: string }
   /** Untrusted model-provided explanation attached to this invocation. */
   modelJustification?: string
   modelJustificationTruncated?: boolean
@@ -472,6 +486,10 @@ export interface SecurityAuditEvent {
   /** Versioned behavior snapshot and revision used for the decision. */
   policyBehaviorVersion?: string
   policyRevision?: number
+  /** Stable identifier of the exact fact snapshot consumed by policy/approval. */
+  factsSnapshotId?: string
+  extractorVersion?: string
+  factsRevision?: number
   /** Whether the invocation facts were complete enough to decide. */
   factsCompleteness?: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale' | 'unknown'
   /** Deterministic policy, user confirmation, approval agent, or a fail-closed fallback path. */

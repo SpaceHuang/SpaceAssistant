@@ -97,6 +97,19 @@ describe('AgentChannel（P2-3）', () => {
     }))
   })
 
+  it('将策略使用的事实快照版本带入审批线索，且不暴露原始输入', async () => {
+    const { ch, invokeApproval } = channel()
+    const request = req({ factsProvenance: {
+      factId: 'fact-0123456789abcdef01234567', extractorVersion: 'facts-v1',
+      completeness: 'partial', factsRevision: 3, policyVersion: 'policy-v2'
+    } })
+    await ch.request(request)
+    expect(invokeApproval).toHaveBeenCalledWith(expect.objectContaining({
+      clue: expect.objectContaining({ factsProvenance: request.factsProvenance })
+    }))
+    expect(JSON.stringify(invokeApproval.mock.calls[0][0].clue)).not.toContain('raw')
+  })
+
   it('deny 裁决 → rejected + cause=agent-deny，reason.summary 保留（理由回传）', async () => {
     const ch2 = new AgentChannel({
       lane: 'automation',

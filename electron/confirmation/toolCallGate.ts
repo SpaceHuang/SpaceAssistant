@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import fsPromises from 'node:fs/promises'
 import path from 'node:path'
 import { decide } from '../../src/shared/policy/policyEngine'
+import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachmentFacts'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
@@ -113,6 +114,7 @@ import type { WorkspaceSnapshot } from '../../src/shared/agent/workspace'
 import { sanitizeAgentText } from '../../src/shared/agentSafeText'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 import { CONFIRMATION_LABELS } from '../../src/shared/confirmation/labels'
+import { createInvocationFactsSnapshot } from '../../src/shared/confirmation/invocationFactsSnapshot'
 
 
 /** 出站写工具判定（等价现 toolChatLoop.isOutboundWriteTool：未知/非读 fail-closed 计写）。 */
@@ -222,6 +224,7 @@ export function buildToolCallGateArgs(
 export interface ToolCallGateResult {
   decision: Decision
   facts: ContentFacts
+  factsSnapshot?: import('../../src/shared/confirmation/invocationFactsSnapshot').InvocationFactsSnapshot
   approvedFactIds: Array<{ factId: string; decisionRuleId: string }>
   readTargetMapping?: Array<{ factId: string; decisionRuleId: string }>
   readExecutionPermit?: ReadExecutionPermit
@@ -810,10 +813,23 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
                 ? 10 * 1024 * 1024 : 512 * 1024 * 1024
               if (mediaStat.isFile() && mediaStat.size <= maxBytes) {
                 const mediaBytes = await fsPromises.readFile(resolvedMediaPath)
+                const contentDigest = createHash('sha256').update(mediaBytes).digest('hex')
                 facts.signals.push({ kind: 'wechat-media-content',
-                  sha256: createHash('sha256').update(mediaBytes).digest('hex'), byteSize: mediaBytes.length,
+                  sha256: contentDigest, byteSize: mediaBytes.length,
                   fileName: path.basename(resolvedMediaPath),
                   displayPath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/') })
+                let inspectedText = ''
+                let inspectionCoverage: 'complete' | 'partial' = 'complete'
+                try { inspectedText = new TextDecoder('utf-8', { fatal: true }).decode(mediaBytes) }
+                catch { inspectionCoverage = 'partial' }
+                const attachmentFacts = await createImAttachmentFacts({
+                  fileName: path.basename(resolvedMediaPath),
+                  relativePath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/'),
+                  content: inspectedText,
+                  contentDigest,
+                  inspectionCoverage
+                })
+                facts.signals.push({ kind: 'wechat-media-content-assessment', ...attachmentFacts })
               }
             }
           } catch (error) {
@@ -1186,6 +1202,28 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     : reportedCompleteness.includes('partial') ? 'partial'
       : reportedCompleteness.includes('capability-description-stale') ? 'capability-description-stale'
         : reportedCompleteness.length > 0 && reportedCompleteness.every((value) => value === 'complete') ? 'complete' : 'unknown'
+  const reportedSnapshotCompleteness = facts.signals.some((signal) => signal.kind === 'mcp-invocation' && signal.completeness === 'missing')
+    ? 'missing' as const
+    : facts.signals.some((signal) => signal.kind === 'mcp-invocation' && signal.completeness === 'capability-description-stale')
+      ? 'capability-description-stale' as const
+      : facts.signals.some((signal) => signal.kind === 'extraction-failed' ||
+          signal.kind === 'shell-analysis-completeness' && signal.completeness === 'partial' ||
+          signal.kind === 'mcp-invocation' && signal.completeness === 'partial')
+        ? 'partial' as const
+        : 'complete' as const
+  const factsSnapshot = await createInvocationFactsSnapshot({
+    invocationId: args.requestId ?? args.sessionId,
+    envelope: { toolName: args.toolName, toolInput: args.toolInput, toolUseId: args.toolUseId ?? '' },
+    facts,
+    extractorVersion: 'host-tool-facts-v1',
+    completeness: reportedSnapshotCompleteness,
+    evidenceReferences: [],
+    environmentVersion: `${env.os}:${env.workDir}`,
+    policyVersion: args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
+    factsRevision: args.phase === 'recheck' ? 2 : 1,
+    previousFactsRevision: 0
+  })
+  result.factsSnapshot = factsSnapshot
   audit.record({
     ts: Date.now(),
     event: 'policy.decision',
@@ -1193,6 +1231,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     ...(lane === 'wechat' || lane === 'feishu' ? { policyDomain: 'im' as const } : { policyDomain: 'desktop' as const }),
     ...(args.imPolicySnapshot ? { policyBehaviorVersion: args.imPolicySnapshot.policyBehaviorVersion, policyRevision: args.imPolicySnapshot.revision } : {}),
     factsCompleteness,
+    factsSnapshotId: factsSnapshot.factId,
+    extractorVersion: factsSnapshot.extractorVersion,
+    factsRevision: factsSnapshot.factsRevision,
     reviewPath: decision.type === 'require-confirm'
       ? decision.answerer === 'agent' ? 'approval-agent' : 'user-confirmation'
       : 'deterministic-policy',

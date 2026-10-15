@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { assertImOutboundAllowed, classifyImOutbound } from './outboundClassification'
 
+describe('outbound evidence equivalence', () => {
+  it('structured facts observations do not replace legacy dispatch decisions', async () => {
+    const { createImOutboundFacts } = await import('./imOutboundFacts')
+    const ordinary = await createImOutboundFacts('The requested report is ready.')
+    const sensitive = await createImOutboundFacts('token=sk-1234567890abcdefghijklmnop')
+    expect(ordinary.evidenceKinds).toEqual([])
+    expect(sensitive.evidenceKinds).toContain('credential-like-pattern')
+    const base = { channel: 'feishu' as const, purpose: 'task-reply' as const, originSessionId: 's', activeSessionId: 's', identityKey: 'owner', ownerId: 'owner', trustedRecipient: 'owner', recipient: 'owner', chatType: 'p2p' as const, content: 'The requested report is ready.', contentAssessment: { source: 'host' as const, content: 'The requested report is ready.', classification: 'ordinary' as const, classifierVersion: 'host-im-outbound-v1' }, contentCompleteness: 'complete' as const, hasAttachment: false, attachmentAuthorized: false }
+    expect(classifyImOutbound(base)).toMatchObject({ kind: 'controlled-reply' })
+    expect(classifyImOutbound({ ...base, contentAssessment: { ...base.contentAssessment, classification: 'sensitive' } })).toMatchObject({ kind: 'active-outbound', reason: 'sensitive' })
+  })
+})
+
 describe('classifyImOutbound', () => {
   const base = {
     channel: 'feishu' as const,

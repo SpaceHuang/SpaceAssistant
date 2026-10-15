@@ -18,6 +18,18 @@ function signalKinds(signals: { kind: string }[]): string[] {
 }
 
 describe('commandSequenceExtractor', () => {
+  it('emits command effect and analysis completeness as observations only', () => {
+    const read = extractCommandSignals('cat report.txt', { os: 'darwin', workDir: '/workspace', sensitivePaths: [] })
+    expect(read.signals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'command-effect', effect: 'read-only' }),
+      expect.objectContaining({ kind: 'shell-analysis-completeness', completeness: 'complete', unknownReasons: [] })
+    ]))
+    const unknown = extractCommandSignals('echo \"unterminated', { os: 'darwin', workDir: '/workspace', sensitivePaths: [] })
+    expect(unknown.signals).toContainEqual(expect.objectContaining({ kind: 'command-effect', effect: 'unknown' }))
+    expect(unknown.signals).toContainEqual(expect.objectContaining({ kind: 'shell-analysis-completeness', completeness: 'partial' }))
+    expect(unknown.signals.some((signal) => 'verdict' in signal || 'decision' in signal)).toBe(false)
+  })
+
   it('tracks POSIX cwd changes segment by segment', () => {
     const result = extractCommandSignals('cd src && cd ../tests && pwd', {
       os: 'darwin', workDir: '/workspace/project', sensitivePaths: []
