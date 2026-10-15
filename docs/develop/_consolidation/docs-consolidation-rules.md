@@ -160,7 +160,7 @@ git log --date=short --format='%ad %h %s' --grep='<方案关键词>'
 | 项 | 结论 |
 | --- | --- |
 | 是否进主题体系 | **否** —— 它记录的是「某次开发怎么拆的、怎么跑的」，属工具的过程产物，与 `docs/plan/`（TDD 计划/todo）、`docs/review/`（本地评审报告）同类 |
-| 是否搬迁 | **否**（§2.5）。硬理由：`docs/knowledge/SCHEMA.md:145-146` 以 `docs/superpowers/{specs,plans}` 作为 `design` / `plan` 两类 docType 的**来源目录**，搬迁会让知识库分类规则指向空目录 |
+| 是否搬迁 | **否**。① **定性理由（主，仍是依据）**：它是**工具的过程产物**（见上），与 `docs/plan/`、`docs/review/` 同类，不进主题体系；② ~~`docs/knowledge/SCHEMA.md:145-146` 的 docType 来源耦合~~ —— **该理由已于 2026-10-15 随 `docs/knowledge/` 移除而消失**（提交 `054a80f8`），不再作为依据 |
 | 如何被发现 | 主题 README 的「关联过程产物」节（[`desktop-ui`](../desktop-ui/README.md) 12 篇、[`platform-eng`](../platform-eng/README.md) 2 篇） |
 | 与需求的关系 | 与已归档的 requirement **成对**（需求 ↔ 实现计划），口径以需求基线为准 |
 

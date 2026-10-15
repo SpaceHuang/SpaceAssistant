@@ -16,7 +16,7 @@
 | --- | --- |
 | 需求口径 | [`../../requirement/knowledge-skills/需求基线.md`](../../requirement/knowledge-skills/需求基线.md) |
 | 需求原件（9 件归档） | [`../archive/knowledge-skills/`](../archive/knowledge-skills/)（`docs/requirement/archive/knowledge-skills/` 的对称位） |
-| 知识库（不入档、不搬迁） | `docs/knowledge/`（含 `wiki/`、`SCHEMA.md`） |
+| ~~知识库~~（**已于 2026-10-15 移除**） | `docs/knowledge/`（`SCHEMA.md` + `wiki/`，15 文件）随 wiki 跨 profile 整合移除（提交 `054a80f8`）；现行 wiki 数据见 [`技能与知识-现状.md`](./技能与知识-现状.md) §2 |
 
 ## 状态提示（文档自述滞后）
 

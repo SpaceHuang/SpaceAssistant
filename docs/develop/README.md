@@ -26,7 +26,9 @@
 
 ## 边界（本次不动的目录）
 
-`docs/review/`、`docs/plan/`、`docs/analyze/`、`docs/knowledge/`、`docs/architecture/`、`docs/diagrams/`、`docs/废弃/`、`docs/manual/`、`docs/validation/`、`docs/i18n/`、`docs/skill/`、`docs/superpowers/` —— 只做交叉引用，不搬迁。
+`docs/review/`、`docs/plan/`、`docs/analyze/`、`docs/architecture/`、`docs/diagrams/`、`docs/废弃/`、`docs/manual/`、`docs/validation/`、`docs/i18n/`、`docs/skill/`、`docs/superpowers/` —— 只做交叉引用，不搬迁。
+
+> **清单变更（2026-10-15）**：`docs/knowledge/` 已随 wiki 跨 profile 整合**移除**（提交 `054a80f8`，15 个文件），不再属于本清单；原来「不整合 `docs/superpowers/`」的依据之一（其 `SCHEMA.md` 的 docType 来源耦合）随之消失。
 
 > **`docs/superpowers/` 为何不整合**（15 篇：9 份实现计划 + 6 份设计稿，2026-05~06）：它是 **Claude Code 配合 superpowers 插件**在开发时产出的**计划拆解与执行记录**（文档头带 `REQUIRED SUB-SKILL: superpowers:subagent-driven-development` / `executing-plans` 标记）—— 属**工具的过程产物**，不是本仓库的产品文档。不搬迁的两条硬理由：① `docs/knowledge/SCHEMA.md` 以 `docs/superpowers/{specs,plans}` 作为 `design` / `plan` 两类 docType 的**来源目录**（`SCHEMA.md:145-146`），搬迁会让知识库分类规则指向空目录；② 其内容价值已被各主题的 `需求基线.md` 与 `history.md` 覆盖。
 > **发现路径**：改由主题 README 的「关联过程产物」节提供 —— [`desktop-ui/README.md`](./desktop-ui/README.md)（12 篇）、[`platform-eng/README.md`](./platform-eng/README.md)（2 篇）。
