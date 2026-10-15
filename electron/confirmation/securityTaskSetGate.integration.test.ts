@@ -499,9 +499,23 @@ describe('fixed task-set actual gate shadow integration', () => {
   })
 
   it('records the aggregate fixed-task outcome and enforces the R3 non-regression comparison', () => {
+    const requireLaneReport = (
+      reports: Partial<Record<'desktop' | 'im-standard', SecurityTaskSetReport>>,
+      lane: 'desktop' | 'im-standard',
+      taskSet: string
+    ) => {
+      const report = reports[lane]
+      expect(report, `missing ${taskSet} observations for ${lane} before aggregate comparison`).toBeDefined()
+      const laneReport = report?.byLane[lane]
+      expect(laneReport, `missing ${taskSet} lane summary for ${lane}`).toBeDefined()
+      return laneReport!
+    }
     const combine = (lane: 'desktop' | 'im-standard') => {
-      const parts = [observedFixedTaskReports[lane]!.byLane[lane], observedMcpSearchReports[lane]!.byLane[lane],
-        observedOrdinaryReplyReports[lane]!.byLane[lane]]
+      const parts = [
+        requireLaneReport(observedFixedTaskReports, lane, 'fixed-task-set'),
+        requireLaneReport(observedMcpSearchReports, lane, 'MCP-search'),
+        requireLaneReport(observedOrdinaryReplyReports, lane, 'ordinary-reply')
+      ]
       const denominator = parts.reduce((total, part) => total + part.denominator, 0)
       const autoExecutedCalls = parts.reduce((total, part) => total + part.autoExecutedCalls, 0)
       return { denominator, autoExecutedCalls, autoExecutionRate: autoExecutedCalls / denominator,

@@ -98,7 +98,7 @@ export function createAgentSdkSafetyPolicy(input: {
           if (!previous) return deny(binding, 'MISSING_MATERIAL')
           const sameFacts = createHash('sha256').update(JSON.stringify(previous.result.facts)).digest('hex') === createHash('sha256').update(JSON.stringify(result.facts)).digest('hex')
           const sameAuthorizationVersion = previous.binding.authorizationVersion === binding.authorizationVersion
-          const sameWriteTarget = stableSerialize(previous.result.writePathFact) === stableSerialize(result.writePathFact)
+          const sameWriteTarget = sameWritePathTarget(previous.result.writePathFact, result.writePathFact)
           const sameReadTarget = stableSerialize(previous.result.readPathFact) === stableSerialize(result.readPathFact)
           const sameFeishuMediaTarget = stableSerialize(previous.result.feishuMediaFact) === stableSerialize(result.feishuMediaFact)
           const sameWriteApprovalConfiguration = !previous.result.writePathFact ||
@@ -204,6 +204,27 @@ function stableSerialize(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined'
   if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
   return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize((value as Record<string, unknown>)[key])}`).join(',')}}`
+}
+
+/**
+ * Bind approval to the exact target and parent directory object, permissions, and target identity.
+ * Directory size, mtime, and link count describe sibling entries; unrelated writes in the same
+ * directory must not invalidate an edit that still targets the same unchanged file.
+ */
+function sameWritePathTarget(
+  previous: ToolCallGateResult['writePathFact'],
+  current: ToolCallGateResult['writePathFact']
+): boolean {
+  if (!previous || !current) return previous === current
+  const stableTarget = (fact: NonNullable<ToolCallGateResult['writePathFact']>) => ({
+    ...fact,
+    parentIdentity: {
+      dev: fact.parentIdentity.dev,
+      ino: fact.parentIdentity.ino,
+      mode: fact.parentIdentity.mode
+    }
+  })
+  return stableSerialize(stableTarget(previous)) === stableSerialize(stableTarget(current))
 }
 
 /** File-write approval is tied to the threshold and sensitive-path configuration shown at approval time. */

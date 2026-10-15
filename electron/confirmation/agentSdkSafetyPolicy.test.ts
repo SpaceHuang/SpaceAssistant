@@ -65,6 +65,32 @@ describe('createAgentSdkSafetyPolicy', () => {
     expect(evaluateGate).toHaveBeenCalledTimes(2)
   })
 
+  it('allows a confirmed edit when only sibling creation changes parent directory size and mtime', async () => {
+    const originalTarget = { rawPath: 'approved.txt', normalizedPath: '/workspace/approved.txt', zone: 'workdir-normal' as const,
+      targetKind: 'file' as const, parentReal: '/workspace',
+      parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 128, mtimeMs: 10, nlink: 2 },
+      identity: { dev: 1, ino: 3, mode: 0o100644, size: 16, mtimeMs: 1, nlink: 1 } }
+    const siblingCreated = { ...originalTarget, parentIdentity: { ...originalTarget.parentIdentity, size: 160, mtimeMs: 20 } }
+    const writeFacts: ContentFacts = { toolName: 'edit_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'edit approved file' } }
+    const initial: ToolCallGateResult = {
+      decision: { type: 'require-confirm', ruleId: 'edit-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts, memoryTiers: [], timeoutMs: 1000 },
+      facts: writeFacts, approvedFactIds: [], writePathFact: originalTarget
+    }
+    const rechecked: ToolCallGateResult = { ...initial, writePathFact: siblingCreated }
+    const input = { path: 'approved.txt', old_string: 'original content', new_string: 'changed content' }
+    const args = { ...baseArgs, toolName: 'edit_file', toolInput: input, workDir: '/workspace' } as ToolCallGateArgs
+    const testBinding = { ...binding, capabilityId: 'edit_file',
+      inputSnapshotHash: createHash('sha256').update('{"new_string":"changed content","old_string":"original content","path":"approved.txt"}').digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'edit_file' } }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(rechecked)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, evaluateGate })
+
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'edit-confirm' })
+    markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1', phase: 'recheck' }))
+      .resolves.toEqual({ kind: 'allow', authorizationVersion: 'edit-v1' })
+  })
+
   it('rejects an approved ask when recheck becomes auto-allow under changed facts', async () => {
     const changedFacts: ContentFacts = { ...facts, signals: [{ kind: 'path-target', path: '/tmp/changed.txt', zone: 'workdir-normal' }] }
     const initial = result({ type: 'require-confirm', ruleId: 'confirmed-read-rule', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 })
