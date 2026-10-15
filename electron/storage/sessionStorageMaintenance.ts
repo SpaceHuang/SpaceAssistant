@@ -5,7 +5,6 @@ import { DatabaseSync } from 'node:sqlite'
 import { performance } from 'node:perf_hooks'
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
 import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 
 export { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'

@@ -1,4 +1,3 @@
-import { ipcMain } from 'electron'
 import { dialog, BrowserWindow } from 'electron'
 import { runButlerTask, type ButlerInvokerDeps } from './butlerInvoker'
 import {
