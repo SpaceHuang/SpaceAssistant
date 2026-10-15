@@ -883,12 +883,10 @@ export interface ModelEntry {
 }
 
 import type { FeishuConfig, WorkDirProfile } from './feishuTypes'
-import { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 export type { FeishuConfig, WorkDirProfile } from './feishuTypes'
 export { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 
 import type { WeChatConfig } from './wechatTypes'
-import { DEFAULT_WECHAT_CONFIG, mergeWeChatConfig } from './wechatTypes'
 export type { WeChatConfig } from './wechatTypes'
 export { DEFAULT_WECHAT_CONFIG, mergeWeChatConfig } from './wechatTypes'
 
