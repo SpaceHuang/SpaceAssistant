@@ -83,7 +83,7 @@ async function attachWritePermit(
     customSensitivePrefixes: []
   }
   const wc = ctx.wikiConfig
-  if (wc?.enabled) {
+  if (wc) {
     const { resolveWikiMount } = await import('../wiki/wikiMount')
     const resolution = resolveWikiMount(ctx.workDir, wc, ctx.userDataDir, rawPath)
     if (resolution.mounted) {

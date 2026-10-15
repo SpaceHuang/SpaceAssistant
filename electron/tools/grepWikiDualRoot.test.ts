@@ -128,7 +128,7 @@ async function runGrep(ctx: ToolExecutionContext, input: Record<string, unknown>
   const rawPath = typeof input.path === 'string' ? input.path : undefined
   if (rawPath === undefined) {
     await attachWorkDirGrepPermit(ctx, input)
-  } else if (ctx.wikiConfig?.enabled) {
+  } else if (ctx.wikiConfig) {
     const { resolveWikiMount } = await import('../wiki/wikiMount')
     const resolution = resolveWikiMount(ctx.workDir, ctx.wikiConfig, ctx.userDataDir, rawPath)
     if (resolution.mounted) await attachWikiPathGrepPermit(ctx, input)
@@ -173,14 +173,6 @@ describe('grep 双根编排（T1.11a）', () => {
     expect(res.output).toContain('needle in workdir')
     expect(res.output).toContain('llm-wiki/wiki/shared.md')
     expect(res.output).toContain('needle in shared wiki')
-  })
-
-  it('a② wiki 停用 → 单根（现状，无 wiki 命中）', async () => {
-    const { ctx } = await setupWorld({ wikiEnabled: false })
-    const res = await runGrep(ctx, { pattern: 'needle', output_mode: 'content' })
-    expect(res.success).toBe(true)
-    expect(res.output).toContain('needle in workdir')
-    expect(res.output).not.toContain('llm-wiki/wiki/shared.md')
   })
 
   it('a③ 显式 path=wiki 词汇 → 仅共享根子路径（挂载 permit 单根）', async () => {
