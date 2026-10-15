@@ -26,7 +26,7 @@ const messages = [
   { id: 'a2', role: 'assistant' as const, content: 'Recent answer '.repeat(120) }
 ]
 const fingerprint = computeReplaySurfaceFingerprint('', projectReplaySurface(messages))
-const summarizeFixture = async () => ({ task: 'Prior task', decisions: 'Prior decision', pending: 'Next step' })
+const summarizeFixture = async () => ({ task: 'Prior task', completed: 'Earlier tasks', decisions: 'Prior decision', constraints: 'Keep exact IDs', pending: 'Next step', blockers: 'None', nextStep: 'Continue' })
 function makeAdapter(sink: SessionEventSink, inputMessages: typeof messages, fp: () => Promise<string> = async () => computeReplaySurfaceFingerprint('', projectReplaySurface(inputMessages)), busy: () => boolean = () => false) {
   const registrar = createContextRegistrar()
   const surfaceMessages = projectReplaySurface(inputMessages)
@@ -46,6 +46,15 @@ function makeAdapter(sink: SessionEventSink, inputMessages: typeof messages, fp:
 }
 
 describe('manual session context compaction', () => {
+  it('keeps recovery IDs and outcomes as host facts in the checkpoint without asking the summarizer to author them', async () => {
+    const recoveryFacts = { unresolvedEffects: [{ id: 'origin:call-1', originInvocationId: 'origin', toolCallId: 'call-1' }], toolOutcomes: [{ id: 'origin:call-1', outcome: 'unknown-after-dispatch' as const }] }
+    const summarize = vi.fn(async () => ({ task: 'Prior task', completed: 'Earlier tasks', decisions: 'Prior decision', constraints: 'Keep exact IDs', pending: 'Next step', blockers: 'None', nextStep: 'Continue' }))
+    const { sink, events } = makeSink()
+    await compactSessionContext({ sessionId: 's1', requestId: 'recovery-facts', windowId: 'window-1', messages, totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, messages), recoveryFacts, summarize })
+    expect(summarize).toHaveBeenCalledWith(expect.any(Array), 'en-US', recoveryFacts)
+    const candidate = events[1]?.payload.candidate as { checkpointMessage: { content: string } }
+    expect(JSON.parse(candidate.checkpointMessage.content)).toMatchObject({ unresolvedEffectIds: ['origin:call-1'], toolOutcomes: [{ id: 'origin:call-1', outcome: 'unknown-after-dispatch' }] })
+  })
   it('submits a registered candidate through ContextPort instead of owning a sink', async () => {
     const commits: unknown[] = []
     const registrar = createContextRegistrar()
@@ -104,7 +113,7 @@ describe('manual session context compaction', () => {
       totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, changedSurface),
       summarize: async (source) => {
         const ending = source.map((message) => message.content).join('\n').slice(-120)
-        return { task: 'Earlier task', decisions: ending, pending: 'Continue the current task' }
+        return { task: 'Earlier task', completed: 'Earlier work', decisions: ending, constraints: 'Keep IDs', pending: 'Continue the current task', blockers: 'None', nextStep: 'Continue' }
       },
     })
     expect(result).toEqual({ status: 'stale' })
@@ -123,7 +132,7 @@ describe('manual session context compaction', () => {
       totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, longMessages),
       summarize: async (source) => ({
         task: source.map((message) => message.content).join('\n').includes('LATE_DECISION_KEEP_THIS') ? 'LATE_DECISION_KEEP_THIS' : 'Prior task',
-        decisions: 'Prior decision', pending: 'Next step'
+        completed: 'Earlier work', decisions: 'Prior decision', constraints: 'Keep IDs', pending: 'Next step', blockers: 'None', nextStep: 'Continue'
       }),
       currentFingerprint: async () => computeReplaySurfaceFingerprint('', projectReplaySurface(longMessages)), isBusy: () => false
     })
@@ -161,7 +170,7 @@ describe('manual session context compaction', () => {
     ]
     const summarize = vi.fn(async (source: readonly { role: string; content: unknown }[]) => {
       const transcript = source.map((message) => String(message.content)).join('\n')
-      return { task: transcript.includes(middleDecision) ? middleDecision : '', decisions: 'Routine decision', pending: 'Continue current task' }
+      return { task: transcript.includes(middleDecision) ? middleDecision : '', completed: 'Earlier work', decisions: 'Routine decision', constraints: 'Keep IDs', pending: 'Continue current task', blockers: 'None', nextStep: 'Continue' }
     })
     const result = await compactSessionContext({
       sessionId: 's1', requestId: 'middle-decision', windowId: 'window-1', messages: middleMessages,
