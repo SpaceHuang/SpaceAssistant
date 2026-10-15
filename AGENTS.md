@@ -85,6 +85,18 @@ API Key 经 `secureApiKey.ts`（`safeStorage`）加密存储；文件访问必�
 - `electron/` 下还有本文别处未提的领域目录：`driver/`、`butler/`、`capabilities/`、`confirmation/`、`mcp/`、`storage/`——定位以 `ls electron/` 为准。
 - 不入库（clone 后不存在）：`docs/analysis`、`docs/references`、`docs/review`、`docs/project`、`sessions/`、`logs/`、`llm-wiki/`、`res/mingcute-icons-main/`（图标源；已用图标在 `src/renderer/assets/`），完整见 `.gitignore`。
 
+## 文档规范
+
+**整理 `docs/` 下的文档前，先读 [`docs/rules/docs-guide.md`](docs/rules/docs-guide.md)** —— 它是 `docs/` 文档库的长期统一规范（主题结构、归属判定 A/B/C/D、`history.md` 规范、模板集、执行流程、质量门禁、反模式清单）。
+
+要点速览：
+
+- `docs/develop/`、`docs/requirement/` 按 **9 个主题**组织：每主题 = `README.md`（索引）+ 现状文档（requirement 侧为 `需求基线.md`）+ `history.md`（流水账）+ `in-flight/`（草稿箱）；已完成迭代 `git mv` 进 `archive/<主题>/`，**内容零改动**。
+- **文档里那行「状态：」不能当判定依据** —— 必须跑代码核验（提交检索 / 路径检索 / 符号检索三步，指南 §3.0）。
+- 只动文档、**不改代码**；搬迁与改写**分开提交**。
+- 边界目录（`docs/review/`、`docs/plan/`、`docs/analyze/`、`docs/superpowers/` 等）只引用不搬迁；判定原则先看「产品文档 or 过程产物」。
+- **本环境会话可能丢帧**：判定「文件是否已写 / 改动是否生效」一律以 `read_file` / `ls` / `git log` 为准，**不凭会话记忆**；每次写入后复读确认（指南 §0）。
+
 ## 构建系统
 
 - **渲染进程**：Vite + `@vitejs/plugin-react`，`@` 别名映射到 `src/`；dev 端口 9240
