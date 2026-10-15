@@ -24,7 +24,7 @@
 
 ## 关联过程产物（`docs/superpowers/`，按 §2.5 不搬迁）
 
-- `docs/superpowers/plans/2026-06-03-i18n-phase4.md` + `docs/superpowers/specs/2026-06-03-i18n-phase4-design.md` —— i18n 第四期收尾与验证；口径见 [`../../requirement/platform-eng/需求基线.md`](../../requirement/platform-eng/需求基线.md)
+- `docs/superpowers/plans/2026-06-03-i18n-phase4.md` + `docs/superpowers/specs/2026-06-03-i18n-phase4-design.md` —— i18n 第四期收尾与验证。该目录由 **Claude Code + superpowers 插件**产出（工具的**过程产物**：开发计划拆解与执行记录），故不入主题体系；口径见 [`../../requirement/platform-eng/需求基线.md`](../../requirement/platform-eng/需求基线.md)
 
 ## 相关需求口径
 

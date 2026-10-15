@@ -37,7 +37,7 @@
 
 ## 关联过程产物（`docs/superpowers/`，按 §2.5 不搬迁）
 
-以下 12 篇是 2026-05~06 的实现计划/设计稿（**另一套工作流的产出**，文档头含 `superpowers:subagent-driven-development` 标记），与已归档的同名需求成对；此处只做交叉引用：
+以下 12 篇是 2026-05~06 的**开发计划拆解与执行记录**，由 **Claude Code 配合 superpowers 插件**产出（文档头带 `REQUIRED SUB-SKILL: superpowers:subagent-driven-development` / `executing-plans` 标记）—— 属**工具的过程产物**，不是产品文档；它们与已归档的同名需求成对，此处只做交叉引用：
 
 | 件（前缀 `docs/superpowers/`） | 对应口径 |
 | --- | --- |

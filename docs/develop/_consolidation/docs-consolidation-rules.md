@@ -132,6 +132,19 @@ git log --date=short --format='%ad %h %s' --grep='<方案关键词>'
 
 > **教训**：不要因为「原地保留」就把它当 A（现状素材）。A 的判据是「目标形态今天仍成立**且代码可对照**」；本系列**代码不可对照**（符号 0 命中），故只能是 C。反过来，`in-flight/` 里的文档也不能因为「在 in-flight」就免于核验（§3.5/§3.6 的 25 篇更正即是教训）。
 
+### 3.8 工具的过程产物目录：不搬迁、只索引
+
+`docs/superpowers/`（15 篇）是 **Claude Code 配合 superpowers 插件**在做开发时产出的**计划拆解与执行文档**（文档头带 `REQUIRED SUB-SKILL: superpowers:subagent-driven-development` / `executing-plans` 标记）。处置原则：
+
+| 项 | 结论 |
+| --- | --- |
+| 是否进主题体系 | **否** —— 它记录的是「某次开发怎么拆的、怎么跑的」，属工具的过程产物，与 `docs/plan/`（TDD 计划/todo）、`docs/review/`（本地评审报告）同类 |
+| 是否搬迁 | **否**（§2.5）。硬理由：`docs/knowledge/SCHEMA.md:145-146` 以 `docs/superpowers/{specs,plans}` 作为 `design` / `plan` 两类 docType 的**来源目录**，搬迁会让知识库分类规则指向空目录 |
+| 如何被发现 | 主题 README 的「关联过程产物」节（[`desktop-ui`](../../desktop-ui/README.md) 12 篇、[`platform-eng`](../../platform-eng/README.md) 2 篇） |
+| 与需求的关系 | 与已归档的 requirement **成对**（需求 ↔ 实现计划），口径以需求基线为准 |
+
+> **推广**：遇到「工具生成的过程文档」目录（插件、脚手架、自动化 Agent 的产出），先判**归属**（产品文档 or 过程产物），再决定是否进主题体系；**不要因为它"看起来像文档"就并入**。
+
 ## 4. 模板
 
 ### 4.1 现状文档（develop 侧）
