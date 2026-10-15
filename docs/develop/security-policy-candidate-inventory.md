@@ -1,0 +1,48 @@
+# 安全策略三阶段候选清单（Phase 0）
+
+源码基线：`8c0d2a89f78816d4a7d1b1a1890ad59f608cee4f`。本清单记录可复查入口；触发范围以列出的调用链为准，tier 配置需要通过实际 `effectiveRules` / `policySnapshot` 求值。`ruleId` 尚未在 decision 中持久化的点标为缺口。外部 lane 的真实 dispatch 不在本静态清点证据范围。
+
+分类：`facts` 事实生产；`policy` 授权策略；`final-check` 已批准对象/授权校验；`invariant` 不可配置系统约束候选；`mechanism` 失败保护；`functional` 普通输入或业务功能；`duplicate` 重复裁决链；`false-positive` 与授权无关。
+
+| ID | 文件 / 函数与触发 | lane / tool / tier | 当前授权影响、调用者与归位 | 决策依据 / 目标规则 | 测试 / 审计证据 / 状态 |
+|---|---|---|---|---|---|
+| C-01 | `agentSdkConfirmationPort.ts`，channel outcome 为 agent approved 且 facts.actionClass=outbound | 触发该 adapter 的 lane；outbound | `toolCallGate` decision→SDK confirmation→channel outcome→port；把 approved 改成 denied，cause=`rules-violated`。归 `policy` | B-01；answerer 必须由策略阶段选出。候选 rule `outbound-approval-mode`，按 tier：loose allow、standard agent、strict user；删除 port veto | `agentSdkConfirmationPort.test.ts` 及 gate→port 集成待建立；现有分支无 ruleId；未完成 |
+| C-02 | `toolCallGate.ts`，path fact zone 非 `workdir-normal` 且 `decide()` 返回 auto-allow | 写/编辑类可产生 `writePathFact` 的工具；desktop agent / 非 desktop user；automation 另见 C-03 | extractor→`decide`→仅 auto-allow 时重写 require-confirm；已有 ask/deny 不被该 if 改写。归 `facts + policy` 拆分 | B-02；outside-write 独立规则，zone/type 为 facts；loose/standard Agent，strict user | gate、policy 和 permit integration 测试；当前行内 rule `write-outside-confirm` 无策略层 trace；未完成 |
+| C-03 | `toolCallGate.ts`，automation lane 工作目录外写入、原 decision auto-allow | automation 写工具 | C-02 同一后置 if 将 decision 改成 deny。归 `policy`：当前存在 lane-specific automation deny rule，未发现其是不可配置平台能力约束的证据 | B-02/B-05；lane 条件应在规则系统表达；不登记 invariant | gate automation 测试待盘；目标 rule ID 待补；未完成 |
+| C-04 | `outboundClassification.ts:assessImOutboundContent`，对正文启发式匹配敏感/批量/权限变更/unknown | IM outbound body；全 tier | 返回内容标签本身归 `facts`；当前调用链也可能被用于 dispatch eligibility，需拆开 | B-03/04；labels 不做 verdict；unknown/incomplete 作为独立 facts | `outboundClassification.test.ts` 有 label/边界输入，但未断言无授权副作用；未完成 |
+| C-05 | `outboundClassification.ts:classifyImOutbound`，model recipient、purpose/session/owner/chatType/content/attachment 不满足受控回复条件 | wechat/feishu 及 IM 管理回复/主动发送 | 当前结果将受控回复分为 active outbound，并可影响 executor 路由；混合身份事实与内容策略 | 身份/session/recipient 观测→`facts`；动作是否需要 policy approval→`policy`；已批准对象比较→`final-check` | 调用点 `wechatOutboundRegisteredTools.ts`、`weChatToolExecutor.ts` 等；现有工具/通道测试；待拆 |
+| C-06 | `outboundClassification.ts:assertImOutboundAllowed`，平台发送前比较 channel/body/session/recipient/destination 与绑定 facts/receipt | wechat/feishu dispatch | 不匹配时抛 `IM_OUTBOUND_FINAL_CHECK_REQUIRED`；目标/正文一致性属 `final-check`；“只允许某类内容”的策略分支不能留在此处 | B-07；subject digest/receipt 应承接 policy 决定，内容敏感性由 C-04 显式规则决定 | 相关 Feishu/WeChat/remote outbound tests；审计 veto 关联字段需核对；未完成 |
+| C-07 | `policyEngine.ts:decide`，`hasDangerousSignal(facts)` 命中 | 所有进入共享 engine 的 invocation | unconditional `deny('dangerous-signal')`，在配置 deny 和 rules 前。归 `policy`：它将事实信号转成拒绝，尚无“不可配置”的平台/完整性依据 | B-09/10；改为可 trace 的决策规则/约束；危险信号本身由 facts producer 生成 | `policyEngine.test.ts`、dangerous signal 定义和 producer 尚待逐项清点；未完成 |
+| C-08 | `policyEngine.ts:decide`，`config.deniedTools` 或 locked/action deny 匹配 | invocation lane/tool/tier | policy deny、locked laneHardDeny、普通 deny 位于 cache 前；属于 `policy`，多个 precedence 层不能折叠为全局排序 | B-09；显式规则/配置及 trace 说明来源；禁止缓存覆盖 deny | `policyEngine.test.ts` 与 floor contract；具体规则矩阵待补；未完成 |
+| C-09 | `policyEngine.ts:decide`，humanRequired、MCP ask、confirm-every-time、cache、declared capability、auto-evaluator、default rules | desktop/IM/MCP/automation invocation | 各约束层返回不同 answerer/verdict；默认 ask 子域按数组首条，另有独立优先阶段。归 `policy`；保留真实 precedence | B-05/B-09；规则集合/层次需进 dependency trace；不要引入数值 priority | `policyEngine.test.ts` 覆盖多层 precedence 和档位；待形成对照矩阵 |
+| C-10 | `toolCallGate.ts`，effective rules/decisionCache/shellPrecheck 缺失，或 IM policy snapshot 无效 | 所有调用；IM lane 要求受支持 snapshot | 不运行策略或工具，记 policy.decision / gate-materials-missing 并 throw。归 `mechanism`（调用材料完整性） | 缺料不能伪装成风险事实或普通 rule；明确 audit failure class | gate tests 和 securityAuditLog；需确认事件是否和 final policy verdict区分；未完成 |
+| C-11 | `toolCallGate.ts`，`validatePolicyRulesFloor` 发现 locked floor 被放宽 | effective rule set | 返回 deny rules-violated；归 `policy` 约束层，校验失败是拒绝违反策略配置契约，不登记为第二套 invariant verdict | P0-05/06；具体 locked rule 分别定性，decision trace 引用 floor/rule provenance | policy floor tests、appIpc securityRules tests；未完成 |
+| C-12 | `toolCallGate.ts`，`run_shell` precheck 不通过，或 facts 不完整 | run_shell；非 automation 执行 precheck | precheck 先于 `policyEngine` 返回 shell-precheck-deny；混合 shell 事实检测、命令拒绝和工具输入/能力验证 | 命令效果/覆盖度→`facts`；策略拒绝→显式 rule；语法/无法建立执行能力→`mechanism`；逐 validator 判定 | shell precheck/shell security tests；当前 decision ruleId=`shell-precheck-deny`，需核对 denyType/validatorId 与 rule 关系 |
+| C-13 | `toolCallGate.ts`，审批 Agent 内部调用产生 require-confirm | approval-agent internalConfirmExemption | 改写 deny `recursion-guard`，防递归审批。候选 `invariant`/`mechanism`，不属用户策略 | 必须说明审批器不能递归调用自身；登记生命周期 invariant，保留单独 failure cause | gate recursion tests、SDK turn tests；审计 ID 待关联 |
+| C-14 | `toolCallGate.ts`，read/write permit 签发；executor 使用前检查 digest/path identity/revocation | file read/write/list/grep 等受保护工具 | 已批准对象的 permit 绑定、撤销、identity 与 symlink/hardlink 检查归 `final-check`/`invariant`；不得改风险 verdict | B-07；subject/envelope 逐字段核对；身份/机制变化时 executor call=0 | `readReadIntegration.test.ts`、write permit tests；已有 decisionRuleId/factId/request/toolUse linkage，整体覆盖待核 |
+| C-15 | `remoteToolPolicy.ts`，迁移 overlay 和 remote per-tool confirm switch | remote IM script/browser/file/lark tools | `toolChatLoop` 之外单独给 confirm skip 结论；归 `duplicate` policy chain，具体配置规则须映射共享契约 | B-05；lane 可作条件，保留不同信任域的规则差异；删除重复最终裁决 | `remoteToolPolicy.test.ts` 与 remote loop tests；分支映射待逐项 |
+| C-16 | `agent-sdk/src/safetyGate.ts` 与 capability revocation components | 所有拥有 SDK capability 的工具 | known-unauthorized 属能力机制 deny；运行中撤销属生命周期检查。分别归 `invariant` 与 `final-check`，不是普通产品风险规则 | SDK 未获能力不得执行；运行中撤销令牌必须停止剩余执行；登记稳定 failure class | `safetyGate.test.ts`、runtime component tests；与宿主 policy 顺序待对账 |
+| C-17 | Feishu/WeChat outbound executors、MCP/browser/shell executors 在 dispatch 前检查 recipient/payload/args/tool identity | 外部执行工具 | 必须区分参数合法性/运行时机制与普通产品 policy；精确对象不匹配归 `final-check` | B-07；共享 envelope 后逐工具补充字段；原 decision 不被改写 | 当前多有 mock integration；真实 IM/MCP 服务缺席（外部待验） |
+| C-18 | `policyEngine.ts:decide`，declared capability 匹配后 autoAllow | invocation 且 context capability 匹配 | 当前在 cache 后、auto-evaluator 前授权放行。归 `policy`：本次基线未发现该路径的不可配置 capability proof 或 invariant contract | B-09；作为显式 capability policy rule，记录能力来源与约束层；未提供可信来源不得扩大授权 | policyEngine tests/SDK contract tests；来源完整性未关闭 |
+| C-19 | `toolCallGate.ts`，recheck 阶段新 decision require-confirm 且此前未确认→deny | approval recheck path | 禁止第二次确认的生命周期规则；归 `invariant`/`mechanism`，需要与 stale approval redecision 分开 | 重新评估后的新审批需求不能被当作授权通过；拒绝应表达 recheck boundary failure | recheck tests；目前 `recheck-requires-confirm` decision 须改归类审计 |
+
+## 搜索范围与排除依据
+
+- 扫描目录：`electron/confirmation/`、`electron/remote/`、`electron/tools/`、`electron/shell/`、`electron/feishu/`、`electron/wechat/`、`src/shared/policy/`、`src/shared/confirmation/`、`packages/agent-sdk/src/`。
+- 搜索线索：`actionClass`、`answerer`、`approved`、`deny`、`require-confirm`、`humanRequired`、`outsideWorkDirRisk`、`contentAssessment`、`permit`、`digest`、`revok`、`capability`、`dispatch`。
+- 本轮排除：只影响展示或错误消息的分支、无工具授权/dispatch 影响的记忆 eligibility；若后续命中调用链影响授权，重新纳入。关键词命中不是分类依据，表内依据具体函数与调用顺序。
+- 复查命令示例：`rg -n "actionClass|humanRequired|answerer|approved\\s*=\\s*false|verdict|require-confirm|outsideWorkDirRisk|contentAssessment|permit|revok|capability" electron src/shared packages/agent-sdk/src`。
+
+## Facts producer 输入/输出与失败行为
+
+| Producer | 输入 → 输出 | unknown/error 行为与消费者 | 副作用/混合边界 |
+|---|---|---|---|
+| `assessImOutboundContent` / `createHostImOutboundFacts` | IM body → `ordinary/sensitive/bulk-local-export/permission-change/unknown`、classifierVersion、contentCompleteness | 空或超过 20,000 字符返回 `unknown`；消费点为 `classifyImOutbound`、各 outbound executor | `assess` 是纯函数；`classify/assert` 混合授权/dispatch 门禁，见 C-05/06 |
+| `probeWritePathFact` / `classifyWriteTargetScope` | raw target、workDir/userData/home/sensitive prefix → normalized path、zone、targetKind、identity | `WritePathProbeError` 区分 caseId/environment；gate 转 `extraction-failed` 或 `write-target-scope:unknown`；消费者 policy 与 permit | extractor 不调用 policy/executor；gate 后置 outside-write if 是 C-02/03 |
+| `probeReadPathFact` | raw target、workDir/userData/home → path zone/kind/identity | `ReadPathProbeError` 记录环境错误；gate 输出 `extraction-failed`；policy matcher 与 read permit 消费 | probe 只观察；permit executor 的重探测是 final-check，不是 facts extractor |
+| `probeFeishuMediaTarget` / WeChat media target probe | inbound attachment path、受信 media root → boundary、kind、identity、解析状态 | unknown/outside 通过 `feishu-media-target:*` / `wechat-media-target:*` signal；规则和发送/读取对象绑定消费 | path/identity 为 facts；规则 deny 与平台最终对象核对需分开 |
+| `analyzeShellCommand` + `classifyShellCommandEffect` | command、workDir/platform/config → shell path/effect/completeness/security hints | parse/probe failure 标记 `extraction-failed`；shell precheck 可能先于 policy 返回 deny（C-12） | analyzer 产事实；precheck 同时含命令规则判决，须逐 validator 拆 |
+| `extractScriptPathFacts` / `analyzeScriptContent` | 脚本文本、语言、解析结果、认证配置 → call/path/network/completeness/digests | dynamic/unmodeled/unverified 经不同 signal 传给默认/locked 规则；提取异常另产 `extraction-failed` | facts producer 不应直接执行；script allow/ask/deny 为 policy 规则 |
+| MCP/tool metadata extraction in `toolCallGate` | server/tool annotations、args、registered metadata → mcp signals、actionClass、target facts | missing metadata 会产 extraction-failed / unknown；MCP ask 与 readonly allow 由规则匹配 | profile `toolConfirmPolicy` 曾是 extractor 侧免问分支；当前要追清是否仍作为 facts filter |
+
+facts 行为有现成 unit tests，但“异常仅改变 completeness/技术错误，不伪造风险 signal”及“不问询/不 dispatch”的边界断言需在 Phase 1 增补。
