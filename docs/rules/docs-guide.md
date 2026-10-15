@@ -110,6 +110,8 @@ docs/requirement/<主题>/
 
 > `requirement` 侧形态与 `develop` 相同，**只是把「现状文档」换成「需求基线.md」**，已完成需求同样进 `archive/`。
 
+> **空目录不被 git 跟踪（实测坑）**：`in-flight/` 在没有条目时是空目录，**不会进版本库**——因此从整理分支合并回 `main` 后，空的 `in-flight/` 会「消失」。往 `in-flight/` 放第一篇文档时**必须先 `mkdir -p`**，否则 `git mv` / `mv` 会报 `No such file or directory`。同理适用于任何依赖"目录存在"的操作。
+
 ### 2.4 归档形态与约定（计划 §2.4）
 
 ```text
