@@ -33,7 +33,6 @@ export function createAgentSdkDesktopObserver(input: {
   turnIdForRetry?: string
   stageAssistantContentUntilTurnFinished?: boolean
   onRemoteTextActivity?(text: string): void
-  onAgentsMdNotLoaded?(): void
   assistantMessageId?: string
   onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
   emitSessionEvent?(event: SessionEventInput): void | Promise<void>
@@ -50,7 +49,6 @@ export function createAgentSdkDesktopObserver(input: {
   onDispatchDiagnostic?(event: Readonly<Record<string, unknown>>): void
   getWorkDir?(modelTurn: number): string
   getWorkDirSnapshot?(): Readonly<{ workDir: string; profileId: string; key: string; revision: number }>
-  agentsMdEnabled?: boolean
 }): AgentTurnObserver {
   let pendingChunks: ObserverChunk[] = []
   let streamedText = ''
@@ -123,11 +121,8 @@ export function createAgentSdkDesktopObserver(input: {
     if (!agentsMdSnapshot) {
       workspaceBinding = input.getWorkDirSnapshot?.()
       if (workspaceBinding) agentsMdWorkspaceBindings.set(request.modelTurn, workspaceBinding)
-      agentsMdSnapshot = await loadAgentsMd(workspaceBinding?.workDir ?? input.getWorkDir?.(request.modelTurn) ?? '', { enabled: input.agentsMdEnabled, contextWindow: input.contextWindow, promptOverheadTokens: estimateTokensFromUtf8Text(renderAgentsMdSection('')) })
+      agentsMdSnapshot = await loadAgentsMd(workspaceBinding?.workDir ?? input.getWorkDir?.(request.modelTurn) ?? '', { contextWindow: input.contextWindow, promptOverheadTokens: estimateTokensFromUtf8Text(renderAgentsMdSection('')) })
       agentsMdSnapshots.set(request.modelTurn, agentsMdSnapshot)
-      if (input.lane === 'feishu' || input.lane === 'wechat') {
-        if (agentsMdSnapshot.status !== 'loaded') input.onAgentsMdNotLoaded?.()
-      }
     }
     const agentsMdSection = agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content
       ? renderAgentsMdSection(agentsMdSnapshot.content)

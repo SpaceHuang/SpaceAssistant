@@ -398,7 +398,7 @@ describe('runImRemoteAgent', () => {
 
     expect(mockResolveLlmCredentialsForPair).toHaveBeenCalledWith(db, 'catalog-model', 'svc-frozen')
     expect(captured.ports.credentials.networkTarget?.baseUrl).toBe('https://creds.example.com')
-    expect(captured.invocation.profile.agentsMdEnabled).toBe(false)
+    expect(captured.invocation.profile).not.toHaveProperty('agentsMdEnabled')
     expect(await captured.ports.credentials.resolveApiKey()).toBe('creds-key')
     db.close()
   })

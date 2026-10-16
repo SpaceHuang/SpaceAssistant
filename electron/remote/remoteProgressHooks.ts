@@ -73,14 +73,6 @@ export function onRemoteTextSegmentClosed(ctx: RemoteProgressHookContext, text: 
   })
 }
 
-export function onAgentsMdNotLoaded(ctx: RemoteProgressHookContext): void {
-  updateRemoteProgressSnapshot(ctx.sessionId, {
-    kind: 'text',
-    label: ctx.t('streaming.agentsMdNotLoaded'),
-    publishable: true
-  })
-}
-
 export function onRemoteThinkingActive(ctx: RemoteProgressHookContext): void {
   updateRemoteProgressSnapshot(ctx.sessionId, {
     kind: 'idle',

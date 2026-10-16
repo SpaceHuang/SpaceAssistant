@@ -22,22 +22,6 @@ import path from 'node:path'
 
 describe('createAgentSdkDesktopObserver', () => {
   afterEach(() => vi.unstubAllEnvs())
-  it('signals remote sessions when the logical request has no usable AGENTS.md snapshot', async () => {
-    const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-remote-status-'))
-    const status = vi.fn()
-    try {
-      const observer = createAgentSdkDesktopObserver({
-        requestId: 'remote-instructions-status', sessionId: 's', turnId: 't', lane: 'feishu',
-        getWorkDir: () => workDir, onAgentsMdNotLoaded: status
-      })
-      await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
-        messages: [{ role: 'user', content: 'hello' }], maxTokens: 100, tools: []
-      } })
-      expect(status).toHaveBeenCalledOnce()
-    } finally {
-      await rm(workDir, { recursive: true, force: true })
-    }
-  })
   it('tells the model when AGENTS.md failed to load so it cannot claim it followed the file', async () => {
     const observer = createAgentSdkDesktopObserver({ requestId: 'failed-instructions', sessionId: 's', turnId: 't', getWorkDir: () => '' })
     const prepared = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
@@ -58,7 +42,7 @@ describe('createAgentSdkDesktopObserver', () => {
         const lane = name as 'desktop' | 'feishu' | 'wechat' | 'automation'
         const observer = createAgentSdkDesktopObserver({
           requestId: 'request-' + name, sessionId: 'session-' + name, turnId: 'turn-' + name,
-          lane, getWorkDir: () => root, agentsMdEnabled: true
+          lane, getWorkDir: () => root
         })
         return observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
           messages: [{ role: 'user', content: 'hello' }], maxTokens: 100, tools: []
@@ -104,7 +88,7 @@ describe('createAgentSdkDesktopObserver', () => {
       await runAgentTurn({
         registry, routeId: route.routeId, invocationId, history,
         request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 100 },
-        observer: createAgentSdkDesktopObserver({ requestId: invocationId, sessionId: 'session', turnId: 'turn', getWorkDir: () => workDir, agentsMdEnabled: true }),
+        observer: createAgentSdkDesktopObserver({ requestId: invocationId, sessionId: 'session', turnId: 'turn', getWorkDir: () => workDir }),
         safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
         prepareTool: async () => { throw new Error('no tools expected') },
         toolExecution: createPermitBoundToolExecutionPort({
@@ -251,7 +235,7 @@ describe('createAgentSdkDesktopObserver', () => {
       const filePath = path.join(workDir, 'AGENTS.md')
       await writeFile(filePath, 'instruction version one', 'utf8')
       const observer = createAgentSdkDesktopObserver({ requestId: 'agents-request', sessionId: 's', turnId: 't',
-        getWorkDir: () => workDir, agentsMdEnabled: true, contextWindow: 100_000
+        getWorkDir: () => workDir, contextWindow: 100_000
       })
       const request = { messages: [{ role: 'system' as const, content: 'system' }, { role: 'user' as const, content: 'hello' }], maxTokens: 32 }
       const first = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request })
@@ -303,7 +287,7 @@ describe('createAgentSdkDesktopObserver', () => {
         registry, routeId: route.routeId, invocationId, history,
         request: { messages: [{ role: 'system', content: 'base prompt\n\n<project_memory>memory</project_memory>\n\n## Skills\nskill fragment' }, { role: 'user', content: 'hello' }], maxTokens: 100 },
         observer: createAgentSdkDesktopObserver({ requestId: invocationId, sessionId: 'session', turnId: 'agents-turn',
-          getWorkDir: () => workDir, agentsMdEnabled: true, contextWindow: 100_000 }),
+          getWorkDir: () => workDir, contextWindow: 100_000 }),
         recoverProviderAttempt: async ({ error, messages }) => error ? ({ kind: 'retry', reasonCode: 'TEMPORARY_PROVIDER_ERROR', messages }) : undefined,
         safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (value) => ({ kind: 'allow', authorizationVersion: value.authorizationVersion }) } }),
         prepareTool: async (call, stage) => ({ ...binding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName,

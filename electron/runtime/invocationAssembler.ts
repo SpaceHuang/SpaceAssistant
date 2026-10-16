@@ -144,7 +144,6 @@ export interface AgentInvocationMaterials {
   remoteContext?: import('../tools/types').RemoteContext
   /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
   onRemoteTextActivity?: (text: string) => void
-  onAgentsMdNotLoaded?: () => void
   workDir: string
   workDirManager?: import('../workDirManager').WorkDirManager
   resolveWorkDir?: () => string
@@ -159,7 +158,6 @@ export interface AgentInvocationMaterials {
   historyForSession?: (sessionId: string) => import('../../packages/agent-sdk/src/history').HistoryPort
   locale?: import('../../src/shared/domainTypes').AppLocale
   projectMemoryEnabled?: boolean
-  agentsMdEnabled?: boolean
   skillFragments?: string[]
   /** Test composition hook for IM-only orchestration capabilities; production adapters are added by the ordered tool tasks. */
   imOrchestrationToolRegistry?: import('../tools/plannedToolRegistry').TypedToolRegistry
@@ -502,7 +500,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(materials.options !== undefined ? { options: materials.options } : {}),
       ...(resolvedLocale !== undefined ? { locale: resolvedLocale } : {}),
       ...(materials.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: materials.projectMemoryEnabled } : {}),
-      agentsMdEnabled: materials.agentsMdEnabled ?? true,
       ...(invocationSkillFragments.length > 0 ? { skillFragments: invocationSkillFragments } : {}),
       tools: {
         toolsConfig: materials.toolsConfig,
@@ -1630,13 +1627,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         const snapshot = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
         return { workDir: snapshot.rootPath ?? materials.workDir, profileId: snapshot.profileId ?? '', key: snapshot.key ?? '', revision: snapshot.revision ?? 0 }
       },
-      agentsMdEnabled: materials.agentsMdEnabled ?? true,
       windowId: materials.windowId,
       ...(materials.sessionEventLocation ? { sessionEventLocation: materials.sessionEventLocation } : {}),
       turnIdForRetry: runtimeTurnId,
       stageAssistantContentUntilTurnFinished: materials.remoteContext !== undefined,
       onRemoteTextActivity: materials.onRemoteTextActivity,
-      onAgentsMdNotLoaded: materials.onAgentsMdNotLoaded,
       assistantMessageId: materials.assistantMessageId,
       emitSessionEvent: materials.emitSessionEvent,
       onProviderRetry: (retry) => materials.emitSessionEvent({

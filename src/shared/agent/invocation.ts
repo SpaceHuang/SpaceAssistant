@@ -63,7 +63,6 @@ export interface AgentInvocationProfile {
   options?: { maxTokens?: number; enableThinking?: boolean }
   locale?: string
   projectMemoryEnabled?: boolean
-  agentsMdEnabled?: boolean
   skillFragments?: string[]
   /** 宿主已解析的装配材料；P7 改造为按调用的能力集裁剪。 */
   tools: {

@@ -49,9 +49,9 @@ describe('AcceptedTurn propagation', () => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: 'agents-md-setting' })
     const { invocation } = assembleInvocation({ requestId: 'agents-md-disabled', sessionId: session.id, model: 'test', locale: 'zh-CN',
-      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', agentsMdEnabled: false,
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
       getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
-    expect(invocation.profile.agentsMdEnabled).toBe(false)
+    expect(invocation.profile).not.toHaveProperty('agentsMdEnabled')
     db.close()
   })
 

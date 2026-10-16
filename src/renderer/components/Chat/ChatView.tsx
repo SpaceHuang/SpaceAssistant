@@ -48,7 +48,6 @@ import { registerMessagesReloadHandler } from '../../services/invalidationServic
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelThinkingPicker } from './ComposerModelThinkingPicker'
-import { ProjectInstructionsControl } from './ProjectInstructionsControl'
 import { resolveSessionModelBinding, resolveSessionThinkingBinding, resolveAvailableThinkingEfforts } from '../../services/sessionModelBinding'
 import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
@@ -1190,7 +1189,6 @@ export function ChatView() {
                 onSelectEffort={(effort) => void handleThinkingSelect(effort)}
                 availableEfforts={availableEfforts}
               />
-              <ProjectInstructionsControl />
             </>
           ) : null
         }

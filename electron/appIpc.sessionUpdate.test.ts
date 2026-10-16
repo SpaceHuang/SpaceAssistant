@@ -135,7 +135,6 @@ function makeCtx(): AppIpcContext {
         renameSession: (sessionId: string, name: string) => mockSessionUpdatePreferences({} as AppIpcContext['db'], { sessionId, name }),
         updateSettings: (input: Parameters<NonNullable<AppIpcContext['sessionStorage']>['commands']['updateSettings']>[0]) => mockSessionUpdatePreferences({} as AppIpcContext['db'], input),
         updateUserMetadata: (sessionId, metadataPatch) => mockSessionUpdatePreferences({} as AppIpcContext['db'], { sessionId, metadataPatch }),
-        updateAgentsMdEnabled: (sessionId, enabled) => mockSessionUpdatePreferences({} as AppIpcContext['db'], { sessionId, metadataPatch: { agentsMdEnabled: enabled } }),
         updateDirectoryGrants: vi.fn(),
         deleteQueuedMessage: vi.fn(), editQueuedMessage: vi.fn(), reorderQueuedMessages: vi.fn(),
         deleteSession: (sessionId: string) => { mockDeleteSession({} as AppIpcContext['db'], sessionId, { flush: false }) },
@@ -293,18 +292,6 @@ describe('session:update IPC', () => {
     }))
   })
 
-  it('updates agentsMdEnabled with the session-scoped command and blocks renderer metadata spoofing', async () => {
-    const cur = stubSession({ metadata: { agentsMdEnabled: true, projectMemoryEnabled: false } })
-    mockGetSession.mockReturnValue(cur)
-    mockUpdateSession.mockImplementation((_db, _id, patch) => ({ ...cur, ...patch, metadata: patch.metadata ?? cur.metadata }))
-    const handler = ipc.getHandler('session:update')!
-
-    await handler({}, { sessionId: 'session-1', agentsMdEnabled: false, metadata: { agentsMdEnabled: true } })
-
-    expect(mockUpdateSession).toHaveBeenCalledWith(ctx.db, 'session-1', expect.objectContaining({
-      metadata: { agentsMdEnabled: false, projectMemoryEnabled: false }
-    }))
-  })
 
   it('does not write name or titleUserCustom for whitespace-only name', async () => {
     const cur = stubSession({ name: '会话 1' })

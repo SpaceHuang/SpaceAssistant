@@ -103,7 +103,6 @@ export function buildFinalSystemPrompt(args: {
   memoryContent: string | null
   memoryEnabled: boolean
   agentsMdContent?: string | null
-  agentsMdEnabled?: boolean
   locale: AppLocale
   hasImageAttachments?: boolean
   skillCatalog?: SkillDefinition[]
@@ -113,7 +112,7 @@ export function buildFinalSystemPrompt(args: {
 }): string | undefined {
   const sections: PromptSection[] = [
     buildBaseSystemSection(args),
-    ...(args.agentsMdEnabled !== false && args.agentsMdContent?.trim() ? [buildAgentsMdSection(args.agentsMdContent)] : []),
+    ...(args.agentsMdContent?.trim() ? [buildAgentsMdSection(args.agentsMdContent)] : []),
     buildToolConventionSection(args.locale),
     ...(args.hasImageAttachments ? [buildImageAttachmentsSection(args.locale)] : []),
     buildUiLocaleSection(args.locale),
