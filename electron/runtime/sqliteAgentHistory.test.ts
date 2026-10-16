@@ -67,11 +67,42 @@ describe('SqliteAgentHistory', () => {
     const target = conn.prepare(`SELECT outbox.projection_kind,outbox.canonical_event_id,outbox.expected_event_ids_json,outbox.expected_events_json,
       state.origin,state.state FROM session_ledger_projection_outbox outbox
       JOIN session_ledger_projection_state state USING(ledger_location_key) WHERE outbox.canonical_event_id='outbox-result'`).get()
-    expect(target).toMatchObject({ projection_kind: 'tool-result', canonical_event_id: 'outbox-result', origin: 'legacy', state: 'unknown' })
+    expect(target).toMatchObject({ projection_kind: 'tool-result', canonical_event_id: 'outbox-result', origin: 'legacy', state: 'dirty' })
     expect(JSON.parse((target as { expected_event_ids_json: string }).expected_event_ids_json)).toEqual(['tool_result:outbox-tool'])
     expect(JSON.parse((target as { expected_events_json: string }).expected_events_json)).toEqual([{
       type: 'tool_result', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } }
     }])
+    const proposalTarget = conn.prepare(`SELECT projection_kind,canonical_event_id,expected_events_json FROM session_ledger_projection_outbox
+      WHERE canonical_event_id='outbox-proposal'`).get() as { projection_kind: string; canonical_event_id: string; expected_events_json: string }
+    expect(proposalTarget).toMatchObject({ projection_kind: 'tool-call:outbox-tool', canonical_event_id: 'outbox-proposal' })
+    expect(JSON.parse(proposalTarget.expected_events_json)).toEqual([{
+      type: 'tool_call', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', name: 'read_file', args: { path: 'a.txt' }, turnId: 'turn-1' }
+    }])
+    await fs.rm(workDir, { recursive: true, force: true })
+    conn.close()
+  })
+
+  it('registers the model request header/context pair as one canonical projection target', async () => {
+    const conn = createDb()
+    const sessionId = 'outbox-request-session'
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'history-outbox-request-root-'))
+    conn.prepare(`INSERT INTO sessions(id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation,work_dir_profile_id)
+      VALUES(?, 'outbox', 'model', 0.7, 1024, 1000, 1000, '{}', '{}', 1, 'request-generation', 'profile')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+    const location = { workDir, sessionId, createdAt: 1000 }
+    const requestHeader = { requestId: 'request-invocation:round:1', attempt: 1, turnId: 'request-turn' }
+    const requestContext = { requestId: requestHeader.requestId, attempt: 1, turnId: 'request-turn', contextUsage: { inputTokens: 1 } }
+    await history.appendBatch([{ ...event('request-projection-event', 1), invocationId: 'request-invocation', turnId: 'request-turn',
+      kind: 'model-request-started', payload: { requestId: requestHeader.requestId, modelTurn: 1, attempt: 1,
+        sessionLedger: { location, requestHeader, requestContext } } }], 0)
+
+    const row = conn.prepare(`SELECT projection_kind,expected_event_ids_json,expected_events_json FROM session_ledger_projection_outbox
+      WHERE canonical_event_id='request-projection-event'`).get() as { projection_kind: string; expected_event_ids_json: string; expected_events_json: string }
+    expect(row.projection_kind).toBe('request-projection')
+    expect(JSON.parse(row.expected_event_ids_json)).toEqual(['request_header:request-invocation:round:1:1', 'request_context:request-invocation:round:1:1'])
+    expect(JSON.parse(row.expected_events_json)).toEqual([
+      { type: 'request_header', payload: requestHeader }, { type: 'request_context', payload: requestContext }
+    ])
     await fs.rm(workDir, { recursive: true, force: true })
     conn.close()
   })

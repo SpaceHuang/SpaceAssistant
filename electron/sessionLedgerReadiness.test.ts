@@ -5,9 +5,12 @@ import { CREATE_TABLES_SQL } from './database/schema'
 import { createTempDatabase } from './database/testHelpers'
 import { getDbConnection } from './database/sqliteStore'
 import { openDatabase } from './database'
+import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
 import {
   decideSessionLedgerGate,
   beginSessionLedgerCheck,
+  beginSessionLedgerBootstrap,
+  completeSessionLedgerBootstrap,
   completeSessionLedgerCheck,
   ensureLegacyLedgerReadiness,
   markMissingLegacyLedgerBlocked,
@@ -38,13 +41,18 @@ describe('session ledger readiness state', () => {
   it('resumes only the original bootstrap id and recovers an interrupted check as unknown', () => {
     const base = {
       ledgerLocationKey: 'location', workDirIdentity: 'workdir-hash', sessionId: 's', sessionGeneration: 'g',
-      ledgerGeneration: 0, canonicalWatermark: null, checkedAt: null, ownerReconciledProcessGeneration: 0,
+      ledgerGeneration: 0, canonicalWatermark: null, proofFileIdentity: null, proofFileBytes: null, proofTailFrame: null,
+      proofIndexSeq: null, proofIndexEventCount: null, proofIndexBytes: null, proofIndexLastAt: null, checkToken: null,
+      checkedAt: null, ownerReconciledProcessGeneration: 0,
       retryScope: null, failureClass: null
     }
     expect(decideSessionLedgerGate({ ...base, origin: 'new_location', state: 'initializing', bootstrapId: 'bootstrap-1' }))
       .toEqual({ kind: 'resume-bootstrap', bootstrapId: 'bootstrap-1' })
     expect(decideSessionLedgerGate({ ...base, origin: 'legacy', state: 'checking', bootstrapId: null })).toEqual({ kind: 'recover-check' })
     expect(() => decideSessionLedgerGate({ ...base, origin: 'legacy', state: 'uninitialized', bootstrapId: null })).toThrow('SESSION_LEDGER_BOOTSTRAP_PROVENANCE_INVALID')
+    expect(decideSessionLedgerGate({ ...base, origin: 'legacy', state: 'dirty', bootstrapId: null })).toEqual({ kind: 'check-baseline' })
+    expect(decideSessionLedgerGate({ ...base, origin: 'legacy', state: 'dirty', bootstrapId: null,
+      canonicalWatermark: 'seq:1', proofFileIdentity: 'file-id' })).toEqual({ kind: 'check-target' })
   })
 
   it('rejects cross-location state reuse for the same session id and creation time', () => {
@@ -70,6 +78,26 @@ describe('session ledger readiness state', () => {
     expect(ready).toMatchObject({ state: 'ready', canonicalWatermark: 'seq:4', proofFileBytes: 100,
       proofIndexSeq: 4, proofIndexEventCount: 4, proofIndexBytes: 100, checkToken: null })
     expect(recoverInterruptedSessionLedgerCheck(conn, readiness.ledgerLocationKey, 7)).toBe(false)
+    conn.close()
+  })
+
+  it('bootstraps only with the creation transaction credential and can resume the same bootstrap after reopen', () => {
+    const conn = createDb()
+    const location = { workDir: '/tmp/new-bootstrap', sessionId: 'new-session', createdAt: 40 }
+    const identity = sessionLedgerLocationIdentity(location)
+    conn.prepare(`INSERT INTO session_ledger_projection_state(ledger_location_key,work_dir_identity,created_at,session_id,session_generation,
+      origin,state,bootstrap_id,updated_at) VALUES(?,?,?,?,?,'new_location','uninitialized','bootstrap-id',1)`)
+      .run(identity.key, identity.workDirIdentity, location.createdAt, location.sessionId, 'g')
+    expect(beginSessionLedgerBootstrap(conn, identity.key, 'wrong-id', 2)).toBe(false)
+    expect(beginSessionLedgerBootstrap(conn, identity.key, 'bootstrap-id', 3)).toBe(true)
+    expect(decideSessionLedgerGate(ensureLegacyLedgerReadiness(conn, location, 'g', 4)))
+      .toEqual({ kind: 'resume-bootstrap', bootstrapId: 'bootstrap-id' })
+    const proof = { canonicalWatermark: 'seq:-1', ledgerGeneration: 0, fileIdentity: 'empty-file', fileBytes: 0,
+      tailFrame: 'empty-tail', indexSeq: 0, indexEventCount: 0, indexBytes: 0, indexLastAt: null }
+    expect(completeSessionLedgerBootstrap(conn, identity.key, 'wrong-id', proof, 5)).toBe(false)
+    expect(completeSessionLedgerBootstrap(conn, identity.key, 'bootstrap-id', proof, 6)).toBe(true)
+    expect(conn.prepare('SELECT state,bootstrap_id,canonical_watermark,proof_file_identity FROM session_ledger_projection_state WHERE ledger_location_key=?')
+      .get(identity.key)).toEqual({ state: 'ready', bootstrap_id: 'bootstrap-id', canonical_watermark: 'seq:-1', proof_file_identity: 'empty-file' })
     conn.close()
   })
 

@@ -2037,6 +2037,8 @@ CREATE TABLE IF NOT EXISTS session_ledger_projection_outbox (
   session_id TEXT NOT NULL,
   session_generation TEXT NOT NULL,
   canonical_event_id TEXT NOT NULL,
+  canonical_sequence INTEGER NOT NULL CHECK(canonical_sequence>=1),
+  projection_order INTEGER NOT NULL DEFAULT 0 CHECK(projection_order>=0),
   projection_kind TEXT NOT NULL,
   expected_events_json TEXT NOT NULL,
   expected_event_ids_json TEXT NOT NULL,
@@ -2048,7 +2050,7 @@ CREATE TABLE IF NOT EXISTS session_ledger_projection_outbox (
   FOREIGN KEY(ledger_location_key) REFERENCES session_ledger_projection_state(ledger_location_key) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS idx_session_ledger_projection_outbox_pending
-  ON session_ledger_projection_outbox(ledger_location_key,status,created_at,target_id);
+  ON session_ledger_projection_outbox(ledger_location_key,status,canonical_sequence,projection_order);
 `
 
 /** v51: preserve stable catalog/provider/route identity on usage facts. */

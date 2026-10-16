@@ -19,6 +19,13 @@ import {
 import { getSessionEventSink, readSessionEvents } from './sessionEvents'
 import { projectCanonicalSessionLedgerTarget } from './runtime/sessionLedgerOutboxProjector'
 
+function appendCanonicalEvent(conn: ReturnType<typeof getDbConnection>, sessionId: string, eventId: string) {
+  runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, [{
+    invocationId: `seed-${eventId}`, turnId: `turn-${eventId}`, sequence: 1, schemaVersion: 1,
+    eventId, idempotencyKey: eventId, kind: 'invocation-context-committed', payload: { context: {} }
+  }], 0, { sessionId }))
+}
+
 describe('canonical session ledger outbox', () => {
   const databases: ReturnType<typeof createMemoryAppDb>[] = []
   afterEach(() => { for (const db of databases.splice(0)) db.close() })
@@ -30,6 +37,7 @@ describe('canonical session ledger outbox', () => {
     const session = createSession(db, { name: 'outbox', workDirProfileId: 'p' })
     const conn = getDbConnection(db)
     const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { ledger_location_key: string }
+    appendCanonicalEvent(conn, session.id, 'retry-event')
     const event: HistoryEvent = { invocationId: 'outbox-invocation', turnId: 'outbox-turn', sequence: 1, schemaVersion: 1,
       eventId: 'outbox-canonical-event', idempotencyKey: 'outbox-canonical-event', kind: 'invocation-context-committed', payload: { context: {} } }
     const target: CanonicalLedgerProjectionTarget = { ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id,
@@ -60,6 +68,7 @@ describe('canonical session ledger outbox', () => {
     const session = createSession(db, { name: 'outbox rollback', workDirProfileId: 'p' })
     const conn = getDbConnection(db)
     const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { ledger_location_key: string }
+    appendCanonicalEvent(conn, session.id, 'projected-result')
     const event: HistoryEvent = { invocationId: 'rollback-invocation', turnId: 'rollback-turn', sequence: 1, schemaVersion: 1,
       eventId: 'rollback-canonical-event', idempotencyKey: 'rollback-canonical-event', kind: 'invocation-context-committed', payload: { context: {} } }
     const target: CanonicalLedgerProjectionTarget = { ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id,
@@ -85,6 +94,7 @@ describe('canonical session ledger outbox', () => {
     databases.push(db)
     const conn = getDbConnection(db)
     const readiness = ensureLegacyLedgerReadiness(conn, { workDir: '/tmp/outbox-scope', sessionId: 'scope', createdAt: 1 }, 'g1')
+    appendCanonicalEvent(conn, 'scope', 'event')
     expect(() => runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, {
       ledgerLocationKey: readiness.ledgerLocationKey, sessionId: 'scope', sessionGeneration: 'g2', canonicalEventId: 'event',
       projectionKind: 'context', expectedEvents: [{ type: 'turn_start', payload: { turnId: 't' } }], expectedEventIds: ['start']
@@ -98,6 +108,7 @@ describe('canonical session ledger outbox', () => {
     const session = createSession(db, { name: 'outbox retry', workDirProfileId: 'p' })
     const conn = getDbConnection(db)
     const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { ledger_location_key: string }
+    appendCanonicalEvent(conn, session.id, 'retry-event')
     runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, {
       ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id, sessionGeneration: session.generation,
       canonicalEventId: 'retry-event', projectionKind: 'tool-result', expectedEvents: [{ type: 'tool_result', payload: { toolUseId: 'tool' } }],
@@ -122,6 +133,7 @@ describe('canonical session ledger outbox', () => {
     const session = createSession(db, { name: 'outbox projector', workDirProfileId: 'p' })
     const conn = getDbConnection(db)
     const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { ledger_location_key: string }
+    appendCanonicalEvent(conn, session.id, 'projected-result')
     const sink = getSessionEventSink(tempRoot, session.id, session.createdAt)
     try {
       runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, {
@@ -137,6 +149,74 @@ describe('canonical session ledger outbox', () => {
       expect(first).toEqual({ projected: 1 })
       expect(again).toEqual({ projected: 0 })
       expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result')).toHaveLength(1)
+    } finally {
+      await sink.close()
+      await fs.rm(tempRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('drains multiple projections from one canonical event in their declared order', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-outbox-order-'))
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: tempRoot, isDefault: true }]))
+    const session = createSession(db, { name: 'outbox ordered projections', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { ledger_location_key: string }
+    appendCanonicalEvent(conn, session.id, 'ordered-projections')
+    const sink = getSessionEventSink(tempRoot, session.id, session.createdAt)
+    try {
+      runInTransaction(conn, () => {
+        enqueueCanonicalLedgerProjectionTargetInTransaction(conn, {
+          ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id, sessionGeneration: session.generation,
+          canonicalEventId: 'ordered-projections', projectionOrder: 1, projectionKind: 'tool-result',
+          expectedEvents: [{ type: 'tool_result', payload: { toolUseId: 'ordered-tool', stepId: 'ordered-step', result: { success: true } } }],
+          expectedEventIds: ['tool_result:ordered-tool']
+        })
+        enqueueCanonicalLedgerProjectionTargetInTransaction(conn, {
+          ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id, sessionGeneration: session.generation,
+          canonicalEventId: 'ordered-projections', projectionOrder: 0, projectionKind: 'tool-call:ordered-tool',
+          expectedEvents: [{ type: 'tool_call', payload: { toolUseId: 'ordered-tool', stepId: 'ordered-step', name: 'read_file', args: {} } }],
+          expectedEventIds: ['tool_call:ordered-tool']
+        })
+      })
+      expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key).map((target) => target.projection_kind))
+        .toEqual(['tool-call:ordered-tool', 'tool-result'])
+      const result = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        (target) => projectCanonicalSessionLedgerTarget(sink, target))
+      expect(result).toEqual({ projected: 2 })
+      expect((await readSessionEvents(sink.eventsPath)).map((event) => event.type)).toEqual(['tool_call', 'tool_result'])
+    } finally {
+      await sink.close()
+      await fs.rm(tempRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('projects and acknowledges a paired request header/context target only after both events match', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-request-projection-'))
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: tempRoot, isDefault: true }]))
+    const session = createSession(db, { name: 'request projection', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { ledger_location_key: string }
+    appendCanonicalEvent(conn, session.id, 'paired-request')
+    const sink = getSessionEventSink(tempRoot, session.id, session.createdAt)
+    const requestId = 'paired-request-id'
+    const expectedEvents = [
+      { type: 'request_header' as const, payload: { requestId, attempt: 1, turnId: 'paired-turn' } },
+      { type: 'request_context' as const, payload: { requestId, attempt: 1, turnId: 'paired-turn', contextUsage: { inputTokens: 1 } } }
+    ]
+    try {
+      runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, {
+        ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id, sessionGeneration: session.generation,
+        canonicalEventId: 'paired-request', projectionKind: 'request-projection', expectedEvents,
+        expectedEventIds: [`request_header:${requestId}:1`, `request_context:${requestId}:1`]
+      }))
+      const result = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        (target) => projectCanonicalSessionLedgerTarget(sink, target))
+      expect(result).toEqual({ projected: 1 })
+      expect((await readSessionEvents(sink.eventsPath)).map((event) => event.type)).toEqual(['request_header', 'request_context'])
     } finally {
       await sink.close()
       await fs.rm(tempRoot, { recursive: true, force: true })

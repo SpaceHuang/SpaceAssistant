@@ -88,7 +88,10 @@ export function decideSessionLedgerGate(readiness: SessionLedgerReadiness): Sess
     case 'unknown': return { kind: 'check-baseline' }
     case 'checking': return { kind: 'recover-check' }
     case 'ready': return { kind: 'allow-ready' }
-    case 'dirty': return { kind: 'check-target' }
+    case 'dirty':
+      return readiness.proofFileIdentity && readiness.canonicalWatermark !== null
+        ? { kind: 'check-target' }
+        : { kind: 'check-baseline' }
     case 'blocked': return { kind: 'retry-blocked', scope: readiness.retryScope ?? 'baseline' }
   }
 }
@@ -112,22 +115,44 @@ export type SessionLedgerReadyProof = {
   indexLastAt: number | null
 }
 
+export function beginSessionLedgerBootstrap(conn: DatabaseSync, ledgerLocationKey: string, bootstrapId: string, now = Date.now()): boolean {
+  const result = conn.prepare(`UPDATE session_ledger_projection_state SET state='initializing',updated_at=?
+    WHERE ledger_location_key=? AND origin='new_location' AND state='uninitialized' AND bootstrap_id=?`)
+    .run(now, ledgerLocationKey, bootstrapId) as { changes: number | bigint }
+  return Number(result.changes) === 1
+}
+
+export function completeSessionLedgerBootstrap(conn: DatabaseSync, ledgerLocationKey: string, bootstrapId: string,
+  proof: SessionLedgerReadyProof, now = Date.now()): boolean {
+  if (!isValidReadyProof(proof)) return false
+  const result = conn.prepare(`UPDATE session_ledger_projection_state SET state=CASE WHEN EXISTS(
+      SELECT 1 FROM session_ledger_projection_outbox outbox WHERE outbox.ledger_location_key=session_ledger_projection_state.ledger_location_key AND outbox.status='pending'
+    ) THEN 'dirty' ELSE 'ready' END,
+    canonical_watermark=?,ledger_generation=?,proof_file_identity=?,proof_file_bytes=?,proof_tail_frame=?,
+    proof_index_seq=?,proof_index_event_count=?,proof_index_bytes=?,proof_index_last_at=?,checked_at=?,updated_at=?
+    WHERE ledger_location_key=? AND origin='new_location' AND state='initializing' AND bootstrap_id=?`).run(
+    proof.canonicalWatermark, proof.ledgerGeneration, proof.fileIdentity, proof.fileBytes, proof.tailFrame,
+    proof.indexSeq, proof.indexEventCount, proof.indexBytes, proof.indexLastAt, now, now, ledgerLocationKey, bootstrapId
+  ) as { changes: number | bigint }
+  return Number(result.changes) === 1
+}
+
 /** Claims a baseline check and mints a compare-and-swap token. */
 export function beginSessionLedgerCheck(conn: DatabaseSync, ledgerLocationKey: string, now = Date.now()): string | null {
   const token = randomUUID()
   const result = conn.prepare(`UPDATE session_ledger_projection_state SET state='checking',check_token=?,updated_at=?
-    WHERE ledger_location_key=? AND state='unknown'`).run(token, now, ledgerLocationKey) as { changes: number | bigint }
+    WHERE ledger_location_key=? AND (state='unknown' OR (state='dirty' AND canonical_watermark IS NULL))`)
+    .run(token, now, ledgerLocationKey) as { changes: number | bigint }
   return Number(result.changes) === 1 ? token : null
 }
 
 /** A stale async baseline completion cannot overwrite a newer state or a different check owner. */
 export function completeSessionLedgerCheck(conn: DatabaseSync, ledgerLocationKey: string, checkToken: string, proof: SessionLedgerReadyProof, now = Date.now()): boolean {
-  if (!Number.isSafeInteger(proof.ledgerGeneration) || proof.ledgerGeneration < 0 ||
-    !Number.isSafeInteger(proof.fileBytes) || proof.fileBytes < 0 ||
-    !Number.isSafeInteger(proof.indexSeq) || proof.indexSeq < 0 ||
-    !Number.isSafeInteger(proof.indexEventCount) || proof.indexEventCount < 0 ||
-    !Number.isSafeInteger(proof.indexBytes) || proof.indexBytes < 0) return false
-  const result = conn.prepare(`UPDATE session_ledger_projection_state SET state='ready',check_token=NULL,retry_scope=NULL,failure_class=NULL,
+  if (!isValidReadyProof(proof)) return false
+  const result = conn.prepare(`UPDATE session_ledger_projection_state SET state=CASE WHEN EXISTS(
+      SELECT 1 FROM session_ledger_projection_outbox outbox WHERE outbox.ledger_location_key=session_ledger_projection_state.ledger_location_key AND outbox.status='pending'
+    ) THEN 'dirty' ELSE 'ready' END,
+    check_token=NULL,retry_scope=NULL,failure_class=NULL,
     canonical_watermark=?,ledger_generation=?,proof_file_identity=?,proof_file_bytes=?,proof_tail_frame=?,
     proof_index_seq=?,proof_index_event_count=?,proof_index_bytes=?,proof_index_last_at=?,checked_at=?,updated_at=?
     WHERE ledger_location_key=? AND state='checking' AND check_token=?`).run(
@@ -135,6 +160,15 @@ export function completeSessionLedgerCheck(conn: DatabaseSync, ledgerLocationKey
     proof.indexSeq, proof.indexEventCount, proof.indexBytes, proof.indexLastAt, now, now, ledgerLocationKey, checkToken
   ) as { changes: number | bigint }
   return Number(result.changes) === 1
+}
+
+function isValidReadyProof(proof: SessionLedgerReadyProof): boolean {
+  return Number.isSafeInteger(proof.ledgerGeneration) && proof.ledgerGeneration >= 0 &&
+    Number.isSafeInteger(proof.fileBytes) && proof.fileBytes >= 0 &&
+    Number.isSafeInteger(proof.indexSeq) && proof.indexSeq >= 0 &&
+    Number.isSafeInteger(proof.indexEventCount) && proof.indexEventCount >= 0 &&
+    Number.isSafeInteger(proof.indexBytes) && proof.indexBytes >= 0 &&
+    Boolean(proof.fileIdentity) && Boolean(proof.tailFrame) && Boolean(proof.canonicalWatermark)
 }
 
 export function recoverInterruptedSessionLedgerCheck(conn: DatabaseSync, ledgerLocationKey: string, now = Date.now()): boolean {
