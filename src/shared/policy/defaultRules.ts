@@ -87,7 +87,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   {
     id: 'outbound-incomplete-standard-review', when: 'invocation',
-    match: { lane: ['desktop'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete', 'policy-tier:standard'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete', 'policy-tier:standard'] },
     denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '标准档出站检查不完整，交由安全审核 Agent'
   },
   {
@@ -526,6 +526,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     denyClass: 'insufficient-info',
     action: 'ask',
     locked: true,
+    humanRequired: true,
     reason: '飞书消息发送到群或多人，需真人逐次确认'
   },
   {
@@ -535,6 +536,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     denyClass: 'insufficient-info',
     action: 'ask',
     locked: true,
+    humanRequired: true,
     reason: '无法验证飞书消息接收对象，需真人逐次确认'
   },
   {

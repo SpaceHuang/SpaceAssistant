@@ -461,7 +461,15 @@ export function decide(
     return ruleMatchesInvocation(r, policyFacts, context, deps)
   }
   const constraints = deriveInvocationPolicyConstraints(policyFacts, context, rules, deps)
-  const explicitOutboundTier = facts.actionClass === 'outbound' && context.policyTier && context.policyTier !== 'custom' &&
+  const larkMessageOutbound = facts.toolName === 'run_lark_cli' && facts.signals.some((signal) =>
+    signal.kind === 'lark-subcommand' && signal.category === 'message'
+  )
+  const larkMessageNeedsTier = larkMessageOutbound && facts.signals.some((signal) =>
+    signal.kind === 'outbound-content' && (
+      signal.evidenceKinds.length > 0 || signal.inspectionCoverage !== 'complete'
+    )
+  )
+  const explicitOutboundTier = facts.actionClass === 'outbound' && (!larkMessageOutbound || larkMessageNeedsTier) && context.policyTier && context.policyTier !== 'custom' &&
     (context.policyTier === 'loose' || context.policyTier === 'strict' || context.policyTier === 'standard' && context.lane === 'desktop') &&
     !(facts.toolName === 'browser' || context.lane === 'desktop' && ['read_file', 'grep', 'list_directory'].includes(facts.toolName))
 

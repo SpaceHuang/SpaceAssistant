@@ -63,6 +63,29 @@ export function classifyLarkCliImpact(argv: unknown): LarkCliImpactResult {
   const rest = tokens.slice(1).map((a) => a.toLowerCase())
   const joined = rest.join(' ')
 
+  // message/mail action is fixed at argv[1]. Values such as --subject get
+  // must never be interpreted as a command verb.
+  if ((sub === 'message' || sub === 'mail') && ['send', 'create', 'reply'].includes(rest[0] ?? '')) {
+    const optionValues = new Map<string, string[]>()
+    for (let index = 1; index < tokens.length; index += 1) {
+      const token = tokens[index]!
+      if (!token.startsWith('--')) continue
+      const value = tokens[index + 1]
+      if (value === undefined || value.startsWith('--')) continue
+      const key = token.toLowerCase()
+      optionValues.set(key, [...(optionValues.get(key) ?? []), value.toLowerCase()])
+    }
+    const chatTypes = optionValues.get('--chat-type') ?? []
+    const receiveTypes = optionValues.get('--receive-id-type') ?? []
+    const recipients = [...(optionValues.get('--receive-id') ?? []), ...(optionValues.get('--user-ids') ?? [])]
+    const groupOrMultiple = chatTypes.includes('group') || chatTypes.includes('chat') ||
+      receiveTypes.some((type) => type === 'chat_id' || type === 'open_chat_id') ||
+      recipients.some((recipient) => recipient.includes(','))
+    return groupOrMultiple
+      ? { impact: 'high_impact', reason: recipients.some((recipient) => recipient.includes(',')) ? 'multi_recipient' : 'group_or_multi_message', category: recipients.some((recipient) => recipient.includes(',')) ? 'multi_message' : 'group_message' }
+      : { impact: 'low_write', reason: 'single_message', category: 'message' }
+  }
+
   // Read-ish verbs early
   if (rest.some((t) => t === 'get' || t === 'list' || t === 'search' || t === 'info' || t === 'show')) {
     if (!rest.some((t) => DELETE_TOKENS.has(t) || BATCH_TOKENS.has(t) || PERM_TOKENS.has(t))) {

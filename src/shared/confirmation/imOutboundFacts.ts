@@ -38,6 +38,15 @@ function evidenceFor(body: string): ImOutboundEvidenceKind[] {
   return evidence
 }
 
+/** Synchronous, content-free projection for extractors that must stay synchronous. */
+export function inspectImOutboundContent(body: string): Pick<ImOutboundContentFacts, 'inspectionCoverage' | 'evidenceKinds'> {
+  const inspectionCoverage = body.length > 20_000 ? 'unavailable' : body.trim() ? 'complete' : 'partial'
+  return Object.freeze({
+    inspectionCoverage,
+    evidenceKinds: Object.freeze(inspectionCoverage === 'complete' ? evidenceFor(body) : [])
+  })
+}
+
 async function sha256(value: string): Promise<string> {
   if (!globalThis.crypto?.subtle) throw new Error('IM_OUTBOUND_FACTS_CRYPTO_UNAVAILABLE')
   const bytes = new TextEncoder().encode(value)
@@ -48,8 +57,7 @@ async function sha256(value: string): Promise<string> {
 /** Produce a versioned, content-free fact snapshot. It reports evidence and inspection coverage only. */
 export async function createImOutboundFacts(body: string): Promise<ImOutboundContentFacts> {
   const contentDigest = await sha256(body)
-  const inspectionCoverage = body.length > 20_000 ? 'unavailable' : body.trim() ? 'complete' : 'partial'
-  const evidenceKinds = inspectionCoverage === 'complete' ? evidenceFor(body) : []
+  const { inspectionCoverage, evidenceKinds } = inspectImOutboundContent(body)
   const factDigest = await sha256(`${CLASSIFIER_VERSION}\0${contentDigest}`)
   return Object.freeze({
     factId: `fact-${factDigest.slice(0, 24)}`,

@@ -2166,6 +2166,54 @@ describe('evaluateToolCallGate', () => {
     expect(unknown.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-target-unknown-human', answerer: 'user' })
   })
 
+  it('IM standard requires human confirmation for sensitive Feishu message text and reports missing text as incomplete', async () => {
+    const run = (args: string[]) => evaluateToolCallGate(base({
+      toolName: 'run_lark_cli', toolInput: { args },
+      effectiveRules: resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES }),
+      remoteContext: remoteContext({ authOwner: 'ou_owner' }),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    }))
+    const sensitive = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner', '--text', 'password=supersecret'])
+    const missing = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner'])
+    expect(sensitive.facts.signals).toContainEqual(expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern']
+    }))
+    expect(sensitive.decision).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-sensitive-standard-human', answerer: 'user' })
+    expect(missing.facts.signals).toContainEqual(expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: []
+    }))
+    expect(missing.facts.actionClass).toBe('outbound')
+    expect(missing.facts.signals).toContainEqual({ kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: [] })
+    expect(missing.decision, JSON.stringify(missing.facts)).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
+  })
+
+  it('standard Feishu mail send with sensitive text requires human confirmation', async () => {
+    const r = await evaluateToolCallGate(base({
+      toolName: 'run_lark_cli',
+      toolInput: { args: ['mail', 'send', '--to', 'owner@example.test', '--text', 'password=supersecret'] },
+      effectiveRules: DEFAULT_POLICY_RULES,
+      lanePackage: 'standard'
+    }))
+    expect(r.facts.signals).toContainEqual(expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern']
+    }))
+    expect(r.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'outbound-sensitive-standard-human' })
+  })
+
+  it.each(['get', 'list', 'search', 'info', 'show'])('mail send --subject %s remains a sensitive outbound requiring human confirmation', async (subject) => {
+    const r = await evaluateToolCallGate(base({
+      toolName: 'run_lark_cli',
+      toolInput: { args: ['mail', 'send', '--to', 'owner@example.test', '--subject', subject, '--text', 'password=supersecret'] },
+      effectiveRules: DEFAULT_POLICY_RULES,
+      lanePackage: 'standard'
+    }))
+    expect(r.facts.actionClass).toBe('outbound')
+    expect(r.facts.signals).toContainEqual(expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern']
+    }))
+    expect(r.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'outbound-sensitive-standard-human' })
+  })
+
   it('出站写预算耗尽 → deny(remote-outbound-budget-pause-*) + budgetPause 消息', async () => {
     const budget = createRemoteTaskBudgetState('t1')
     budget.stopped = true

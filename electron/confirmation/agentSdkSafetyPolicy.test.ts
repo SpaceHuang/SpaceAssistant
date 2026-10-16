@@ -53,6 +53,25 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', context: { factsProvenance: { factId: snapshot.factId, extractorVersion: snapshot.extractorVersion, completeness: snapshot.completeness, factsRevision: snapshot.factsRevision, policyVersion: snapshot.policyVersion } } })
   })
 
+  it('projects prepared Feishu outbound content facts into the policy gate', async () => {
+    const toolInput = { args: ['message', 'send', '--text', 'password=supersecret'] }
+    const larkBinding = { ...binding, capabilityId: 'run_lark_cli', capability: { state: 'known-authorized' as const, id: 'run_lark_cli' },
+      inputSnapshotHash: createHash('sha256').update(JSON.stringify(toolInput)).digest('hex') }
+    const larkArgs = { ...baseArgs, toolName: 'run_lark_cli', toolInput } as ToolCallGateArgs
+    let projected: unknown
+    const policy = createAgentSdkSafetyPolicy({
+      resolveToolCall: () => ({ invocationId: 'inv', toolCallId: 'call', toolName: 'run_lark_cli', input: toolInput }),
+      resolveGateArgs: async () => larkArgs,
+      getPreparedFacts: () => ({ outboundPolicyFacts: [{ kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] }] }),
+      evaluateGate: async (args) => {
+        projected = args.factsProvider?.({ toolName: args.toolName, toolInput: args.toolInput })
+        return result({ type: 'require-confirm', ruleId: 'outbound-sensitive-standard-human', answerer: 'user', riskLevel: 'high', facts, memoryTiers: [], timeoutMs: 1000 })
+      }
+    })
+    await expect(policy.evaluate(larkBinding)).resolves.toMatchObject({ kind: 'ask', answerer: 'user' })
+    expect(projected).toEqual([{ kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] }])
+  })
+
   it('拒绝理由变化后沿用旧 run_shell 输入快照绑定', async () => {
     const toolInput = { command: 'pwd', justification: '核对当前目录' }
     const staleBinding = {
@@ -221,6 +240,16 @@ describe('createAgentSdkSafetyPolicy', () => {
       facts: browserFacts,
       approvedFactIds: []
     }
+    initial.policyDecision = {
+      decisionId: 'decision-initial', invocationId: 'inv', toolUseId: 'call', factsId: 'facts', factsDigest: 'digest',
+      extractorVersion: 'host-tool-facts-v1', factsRevision: 1, policyDomain: 'desktop', policyVersion: 'v1',
+      policyRevision: 1, policyLane: 'desktop', tier: 'standard', dependencyFingerprint: 'same-policy',
+      verdict: 'require-confirm', ruleIds: ['browser-navigate-ask-desktop'], reasonCode: 'browser-navigate-ask-desktop', answerer: 'user'
+    }
+    cached.policyDecision = {
+      ...initial.policyDecision, decisionId: 'decision-cache-hit', verdict: 'allow',
+      ruleIds: ['cache-hit'], reasonCode: 'cache-hit', answerer: undefined
+    }
     const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(cached)
     const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
     const confirmedBinding = { ...binding, authorizationVersion: 'policy-v1' }
@@ -228,6 +257,21 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate(confirmedBinding)).resolves.toMatchObject({ kind: 'ask', reasonCode: 'browser-navigate-ask-desktop' })
     markAgentSdkSafetyDecisionConfirmed(policy, confirmedBinding)
     await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toEqual({ kind: 'allow', authorizationVersion: 'policy-v1' })
+  })
+
+  it('rejects a cache-hit recheck when the policy dependency fingerprint changed', async () => {
+    const initial = result({ type: 'require-confirm', ruleId: 'browser-navigate-ask-desktop', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 })
+    initial.policyDecision = { dependencyFingerprint: 'policy-before', verdict: 'require-confirm', reasonCode: 'browser-navigate-ask-desktop', answerer: 'user' } as never
+    const cached = result({ type: 'auto-allow', ruleId: 'cache-hit', reason: 'approval cache hit' })
+    cached.policyDecision = { dependencyFingerprint: 'policy-after', verdict: 'allow', reasonCode: 'cache-hit' } as never
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(cached)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
+    const confirmedBinding = { ...binding, authorizationVersion: 'policy-v1' }
+
+    await expect(policy.evaluate(confirmedBinding)).resolves.toMatchObject({ kind: 'ask' })
+    markAgentSdkSafetyDecisionConfirmed(policy, confirmedBinding)
+    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' }))
+      .resolves.toEqual({ kind: 'deny', reasonCode: 'POLICY_DENY' })
   })
 
   it('discards the approved initial snapshot when fresh recheck material is unavailable', async () => {

@@ -610,6 +610,18 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
       .toMatchObject({ type: 'require-confirm', ruleId: 'outbound-incomplete-standard-review', answerer: 'agent' })
   })
 
+  it('standard Feishu outbound with missing content is marked unavailable and remains in review', () => {
+    const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const facts = mkFacts('run_lark_cli', 'outbound', [
+      { kind: 'lark-subcommand', impact: 'low_write', category: 'message', completeness: 'complete', messageTarget: 'self' },
+      { kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: [] },
+      { kind: 'policy-tier', tier: 'standard' }
+    ])
+    const result = decide(facts, { ...mkContext('feishu'), policyTier: 'standard' }, rules,
+      deps({ transform: (rule) => effectiveActionFor('feishu', 'standard', rule) }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
+  })
+
   it('sensitive outbound in standard IM requires human approval through an explicit policy rule', () => {
     const facts = mkFacts('wechat_send', 'outbound', [
       { kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] }

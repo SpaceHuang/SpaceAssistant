@@ -236,6 +236,41 @@ describe('outbound / lark 提取器', () => {
     expect(r.summary).toContain('写')
   })
 
+  it('飞书出站正文进入 outbound-content facts，敏感正文产生 credential evidence', () => {
+    const r = extractLarkSubcommand({ args: ['message', 'send', '--chat-id', 'oc_x', '--text', 'password=supersecret'] })
+    expect(r.signals).toContainEqual(expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern']
+    }))
+  })
+
+  it('飞书 mail send 正文进入 outbound-content facts，敏感正文产生 credential evidence', () => {
+    const r = extractLarkSubcommand({ args: ['mail', 'send', '--to', 'owner@example.test', '--text', 'password=supersecret'] })
+    expect(r.signals).toContainEqual(expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern']
+    }))
+  })
+
+  it('飞书 mail send 正文缺失时明确报告检查不可用', () => {
+    const r = extractLarkSubcommand({ args: ['mail', 'send', '--to', 'owner@example.test'] })
+    expect(r.signals).toContainEqual(expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: []
+    }))
+  })
+
+  it('飞书发送正文缺失时明确报告检查不可用', () => {
+    const r = extractLarkSubcommand({ args: ['message', 'send', '--chat-id', 'oc_x'] })
+    expect(r.signals).toContainEqual(expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: []
+    }))
+  })
+
+  it('飞书消息带文件附件时将正文检查标记为部分覆盖', () => {
+    const r = extractLarkSubcommand({ args: ['message', 'send', '--chat-id', 'oc_x', '--text', 'report', '--file', '/tmp/report.txt'] })
+    expect(r.signals).toContainEqual(expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'partial', evidenceKinds: []
+    }))
+  })
+
   it('runExtractors 支持 run_lark_cli 的 lark-subcommand', () => {
     const facts = runExtractors(
       { toolName: 'run_lark_cli', actionClass: 'execute', riskLevel: 'high', extractors: ['lark-subcommand'] },
@@ -244,6 +279,14 @@ describe('outbound / lark 提取器', () => {
     )
     expect(facts.signals.some((s) => s.kind === 'outbound-target')).toBe(true)
     expect(facts.signals).toContainEqual(expect.objectContaining({ kind: 'lark-subcommand', impact: 'read', category: 'read', completeness: 'complete' }))
+  })
+
+  it('run_lark_cli message send facts are classified as outbound actions', () => {
+    const facts = runExtractors(
+      { toolName: 'run_lark_cli', actionClass: 'execute', riskLevel: 'high', extractors: ['lark-subcommand'] },
+      { args: ['message', 'send', '--chat-id', 'oc_x', '--text', 'hello'] }, env
+    )
+    expect(facts.actionClass).toBe('outbound')
   })
 
   it('lark message target is compared to host-authenticated Feishu identity, not model-authored identity', () => {

@@ -89,7 +89,7 @@ export function createAgentSdkSafetyPolicy(input: {
         }
         const args = await input.resolveGateArgs(binding, call, binding.signal)
         if (binding.signal?.aborted) return deny(binding, 'POLICY_DENY')
-        if (call && (call.toolName === 'wechat_send' || call.toolName === 'wechat_reply')) {
+        if (call && (call.toolName === 'wechat_send' || call.toolName === 'wechat_reply' || call.toolName === 'run_lark_cli')) {
           const prepared = input.getPreparedFacts?.(call)
           const projection = prepared && typeof prepared === 'object' ? (prepared as { outboundPolicyFacts?: unknown }).outboundPolicyFacts : undefined
           const facts = Array.isArray(projection) ? projection as import('../../src/shared/confirmation/types').FactSignal[] : []
@@ -113,10 +113,7 @@ export function createAgentSdkSafetyPolicy(input: {
           if (!previous) return deny(binding, 'MISSING_MATERIAL')
           const sameFacts = createHash('sha256').update(JSON.stringify(previous.result.facts)).digest('hex') === createHash('sha256').update(JSON.stringify(result.facts)).digest('hex')
           const samePolicyDependencies = previous.result.policyDecision && result.policyDecision
-            ? previous.result.policyDecision.dependencyFingerprint === result.policyDecision.dependencyFingerprint &&
-              previous.result.policyDecision.verdict === result.policyDecision.verdict &&
-              previous.result.policyDecision.reasonCode === result.policyDecision.reasonCode &&
-              previous.result.policyDecision.answerer === result.policyDecision.answerer
+            ? previous.result.policyDecision.dependencyFingerprint === result.policyDecision.dependencyFingerprint
             : previous.binding.authorizationVersion === binding.authorizationVersion
           const sameWriteTarget = sameWritePathTarget(previous.result.writePathFact, result.writePathFact)
           const sameReadTarget = stableSerialize(previous.result.readPathFact) === stableSerialize(result.readPathFact)

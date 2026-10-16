@@ -31,6 +31,32 @@ function setup() {
 }
 
 describe('run_lark_cli planned registration', () => {
+  it('projects content-only outbound facts from the prepared Feishu message plan', async () => {
+    const { context, run } = setup()
+    const tool = createRunLarkCliRegisteredTool(runLarkCliExecutor)
+    const handle = await tool.begin({ args: ['message', 'send', '--chat-id', 'oc_x', '--text', 'password=supersecret'] }, {
+      requestId: 'r', toolUseId: 'u', signal: context.signal, executionContext: context
+    })
+    const facts = tool.getPreparedFacts?.(handle.prepared) as { outboundPolicyFacts?: Array<Record<string, unknown>> }
+    expect(facts.outboundPolicyFacts).toEqual([expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern']
+    })])
+    expect(JSON.stringify(facts)).not.toContain('supersecret')
+  })
+
+  it('projects content-only outbound facts from the prepared Feishu mail plan', async () => {
+    const { context, run } = setup()
+    const tool = createRunLarkCliRegisteredTool(runLarkCliExecutor)
+    const handle = await tool.begin({ args: ['mail', 'send', '--to', 'owner@example.test', '--text', 'password=supersecret'] }, {
+      requestId: 'r', toolUseId: 'u', signal: context.signal, executionContext: context
+    })
+    const facts = tool.getPreparedFacts?.(handle.prepared) as { outboundPolicyFacts?: Array<Record<string, unknown>> }
+    expect(facts.outboundPolicyFacts).toEqual([expect.objectContaining({
+      kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern']
+    })])
+    expect(JSON.stringify(facts)).not.toContain('supersecret')
+  })
+
   it('确认期间 executable 漂移会在 dispatch 前拒绝', async () => {
     const { context, run, setExecutable } = setup()
     let dispatched = false
