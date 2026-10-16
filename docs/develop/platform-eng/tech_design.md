@@ -41,7 +41,7 @@
 | 应用菜单 | 文件/查看/帮助菜单、快捷键支持 | Electron Menu API |
 | 文件浏览 | 目录导航、文件预览 | Node.js 文件系统 API |
 | 搜索功能 | 全局搜索、历史记录 | 全文索引、正则匹配 |
-| 跨平台 | Windows/macOS/Linux 支持 | Electron 平台适配 |
+| 跨平台 | Windows/macOS 支持 | Electron 平台适配 |
 
 ---
 
@@ -412,7 +412,6 @@ const menuTemplate: MenuConfig[] = [
 |------|---------|---------|
 | macOS | 系统菜单栏 | 应用名称显示在菜单最左侧 |
 | Windows | 窗口标题栏 | 默认显示 |
-| Linux | 窗口标题栏 | 依赖窗口管理器 |
 
 ### 5.4 文件浏览模块
 
@@ -1332,8 +1331,6 @@ npm run pack:win
 # 打包 macOS
 npm run pack:mac
 
-# 打包 Linux
-npm run pack:linux
 ```
 
 ### 10.2 electron-builder 配置
@@ -1359,11 +1356,6 @@ mac:
       arch:
         - x64
         - arm64
-linux:
-  target:
-    - target: AppImage
-      arch:
-        - x64
 ```
 
 ---
@@ -1431,4 +1423,3 @@ linux:
 **文档版本**: v1.0  
 **创建日期**: 2026年5月14日  
 **适用范围**: SpaceAssistant 桌面应用开发团队
-

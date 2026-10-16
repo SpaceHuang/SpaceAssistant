@@ -62,10 +62,8 @@
     "prepare:rg:all": "node scripts/prepare-ripgrep.mjs",
     "verify:rg:package": "node scripts/verify-ripgrep-package.mjs",
     "reinstall:electron": "rimraf node_modules/electron && npm install",
-    "pack": "npm run prepare:rg && npm run build && electron-builder",
     "pack:win": "npm run prepare:rg -- --target=win32-x64 && npm run build && electron-builder --win",
     "pack:mac": "npm run prepare:rg -- --target=darwin-x64 --target=darwin-arm64 && npm run build && node scripts/pack-mac-sequential.cjs",
-    "pack:linux": "npm run build && electron-builder --linux",
     "build:agent-provider-pi-ai": "tsc -p packages/agent-provider-pi-ai/tsconfig.build.json",
     "check:tool-result-invariants": "node scripts/scan-tool-result-invariants.mjs",
     "test:tool-reliability": "npm run test:electron && npm run check:tool-result-invariants",
@@ -258,12 +256,6 @@
             "arm64"
           ]
         }
-      ]
-    },
-    "linux": {
-      "icon": "res/icons/sa-logo-512.png",
-      "target": [
-        "AppImage"
       ]
     }
   },

@@ -24,6 +24,7 @@
 | 2026-07-18 | `file-tree-auto-refresh-requirement`（v1.1） | 文件树自动刷新 | — |
 | 2026-09-30 | `composer-model-thinking-entry-requirement`（已定稿） | composer 模型/思考入口 | 实施完成并留验收证据 |
 | 2026-10-03 | `composer-plus-menu-requirement`（v1.0） | composer 加号菜单 | `810d38e2` |
+| 2026-10-16 | `product_requirement.md` | 平台支持范围收敛为 Windows/macOS；撤销 Linux 用户支持承诺 | 移除 AppImage 打包配置与入口 |
 | 2026-10-03 | `scheduled-task-output-directory-model-requirements` | 定时任务输出目录/模型（**在途**） | 未见实现 |
 | — | `system-tray.md` | 托盘（**在途**，自述待实现） | — |
 

@@ -46,7 +46,7 @@ SpaceAssistant 是一款基于 Electron + React + TypeScript 的跨平台桌面�
 |------|-------------|---------|
 | Windows | Windows 10 64位 | 支持 |
 | macOS | macOS 10.15+ | 支持 |
-| Linux | Ubuntu 18.04+/Fedora 34+ | 支持 |
+| Linux | — | 当前不支持 |
 
 ---
 
@@ -209,8 +209,8 @@ SpaceAssistant 是一款基于 Electron + React + TypeScript 的跨平台桌面�
 
 | 需求点 | 描述 | 优先级 |
 |--------|------|--------|
-| 平台适配 | 菜单系统需适配 Windows、macOS、Linux 三大操作系统 | 高 |
-| 系统菜单集成 | 在 macOS 上集成到系统菜单栏，在 Windows/Linux 上显示在窗口标题栏 | 高 |
+| 平台适配 | 菜单系统需适配 Windows 和 macOS | 高 |
+| 系统菜单集成 | 在 macOS 上集成到系统菜单栏，在 Windows 上显示在窗口标题栏 | 高 |
 | 行为一致性 | 确保各平台菜单行为逻辑一致 | 高 |
 
 #### 3.3.2 文件菜单
@@ -247,9 +247,9 @@ SpaceAssistant 是一款基于 Electron + React + TypeScript 的跨平台桌面�
 | 需求点 | 描述 | 优先级 |
 |--------|------|--------|
 | 标准规范 | 快捷键符合各操作系统标准规范 | 高 |
-| 退出快捷键 | Windows/Linux: `Ctrl+Q`，macOS: `Cmd+Q` | 高 |
-| 开发者工具快捷键 | Windows/Linux: `Ctrl+Shift+I`，macOS: `Cmd+Option+I` | 高 |
-| 设置快捷键 | Windows/Linux: `Ctrl+,`，macOS: `Cmd+,` | 中 |
+| 退出快捷键 | Windows: `Ctrl+Q`，macOS: `Cmd+Q` | 高 |
+| 开发者工具快捷键 | Windows: `Ctrl+Shift+I`，macOS: `Cmd+Option+I` | 高 |
+| 设置快捷键 | Windows: `Ctrl+,`，macOS: `Cmd+,` | 中 |
 | 快捷键提示 | 菜单中显示对应的快捷键提示 | 高 |
 
 #### 3.3.6 菜单状态管理
@@ -468,7 +468,7 @@ SpaceAssistant 是一款基于 Electron + React + TypeScript 的跨平台桌面�
 |------|---------|
 | 启动时间 | ≤ 3秒 |
 | 响应延迟 | ≤ 500ms |
-| 跨平台 | Windows、macOS、Linux 均能正常运行 |
+| 平台支持 | Windows 和 macOS 均能正常运行 |
 | 界面响应 | 无明显卡顿，操作流畅 |
 
 ---
@@ -476,4 +476,3 @@ SpaceAssistant 是一款基于 Electron + React + TypeScript 的跨平台桌面�
 **文档版本**: v1.0  
 **创建日期**: 2026年5月14日  
 **适用范围**: SpaceAssistant 桌面应用
-

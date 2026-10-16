@@ -51,7 +51,6 @@ npm run probe:sqlite        # 在完整 Electron 主进程运行时探测内嵌 
 # 打包分发（输出到 release/）
 npm run pack:win
 npm run pack:mac
-npm run pack:linux
 ```
 
 ## 架构
@@ -107,7 +106,7 @@ API Key 经 `secureApiKey.ts`（`safeStorage`）加密存储；文件访问必�
 
 - **渲染进程**：Vite + `@vitejs/plugin-react`，`@` 别名映射到 `src/`；dev 端口 9240
 - **主进程**：`tsc -p tsconfig.electron.json`（CommonJS 输出，无打包器）
-- **打包**：electron-builder（配置在 `package.json` 的 `build` 字段），输出到 `release/`；Windows 为 NSIS（中文/英文安装语言），macOS 为 DMG，Linux 为 AppImage；`afterPack` 钩子为 `scripts/after-pack.cjs`；托盘图标与图标资源经 `extraResources` 拷贝
+- **打包**：electron-builder（配置在 `package.json` 的 `build` 字段），输出到 `release/`；Windows 为 NSIS（中文/英文安装语言），macOS 为 DMG；当前不提供 Linux 安装包；`afterPack` 钩子为 `scripts/after-pack.cjs`；托盘图标与图标资源经 `extraResources` 拷贝
 - **测试**：Vitest，配置在 `vitest.config.mts`
 
 ## 测试

@@ -6,7 +6,7 @@ SpaceAssistant — Your Desktop AI Assistant
 
 SpaceAssistant is a desktop AI assistant application that not only chats with you but also gets things done — reading files, writing code, looking up information. It's like your smart workbench, helping you handle daily mundane tasks. It supports Skill extensions and autonomous learning, getting better the more you use it.
 
-Supports Windows, macOS, and Linux.
+Supports Windows and macOS.
 
 ## What makes SpaceAssistant special?
 

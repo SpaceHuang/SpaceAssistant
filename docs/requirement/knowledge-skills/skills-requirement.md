@@ -48,7 +48,7 @@ SpaceAssistant 是一款基于 Electron + React + TypeScript 的桌面 AI 助手
 | 交互方式 | `/skill <subcommand>` 斜杠命令 | 图形化管理界面 + 聊天内斜杠命令 |
 | Skill 管理 | 纯命令行操作 | 界面化管理（查看、添加、启用/禁用） |
 | 上下文注入 | 运行时动态注入 system prompt | 通过聊天流式 API 的 system 字段注入 |
-| 存储路径 | `.claude/skills/`（Unix 风格） | 适配 Windows/macOS/Linux 三平台的用户数据目录 |
+| 存储路径 | `.claude/skills/`（Unix 风格） | 使用 Windows/macOS 支持平台的用户数据目录 |
 | 作用域层级 | 项目级 / 用户级 / 系统级 | 项目级（工作目录下）/ 用户级（应用数据目录下） |
 
 ---
@@ -175,7 +175,6 @@ SpaceAssistant 按以下优先级顺序查找 Skill（高优先级覆盖低优�
 | 项目级 | `<workDir>/.space-skills/` | 与工作目录绑定，团队可共享 | Windows: `C:\Projects\MyApp\.space-skills\` |
 | 用户级 | `<userData>/skills/` | 与用户数据目录绑定，全局生效 | Windows: `%APPDATA%\SpaceAssistant\skills\` |
 | | | | macOS: `~/Library/Application Support/SpaceAssistant/skills/` |
-| | | | Linux: `~/.config/SpaceAssistant/skills/` |
 
 **扫描规则：**
 
@@ -529,7 +528,7 @@ interface SessionSkillsState {
 - 与现有 `AppConfig` 兼容：新增 `skills` 字段有默认值，旧版配置自动补充默认值。
 - 与现有 `Session` 模型兼容：新增 `skillsState` 字段有默认值，旧版会话自动补充空状态。
 - 与现有聊天流式 API 兼容：`system` 字段为新增可选字段，不影响现有 `messages` 参数。
-- 跨平台：项目级路径使用 `<workDir>/.space-skills/`，用户级路径使用 Electron 的 `app.getPath('userData')/skills/`，自动适配 Windows/macOS/Linux。
+- 平台范围：Windows/macOS 支持用户级 Skills 存储；项目级路径使用 `<workDir>/.space-skills/`，用户级路径使用 Electron 的 `app.getPath('userData')/skills/`。
 
 ### 10.4 可维护性
 

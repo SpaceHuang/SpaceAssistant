@@ -8,7 +8,7 @@ SpaceAssistant — 你的桌面 AI 助手
 
 SpaceAssistant 是一款桌面学习与创作助手。它聚焦普通个人创作者的四大场景：学习、思考、创作、分享。它能帮你减轻日常工作和思考的负荷强度，帮你完成日常琐碎的事情，提升你学习和成长的效率。支持Skills扩展，支持自主学习，越用越好用。
 
-支持 Windows、macOS、Linux。
+支持 Windows 和 macOS。
 
 SpaceAssistant 有什么特点？
 
@@ -41,8 +41,6 @@ SpaceAssistant 有什么特点？
 
   - 支持安装第三方 Skill
   - AI 自动识别用户意图并匹配对应 Skill
-
-支持 Windows、macOS、Linux。
 
 ## macOS 安装提示
 
