@@ -165,6 +165,21 @@ describe('loadAgentsMd', () => {
   // win32 已排查（2026-10-17）：rename 替换「正被打开」的目标会稳定 EPERM（实测，Node 句柄带 FILE_SHARE_DELETE 亦然），
   // EPERM 由替换方（编辑器）承担并重试保存；读取方 fail-closed 返回 read-error，下次加载即恢复——行为正确非缺陷。
   // 「打开后、校验前被替换」的中间态在 win32 物理上不可达，本用例为 POSIX 专属竞态；win32 对应的真实场景（替换发生在 open 之前）由常规读取用例覆盖。
+  // 「打开后原路径被替换成新 inode」的全平台可达形态：unlink 被打开的目标（win32 经 FILE_SHARE_DELETE 放行、
+  // POSIX 原生允许）后写入新文件体，attempt 0 检测 inode 漂移 → 重试读新版本。与上方 POSIX 专属 rename 形态互补。
+  it('retries after the opened path is swapped to a new inode (unlink + rewrite) and reads only the complete new version', async () => {
+    const root = await makeRoot()
+    const current = path.join(root, 'AGENTS.md')
+    await fs.writeFile(current, 'old')
+    let replaced = false
+    await expect(loadAgentsMd(root, { afterOpen: async () => {
+      if (replaced) return
+      replaced = true
+      await fs.unlink(current)
+      await fs.writeFile(current, 'complete new rule')
+    } })).resolves.toMatchObject({ status: 'loaded', content: 'complete new rule' })
+  })
+
   it.skipIf(process.platform === 'win32')('retries an atomic editor replacement after opening and reads only the complete new version', async () => {
     const root = await makeRoot()
     const current = path.join(root, 'AGENTS.md')
