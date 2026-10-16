@@ -572,6 +572,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-standard-low-write'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    askUnless: { config: 'larkCliWriteRequiresConfirm', equals: false },
     reason: '已分类的普通飞书文档或个人日历写入进入 standard 审核候选'
   },
   {
@@ -580,6 +581,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-message-target:self'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    askUnless: { config: 'larkCliWriteRequiresConfirm', equals: false },
     reason: '发送给已验证的本人账号，进入 standard 审核候选'
   },
   {
@@ -588,6 +590,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-message-target:direct-other'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    askUnless: { config: 'larkCliWriteRequiresConfirm', equals: false },
     reason: '发送给一位已明确的个人接收者，进入 standard 审核候选'
   },
   {

@@ -530,7 +530,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
       updatedAt: 1, eventId: 'im-standard-v2-assembler-gate' })
     const { agentSdk } = assembleInvocation({ requestId: 'im-standard-v2-assembler-gate', sessionId: 'im-v2-session', lane: 'feishu',
-      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: path.join(os.tmpdir(), 'im-v2-agent-user-data'),
       getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
       remoteContext: { source: 'feishu', messageId: 'inbound-v2', confirmPolicy: 'always' } as never })
     const binding = { requestId: 'im-standard-v2-assembler-gate', turnId: 'im-v2-turn', invocationId: 'im-standard-v2-assembler-gate',

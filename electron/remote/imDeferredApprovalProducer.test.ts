@@ -27,6 +27,8 @@ import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
 import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegistry'
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 
+const TEST_USER_DATA_DIR = path.join(os.tmpdir(), 'spaceassistant-test-user-data')
+
 function seedImPolicy(db: ReturnType<typeof createMemoryAppDb>): void {
   commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'producer-policy-seed' })
 }
@@ -100,7 +102,7 @@ describe('production IM deferred approval producer', () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-standard-read-'))
     const { agentSdk } = assembleInvocation({ requestId: 'standard-read-request', turnId: 'standard-read-turn', sessionId, providerRouteId: 'standard-read-route',
       lane: 'feishu', model: 'model', locale: 'en-US', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
-      appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      appDb: db, workDir, userDataDir: TEST_USER_DATA_DIR, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
       remoteContext: { source: 'feishu', messageId: 'standard-read-origin', confirmPolicy: 'im_confirm', chatId: 'standard-read-chat',
         userId: 'owner', authOwner: 'owner', originSessionId: sessionId, requestId: 'standard-read-request', turnId: 'standard-read-turn' } as never })
     const executor = vi.fn(async () => ({ success: true, data: 'read once' }))
@@ -131,7 +133,7 @@ describe('production IM deferred approval producer', () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-malformed-tool-input-'))
     const { agentSdk } = assembleInvocation({ requestId: 'malformed-input-request', turnId: 'malformed-input-turn', sessionId,
       providerRouteId: 'malformed-input-route', lane: 'feishu', model: 'model', locale: 'en-US', messages: [],
-      toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: TEST_USER_DATA_DIR, getApiKey: async () => 'key',
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(), remoteContext: { source: 'feishu', messageId: 'malformed-origin',
         confirmPolicy: 'im_confirm', chatId: 'malformed-chat', userId: 'owner', authOwner: 'owner' } as never })
     const executor = vi.fn(async () => ({ success: true }))
@@ -598,7 +600,7 @@ describe('production IM deferred approval producer', () => {
       providerRouteId: 'route-agent-recheck', model: 'model', workDirProfileId: 'profile-agent-recheck' }
     const { agentSdk } = assembleInvocation({ requestId: remoteContext.requestId!, turnId: remoteContext.turnId!, sessionId,
       lane: 'feishu', model: 'model', providerRouteId: 'route-agent-recheck', locale: 'en-US', messages: [],
-      toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: TEST_USER_DATA_DIR, getApiKey: async () => 'key',
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(), remoteContext })
     const executor = vi.fn(async () => ({ success: true }))
     const registry = new TypedToolRegistry()
@@ -703,7 +705,7 @@ describe('production IM deferred approval producer', () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-script-recheck-'))
     const { agentSdk } = assembleInvocation({ requestId: context.requestId!, turnId: context.turnId!, sessionId, lane: 'feishu',
       model: 'model', providerRouteId: context.providerRouteId!, locale: 'en-US', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
-      appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(), remoteContext: context })
+      appDb: db, workDir, userDataDir: TEST_USER_DATA_DIR, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(), remoteContext: context })
     const executor = vi.fn(async () => ({ success: true }))
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({ name: 'run_script', actionClass: 'execute', parseInput: (raw) => raw as { language: string; code: string },

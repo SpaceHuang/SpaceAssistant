@@ -5,8 +5,9 @@ import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/d
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
 import { makeIncomingMessage } from './__mocks__/wechatBotMock'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
+import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
 import { createDesktopAgentRuntime } from '../runtime/desktopAgentRuntime'
-import { getDefaultAgentRuntime, setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { getDefaultAgentRuntime, resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -263,6 +264,28 @@ describe('runWeChatRemoteAgent', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.clearAllMocks()
+    // Fixture providers must not survive into a later test's global runtime.
+    resetDefaultAgentRuntimeForTests()
+    setDefaultAgentRuntime(createDesktopAgentRuntime())
+    const originalRegister = ModelProviderRegistry.prototype.register
+    const fixtureGenerations = new WeakMap<ModelProviderRegistry, Map<string, number>>()
+    vi.spyOn(ModelProviderRegistry.prototype, 'register').mockImplementation(function (route, provider) {
+      // Hosted caller tests inject a plain-object stream fixture after route
+      // assembly. Nested approval turns hit the same route again; keep the
+      // first fixture registration stable so it cannot invalidate an in-flight
+      // prepared model call. The fixture keeps the production provider identity.
+      if (provider.providerId === 'pi-ai-anthropic-messages' && Object.getPrototypeOf(provider) === Object.prototype) {
+        const routes = fixtureGenerations.get(this)
+        const previousGeneration = routes?.get(route.routeId)
+        if (previousGeneration !== undefined) return previousGeneration
+        const generation = originalRegister.call(this, route, provider)
+        const nextRoutes = routes ?? new Map<string, number>()
+        nextRoutes.set(route.routeId, generation)
+        fixtureGenerations.set(this, nextRoutes)
+        return generation
+      }
+      return originalRegister.call(this, route, provider)
+    })
     mockRequestRendererSessionSwitch.mockReset().mockResolvedValue({ desktopSwitched: true, viewChanged: true })
     hostedRuntimeFailureInjection.requestId = ''
     hostedRuntimeFailureInjection.composeCalls = 0
@@ -325,11 +348,15 @@ describe('runWeChatRemoteAgent', () => {
     }
     const context = {
       ...args,
+      confirmationAdapter: { cancel: () => undefined, createChannel: () => ({
+        request: async () => ({ kind: 'approved' as const, answererKind: 'user' as const, cause: 'user-approved' as const }),
+        cancel: () => undefined
+      }) },
       sessionId: session.id,
       workDir,
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
       botService: { getBot: () => null, getRawBot: () => ({ reply }) } as never,
-      remoteContext: { ...args.remoteContext, messageId: 'msg-1' }
+      remoteContext: { ...args.remoteContext, messageId: 'msg-1', authOwner: 'wx-user@test', originSessionId: session.id }
     }
     const bundle = {
       botService: { getRawBot: () => ({ reply }) },
@@ -342,7 +369,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat reply invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-reply-inbound-drift-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-reply-inbound-drift', toolName: 'wechat_reply', input: { text: 'reply to msg-1' } } as const
@@ -405,9 +432,14 @@ describe('runWeChatRemoteAgent', () => {
     const reply = vi.fn()
     const context = {
       ...args, sessionId: session.id, workDir,
+      confirmationAdapter: { cancel: () => undefined, createChannel: () => ({
+        request: async () => ({ kind: 'approved' as const, answererKind: 'user' as const, cause: 'user-approved' as const }),
+        cancel: () => undefined
+      }) },
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
       botService: { getBot: () => null, getRawBot: () => ({ reply }) } as never,
-      remoteContext: { ...args.remoteContext, confirmPolicy: 'always' as const, imChannel: channel }
+      remoteContext: { ...args.remoteContext, confirmPolicy: 'always' as const, imChannel: channel,
+        authOwner: 'wx-user@test', originSessionId: session.id }
     }
     mockResolveWorkDirForSession.mockReturnValue({ profileId: `wechat-reply-${termination}`, workDir, isSensitive: false })
     const packages = readPolicyPackages(args.db)
@@ -438,7 +470,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat reply invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: `wechat-reply-${termination}-fixture`, stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId, toolName: 'wechat_reply', input: { text: 'reply to msg-1' } } as const
@@ -521,6 +553,10 @@ describe('runWeChatRemoteAgent', () => {
     args.sessionStorage.commands.recordRemoteSessionIdentity(session.id, { channel: 'wechat', userId: 'wx-user@test', messageId: 'msg-1', contextToken: 'ctx' })
     const context = {
       ...args, sessionId: session.id, workDir,
+      confirmationAdapter: { cancel: () => undefined, createChannel: () => ({
+        request: async () => ({ kind: 'approved' as const, answererKind: 'user' as const, cause: 'user-approved' as const }),
+        cancel: () => undefined
+      }) },
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
       botService: { getBot: () => null, getRawBot: () => ({ reply }) } as never,
       remoteContext: { ...args.remoteContext, messageId: 'msg-1', authOwner: 'wx-user@test', originSessionId: session.id }
@@ -531,7 +567,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat reply invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-reply-hosted-success-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-reply-hosted-success', toolName: 'wechat_reply', input: { text: 'Approved reply text' } } as const
@@ -608,6 +644,10 @@ describe('runWeChatRemoteAgent', () => {
     args.sessionStorage.commands.recordRemoteSessionIdentity(session.id, { channel: 'wechat', userId: 'wx-user@test', messageId: 'msg-1', contextToken: 'ctx' })
     const context = {
       ...args, sessionId: session.id, workDir,
+      confirmationAdapter: { cancel: () => undefined, createChannel: () => ({
+        request: async () => ({ kind: 'approved' as const, answererKind: 'user' as const, cause: 'user-approved' as const }),
+        cancel: () => undefined
+      }) },
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
       botService: { getBot: () => null, ...bundle.botService } as never,
       remoteContext: { ...args.remoteContext, messageId: 'msg-1', authOwner: 'wx-user@test', originSessionId: session.id }
@@ -631,7 +671,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat reply invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: `wechat-reply-${termination}-post-claim-fixture`, stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId, toolName: 'wechat_reply', input: { text: 'reply to msg-1' } } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
@@ -741,7 +781,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         yield { type: 'text-delta', text: 'hosted WeChat answer' } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 3 } as const
@@ -791,7 +831,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-workdir-switch-success-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-switch-workdir-success', toolName: 'switch_work_dir', input: { profile_id: 'target-profile' } } as const
@@ -886,7 +926,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: `wechat-workdir-${termination}-claim-fixture`, stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: `wechat-workdir-${termination}`, toolName: 'switch_work_dir', input: { profile_id: 'target-profile' } } as const
@@ -994,7 +1034,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: `wechat-workdir-${termination}-postclaim-fixture`, stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId: `wechat-workdir-postclaim-${termination}`, toolName: 'switch_work_dir', input: { profile_id: 'target-profile' } } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
@@ -1084,7 +1124,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-skills-read-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-skills-read', toolName: 'skills.read', input: { name: 'remote-skill' } } as const
@@ -1154,7 +1194,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-locked-shell-deny-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-shell-denied', toolName: 'run_shell', input: {
@@ -1229,7 +1269,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-list-workdirs-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-list-workdirs', toolName: 'list_work_dirs', input: {} } as const
@@ -1296,7 +1336,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-history-read-unavailable-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-history-read-unavailable', toolName: 'history.read', input: { limit: 1 } } as const
@@ -1373,7 +1413,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat switch_session invocation route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-switch-session-hosted-success-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId, toolName: 'switch_session', input: { session_id: targetSession.id } } as const
@@ -1472,7 +1512,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat switch_session invocation route')
-      runtime.modelProviders.register(route.profile, { providerId: `wechat-switch-session-${termination}-claim-fixture`, stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId, toolName: 'switch_session', input: { session_id: targetSession.id } } as const
@@ -1580,7 +1620,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat switch_session invocation route')
-      runtime.modelProviders.register(route.profile, { providerId: `wechat-switch-session-${termination}-postclaim-fixture`, stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId, toolName: 'switch_session', input: { session_id: targetSession.id } } as const
         yield { type: 'usage', inputTokens: 1, outputTokens: 1 } as const
@@ -1673,7 +1713,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-hosted-run-script-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-run-script', toolName: 'run_script', input: { language: 'javascript', code } } as const
@@ -1753,7 +1793,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-run-script-config-drift-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-run-script-config-drift', toolName: 'run_script', input: { language: 'javascript', code } } as const
@@ -1818,7 +1858,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'wechat-runtime-fail-stop-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         yield { type: 'text-delta', text: 'provider must not start' } as const
         yield { type: 'finish', reason: 'stop' } as const
@@ -1907,7 +1947,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: `wechat-run-script-${termination}-claim-fixture`, stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: `wechat-run-script-${termination}`, toolName: 'run_script', input: { language: 'javascript', code } } as const
@@ -2018,7 +2058,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: `wechat-run-script-${termination}-postclaim-fixture`, stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId: `wechat-run-script-postclaim-${termination}`, toolName: 'run_script', input: { language: 'javascript', code } } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
@@ -2096,7 +2136,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-terminal-recovery-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         yield { type: 'text-delta', text: 'completed WeChat turn' } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 3 } as const
         yield { type: 'finish', reason: 'stop' } as const
@@ -2226,7 +2266,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const configured = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!configured) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(configured.profile, { providerId: 'hosted-wechat-tool-fixture', stream: async function* () {
+      runtime.modelProviders.register(configured.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-read-1', toolName: 'read_file', input: { path: 'note.txt' } } as const
@@ -2371,7 +2411,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-read-claim-revoke', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-read-claim-revoked', toolName: 'read_file', input: { path: 'note.txt' } } as const
@@ -2446,7 +2486,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-write-denied-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-write-denied-1', toolName: 'write_file', input: { path: 'must-not-exist.txt', content: 'denied' } } as const
@@ -2516,7 +2556,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-target-drift-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-write-target-drift', toolName: 'write_file', input: { path: 'approved-target.txt', content: 'must-not-overwrite' } } as const
@@ -2588,7 +2628,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-read-identity-drift-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-read-identity-drift', toolName: 'read_file', input: { path: '.env' } } as const
@@ -2667,7 +2707,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-config-drift-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-write-config-drift', toolName: 'write_file', input: { path: 'approved-target.txt', content: 'must-not-use-stale-threshold' } } as const
@@ -2741,7 +2781,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-browser-config-drift-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId: 'wechat-browser-config-drift', toolName: 'browser', input: { action: 'act', instruction: 'click the submit button' } } as const
@@ -2806,7 +2846,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-write-cancelled-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId: 'wechat-write-cancelled-1', toolName: 'write_file', input: { path: 'must-not-exist.txt', content: 'cancelled' } } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
@@ -2871,7 +2911,7 @@ describe('runWeChatRemoteAgent', () => {
       const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
       const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
       if (!route) throw new Error('expected WeChat invocation provider route')
-      runtime.modelProviders.register(route.profile, { providerId: 'hosted-wechat-policy-change-fixture', stream: async function* () {
+      runtime.modelProviders.register(route.profile, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId: 'wechat-policy-change-read', toolName: 'read_file', input: { path: 'note.txt' } } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
