@@ -34,21 +34,22 @@ export function mapAgentSdkConfirmationOutcome(outcome: ConfirmOutcome, requeste
   const reason = 'reason' in outcome && outcome.reason && typeof outcome.reason.summary === 'string' && outcome.reason.summary.trim()
     ? { userMessage: outcome.reason.summary.trim() }
     : {}
+  const decisionRuleId = 'decisionRuleId' in outcome && typeof outcome.decisionRuleId === 'string' ? { decisionRuleId: outcome.decisionRuleId } : {}
   if (outcome.kind === 'approved' && (outcome.cause === 'user-approved' || outcome.cause === 'agent-approved')) {
     return {
       kind: 'approved', receipt: `confirmation:${randomUUID()}`, ...attribution, ...reason,
       ...(outcome.memory ? { selectedMemory: outcome.memory } : {})
     }
   }
-  if (outcome.kind === 'timeout') return { kind: 'timeout', ...attribution, ...reason }
-  if (outcome.cause === 'cancelled') return { kind: 'cancelled', ...attribution, ...reason }
-  if (outcome.cause === 'unavailable' || outcome.cause === 'config-error' || outcome.cause === 'no-answerer') return { kind: 'unavailable', ...attribution, ...reason, ...promptSendFailure }
-  return { kind: 'denied', ...attribution, ...reason }
+  if (outcome.kind === 'timeout') return { kind: 'timeout', ...attribution, ...reason, ...decisionRuleId }
+  if (outcome.cause === 'cancelled') return { kind: 'cancelled', ...attribution, ...reason, ...decisionRuleId }
+  if (outcome.cause === 'unavailable' || outcome.cause === 'config-error' || outcome.cause === 'no-answerer') return { kind: 'unavailable', ...attribution, ...reason, ...promptSendFailure, ...decisionRuleId }
+  return { kind: 'denied', ...attribution, ...reason, ...decisionRuleId }
 }
 
 /** Bridges the SDK confirmation decision to the existing host channel and its waiter lifecycle. */
 export function createAgentSdkConfirmationPort(input: {
-  createChannel(call: Parameters<ConfirmationPort>[0]['call'], confirmation: Pick<Parameters<ConfirmationPort>[0], 'confirmationId' | 'answerer' | 'reasonCode' | 'context'>): ConfirmationChannel
+  createChannel(call: Parameters<ConfirmationPort>[0]['call'], confirmation: Pick<Parameters<ConfirmationPort>[0], 'confirmationId' | 'answerer' | 'reasonCode' | 'context'> & Partial<Pick<Parameters<ConfirmationPort>[0], 'decisionRuleId'>>): ConfirmationChannel
   publish(call: Parameters<ConfirmationPort>[0]['call'], request: ConfirmRequest, confirmationId: string, context: GateConfirmationContext): void | Promise<void>
   cancel(call: Parameters<ConfirmationPort>[0]['call'], confirmationId: string): void
   onApproved?(
@@ -72,7 +73,7 @@ export function createAgentSdkConfirmationPort(input: {
     primaryOutcome: ConfirmOutcome
   ): Promise<Awaited<ReturnType<ConfirmationPort>> | undefined>
 }): ConfirmationPort {
-  const explicitDenials = new Map<string, Readonly<{ userMessage?: string }>>()
+  const explicitDenials = new Map<string, Readonly<{ userMessage?: string; decisionRuleId?: string }>>()
   return async (confirmation) => {
     if (!isGateContext(confirmation.context)) return { kind: 'unavailable', cause: 'unavailable' }
     const target = confirmation.context.writePathFact && typeof confirmation.context.writePathFact === 'object'
@@ -84,7 +85,7 @@ export function createAgentSdkConfirmationPort(input: {
       const previous = explicitDenials.get(key)
       if (previous) return {
         kind: 'denied', cause: 'user-denied', answerer: 'user',
-        userMessage: previous.userMessage ?? '同批同目标的同类调用已由用户拒绝。'
+        userMessage: previous.userMessage ?? '同批同目标的同类调用已由用户拒绝。', decisionRuleId: confirmation.decisionRuleId ?? previous.decisionRuleId
       }
     }
     const request: ConfirmRequest = {
@@ -161,10 +162,13 @@ export function createAgentSdkConfirmationPort(input: {
       if (outcome.kind === 'approved') input.onApproved?.(confirmation.call, outcome, confirmation, confirmation.context as GateConfirmationContext, outcome.selectedMemory)
       if (outcome.kind === 'denied' && outcome.answerer === 'user' && normalizedTarget) {
         explicitDenials.set(JSON.stringify([confirmation.modelTurn, confirmation.call.toolName, normalizedTarget]), {
-          ...(outcome.userMessage ? { userMessage: outcome.userMessage } : {})
+          ...(outcome.userMessage ? { userMessage: outcome.userMessage } : {}),
+          ...(confirmation.decisionRuleId ? { decisionRuleId: confirmation.decisionRuleId } : {})
         })
       }
-      return outcome
+      return outcome.kind === 'denied' && confirmation.decisionRuleId
+        ? { ...outcome, decisionRuleId: confirmation.decisionRuleId }
+        : outcome
     } finally {
       if (abort) confirmation.signal?.removeEventListener('abort', abort)
     }

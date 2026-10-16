@@ -13,6 +13,16 @@ const context = {
 }
 
 describe('createAgentSdkConfirmationPort', () => {
+  it('preserves the policy rule ID in a rejected user confirmation result', async () => {
+    const channel = { request: vi.fn(async () => ({ kind: 'rejected' as const, cause: 'user-denied' as const, answererKind: 'user' as const,
+      reason: { summary: 'denied' } })), cancel: vi.fn() }
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: vi.fn(), cancel: vi.fn() })
+    await expect(port({ call: { invocationId: 'inv', toolCallId: 'call', toolName: 'write_file', input: { path: 'a.txt' } },
+      modelTurn: 1, confirmationId: 'call', answerer: 'user', reasonCode: 'default-write-execute-ask', decisionRuleId: 'default-write-execute-ask', context: {
+        ...context, writePathFact: { normalizedPath: '/workspace/a.txt' }, decision: { ...context.decision, answerer: 'user', disposition: 'human-required' }
+      } })).resolves.toMatchObject({ kind: 'denied', userMessage: 'denied', decisionRuleId: 'default-write-execute-ask' })
+  })
+
   it('保留发送成功但提示绑定不可用的结构化事实', () => {
     expect(mapAgentSdkConfirmationOutcome({
       kind: 'rejected', cause: 'unavailable', promptSendFailure: {

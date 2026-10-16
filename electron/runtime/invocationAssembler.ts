@@ -1343,11 +1343,23 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             ...(materialsLane ? { lane: materialsLane } : {}), turnId: runtimeTurnId
           }
         } } : {}),
-        ...(materials.sessionEventLocation ? { sessionLedgerForNotDispatched: (call: { toolCallId: string }, _reason: string, result: Record<string, unknown>) => ({
-          location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result,
+        ...(materials.sessionEventLocation ? { sessionLedgerForNotDispatched: (call: { toolCallId: string }, _reason: string, result: Record<string, unknown>) => {
+          const projectedResult = projectAgentToolResult({
+            success: result.success === true, data: result.data,
+            ...(typeof result.decisionRuleId === 'string' ? { decisionRuleId: result.decisionRuleId } : {})
+          })
+          // Preserve the SDK's bounded, allowlisted not-dispatched diagnostics (for example output truncation).
+          const projectedResultWithDispatchState = {
+            ...projectedResult,
+            ...(result.notExecuted === true ? { notExecuted: true } : {}),
+            ...(typeof result.notExecutedReason === 'string' ? { notExecutedReason: result.notExecutedReason } : {})
+          }
+          return {
+          location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result: projectedResultWithDispatchState,
           requestId: materials.requestId, invocationRequestId: materials.requestId,
           ...(materialsLane ? { lane: materialsLane } : {}), turnId: runtimeTurnId
-        }) } : {}),
+          }
+        } } : {}),
         ...(materials.sessionEventLocation ? {
           sessionLedgerForAttemptUsage: (attempt: Record<string, unknown>) => {
             const event = createAgentSdkUsageSessionEvent({ requestId: materials.requestId, turnId: runtimeTurnId, baseUrl: materials.baseUrl }, attempt)

@@ -7,6 +7,7 @@ import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs, typ
 import { finalizeReadConfirmation } from './readConfirmationFlow'
 import { buildWriteExecutionPermit } from './writeExecutionPermit'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
+import { explainPolicyDenial } from '../../src/shared/confirmation/denialExplanation'
 
 export type AgentSdkGateArgsResolver = (binding: PermitBinding, call?: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, signal?: AbortSignal) => Promise<ToolCallGateArgs>
 export type AgentSdkGateEvaluator = (args: ToolCallGateArgs) => Promise<ToolCallGateResult>
@@ -25,15 +26,16 @@ export function createAgentSdkSafetyPolicy(input: {
 }): SafetyPolicyPort & { markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer?: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): void } {
   const initial = new Map<string, { binding: PermitBinding; result: ToolCallGateResult; args: ToolCallGateArgs; confirmed: boolean; confirmedAnswerer?: 'user' | 'agent' }>()
   const callKey = (binding: PermitBinding) => JSON.stringify([binding.invocationId, binding.toolCallId])
-  const deny = (binding: PermitBinding, reasonCode: SafetyDenyReason) => {
+  const deny = (binding: PermitBinding, reasonCode: SafetyDenyReason, userMessage?: string, decisionRuleId?: string) => {
     if (binding.phase === 'recheck') initial.delete(callKey(binding))
-    return { kind: 'deny' as const, reasonCode }
+    const explanation = explainPolicyDenial(decisionRuleId ?? reasonCode, userMessage)
+    return { kind: 'deny' as const, reasonCode, ...(explanation ? { userMessage: explanation } : {}), ...(decisionRuleId ? { decisionRuleId } : {}) }
   }
   const ask = (binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs) => {
     const decision = result.decision
     if (decision.type !== 'require-confirm') return deny(binding, 'POLICY_DENY')
     return {
-      kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId,
+      kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId, decisionRuleId: decision.ruleId,
       context: {
         toolName: args.toolName,
         ...(args.toolName === 'run_shell' && typeof args.toolInput.justification === 'string'
@@ -148,7 +150,7 @@ export function createAgentSdkSafetyPolicy(input: {
               initial.set(key, { binding: structuredClone(binding), result: structuredClone(humanResult), args: gateArgs, confirmed: false })
               return ask(binding, humanResult, gateArgs)
             }
-            return { kind: 'deny', reasonCode: confirmationScopeChanged ? 'FACTS_CHANGED' : 'POLICY_DENY' }
+            return deny(binding, confirmationScopeChanged ? 'FACTS_CHANGED' : 'POLICY_DENY', undefined, decision.type === 'deny' ? decision.ruleId : undefined)
           }
           return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
         }
@@ -162,7 +164,7 @@ export function createAgentSdkSafetyPolicy(input: {
           return ask(binding, result, gateArgs)
         }
         initial.delete(key)
-        return { kind: 'deny', reasonCode: 'POLICY_DENY' }
+        return deny(binding, 'POLICY_DENY', undefined, decision.ruleId)
       } catch {
         return { kind: 'deny', reasonCode: 'MISSING_MATERIAL' }
       }

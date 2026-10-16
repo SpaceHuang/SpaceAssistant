@@ -28,6 +28,20 @@ const baseArgs = { toolName: 'read_file', toolInput: { path: 'x' }, sessionId: '
 const result = (decision: Decision): ToolCallGateResult => ({ decision, facts, approvedFactIds: [] })
 
 describe('createAgentSdkSafetyPolicy', () => {
+  it('returns an actionable coarse explanation for a mapped gate denial without changing the SDK reason code', async () => {
+    const writeArgs = { ...baseArgs, toolName: 'write_file', toolInput: { path: 'new/file.md', content: 'x' } } as ToolCallGateArgs
+    const writeBinding = { ...binding, capabilityId: 'write_file', authorizationVersion: 'write-v1', inputSnapshotHash: createHash('sha256').update('{"content":"x","path":"new/file.md"}').digest('hex') }
+    const gateResult: ToolCallGateResult = {
+      ...result({ type: 'deny', ruleId: 'write-parent-directory-missing', reason: '写入目标事实探测失败，已阻止执行' }),
+      writePathFact: undefined
+    }
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => writeArgs, evaluateGate: async () => gateResult })
+    await expect(policy.evaluate(writeBinding)).resolves.toEqual({
+      kind: 'deny', reasonCode: 'POLICY_DENY', decisionRuleId: 'write-parent-directory-missing',
+      userMessage: '[path-target-unavailable] 目标目录不存在，无法创建该文件；请改写到一个已存在的目录，或告知用户需要先建立该目录'
+    })
+  })
+
   it('carries the current run_shell justification and truncation marker into automation approval context', async () => {
     const toolInput = { command: 'pwd', justification: '核对工作目录', _justificationTruncated: true }
     const agentBinding = {
