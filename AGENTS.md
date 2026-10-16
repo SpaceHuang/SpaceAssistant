@@ -87,15 +87,12 @@ API Key 经 `secureApiKey.ts`（`safeStorage`）加密存储；文件访问必�
 
 ## 文档规范
 
-**整理 `docs/` 下的文档前，先读 [`docs/rules/docs-guide.md`](docs/rules/docs-guide.md)** —— 它是 `docs/` 文档库的长期统一规范（主题结构、归属判定 A/B/C/D、`history.md` 规范、模板集、执行流程、质量门禁、反模式清单）。
+**写或改任何文档前，先读 [`docs/rules/README.md`](docs/rules/README.md)** —— 按任务查"读哪一篇"（元指南 / 文档库整理 / 需求 / 交互 / 技术方案 / 执行计划；各篇的定位与 `-sources.md` 的阅读时机都在表里）。
 
-要点速览：
+两条跨文档的硬纪律：
 
-- `docs/develop/`、`docs/requirement/` 按 **9 个主题**组织：每主题 = `README.md`（索引）+ 现状文档（requirement 侧为 `需求基线.md`）+ `history.md`（流水账）+ `in-flight/`（草稿箱）；已完成迭代 `git mv` 进 `archive/<主题>/`，**内容零改动**。
-- **文档里那行「状态：」不能当判定依据** —— 必须跑代码核验（提交检索 / 路径检索 / 符号检索三步，指南 §3.0）。
 - 只动文档、**不改代码**；搬迁与改写**分开提交**。
-- 边界目录（`docs/review/`、`docs/plan/`、`docs/analyze/`、`docs/superpowers/` 等）只引用不搬迁；判定原则先看「产品文档 or 过程产物」。
-- **本环境会话可能丢帧**：判定「文件是否已写 / 改动是否生效」一律以 `read_file` / `ls` / `git log` 为准，**不凭会话记忆**；每次写入后复读确认（指南 §0）。
+- **本环境会话可能丢帧**：判定「文件是否已写 / 改动是否生效」一律以 `read_file` / `ls` / `git log` 为准，**不凭会话记忆**；每次写入后复读确认。
 
 ## 构建系统
 
@@ -106,14 +103,7 @@ API Key 经 `secureApiKey.ts`（`safeStorage`）加密存储；文件访问必�
 
 ## 测试
 
-使用 Vitest（`vitest.config.mts`），采用 **projects 多项目配置**（当前三项目：electron / renderer / renderer-perf）：
-
-- `electron` 项目：`electron/**/*.test.ts`，`node` 环境，`pool: 'forks' + maxWorkers: 1 + fileParallelism: false`（Windows 上 threads 池易出现 worker 启动超时，主进程测试必须保持 forks 单 worker）
-- `renderer` 项目：`src/**/*.test.{ts,tsx}`，`jsdom` 环境，`pool: 'threads' + maxWorkers: 4`（纯 jsdom 测试可安全并行）
-
-测试文件就近放置，setup 文件为 `src/test/setup.ts`。
-
-**测试执行策略（严格遵守）**：
+**执行策略（严格遵守）**：
 
 1. **开发过程中只跑定向测试**，禁止每改一步就跑全量：
    - 已知受影响文件时：`npm exec vitest run <文件1> <文件2>`
@@ -122,7 +112,9 @@ API Key 经 `secureApiKey.ts`（`safeStorage`）加密存储；文件访问必�
 2. **全量 `npm test` 仅在以下时点运行**：多阶段计划的每个 Phase 收尾验证、提交前的最终验收。不要把它当作增量开发的循环验证手段。
 3. 中间构建验证优先用 `npm run build:electron:incremental` + `npm run typecheck:renderer`，全量 `npm run build` 只在最终验收时运行。
 
-**不变量优先（队列 / 票据 / 配额类模块）**：此类模块（如 `electron/butler/butlerAdmission.ts`）除逐场景用例外，必须另有一条**随机操作序列 + 状态不变量断言**测试——确定性伪随机种子（如 mulberry32）生成 acquire/release 序列，每步后断言跨函数不变量（如「探针排队 ⇔ oracle 持票数已满」「已发票据数 ∈ [0, maxConcurrent]」）。逐场景用例对「跨函数成对性 / 计数守恒」类缺陷天然易漏（2026-10 评审 P1 教训：排队唤醒漏补计数，场景测试全绿但一次排队后上限永久失效）；不变量测试需与实现同步红绿验证（回退修复应转红），示范见 `electron/butler/butlerAdmission.test.ts` 末组用例。
+**配置与基建**（projects 多项目配置、池与并发、测试文件位置与 setup、**不变量测试的写法**）见 [`docs/develop/platform-eng/testing-guide.md`](docs/develop/platform-eng/testing-guide.md)。
+
+**不变量优先**：队列 / 票据 / 配额类模块，除逐场景用例外必须另有一条"随机操作序列 + 状态不变量断言"测试（原因与示范见 testing-guide §2）。
 
 ## Agent 执行纪律（会话成本控制）
 
@@ -136,35 +128,29 @@ API Key 经 `secureApiKey.ts`（`safeStorage`）加密存储；文件访问必�
 - **带状态 / 外部耦合逻辑**（browser / lark / 远程 / grant 等）：设计专门的边界回归测试，不能只靠 happy-path 单测。
 - **状态汇报从简**：进度用 `update_plan` 清单 / 一句话表达，不跨回合重复粘贴同一份长状态。
 
-## 排障：飞书 / 微信 CLI 文件日志
+## 排障与模块规范
 
-二者的全链路调试日志均为 JSON Lines（`FeishuCli-{YYYYmmdd}.log` / `WeChatCli-{YYYYmmdd}.log`）：开发模式在 `{项目根}/logs/`，打包模式在 `{workDir}/.agent/logs/`（同目录另有 Agent 日志）；与设置页「操作记录」读的 `{userData}/logs/feishu-audit.log` / `wechat-audit.log` 是两份日志，互不替代。
+IM 链路（飞书 / 微信 CLI 日志）的排障约定已并入主题现状文档：`docs/develop/im-remote/远程与IM-现状.md` §1–§2（含"全链路日志与设置页审计日志互不替代"的区分）。
 
-## IPC 通道参考
+## IPC 通道
 
-通道名定义在 `electron/preload.ts`，处理器分布在 `electron/ipc/`（组合器 `electron/appIpc.ts`）：
-- `session:list|create|get|update|delete` - 会话 CRUD
-- `chat:get-messages` - 消息读取；`message:append-non-turn` / `message:patch-non-turn` - 消息增改（非 turn 路径直写）
-- `chat:submit-outbound` - 发起一轮对话（提交出站意图，立即返回；由 outbound 受理后 start-turn 或降级排队，展示与用量经 `chat:turn-display` / `chat:turn-usage` 事件推送）
-- `config:get|set|test-connection` - 配置管理
-- `file:list-directory|read-file` - 文件浏览（路径相对于 workDir）
-- `search:execute|get-history` - 跨会话和文件搜索
+通道名定义在 `electron/preload.ts`；处理器分布在 `electron/ipc/`（组合器 `electron/appIpc.ts`）。**这里不再维护通道清单**——它以代码为准（读 `preload.ts` 即得全量通道名与签名），文档化必然腐化；需要清单时用 `rg -n "'[a-z-]+:[a-z-]+'" electron/preload.ts`。
 
 ## UI 规范
 
-- 左侧边栏使用 VS Code 风格的活动栏（图标条）切换会话、文件、搜索面板
-- SVG 图标来自 `src/renderer/assets/`，使用 `?raw` 导入；运行时将 `fill` 替换为 `currentColor`
-- 如需新图标，可从 `res/mingcute-icons-main/svg/` 目录按分类查找（如 `arrow/`、`file/`、`device/`、`editor/` 等），复制 SVG 文件到 `src/renderer/assets/` 后使用
+- 三栏布局：左侧活动栏（328px）｜中间聊天区｜右侧边栏（240px，预留位）
 - 全局使用 Ant Design 组件；自定义样式在 `src/renderer/styles.css`；图标库另有 `lucide-react`
-- 三栏布局：左侧边栏（328px）| 中间聊天区 | 右侧边栏（240px，预留位）
+- SVG 图标以 `?raw` 从 `src/renderer/assets/` 导入，运行时 `fill` → `currentColor`；新增图标从 `res/mingcute-icons-main/svg/` 按分类取
+
+**完整呈现层约定**（含新增图标的完整流程）见 [`docs/develop/desktop-ui/桌面交互与工作区-现状.md`](docs/develop/desktop-ui/桌面交互与工作区-现状.md) §1。
 
 ## i18n 国际化开发规范
 
-- 所有新增 UI 文案**必须**通过 `t()` 函数使用，禁止硬编码中文或英文
-- 翻译 key 命名遵循 `模块.组件.语义` 层级（camelCase，最多 4 层）
-- `zh-CN` 是翻译 key 的真实来源；TypeScript 类型从 `src/renderer/i18n/resources/zh-CN/` 自动推导
+- 所有新增 UI 文案**必须**通过 `t()`（或类型化的 `useTypedTranslation`）使用，禁止硬编码中文或英文；**测试文件（`.test.ts`/`.test.tsx`）内的中文属例外**
+- 翻译 key 命名遵循 `模块.组件.语义` 层级（camelCase，最多 4 层）；**`zh-CN` 是 key 的真实来源**，`en-US` 保持 key 对齐
 - 新增 key 后运行 `npm run i18n:generate-types` 更新类型（`dev` 与 `build:renderer` 前会自动执行）
-- 提交前运行 `npm run i18n:check` 确保 key 对齐、JSON 合法
-- 复用性高的文案放 `common` 命名空间；模块专属文案放对应命名空间
+- 提交前运行 `npm run i18n:check`（严格模式 `npm run i18n:check:strict` 含硬编码中文检测）
+
+**细节**（命名空间分配表、六步工作流、常见问题与命令速查）见 [`docs/develop/platform-eng/i18n-sync-guide.md`](docs/develop/platform-eng/i18n-sync-guide.md)。
 - 错误消息使用 `errors` 命名空间 + `src/shared/errorCodes.ts` 错误码模式
 - 翻译资源文件在 `src/renderer/i18n/resources/{locale}/` 下按命名空间分文件

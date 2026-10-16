@@ -14,7 +14,7 @@
 | 归属绑定与去重 | `feishuOwnerBind.ts`、`feishuProcessedStore.ts` | `ls electron/feishu/feishu{OwnerBind,ProcessedStore}.ts` |
 | 审计与 IPC | `feishuAuditLogger.ts`、`feishuIpc.ts` | `ls electron/feishu/feishu{AuditLogger,Ipc}.ts` |
 
-日志位置约定：开发模式 `{项目根}/logs/FeishuCli-{YYYYmmdd}.log`，打包模式 `{workDir}/.agent/logs/`（见 `AGENTS.md`）。
+**日志位置约定（飞书 CLI 全链路）**：JSON Lines 格式，文件 `FeishuCli-{YYYYmmdd}.log`；开发模式在 `{项目根}/logs/`，打包模式在 `{workDir}/.agent/logs/`（同目录另有 Agent 日志）。注意：设置页「操作记录」读的是 `{userData}/logs/feishu-audit.log`，与上述全链路日志是**两份不同的日志，互不替代**。
 
 ## 2. 微信链路（`electron/wechat/`）
 
@@ -26,6 +26,8 @@
 | 去重 | `weChatProcessedStore.ts` | `ls electron/wechat/weChatProcessedStore.ts` |
 | IM 通道与确认投递 | `weChatImChannel.ts`、`weChatConfirmationPromptAdapter.ts` | `ls electron/wechat/weChat{ImChannel,ConfirmationPromptAdapter}.ts` |
 | 审计与 IPC | `weChatAuditLogger.ts`、`weChatIpc.ts` | `ls electron/wechat/weChat{AuditLogger,Ipc}.ts` |
+
+**日志位置约定（微信 CLI 全链路）**：JSON Lines 格式，文件 `WeChatCli-{YYYYmmdd}.log`；路径规则与飞书相同（开发 `{项目根}/logs/`、打包 `{workDir}/.agent/logs/`）。设置页「操作记录」读的 `{userData}/logs/wechat-audit.log` 与它**互不替代**。
 
 ## 3. 远程会话、澄清与延迟审批（`electron/remote/`）
 
