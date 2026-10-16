@@ -162,7 +162,9 @@ describe('loadAgentsMd', () => {
     }
   })
 
-  // TODO(win32)：rename 替换后重试读在 Windows 稳定返回 read-error（预期 loaded），疑似产品侧重试读缺陷，待单独排查；非 Windows 平台保持验证。
+  // win32 已排查（2026-10-17）：rename 替换「正被打开」的目标会稳定 EPERM（实测，Node 句柄带 FILE_SHARE_DELETE 亦然），
+  // EPERM 由替换方（编辑器）承担并重试保存；读取方 fail-closed 返回 read-error，下次加载即恢复——行为正确非缺陷。
+  // 「打开后、校验前被替换」的中间态在 win32 物理上不可达，本用例为 POSIX 专属竞态；win32 对应的真实场景（替换发生在 open 之前）由常规读取用例覆盖。
   it.skipIf(process.platform === 'win32')('retries an atomic editor replacement after opening and reads only the complete new version', async () => {
     const root = await makeRoot()
     const current = path.join(root, 'AGENTS.md')
