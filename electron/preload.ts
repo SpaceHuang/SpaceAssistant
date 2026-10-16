@@ -386,6 +386,11 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('remote:switch-session-request', fn)
     return () => ipcRenderer.removeListener('remote:switch-session-request', fn)
   },
+  onNotificationNavigateSession: (cb) => {
+    const fn = (_e: unknown, payload: { sessionId: string; toolUseId?: string }) => cb(payload)
+    ipcRenderer.on('notification:navigate-session', fn)
+    return () => ipcRenderer.removeListener('notification:navigate-session', fn)
+  },
   remoteSwitchSessionComplete: (payload: {
     requestId: string
     desktopSwitched: boolean

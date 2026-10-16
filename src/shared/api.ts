@@ -692,6 +692,9 @@ export type SpaceAssistantApi = {
     viewChanged: boolean
   }) => Promise<void>
 
+  /** Floating confirmation notification clicked: focus its session and pending tool call. */
+  onNotificationNavigateSession: (cb: (payload: { sessionId: string; toolUseId?: string }) => void) => () => void
+
   // 浮动通知 /test-pop 调试命令（仅主窗口渲染进程）
   testPopShow: () => Promise<void>
 }
