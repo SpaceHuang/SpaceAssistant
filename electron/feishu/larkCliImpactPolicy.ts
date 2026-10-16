@@ -47,6 +47,22 @@ function asStringArgv(argv: unknown): string[] | null {
   return argv
 }
 
+/** Remove flags and their values before inspecting command verbs. Option values are user data. */
+function commandPathTokens(argv: string[]): string[] {
+  const path: string[] = []
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index]!
+    if (token === '--') break
+    if (token.startsWith('--')) {
+      // --name=value is a complete option token; --name value consumes the next token.
+      if (!token.includes('=') && argv[index + 1] !== undefined && !argv[index + 1]!.startsWith('-')) index += 1
+      continue
+    }
+    path.push(token.toLowerCase())
+  }
+  return path
+}
+
 /**
  * Deterministic classifier on tokenized argv (args[0]=subcommand like message/doc/...).
  * Accepts untrusted tool input: non-arrays, empty, and non-string elements → unknown (fail closed).
@@ -60,8 +76,9 @@ export function classifyLarkCliImpact(argv: unknown): LarkCliImpactResult {
     return { impact: 'unknown', reason: 'non_string_argv', category: 'invalid' }
   }
   const sub = tokens[0]?.toLowerCase() ?? ''
-  const rest = tokens.slice(1).map((a) => a.toLowerCase())
+  const rest = commandPathTokens(tokens)
   const joined = rest.join(' ')
+  const optionNames = tokens.filter((token) => token.startsWith('--')).map((token) => token.split('=', 1)[0]!.toLowerCase())
 
   // message/mail action is fixed at argv[1]. Values such as --subject get
   // must never be interpreted as a command verb.
@@ -130,10 +147,9 @@ export function classifyLarkCliImpact(argv: unknown): LarkCliImpactResult {
   if (sub === 'calendar') {
     if (rest.some((t) => t === 'create' || t === 'invite' || t === 'update')) {
       if (
-        rest.includes('--attendees') ||
-        rest.includes('--attendee') ||
-        joined.includes('attendee') ||
-        rest.includes('--user-ids')
+        optionNames.includes('--attendees') ||
+        optionNames.includes('--attendee') ||
+        optionNames.includes('--user-ids')
       ) {
         return { impact: 'high_impact', reason: 'calendar_invite_others', category: 'calendar_invite' }
       }

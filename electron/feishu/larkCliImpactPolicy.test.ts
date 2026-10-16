@@ -33,6 +33,21 @@ describe('larkCliImpactPolicy', () => {
     expect(classifyLarkCliImpact(['doc', 'permission', 'update']).impact).toBe('high_impact')
   })
 
+  it.each(['get', 'list', 'search', 'info', 'show'])('doc create title value %s stays a write', (title) => {
+    expect(classifyLarkCliImpact(['doc', 'create', '--title', title]))
+      .toMatchObject({ impact: 'low_write', category: 'doc_write' })
+  })
+
+  it.each(['get', 'list', 'search', 'info', 'show'])('calendar create title value %s stays a write', (title) => {
+    expect(classifyLarkCliImpact(['calendar', 'event', 'create', '--title', title]))
+      .toMatchObject({ impact: 'low_write', category: 'calendar' })
+  })
+
+  it.each(['get', 'list', 'search', 'info', 'show'])('actual doc read action %s remains read', (action) => {
+    expect(classifyLarkCliImpact(['doc', action, '--title', 'new document']))
+      .toMatchObject({ impact: 'read', category: 'read' })
+  })
+
   it('calendar invite with attendees is high-impact', () => {
     expect(
       classifyLarkCliImpact(['calendar', 'create', '--attendees', 'ou_a,ou_b']).impact

@@ -226,6 +226,14 @@ describe('判定矩阵：run_lark_cli', () => {
     expect(decideToolCall('run_lark_cli', input, 'desktop', deps({ larkCliWriteRequiresConfirm: true })).type).toBe('require-confirm')
     expect(decideToolCall('run_lark_cli', input, 'desktop', deps({ larkCliWriteRequiresConfirm: false })).type).toBe('auto-allow')
   })
+  it.each([
+    ['doc', ['doc', 'create', '--title', 'list']],
+    ['calendar', ['calendar', 'event', 'create', '--title', 'list']]
+  ])('%s 写命令的标题值 list 不得命中读类免确认规则', (_name, args) => {
+    const d = decideToolCall('run_lark_cli', { args }, 'desktop', deps({ larkCliWriteRequiresConfirm: true }))
+    expect(d.type).toBe('require-confirm')
+    expect(d.ruleId).not.toBe('lark-read-allow')
+  })
   it('high_impact / unknown 无条件确认（不消费开关）', () => {
     for (const input of [{ args: ['message', 'send', '--chat-type', 'group'] }, { args: [] }, {}]) {
       const d = decideToolCall('run_lark_cli', input, 'desktop', deps({ larkCliWriteRequiresConfirm: false }))
