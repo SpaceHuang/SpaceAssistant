@@ -17,7 +17,9 @@
 
 ## 在途（in-flight）
 
-**（本次核验后为空）** —— 全部移入 `../archive/storage-session/`（共 66 件）。
+**（2026-10-14 核验时为空）** —— 当时全部移入 `../archive/storage-session/`（共 66 件）；后续新增在途方案列于下方。
+
+- [启动时历史会话恢复耗时优化方案](./in-flight/启动历史会话恢复耗时优化方案.md) —— 草稿（未实施）；分析窗口前分类与恢复的全量待办扫描，建议拆分启动关键恢复与附属记录后台修复。
 
 > **2026-10-14 核验更正（原判 C 有误）**：`message-fact-persistence-core-refactor-plan.md`、`message-fact-pipeline-prompt-cache-optimization-plan.md` —— 证据：2026-09-09 `refactor(message-fact): persist turn lifecycle in core`；`da010dcb feat(context): add prompt cache breakpoints`。
 
