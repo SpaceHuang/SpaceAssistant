@@ -338,6 +338,8 @@ export interface ApprovalCluePack {
    * 与不可信证据分区呈现（渲染在围栏之外，见 approvalAgent.renderCluePack）。
    */
   taskDigest?: string
+  /** taskDigest 是否因长度限制截断；截断时不得作为 medium/high 授权依据。 */
+  taskDigestTruncated?: boolean
 }
 
 /** 一次审批 Agent 调用（I2：标准唯一；I5：由 AgentChannel 深度计数兜底递归）。 */

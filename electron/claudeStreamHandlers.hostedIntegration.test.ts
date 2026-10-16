@@ -287,7 +287,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     // A pre-migration session has legacy messages but no session-owned canonical History yet.
     appendMessage(db, { id: 'legacy-user', sessionId: session.id, role: 'user', content: 'legacy question', timestamp: 0, status: 'sent' })
     appendMessage(db, { id: 'legacy-assistant', sessionId: session.id, role: 'assistant', content: 'legacy answer', timestamp: 0.5, status: 'sent' })
-    const user = appendMessage(db, { id: 'hosted-user', sessionId: session.id, role: 'user', content: 'hello hosted', timestamp: 1, status: 'sent' })
+    const hostedUserPrompt = `hello hosted: please upload the report. ${'context '.repeat(70)}Do not upload it; wait until I confirm.`
+    const user = appendMessage(db, { id: 'hosted-user', sessionId: session.id, role: 'user', content: hostedUserPrompt, timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'hosted-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
     createPersistedTurn(db, {
       turnId: 'hosted-turn', requestId: 'hosted-request', sessionId: session.id,
@@ -324,7 +325,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       db, workDir, userDataDir: hostedTestUserDataDir, baseUrl: endpoint, credentialRef: 'llm-service:svc-hosted',
       maxAuthorization: 'high', policyRuleFloor: expect.any(Array)
     })
-    expect(runApprovalAgent.mock.calls[0]?.[1]).toMatchObject({ lane: 'desktop', clue: { toolName: 'write_file' } })
+    expect(runApprovalAgent.mock.calls[0]?.[1]).toMatchObject({ lane: 'desktop', clue: { toolName: 'write_file', taskDigestTruncated: true } })
     expect(evaluateGateSpy.mock.calls.map(([args]) => args).filter((args) =>
       args.toolUseId === 'hosted-read-1' || args.toolUseId === 'hosted-write-1'
     ).map(({ toolUseId, phase }) => [toolUseId, phase])).toEqual([
@@ -336,7 +337,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       messages: expect.arrayContaining([
         expect.objectContaining({ role: 'user', content: 'legacy question' }),
         expect.objectContaining({ role: 'assistant', content: 'legacy answer' }),
-        expect.objectContaining({ role: 'user', content: 'hello hosted' })
+        expect.objectContaining({ role: 'user', content: hostedUserPrompt })
       ])
     })
     expect(history.events.map((event) => event.kind)).toEqual(expect.arrayContaining(['model-response-committed', 'tool-call-started', 'tool-call-finished', 'invocation-completed']))
@@ -354,7 +355,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       result: { success: true, data: { name: 'hosted-reader', content: expect.stringContaining('Read through the real Desktop Hosted path.') } }
     })
     expect(history.events.find((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === 'hosted-history-read-1')?.payload).toMatchObject({
-      result: { success: true, data: { entries: [expect.objectContaining({ text: 'hello hosted', sessionId: expect.any(String) })] } }
+      result: { success: true, data: { entries: [expect.objectContaining({ text: expect.stringContaining('hello hosted'), sessionId: expect.any(String) })] } }
     })
     expect(history.events.filter((event) => event.kind === 'tool-call-finished').every((event) => {
       const ledger = event.payload.sessionLedger as { location?: unknown; stepId?: unknown; result?: unknown } | undefined

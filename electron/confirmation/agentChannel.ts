@@ -117,6 +117,7 @@ export class AgentChannel implements ConfirmationChannel {
       policy: ConfirmAnswererPolicy
       /** 已声明的任务（D，可信证据）：装配方从外层任务上下文透传；缺省 = 无任务上下文。 */
       taskDigest?: string
+      taskDigestTruncated?: boolean
       audit?: AuditSink
       invokeApproval: (inv: ApprovalInvocation) => Promise<ApprovalInvocationResult>
       /** 安全审批专属容量池；不占用普通 Agent turn 的 application admission 名额。 */
@@ -165,7 +166,10 @@ export class AgentChannel implements ConfirmationChannel {
       ...deriveClueExtras(req.facts),
       ...(req.modelJustification ? { modelJustification: req.modelJustification } : {}),
       ...(req.modelJustificationTruncated ? { modelJustificationTruncated: true } : {}),
-      ...(this.deps.taskDigest ? { taskDigest: this.deps.taskDigest } : {})
+      ...(this.deps.taskDigest ? {
+        taskDigest: this.deps.taskDigest,
+        ...(this.deps.taskDigestTruncated ? { taskDigestTruncated: true } : {})
+      } : {})
     }
     // confirm.request 先于 effectiveTimeoutMs 提前返回记录（§5.4 附带缺口补审计）：
     // 该路径属 §4 可回退格，必须留下 agent 侧痕迹，否则回退率分母系统性漏计这类超时。

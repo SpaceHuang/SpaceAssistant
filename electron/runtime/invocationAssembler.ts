@@ -140,6 +140,7 @@ export interface AgentInvocationMaterials {
   internalConfirmExemption?: 'approval-agent'
   maxToolLoopRounds?: number
   approvalTaskDigest?: string
+  approvalTaskDigestTruncated?: boolean
   remoteContext?: import('../tools/types').RemoteContext
   /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
   onRemoteTextActivity?: (text: string) => void
@@ -1041,6 +1042,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         approvalAdmission: materials.approvalAdmission ?? getDefaultAgentRuntime().approvalAdmission,
         ...(materials.deadlineAt !== undefined ? { deadlineAt: materials.deadlineAt } : {}),
         ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
+        ...(materials.approvalTaskDigestTruncated ? { taskDigestTruncated: true } : {}),
         invokeApproval: (invocation) => {
           if (!db) return Promise.resolve({ ok: false as const, cause: 'unavailable' as const })
           return import('../confirmation/approvalAgent').then(({ runApprovalAgent }) => runApprovalAgent({

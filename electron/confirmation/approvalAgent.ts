@@ -22,7 +22,7 @@ import { buildFinalSystemPrompt } from '../llmSystemPrompt'
 import type { AppLocale } from '../../src/shared/locale'
 import { signalChatCancel } from '../chatCancelRegistry'
 import { markApprovalSessionActive, unmarkApprovalSessionActive } from './agentChannel'
-import { getBundledSecurityApprovalSkill } from '../skills/bundled/securityApprovalSkill'
+import { getBundledSecurityApprovalSkill, resolveApprovalAuthorizationContext } from '../skills/bundled/securityApprovalSkill'
 import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRoute'
 import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
@@ -97,13 +97,17 @@ function neutralizeFence(value: string): string {
  * 线索包渲染（P1-2 反注入）：固定结构 + 数据字段全部收进「不可信证据数据」围栏块。
  * summary/command/url 等字段值可能携带主 Agent 从网页/文件/消息读到的敌意文本，
  * 绝不作为自由文本拼进指令位；裁决模型依 Skill 的防注入条款将其视为纯证据。
- * D 任务声明（taskDigest，可信证据）单独小节渲染在围栏之外——来自用户创建任务时的输入，
- * 用于任务相关性判断；它不构成对高危动作的授权（Skill v2 授权条款约束）。
+ * D 任务声明（taskDigest，可信证据）单独小节渲染在围栏之外——来自用户创建任务时的输入；
+ * 截断标记 taskDigestTruncated 随线索包透传，截断证据不能授权中高风险动作。
  */
 /** 测试缝：护栏断言提示词与 Skill 三态合同一致（R5，防「两态」表述回潮）。 */
-export const renderCluePackForTest = (clue: ApprovalCluePack): string => renderCluePack(clue)
+export const renderCluePackForTest = (
+  clue: ApprovalCluePack,
+  maxAuthorization: ApprovalAuthorizationDimension = 'low'
+): string => renderCluePack(clue, maxAuthorization)
 
-function renderCluePack(clue: ApprovalCluePack): string {
+function renderCluePack(clue: ApprovalCluePack, maxAuthorization: ApprovalAuthorizationDimension): string {
+  const authorizationContext = resolveApprovalAuthorizationContext(maxAuthorization, clue.taskDigestTruncated)
   const evidence: string[] = [`[摘要] ${neutralizeFence(clue.summary)}`]
   if (clue.toolUseId) evidence.push(`[本次模型工具调用标识] ${neutralizeFence(runShellJustificationForDisplay(clue.toolUseId))}`)
   evidence.push(`[信号] ${neutralizeFence(clue.signals.length ? clue.signals.join(', ') : '（无）')}`)
@@ -135,8 +139,8 @@ function renderCluePack(clue: ApprovalCluePack): string {
       ? [
           '',
           '## 已声明的任务（可信证据）',
-          '以下任务声明来自真实用户创建任务时的输入，仅用于判断本次动作与任务的相关性；',
-          '它不构成对 high / critical 风险动作的授权。',
+          authorizationContext.task,
+          ...(clue.taskDigestTruncated ? ['任务摘要已截断，以下内容仅是前 500 字符；末尾限制条件可能缺失：'] : []),
           clue.taskDigest
         ]
       : []),
@@ -298,7 +302,9 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
   let runSettled = false
   try {
     const maxAuthorization = deps.maxAuthorization ?? APPROVAL_MAX_AUTHORIZATION
-    const skill = getBundledSecurityApprovalSkill(maxAuthorization)
+    const authorizationContext = resolveApprovalAuthorizationContext(maxAuthorization, inv.clue.taskDigestTruncated)
+    const effectiveMaxAuthorization = authorizationContext.effectiveMaxAuthorization
+    const skill = getBundledSecurityApprovalSkill(maxAuthorization, inv.clue.taskDigestTruncated)
     const session = deps.sessionStorage.commands.createSession({
       name: `安全审批 · ${inv.clue.summary.slice(0, 24)}`,
       ownership: 'internal',
@@ -319,7 +325,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
 
     // 输入形态：facts + 线索包（单条 user 消息），不给全量会话
     const currentUserMessageId = `${inv.requestId}:approval-user`
-    const messages = [{ role: 'user' as const, id: currentUserMessageId, content: renderCluePack(inv.clue) }]
+    const messages = [{ role: 'user' as const, id: currentUserMessageId, content: renderCluePack(inv.clue, maxAuthorization) }]
     const { messages: pairedMessages } = ensureToolResultPairing(messages, { requiredUserMessageId: currentUserMessageId })
 
     const system = buildFinalSystemPrompt({
@@ -425,7 +431,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     }
     // 授权维度上限随链强制：automation 无人场景 'low'（缺省）；desktop 档位传 'high'（§6）
     const verdict = parseApprovalVerdict(extractText(raced.r), {
-      maxAuthorization
+      maxAuthorization: effectiveMaxAuthorization
     })
     if (!verdict) {
       return { ok: false, cause: 'unparsable' }
