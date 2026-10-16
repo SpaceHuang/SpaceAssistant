@@ -49,13 +49,9 @@ describe('createAgentSdkDesktopObserver', () => {
         } })
       }))
       for (const [index, result] of results.entries()) {
-        expect(result?.requestMetadata?.agentsMdSnapshot).toMatchObject({
-          status: 'loaded', source: 'AGENTS.md', scope: 'workdir-root',
-          content: 'rules for ' + roots[index].name, workDir: roots[index].root
-        })
+        expect(result?.requestMetadata).not.toHaveProperty('agentsMdSnapshot')
       }
-      expect(results.map((result) => (result?.requestMetadata?.agentsMdSnapshot as { content?: string }).content))
-        .toEqual(roots.map(({ name }) => 'rules for ' + name))
+      expect(results.map((result) => result?.requestPatch?.messages?.[0]?.content)).toEqual(roots.map(({ name }) => expect.stringContaining('rules for ' + name)))
     } finally {
       await Promise.all(roots.map(({ root }) => rm(root, { recursive: true, force: true })))
     }
@@ -103,7 +99,7 @@ describe('createAgentSdkDesktopObserver', () => {
       const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
       expect(JSON.stringify(providerMessages)).not.toContain('PRIVATE_OUTSIDE_WORKDIR')
       expect(JSON.stringify(requestEvents)).not.toContain('PRIVATE_OUTSIDE_WORKDIR')
-      expect(requestEvents[0]?.payload).toMatchObject({ requestMetadata: { agentsMdSnapshot: { status: 'not-file' } } })
+      expect(requestEvents[0]?.payload).not.toHaveProperty('requestMetadata.agentsMdSnapshot')
     } finally {
       await Promise.all([rm(workDir, { recursive: true, force: true }), rm(outsideDir, { recursive: true, force: true })])
     }
@@ -235,7 +231,7 @@ describe('createAgentSdkDesktopObserver', () => {
       const filePath = path.join(workDir, 'AGENTS.md')
       await writeFile(filePath, 'instruction version one', 'utf8')
       const observer = createAgentSdkDesktopObserver({ requestId: 'agents-request', sessionId: 's', turnId: 't',
-        getWorkDir: () => workDir, contextWindow: 100_000
+        getWorkDir: () => workDir, agentsMdEnabled: false, contextWindow: 100_000
       })
       const request = { messages: [{ role: 'system' as const, content: 'system' }, { role: 'user' as const, content: 'hello' }], maxTokens: 32 }
       const first = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request })
@@ -247,7 +243,7 @@ describe('createAgentSdkDesktopObserver', () => {
       expect(systemText(retry)).toContain('instruction version one')
       expect(systemText(retry)).not.toContain('instruction version two')
       expect(systemText(next)).toContain('instruction version two')
-      expect(first).toMatchObject({ requestMetadata: { agentsMdSnapshot: { status: 'loaded', byteLength: 23, content: 'instruction version one', source: 'AGENTS.md', scope: 'workdir-root', workDir } } })
+      expect(first?.requestMetadata).not.toHaveProperty('agentsMdSnapshot')
     } finally {
       await rm(workDir, { recursive: true, force: true })
     }
@@ -308,8 +304,7 @@ describe('createAgentSdkDesktopObserver', () => {
       expect(systems[1]).not.toContain('instruction B')
       expect(systems.map((system) => system.match(/<project_instructions /g)?.length ?? 0)).toEqual([1, 1, 1])
       const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
-      expect(requestEvents.map((event) => (event.payload as { requestMetadata: { agentsMdSnapshot: { content?: string } } }).requestMetadata.agentsMdSnapshot.content))
-        .toEqual(['instruction A', 'instruction A', 'instruction B'])
+      expect(requestEvents.every((event) => !('agentsMdSnapshot' in (event.payload as { requestMetadata: Record<string, unknown> }).requestMetadata))).toBe(true)
     } finally {
       await rm(workDir, { recursive: true, force: true })
     }

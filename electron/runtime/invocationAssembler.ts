@@ -973,25 +973,24 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       }))
       const refreshExecutionContext = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: { confirmation?: { receipt: string } }, current: Record<string, unknown>) => {
         const requestMetadata = (stage as { requestMetadata?: Record<string, unknown> }).requestMetadata
-        const agentsMdSnapshot = requestMetadata?.agentsMdSnapshot
-        const sourceWorkDir = agentsMdSnapshot && typeof agentsMdSnapshot === 'object' && !Array.isArray(agentsMdSnapshot)
-          ? (agentsMdSnapshot as { workDir?: unknown }).workDir
-          : undefined
         const currentWorkspace = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
         const currentWorkDir = path.resolve(currentWorkspace.rootPath ?? materials.resolveWorkDir?.() ?? materials.workDir)
         const sourceWorkspace = requestMetadata?.workspaceBinding as { workDir?: unknown; profileId?: unknown; key?: unknown; revision?: unknown } | undefined
+        const sourceWorkDir = typeof sourceWorkspace?.workDir === 'string' && sourceWorkspace.workDir.length > 0
+          ? path.resolve(sourceWorkspace.workDir)
+          : undefined
         if (sourceWorkspace && typeof sourceWorkspace.key === 'string' &&
           (sourceWorkspace.key !== currentWorkspace.key || sourceWorkspace.profileId !== currentWorkspace.profileId || sourceWorkspace.revision !== currentWorkspace.revision)) {
           const { ToolDeniedError } = await import('../../packages/agent-sdk/src/turn')
           throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'The session work directory binding changed after this model response. The tool was not executed; issue a new request under the current directory instructions.')
         }
-        if (typeof sourceWorkDir === 'string' && sourceWorkDir.length > 0 && path.resolve(sourceWorkDir) !== currentWorkDir) {
+        if (sourceWorkDir && sourceWorkDir !== currentWorkDir) {
           const { ToolDeniedError } = await import('../../packages/agent-sdk/src/turn')
           throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'The session work directory changed after this model response. The tool was not executed; issue a new request under the current directory instructions.')
         }
         const refreshed = {
           ...current,
-          workDir: typeof sourceWorkspace?.workDir === 'string' ? path.resolve(sourceWorkspace.workDir) : typeof sourceWorkDir === 'string' && sourceWorkDir.length > 0 ? path.resolve(sourceWorkDir) : currentWorkDir,
+          workDir: sourceWorkDir ?? currentWorkDir,
           browserConfig: materials.resolveBrowserConfig?.() ?? current.browserConfig ?? materials.browserConfig,
           toolsConfig: materials.resolveToolsConfig?.() ?? current.toolsConfig ?? materials.toolsConfig,
           shellConfig: materials.resolveShellConfig?.() ?? current.shellConfig ?? materials.shellConfig,
@@ -1449,16 +1448,15 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         prepareTool: async (call: Parameters<typeof registeredTools.prepareTool>[0], stage: Parameters<typeof registeredTools.prepareTool>[1]) => {
           try {
             if (stage.kind === 'recheck') {
-              const snapshot = stage.requestMetadata?.agentsMdSnapshot
-              const sourceWorkDir = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
-                ? (snapshot as { workDir?: unknown }).workDir
-                : undefined
               const currentWorkspace = workspacePorts.refresh() as { rootPath?: string; profileId?: string; key?: string; revision?: number }
               const currentWorkDir = path.resolve(currentWorkspace.rootPath ?? materials.resolveWorkDir?.() ?? materials.workDir)
               const sourceWorkspace = stage.requestMetadata?.workspaceBinding as { workDir?: unknown; profileId?: unknown; key?: unknown; revision?: unknown } | undefined
+              const sourceWorkDir = typeof sourceWorkspace?.workDir === 'string' && sourceWorkspace.workDir.length > 0
+                ? path.resolve(sourceWorkspace.workDir)
+                : undefined
               const workspaceBindingChanged = sourceWorkspace && typeof sourceWorkspace.key === 'string' &&
                 (sourceWorkspace.key !== currentWorkspace.key || sourceWorkspace.profileId !== currentWorkspace.profileId || sourceWorkspace.revision !== currentWorkspace.revision)
-              const workDirChanged = typeof sourceWorkDir === 'string' && sourceWorkDir.length > 0 && path.resolve(sourceWorkDir) !== currentWorkDir
+              const workDirChanged = sourceWorkDir !== undefined && sourceWorkDir !== currentWorkDir
               if (workspaceBindingChanged || workDirChanged) {
                 const { ToolDeniedError } = await import('../../packages/agent-sdk/src/turn')
                 throw new ToolDeniedError('WORKDIR_BINDING_CHANGED', 'The session work directory binding changed after this model response. The tool was not executed; issue a new request under the current directory instructions.')
