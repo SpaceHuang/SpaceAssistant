@@ -12,6 +12,7 @@ import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPe
 import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
 import { runMigrations } from '../database/migrations'
+import { advanceProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { runInTransaction } from '../database/transaction'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
@@ -46,6 +47,58 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it('fences callbacks created by a previous process generation', async () => {
+    const conn = createDb()
+    advanceProcessGeneration(conn)
+    const staleWriter = new SqliteAgentHistory(conn)
+    advanceProcessGeneration(conn)
+
+    await expect(staleWriter.appendBatch([event('stale-process-write', 1)], 0)).rejects.toThrow('HISTORY_PROCESS_GENERATION_FENCED')
+    await expect(new SqliteAgentHistory(conn).appendBatch([event('current-process-write', 1)], 0)).resolves.toMatchObject({ version: 1 })
+    expect(conn.prepare('SELECT event_id FROM agent_history_events ORDER BY event_id').all()).toEqual([{ event_id: 'current-process-write' }])
+    conn.close()
+  })
+
+  it('keeps parked invocations out of the unfinished recovery workset', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    conn.prepare(`UPDATE canonical_history_recovery_work_migration SET status='complete'
+      WHERE migration_key='active-invocations-v1'`).run()
+    await history.appendBatch([{ ...event('parked-invocation', 1), kind: 'invocation-parked', payload: { status: 'parked' } }], 0)
+
+    expect(history.listStartupRecoveryWorkset()).toEqual([])
+    await expect(history.recoverInterruptedInvocations()).resolves.toEqual([])
+    conn.close()
+  })
+
+  it('recovers only a prior process generation from the durable active workset after reopen', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'history-process-generation-'))
+    const dbPath = path.join(root, 'history.db')
+    let db = openDatabase(dbPath)
+    try {
+      let conn = getDbConnection(db)
+      expect(advanceProcessGeneration(conn)).toBe(1)
+      const currentWriter = new SqliteAgentHistory(conn)
+      await currentWriter.appendBatch([{ ...event('generation-owned-open', 1), payload: { toolCallId: 'generation-tool' } }], 0)
+      expect(conn.prepare('SELECT owner_generation FROM canonical_history_recovery_work WHERE invocation_id=?')
+        .get('inv-1')).toEqual({ owner_generation: 1 })
+      expect(currentWriter.listStartupRecoveryWorkset()).toEqual([])
+      db.close()
+
+      db = openDatabase(dbPath)
+      conn = getDbConnection(db)
+      expect(advanceProcessGeneration(conn)).toBe(2)
+      const nextProcess = new SqliteAgentHistory(conn)
+      expect(nextProcess.listStartupRecoveryWorkset()).toEqual([{ invocationId: 'inv-1', sessionId: null }])
+      await expect(nextProcess.recoverInterruptedInvocations()).resolves.toMatchObject([
+        { invocationId: 'inv-1', state: 'interrupted' }
+      ])
+    } finally {
+      try { db.close() } catch { /* already closed before reopen */ }
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('persists and restores the exact bounded run_shell justification in the canonical response snapshot', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
@@ -3466,18 +3519,15 @@ describe('SqliteAgentHistory', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
     await history.appendBatch([{ ...event('e1', 1), payload: { toolCallId: 'tc-1' } }], 0)
+    expect(history.listStartupRecoveryWorkset()).toEqual([{ invocationId: 'inv-1', sessionId: null }])
 
-    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([
-      { invocationId: 'inv-1', state: 'interrupted' }
-    ])
+    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([{ invocationId: 'inv-1', state: 'interrupted' }])
     const snapshot = await history.read('inv-1')
     expect(snapshot.events.at(-1)).toMatchObject({
       kind: 'invocation-interrupted',
       payload: { status: 'interrupted', reason: 'process-restart' }
     })
-    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([
-      { invocationId: 'inv-1', state: 'interrupted' }
-    ])
+    await expect(history.recoverInterruptedInvocations()).resolves.toEqual([])
     await expect(history.read('inv-1')).resolves.toMatchObject({ version: 2 })
     conn.close()
   })
@@ -3610,6 +3660,7 @@ describe('SqliteAgentHistory', () => {
       status: 'interrupted', turnId: 'turn-1', reason: 'interrupted'
     })
     expect(onInvocationTerminalRepairError).toHaveBeenCalledWith(expect.any(Error), 'inv-1', 'turn-1')
+    conn.prepare("UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id='inv-1'").run(Date.now() - 60 * 60_000)
     await expect(history.recoverInterruptedInvocations(recoveryOptions)).resolves.toMatchObject([{ state: 'interrupted' }])
     expect(repairInvocationTerminal).toHaveBeenCalledTimes(2)
     await expect(history.read('inv-1')).resolves.toMatchObject({
@@ -3639,6 +3690,7 @@ describe('SqliteAgentHistory', () => {
 
     const recoveryOptions = { resolveSessionLedgerLocation, repairInvocationTerminal, onInvocationTerminalRepairError }
     await history.recoverInterruptedInvocations(recoveryOptions)
+    conn.prepare("UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id='inv-1'").run(Date.now() - 60 * 60_000)
     await history.recoverInterruptedInvocations(recoveryOptions)
 
     expect(resolveSessionLedgerLocation).toHaveBeenCalledWith(sessionId)
@@ -4426,9 +4478,7 @@ describe('SqliteAgentHistory', () => {
       payload: { message: { role: 'assistant', toolCalls: [{ id: 'tc-proposed', name: 'write_file', input: { path: 'a.txt' } }] } }
     }], 0)
 
-    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([
-      { invocationId: 'inv-1', state: 'interrupted' }
-    ])
+    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([{ invocationId: 'inv-1', state: 'interrupted' }])
     await expect(history.read('inv-1')).resolves.toMatchObject({
       version: 2,
       events: [expect.objectContaining({ kind: 'model-response-committed' }), expect.objectContaining({

@@ -22,6 +22,7 @@ import {
   MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_TRIGGERS_SQL, MIGRATION_V47_SESSION_PROJECTION_MIGRATION_SQL,
   MIGRATION_V48_SESSION_PROJECTION_LEGACY_POLICY_SQL,
   MIGRATION_V50_HISTORY_RECOVERY_WORK_SQL, MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL,
+  MIGRATION_V100_PROCESS_GENERATION_SQL,
   MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL,
   MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
   MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
@@ -1877,6 +1878,29 @@ export function runMigrations(conn: DatabaseSync): void {
       conn.exec(MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL)
     }
     version = 99
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 99) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V100_PROCESS_GENERATION_SQL)
+    if (hasTable(conn, 'canonical_history_recovery_work') && !hasColumn(conn, 'canonical_history_recovery_work', 'owner_generation')) {
+      conn.exec('ALTER TABLE canonical_history_recovery_work ADD COLUMN owner_generation INTEGER')
+    }
+    const recoveryTriggers = [
+      'add_history_recovery_work_for_new_stream', 'refresh_history_recovery_work_for_stream_update',
+      'remove_history_recovery_work_for_stream_delete', 'refresh_history_recovery_work_for_event_insert',
+      'refresh_history_recovery_work_for_event_update', 'refresh_history_recovery_work_for_event_delete'
+    ]
+    for (const trigger of recoveryTriggers) conn.exec(`DROP TRIGGER IF EXISTS ${trigger}`)
+    const hasRecoveryHistoryShape = ['invocation_id', 'version', 'session_id'].every((name) => hasColumn(conn, 'agent_history_streams', name)) &&
+      ['invocation_id', 'sequence', 'kind'].every((name) => hasColumn(conn, 'agent_history_events', name))
+    if (hasRecoveryHistoryShape) {
+      conn.exec(MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL)
+      conn.exec(`DELETE FROM canonical_history_recovery_work WHERE EXISTS (
+        SELECT 1 FROM agent_history_events terminal JOIN agent_history_streams stream USING(invocation_id)
+        WHERE terminal.invocation_id=canonical_history_recovery_work.invocation_id
+          AND terminal.sequence=stream.version AND terminal.kind='invocation-parked')`)
+    }
+    version = 100
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

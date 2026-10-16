@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 99
+export const DB_SCHEMA_VERSION = 100
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -1919,7 +1919,7 @@ AFTER INSERT ON agent_history_streams BEGIN
   WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
 CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_stream_update
@@ -1930,14 +1930,14 @@ AFTER UPDATE ON agent_history_streams BEGIN
   WHERE stream.invocation_id=OLD.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
   INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
   SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
   WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
 CREATE TRIGGER IF NOT EXISTS remove_history_recovery_work_for_stream_delete
@@ -1952,7 +1952,7 @@ AFTER INSERT ON agent_history_events BEGIN
   WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
 CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_event_update
@@ -1963,14 +1963,14 @@ AFTER UPDATE ON agent_history_events BEGIN
   WHERE stream.invocation_id=OLD.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
   INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
   SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
   WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
 CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_event_delete
@@ -1981,9 +1981,19 @@ AFTER DELETE ON agent_history_events BEGIN
   WHERE stream.invocation_id=OLD.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
+`
+
+/** v99 → v100: durable process fencing and owner generation on the active invocation registry. */
+export const MIGRATION_V100_PROCESS_GENERATION_SQL = `
+CREATE TABLE IF NOT EXISTS process_generation_state (
+  singleton_id INTEGER PRIMARY KEY NOT NULL CHECK(singleton_id=1),
+  current_generation INTEGER NOT NULL CHECK(current_generation>=0),
+  updated_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO process_generation_state(singleton_id,current_generation,updated_at) VALUES(1,0,0);
 `
 
 /** v51: preserve stable catalog/provider/route identity on usage facts. */

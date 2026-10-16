@@ -15,6 +15,7 @@ import {
   type RebuiltInvocationState
 } from '../../packages/agent-sdk/src/history'
 import { runInTransaction } from '../database/transaction'
+import { currentProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { commitSessionTranscriptInTransaction } from '../database/sessionTranscript'
 import type { SessionTranscriptCommitIntent } from '../../packages/agent-sdk/src/history'
@@ -338,9 +339,11 @@ export function reconcileTerminalContentSegments(serializedSegments: string | nu
 /** SQLite adapter for canonical SDK history. Callers must run the current migrations first. */
 export class SqliteAgentHistory implements HistoryPort {
   private readonly spillStore?: SpillStore
+  private readonly processGeneration: number
 
   constructor(private readonly conn: DatabaseSync, private readonly schemaVersion = 1, private readonly now: () => number = Date.now, private readonly sessionId?: string, spillStore?: SpillStore) {
     this.spillStore = spillStore ?? createSpillStoreForDatabase(conn)
+    this.processGeneration = currentProcessGeneration(conn)
   }
 
   async appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
@@ -428,7 +431,8 @@ export class SqliteAgentHistory implements HistoryPort {
         }
       }
       const appended = appendSqliteAgentHistoryBatchInTransaction(this.conn, storedEvents, expectedVersion, {
-        schemaVersion: this.schemaVersion, now: this.now, ...(this.sessionId ? { sessionId: this.sessionId } : {})
+        schemaVersion: this.schemaVersion, now: this.now, processGeneration: this.processGeneration,
+        ...(this.sessionId ? { sessionId: this.sessionId } : {})
       })
       if (this.sessionId) {
         for (const event of events) {
@@ -1374,16 +1378,20 @@ export class SqliteAgentHistory implements HistoryPort {
 
   /** Returns the durable unfinished-work set while legacy rows are incorporated in resumable batches. */
   listStartupRecoveryWorkset(): Array<{ invocationId: string; sessionId: string | null }> {
+    const processGeneration = currentProcessGeneration(this.conn)
     const migration = this.conn.prepare(`SELECT status FROM canonical_history_recovery_work_migration
       WHERE migration_key='active-invocations-v1'`).get() as { status: string } | undefined
     const query = migration?.status === 'complete' ? `SELECT work.invocation_id,work.session_id FROM canonical_history_recovery_work work
       LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=work.session_id
       WHERE cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')
+        ${processGeneration > 0 ? `AND (work.owner_generation IS NULL OR work.owner_generation < ${processGeneration})` : ''}
       ORDER BY work.invocation_id` : `SELECT streams.invocation_id,streams.session_id FROM agent_history_streams streams
       LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=streams.session_id
       WHERE NOT EXISTS (SELECT 1 FROM agent_history_events terminal
           WHERE terminal.invocation_id=streams.invocation_id AND terminal.sequence=streams.version
-            AND terminal.kind IN ('invocation-completed','invocation-failed'))
+            AND terminal.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked'))
+        ${processGeneration > 0 ? `AND NOT EXISTS (SELECT 1 FROM canonical_history_recovery_work current_work
+          WHERE current_work.invocation_id=streams.invocation_id AND current_work.owner_generation>=${processGeneration})` : ''}
         AND (cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
       ORDER BY streams.invocation_id`
     return this.conn.prepare(query).all()

@@ -70,6 +70,7 @@ import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageSt
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
 import { getDbConnection } from './database/sqliteStore'
+import { advanceProcessGeneration } from './database/processGeneration'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { classifySessionHistoryRepairFailure } from './runtime/sessionHistoryRecoveryDiagnostics'
 import { SessionProjectionMigrationApplication } from './runtime/sessionProjectionMigrationApplication'
@@ -467,6 +468,7 @@ app.whenReady().then(async () => {
     // 压缩换入崩溃对账必须在 openDatabase 之前：DatabaseSync 打开缺失路径会静默建空库。
     measureStartupPhase('database.compact-recovery', () => reconcileInterruptedCompaction(dbPath))
     db = await measureStartupPhase('database.open-and-migrations', () => openDatabase(dbPath))
+    await measureStartupPhase('database.process-generation-fence', () => advanceProcessGeneration(getDbConnection(db)))
     remoteAuthorizationRegistry.bindPersistentEpochStore(createRemoteAuthorizationEpochStore(db))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

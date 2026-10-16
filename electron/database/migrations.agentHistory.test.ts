@@ -7,6 +7,30 @@ import { runMigrations } from './migrations'
 import { DB_SCHEMA_VERSION } from './schema'
 
 describe('agent canonical history migration', () => {
+  it('v100 adds process fencing and removes parked streams from legacy recovery work', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','99');
+      CREATE TABLE agent_history_streams(invocation_id TEXT PRIMARY KEY,version INTEGER NOT NULL,schema_version INTEGER NOT NULL,session_id TEXT);
+      CREATE TABLE agent_history_events(invocation_id TEXT NOT NULL,sequence INTEGER NOT NULL,kind TEXT NOT NULL,
+        PRIMARY KEY(invocation_id,sequence));
+      CREATE TABLE canonical_history_recovery_work(invocation_id TEXT PRIMARY KEY,session_id TEXT,updated_at INTEGER NOT NULL);
+      CREATE TABLE canonical_history_recovery_work_migration(migration_key TEXT PRIMARY KEY,after_invocation_id TEXT,status TEXT,updated_at INTEGER NOT NULL);
+      INSERT INTO agent_history_streams VALUES('parked',1,1,'s1'),('open',1,1,'s2');
+      INSERT INTO agent_history_events VALUES('parked',1,'invocation-parked'),('open',1,'model-request-started');
+      INSERT INTO canonical_history_recovery_work VALUES('parked','s1',1),('open','s2',1);`)
+
+    runMigrations(conn)
+
+    expect(conn.prepare('SELECT current_generation FROM process_generation_state WHERE singleton_id=1').get())
+      .toEqual({ current_generation: 0 })
+    expect(conn.prepare('PRAGMA table_info(canonical_history_recovery_work)').all())
+      .toEqual(expect.arrayContaining([expect.objectContaining({ name: 'owner_generation' })]))
+    expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work ORDER BY invocation_id').all())
+      .toEqual([{ invocation_id: 'open' }])
+    conn.close()
+  })
+
   it('v51 adds a durable cancellation marker to migration runs without changing existing run or item data', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
