@@ -225,13 +225,13 @@ describe('createAgentSdkDesktopObserver', () => {
     expect(emitSessionEvent.mock.calls[3]?.[0].payload).toMatchObject({ requestId: 'r:round:2', model: 'claude-test', contextWindow: { tokens: 1000, source: 'config' } })
   })
 
-  it('freezes one AGENTS.md snapshot for a logical request and reloads after the tool boundary', async () => {
+  it('loads AGENTS.md automatically, freezes one logical request, and reloads after the tool boundary', async () => {
     const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-observer-'))
     try {
       const filePath = path.join(workDir, 'AGENTS.md')
       await writeFile(filePath, 'instruction version one', 'utf8')
       const observer = createAgentSdkDesktopObserver({ requestId: 'agents-request', sessionId: 's', turnId: 't',
-        getWorkDir: () => workDir, agentsMdEnabled: false, contextWindow: 100_000
+        getWorkDir: () => workDir, contextWindow: 100_000
       })
       const request = { messages: [{ role: 'system' as const, content: 'system' }, { role: 'user' as const, content: 'hello' }], maxTokens: 32 }
       const first = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request })

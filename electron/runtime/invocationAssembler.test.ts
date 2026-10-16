@@ -45,11 +45,11 @@ function createImPolicyTestDb(name: string) {
 }
 
 describe('AcceptedTurn propagation', () => {
-  it('preserves the per-session AGENTS.md setting in the invocation profile', () => {
+  it('does not expose an AGENTS.md session toggle in the invocation profile', () => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: 'agents-md-setting' })
     const { invocation } = assembleInvocation({ requestId: 'agents-md-disabled', sessionId: session.id, model: 'test', locale: 'zh-CN',
-      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', agentsMdEnabled: false,
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
       getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
     expect(invocation.profile.agentsMdEnabled).toBeUndefined()
     db.close()
