@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
 
 /**
- * T1.5：defaultRules 零改动契约（wiki-shared-centralized-storage D5/§9.1）。
- * 挂载改造只修正探测层信号，策略规则本体（id/action/locked/match）必须零改动。
- * 本测试以显式快照锁定规则全集——任何规则变更都会转红，需显式更新快照并说明理由。
+ * defaultRules 规则全集契约：规则增删需显式更新 ID 基线，并同步核对关键规则语义。
+ * 2026-10-16：将已进入生产规则表的 13 条 IM/MCP 规则补入快照，避免快照长期落后于策略实现。
  */
 const EXPECTED_RULE_IDS = [
   'wiki-raw-write-deny',
@@ -71,7 +70,20 @@ const EXPECTED_RULE_IDS = [
   'automation-default-confirm',
   'im-no-wechat-send',
   'ingress-direct-other-deny',
-  'ingress-feishu-group-deny'
+  'ingress-feishu-group-deny',
+  'im-browser-act-danger-human',
+  'im-browser-act-review',
+  'im-lark-low-write-review',
+  'im-lark-message-direct-review',
+  'im-lark-message-self-review',
+  'im-low-risk-create',
+  'im-low-risk-edit',
+  'im-mcp-public-read-review',
+  'im-time-query-review',
+  'im-write-sensitive-path-confirm',
+  'lark-message-group-human',
+  'lark-message-target-unknown-human',
+  'mcp-account-unauthorized-deny'
 ]
 
 describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {

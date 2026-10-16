@@ -1804,7 +1804,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })).resolves.toBeUndefined()
     expect(onContextReplacementPlan).toHaveBeenCalledOnce()
     expect(onContextReplacementPlan).toHaveBeenCalledWith(expect.objectContaining({
-      requestId: 'req-boundary-return:round:1', windowId: 'session-boundary-return', system: 'real system prompt',
+      requestId: 'req-boundary-return:round:1', windowId: 'session-boundary-return', system: expect.stringContaining('real system prompt'),
       tools: [{ name: 'read_file', description: 'read', input_schema: { type: 'object' } }],
       messages: expect.arrayContaining([expect.objectContaining({ id: 'required-user', content: 'current request' })]),
       budget: expect.objectContaining({ totalInputBudget: expect.any(Number), bodyBudget: expect.any(Number) }),

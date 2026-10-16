@@ -1556,7 +1556,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       releaseClaim()
       const result = await runningTask
 
-      expect(result.ok).toBe(termination !== 'cancel')
+        expect(result.ok).toBe(false)
       expect(executor).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({

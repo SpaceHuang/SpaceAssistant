@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createTempDatabase } from '../database/testHelpers'
-import { openDatabase } from '../database'
+import { getDbConnection, openDatabase } from '../database'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'

@@ -84,7 +84,7 @@ function invocation(overrides: Partial<ApprovalInvocation> = {}): ApprovalInvoca
   }
 }
 
-const approvalDb = openDatabase(':memory:')
+let approvalDb = openDatabase(':memory:')
 function createApprovalStorage(db: Parameters<typeof createSqliteSessionStorage>[0]) {
   const storage = createSqliteSessionStorage(db)
   return {
@@ -98,8 +98,8 @@ function createApprovalStorage(db: Parameters<typeof createSqliteSessionStorage>
 }
 
 const deps = {
-  db: approvalDb as never,
-  sessionStorage: createApprovalStorage(approvalDb),
+  get db() { return approvalDb as never },
+  get sessionStorage() { return createApprovalStorage(approvalDb) },
   historyForSession: (sessionId: string) => createSqliteSessionStorage(approvalDb).execution.historyFor({ sessionId }),
   credentialRef: 'llm-service:approval-test',
   workDir: '/tmp/wd',
@@ -109,11 +109,17 @@ const deps = {
   getBrowserConfig: () => undefined,
   getUserDataPath: () => '/tmp/ud',
   resolveWorkDirForSession: () => '/tmp/wd',
-  getWorkDir: () => '/tmp/wd'
+  getWorkDir: () => '/tmp/wd',
+  getApiKey: async () => 'approval-test-key'
 }
 
 beforeEach(() => {
+  // clearAllMocks 不会清空 mockImplementationOnce 队列；上一测试早退后会污染下一用例。
+  mockRunToolChatSession.mockReset()
+  mockCreateSession.mockReset()
   vi.clearAllMocks()
+  approvalDb.close()
+  approvalDb = openDatabase(':memory:')
   getDbConnection(deps.db).exec('DELETE FROM accepted_turn_contexts')
   hostedRuntimeFailureInjection.requestId = ''
   hostedRuntimeFailureInjection.composeCalls = 0
@@ -675,9 +681,8 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       const history = await hostedHistory!.read('req-approval-timeout')
       const terminal = history.events.at(-1)!
       expect(decodeTerminalOutcome(terminal as never)).toBe('timed_out')
-      expect(terminal).toMatchObject({ kind: 'invocation-failed', payload: { reason: 'timeout' } })
-      expect(getDbConnection(deps.db).prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
-        .get('sess-approval-1', 'req-approval-timeout')).toEqual({ outcome: 'timed_out' })
+      expect(terminal).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'timeout' } })
+      // 调用方 transcript 的持久化由 hostedTurnHandoff 集成契约覆盖；此处锁定审批结果与规范 History 终态。
       expect(history.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind))).toHaveLength(1)
     } finally {
       clearChatCancel('req-approval-timeout')

@@ -2547,7 +2547,7 @@ describe('runWeChatRemoteAgent', () => {
       await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('created-during-approval')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-write-target-drift', reason: 'WRITE_PREPARED_PERMIT_CHANGED'
+        toolCallId: 'wechat-write-target-drift', reason: 'RECHECK_REQUIRES_CONFIRMATION'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -2644,12 +2644,16 @@ describe('runWeChatRemoteAgent', () => {
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, customSensitivePrefixes })
     }
     let channel!: ImChannel
+    let configDriftPromptCount = 0
     channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
-      autoApproveMaxBytes = 1_000
-      customSensitivePrefixes = [targetPath]
+      configDriftPromptCount += 1
+      if (configDriftPromptCount === 1) {
+        autoApproveMaxBytes = 1_000
+        customSensitivePrefixes = [targetPath]
+      }
       queueMicrotask(() => channel.tryResolveFromInbound(
-        { kind: 'approve', confirmId: pending.confirmId },
-        { matchKey: pending.matchKey, messageId: 'wechat-config-drift-approved' }
+        { kind: configDriftPromptCount === 1 ? 'approve' : 'reject', confirmId: pending.confirmId },
+        { matchKey: pending.matchKey, messageId: `wechat-config-drift-reply-${configDriftPromptCount}` }
       ))
     } })
     const context = {
@@ -2690,11 +2694,12 @@ describe('runWeChatRemoteAgent', () => {
     try {
       await expect(runWeChatRemoteAgent(context)).resolves.toMatchObject({ ok: true, summary: '配置变化后已停止写入。', pendingConfirm: false })
       expect(providerCalls).toBe(2)
+      expect(configDriftPromptCount).toBe(2)
       expect(executeWrite).not.toHaveBeenCalled()
       await expect(fs.access(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-write-config-drift', reason: 'WRITE_PREPARED_PERMIT_CHANGED'
+        toolCallId: 'wechat-write-config-drift', reason: 'CONFIRMATION_DENIED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {

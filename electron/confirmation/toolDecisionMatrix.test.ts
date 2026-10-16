@@ -214,7 +214,7 @@ describe('判定矩阵：browser', () => {
     const env: EnvFacts = { ...ENV, browserAct: { dangerous: true } }
     const d = decideToolCall('browser', { action: 'act', instruction: 'x' }, 'wechat', deps({ actRequiresConfirm: true, remoteActSkipConfirm: true }), undefined, env)
     expect(d.type).toBe('require-confirm')
-    expect(d.ruleId).toBe('browser-act-danger-ask')
+    expect(d.ruleId).toBe('im-browser-act-danger-human')
   })
   it('远程浏览器未开放（allowRemoteSessions=false）→ 硬拒', () => {
     const d = decideToolCall('browser', { action: 'navigate', url: 'https://a.com' }, 'feishu', deps({ allowRemoteSessions: false, navigateRequiresConfirm: true, remoteNavigateRequiresConfirm: false }))

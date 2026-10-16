@@ -75,7 +75,9 @@ vi.mock('electron', () => ({
 vi.mock('./secureApiKey', () => ({
   isSecretStorageAvailable: vi.fn(() => true),
   encryptSecret: vi.fn((plain: string) => `enc:${plain}`),
-  decryptSecret: vi.fn((value: string) => value.replace(/^enc:/, ''))
+  decryptSecret: vi.fn((value: string) => value.replace(/^enc:/, '')),
+  isLegacySecret: vi.fn((value: string) => !value.startsWith('enc:')),
+  markLegacySecret: vi.fn((value: string) => value.startsWith('enc:') ? value : `legacy:${value}`)
 }))
 
 let sessionEvents: Array<{ seq: number; time: number; type: string; payload: Record<string, unknown> }>
@@ -3553,6 +3555,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       }
       return { ok: true, verdict: { kind: 'approve', reason: { summary: 'target drift fixture' }, riskLevel: 'medium', authorization: 'high' } } as never
     })
+    // 目标改变后策略要求新的真人确认；本用例不提供第二次批准。
+    vi.mocked(waitForToolConfirm).mockResolvedValueOnce('rejected' as never)
 
     const session = createSession(db, { name: 'hosted-target-drift', model: modelId, maxTokens: 512 })
     const user = appendMessage(db, { id: 'hosted-target-drift-user', sessionId: session.id, role: 'user', content: '写入这个文件', timestamp: 1, status: 'sent' })
@@ -3581,12 +3585,13 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: '目标变化后已停止写入。' }] })
     expect(providerCalls).toBe(2)
     expect(runApprovalAgent).toHaveBeenCalledOnce()
+    expect(waitForToolConfirm).toHaveBeenCalledOnce()
     expect(executeWrite).not.toHaveBeenCalled()
     expect(executeEdit).not.toHaveBeenCalled()
     await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe(toolName === 'edit_file' ? 'replacement-after-approval-request' : 'created-after-approval-request')
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('hosted-target-drift-request')
     expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-      toolCallId: `desktop-${toolName}-target-drift`, reason: 'FACTS_CHANGED'
+      toolCallId: `desktop-${toolName}-target-drift`, reason: 'CONFIRMATION_DENIED'
     })
     expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
   })
@@ -4112,6 +4117,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       autoApproveThreshold = 1_000
       return { ok: true, verdict: { kind: 'approve', reason: { summary: 'threshold changed during confirmation' }, riskLevel: 'medium', authorization: 'high' } } as never
     })
+    // 阈值变化使原审批失效；拒绝重新确认以证明旧批准不会被沿用。
+    vi.mocked(waitForToolConfirm).mockResolvedValueOnce('rejected' as never)
 
     const requestId = `hosted-${toolName}-config-drift-request`
     const turnId = `hosted-${toolName}-config-drift-turn`
@@ -4143,13 +4150,15 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: '配置变化后已停止写入。' }] })
       expect(providerCalls).toBe(toolName === 'edit_file' ? 3 : 2)
       expect(runApprovalAgent).toHaveBeenCalledOnce()
+      if (toolName === 'edit_file') expect(waitForToolConfirm).toHaveBeenCalledOnce()
+      else expect(waitForToolConfirm).not.toHaveBeenCalled()
       expect(executeWrite).not.toHaveBeenCalled()
       expect(executeEdit).not.toHaveBeenCalled()
       if (toolName === 'write_file') await expect(fs.access(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
       else await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('original content to edit')
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId, reason: 'FACTS_CHANGED'
+        toolCallId, reason: toolName === 'write_file' ? 'FACTS_CHANGED' : 'CONFIRMATION_DENIED'
       })
       expect(history.events.some((event) =>
         (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished') &&

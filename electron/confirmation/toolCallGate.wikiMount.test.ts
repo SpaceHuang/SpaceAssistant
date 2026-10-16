@@ -9,7 +9,6 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { openSqliteDatabase, type AppDatabase } from '../database'
 import { resetRunningRemoteAgentRegistryForTests } from '../remote/remoteAgentRegistry'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
@@ -17,11 +16,9 @@ import type { RemoteContext } from '../tools/types'
 import { DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG, type ToolsConfig, type WikiConfig } from '../../src/shared/domainTypes'
 import type { ExecutionLane, SecurityAuditEvent } from '../../src/shared/confirmation/types'
 
-const shells: AppDatabase[] = []
 const dirs: string[] = []
 
 afterEach(() => {
-  shells.splice(0).forEach((db) => db.close())
   resetRunningRemoteAgentRegistryForTests()
   for (const dir of dirs.splice(0)) {
     fs.rm(dir, { recursive: true, force: true }).catch(() => undefined)
@@ -60,6 +57,9 @@ function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
     toolsConfig: toolsConfig(),
     audit: { record: (_e: SecurityAuditEvent) => undefined },
     effectiveRules: DEFAULT_POLICY_RULES,
+    ...(overrides.remoteContext ? { imPolicySnapshot: {
+      domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { selectedPackage: 'standard' }
+    } } : {}),
     lanePackage: 'standard',
     decisionCache: {
       lookup: () => null,

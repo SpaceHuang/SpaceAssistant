@@ -113,7 +113,8 @@ describe('fixed task-set actual gate shadow integration', () => {
         request: { messages: [{ role: 'user', content: message.content }], maxTokens: 128, credentials: { apiKey: 'test-approval-key' } },
         currentUserMessageId: messageId,
         requiredUserMessage: { id: messageId, message: { role: 'user', content: message.content } },
-        windowId: approvalInvocation.trace.windowId
+        windowId: approvalInvocation.trace.windowId,
+        authorizedToolNames: new Set(['read_file', 'grep', 'list_directory'])
       })
       return { ok: true, content: outcome.result.content, stopReason: 'end_turn' }
     })
@@ -359,7 +360,8 @@ describe('fixed task-set actual gate shadow integration', () => {
       approvalHostedHandoffs += 1
       const outcome = await runOptions.onHostedTurnHandoff({ request: { messages: [{ role: 'user', content: message.content }],
         maxTokens: 128, credentials: { apiKey: 'test-approval-key' } }, currentUserMessageId: messageId,
-      requiredUserMessage: { id: messageId, message: { role: 'user', content: message.content } }, windowId: approvalInvocation.trace.windowId })
+      requiredUserMessage: { id: messageId, message: { role: 'user', content: message.content } }, windowId: approvalInvocation.trace.windowId,
+      authorizedToolNames: new Set(['read_file', 'grep', 'list_directory']) })
       return { ok: true, content: outcome.result.content, stopReason: 'end_turn' }
     })
     const composed = agentSdk.createHostedTurnRuntime({ registry: new TypedToolRegistry(),
