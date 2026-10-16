@@ -34,6 +34,8 @@ import { AgentChannel } from '../confirmation/agentChannel'
 import { RunShellPlanError } from '../tools/runShellPlan'
 import { PlanRejectedError } from '../../packages/agent-sdk/src/turn'
 
+const TEST_USER_DATA_DIR = path.join(os.tmpdir(), 'spaceassistant-invocation-test-user-data')
+
 function createImPolicyTestDb(name: string) {
   const db = createMemoryAppDb(name)
   commitImPolicySnapshot(getDbConnection(db), {
@@ -644,7 +646,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const { agentSdk } = assembleInvocation({ requestId: 'im-write-candidate-facts-change', sessionId: session.id, lane: 'feishu',
       remoteContext: { source: 'feishu', messageId: 'candidate-origin', chatId: 'candidate-chat', userId: 'owner' } as never,
       model: 'test-model', providerRouteId: 'route-im-write-candidate', agentSdkHistory: new MemoryHistory(), locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
-      workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      workDir, userDataDir: TEST_USER_DATA_DIR, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
     const execute = vi.fn(async () => ({ success: true }))
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw as { path: string; content: string },
@@ -1571,7 +1573,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const { agentSdk } = assembleInvocation({ requestId: 'im-test-auto-review', sessionId: session.id, lane: 'feishu',
       remoteContext: { source: 'feishu', messageId: 'origin', chatId: 'chat', userId: 'owner', imChannel: { request: vi.fn(), cancelByRequestId: vi.fn() } } as never,
       model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
-      appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      appDb: db, workDir, userDataDir: TEST_USER_DATA_DIR, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write',
       parseInput: (raw) => raw as { path: string; content: string }, plan: async (input) => input, execute: async () => ({ success: true }) }))
