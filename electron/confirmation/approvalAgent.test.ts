@@ -1135,6 +1135,37 @@ describe('runApprovalAgent（Skill v2 链内矩阵生效）', () => {
 })
 
 describe('线索包任务声明（D：可信证据分区）', () => {
+  it('桌面有人值守档位的系统提示允许按明确用户指令评估授权至 high', async () => {
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true,
+      content: [{ type: 'text', text: '{"kind":"deny","reason":{"summary":"x"}}' }]
+    })
+    await runApprovalAgent({ ...deps, maxAuthorization: 'high' }, invocation({
+      lane: 'desktop',
+      clue: clue({ taskDigest: '请将生成的报告保存到项目目录' })
+    }))
+    const inner = mockRunToolChatSession.mock.calls[0]![0] as { profile: { system: string } }
+    expect(inner.profile.system).toContain('有人值守的桌面链路')
+    expect(inner.profile.system).toContain('authorization 可评估至 high')
+    expect(inner.profile.system).toContain('可使用围栏外、由宿主作为可信证据注入的「已声明的任务」中的明确用户指令')
+    expect(inner.profile.system).not.toContain('无人自动化上下文')
+    expect(inner.profile.system).not.toContain('不在场的用户')
+    expect(inner.profile.system).not.toContain('永远不会出现在证据数据里')
+    expect(inner.profile.system).not.toContain('用户不盯着')
+  })
+
+  it('无人值守档位继续限制授权为 unknown 或 low', async () => {
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true,
+      content: [{ type: 'text', text: '{"kind":"deny","reason":{"summary":"x"}}' }]
+    })
+    await runApprovalAgent({ ...deps, maxAuthorization: 'low' }, invocation({ lane: 'automation' }))
+    const inner = mockRunToolChatSession.mock.calls[0]![0] as { profile: { system: string } }
+    expect(inner.profile.system).toContain('无人自动化上下文')
+    expect(inner.profile.system).toContain('authorization 只能输出 unknown 或 low')
+    expect(inner.profile.system).toContain('永远不会出现在证据数据里')
+  })
+
   it('clue.taskDigest 存在 → 渲染「已声明的任务（可信证据）」小节，位于不可信围栏之外', async () => {
     mockRunToolChatSession.mockResolvedValue({
       ok: true,

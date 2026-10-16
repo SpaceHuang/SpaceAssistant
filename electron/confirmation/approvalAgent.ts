@@ -297,7 +297,8 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
   let runCreated = false
   let runSettled = false
   try {
-    const skill = getBundledSecurityApprovalSkill()
+    const maxAuthorization = deps.maxAuthorization ?? APPROVAL_MAX_AUTHORIZATION
+    const skill = getBundledSecurityApprovalSkill(maxAuthorization)
     const session = deps.sessionStorage.commands.createSession({
       name: `安全审批 · ${inv.clue.summary.slice(0, 24)}`,
       ownership: 'internal',
@@ -424,7 +425,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     }
     // 授权维度上限随链强制：automation 无人场景 'low'（缺省）；desktop 档位传 'high'（§6）
     const verdict = parseApprovalVerdict(extractText(raced.r), {
-      maxAuthorization: deps.maxAuthorization ?? APPROVAL_MAX_AUTHORIZATION
+      maxAuthorization
     })
     if (!verdict) {
       return { ok: false, cause: 'unparsable' }
