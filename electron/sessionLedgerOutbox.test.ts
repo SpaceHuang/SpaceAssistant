@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import type { HistoryEvent } from '../packages/agent-sdk/src/history'
 import { appendSqliteAgentHistoryBatchInTransaction } from './database/agentHistoryStorage'
 import { createMemoryAppDb } from './database/testHelpers'
@@ -13,6 +16,8 @@ import {
   listPendingCanonicalLedgerProjectionTargets,
   type CanonicalLedgerProjectionTarget
 } from './sessionLedgerOutbox'
+import { getSessionEventSink, readSessionEvents } from './sessionEvents'
+import { projectCanonicalSessionLedgerTarget } from './runtime/sessionLedgerOutboxProjector'
 
 describe('canonical session ledger outbox', () => {
   const databases: ReturnType<typeof createMemoryAppDb>[] = []
@@ -107,5 +112,34 @@ describe('canonical session ledger outbox', () => {
     const second = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key, apply, 5)
     expect(second).toEqual({ projected: 1 })
     expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toEqual([])
+  })
+
+  it('projects a tool-result target idempotently to JSONL before acknowledgement', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-outbox-projector-'))
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: tempRoot, isDefault: true }]))
+    const session = createSession(db, { name: 'outbox projector', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { ledger_location_key: string }
+    const sink = getSessionEventSink(tempRoot, session.id, session.createdAt)
+    try {
+      runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, {
+        ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id, sessionGeneration: session.generation,
+        canonicalEventId: 'projected-result', projectionKind: 'tool-result',
+        expectedEvents: [{ type: 'tool_result', payload: { toolUseId: 'projector-tool', stepId: 'projector-step', result: { success: true, data: 'ok' } } }],
+        expectedEventIds: ['tool_result:projector-tool']
+      }))
+      const first = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        (target) => projectCanonicalSessionLedgerTarget(sink, target))
+      const again = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        (target) => projectCanonicalSessionLedgerTarget(sink, target))
+      expect(first).toEqual({ projected: 1 })
+      expect(again).toEqual({ projected: 0 })
+      expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result')).toHaveLength(1)
+    } finally {
+      await sink.close()
+      await fs.rm(tempRoot, { recursive: true, force: true })
+    }
   })
 })

@@ -17,6 +17,7 @@ import {
 import { runInTransaction } from '../database/transaction'
 import { currentProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
+import { buildCanonicalToolResultProjectionTargets } from '../sessionLedgerOutbox'
 import { commitSessionTranscriptInTransaction } from '../database/sessionTranscript'
 import type { SessionTranscriptCommitIntent } from '../../packages/agent-sdk/src/history'
 import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
@@ -430,8 +431,12 @@ export class SqliteAgentHistory implements HistoryPort {
           }
         }
       }
+      const projectionTargets = this.sessionId && expectedSessionGeneration
+        ? buildCanonicalToolResultProjectionTargets(this.conn, events, this.sessionId, expectedSessionGeneration, this.now())
+        : []
       const appended = appendSqliteAgentHistoryBatchInTransaction(this.conn, storedEvents, expectedVersion, {
         schemaVersion: this.schemaVersion, now: this.now, processGeneration: this.processGeneration,
+        ...(projectionTargets.length ? { projectionTargets } : {}),
         ...(this.sessionId ? { sessionId: this.sessionId } : {})
       })
       if (this.sessionId) {

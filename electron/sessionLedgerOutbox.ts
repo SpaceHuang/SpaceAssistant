@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { runInTransaction } from './database/transaction'
 import type { SessionEventInput } from './sessionEvents'
+import type { HistoryEvent } from '../packages/agent-sdk/src/history'
+import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 
 export type CanonicalLedgerProjectionTarget = {
   ledgerLocationKey: string
@@ -26,6 +28,38 @@ function stableJson(value: unknown): string {
 export function canonicalLedgerProjectionTargetId(target: Pick<CanonicalLedgerProjectionTarget,
   'ledgerLocationKey' | 'canonicalEventId' | 'projectionKind'>): string {
   return createHash('sha256').update(`${target.ledgerLocationKey}\0${target.canonicalEventId}\0${target.projectionKind}`).digest('hex')
+}
+
+/** Maps the canonical tool completion sidecar to its one-event ledger obligation. */
+export function buildCanonicalToolResultProjectionTargets(conn: DatabaseSync, events: readonly HistoryEvent[], sessionId: string,
+  sessionGeneration: string, now = Date.now()): CanonicalLedgerProjectionTarget[] {
+  const targets: CanonicalLedgerProjectionTarget[] = []
+  for (const event of events) {
+    if (event.kind !== 'tool-call-finished' && event.kind !== 'tool-call-not-dispatched') continue
+    if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) continue
+    const payload = event.payload as { toolCallId?: unknown; sessionLedger?: unknown }
+    const ledger = payload.sessionLedger
+    if (!ledger || typeof ledger !== 'object' || Array.isArray(ledger) || typeof payload.toolCallId !== 'string') continue
+    const sidecar = ledger as Record<string, unknown>
+    const location = sidecar.location as { workDir?: unknown; sessionId?: unknown; createdAt?: unknown } | undefined
+    if (!location || typeof location.workDir !== 'string' || typeof location.sessionId !== 'string' || !Number.isSafeInteger(location.createdAt)) continue
+    if (location.sessionId !== sessionId) throw new Error('SESSION_LEDGER_PROJECTION_LOCATION_MISMATCH')
+    if (typeof sidecar.stepId !== 'string' || !sidecar.stepId || !sidecar.result || typeof sidecar.result !== 'object' || Array.isArray(sidecar.result)) continue
+    const readiness = ensureLegacyLedgerReadiness(conn, {
+      workDir: location.workDir, sessionId, createdAt: location.createdAt as number
+    }, sessionGeneration, now)
+    const projection: Record<string, unknown> = { toolUseId: payload.toolCallId, stepId: sidecar.stepId, result: sidecar.result }
+    for (const key of ['turnId', 'requestId', 'invocationRequestId', 'lane'] as const) {
+      if (typeof sidecar[key] === 'string') projection[key] = sidecar[key]
+    }
+    targets.push({
+      ledgerLocationKey: readiness.ledgerLocationKey, sessionId, sessionGeneration,
+      canonicalEventId: event.eventId, projectionKind: 'tool-result',
+      expectedEvents: [{ type: 'tool_result', payload: projection }],
+      expectedEventIds: [`tool_result:${payload.toolCallId}`], now
+    })
+  }
+  return targets
 }
 
 /** Inserts a durable obligation in the caller's canonical History transaction. */

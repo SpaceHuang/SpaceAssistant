@@ -47,6 +47,35 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it('registers tool-result projection obligations with the canonical completion transaction', async () => {
+    const conn = createDb()
+    const sessionId = 'outbox-canonical-session'
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'history-outbox-root-'))
+    conn.prepare(`INSERT INTO sessions(id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation,work_dir_profile_id)
+      VALUES(?, 'outbox', 'model', 0.7, 1024, 1000, 1000, '{}', '{}', 1, 'outbox-generation', 'profile')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+    const location = { workDir, sessionId, createdAt: 1000 }
+    await history.appendBatch([
+      { ...event('outbox-proposal', 1), kind: 'model-response-committed', payload: {
+        modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'outbox-tool', name: 'read_file', input: { path: 'a.txt' } }] },
+        sessionLedger: { location, stepId: 'outbox-step', toolCalls: [{ toolUseId: 'outbox-tool', name: 'read_file', args: { path: 'a.txt' } }] }
+      } },
+      { ...event('outbox-result', 2), kind: 'tool-call-finished', payload: { toolCallId: 'outbox-tool', result: { success: true, data: 'ok' },
+        sessionLedger: { location, stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } } } }
+    ], 0)
+
+    const target = conn.prepare(`SELECT outbox.projection_kind,outbox.canonical_event_id,outbox.expected_event_ids_json,outbox.expected_events_json,
+      state.origin,state.state FROM session_ledger_projection_outbox outbox
+      JOIN session_ledger_projection_state state USING(ledger_location_key) WHERE outbox.canonical_event_id='outbox-result'`).get()
+    expect(target).toMatchObject({ projection_kind: 'tool-result', canonical_event_id: 'outbox-result', origin: 'legacy', state: 'unknown' })
+    expect(JSON.parse((target as { expected_event_ids_json: string }).expected_event_ids_json)).toEqual(['tool_result:outbox-tool'])
+    expect(JSON.parse((target as { expected_events_json: string }).expected_events_json)).toEqual([{
+      type: 'tool_result', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } }
+    }])
+    await fs.rm(workDir, { recursive: true, force: true })
+    conn.close()
+  })
+
   it('fences callbacks created by a previous process generation', async () => {
     const conn = createDb()
     advanceProcessGeneration(conn)
