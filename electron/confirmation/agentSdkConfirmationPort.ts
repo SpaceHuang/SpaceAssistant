@@ -6,6 +6,7 @@ export type GateConfirmationContext = Readonly<{
   facts: ConfirmRequest['facts']
   /** Host-derived references to controlled evidence used for the current facts snapshot. */
   evidenceReferences?: readonly string[]
+  factsProvenance?: ConfirmRequest['factsProvenance']
   decision: Pick<ConfirmRequest, 'riskLevel' | 'memoryTiers' | 'timeoutMs'> & {
     answerer?: 'user' | 'agent'
     disposition?: 'human-required' | 'auto-eligible'
@@ -88,6 +89,7 @@ export function createAgentSdkConfirmationPort(input: {
     }
     const request: ConfirmRequest = {
       facts: confirmation.context.facts,
+      ...(confirmation.context.factsProvenance ? { factsProvenance: confirmation.context.factsProvenance } : {}),
       ...confirmation.context.decision,
       ...(typeof confirmation.context.modelJustification === 'string' ? { modelJustification: confirmation.context.modelJustification } : {}),
       ...(confirmation.context.modelJustificationTruncated === true ? { modelJustificationTruncated: true } : {})
@@ -149,9 +151,6 @@ export function createAgentSdkConfirmationPort(input: {
           (result.outcome.cause === 'agent-undetermined' && confirmation.context.lane === 'desktop')) &&
         result.outcome.answererKind === 'agent' && !confirmation.signal?.aborted && input.fallback) {
         outcome = await input.fallback(confirmation.call, confirmation, confirmation.context as GateConfirmationContext, result.outcome) ?? outcome
-      }
-      if (outcome.kind === 'approved' && outcome.answerer === 'agent' && confirmation.context.facts.actionClass === 'outbound') {
-        outcome = { kind: 'denied', answerer: 'agent', cause: 'rules-violated', userMessage: '外发动作必须由真人逐次确认。' }
       }
       if ('outcome' in result && (outcome as { answerer?: unknown }).answerer === 'agent' &&
         !confirmation.signal?.aborted && input.defer) {

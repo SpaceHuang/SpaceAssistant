@@ -31,14 +31,8 @@ export interface ExecutionContext {
   sessionId: string
   /** 出站写额度余量（只读，由执行链路注入）。 */
   outboundWriteBudgetRemaining?: number
-  /** 套餐 B 预留：本期无人写入。 */
-  declaredCapabilities?: DeclaredCapability[]
-}
-
-/** 套餐 B 预留的能力声明。 */
-export interface DeclaredCapability {
-  actionClass: ActionClass
-  scope: string
+  /** Policy package selected for this lane; used by explicit tier-scoped rules. */
+  policyTier?: 'loose' | 'standard' | 'strict' | 'custom'
 }
 
 /** 消息入口准入的输入事实（ingress 时机，此时尚无工具调用）。 */
@@ -124,11 +118,22 @@ export type FactSignal =
   | { kind: 'wechat-media-target'; boundary: 'inside-workdir' | 'outside-workdir' | 'unknown'; zone?: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown' }
   /** Host-measured exact attachment version, included in confirmation and deferred-approval facts. */
   | { kind: 'wechat-media-content'; sha256: string; byteSize: number; fileName: string; displayPath: string }
+  /** Content/path observations for IM attachments; never includes attachment bytes or a policy verdict. */
+  | {
+      kind: 'wechat-media-content-assessment'
+      factId: string
+      contentDigest: string
+      extractorVersion: string
+      inspectionCoverage: 'complete' | 'partial' | 'unavailable'
+      evidenceKinds: readonly ('credential-like-pattern' | 'personal-data-pattern' | 'sensitive-path-name')[]
+    }
   | { kind: 'workdir-profile-target'; status: 'normal' | 'sensitive' | 'unknown' }
   | { kind: 'write-target-unsupported' }
   | { kind: 'write-target-new' }
   | { kind: 'write-target-existing' }
   | { kind: 'write-target-scope'; scope: 'inside-workdir' | 'outside-workdir' | 'unknown' }
+  | { kind: 'policy-tier'; tier: 'loose' | 'standard' | 'strict' | 'custom' }
+  | { kind: 'outbound-content'; inspectionCoverage: 'complete' | 'partial' | 'unavailable'; evidenceKinds: readonly string[] }
   | { kind: 'network-egress'; domains: string[] }
   | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }
   | { kind: 'script-analysis'; signal: 'clean' | 'suspicious' | 'dangerous'; patterns: string[] }
@@ -197,6 +202,7 @@ export type FactSignal =
    * 对 automation 由 lane 限定 locked deny 规则收敛为拒绝（O9 用户决策）。
    */
   | { kind: 'shell-unsupported-structure'; structures: string[]; reason: 'structure' | 'too-many-segments' }
+  | { kind: 'shell-analysis-completeness'; completeness: 'complete' | 'partial'; unknownReasons: readonly string[] }
   /**
    * R3：审批载荷构造不完整信号——表述纪律：只能报「载荷构造不完整（缺字段 X）」，
    * 禁止表述为「调用参数缺失」（需求 §R3 第 4 点根因）。
@@ -246,6 +252,8 @@ export interface ConfirmRequest {
   riskLevel: RiskLevel
   memoryTiers: MemoryTier[]
   timeoutMs: number | null
+  /** Provenance of the exact host facts snapshot used by policy. */
+  factsProvenance?: { factId: string; extractorVersion: string; completeness: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale'; factsRevision: number; policyVersion: string }
   /** Per-call model claim; untrusted and shown only as review context. */
   modelJustification?: string
   modelJustificationTruncated?: boolean
@@ -325,6 +333,8 @@ export interface ApprovalCluePack {
   signals: string[]
   targetPath?: string
   command?: string
+  /** Provenance of the exact facts reviewed by policy and approval; contains no raw input. */
+  factsProvenance?: { factId: string; extractorVersion: string; completeness: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale'; factsRevision: number; policyVersion: string }
   /** Untrusted model-provided explanation attached to this invocation. */
   modelJustification?: string
   modelJustificationTruncated?: boolean
@@ -338,6 +348,8 @@ export interface ApprovalCluePack {
    * 与不可信证据分区呈现（渲染在围栏之外，见 approvalAgent.renderCluePack）。
    */
   taskDigest?: string
+  /** taskDigest 是否因长度限制截断；截断时不得作为 medium/high 授权依据。 */
+  taskDigestTruncated?: boolean
 }
 
 /** 一次审批 Agent 调用（I2：标准唯一；I5：由 AgentChannel 深度计数兜底递归）。 */
@@ -472,6 +484,18 @@ export interface SecurityAuditEvent {
   /** Versioned behavior snapshot and revision used for the decision. */
   policyBehaviorVersion?: string
   policyRevision?: number
+  /** Canonical identity and matched attribution of the policy decision. */
+  decisionId?: string
+  /** Whether an execution veto can be joined to its originating policy decision. */
+  priorDecision?: 'available' | 'unavailable'
+  policyDependencyFingerprint?: string
+  decisionRuleIds?: string[]
+  /** Source registry reference for a non-policy system invariant; never grants an exemption. */
+  invariantId?: string
+  /** Stable identifier of the exact fact snapshot consumed by policy/approval. */
+  factsSnapshotId?: string
+  extractorVersion?: string
+  factsRevision?: number
   /** Whether the invocation facts were complete enough to decide. */
   factsCompleteness?: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale' | 'unknown'
   /** Deterministic policy, user confirmation, approval agent, or a fail-closed fallback path. */
@@ -494,7 +518,7 @@ export interface SecurityAuditEvent {
   /** 脱敏后的事实关联 id；路径事实不得把原始路径直接写入该字段。 */
   factId?: string
   pathZone?: PathZone
-  failureClass?: 'input' | 'mechanism' | 'environment' | 'integration-violation'
+  failureClass?: import('../security/executionAuthorizationCheck').ExecutionVetoFailureClass
   caseId?: string
   toolName?: string
   actionClass?: ActionClass
@@ -603,6 +627,8 @@ export interface PolicyRule {
   userOverride?: true
   /** 安全语义标记：即使 rule.action 被档位映射为 auto-evaluator，也必须原渠道逐次人工确认。 */
   humanRequired?: boolean
+  /** Explicit reviewer for an ask rule; defaults to the lane's established reviewer. */
+  answerer?: 'user' | 'agent'
   /** 系统保护条目：UI 只读、自定义套餐不可调松。 */
   locked?: boolean
   /** R2：拒绝分类声明（O4 全量标注；会产 ask/deny/confirm-every-time 的规则必须标，放行类不标）。 */
@@ -628,7 +654,7 @@ export interface DecisionCacheView {
   lookup(key: CacheKey, lane?: ExecutionLane | '*'): DecisionCacheEntry | null
 }
 
-/** 第 4 步自动审批器：批准返回 Decision，不裁决（approve:false）交还规则链。 */
+/** 第 3 步自动审批器：批准返回 Decision，不裁决（approve:false）交还规则链。 */
 export type AutoEvaluator = (
   facts: ContentFacts,
   context: ExecutionContext
@@ -641,7 +667,7 @@ export interface PolicyEngineDeps {
   config: Record<string, unknown>
   /** 迁移完成位（参数化配置引用问询）。 */
   migrationComplete: boolean
-  /** 第 4 步自动审批器（可注入，缺省不裁决）。 */
+  /** 第 3 步自动审批器（可注入，缺省不裁决）。 */
   autoEvaluator?: AutoEvaluator
   /**
    * 档位动作变换（§2.1 LANE_PROFILES 按当前 lane+档位绑定；缺省恒等）。

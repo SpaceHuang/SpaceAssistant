@@ -12,6 +12,7 @@
 | 2026-10-13 | `d6c57138` | 整合本地 main：fence/inventory 适配 + 死文件清理 | — | 本地与远端主线对齐 |
 | 2026-10-13 | `6fe55d43` | 清理 7 个零引用死文件及孤儿 i18n key | `main-dead-code-cleanup-audit-and-plan-2026-10-14.md`（本地分析，未入库） | 死代码与孤儿 key 收敛 |
 | 2026-10-14 | `879c7d04` | 版本升至 0.2.7 | `release-guide.md`（现状） | 发版流程按指南执行 |
+| 2026-10-16 | — | 撤销 Linux 桌面端支持承诺与 AppImage 打包入口；Ubuntu 保留为通用 CI 测试 runner | `package.json`、`release-guide.md` | 支持与发布范围收敛为 Windows/macOS |
 
 ## 存疑
 

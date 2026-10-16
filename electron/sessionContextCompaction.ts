@@ -24,8 +24,12 @@ function safeSummaryContent(value: unknown): unknown {
   return value
 }
 
-export type SessionContextSummary = { task: string; decisions: string; pending: string }
+export type SessionContextSummary = { task: string; completed: string; decisions: string; constraints: string; pending: string; blockers: string; nextStep: string }
 export type SessionContextSummaryInput = readonly { role: SurfaceMessage['role']; content: string }[]
+export type SessionContextRecoveryFacts = Readonly<{
+  unresolvedEffects: readonly Readonly<{ id: string; originInvocationId: string; toolCallId: string }>[]
+  toolOutcomes: readonly Readonly<{ id: string; toolName?: string; outcome: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched' }>[]
+}>
 
 function textOf(message: SurfaceMessage): string {
   if (typeof message.content === 'string') return message.content
@@ -40,7 +44,8 @@ export async function compactSessionContext(input: {
   totalInputBudget: number
   locale: 'zh-CN' | 'en-US'
   contextAdapter: SessionContextAdapter
-  summarize: (messages: SessionContextSummaryInput, locale: 'zh-CN' | 'en-US') => Promise<SessionContextSummary>
+  recoveryFacts?: SessionContextRecoveryFacts
+  summarize: (messages: SessionContextSummaryInput, locale: 'zh-CN' | 'en-US', recoveryFacts?: SessionContextRecoveryFacts) => Promise<SessionContextSummary>
 }): Promise<SessionContextCompactionResult> {
   try {
     const contextBase = await input.contextAdapter.port.readCurrent({ kind: 'session', sessionId: input.sessionId })
@@ -70,15 +75,17 @@ export async function compactSessionContext(input: {
     const minimumCheckpoint = {
       id: checkpointId,
       role: 'user' as const,
-      content: JSON.stringify({ kind: 'context_checkpoint', task: 'x', decisions: 'x', pending: 'x' })
+      content: JSON.stringify({ kind: 'context_checkpoint', task: 'x', completed: 'x', decisions: 'x', constraints: 'x', pending: 'x', blockers: 'x', nextStep: 'x', unresolvedEffectIds: [], toolOutcomes: [] })
     }
     if (estimateTokensFromUtf8Text(JSON.stringify(minimumCheckpoint)) >= shadowedTokenCount) return { status: 'no-op' }
-    const checkpointSummary = await input.summarize(shadowSource.map((message) => ({ role: message.role, content: textOf(message) })), input.locale)
-    if (!checkpointSummary || !['task', 'decisions', 'pending'].every((key) => {
+    const checkpointSummary = await input.summarize(shadowSource.map((message) => ({ role: message.role, content: textOf(message) })), input.locale, input.recoveryFacts)
+    if (!checkpointSummary || !['task', 'completed', 'decisions', 'constraints', 'pending', 'blockers', 'nextStep'].every((key) => {
       const value = checkpointSummary[key as keyof SessionContextSummary]
       return typeof value === 'string' && Boolean(value.trim()) && value.length <= 2_000
     })) return { status: 'failed' }
-    checkpointMessage.content = JSON.stringify({ kind: 'context_checkpoint', ...checkpointSummary })
+    const toolOutcomes = (input.recoveryFacts?.toolOutcomes ?? []).slice(-20)
+    const unresolvedEffectIds = (input.recoveryFacts?.unresolvedEffects ?? []).map(({ id }) => id)
+    checkpointMessage.content = JSON.stringify({ kind: 'context_checkpoint', ...checkpointSummary, unresolvedEffectIds, toolOutcomes })
     const checkpointTokens = estimateTokensFromUtf8Text(JSON.stringify(checkpointMessage))
     if (checkpointTokens >= shadowedTokenCount) return { status: 'no-op' }
     const retainedTokens = items.filter((item) => !shadowedIds.has(item.id)).reduce((sum, item) => sum + item.tokens, 0)

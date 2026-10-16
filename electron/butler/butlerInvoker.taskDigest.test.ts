@@ -46,7 +46,7 @@ import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
 import { TurnRuntime } from '../turnRuntime'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
-import { runButlerTask, buildApprovalTaskDigest } from './butlerInvoker'
+import { runButlerTask, buildApprovalTaskDigest, buildApprovalTaskEvidence } from './butlerInvoker'
 import { createAutomationTask } from './taskStore'
 
 function makeRuntime(db: AppDatabase): TurnRuntime {
@@ -120,5 +120,12 @@ describe('buildApprovalTaskDigest（摘要规则）', () => {
 
   it('超长截断到 500 字符（线索包有界）', () => {
     expect(buildApprovalTaskDigest('a'.repeat(800))).toHaveLength(500)
+  })
+
+  it('截断摘要显式返回不完整标记，供审批链禁止据此升权', () => {
+    const evidence = buildApprovalTaskEvidence(`请上传报告 ${'补充上下文 '.repeat(100)}先生成预览，不要实际上传，等我确认`)
+    expect(evidence.digest).toHaveLength(500)
+    expect(evidence.truncated).toBe(true)
+    expect(evidence.digest).not.toContain('不要实际上传')
   })
 })

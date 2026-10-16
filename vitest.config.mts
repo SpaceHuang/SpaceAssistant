@@ -13,8 +13,7 @@ export default defineConfig({
         // 主进程测试：macOS threads 池并行实测更快；Windows 上 threads 易启动超时，保留 forks + 单 worker。
         test: {
           name: 'electron',
-          // SDK 包级测试(A3)：纯 Node，与 Electron 项目共用 worker 配置。
-          include: ['electron/**/*.test.ts', 'packages/agent-sdk/**/*.test.ts', 'packages/agent-provider-testing/**/*.test.ts', 'packages/agent-provider-pi-ai/**/*.test.ts'],
+          include: ['electron/**/*.test.ts'],
           environment: 'node',
           // Windows 慢机满载下 5s 默认值会误杀重 IO 用例（如 1000 并发台账写盘）；断言本身不受影响
           testTimeout: 15_000,
@@ -24,6 +23,22 @@ export default defineConfig({
           fileParallelism: process.platform === 'darwin',
           // electron 项目专属第二 setup:脚本安全解析服务初始化(§2.3 归属约束)+ 默认 runtime 装配(batch3)
           setupFiles: ['./src/test/setup.ts', './src/test/setup-electron-parser.ts', './electron/testSetup.ts']
+        }
+      },
+      {
+        // SDK/provider 包测试是纯 Node，与 Electron 主进程装配隔离。
+        test: {
+          name: 'agent-sdk',
+          include: [
+            'packages/agent-sdk/**/*.test.ts',
+            'packages/agent-provider-testing/**/*.test.ts',
+            'packages/agent-provider-pi-ai/**/*.test.ts'
+          ],
+          environment: 'node',
+          testTimeout: 15_000,
+          globals: true,
+          pool: process.platform === 'darwin' ? 'threads' : 'forks',
+          maxWorkers: process.platform === 'darwin' ? 4 : 1
         }
       },
       {

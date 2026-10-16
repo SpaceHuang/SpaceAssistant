@@ -12,6 +12,11 @@ describe('larkCliImpactPolicy', () => {
     expect(r.impact).toBe('low_write')
   })
 
+  it.each(['get', 'list', 'search', 'info', 'show'])('mail send option value %s does not change the write classification', (subject) => {
+    expect(classifyLarkCliImpact(['mail', 'send', '--to', 'owner@example.test', '--subject', subject, '--text', 'password=supersecret']))
+      .toMatchObject({ impact: 'low_write', category: 'message' })
+  })
+
   it('classifies Feishu message recipients only from explicit open_id and trusted actor identity', () => {
     expect(classifyLarkMessageTarget(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_self'], 'ou_self')).toBe('self')
     expect(classifyLarkMessageTarget(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other'], 'ou_self')).toBe('direct-other')
@@ -26,6 +31,21 @@ describe('larkCliImpactPolicy', () => {
     expect(classifyLarkCliImpact(['doc', 'delete', '--token', 't']).impact).toBe('high_impact')
     expect(classifyLarkCliImpact(['bitable', 'batch-create', '--table', 'x']).impact).toBe('high_impact')
     expect(classifyLarkCliImpact(['doc', 'permission', 'update']).impact).toBe('high_impact')
+  })
+
+  it.each(['get', 'list', 'search', 'info', 'show'])('doc create title value %s stays a write', (title) => {
+    expect(classifyLarkCliImpact(['doc', 'create', '--title', title]))
+      .toMatchObject({ impact: 'low_write', category: 'doc_write' })
+  })
+
+  it.each(['get', 'list', 'search', 'info', 'show'])('calendar create title value %s stays a write', (title) => {
+    expect(classifyLarkCliImpact(['calendar', 'event', 'create', '--title', title]))
+      .toMatchObject({ impact: 'low_write', category: 'calendar' })
+  })
+
+  it.each(['get', 'list', 'search', 'info', 'show'])('actual doc read action %s remains read', (action) => {
+    expect(classifyLarkCliImpact(['doc', action, '--title', 'new document']))
+      .toMatchObject({ impact: 'read', category: 'read' })
   })
 
   it('calendar invite with attendees is high-impact', () => {

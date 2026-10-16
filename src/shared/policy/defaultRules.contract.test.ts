@@ -2,11 +2,23 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
 
 /**
- * T1.5：defaultRules 零改动契约（wiki-shared-centralized-storage D5/§9.1）。
- * 挂载改造只修正探测层信号，策略规则本体（id/action/locked/match）必须零改动。
- * 本测试以显式快照锁定规则全集——任何规则变更都会转红，需显式更新快照并说明理由。
+ * defaultRules 规则全集契约：规则增删需显式更新 ID 基线，并同步核对关键规则语义。
+ * 2026-10-16：将已进入生产规则表的 13 条 IM/MCP 规则补入快照，避免快照长期落后于策略实现。
  */
 const EXPECTED_RULE_IDS = [
+  'write-outside-standard-review',
+  'write-outside-strict-human',
+  'write-outside-loose-review',
+  'outbound-mode-loose-allow',
+  'outbound-mode-standard-review',
+  'outbound-mode-strict-human',
+  'outbound-sensitive-standard-human',
+  'outbound-sensitive-strict-human',
+  'outbound-sensitive-loose-review',
+  'outbound-incomplete-strict-human',
+  'outbound-incomplete-review',
+  'outbound-incomplete-standard-review',
+  'outbound-incomplete-loose-review',
   'wiki-raw-write-deny',
   'remote-outside-write-deny',
   'remote-write-scope-unknown-deny',
@@ -19,6 +31,7 @@ const EXPECTED_RULE_IDS = [
   'remote-sensitive-workdir-switch-deny',
   'remote-unknown-workdir-switch-deny',
   'script-network-deny-remote',
+  'script-dangerous-deny',
   'remote-deny-lark-write-outbound',
   'remote-deny-wechat-outbound',
   'remote-browser-disabled',
@@ -70,8 +83,21 @@ const EXPECTED_RULE_IDS = [
   'automation-unsupported-deny',
   'automation-default-confirm',
   'im-no-wechat-send',
+  'im-browser-act-danger-human',
+  'im-browser-act-review',
+  'im-lark-low-write-review',
+  'im-lark-message-direct-review',
+  'im-lark-message-self-review',
+  'im-low-risk-create',
+  'im-low-risk-edit',
+  'im-mcp-public-read-review',
+  'im-time-query-review',
+  'im-write-sensitive-path-confirm',
   'ingress-direct-other-deny',
-  'ingress-feishu-group-deny'
+  'ingress-feishu-group-deny',
+  'lark-message-group-human',
+  'lark-message-target-unknown-human',
+  'mcp-account-unauthorized-deny'
 ]
 
 describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {

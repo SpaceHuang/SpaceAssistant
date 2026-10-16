@@ -8,8 +8,8 @@ function createMigratedDb(): AppDatabase {
   return openDatabase(':memory:')
 }
 
-describe('schema v83 wiki_projects 表迁移（T0.3）', () => {
-  it('DB_SCHEMA_VERSION 为 83', () => {
+describe('wiki_projects 表迁移（v83，T0.3）', () => {
+  it('当前 schema 包含 wiki_projects v83 迁移', () => {
     expect(DB_SCHEMA_VERSION).toBe(99)
   })
 

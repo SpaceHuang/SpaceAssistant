@@ -285,7 +285,12 @@
     }
   },
   "chatView": {
+    "recoveryCancel": "取消",
     "continuationStarted": "正在继续上次执行",
+    "recoveryRiskTitle": "无法自动核查未确定操作",
+    "recoveryRiskBody": "当前没有审核通过的只读核查工具。以下操作的结果仍无法确认：{{operations}}。若接受本次恢复期间继续操作可能造成的重复副作用，可仅对当前恢复 Invocation 放行；原操作仍保持未确定，且后续操作仍需通过正常安全审批。",
+    "recoveryRiskAccept": "承担本轮风险并继续",
+    "recoveryRetryOnce": "只重试一次：{{tool}}",
     "statusLabel": "状态",
     "warnings": {
       "selectSession": "请先选择会话并等待配置加载",
@@ -296,6 +301,7 @@
       "apiKeyMissing": "请先在设置中配置 API Key",
       "retryNoUserMessage": "找不到可重试的上一条用户消息",
       "continuationUnavailable": "此失败没有可安全继续的检查点，请重试生成或检查失败原因",
+      "continuationNoChecker": "存在尚未确认结果的操作，但当前没有经过审核的只读核查工具。继续过程中会阻止新的工具操作；未解决操作仍保持未知。",
       "continuationSourceSelectionTitle": "选择要承接的失败执行",
       "continuationSourceSelectionBody": "当前会话有多个失败任务。选择继续最近一次失败执行，或将原输入作为普通新任务发送。",
       "continuationContinueLatest": "继续最近一次",

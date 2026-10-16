@@ -47,8 +47,8 @@ export const BUTLER_SYSTEM_APPENDIX = [
 ].join('\n')
 
 // 任务声明摘要已提取为两端共用模块（§5.6）：automation 任务 prompt 与桌面当前 turn 用户消息共用。
-import { APPROVAL_TASK_DIGEST_MAX_CHARS, buildApprovalTaskDigest } from '../../src/shared/approvalTaskDigest'
-export { APPROVAL_TASK_DIGEST_MAX_CHARS, buildApprovalTaskDigest }
+import { APPROVAL_TASK_DIGEST_MAX_CHARS, buildApprovalTaskDigest, buildApprovalTaskEvidence } from '../../src/shared/approvalTaskDigest'
+export { APPROVAL_TASK_DIGEST_MAX_CHARS, buildApprovalTaskDigest, buildApprovalTaskEvidence }
 
 export type ButlerInvokerDeps = {
   db: AppDatabase
@@ -373,6 +373,7 @@ async function runButlerModelTurn(
   await butlerEvents.sink.appendCritical({ type: 'turn_start', payload: { turnId: hostedTurnId } })
   await butlerEvents.sink.appendCritical({ type: 'step_start', payload: { turnId: hostedTurnId, stepId: args.requestId } })
   const workDir = args.runConfig.workDir!
+  const approvalTaskEvidence = buildApprovalTaskEvidence(args.taskPrompt)
 
   const { invocation, ports, agentSdk } = assembleInvocation({
     // W3 lane 对齐：未透传会被执行层按「未启用」误拒（桌面/IM 链路均注入）
@@ -385,7 +386,8 @@ async function runButlerModelTurn(
     llmServiceId: creds.serviceId || args.llmServiceId,
     lane: 'automation',
     // D 任务声明（可信证据）：随执行链进入审批线索包，供任务相关性判断
-    approvalTaskDigest: buildApprovalTaskDigest(args.taskPrompt),
+    approvalTaskDigest: approvalTaskEvidence.digest,
+    approvalTaskDigestTruncated: approvalTaskEvidence.truncated,
     model: args.runConfig.providerModelName!,
     modelId: args.runConfig.modelId,
     supportsThinking: args.runConfig.model.supportsThinking !== false,

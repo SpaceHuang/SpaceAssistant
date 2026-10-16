@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import fsPromises from 'node:fs/promises'
 import path from 'node:path'
-import { decide } from '../../src/shared/policy/policyEngine'
+import { decide, ruleMatchesInvocation } from '../../src/shared/policy/policyEngine'
+import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachmentFacts'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
@@ -42,6 +43,7 @@ import { validateDesktopReadV1 } from '../../src/shared/policy/readPolicyV1'
 import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
 import { matchSessionDirectoryGrant } from './sessionDirectoryGrantMatcher'
 import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmationTimeout'
+import { SYSTEM_INVARIANT_ID_BY_GATE_RULE } from '../../src/shared/security/systemInvariantIds'
 
 /**
  * T1.2/T1.3：以 resolveWikiMount 为本次路径入参构造探测锚点与敏感根豁免。
@@ -100,6 +102,7 @@ import { AuditedDecisionCache } from './auditedDecisionCache'
 import { getSecurityAuditLog } from './audit'
 import { auditFactId } from './auditFactId'
 import { effectiveActionFor, type PolicyPackage } from '../../src/shared/policy/policyPackages'
+import { createPolicyDecision, selectPolicyDependencyRules } from '../../src/shared/policy/policyDecision'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import { classifyWikiPath, resolveWikiRelPath } from '../wiki/wikiPaths'
 import { resolveWikiMount } from '../wiki/wikiMount'
@@ -113,6 +116,7 @@ import type { WorkspaceSnapshot } from '../../src/shared/agent/workspace'
 import { sanitizeAgentText } from '../../src/shared/agentSafeText'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 import { CONFIRMATION_LABELS } from '../../src/shared/confirmation/labels'
+import { createInvocationFactsSnapshot } from '../../src/shared/confirmation/invocationFactsSnapshot'
 
 
 /** 出站写工具判定（等价现 toolChatLoop.isOutboundWriteTool：未知/非读 fail-closed 计写）。 */
@@ -221,7 +225,9 @@ export function buildToolCallGateArgs(
 
 export interface ToolCallGateResult {
   decision: Decision
+  policyDecision?: import('../../src/shared/policy/policyDecision').PolicyDecision
   facts: ContentFacts
+  factsSnapshot?: import('../../src/shared/confirmation/invocationFactsSnapshot').InvocationFactsSnapshot
   approvedFactIds: Array<{ factId: string; decisionRuleId: string }>
   readTargetMapping?: Array<{ factId: string; decisionRuleId: string }>
   readExecutionPermit?: ReadExecutionPermit
@@ -810,10 +816,23 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
                 ? 10 * 1024 * 1024 : 512 * 1024 * 1024
               if (mediaStat.isFile() && mediaStat.size <= maxBytes) {
                 const mediaBytes = await fsPromises.readFile(resolvedMediaPath)
+                const contentDigest = createHash('sha256').update(mediaBytes).digest('hex')
                 facts.signals.push({ kind: 'wechat-media-content',
-                  sha256: createHash('sha256').update(mediaBytes).digest('hex'), byteSize: mediaBytes.length,
+                  sha256: contentDigest, byteSize: mediaBytes.length,
                   fileName: path.basename(resolvedMediaPath),
                   displayPath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/') })
+                let inspectedText = ''
+                let inspectionCoverage: 'complete' | 'partial' = 'complete'
+                try { inspectedText = new TextDecoder('utf-8', { fatal: true }).decode(mediaBytes) }
+                catch { inspectionCoverage = 'partial' }
+                const attachmentFacts = await createImAttachmentFacts({
+                  fileName: path.basename(resolvedMediaPath),
+                  relativePath: path.relative(args.workDir, resolvedMediaPath).split(path.sep).join('/'),
+                  content: inspectedText,
+                  contentDigest,
+                  inspectionCoverage
+                })
+                facts.signals.push({ kind: 'wechat-media-content-assessment', ...attachmentFacts })
               }
             }
           } catch (error) {
@@ -859,7 +878,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
   // ===== 执行上下文（预算/授权只读 peek；记账留主循环）=====
-  const context: ExecutionContext = { lane, origin, sessionId: args.sessionId }
+  const context: ExecutionContext = { lane, origin, sessionId: args.sessionId, policyTier: args.lanePackage ?? 'standard' }
   let outboundBudgetMessage: { message: string; reason: string } | undefined
   if (args.remoteBudgetState && isOutboundWriteTool(args.toolName, args.toolInput)) {
     const check = checkRemoteTaskBudget(args.remoteBudgetState, 'outbound_write')
@@ -957,6 +976,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (!(signal.kind in factSources)) factSources[signal.kind] = 'host-environment'
   }
   facts.signals = [...facts.signals, ...(providerSignals ?? [])]
+  facts.signals.push({ kind: 'policy-tier', tier: lanePackage })
   facts.factSources = factSources
   facts.factsProviderDeclared = args.factsProvider !== undefined
 
@@ -1046,18 +1066,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       ? { type: 'deny' as const, ruleId: 'automation-read-target-unsupported', reason: 'automation lane 仅支持显式、单目标文件或目录读取', disposition: 'forbidden' as const, cause: 'automation-read-target-unsupported' }
       : decide(facts, context, rules, deps)
 
-  // 目录外只读是安全边界例外，只能细化已放行的结果，不能覆盖套餐或自定义规则要求的确认。
-  // 保留其原规则结论也让后续审批会话递归守卫继续看到 require-confirm。
-  if (shellOutsideReadOnly && decision.type === 'auto-allow') {
-    decision = { type: 'auto-allow', ruleId: 'shell-outside-readonly-allow', reason: '工作目录外的只读 shell 命令免确认', disposition: 'auto-eligible', cause: 'shell-outside-readonly-allow' }
-  }
-
-  // 写路径离开 workdir 时，不能继承泛化策略/缓存的自动放行；走既有人工确认路径。
-  if (writePathFact && writePathFact.zone !== 'workdir-normal' && decision.type === 'auto-allow') {
-    decision = lane === 'automation'
-      ? { type: 'deny', ruleId: 'automation-outside-write-deny', reason: 'automation lane 不允许工作目录外写入', disposition: 'forbidden', cause: 'automation-outside-write-deny' }
-      : { type: 'require-confirm', ruleId: 'write-outside-confirm', answerer: lane === 'desktop' ? 'agent' : 'user', riskLevel: facts.baseRiskLevel, facts, memoryTiers: [], timeoutMs: null, disposition: lane === 'desktop' ? 'auto-eligible' : 'human-required', cause: 'write-outside-confirm', reason: '工作目录外写入需要确认' }
-  }
+  // P2-04 / P2-07: scope and precheck affect the decision only through matched rules or evaluator evidence.
 
   // ===== P2-4 递归守卫（I5）：审批会话内的 require-confirm 一律 fail-closed =====
   // 守卫在回答者解析之前生效，否则内层 require-confirm 会被再次解析到 AgentChannel 造成递归。
@@ -1067,7 +1076,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     decision = { type: 'deny', ruleId: 'recursion-guard', reason, disposition: 'forbidden', cause: 'recursion-guard' }
   }
 
-  if (args.phase === 'recheck' && decision.type === 'require-confirm' && !args.previouslyConfirmed) decision = { type: 'deny', ruleId: 'recheck-requires-confirm', reason: '确认后复检不得发起第二次确认' }
+  if (args.phase === 'recheck' && decision.type === 'require-confirm' && !args.previouslyConfirmed) {
+    decision = { type: 'deny', ruleId: 'recheck-requires-confirm', reason: '确认后复检不得发起第二次确认' }
+  }
 
   // 目录目标可签发 permit 的工具：list_directory（direct-entries）与 grep（subtree）——§7.4 改动 4
   const directoryPermittable = isListDirectoryTool || args.toolName === 'grep'
@@ -1186,6 +1197,67 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     : reportedCompleteness.includes('partial') ? 'partial'
       : reportedCompleteness.includes('capability-description-stale') ? 'capability-description-stale'
         : reportedCompleteness.length > 0 && reportedCompleteness.every((value) => value === 'complete') ? 'complete' : 'unknown'
+  const reportedSnapshotCompleteness = facts.signals.some((signal) => signal.kind === 'mcp-invocation' && signal.completeness === 'missing')
+    ? 'missing' as const
+    : facts.signals.some((signal) => signal.kind === 'mcp-invocation' && signal.completeness === 'capability-description-stale')
+      ? 'capability-description-stale' as const
+      : facts.signals.some((signal) => signal.kind === 'extraction-failed' ||
+          signal.kind === 'shell-analysis-completeness' && signal.completeness === 'partial' ||
+          signal.kind === 'mcp-invocation' && signal.completeness === 'partial')
+        ? 'partial' as const
+        : 'complete' as const
+  const factsSnapshot = await createInvocationFactsSnapshot({
+    invocationId: args.requestId ?? args.sessionId,
+    envelope: { toolName: args.toolName, toolInput: args.toolInput, toolUseId: args.toolUseId ?? '' },
+    facts,
+    extractorVersion: 'host-tool-facts-v1',
+    completeness: reportedSnapshotCompleteness,
+    evidenceReferences: [],
+    environmentVersion: `${env.os}:${env.workDir}`,
+    policyVersion: args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
+    factsRevision: args.phase === 'recheck' ? 2 : 1,
+    previousFactsRevision: 0
+  })
+  result.factsSnapshot = factsSnapshot
+  const policyDomain = lane === 'wechat' || lane === 'feishu' ? 'im' : lane === 'automation' ? 'automation' : 'desktop'
+  const policyDecision = createPolicyDecision({
+    decision, invocationId: args.requestId ?? args.sessionId, toolUseId: args.toolUseId ?? args.requestId ?? args.sessionId,
+    factsId: factsSnapshot.factId, factsDigest: factsSnapshot.factsHash, extractorVersion: factsSnapshot.extractorVersion,
+    factsRevision: factsSnapshot.factsRevision, policyDomain, tier: lanePackage,
+    policyVersion: args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
+    policyRevision: args.imPolicySnapshot?.revision ?? 0, policyLane: lane, rules,
+    dependencyRules: selectPolicyDependencyRules({
+      rules,
+      matchingRuleIds: rules.filter((rule) => rule.when === 'invocation' && ruleMatchesInvocation(rule,
+        context.policyTier ? { ...facts, signals: [...facts.signals, { kind: 'policy-tier' as const, tier: context.policyTier }] } : facts,
+        context, deps)).map((rule) => rule.id),
+      decisionRuleIds: [decision.ruleId]
+    }),
+    policyConfig: {
+      ...deps.config,
+      ...(facts.actionClass === 'write' ? {
+        writeApprovalConfiguration: {
+          workDir: args.workDir,
+          userDataDir: args.userDataDir,
+          toolsConfig: {
+            autoApproveMaxBytes: args.toolsConfig.autoApproveMaxBytes,
+            autoApproveMaxEditChars: args.toolsConfig.autoApproveMaxEditChars
+          },
+          shellConfig: args.shellConfig ?? null,
+          wikiConfig: args.wikiConfig ?? null
+        }
+      } : {})
+    }, migrationComplete: deps.migrationComplete,
+    disabledRuleIds: args.disabledPolicyRuleIds ?? []
+  })
+  if (result.readExecutionPermit) {
+    result.readExecutionPermit = buildReadExecutionPermit({
+      ...result.readExecutionPermit,
+      decisionId: policyDecision.decisionId,
+      policyDependencyFingerprint: policyDecision.dependencyFingerprint
+    })
+  }
+  const invariantId = SYSTEM_INVARIANT_ID_BY_GATE_RULE[decision.ruleId]
   audit.record({
     ts: Date.now(),
     event: 'policy.decision',
@@ -1193,6 +1265,12 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     ...(lane === 'wechat' || lane === 'feishu' ? { policyDomain: 'im' as const } : { policyDomain: 'desktop' as const }),
     ...(args.imPolicySnapshot ? { policyBehaviorVersion: args.imPolicySnapshot.policyBehaviorVersion, policyRevision: args.imPolicySnapshot.revision } : {}),
     factsCompleteness,
+    factsSnapshotId: factsSnapshot.factId,
+    extractorVersion: factsSnapshot.extractorVersion,
+    factsRevision: factsSnapshot.factsRevision,
+    decisionId: policyDecision.decisionId,
+    policyDependencyFingerprint: policyDecision.dependencyFingerprint,
+    decisionRuleIds: [...policyDecision.ruleIds],
     reviewPath: decision.type === 'require-confirm'
       ? decision.answerer === 'agent' ? 'approval-agent' : 'user-confirmation'
       : 'deterministic-policy',
@@ -1213,6 +1291,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     pathZones: [...new Set(facts.signals.flatMap((s) => s.kind === 'path-target' ? [s.zone] : s.kind === 'wechat-media-target' && s.zone ? [s.zone] : []))],
     decision: decision.type,
     ruleId: decision.ruleId,
+    ...(invariantId ? { invariantId } : {}),
     reason: decision.type === 'require-confirm' ? decision.ruleId : decision.reason,
     ...(decision.type === 'require-confirm' ? { answerer: decision.answerer } : {}),
     ...(decision.type === 'deny' && decision.ruleId === 'recursion-guard'
@@ -1233,6 +1312,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   // 不再用已删除的 desktop-auto-approve ruleId 匹配
   result.fileAutoApproved = fileAutoApprove === true && decision.type === 'auto-allow'
   result.decision = decision
+  result.policyDecision = policyDecision
   result.facts = facts
   result.readPathFact = readPathFact
   result.wechatMediaPathFact = wechatMediaPathFact

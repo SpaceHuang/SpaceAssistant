@@ -26,6 +26,7 @@ jobs:
       - run: npm run i18n:generate-types
       - run: npm run i18n:check
       - run: npm run typecheck:shared
+      - run: npm run check:system-invariant-registry
       - run: npm run check:model-baseline
       - run: npm run typecheck:renderer
       # Agent SDK 包独立 tsconfig，独立于 Electron 主进程 typecheck。

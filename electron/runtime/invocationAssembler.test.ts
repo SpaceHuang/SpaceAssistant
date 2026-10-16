@@ -34,6 +34,8 @@ import { AgentChannel } from '../confirmation/agentChannel'
 import { RunShellPlanError } from '../tools/runShellPlan'
 import { PlanRejectedError } from '../../packages/agent-sdk/src/turn'
 
+const TEST_USER_DATA_DIR = path.join(os.tmpdir(), 'spaceassistant-invocation-test-user-data')
+
 function createImPolicyTestDb(name: string) {
   const db = createMemoryAppDb(name)
   commitImPolicySnapshot(getDbConnection(db), {
@@ -530,7 +532,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
       updatedAt: 1, eventId: 'im-standard-v2-assembler-gate' })
     const { agentSdk } = assembleInvocation({ requestId: 'im-standard-v2-assembler-gate', sessionId: 'im-v2-session', lane: 'feishu',
-      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: path.join(os.tmpdir(), 'im-v2-agent-user-data'),
       getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
       remoteContext: { source: 'feishu', messageId: 'inbound-v2', confirmPolicy: 'always' } as never })
     const binding = { requestId: 'im-standard-v2-assembler-gate', turnId: 'im-v2-turn', invocationId: 'im-standard-v2-assembler-gate',
@@ -553,7 +555,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       answerer: decision.answerer, reasonCode: decision.ruleId,
       context: { facts: decision.facts, decision: { riskLevel: decision.riskLevel, memoryTiers: decision.memoryTiers,
         timeoutMs: decision.timeoutMs, answerer: decision.answerer, disposition: decision.disposition }, lane: 'feishu' } }))
-      .resolves.toMatchObject({ kind: 'denied', answerer: 'agent', cause: 'rules-violated' })
+      .resolves.toMatchObject({ kind: 'approved', answerer: 'agent', cause: 'agent-approved' })
     expect(agentChannelFactory).toHaveBeenCalledOnce()
     expect(invokeApproval).toHaveBeenCalledOnce()
     expect(getDbConnection(db).prepare('SELECT count(*) AS count FROM deferred_todos').get()).toEqual({ count: 0 })
@@ -644,7 +646,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const { agentSdk } = assembleInvocation({ requestId: 'im-write-candidate-facts-change', sessionId: session.id, lane: 'feishu',
       remoteContext: { source: 'feishu', messageId: 'candidate-origin', chatId: 'candidate-chat', userId: 'owner' } as never,
       model: 'test-model', providerRouteId: 'route-im-write-candidate', agentSdkHistory: new MemoryHistory(), locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
-      workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      workDir, userDataDir: TEST_USER_DATA_DIR, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
     const execute = vi.fn(async () => ({ success: true }))
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw as { path: string; content: string },
@@ -1571,7 +1573,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const { agentSdk } = assembleInvocation({ requestId: 'im-test-auto-review', sessionId: session.id, lane: 'feishu',
       remoteContext: { source: 'feishu', messageId: 'origin', chatId: 'chat', userId: 'owner', imChannel: { request: vi.fn(), cancelByRequestId: vi.fn() } } as never,
       model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
-      appDb: db, workDir, userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      appDb: db, workDir, userDataDir: TEST_USER_DATA_DIR, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write',
       parseInput: (raw) => raw as { path: string; content: string }, plan: async (input) => input, execute: async () => ({ success: true }) }))
@@ -1804,7 +1806,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })).resolves.toBeUndefined()
     expect(onContextReplacementPlan).toHaveBeenCalledOnce()
     expect(onContextReplacementPlan).toHaveBeenCalledWith(expect.objectContaining({
-      requestId: 'req-boundary-return:round:1', windowId: 'session-boundary-return', system: 'real system prompt',
+      requestId: 'req-boundary-return:round:1', windowId: 'session-boundary-return', system: expect.stringContaining('real system prompt'),
       tools: [{ name: 'read_file', description: 'read', input_schema: { type: 'object' } }],
       messages: expect.arrayContaining([expect.objectContaining({ id: 'required-user', content: 'current request' })]),
       budget: expect.objectContaining({ totalInputBudget: expect.any(Number), bodyBudget: expect.any(Number) }),

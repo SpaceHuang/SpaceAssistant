@@ -426,9 +426,9 @@ describe('decide：脚本规则作用域不外溢', () => {
   it('桌面 browser navigate 不因脚本规则出现确认（按 outbound 默认放行）', () => {
     const d = decide(
       mkFacts('browser', 'outbound', [{ kind: 'network-egress', domains: ['example.com'] }], 'low'),
-      mkContext('desktop'),
+      { ...mkContext('desktop'), policyTier: 'loose' },
       DEFAULT_POLICY_RULES,
-      deps()
+      deps({ transform: (rule) => effectiveActionFor('desktop', 'loose', rule) })
     )
     expect(d.type).toBe('auto-allow')
   })
@@ -558,6 +558,94 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
     )
     expect(decision).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
     expect(lookup).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['loose', 'desktop', { type: 'auto-allow', ruleId: 'outbound-mode-loose-allow' }],
+    ['standard', 'desktop', { type: 'require-confirm', ruleId: 'outbound-mode-standard-review', answerer: 'agent' }],
+    ['strict', 'desktop', { type: 'require-confirm', ruleId: 'outbound-mode-strict-human', answerer: 'user' }],
+    ['standard', 'wechat', { type: 'require-confirm', ruleId: 'outbound-mode-standard-review', answerer: 'agent' }],
+    ['strict', 'feishu', { type: 'require-confirm', ruleId: 'outbound-mode-strict-human', answerer: 'user' }]
+  ] as const)('outbound policy matrix %s/%s selects answerer before confirmation adapter', (tier, lane, expected) => {
+    const outboundFacts = mkFacts('send_email', 'outbound', [{ kind: 'network-egress', domains: ['example.test'] }], 'medium')
+    const effectiveTier = lane === 'desktop' ? tier : 'standard'
+    const result = decide(outboundFacts, { ...mkContext(lane), policyTier: tier }, DEFAULT_POLICY_RULES, deps({ transform: (rule) => effectiveActionFor(lane, effectiveTier, rule) }))
+    expect(result).toMatchObject(expected)
+  })
+
+  it('existing locked remote outbound deny remains higher priority than the outbound tier table', () => {
+    const remoteDeny = { id: 'remote-outbound-deny', when: 'invocation' as const,
+      match: { lane: ['wechat'] as const, actionClass: 'outbound' as const }, action: 'deny' as const, locked: true, reason: 'explicit remote deny' }
+    const result = decide(mkFacts('wechat_send', 'outbound', []), { ...mkContext('wechat'), policyTier: 'loose' }, [remoteDeny], deps())
+    expect(result).toMatchObject({ type: 'deny', ruleId: 'remote-outbound-deny' })
+  })
+
+  it.each([
+    ['loose', { type: 'require-confirm', ruleId: 'write-outside-loose-review', answerer: 'agent' }],
+    ['standard', { type: 'require-confirm', ruleId: 'write-outside-standard-review', answerer: 'agent' }],
+    ['strict', { type: 'require-confirm', ruleId: 'write-outside-strict-human', answerer: 'user' }]
+  ] as const)('outside-workdir write %s stays distinct from inside write', (tier, expected) => {
+    const facts = mkFacts('write_file', 'write', [{ kind: 'write-target-scope', scope: 'outside-workdir' }], 'medium')
+    const result = decide(facts, { ...mkContext('desktop'), policyTier: tier }, DEFAULT_POLICY_RULES, deps({ transform: (rule) => effectiveActionFor('desktop', tier, rule) }))
+    expect(result).toMatchObject(expected)
+  })
+
+  it.each([
+    ['loose', { type: 'require-confirm', ruleId: 'outbound-sensitive-loose-review', answerer: 'agent' }],
+    ['standard', { type: 'require-confirm', ruleId: 'outbound-sensitive-standard-human', answerer: 'user' }],
+    ['strict', { type: 'require-confirm', ruleId: 'outbound-sensitive-strict-human', answerer: 'user' }]
+  ] as const)('sensitive outbound %s has an explicit answerer and outranks ordinary outbound', (tier, expected) => {
+    const facts = mkFacts('send_message', 'outbound', [
+      { kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] }
+    ])
+    const result = decide(facts, { ...mkContext('desktop'), policyTier: tier }, DEFAULT_POLICY_RULES, deps({ transform: (rule) => effectiveActionFor('desktop', tier, rule) }))
+    expect(result).toMatchObject(expected)
+  })
+
+  it('incomplete outbound facts remain distinct from sensitive content and enter review', () => {
+    const facts = mkFacts('send_message', 'outbound', [
+      { kind: 'outbound-content', inspectionCoverage: 'partial', evidenceKinds: [] }
+    ])
+    expect(decide(facts, { ...mkContext('desktop'), policyTier: 'standard' }, DEFAULT_POLICY_RULES, deps()))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'outbound-incomplete-standard-review', answerer: 'agent' })
+  })
+
+  it('standard Feishu outbound with missing content is marked unavailable and remains in review', () => {
+    const rules = resolveImPolicyRulesForVersion({ policyBehaviorVersion: 'im-standard-v2', pkg: 'standard', rules: DEFAULT_POLICY_RULES })
+    const facts = mkFacts('run_lark_cli', 'outbound', [
+      { kind: 'lark-subcommand', impact: 'low_write', category: 'message', completeness: 'complete', messageTarget: 'self' },
+      { kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: [] },
+      { kind: 'policy-tier', tier: 'standard' }
+    ])
+    const result = decide(facts, { ...mkContext('feishu'), policyTier: 'standard' }, rules,
+      deps({ transform: (rule) => effectiveActionFor('feishu', 'standard', rule) }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
+  })
+
+  it('sensitive outbound in standard IM requires human approval through an explicit policy rule', () => {
+    const facts = mkFacts('wechat_send', 'outbound', [
+      { kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] }
+    ])
+    const result = decide(facts, { ...mkContext('wechat'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('wechat', 'standard', rule) }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-sensitive-standard-human', answerer: 'user' })
+  })
+
+  it('sensitive WeChat attachment evidence participates in the standard outbound policy', () => {
+    const facts = mkFacts('wechat_send', 'outbound', [
+      { kind: 'wechat-media-content-assessment', factId: 'fact-1', contentDigest: 'a'.repeat(64), extractorVersion: 'host-v1',
+        inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] }
+    ])
+    const result = decide(facts, { ...mkContext('wechat'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('wechat', 'standard', rule) }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-sensitive-standard-human', answerer: 'user' })
+  })
+
+  it('ordinary outbound in standard IM is assigned to the policy-selected Agent reviewer', () => {
+    const facts = mkFacts('wechat_reply', 'outbound', [])
+    const result = decide(facts, { ...mkContext('wechat'), policyTier: 'standard' }, DEFAULT_POLICY_RULES,
+      deps({ transform: (rule) => effectiveActionFor('wechat', 'standard', rule) }))
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-mode-standard-review', answerer: 'agent' })
   })
 
   it('read_file 不被评估器截胡（默认放行）', () => {
@@ -717,7 +805,7 @@ describe('decide：远程写会话信任（decision_cache remote-write）', () =
 })
 
 describe('decide：安全不变量（硬约束先于缓存）+ 默认兜底', () => {
-  it('危险信号（script-analysis dangerous）在缓存查询之前被硬拒绝', () => {
+  it('危险脚本信号由显式规则在缓存查询前拒绝', () => {
     const d = decide(
       mkFacts('run_script', 'execute', [
         { kind: 'script-analysis', signal: 'dangerous', patterns: ['rm -rf'] }
@@ -726,7 +814,24 @@ describe('decide：安全不变量（硬约束先于缓存）+ 默认兜底', ()
       DEFAULT_POLICY_RULES,
       deps({ cache: cacheWith('allow') })
     )
-    expect(d.type).toBe('deny')
+    expect(d).toMatchObject({ type: 'deny', ruleId: 'script-dangerous-deny' })
+  })
+
+  it('没有危险脚本规则时不保留隐藏的危险信号终局拒绝', () => {
+    const rules = DEFAULT_POLICY_RULES.filter((rule) => rule.id !== 'script-dangerous-deny')
+    const d = decide(
+      mkFacts('run_script', 'execute', [
+        { kind: 'script-analysis', signal: 'dangerous', patterns: ['rm -rf'] }
+      ], 'high'),
+      mkContext('desktop'), rules, deps({ cache: cacheWith('allow') })
+    )
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'default-write-execute-ask' })
+  })
+
+  it('未受信来源的 declared capability 不绕过正常策略规则', () => {
+    const context = { ...mkContext('desktop'), declaredCapabilities: [{ actionClass: 'execute', scope: '*' }] } as ExecutionContext
+    const d = decide(mkFacts('run_script', 'execute', [], 'medium'), context, DEFAULT_POLICY_RULES, deps())
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'default-write-execute-ask' })
   })
 
   it('deniedTools 配置命中的工具被硬拒绝（第 1 步）', () => {
@@ -1015,7 +1120,7 @@ describe('shell signal tokens', () => {
 })
 
 describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () => {
-  it('desktop 第 6 步 ask → answerer=user（mcp-tool 默认确认）', () => {
+  it('desktop 第 5 步 ask → answerer=user（mcp-tool 默认确认）', () => {
     const d = decide(
       mkFacts('mcp_query', 'write', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
       mkContext('desktop'),
@@ -1027,7 +1132,7 @@ describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () =>
     expect(d.type === 'require-confirm' && d.answerer).toBe('user')
   })
 
-  it('wechat 第 6 步 ask → answerer=user（零行为变化硬回归）', () => {
+  it('wechat 第 5 步 ask → answerer=user（零行为变化硬回归）', () => {
     const d = decide(
       mkFacts('mcp_query', 'write', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
       mkContext('wechat'),

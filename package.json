@@ -10,7 +10,7 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "test": "vitest run --project electron --project renderer",
+    "test": "vitest run --project electron --project agent-sdk --project renderer",
     "pretest": "npm run build:agent-provider-pi-ai",
     "test:watch": "vitest",
     "test:related": "vitest related --run",
@@ -43,7 +43,9 @@
     "check:message-fact-ownership": "node scripts/check-message-fact-ownership.mjs",
     "check:no-nul": "node scripts/check-no-nul.mjs",
     "check:treesitter-wasm": "node scripts/check-treesitter-wasm.mjs",
-    "check:agent-sdk": "node scripts/check-agent-sdk-boundary.mjs && node scripts/check-agent-sdk-dependencies.mjs && node scripts/check-agent-sdk-package-closure.mjs",
+    "check:agent-sdk-dependencies": "node --test scripts/check-agent-sdk-dependencies.test.mjs && node scripts/check-agent-sdk-dependencies.mjs",
+    "check:agent-sdk": "node scripts/check-agent-sdk-boundary.mjs && npm run check:agent-sdk-dependencies && node scripts/check-agent-sdk-package-closure.mjs",
+    "check:system-invariant-registry": "node scripts/check-system-invariant-registry.mjs && node scripts/check-system-invariant-registry.test.mjs",
     "model:baseline": "node --import tsx scripts/generate-model-baseline.mjs",
     "check:model-baseline": "node --import tsx scripts/generate-model-baseline.mjs --check",
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
@@ -60,10 +62,8 @@
     "prepare:rg:all": "node scripts/prepare-ripgrep.mjs",
     "verify:rg:package": "node scripts/verify-ripgrep-package.mjs",
     "reinstall:electron": "rimraf node_modules/electron && npm install",
-    "pack": "npm run prepare:rg && npm run build && electron-builder",
     "pack:win": "npm run prepare:rg -- --target=win32-x64 && npm run build && electron-builder --win",
     "pack:mac": "npm run prepare:rg -- --target=darwin-x64 --target=darwin-arm64 && npm run build && node scripts/pack-mac-sequential.cjs",
-    "pack:linux": "npm run build && electron-builder --linux",
     "build:agent-provider-pi-ai": "tsc -p packages/agent-provider-pi-ai/tsconfig.build.json",
     "check:tool-result-invariants": "node scripts/scan-tool-result-invariants.mjs",
     "test:tool-reliability": "npm run test:electron && npm run check:tool-result-invariants",
@@ -256,12 +256,6 @@
             "arm64"
           ]
         }
-      ]
-    },
-    "linux": {
-      "icon": "res/icons/sa-logo-512.png",
-      "target": [
-        "AppImage"
       ]
     }
   },

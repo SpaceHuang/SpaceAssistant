@@ -1,5 +1,6 @@
 import { classifyLarkCliImpact, classifyLarkMessageTarget } from '../../feishu/larkCliImpactPolicy'
 import type { FactSignal } from '../../../src/shared/confirmation/types'
+import { inspectImOutboundContent } from '../../../src/shared/confirmation/imOutboundFacts'
 
 /** 出站目标提取器：wechat_send/reply 的接收者 → outbound-target 信号。 */
 export function extractOutboundTarget(toolInput: Record<string, unknown>): {
@@ -28,10 +29,27 @@ export function extractLarkSubcommand(toolInput: Record<string, unknown>, truste
     ? 'group-or-multiple'
     : classifyLarkMessageTarget(argv, trustedActorOpenId)
   const { impact } = classification
+  const isMessageOutbound = ['message', 'mail'].includes(String(argv[0] ?? '').toLowerCase()) &&
+    ['send', 'create', 'reply'].includes(String(argv[1] ?? '').toLowerCase())
+  const contentFlags = argv.flatMap((arg, index) => arg === '--text' || arg === '--content' ? [index] : [])
+  let outboundContent: FactSignal[] = []
+  if (isMessageOutbound) {
+    const contentIndex = contentFlags.length === 1 ? contentFlags[0]! : -1
+    const body = contentIndex >= 0 && typeof argv[contentIndex + 1] === 'string' ? String(argv[contentIndex + 1]) : undefined
+    let assessment = body === undefined
+      ? { inspectionCoverage: 'unavailable' as const, evidenceKinds: [] as string[] }
+      : inspectImOutboundContent(body)
+    const attachmentPresent = argv.some((arg) => ['--file', '--image', '--attachment'].includes(String(arg).toLowerCase()))
+    if (attachmentPresent && assessment.inspectionCoverage === 'complete') {
+      assessment = { ...assessment, inspectionCoverage: 'partial' }
+    }
+    outboundContent = [{ kind: 'outbound-content', ...assessment }]
+  }
   const signals: FactSignal[] = [
     // 读/写分类信号（high_impact/unknown fail-closed 必确认，等价现 larkCliWriteNeedsConfirm）
     { kind: 'lark-subcommand', impact, category: classification.category, classificationReason: classification.reason, completeness: impact === 'unknown' ? 'partial' : 'complete',
       ...(classification.category === 'message' || classification.category === 'group_message' || classification.category === 'multi_message' ? { messageTarget } : {}) },
+    ...outboundContent,
     {
       kind: 'outbound-target',
       channel: 'lark-cli',

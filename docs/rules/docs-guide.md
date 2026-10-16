@@ -3,7 +3,7 @@
 > **定位**：`docs/` 文档库的长期统一规范，供后续执行者（人 / Agent）在**新增、搬迁、归档、改写**文档时遵循，保证不同批次的整理口径一致。
 > **依据**：`docs/analyze/2026-10-14-docs-consolidation-plan.md`（下称「计划」）。本指南是计划 **§2 目标结构 / §3 判定规则 / §4 迭代记录规范**的规范化提炼，并整合 §5 流程、§6 批次、§7 风险约束；凡与计划原文冲突，以计划为准。
 > **核对基准**：`main` `17236274`（2026-10-14）。
-> **本文件位置**：`docs/rules/docs-guide.md`（2026-10-15 定稿）—— 与 `reusable-work-method-scenario-blocks.md`（工作方法 SOP）同属「仓库级长期规范」层，**独立于 9 主题体系**。入口见 §9.1。
+> **本文件位置**：`docs/rules/docs-guide.md`（2026-10-15 定稿）—— 属「仓库级长期规范」层（`docs/rules/`），**独立于 9 主题体系**。该层的路由见 [`README.md`](README.md)，文件清单与用途分类见 §9.1。
 > 整理过程档案 `docs/develop/_consolidation/` 属**过程数据**（清单 / 规则 / 核验记录），不承载长期规范。
 > **一句话**：把文档库从「按时间堆积的计划与需求」，改造成「按主题组织的**现状文档** + 已完成迭代的**归档** + 每主题一份**迭代流水账**」。
 > **硬边界**：只动 `.md`（及索引/证据类 `.tsv`、`.json`）；**不改代码**；**不删除文档**（只搬迁 + 重写索引；仅 0 字节空文件按计划 §8-5 删除）。
@@ -600,6 +600,13 @@ git merge main --no-edit        # 只在 worktree 内跑，不触碰 main 工作
 ### 9.1 本指南的归属与入口（2026-10-15 已落地）
 
 - **位置**：`docs/rules/docs-guide.md`（与工作方法 SOP 同层，独立于 9 主题体系）—— ✅ 已就位（此前暂放 `docs/develop/` 根下）。
+- **`docs/rules/` 文件清单（按用途，2026-10-16）**：
+  0. **路由**：`README.md`（任务 → 读哪一篇；只做路由，不承载规则。`AGENTS.md` 只保留一行指引与跨文档硬纪律）。
+  1. **库管理**：`docs-guide.md`（本文件；仅"整理 / 搬迁 / 归档文档"类任务必读）。
+  2. **已归档**：`archive/reusable-work-method-scenario-blocks.md` + `…-sources.md`（2026-10-16 起**不作为正式指南**；内容与 git 历史保留供追溯，**不参与路由**）。
+  3. **元方法的元方法（元指南）**：`document-writing-guide.md` + `…-sources.md` —— 管"这类元方法本身怎么写"：正文与 sources 的归属判据、**通用性准入（§2 判据 C）**、动作导向写法、一条规则只在一处定义、加载层次与路由（跨文件路由集中在元方法目录 `README.md`）、迁移与修订记录。
+  4. **元方法（专题指南）**：`technical-plan-writing-guide.md`（技术方案）、`execution-plan-writing-guide.md`（执行计划）、`requirement-writing-guide.md`（需求）、`interaction-design-guide.md`（交互行为：确认与打断、设置项开关），各自配 `-sources.md`（按需）；后续"代码写作指南"按同一"正文 + `-sources`"成对产出。
+  - **分层惯例**：见 [`document-writing-guide.md`](document-writing-guide.md) §1 —— 正文只放动作；出处、口径、待办主题、维护规则、被精简的举证进 `-sources.md`。
 - **入口**：
   1. ✅ **`AGENTS.md` 已新增「## 文档规范」一节**指向本指南 —— 这是保证「后人找得到」的挂点；
   2. 待定（可选）：新建 `docs/README.md` 作为 `docs/` 总入口，一页说清三分结构 —— **主题体系**（`develop/` + `requirement/`）／**长期规范**（`rules/`）／**冻结边界**（`review/`、`plan/`、`analyze/`、`superpowers/` 等）。

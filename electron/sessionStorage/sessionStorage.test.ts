@@ -571,6 +571,23 @@ describe('SQLite session storage public queries', () => {
     if (inspection.kind === 'available') expect(inspection.fallback).toBeUndefined()
   })
 
+  it('derives recovery facts only from canonical dispatched and settled History events', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'recovery facts', model: 'test' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([
+      { invocationId: 'origin', turnId: 'origin-turn', sequence: 1, schemaVersion: 1, eventId: 'rf-1', idempotencyKey: 'rf-1', kind: 'invocation-context-committed', payload: { messages: [] } },
+      { invocationId: 'origin', turnId: 'origin-turn', sequence: 2, schemaVersion: 1, eventId: 'rf-2', idempotencyKey: 'rf-2', kind: 'tool-call-started', payload: { toolCallId: 'unknown', toolName: 'file.write', inputHash: 'a'.repeat(64) } },
+      { invocationId: 'origin', turnId: 'origin-turn', sequence: 3, schemaVersion: 1, eventId: 'rf-3', idempotencyKey: 'rf-3', kind: 'tool-call-finished', payload: { toolCallId: 'unknown', executionOutcome: 'unknown-after-dispatch', isError: true } },
+      { invocationId: 'origin', turnId: 'origin-turn', sequence: 4, schemaVersion: 1, eventId: 'rf-4', idempotencyKey: 'rf-4', kind: 'tool-call-started', payload: { toolCallId: 'done', toolName: 'file.read', inputHash: 'b'.repeat(64) } },
+      { invocationId: 'origin', turnId: 'origin-turn', sequence: 5, schemaVersion: 1, eventId: 'rf-5', idempotencyKey: 'rf-5', kind: 'tool-call-finished', payload: { toolCallId: 'done', executionOutcome: 'succeeded', isError: false } }
+    ], 0)
+    const facts = createSqliteSessionStorage(db).queries.continuationSources.readRecoveryFacts(session.id)
+    expect(facts).toMatchObject({ unresolvedEffects: [{ id: 'origin:unknown', toolName: 'file.write', inputHash: 'a'.repeat(64) }], toolOutcomes: [
+      { id: 'origin:unknown', outcome: 'unknown-after-dispatch' }, { id: 'origin:done', outcome: 'succeeded' }
+    ] })
+  })
+
   it('rejects a continuation source inspection without a non-empty session ID at the boundary', () => {
     db = createMemoryAppDb()
     const queries = createSqliteSessionStorage(db).queries.continuationSources

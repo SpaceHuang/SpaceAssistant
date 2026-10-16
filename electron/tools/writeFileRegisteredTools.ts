@@ -1,9 +1,10 @@
 import { definePlannedTool, type RegisteredTool, type ToolPlanningContext, type ToolExecutionContext } from './plannedToolRegistry'
 import type { ToolExecutor, ToolExecutionContext as RuntimeExecutionContext, ToolExecutorResult } from './types'
 import { validateWriteExecutionPermit, type WriteExecutionPermit } from '../confirmation/writeExecutionPermit'
+import { recordPolicyExecutionVeto } from '../confirmation/audit'
 
 type WriteToolName = 'write_file' | 'edit_file'
-type PermitSnapshot = Pick<WriteExecutionPermit, 'requestId' | 'toolUseId' | 'toolName' | 'inputDigest' | 'decisionRuleId' | 'approval'> & {
+type PermitSnapshot = Pick<WriteExecutionPermit, 'requestId' | 'invocationId' | 'toolUseId' | 'toolName' | 'inputDigest' | 'decisionId' | 'policyDependencyFingerprint' | 'subjectDigest' | 'schemaVersion' | 'decisionRuleId' | 'approval'> & {
   target: WriteExecutionPermit['target']
 }
 type PreparedWrite = Readonly<{
@@ -17,13 +18,24 @@ function currentRuntime(context: ToolExecutionContext): RuntimeExecutionContext 
   return runtime
 }
 
+function auditPermitVeto(runtime: RuntimeExecutionContext, name: WriteToolName, permit: WriteExecutionPermit | undefined, caseId: string): void {
+  recordPolicyExecutionVeto({ audit: runtime.audit, lane: (runtime.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop',
+    sessionId: runtime.sessionId, requestId: runtime.requestId, toolUseId: runtime.toolUseId, toolName: name,
+    decisionId: permit?.decisionId, decisionRuleId: permit?.decisionRuleId, failureClass: 'integration-violation', caseId, invariantId: 'SYS-PERMIT-001' })
+}
+
 function snapshotPermit(permit: WriteExecutionPermit | undefined): PermitSnapshot | undefined {
   if (!permit) return undefined
   return structuredClone({
     requestId: permit.requestId,
+    invocationId: permit.invocationId,
     toolUseId: permit.toolUseId,
     toolName: permit.toolName,
     inputDigest: permit.inputDigest,
+    decisionId: permit.decisionId,
+    policyDependencyFingerprint: permit.policyDependencyFingerprint,
+    subjectDigest: permit.subjectDigest,
+    schemaVersion: permit.schemaVersion,
     decisionRuleId: permit.decisionRuleId,
     approval: permit.approval,
     target: permit.target
@@ -62,10 +74,14 @@ function registerWriteTool(name: WriteToolName, executor: ToolExecutor): Registe
     validate: (prepared, execution) => {
       const runtime = currentRuntime(execution)
       const permit = runtime.writeExecutionPermit
-      if (!permit) throw new Error('write-permit-missing')
+      if (!permit) {
+        auditPermitVeto(runtime, name, undefined, 'write-permit-missing')
+        throw new Error('write-permit-missing')
+      }
       const bound = boundPermits.get(prepared) ?? prepared.permit
       if (!bound) boundPermits.set(prepared, snapshotPermit(permit)!)
       else if (stablePermitSnapshot(snapshotPermit(permit)) !== stablePermitSnapshot(bound)) {
+        auditPermitVeto(runtime, name, permit, 'write-prepared-permit-changed')
         throw new Error('WRITE_PREPARED_PERMIT_CHANGED')
       }
       const valid = validateWriteExecutionPermit(permit, {
@@ -74,7 +90,10 @@ function registerWriteTool(name: WriteToolName, executor: ToolExecutor): Registe
         toolName: name,
         input: prepared.input
       })
-      if (!valid.ok) throw new Error(valid.caseId)
+      if (!valid.ok) {
+        auditPermitVeto(runtime, name, permit, valid.caseId)
+        throw new Error(valid.caseId)
+      }
     },
     execute: async (prepared, execution) => {
       const runtime = currentRuntime(execution)

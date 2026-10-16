@@ -72,10 +72,9 @@ describe('phase2 remote confirm defaults（经 toolCallGate + 规则表）', () 
     expect(await lark(['message', 'send', '--chat-type', 'group', '--receive-id', 'oc_x'], { larkCliWriteRequiresConfirm: false })).toBe(true)
   })
 
-  it('low-impact lark write can skip when switch explicitly false', async () => {
-    expect(
-      await lark(['message', 'send', '--receive-id', 'ou_1'], { larkCliWriteRequiresConfirm: false })
-    ).toBe(false)
+  it('low-impact document writes can skip while incomplete outbound messages still require review', async () => {
+    expect(await lark(['doc', 'create', '--title', 'Draft'], { larkCliWriteRequiresConfirm: false })).toBe(false)
+    expect(await lark(['message', 'send', '--receive-id', 'ou_1'], { larkCliWriteRequiresConfirm: false })).toBe(true)
   })
 
   it('high-impact ops always confirm even when old write-pair list misses them', async () => {

@@ -285,7 +285,12 @@
     }
   },
   "chatView": {
+    "recoveryCancel": "Cancel",
     "continuationStarted": "Continuing the previous run",
+    "recoveryRiskTitle": "Unable to check the unresolved operation",
+    "recoveryRiskBody": "No reviewed read-only checker is available. The outcomes of these operations remain unknown: {{operations}}. If you accept the risk of duplicate side effects during this recovery, access can be granted only for the current recovery invocation. The original operation remains unresolved, and subsequent operations still pass the normal safety approval.",
+    "recoveryRiskAccept": "Accept this run's risk and continue",
+    "recoveryRetryOnce": "Retry once: {{tool}}",
     "statusLabel": "Status",
     "warnings": {
       "selectSession": "Select a session and wait for settings to load",
@@ -296,6 +301,7 @@
       "apiKeyMissing": "Configure an API Key in Settings first",
       "retryNoUserMessage": "Could not find a previous user message to retry",
       "continuationUnavailable": "This failure has no checkpoint that can be safely continued. Retry generation or review the failure reason.",
+      "continuationNoChecker": "An operation still has an unknown outcome, and no reviewed read-only checker is available. New tool operations will be blocked during recovery; the unresolved operation remains unknown.",
       "continuationSourceSelectionTitle": "Choose a failed run to continue",
       "continuationSourceSelectionBody": "This conversation has multiple failed tasks. Continue the latest failed run or send the original input as a normal new task.",
       "continuationContinueLatest": "Continue latest",

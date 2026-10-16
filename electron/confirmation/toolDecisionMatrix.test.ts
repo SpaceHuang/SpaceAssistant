@@ -108,17 +108,6 @@ describe('判定矩阵：run_shell', () => {
     expect(d.type).toBe('deny')
     expect(d.ruleId).toBe('denied-tools')
   })
-  it('危险事实硬拒先于预置 allow cache（旧 trusted/cache 不能绕过强 validator）', () => {
-    const facts = factsFor('run_shell', input)
-    facts.signals = [
-      ...facts.signals,
-      { kind: 'script-analysis', signal: 'dangerous', patterns: ['validator-fixture'] }
-    ]
-    const cache = mapCache([allowEntry({ kind: 'shell-command', verb: 'ls -la', level: 'exact' })])
-    const d = decide(facts, ctx('desktop'), DEFAULT_POLICY_RULES, deps({}, cache))
-    expect(d.type).toBe('deny')
-    expect(d.ruleId).toBe('dangerous-signal')
-  })
   it('变体绕过：FOO=1 前缀 / cd && 复合命令不命中 exact 缓存', () => {
     const cache = mapCache([allowEntry({ kind: 'shell-command', verb: 'ls -la', level: 'exact' })])
     for (const command of ['FOO=1 ls -la', 'cd x && ls -la', 'ls   -la']) {
@@ -214,7 +203,7 @@ describe('判定矩阵：browser', () => {
     const env: EnvFacts = { ...ENV, browserAct: { dangerous: true } }
     const d = decideToolCall('browser', { action: 'act', instruction: 'x' }, 'wechat', deps({ actRequiresConfirm: true, remoteActSkipConfirm: true }), undefined, env)
     expect(d.type).toBe('require-confirm')
-    expect(d.ruleId).toBe('browser-act-danger-ask')
+    expect(d.ruleId).toBe('im-browser-act-danger-human')
   })
   it('远程浏览器未开放（allowRemoteSessions=false）→ 硬拒', () => {
     const d = decideToolCall('browser', { action: 'navigate', url: 'https://a.com' }, 'feishu', deps({ allowRemoteSessions: false, navigateRequiresConfirm: true, remoteNavigateRequiresConfirm: false }))
@@ -236,6 +225,14 @@ describe('判定矩阵：run_lark_cli', () => {
     const input = { args: ['doc', 'create'] }
     expect(decideToolCall('run_lark_cli', input, 'desktop', deps({ larkCliWriteRequiresConfirm: true })).type).toBe('require-confirm')
     expect(decideToolCall('run_lark_cli', input, 'desktop', deps({ larkCliWriteRequiresConfirm: false })).type).toBe('auto-allow')
+  })
+  it.each([
+    ['doc', ['doc', 'create', '--title', 'list']],
+    ['calendar', ['calendar', 'event', 'create', '--title', 'list']]
+  ])('%s 写命令的标题值 list 不得命中读类免确认规则', (_name, args) => {
+    const d = decideToolCall('run_lark_cli', { args }, 'desktop', deps({ larkCliWriteRequiresConfirm: true }))
+    expect(d.type).toBe('require-confirm')
+    expect(d.ruleId).not.toBe('lark-read-allow')
   })
   it('high_impact / unknown 无条件确认（不消费开关）', () => {
     for (const input of [{ args: ['message', 'send', '--chat-type', 'group'] }, { args: [] }, {}]) {

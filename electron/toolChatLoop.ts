@@ -17,6 +17,7 @@ import { countVisibleTitleMessagesForSuggest, reachedCumulativeMessagesForTitleS
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from '../packages/agent-sdk/src/history'
+import { createUnknownEffectBeforeDispatchLease } from './runtime/unknownEffectRecovery'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
 import { createTurnScopedHistoryMemo } from './runtime/turnScopedHistoryMemo'
 import { CanonicalCompactionCommitUncertainError, toCanonicalModelMessages } from './runtime/canonicalHistory'
@@ -161,6 +162,7 @@ export type RunToolChatSessionArgs = {
     hostHistory?: import('../packages/agent-sdk/src/history').HistoryPort
     afterToolResult?: import('../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
     beforeToolDispatch?: import('../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
+    beforeDispatchLease?: import('../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']
     initialResponse?: HostCommittedModelResponse
     currentUserMessageId?: string
     assistantMessageId?: string
@@ -801,6 +803,9 @@ async function runToolChatSessionInner(
     if (!priorResponseFailures) return { kind: 'dispatch' }
     return { kind: 'reject', reasonCode: 'REPEATED_SEMANTIC_CALL', message: 'The same semantic tool operation has failed repeatedly. Do not execute it again; explain the blocker or ask the user for guidance.' }
   }
+  const beforeDispatchLease: NonNullable<import('../packages/agent-sdk/src/turn').AgentTurnPorts['beforeDispatchLease']> = args.history
+    ? createUnknownEffectBeforeDispatchLease(args.history)
+    : async () => ({ kind: 'reject', reasonCode: 'RECOVERY_HISTORY_UNAVAILABLE', message: 'Recovery state could not be verified; no tool was dispatched.' })
   let effortOutputConfig = requestedOutputConfig
   const thinkingAvailability = resolveThinkingAvailability(model, {
     effortUnsupportedByMemo: isEffortUnsupportedByUpstream(args.llmServiceId, model)
@@ -1045,6 +1050,7 @@ async function runToolChatSessionInner(
             resolveRegisteredToolName: (providerToolName) => compatToInternal.get(providerToolName) ?? providerToolName,
             afterToolResult,
             beforeToolDispatch,
+            beforeDispatchLease,
             // FR3/A 方案：延迟名随依赖传入，capabilities.define 并入 known + authorized（门禁簿记，零上下文成本）
             deferredToolNames,
             deferredUnsurfacedCheck,

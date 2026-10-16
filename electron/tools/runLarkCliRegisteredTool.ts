@@ -4,6 +4,7 @@ import { assertSafeLarkCliArgs } from '../feishu/larkCliSecurity'
 import { definePlannedTool, type RegisteredTool, type ToolExecutionContext } from './plannedToolRegistry'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { RemoteContext, ToolExecutionContext as RuntimeExecutionContext, ToolExecutor, ToolExecutorResult } from './types'
+import { extractLarkSubcommand } from '../confirmation/extractors/outboundExtractors'
 
 type FeishuAuthorizationBinding = Readonly<{
   cliPath?: string
@@ -115,12 +116,19 @@ export function createRunLarkCliRegisteredTool(executor: ToolExecutor): Register
         signal: execution.signal
       })
     },
-    facts: (prepared) => ({
-      inputHash: hash(prepared.input),
-      argvHash: prepared.normalizedArgs ? hash(prepared.normalizedArgs) : undefined,
-      timeoutSec: prepared.timeoutSec,
-      authorizationBindingHash: hash(prepared.binding)
-    }),
+    facts: (prepared) => {
+      const outboundPolicyFacts = extractLarkSubcommand(
+        { args: prepared.normalizedArgs ?? prepared.input.args },
+        typeof prepared.binding.remote?.authOwner === 'string' ? prepared.binding.remote.authOwner : undefined
+      ).signals.filter((signal) => signal.kind === 'outbound-content')
+      return {
+        inputHash: hash(prepared.input),
+        argvHash: prepared.normalizedArgs ? hash(prepared.normalizedArgs) : undefined,
+        timeoutSec: prepared.timeoutSec,
+        authorizationBindingHash: hash(prepared.binding),
+        outboundPolicyFacts
+      }
+    },
     display: (prepared) => ({
       subcommand: prepared.normalizedArgs?.[0] ?? 'invalid',
       argumentCount: prepared.normalizedArgs?.length ?? 0

@@ -13,6 +13,7 @@
 | 2026-09-11 | `skill-install-size-limit-and-cloud-install-requirement`（v1.0） | 安装体积限制与云端安装（决策闭环） | — |
 | 2026-09-12 | `skill-github-nested-directory-discovery-requirement`（v1.4） | GitHub 嵌套目录发现 | — |
 | 2026-10-10 | `wiki-shared-centralized-storage-requirement`（v1.12） | Wiki 集中共享存储 | `5c7e7a8a`（实现先于需求回写） |
+| 2026-10-16 | `skills-requirement` | Skills 用户级存储需求范围收敛为 Windows/macOS 支持平台 | 撤销 Linux 桌面端支持承诺 |
 | — | `skills-requirement` | Skills 机制总纲（A 类） | — |
 | — | `project-memory-requirement` | 项目记忆 | — |
 

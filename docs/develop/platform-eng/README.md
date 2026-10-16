@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | [release-guide.md](./release-guide.md) | 指南 | 发版流程（版本号一致性、tag、打包） |
 | [i18n-sync-guide.md](./i18n-sync-guide.md) | 指南 | i18n 资源同步：`npm run i18n:generate-types` / `i18n:check` |
+| [testing-guide.md](./testing-guide.md) | 指南 | 测试基建：Vitest projects 配置、测试文件位置、不变量测试要求 |
 | [tech_design.md](./tech_design.md) | 技术设计总纲 | 早期设计说明；与现役架构文档冲突处以 `architect/` 与代码为准 |
 
 ## 归档（10 件）
