@@ -12,6 +12,11 @@ describe('larkCliImpactPolicy', () => {
     expect(r.impact).toBe('low_write')
   })
 
+  it.each(['get', 'list', 'search', 'info', 'show'])('mail send option value %s does not change the write classification', (subject) => {
+    expect(classifyLarkCliImpact(['mail', 'send', '--to', 'owner@example.test', '--subject', subject, '--text', 'password=supersecret']))
+      .toMatchObject({ impact: 'low_write', category: 'message' })
+  })
+
   it('classifies Feishu message recipients only from explicit open_id and trusted actor identity', () => {
     expect(classifyLarkMessageTarget(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_self'], 'ou_self')).toBe('self')
     expect(classifyLarkMessageTarget(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other'], 'ou_self')).toBe('direct-other')

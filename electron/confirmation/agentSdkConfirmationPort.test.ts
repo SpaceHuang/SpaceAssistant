@@ -143,15 +143,15 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(result).toMatchObject({ kind: 'approved', answerer: 'user', cause: 'user-approved' })
   })
 
-  it('Agent cannot turn an IM outbound action into agent-approved', async () => {
+  it('Agent outbound result follows the policy answerer; the port does not add a second veto', async () => {
     const channel: ConfirmationChannel = { request: async () => ({ kind: 'approved', answererKind: 'agent', cause: 'agent-approved' }), cancel: vi.fn() }
     const onApproved = vi.fn()
     const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: async () => undefined, cancel: vi.fn(), onApproved })
     await expect(port({ call: { invocationId: 'inv', toolCallId: 'outbound-agent', toolName: 'send_message', input: {} },
       confirmationId: 'outbound-agent', answerer: 'agent', reasonCode: 'agent-approval',
       context: { ...context, facts: { ...facts, toolName: 'send_message', actionClass: 'outbound' } } }))
-      .resolves.toMatchObject({ kind: 'denied', answerer: 'agent', cause: 'rules-violated' })
-    expect(onApproved).not.toHaveBeenCalled()
+      .resolves.toMatchObject({ kind: 'approved', answerer: 'agent', cause: 'agent-approved' })
+    expect(onApproved).toHaveBeenCalledOnce()
   })
 
   it('从 policy context 还原 ConfirmRequest，并在发布卡片前登记 channel waiter', async () => {
@@ -277,6 +277,16 @@ describe('createAgentSdkConfirmationPort', () => {
     await expect(pending).resolves.toEqual({ kind: 'cancelled', cause: 'cancelled' })
     expect(cancel).toHaveBeenCalledOnce()
     expect(channel.cancel).toHaveBeenCalledWith('tool-1', 'cancelled')
+  })
+
+  it('passes snapshot provenance intact to the confirmation channel', async () => {
+    const channel = { request: vi.fn(async () => ({ kind: 'rejected' as const, cause: 'agent-deny' as const, answererKind: 'agent' as const })), cancel: vi.fn() }
+    const publish = vi.fn()
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish, cancel: vi.fn() })
+    const factsProvenance = { factId: 'fact-0123456789abcdef01234567', extractorVersion: 'host-tool-facts-v1', completeness: 'partial' as const, factsRevision: 2, policyVersion: 'policy-v1' }
+    await port({ call: { invocationId: 'inv', toolCallId: 'tool-provenance', toolName: 'write_file', input: {} }, confirmationId: 'tool-provenance', answerer: 'agent', reasonCode: 'ask', context: { ...context, factsProvenance } })
+    expect(channel.request).toHaveBeenCalledWith(expect.objectContaining({ factsProvenance }))
+    expect(publish).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ factsProvenance }), 'tool-provenance', expect.objectContaining({ factsProvenance }))
   })
 
   it('Desktop request cancellation resolves the real confirmation waiter and SDK port', async () => {

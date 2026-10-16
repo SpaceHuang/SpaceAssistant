@@ -242,7 +242,7 @@ MCP 工具在注册时按 server 声明的只读/写能力归类；缺元数据�
 
 | 现状判定来源 | 现状结论 | 迁移后事实/信号 | 桌面链路规则 | 远程链路规则 | 等价性说明 |
 |---|---|---|---|---|---|
-| `analyzeScriptContent` | `verdict: 'allow'` | `clean` | **auto-allow**（跳过确认） | **clean + 已认证 → 消费 `remoteScriptRequiresConfirm`**（配置为 false 且安全迁移完成 → auto-allow，否则 ask；迁移门控语义保留为规则参数）；**clean + 未认证（`script-uncertified`）→ ask** | 等价。桌面现状 verdict allow 即 `needsConfirm = false` 直接执行（`toolChatLoop.ts:1407-1417`）；远程现状由 `shouldSkipRemoteScriptConfirmOnAllow` 门控（`remoteToolPolicy.ts:81-84`：安全迁移完成且 `remoteScriptRequiresConfirm === false` 才 skip，默认确认）。§5.2 落对应默认规则条目承载 |
+| `analyzeScriptContent` | `verdict: 'allow'` | `clean` | **auto-allow**（跳过确认） | **clean + 已认证 → 消费 `remoteScriptRequiresConfirm`**（配置为 false 且安全迁移完成 → auto-allow，否则 ask；迁移门控语义保留为规则参数）；**clean + 未认证（`script-uncertified`）→ ask** | 等价。桌面现状 verdict allow 即 `needsConfirm = false` 直接执行（`toolChatLoop.ts:1407-1417`）；迁移后由 `script-clean-certified-remote` 规则消费 `remoteScriptRequiresConfirm` 和迁移完成状态（默认确认）。§5.2 落对应默认规则条目承载 |
 | `analyzeScriptContent` | `verdict: 'ask'` | `suspicious` | 确认 | 确认 | 等价（预置套餐下 suspicious → 确认） |
 | `analyzeScriptContent` | `verdict: 'deny'` | `dangerous` | 硬拒绝 | 硬拒绝 | 等价（预置套餐下 dangerous → 硬拒绝） |
 | `analyzeScriptContent` **网络模式命中**（现 `networkVerdict`） | **桌面 ask / 远程 deny**（`ctx?.remote ? 'deny' : 'ask'`） | **`script-network` 信号**（脚本专属，随 script 信号携带 patterns；与通用 `network-egress` 区分） | **ask** | **deny** | **裁决：按 lane 分叉两条规则定死，且 match 均限定 `toolName: 'run_script'` + `signals: ['script-network']`**——`{ lane: ['desktop'], … } → ask`、`{ lane: ['wechat','feishu'], … } → deny`。禁止把网络命中笼统映射 dangerous（会把桌面从"问"静默升级为"拒"）或 suspicious（会把远程从"拒"松动为"问"）；**双重限定（独立信号 + toolName）确保 browser / run_shell 的通用 `network-egress` 不受波及**（远程 browser navigate 默认免确认、browser act 走确认、shell 网络命令按模式判定等现状行为逐项不变，回归用例见 §9） |
@@ -335,7 +335,7 @@ function decideIngress(
   action: 'ask', reason: '未通过远程安全认证的脚本需确认' }
 
 // 远程 clean 已认证脚本：消费 remoteScriptRequiresConfirm 配置（迁移门控语义保留为规则参数；
-// 等价于现 shouldSkipRemoteScriptConfirmOnAllow：安全迁移完成且配置为 false 才 skip，默认确认）
+// 由策略规则消费：安全迁移完成且配置为 false 才允许，否则默认确认）
 { id: 'script-clean-certified-remote', when: 'invocation',
   match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['clean'] },
   action: 'ask', askUnless: { config: 'remoteScriptRequiresConfirm', equals: false, andMigrationComplete: true },

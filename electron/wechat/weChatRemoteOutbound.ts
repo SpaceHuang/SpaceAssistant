@@ -6,6 +6,7 @@ import { maybeTouchOutboundActivity } from '../remote/imRemoteOutbound'
 import { formatWeChatSummary, type WeChatReplyBot } from './weChatReplyService'
 import { logWeChatCliEvent } from './weChatCliLogger'
 import { sendRemoteTrackOutbound, type RemoteTrackOutboundDeliveryContext } from '../remote/remoteTrackOutbound'
+import { assertSystemImOutboundPolicy } from '../../src/shared/policy/imOutboundPolicy'
 
 const WECHAT_SUMMARY_MAX = 2000
 
@@ -25,6 +26,7 @@ export async function sendWeChatRemoteOutbound(args: {
   const outboundFacts = args.outboundDeliveryFacts ?? (args.ownerId ? createHostImOutboundFacts({ channel: 'wechat', purpose: 'system-reply',
     body, sessionId, identityKey: inbound.userId, ownerId: args.ownerId, recipient: inbound.userId, chatType: 'p2p', destinationId }) : undefined)
   if (!outboundFacts) throw new Error('WECHAT_OUTBOUND_FINAL_CHECK_REQUIRED')
+  assertSystemImOutboundPolicy(outboundFacts)
   assertImOutboundAllowed(outboundFacts, { channel: 'wechat', body, sessionId, recipient: inbound.userId, destinationId })
   const base = formatWeChatSummary(body)
   let text: string

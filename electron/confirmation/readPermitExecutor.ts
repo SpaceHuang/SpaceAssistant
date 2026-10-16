@@ -21,7 +21,7 @@ export function resolveReadPermitTarget(toolName: 'read_feishu_attachment', inpu
 export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | 'list_directory' | 'read_feishu_attachment', input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<FilePermitResolveSuccess | DirectoryPermitResolveSuccess | FeishuPermitResolveSuccess | PermitResolveFailure> {
   const permit: ReadExecutionPermit | undefined = ctx.readExecutionPermit
   const deny = (caseId: string, failureClass: 'input' | 'mechanism' | 'environment' | 'integration-violation') => {
-    recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName, decisionRuleId: permit?.decisionRuleId, pathZone: permit?.targets[0]?.zone, factId: permit?.targets[0]?.factId, failureClass, caseId })
+    recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, decisionId: permit?.decisionId, toolName, decisionRuleId: permit?.decisionRuleId, pathZone: permit?.targets[0]?.zone, factId: permit?.targets[0]?.factId, failureClass, caseId, invariantId: 'SYS-PERMIT-001' })
     return { ok: false as const, caseId, failureClass, ...(permit?.targets[0]?.factId ? { factId: permit.targets[0].factId } : {}) }
   }
   if (ctx.signal?.aborted) return deny('read-permit-cancelled', 'environment')

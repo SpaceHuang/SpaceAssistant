@@ -4408,6 +4408,38 @@ describe('runAgentTurn', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
+  it('runs a fresh policy recheck when the broad authorization snapshot changes', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'unrelated-policy-change', stream: () => ++providerCalls === 1 ? stream(
+      { type: 'tool-call', toolCallId: 'policy-change-call', toolName: 'lookup', input: { query: 'weather' } },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) : stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }) })
+    const invocationId = 'unrelated-policy-change'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const execute = vi.fn(async () => ({ output: 'fresh policy permits execution' }))
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, request: { messages: [], maxTokens: 16 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: {
+        evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion })
+      } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        inputSnapshotHash: 'same-input', authorizationVersion: stage.kind === 'initial' ? 'before' : 'after',
+        phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: createPermitBoundToolExecutionPort({
+        permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+        resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+          capabilityId: call.toolName, inputSnapshotHash: 'same-input', authorizationVersion: 'after', phase: 'recheck' }),
+        execute
+      }),
+      maxModelTurns: 2
+    })
+    expect(result.modelTurns).toBe(2)
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
   it('discards a freshly issued permit when cancellation wins during recheck', async () => {
     const registry = new ModelProviderRegistry()
     registry.register(route, { providerId: 'fake', stream: () => stream(

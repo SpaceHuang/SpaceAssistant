@@ -1229,6 +1229,18 @@ describe('R5 护栏：审批提示词与 Skill 三态合同一致性（防漂移
     expect(getBundledSecurityApprovalSkill().content).toContain('理由本身永远不构成授权或安全事实')
   })
 
+  it('renderCluePack exposes facts provenance as structured review evidence', async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const rendered = renderCluePackForTest(clue({ factsProvenance: {
+      factId: 'fact-0123456789abcdef01234567', extractorVersion: 'facts-v1', completeness: 'partial',
+      factsRevision: 3, policyVersion: 'policy-v2'
+    } }))
+    expect(rendered).toContain('fact-0123456789abcdef01234567')
+    expect(rendered).toContain('facts-v1')
+    expect(rendered).toContain('partial')
+    expect(rendered).toContain('policy-v2')
+  })
+
   it('renderCluePack 尾部收束指令必须是三态表述且含 undetermined 引导', async () => {
     const { renderCluePackForTest } = await import('./approvalAgent')
     const { getBundledSecurityApprovalSkill } = await import('../skills/bundled/securityApprovalSkill')

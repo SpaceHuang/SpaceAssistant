@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import type { ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import { assessImOutboundContent } from '../../src/shared/confirmation/outboundClassification'
+import { createImOutboundFacts } from '../../src/shared/confirmation/imOutboundFacts'
 import { definePlannedTool, type RegisteredTool, type ToolExecutionContext } from './plannedToolRegistry'
 import type { RemoteContext, ToolExecutionContext as RuntimeExecutionContext, ToolExecutor, ToolExecutorResult } from './types'
 import { inspectWeChatTaskReplyAttachment } from './weChatToolExecutor'
@@ -22,6 +23,14 @@ type PreparedOutbound = Readonly<{
   wechatConfig?: WeChatConfig
   outboundDeliveryFacts: ImOutboundFacts
 }>
+
+export function projectOutboundDeliveryPolicyFacts(value: unknown): import('../../src/shared/confirmation/types').FactSignal[] {
+  if (!value || typeof value !== 'object') return []
+  const facts = value as ImOutboundFacts
+  const content = facts.contentFacts
+  if (!content) return facts.contentCompleteness === 'complete' ? [] : [{ kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: [] }]
+  return [{ kind: 'outbound-content', inspectionCoverage: content.inspectionCoverage, evidenceKinds: content.evidenceKinds }]
+}
 
 function runtimeContext(context: ToolExecutionContext): RuntimeExecutionContext {
   const runtime = context.runtimeContext as RuntimeExecutionContext | undefined
@@ -64,6 +73,7 @@ async function deliveryFacts(name: 'wechat_send' | 'wechat_reply', input: Record
     }
   }
   const textAssessment = text === undefined ? 'unknown' : assessImOutboundContent(text)
+  const textFacts = text === undefined ? undefined : await createImOutboundFacts(text)
   const taskReplyBindingValid = name === 'wechat_reply' && !modelRecipient && remote?.source === 'wechat' &&
     Boolean(remote.userId && remote.authOwner === remote.userId && remote.originSessionId === runtime.sessionId &&
       remote.currentUserMessageId && remote.taskBinding)
@@ -86,7 +96,7 @@ async function deliveryFacts(name: 'wechat_send' | 'wechat_reply', input: Record
     ...(text !== undefined ? { content: text } : {}),
     ...(text !== undefined ? { contentAssessment: { source: 'host' as const, content: text,
       classification: textAssessment,
-      classifierVersion: 'host-im-outbound-v1' } } : {}),
+      classifierVersion: 'host-im-outbound-v1' }, contentFacts: textFacts } : {}),
     contentCompleteness: controlledTaskReply ? 'complete' : 'unknown',
     hasAttachment: requestedAttachment,
     ...attachment
@@ -166,7 +176,8 @@ function registerOutbound(name: 'wechat_send' | 'wechat_reply', executor: ToolEx
     },
     facts: (prepared) => ({
       bindingHash: fingerprint(preparedSnapshot(prepared)),
-      inputHash: createHash('sha256').update(JSON.stringify(prepared.input)).digest('hex')
+      inputHash: createHash('sha256').update(JSON.stringify(prepared.input)).digest('hex'),
+      outboundPolicyFacts: projectOutboundDeliveryPolicyFacts(prepared.outboundDeliveryFacts)
     }),
     display: (prepared) => ({
       toolName: name,

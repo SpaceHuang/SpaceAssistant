@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
-import { createWeChatOutboundRegisteredTools } from './wechatOutboundRegisteredTools'
+import { createWeChatOutboundRegisteredTools, projectOutboundDeliveryPolicyFacts } from './wechatOutboundRegisteredTools'
 import { executeRegisteredTool } from './toolInvocationCoordinator'
 import { createPermitBoundCoordinatorDispatch } from './permitBoundCoordinatorDispatch'
 import { createRegisteredAgentTurnTools } from './registeredAgentTurnTools'
@@ -14,7 +15,10 @@ import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { executeWeChatSend, WeChatOutboundExecutionUncertainError } from './weChatToolExecutor'
-import { assertImOutboundAllowed, classifyImOutbound } from '../../src/shared/confirmation/outboundClassification'
+import { assertImOutboundAllowed } from '../../src/shared/confirmation/outboundClassification'
+import { evaluateToolCallGate } from '../confirmation/toolCallGate'
+import { createAgentSdkSafetyPolicy } from '../confirmation/agentSdkSafetyPolicy'
+import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 
 function makeRuntime() {
   return {
@@ -34,6 +38,30 @@ function makeRuntime() {
 }
 
 describe('WeChat outbound prepared registrations', () => {
+  it('projects only host assessment evidence into policy facts and ignores model supplied contentFacts', async () => {
+    const send = vi.fn()
+    const [tool] = createWeChatOutboundRegisteredTools({ send: { name: 'wechat_send', execute: send } as never, reply: { name: 'wechat_reply', execute: vi.fn() } as never })
+    const prepared = await tool!.begin({ userId: 'friend', text: 'token=sk-1234567890abcdefghijklmnop', contentFacts: { evidenceKinds: [] } }, {
+      requestId: 'r', toolUseId: 't', executionContext: { workDir: '/tmp', sessionId: 's', lane: 'desktop' } as never
+    })
+    const gateFacts = tool!.getPreparedFacts?.(prepared.prepared) as { outboundPolicyFacts?: Array<{ kind: string; classification?: string }> }
+    expect(gateFacts.outboundPolicyFacts).toEqual([expect.objectContaining({ kind: 'outbound-content', inspectionCoverage: 'complete', evidenceKinds: ['credential-like-pattern'] })])
+    expect(gateFacts.outboundPolicyFacts?.[0]).not.toHaveProperty('classification')
+    expect(JSON.stringify(gateFacts)).not.toContain('sk-1234567890')
+    const callInput = { userId: 'friend', text: 'token=sk-1234567890abcdefghijklmnop' }
+    const binding = { requestId: 'r', turnId: 'turn', invocationId: 'inv', toolCallId: 't', capabilityId: 'wechat_send', inputSnapshotHash: createHash('sha256').update('{"text":"token=sk-1234567890abcdefghijklmnop","userId":"friend"}').digest('hex'), planDigest: prepared.prepared.planDigest, factsDigest: prepared.prepared.factsDigest, authorizationVersion: 'v1', phase: 'initial-compat' as const, capability: { state: 'known-authorized' as const, id: 'wechat_send' } }
+    const call = { invocationId: 'inv', toolCallId: 't', toolName: 'wechat_send', input: callInput }
+    const policy = createAgentSdkSafetyPolicy({
+      resolveToolCall: () => call,
+      resolveGateArgs: async () => ({ toolName: 'wechat_send', toolInput: { userId: 'friend', text: 'token=sk-1234567890abcdefghijklmnop' }, sessionId: 's', lane: 'desktop', workDir: '/tmp', userDataDir: '/tmp', toolsConfig: {}, effectiveRules: DEFAULT_POLICY_RULES, lanePackage: 'standard', decisionCache: { lookup: () => null }, shellPrecheck: { touchTrustedCommand() {} } } as never),
+      getPreparedFacts: (identity) => identity.toolCallId === 't' ? tool!.getPreparedFacts?.(prepared.prepared) : undefined,
+      evaluateGate: evaluateToolCallGate
+    })
+    await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'outbound-sensitive-standard-human' })
+    prepared.fail()
+    prepared.release()
+  })
+
   it('sends a user-approved desktop wechat_send after binding it to the active desktop session', async () => {
     const sessionId = 'desktop-active-send-session'
     const workDir = '/tmp'
@@ -70,7 +98,7 @@ describe('WeChat outbound prepared registrations', () => {
         taskBinding: { workflowId: 'im:request-text-reply', taskId: 'turn:request-text-reply', stepId: 'request', planRevision: 1, revision: 1 } }
     }
     const reply = vi.fn(async (_input: unknown, context: { outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) => ({
-      success: context.outboundDeliveryFacts ? classifyImOutbound(context.outboundDeliveryFacts).kind === 'controlled-reply' : false
+      success: context.outboundDeliveryFacts ? context.outboundDeliveryFacts.contentCompleteness === 'complete' : false
     }))
     const [, replyTool] = createWeChatOutboundRegisteredTools({
       send: { name: 'wechat_send', execute: vi.fn() } as never,
@@ -92,11 +120,11 @@ describe('WeChat outbound prepared registrations', () => {
 
   it('a cached allow and user approval still cannot turn a sensitive attachment into a task reply', async () => {
     const runtime = makeRuntime()
-    let preparedClassification: ReturnType<typeof classifyImOutbound> | undefined
+    let preparedFacts: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts | undefined
     const sideEffect = vi.fn(async () => undefined)
     const sendExecutor = vi.fn(async (_input: unknown, context: { outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts }) => {
-      preparedClassification = context.outboundDeliveryFacts ? classifyImOutbound(context.outboundDeliveryFacts) : undefined
-      if (preparedClassification?.kind !== 'controlled-reply') return { success: false, error: 'ACTIVE_OUTBOUND_REQUIRES_SEPARATE_AUTHORIZATION' }
+      preparedFacts = context.outboundDeliveryFacts
+      if (preparedFacts?.purpose !== 'task-reply' || preparedFacts.recipient !== preparedFacts.trustedRecipient) return { success: false, error: 'ACTIVE_OUTBOUND_REQUIRES_SEPARATE_AUTHORIZATION' }
       await sideEffect()
       return { success: true }
     })
@@ -117,13 +145,13 @@ describe('WeChat outbound prepared registrations', () => {
 
     expect(gateCalls).toBe(1)
     expect(sendExecutor).toHaveBeenCalledOnce()
-    expect(preparedClassification).toMatchObject({ kind: 'active-outbound' })
+    expect(preparedFacts).toMatchObject({ purpose: 'active-send', modelRecipient: 'wechat-user-approved' })
     expect(sideEffect).not.toHaveBeenCalled()
     expect(result).toMatchObject({ success: false, error: 'ACTIVE_OUTBOUND_REQUIRES_SEPARATE_AUTHORIZATION' })
   })
 
   it.each(['wechat_send', 'wechat_reply'] as const)(
-    'does not send a host-classified sensitive body through confirmed %s', async (toolName) => {
+    'dispatches host-classified sensitive content only through the user-approved policy path for %s', async (toolName) => {
       const body = 'api_key=sk-00000000000000000000000000000000'
       const runtime = {
         ...makeRuntime(),
@@ -151,8 +179,8 @@ describe('WeChat outbound prepared registrations', () => {
         signal: new AbortController().signal, executionContext: runtime as never,
         userConfirmationReceipt: 'confirmation:user-approved', userConfirmationAnswerer: 'user'
       }, { confirm: async () => true, dispatch: async (_handle, _context, dispatch) => dispatch(new AbortController().signal) }))
-        .rejects.toThrow('IM_OUTBOUND_FINAL_CHECK_REQUIRED')
-      expect(platformSend).not.toHaveBeenCalled()
+        .resolves.toMatchObject({ success: true })
+      expect(platformSend).toHaveBeenCalledOnce()
     }
   )
 
@@ -177,7 +205,7 @@ describe('WeChat outbound prepared registrations', () => {
       trustedRecipient: 'wechat-user-approved', modelRecipient: 'attacker-recipient',
       content: 'hello', contentAssessment: { source: 'host', content: 'hello', classification: 'ordinary' }
     })
-    expect(classifyImOutbound(context.outboundDeliveryFacts as never)).toMatchObject({ kind: 'active-outbound', reason: 'untrusted-recipient' })
+    expect(context.outboundDeliveryFacts).toMatchObject({ modelRecipient: expect.any(String) })
   })
 
   it.each(['wechat_send', 'wechat_reply'] as const)(

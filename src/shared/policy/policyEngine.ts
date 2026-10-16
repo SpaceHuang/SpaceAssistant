@@ -42,6 +42,21 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`write-target-scope:${signal.scope}`)
         break
+      case 'policy-tier':
+        tokens.add(`policy-tier:${signal.tier}`)
+        break
+      case 'outbound-content':
+        tokens.add(`outbound-inspection:${signal.inspectionCoverage}`)
+        if (signal.inspectionCoverage !== 'complete') tokens.add('outbound-inspection-incomplete')
+        if (signal.evidenceKinds.length > 0) tokens.add('outbound-evidence-present')
+        for (const evidence of signal.evidenceKinds) tokens.add(`outbound-evidence:${evidence}`)
+        break
+      case 'wechat-media-content-assessment':
+        tokens.add(`outbound-inspection:${signal.inspectionCoverage}`)
+        if (signal.inspectionCoverage !== 'complete') tokens.add('outbound-inspection-incomplete')
+        if (signal.evidenceKinds.length > 0) tokens.add('outbound-evidence-present')
+        for (const evidence of signal.evidenceKinds) tokens.add(`outbound-evidence:${evidence}`)
+        break
       case 'write-target-new':
       case 'write-target-existing':
       case 'write-target-unsupported':
@@ -132,10 +147,6 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
     }
   }
   return tokens
-}
-
-function hasDangerousSignal(facts: ContentFacts): boolean {
-  return signalTokenSet(facts).has('dangerous')
 }
 
 /** 从事实推导候选缓存键（规范化签名不落原始输入）。 */
@@ -237,7 +248,7 @@ export function buildMemoryTiers(
   }))
 }
 
-function ruleMatchesInvocation(
+export function ruleMatchesInvocation(
   rule: PolicyRule,
   facts: ContentFacts,
   context: ExecutionContext,
@@ -252,12 +263,12 @@ function ruleMatchesInvocation(
     if (!names.includes(facts.toolName)) return false
   }
   if (m.actionClass && facts.actionClass !== m.actionClass) return false
+  const tokens = m.signals || m.excludeSignals ? signalTokenSet(facts) : undefined
   if (m.signals) {
-    const tokens = signalTokenSet(facts)
+    if (!tokens) return false
     if (!m.signals.every((s) => tokens.has(s))) return false
     if (m.excludeSignals?.some((s) => tokens.has(s))) return false
-  } else if (m.excludeSignals) {
-    const tokens = signalTokenSet(facts)
+  } else if (m.excludeSignals && tokens) {
     if (m.excludeSignals.some((s) => tokens.has(s))) return false
   }
   // M1：owner-only 出站目标约束——仅信源为 direct-owner 时命中
@@ -315,7 +326,7 @@ function requireConfirm(
   sessionId?: string,
   lane?: ExecutionLane,
   constraints?: InvocationPolicyConstraints,
-  answerer: 'user' | 'agent' = askAnswererFor(lane)
+  answerer: 'user' | 'agent' = rule.answerer ?? askAnswererFor(lane)
 ): Decision {
   const outcome = resolvePolicyOutcome(rule)
   return {
@@ -432,7 +443,7 @@ export function deriveInvocationPolicyConstraints(
 /**
  * 工具调用时机（invocation）判定：纯函数，无副作用。
  *
- * 步骤（约定 4）：拒绝规则 → 缓存 → 能力声明 → 自动审批器 → 链路软约束 → 默认表。
+ * 求值顺序：拒绝规则 → 缓存 → 自动审批器 → 链路软约束 → 默认表。
  * 所有命中的 deny 规则都先于缓存，缓存信任不能覆盖用户或系统策略的明确拒绝。
  * auto-evaluator 命中不产生 Decision，评估器不裁决则交还规则链。
  */
@@ -442,28 +453,44 @@ export function decide(
   rules: PolicyRule[],
   deps: PolicyEngineDeps
 ): Decision {
+  const policyFacts = context.policyTier
+    ? { ...facts, signals: [...facts.signals, { kind: 'policy-tier' as const, tier: context.policyTier }] }
+    : facts
   const invocationRules = rules.filter((r) => r.when === 'invocation')
-  const constraints = deriveInvocationPolicyConstraints(facts, context, rules, deps)
+  const matchedRule = (r: PolicyRule) => {
+    return ruleMatchesInvocation(r, policyFacts, context, deps)
+  }
+  const constraints = deriveInvocationPolicyConstraints(policyFacts, context, rules, deps)
+  const larkMessageOutbound = facts.toolName === 'run_lark_cli' && facts.signals.some((signal) =>
+    signal.kind === 'lark-subcommand' && signal.category === 'message'
+  )
+  const larkMessageNeedsTier = larkMessageOutbound && facts.signals.some((signal) =>
+    signal.kind === 'outbound-content' && (
+      signal.evidenceKinds.length > 0 || signal.inspectionCoverage !== 'complete'
+    )
+  )
+  const explicitOutboundTier = facts.actionClass === 'outbound' && (!larkMessageOutbound || larkMessageNeedsTier) && context.policyTier && context.policyTier !== 'custom' &&
+    (context.policyTier === 'loose' || context.policyTier === 'strict' || context.policyTier === 'standard' && context.lane === 'desktop') &&
+    !(facts.toolName === 'browser' || context.lane === 'desktop' && ['read_file', 'grep', 'list_directory'].includes(facts.toolName))
 
   // 第 1 步：拒绝规则（先于任何缓存查询，缓存信任不能覆盖明确拒绝）
-  if (hasDangerousSignal(facts)) return deny('dangerous-signal', '事实含危险信号，硬拒绝')
   const deniedTools = deps.config.deniedTools
   if (Array.isArray(deniedTools) && deniedTools.includes(facts.toolName)) {
     return deny('denied-tools', `${facts.toolName} 已在禁用列表`)
   }
   const laneHardDeny = invocationRules.find(
-    (r) => r.locked && r.action === 'deny' && ruleMatchesInvocation(r, facts, context, deps)
+    (r) => r.locked && r.action === 'deny' && matchedRule(r)
   )
   if (laneHardDeny) return deny(laneHardDeny.id, laneHardDeny.reason)
 
   const policyDeny = invocationRules.find(
-    (r) => r.action === 'deny' && ruleMatchesInvocation(r, facts, context, deps)
+    (r) => r.action === 'deny' && matchedRule(r)
   )
   if (policyDeny) return deny(policyDeny.id, policyDeny.reason)
 
   // Human-required is a semantic floor, independent of locked/editability and rule array position.
   const humanRequiredRule = invocationRules.find(
-    (r) => r.humanRequired === true && ruleMatchesInvocation(r, facts, context, deps)
+    (r) => r.humanRequired === true && matchedRule(r)
   )
   if (humanRequiredRule) {
     return requireConfirm(humanRequiredRule, facts, context.sessionId, context.lane, constraints, 'user')
@@ -474,7 +501,7 @@ export function decide(
   const explicitMcpAsk = invocationRules.find(
     (r) => (context.lane === 'wechat' || context.lane === 'feishu') &&
       r.id === 'mcp-tool-ask' && r.userOverride === true && r.action === 'ask' &&
-      ruleMatchesInvocation(r, facts, context, deps)
+      matchedRule(r)
   )
   if (explicitMcpAsk) {
     return requireConfirm(explicitMcpAsk, facts, context.sessionId, context.lane, constraints, 'user')
@@ -482,7 +509,7 @@ export function decide(
 
   // 系统 locked confirm-every-time 规则位于缓存之前：即使存在旧 allow cache，也必须逐次确认。
   const confirmEveryTime = invocationRules.find(
-    (r) => r.locked && r.action === 'confirm-every-time' && ruleMatchesInvocation(r, facts, context, deps)
+    (r) => r.locked && r.action === 'confirm-every-time' && matchedRule(r)
   )
   if (confirmEveryTime) {
     // 决策 3：confirm-every-time 始终人工逐次确认（不因 lane 落 agent）
@@ -493,18 +520,12 @@ export function decide(
   const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
   if (cacheHit) return cacheHit
 
-  // 第 3 步：能力声明放行（套餐 B 预留，本期无人写入）
-  const caps = context.declaredCapabilities
-  if (caps && caps.length > 0 && caps.some((c) => c.actionClass === facts.actionClass)) {
-    return autoAllow('declared-capability', facts)
-  }
-
-  // 第 4 步：自动审批器（auto-evaluator =「自动」动作）。确定性快通道批准即放行；
+  // 第 3 步：自动审批器（auto-evaluator =「自动」动作）。确定性快通道批准即放行；
   // 未裁决 → 交审批 Agent（require-confirm answerer='agent'，§5.2：不再交还默认表问人）。
   const autoRules = invocationRules.filter((r) => r.action === 'auto-evaluator')
   let lastAutoRule: PolicyRule | undefined
   for (const rule of autoRules) {
-    if (!ruleMatchesInvocation(rule, facts, context, deps)) continue
+    if (!matchedRule(rule)) continue
     if (askUnlessHolds(rule, deps)) return autoAllow(rule.id, facts)
     lastAutoRule = rule
     if (deps.autoEvaluator) {
@@ -519,14 +540,34 @@ export function decide(
     return requireConfirm(lastAutoRule, facts, context.sessionId, context.lane, undefined, 'agent')
   }
 
-  // 第 5 步：链路软约束（只影响体验，纯决策层无操作）
+  // 第 4 步：链路软约束（只影响体验，纯决策层无操作）
 
-  // 第 6 步：默认表（deny / ask / allow，首条命中即返回）。生效动作按档位产出时变换
+  // 第 5 步：默认表（deny / ask / allow，首条命中即返回）。生效动作按档位产出时变换
   // （deps.transform = effectiveActionFor 同源）：standard 桌面的 ask → auto-evaluator
   // 走快通道/审批 Agent，且不改变规则间优先级（mcp-readonly-allow 等先命中条目不受影响）。
   const defaultRules = invocationRules.filter((r) => r.action === 'deny' || r.action === 'ask' || r.action === 'allow')
+  if (explicitOutboundTier) {
+    const tokens = signalTokenSet(policyFacts)
+    const hasOutboundSensitivity = tokens.has('outbound-evidence-present')
+    const hasIncompleteOutboundFacts = tokens.has('outbound-inspection-incomplete')
+    const outboundModes = context.policyTier === 'strict'
+      ? ['outbound-sensitive-strict-human', 'outbound-incomplete-strict-human', 'outbound-mode-strict-human']
+      : context.policyTier === 'standard'
+        ? ['outbound-sensitive-standard-human', 'outbound-incomplete-standard-review', 'outbound-mode-standard-review']
+        : ['outbound-sensitive-loose-review', 'outbound-incomplete-loose-review',
+        `outbound-mode-${context.policyTier}-${context.policyTier === 'loose' ? 'allow' : 'review'}`]
+    const selectedOutboundRuleId = hasOutboundSensitivity
+      ? outboundModes.find((id) => id.includes('sensitive'))
+      : hasIncompleteOutboundFacts ? outboundModes.find((id) => id.includes('incomplete')) : outboundModes.at(-1)
+    const mode = selectedOutboundRuleId ? rules.find((rule) => rule.id === selectedOutboundRuleId) : undefined
+    if (mode && matchedRule(mode)) {
+      const transformed = deps.transform ? deps.transform(mode) : mode.action
+      if (transformed === 'allow') return autoAllow(mode.id, facts)
+      return requireConfirm(mode, facts, context.sessionId, context.lane, constraints)
+    }
+  }
   for (const rule of defaultRules) {
-    if (!ruleMatchesInvocation(rule, facts, context, deps)) continue
+    if (!matchedRule(rule)) continue
     const effective = deps.transform ? deps.transform(rule) : rule.action
     // askUnless 门控放行先于动作解释：开关已声明「不问」（如 larkCliWriteRequiresConfirm=false）
     // 时无论生效动作是 ask 还是「自动」都直接放行，档位不接管已放行的调用

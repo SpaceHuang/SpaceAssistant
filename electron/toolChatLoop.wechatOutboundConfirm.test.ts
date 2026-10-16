@@ -56,18 +56,18 @@ function gateDefaultMaterials() {
 }
 
 describe('wechat outbound confirm removal（经 toolCallGate + 规则表）', () => {
-  it('wechat_reply does not need confirmation even when legacy flag is true', async () => {
+  it('routes ordinary wechat_reply through the standard Agent policy review', async () => {
     const r = await gate('wechat_reply', { text: 'hi' }, { remoteContext: wechatCtx() })
-    expect(r.decision.type).toBe('auto-allow')
+    expect(r.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'outbound-mode-standard-review' })
   })
 
-  it('wechat_send does not need confirmation even when legacy flag is true', async () => {
+  it('routes ordinary wechat_send through the standard Agent policy review', async () => {
     const r = await gate(
       'wechat_send',
       { userId: 'u1', text: 'hi' },
       { remoteContext: wechatCtx() }
     )
-    expect(r.decision.type).toBe('auto-allow')
+    expect(r.decision).toMatchObject({ type: 'require-confirm', answerer: 'agent', ruleId: 'outbound-mode-standard-review' })
   })
 
   it('shared IM deny outbound blocks wechat_reply and wechat_send', async () => {

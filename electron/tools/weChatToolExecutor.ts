@@ -7,6 +7,7 @@ import { verifyDeferredWeChatAttachment } from './weChatAttachmentBinding'
 import type { WeChatBotService } from '../wechat/weChatBotService'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import { createHash } from 'node:crypto'
+import { createImAttachmentFacts } from '../../src/shared/confirmation/imAttachmentFacts'
 import { assessImOutboundContent, assertImOutboundAllowed, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 
 export class WeChatOutboundExecutionUncertainError extends Error {
@@ -66,11 +67,19 @@ async function attachmentHasSensitiveMaterial(media: Awaited<ReturnType<typeof r
   if (!media.buffer || !media.fileName || !media.resolvedPath) return false
   let relativePath: string
   try { relativePath = path.relative(await fs.realpath(workDir), media.resolvedPath) }
+  // A path binding failure is a mechanism error, so the compatibility adapter remains fail-closed
+  // without manufacturing a sensitive-content observation.
   catch { return true }
-  const pathFacts = `${media.fileName} ${relativePath}`.toLowerCase()
-  if (/(^|[/\\.])(?:\.env|credentials?|secrets?|private|exports?)([/\\._-]|$)|\.(?:pem|key|p12|pfx)$/i.test(pathFacts)) return true
-  const content = media.buffer.toString('utf8')
-  return /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:api[_-]?key|access[_-]?token|password)\s*[:=]|(?:sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{16,})|\b[\w.+-]+@[\w.-]+\.[A-Z]{2,}\b|\b(?:\+?\d[\d ()-]{8,}\d)\b|(?:客户|用户|联系人).{0,16}(?:邮箱|电话|地址|身份证|记录|信息)/i.test(content)
+  const facts = await createImAttachmentFacts({
+    fileName: media.fileName,
+    relativePath,
+    content: media.buffer.toString('utf8'),
+    contentDigest: media.contentVersion ?? createHash('sha256').update(media.buffer).digest('hex'),
+    inspectionCoverage: 'complete'
+  })
+  // P1 compatibility period: the legacy attachment authorization consumer maps the observed
+  // evidence to its prior behavior. Phase 2 moves the policy action to explicit rules.
+  return facts.evidenceKinds.length > 0
 }
 
 /** Host inspection for the prepared reply path; binary and non-reviewable attachments stay unapproved. */

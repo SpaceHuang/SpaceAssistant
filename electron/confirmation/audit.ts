@@ -66,18 +66,21 @@ export function recordPolicyExecutionVeto(input: {
   sessionId: string
   requestId?: string
   toolUseId?: string
+  decisionId?: string
   toolName: string
   decisionRuleId?: string
   factId?: string
   pathZone?: import('../../src/shared/confirmation/types').PathZone
-  failureClass: 'input' | 'mechanism' | 'environment' | 'integration-violation'
+  failureClass: import('../../src/shared/security/executionAuthorizationCheck').ExecutionVetoFailureClass
   caseId: string
+  invariantId?: string
 }): void {
   ;(input.audit ?? getSecurityAuditLog()).record({
     ts: Date.now(), event: 'policy.execution-veto', lane: input.lane, sessionId: input.sessionId,
-    requestId: input.requestId, toolUseId: input.toolUseId, toolName: input.toolName,
+    requestId: input.requestId, toolUseId: input.toolUseId, decisionId: input.decisionId,
+    priorDecision: input.decisionId || input.decisionRuleId ? 'available' : 'unavailable', toolName: input.toolName,
     decisionRuleId: input.decisionRuleId, pathZone: input.pathZone,
     ...(input.factId ? { factId: auditFactId(input.factId) } : {}),
-    failureClass: input.failureClass, caseId: input.caseId, reason: input.caseId, actor: 'system'
+    failureClass: input.failureClass, caseId: input.caseId, invariantId: input.invariantId, reason: input.caseId, actor: 'system'
   })
 }

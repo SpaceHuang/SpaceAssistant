@@ -16,10 +16,24 @@ describe('invocation facts snapshot', () => {
     })
     expect(snapshot).toMatchObject({ invocationId: 'inv-1', extractorVersion: 'extractor-v1',
       completeness: 'complete', evidenceReferences: ['workspace:report.txt'], environmentVersion: 'env-4', factsRevision: 7 })
+    expect(snapshot.factId).toMatch(/^fact-[a-f0-9]{24}$/)
     expect(snapshot.envelopeHash).toMatch(/^[a-f0-9]{64}$/)
     expect(snapshot.factsHash).toMatch(/^[a-f0-9]{64}$/)
     expect(Object.isFrozen(snapshot)).toBe(true)
     expect(Object.isFrozen(snapshot.facts.signals)).toBe(true)
+  })
+
+  it('assigns a content-free fact ID that changes when the bound facts revision changes', async () => {
+    const input = { invocationId: 'inv-fact-id', envelope: { toolName: 'write_file', path: 'report.txt' }, facts,
+      extractorVersion: 'extractor-v1', completeness: 'complete' as const, evidenceReferences: [],
+      environmentVersion: 'env-1' }
+    const first = await createInvocationFactsSnapshot({ ...input, previousFactsRevision: 0 })
+    const nextRevision = await createInvocationFactsSnapshot({ ...input, previousFactsRevision: 1 })
+    const changedFacts = await createInvocationFactsSnapshot({ ...input,
+      facts: { ...facts, signals: [{ kind: 'write-target-new' }] }, previousFactsRevision: 0 })
+
+    expect(nextRevision.factId).not.toBe(first.factId)
+    expect(changedFacts.factId).not.toBe(first.factId)
   })
 
   it('rejects malformed binding data and non-monotonic revisions', async () => {

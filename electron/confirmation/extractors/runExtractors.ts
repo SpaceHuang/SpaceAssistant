@@ -99,9 +99,13 @@ export function runExtractors(
     if (r.summaryText) summaryParts.push(r.summaryText)
   }
 
+  const argv = toolInput.args
+  const larkMessageOutbound = descriptor.toolName === 'run_lark_cli' && Array.isArray(argv) &&
+    ['message', 'mail'].includes(String(argv[0] ?? '').toLowerCase()) &&
+    ['send', 'create', 'reply'].includes(String(argv[1] ?? '').toLowerCase())
   return {
     toolName: descriptor.toolName,
-    actionClass: descriptor.actionClass,
+    actionClass: larkMessageOutbound ? 'outbound' : descriptor.actionClass,
     baseRiskLevel: descriptor.riskLevel,
     signals,
     summary: {

@@ -115,7 +115,7 @@ describe('V1 confirmed read executor integration', () => {
       const decision = events.find((event) => event.event === 'policy.decision')
       const veto = events.find((event) => event.event === 'policy.execution-veto')
       expect(decision).toMatchObject({ requestId, toolUseId, decision: 'require-confirm', ruleId: permit!.decisionRuleId })
-      expect(veto).toMatchObject({ requestId, toolUseId, decisionRuleId: permit!.decisionRuleId, factId: decision?.factId, failureClass: 'mechanism', pathZone: 'sensitive-file' })
+      expect(veto).toMatchObject({ requestId, toolUseId, decisionRuleId: permit!.decisionRuleId, factId: decision?.factId, failureClass: 'mechanism', pathZone: 'sensitive-file', invariantId: 'SYS-PERMIT-001' })
       expect(JSON.stringify([decision, veto])).not.toContain(file)
     } finally {
       await fs.rm(root, { recursive: true, force: true })

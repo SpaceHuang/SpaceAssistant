@@ -78,6 +78,7 @@ export interface RegisteredTool {
   begin(raw: unknown, context: InvocationContext): Promise<InvocationHandle>
   /** 可观察的异步 planning 状态；`begin()` 保持向后兼容并复用同一 promise。 */
   beginPlanning(raw: unknown, context: InvocationContext): PlanningHandle
+  getPreparedFacts?(prepared: PreparedInvocation): unknown
 }
 
 export interface DirectToolSpec<I, O> {
@@ -202,7 +203,7 @@ function makeHandle(
   const prepared = Object.freeze({
     [preparedInvocationBrand]: true as const,
     invocationId: crypto.randomUUID(), requestId: context.requestId, toolUseId: context.toolUseId,
-    toolName: name, kind, inputDigest, planDigest: digest(frozenPayload), factsDigest: digest(frozenFacts), displayDigest: digest(frozenDisplay)
+    toolName: name, kind, inputDigest, planDigest: digest(frozenPayload), factsDigest: digest(frozenFacts), displayDigest: digest(frozenDisplay),
   })
   return {
     prepared,
@@ -301,6 +302,7 @@ export function defineDirectTool<I, O>(spec: DirectToolSpec<I, O>): RegisteredTo
 }
 
 export function definePlannedTool<I, P, O>(spec: PlannedToolSpec<I, P, O>): RegisteredTool {
+  const preparedFacts = new Map<string, unknown>()
   const begin = async (raw: unknown, context: InvocationContext): Promise<InvocationHandle> => {
     assertCanonicalJsonInput(raw)
     const inputDigest = digest(raw)
@@ -313,7 +315,7 @@ export function definePlannedTool<I, P, O>(spec: PlannedToolSpec<I, P, O>): Regi
     const validate = async (execution: ToolExecutionContext): Promise<void> => {
       if (spec.validate) await spec.validate(frozenPlan, execution)
     }
-    return makeHandle(
+    const handle = makeHandle(
       spec.name, 'planned', frozenPlan, context,
       async (execution) => {
         await validate(execution)
@@ -326,6 +328,8 @@ export function definePlannedTool<I, P, O>(spec: PlannedToolSpec<I, P, O>): Regi
       validate,
       inputDigest
     )
+    preparedFacts.set(handle.prepared.planDigest, structuredClone(spec.facts ? spec.facts(frozenPlan) : undefined))
+    return handle
   }
   return {
     name: spec.name,
@@ -333,6 +337,10 @@ export function definePlannedTool<I, P, O>(spec: PlannedToolSpec<I, P, O>): Regi
     ...(spec.actionClass ? { actionClass: spec.actionClass } : {}),
     ...(spec.resourceKeys ? { resourceKeys: (raw, context) => spec.resourceKeys!(spec.parseInput(raw), context) } : {}),
     begin,
-    beginPlanning: (raw, context) => makePlanningHandle(() => begin(raw, context))
+    beginPlanning: (raw, context) => makePlanningHandle(() => begin(raw, context)),
+    getPreparedFacts(prepared) {
+      if (prepared.kind !== 'planned') return undefined
+      return structuredClone(preparedFacts.get(prepared.planDigest))
+    }
   }
 }

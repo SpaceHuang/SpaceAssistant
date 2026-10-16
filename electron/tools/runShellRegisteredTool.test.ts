@@ -130,7 +130,8 @@ describe('runShellRegisteredTool', () => {
         parentReal: '/tmp', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 0, mtimeMs: 1, nlink: 2 }
       }, decisionRuleId, approval: 'confirmed'
     })
-    const runtimeContext = { ...runtime, writeExecutionPermit: makePermit('rule-v1') } as never
+    const auditEvents: import('../../src/shared/confirmation/types').SecurityAuditEvent[] = []
+    const runtimeContext = { ...runtime, audit: { record: (event: import('../../src/shared/confirmation/types').SecurityAuditEvent) => auditEvents.push(event) }, writeExecutionPermit: makePermit('rule-v1') } as never
     const signal = new AbortController().signal
     const handle = await registered.begin(input, { requestId: 'r', toolUseId: 'write-plan-replace', signal, executionContext: runtimeContext })
     handle.awaitConfirmation()
@@ -141,6 +142,7 @@ describe('runShellRegisteredTool', () => {
       requestId: 'r', toolUseId: 'write-plan-replace', toolName: 'write_file', signal, runtimeContext
     } as never)).rejects.toThrow('WRITE_PREPARED_PERMIT_CHANGED')
     expect(executor).not.toHaveBeenCalled()
+    expect(auditEvents).toContainEqual(expect.objectContaining({ event: 'policy.execution-veto', caseId: 'write-prepared-permit-changed', failureClass: 'integration-violation', invariantId: 'SYS-PERMIT-001', priorDecision: 'available' }))
     handle.release()
     executor.mockRestore()
   })
