@@ -2221,6 +2221,32 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('does not materialize a large projection-repair queue to discover that every target is backed off', async () => {
+    const conn = createDb()
+    const now = 10_000_000
+    const history = new SqliteAgentHistory(conn, 1, () => now)
+    conn.prepare(`INSERT INTO canonical_projection_repairs(
+      repair_id,session_id,invocation_id,repair_kind,target_key,status,attempts,idempotency_key,updated_at
+    ) VALUES('backed-off-repair','backed-off-session','backed-off-invocation','projection','target','pending',3,'key',?)`)
+      .run(now)
+    const original = conn.prepare.bind(conn)
+    const allSpy = vi.spyOn(conn, 'prepare').mockImplementation(((sql: string) => {
+      const statement = original(sql)
+      if (sql.includes('FROM canonical_projection_repairs repairs') && sql.includes('COUNT(*) OVER')) {
+        return { ...statement, all: vi.fn(() => { throw new Error('must not materialize backed-off targets') }) } as never
+      }
+      return statement
+    }) as typeof conn.prepare)
+
+    await expect(history.recoverInterruptedInvocations()).resolves.toEqual([])
+    expect(history.getStartupRecoveryWorkSummary()).toEqual({
+      unfinishedInvocationCount: 0, dueProjectionRepairCount: 0, hasWork: false
+    })
+
+    expect(allSpy).not.toHaveBeenCalledWith(expect.stringContaining('COUNT(*) OVER'))
+    conn.close()
+  })
+
   it('resumes the bounded recovery-work census after reopen and keeps streams inserted behind its cursor', async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'history-recovery-work-resume-'))
     const dbPath = path.join(directory, 'history.db')

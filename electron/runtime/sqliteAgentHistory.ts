@@ -1396,18 +1396,15 @@ export class SqliteAgentHistory implements HistoryPort {
   /** Reports only recovery work that startup will actually attempt now; backed-off repairs stay out of this count. */
   getStartupRecoveryWorkSummary(): { unfinishedInvocationCount: number; dueProjectionRepairCount: number; hasWork: boolean } {
     const unfinishedInvocationCount = this.listStartupRecoveryWorkset().length
-    const repairRows = this.conn.prepare(`SELECT repairs.attempts,repairs.updated_at,
-        COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
+    const now = this.now()
+    const dueProjectionRepairCount = (this.conn.prepare(`SELECT COUNT(*) AS count
         FROM canonical_projection_repairs repairs
         LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-        WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
-          cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).all() as Array<{
-            attempts: number; updated_at: number; invocation_repair_count: number
-          }>
-    const now = this.now()
-    const dueProjectionRepairCount = repairRows.filter((row) =>
-      now - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
-    ).length
+        WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND
+          (cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')) AND
+          (repairs.attempts=0 OR repairs.updated_at<=?-CASE repairs.attempts
+            WHEN 1 THEN 1800000 WHEN 2 THEN 3600000 WHEN 3 THEN 7200000 WHEN 4 THEN 14400000
+            WHEN 5 THEN 28800000 WHEN 6 THEN 57600000 ELSE 86400000 END)`).get(now) as { count: number }).count
     return {
       unfinishedInvocationCount,
       dueProjectionRepairCount,
@@ -1885,20 +1882,20 @@ export class SqliteAgentHistory implements HistoryPort {
       invocation_id: invocationId, session_id: sessionId
     }))
     const recovered: RebuiltInvocationState[] = []
+      const retryTime = this.now()
       const repairRows = this.conn.prepare(`SELECT repairs.repair_id,repairs.invocation_id,repairs.repair_kind,repairs.target_key,
-          repairs.attempts,repairs.updated_at,COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
+          repairs.attempts,repairs.updated_at
           FROM canonical_projection_repairs repairs
           LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-          WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
-            cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
-          ORDER BY repairs.updated_at,repairs.repair_id`).all() as Array<{
-            repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number;
-            invocation_repair_count: number
+          WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND
+            (cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')) AND
+            (repairs.attempts=0 OR repairs.updated_at<=?-CASE repairs.attempts
+              WHEN 1 THEN 1800000 WHEN 2 THEN 3600000 WHEN 3 THEN 7200000 WHEN 4 THEN 14400000
+              WHEN 5 THEN 28800000 WHEN 6 THEN 57600000 ELSE 86400000 END)
+          ORDER BY repairs.updated_at,repairs.repair_id`).all(retryTime) as Array<{
+            repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number
           }>
-      const retryTime = this.now()
-      const dueRepairRows = repairRows.filter((row) =>
-        retryTime - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
-      )
+      const dueRepairRows = repairRows
       const work = new Map<string, { sessionId: string | null; repairIds: string[] }>()
     for (const row of streams) work.set(row.invocation_id, { sessionId: row.session_id, repairIds: [] })
     for (const row of dueRepairRows) {
