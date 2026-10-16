@@ -37,7 +37,7 @@ async function tmpdir(prefix: string): Promise<string> {
 const toolsConfig = (): ToolsConfig => ({ ...DEFAULT_TOOLS_CONFIG, deniedTools: [] })
 
 function wikiConfigEnabled(): WikiConfig {
-  return { ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'llm-wiki' }
+  return { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki' }
 }
 
 function remoteContext(source: 'feishu' | 'wechat'): RemoteContext {

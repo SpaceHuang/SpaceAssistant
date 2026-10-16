@@ -64,7 +64,7 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
   it('llm 模式路由 LLM 返回空时，含触发词输入仍激活 llm-wiki 且 source=wiki-trigger', async () => {
     const dirs = makeTempDirs()
     try {
-      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG, enabled: true })
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG })
       createClientMock.mockReturnValue({
         messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: '{"skills":[]}' }] })) }
       } as never)
@@ -87,7 +87,7 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
     const dirs = makeTempDirs()
     try {
       createUserSkill(dirs.userDataPath, 'note-tool', '笔记工具')
-      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG, enabled: true })
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG })
       createClientMock.mockReturnValue({
         messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: '{"skills":["note-tool"]}' }] })) }
       } as never)
@@ -110,7 +110,7 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
   it('路由 LLM 失败（超时）时硬规则兜底，llm-wiki 仍激活', async () => {
     const dirs = makeTempDirs()
     try {
-      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG, enabled: true })
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG })
       const timeoutError = new Error('Request timed out')
       timeoutError.name = 'AbortError'
       createClientMock.mockReturnValue({
@@ -135,7 +135,7 @@ describe('skillManager.route wiki-trigger 确定性激活（W1-a）', () => {
   it('enabled 但输入不含任何触发词时不做确定性激活（交给路由 LLM）', async () => {
     const dirs = makeTempDirs()
     try {
-      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG, enabled: true })
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG })
       createClientMock.mockReturnValue({
         messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: '{"skills":[]}' }] })) }
       } as never)
@@ -160,7 +160,7 @@ describe('skillManager.match wiki 过滤（既有契约）', () => {
     const dirs = makeTempDirs()
     try {
       ensureSkillsDirs(dirs.userDataPath, dirs.workDir)
-      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG, enabled: true })
+      const manager = buildManager(dirs, { ...DEFAULT_WIKI_CONFIG })
       const matched = manager.match('把这段存入知识库', emptyState)
       expect(matched.map((s) => s.meta.name)).toContain('llm-wiki')
     } finally {

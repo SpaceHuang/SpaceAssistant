@@ -178,7 +178,7 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }),
+      getWikiConfig: () => ({}),
       getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir: '/tmp' }),
       turnRuntime: { bindRequest: vi.fn() } as never,
@@ -239,7 +239,7 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
       getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
       turnRuntime: { bindRequest: vi.fn() } as never, notifyMainWindow: vi.fn(), floatingNotificationManager: { onConfirmRequest: vi.fn() } as never
     })
 
@@ -269,7 +269,7 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
       getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
       turnRuntime: { bindRequest: vi.fn() } as never
     }
     const execute = registerClaudeStreamHandlers(ipcMain, deps)

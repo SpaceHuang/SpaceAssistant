@@ -80,7 +80,7 @@ function makeDeps(
     listSkills: async () => [],
     getSkill: async () => null,
     wikiInit: async () => ({ ok: true as const, rootPath: 'llm-wiki', skillInstalled: true }),
-    wikiStatus: async () => ({ enabled: true, rootPath: 'llm-wiki', initialized: true, pageCount: 1, rawCount: 0 }),
+    wikiStatus: async () => ({ rootPath: 'llm-wiki', initialized: true, pageCount: 1, rawCount: 0 }),
     wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }),
     appendHintMessage: vi.fn(async () => ({ messageId: 'hint-1', sequence: 1 })),
     updateSessionState: vi.fn(async () => undefined),

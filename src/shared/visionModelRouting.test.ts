@@ -62,7 +62,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     maxParallelChatSessions: 3,
     tools: { enabled: false, allowedTools: [], deniedTools: [], pythonPath: 'python', scriptTimeout: 300, fileCheckpointingEnabled: true, maxFileSnapshots: 100, grepTimeoutSec: 60 },
     skills: { enabled: false, autoRoute: false, scanIntervalSec: 300 },
-    wiki: { enabled: false },
+    wiki: {},
     feishu: { enabled: false },
     browser: { enabled: false, env: 'LOCAL', allowedDomains: [], trustedDomains: [], allowHttp: true, headless: true, stagehandModel: '', reuseActiveLlmProfile: true, actionTimeoutSec: 90, idleTimeoutSec: 1800, maxOutputChars: 50000, maxInferencesPerRequest: 8, navigateRequiresConfirm: true, actRequiresConfirm: true, deniedActions: [], allowRemoteSessions: false, captureSubdir: 'browser-captures', rateLimitEnabled: true, rateLimitMinIntervalMs: 1000, rateLimitPerMinute: 20, rateLimitPerHour: 200, rateLimitPerDomainPerMinute: 10, rateLimitMode: 'wait', rateLimitMaxWaitSec: 30 },
     shell: { enabled: false, defaultShell: '', rules: [], trustedCommands: [], scrollbackLines: 5000, maxOutputChars: 50000, confirmOutsideWorkDir: true, confirmHighRisk: true },

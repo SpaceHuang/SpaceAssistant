@@ -32,8 +32,8 @@ afterEach(async () => {
   }
 })
 
-function wikiConfig(rootPath = 'llm-wiki', enabled = true, legacyRootAliases: string[] = []): WikiConfig {
-  return { ...DEFAULT_WIKI_CONFIG, enabled, rootPath, legacyRootAliases }
+function wikiConfig(rootPath = 'llm-wiki', legacyRootAliases: string[] = []): WikiConfig {
+  return { ...DEFAULT_WIKI_CONFIG, rootPath, legacyRootAliases }
 }
 
 interface World {
@@ -146,7 +146,7 @@ describe('执行层写挂载（T1.6/T1.7）', () => {
   })
 
   it('T1.7⑤ 只读别名写 → 拒绝 + 引导文案', async () => {
-    const { ctx } = await setupWorld({ wikiConfig: wikiConfig('llm-wiki', true, ['old-wiki']) })
+    const { ctx } = await setupWorld({ wikiConfig: wikiConfig('llm-wiki', ['old-wiki']) })
     const rawPath = 'old-wiki/wiki/index.md'
     const input = { path: rawPath, content: 'x' }
     await attachWritePermit('write_file', rawPath, ctx, input)
@@ -270,7 +270,7 @@ describe('远程写断言（T1.9）', () => {
   })
 
   it('T1.9④ 远程 lane 写只读别名 → 拒绝', async () => {
-    const { ctx } = await setupWorld({ lane: 'wechat', wikiConfig: wikiConfig('llm-wiki', true, ['old-wiki']) })
+    const { ctx } = await setupWorld({ lane: 'wechat', wikiConfig: wikiConfig('llm-wiki', ['old-wiki']) })
     ctx.remoteContext = { source: 'wechat', messageId: 'm1', confirmPolicy: 'im_confirm' }
     const rawPath = 'old-wiki/wiki/index.md'
     const input = { path: rawPath, content: 'x' }

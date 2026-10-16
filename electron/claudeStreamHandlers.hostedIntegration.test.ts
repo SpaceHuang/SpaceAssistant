@@ -299,7 +299,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -500,7 +500,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest } as never
     })
@@ -557,7 +557,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -614,7 +614,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 100 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }), turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never })
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }), turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never })
 
     const executionResult = await execute(makeSender(), { requestId: 'hosted-auto-approved-write-request', turnId: 'hosted-auto-approved-write-turn', turnStartToken: 'hosted-auto-approved-write-start', sessionId: session.id })
     expect(executionResult, JSON.stringify(executionResult)).toMatchObject({ ok: true, content: [{ type: 'text', text: 'written' }] })
@@ -673,7 +673,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1 }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -735,7 +735,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: ['read_file'] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -828,7 +828,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -880,7 +880,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -940,7 +940,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const gateModule = await import('./confirmation/toolCallGate')
@@ -1047,7 +1047,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     try {
@@ -1137,7 +1137,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     let invalidationSent = false
@@ -1243,7 +1243,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: turnRuntime as never
     })
@@ -1321,7 +1321,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -1435,7 +1435,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     failNextSessionEventType = 'tool_result'
@@ -1590,7 +1590,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: toolName === 'run_shell', shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -1733,7 +1733,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const connect = vi.spyOn(McpConnectionManager.prototype, 'connect').mockRejectedValue(new Error('MCP transport must not connect before a successful dispatch claim'))
@@ -1853,7 +1853,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     registerMcpIpcHandlers(ipcMain, { db } as never)
@@ -1967,7 +1967,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const connect = vi.spyOn(McpConnectionManager.prototype, 'connect').mockRejectedValue(new Error('MCP executor must not connect during cancelled approval'))
@@ -2063,7 +2063,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -2156,7 +2156,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -2250,7 +2250,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -2356,7 +2356,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -2455,7 +2455,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -2551,7 +2551,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, scriptTimeout: 30 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -2687,7 +2687,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: true, shellDefaultTimeoutSec: 30, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -2804,7 +2804,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -2906,7 +2906,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -2987,7 +2987,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn((_requestId: string, event: AssistantFactEvent) => { facts.push(event) }) } as never
     })
 
@@ -3059,7 +3059,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -3141,7 +3141,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -3227,7 +3227,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const targetExecutor = toolName === 'read_file' ? readFileExecutor : toolName === 'list_directory' ? listDirectoryExecutor : grepExecutor
@@ -3322,7 +3322,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const targetExecutor = toolName === 'read_file' ? readFileExecutor : toolName === 'list_directory' ? listDirectoryExecutor : grepExecutor
@@ -3445,7 +3445,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 0, autoApproveMaxEditChars: 0 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const targetExecutor = toolName === 'write_file' ? writeFileExecutor : editFileExecutor
@@ -3568,7 +3568,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -3655,7 +3655,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => browserConfig,
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const executeBrowser = vi.spyOn(browserExecutor, 'execute').mockResolvedValue({ success: true })
@@ -3721,7 +3721,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     hostedRuntimeFailureInjection.requestId = requestId
@@ -3795,7 +3795,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, navigateRequiresConfirm: false, actRequiresConfirm: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     let executorEntered!: () => void
@@ -3933,7 +3933,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
       getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, actRequiresConfirm: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -4028,7 +4028,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => browserConfig,
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const executeBrowser = vi.spyOn(browserExecutor, 'execute')
@@ -4132,7 +4132,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         : { ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: autoApproveThreshold },
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const executeWrite = vi.spyOn(writeFileExecutor, 'execute')
@@ -4215,7 +4215,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const executeRead = vi.spyOn(readFileExecutor, 'execute')
@@ -4303,7 +4303,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const executeDirectory = vi.spyOn(toolName === 'list_directory' ? listDirectoryExecutor : grepExecutor, 'execute')
@@ -4386,7 +4386,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => toolsConfig,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const executeScript = vi.spyOn(runScriptExecutor, 'execute')
@@ -4460,7 +4460,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => shellConfig,
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
 
@@ -4529,7 +4529,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -4591,7 +4591,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
@@ -4652,7 +4652,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })

@@ -189,7 +189,7 @@ describe('skillRouter wiki-trigger hard rule (W1-a)', () => {
     alwaysLoad: ['always-one']
   }
   const wikiSkill = skill(WIKI_VOCABULARY_PREFIX, 'builtin', '共享知识库', ['知识库', '存入wiki'])
-  const wikiConfig = { ...DEFAULT_WIKI_CONFIG, enabled: true }
+  const wikiConfig = { ...DEFAULT_WIKI_CONFIG }
 
   it('SOURCE_SCORE.wiki-trigger 与 llm 同级（0.9），低于 manual/feishu', () => {
     expect(SOURCE_SCORE['wiki-trigger']).toBe(0.9)

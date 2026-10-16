@@ -11,7 +11,6 @@ describe('wikiImportService', () => {
     vi.stubGlobal('window', {
       api: {
         wikiStatus: vi.fn().mockResolvedValue({
-          enabled: true,
           rootPath: 'llm-wiki',
           initialized: true,
           pageCount: 1,

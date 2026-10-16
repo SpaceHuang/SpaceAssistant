@@ -49,7 +49,7 @@ function renderWikiPane(wikiInitialized = true, apiOverride: Record<string, unkn
       config: {
         config: {
           workDir: '/tmp/project',
-          wiki: { enabled: true, rootPath: 'llm-wiki', hideWikiFromFileTree: true }
+          wiki: { rootPath: 'llm-wiki', hideWikiFromFileTree: true }
         },
         settingsOpen: false,
         aboutOpen: false

@@ -28,7 +28,7 @@ afterEach(() => {
 })
 
 function wikiConfig(rootPath = 'llm-wiki'): WikiConfig {
-  return { ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath }
+  return { ...DEFAULT_WIKI_CONFIG, rootPath }
 }
 
 describe('initWikiStructure 共享根（T1.12a）', () => {

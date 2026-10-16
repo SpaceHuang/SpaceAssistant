@@ -28,8 +28,8 @@ afterEach(() => {
   }
 })
 
-function wikiConfig(enabled = true): typeof DEFAULT_WIKI_CONFIG {
-  return { ...DEFAULT_WIKI_CONFIG, enabled, rootPath: 'llm-wiki' }
+function wikiConfig(): typeof DEFAULT_WIKI_CONFIG {
+  return { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki' }
 }
 
 describe('importRawFromWorkDir 共享根（T1.12c）', () => {
@@ -101,7 +101,7 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     const userData = tmpdir('wiki-imp-ren2-ud-')
     fs.writeFileSync(path.join(workDir, 'note2.md'), 'x', 'utf8')
     const db = openDatabase(':memory:')
-    const cfg = { ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'my-lib' }
+    const cfg = { ...DEFAULT_WIKI_CONFIG, rootPath: 'my-lib' }
     const res = await importRawFromWorkDir(workDir, cfg, 'note2.md', { userDataPath: userData, db })
     expect(res.ok).toBe(true)
     if (!res.ok) return

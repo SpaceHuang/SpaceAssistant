@@ -21,7 +21,6 @@ function makeDeps(overrides: Partial<Parameters<typeof classifyOutboundMessageWi
     wikiInit: overrides.wikiInit ?? vi.fn().mockResolvedValue({ ok: true, rootPath: 'llm-wiki', skillInstalled: true }),
     wikiStatus: overrides.wikiStatus ??
       vi.fn().mockResolvedValue({
-        enabled: true,
         rootPath: 'llm-wiki',
         initialized: true,
         pageCount: 2,

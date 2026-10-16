@@ -28,8 +28,8 @@ afterEach(async () => {
   }
 })
 
-function wikiConfig(enabled: boolean, legacyRootAliases: string[] = []): WikiConfig {
-  return { ...DEFAULT_WIKI_CONFIG, enabled, rootPath: 'llm-wiki', legacyRootAliases }
+function wikiConfig(legacyRootAliases: string[] = []): WikiConfig {
+  return { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki', legacyRootAliases }
 }
 
 interface World {
@@ -40,7 +40,7 @@ interface World {
   root: string
 }
 
-async function setupWorld(opts: { wikiEnabled?: boolean; withResidue?: boolean } = {}): Promise<World> {
+async function setupWorld(opts: { withResidue?: boolean } = {}): Promise<World> {
   const root = await tmpdir('wiki-grep-')
   const workDir = path.join(root, 'proj')
   const userDataDir = path.join(root, 'ud')
@@ -65,7 +65,7 @@ async function setupWorld(opts: { wikiEnabled?: boolean; withResidue?: boolean }
     signal: AbortSignal.timeout(60_000),
     fileStateCache: new FileStateCache(),
     toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
-    wikiConfig: wikiConfig(opts.wikiEnabled ?? true)
+    wikiConfig: wikiConfig()
   }
   return { workDir, userDataDir, realBase, ctx, root }
 }

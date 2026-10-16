@@ -8,7 +8,6 @@ const userData = path.resolve(path.sep, 'users', 'test', 'appdata')
 
 function makeConfig(overrides: Partial<WikiConfig> = {}): WikiConfig {
   return {
-    enabled: true,
     rootPath: 'llm-wiki',
     hideWikiFromFileTree: true,
     interactiveIngest: false,
