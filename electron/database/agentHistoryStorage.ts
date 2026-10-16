@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { assertSpillReferencePayloadStrict, replaceSpillReferenceOwnerInTransaction, spillHistoryOwnerKey } from '../storage/spillReferenceIndex'
+import { enqueueCanonicalLedgerProjectionTargetInTransaction, type CanonicalLedgerProjectionTarget } from '../sessionLedgerOutbox'
 import {
   HistoryBatchError,
   HistoryIdempotencyConflict,
@@ -31,7 +32,7 @@ export function appendSqliteAgentHistoryBatchInTransaction(
   conn: DatabaseSync,
   events: readonly HistoryEvent[],
   expectedVersion: number,
-  options: { schemaVersion?: number; sessionId?: string; now?: () => number; processGeneration?: number } = {}
+  options: { schemaVersion?: number; sessionId?: string; now?: () => number; processGeneration?: number; projectionTargets?: readonly CanonicalLedgerProjectionTarget[] } = {}
 ): HistoryAppendResult {
   const schemaVersion = options.schemaVersion ?? 1
   const now = options.now ?? Date.now
@@ -69,6 +70,12 @@ export function appendSqliteAgentHistoryBatchInTransaction(
     if (!exactDuplicate) {
       const conflicting = events.find((event, index) => existing[index] && !historyEventsEqual(fromRow(existing[index]!), { ...event, payload: JSON.parse(serialized[index]) }))
       throw new HistoryIdempotencyConflict(conflicting?.idempotencyKey ?? events[0].idempotencyKey)
+    }
+    for (const target of options.projectionTargets ?? []) {
+      if (!options.sessionId || target.sessionId !== options.sessionId || !events.some((event) => event.eventId === target.canonicalEventId)) {
+        throw new HistoryBatchError('projection target must be coupled to this session and an event in the canonical batch')
+      }
+      enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target)
     }
     return { version: actualVersion, duplicate: true }
   }
@@ -141,6 +148,12 @@ export function appendSqliteAgentHistoryBatchInTransaction(
   }
   const version = actualVersion + events.length
   conn.prepare('UPDATE agent_history_streams SET version = ? WHERE invocation_id = ?').run(version, invocationId)
+  for (const target of options.projectionTargets ?? []) {
+    if (!options.sessionId || target.sessionId !== options.sessionId || !events.some((event) => event.eventId === target.canonicalEventId)) {
+      throw new HistoryBatchError('projection target must be coupled to this session and an event in the canonical batch')
+    }
+    enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target)
+  }
   if (options.processGeneration !== undefined) {
     conn.prepare('UPDATE canonical_history_recovery_work SET owner_generation=? WHERE invocation_id=?')
       .run(options.processGeneration, invocationId)

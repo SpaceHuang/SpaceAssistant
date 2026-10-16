@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 101
+export const DB_SCHEMA_VERSION = 102
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -2027,6 +2027,28 @@ CREATE TABLE IF NOT EXISTS session_ledger_projection_state (
 );
 CREATE INDEX IF NOT EXISTS idx_session_ledger_projection_state_session
   ON session_ledger_projection_state(session_id,session_generation);
+`
+
+/** v101 → v102: transactional canonical-to-ledger projection targets. */
+export const MIGRATION_V102_SESSION_LEDGER_OUTBOX_SQL = `
+CREATE TABLE IF NOT EXISTS session_ledger_projection_outbox (
+  target_id TEXT PRIMARY KEY NOT NULL,
+  ledger_location_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  session_generation TEXT NOT NULL,
+  canonical_event_id TEXT NOT NULL,
+  projection_kind TEXT NOT NULL,
+  expected_events_json TEXT NOT NULL,
+  expected_event_ids_json TEXT NOT NULL,
+  payload_sha256 TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','acked')),
+  created_at INTEGER NOT NULL,
+  acked_at INTEGER,
+  UNIQUE(ledger_location_key,canonical_event_id,projection_kind),
+  FOREIGN KEY(ledger_location_key) REFERENCES session_ledger_projection_state(ledger_location_key) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_session_ledger_projection_outbox_pending
+  ON session_ledger_projection_outbox(ledger_location_key,status,created_at,target_id);
 `
 
 /** v51: preserve stable catalog/provider/route identity on usage facts. */
