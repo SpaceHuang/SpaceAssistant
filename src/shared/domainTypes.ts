@@ -501,7 +501,6 @@ export interface WikiMigrationState {
 }
 
 export interface WikiConfig {
-  enabled: boolean
   /** 共享库在 userData 下的目录名（D7/D9；不再表示 workDir 内相对路径） */
   rootPath: string
   hideWikiFromFileTree: boolean
@@ -514,7 +513,6 @@ export interface WikiConfig {
 }
 
 export const DEFAULT_WIKI_CONFIG: WikiConfig = {
-  enabled: false,
   rootPath: WIKI_VOCABULARY_PREFIX,
   hideWikiFromFileTree: true,
   interactiveIngest: false,
@@ -547,9 +545,11 @@ function normalizeWikiMigrationState(value: unknown): WikiMigrationState {
 
 export function mergeWikiConfig(partial?: Partial<WikiConfig> | null): WikiConfig {
   if (!partial || typeof partial !== 'object') return { ...DEFAULT_WIKI_CONFIG }
-  const merged: WikiConfig = { ...DEFAULT_WIKI_CONFIG, ...partial }
-  merged.legacyRootAliases = normalizeWikiLegacyRootAliases(partial.legacyRootAliases)
-  merged.migration = normalizeWikiMigrationState(partial.migration)
+  // 存量剥离：历史版本可能持久化过 enabled；默认启用后概念已移除，不得回写库
+  const { enabled: _legacyEnabled, ...rest } = partial as Partial<WikiConfig> & { enabled?: unknown }
+  const merged: WikiConfig = { ...DEFAULT_WIKI_CONFIG, ...rest }
+  merged.legacyRootAliases = normalizeWikiLegacyRootAliases(rest.legacyRootAliases)
+  merged.migration = normalizeWikiMigrationState(rest.migration)
   return merged
 }
 
@@ -573,7 +573,6 @@ export interface WikiProjectSummary {
 }
 
 export interface WikiStatus {
-  enabled: boolean
   rootPath: string
   initialized: boolean
   pageCount: number

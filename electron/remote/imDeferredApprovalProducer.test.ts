@@ -194,7 +194,7 @@ describe('production IM deferred approval producer', () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-critical-wiki-deny-'))
     const { agentSdk } = assembleInvocation({ requestId: 'critical-wiki-request', turnId: 'critical-wiki-turn', sessionId,
       lane: 'feishu', model: 'model', locale: 'en-US', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
-      wikiConfig: { ...DEFAULT_WIKI_CONFIG, enabled: true }, workDir, userDataDir: '/tmp', getApiKey: async () => 'key',
+      wikiConfig: { ...DEFAULT_WIKI_CONFIG }, workDir, userDataDir: '/tmp', getApiKey: async () => 'key',
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(), remoteContext: { source: 'feishu', messageId: 'critical-wiki-origin',
         confirmPolicy: 'im_confirm', chatId: 'critical-wiki-chat', userId: 'owner', authOwner: 'owner' } as never })
     const executor = vi.fn(async () => ({ success: true }))

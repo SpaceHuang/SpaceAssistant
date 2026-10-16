@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { parseWikiCommand, isWikiPathLink } from './wikiCommandService'
-import { DEFAULT_WIKI_CONFIG } from '../domainTypes'
 
 function makeDeps() {
   return {
     wikiInit: vi.fn().mockResolvedValue({ ok: true, rootPath: 'llm-wiki', skillInstalled: true }),
     wikiStatus: vi.fn().mockResolvedValue({
-      enabled: true,
       rootPath: 'llm-wiki',
       initialized: true,
       pageCount: 2,
@@ -25,7 +23,6 @@ describe('wikiCommandService', () => {
   it('returns chat for normal messages', async () => {
     const r = await parseWikiCommand(
       'hello',
-      DEFAULT_WIKI_CONFIG,
       { manualActivated: [], manualDisabled: [] },
       makeDeps()
     )
@@ -33,10 +30,8 @@ describe('wikiCommandService', () => {
   })
 
   it('shows help', async () => {
-    const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
     const r = await parseWikiCommand(
       '/wiki help',
-      enabled,
       { manualActivated: [], manualDisabled: [] },
       makeDeps()
     )
@@ -46,18 +41,15 @@ describe('wikiCommandService', () => {
 
   it('runs init via injected wikiInit port', async () => {
     const deps = makeDeps()
-    const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
-    const r = await parseWikiCommand('/wiki init', enabled, { manualActivated: [], manualDisabled: [] }, deps)
+    const r = await parseWikiCommand('/wiki init', { manualActivated: [], manualDisabled: [] }, deps)
     expect(r.type).toBe('command')
     expect(deps.wikiInit).toHaveBeenCalledWith({ installSkill: true })
     if (r.type === 'command') expect(r.hint).toContain('已初始化')
   })
 
   it('runs ingest command for raw path', async () => {
-    const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
     const r = await parseWikiCommand(
       '/wiki ingest llm-wiki/raw/test.md',
-      enabled,
       { manualActivated: [], manualDisabled: [] },
       makeDeps()
     )
@@ -71,10 +63,8 @@ describe('wikiCommandService', () => {
 
   it('imports external path before ingest', async () => {
     const deps = makeDeps()
-    const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
     const r = await parseWikiCommand(
       '/wiki ingest docs/note.md',
-      enabled,
       { manualActivated: [], manualDisabled: [] },
       deps
     )
@@ -87,10 +77,8 @@ describe('wikiCommandService', () => {
   })
 
   it.each(['摄取', '提取'])('runs ingest via Chinese alias %s', async (alias) => {
-    const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
     const r = await parseWikiCommand(
       `/wiki ${alias} raw/article.md`,
-      enabled,
       { manualActivated: [], manualDisabled: [] },
       makeDeps()
     )

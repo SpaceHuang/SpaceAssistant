@@ -28,8 +28,8 @@ afterEach(() => {
   }
 })
 
-function wikiConfig(enabled = true): typeof DEFAULT_WIKI_CONFIG {
-  return { ...DEFAULT_WIKI_CONFIG, enabled, rootPath: 'llm-wiki' }
+function wikiConfig(): typeof DEFAULT_WIKI_CONFIG {
+  return { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki' }
 }
 
 describe('importRawFromWorkDir 共享根（T1.12c）', () => {
@@ -101,7 +101,7 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     const userData = tmpdir('wiki-imp-ren2-ud-')
     fs.writeFileSync(path.join(workDir, 'note2.md'), 'x', 'utf8')
     const db = openDatabase(':memory:')
-    const cfg = { ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'my-lib' }
+    const cfg = { ...DEFAULT_WIKI_CONFIG, rootPath: 'my-lib' }
     const res = await importRawFromWorkDir(workDir, cfg, 'note2.md', { userDataPath: userData, db })
     expect(res.ok).toBe(true)
     if (!res.ok) return
@@ -109,15 +109,6 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     // 物理落盘在配置目录（my-lib）下
     const projectId = computeProjectId(workDir)
     expect(fs.existsSync(path.join(userData, 'my-lib', 'raw', projectId, 'note2.md'))).toBe(true)
-    db.close()
-  })
-
-  it('wiki 停用拒绝；workDir 侧 raw/ 显式路径维持现状', async () => {
-    const workDir = tmpdir('wiki-imp-off-')
-    const userData = tmpdir('wiki-imp-off-ud-')
-    const db = openDatabase(':memory:')
-    const res = await importRawFromWorkDir(workDir, wikiConfig(false), 'x.md', { userDataPath: userData, db })
-    expect(res.ok).toBe(false)
     db.close()
   })
 })

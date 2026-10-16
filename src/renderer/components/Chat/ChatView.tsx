@@ -951,8 +951,8 @@ export function ChatView() {
 
   const showArchiveToWikiFor = useCallback(
     (m: Message) =>
-      Boolean(cfg?.wiki?.enabled && m.role === 'assistant' && m.status === 'completed' && m.content.trim()),
-    [cfg?.wiki?.enabled]
+      Boolean(m.role === 'assistant' && m.status === 'completed' && m.content.trim()),
+    []
   )
 
   const canRetryMessage = useCallback(

@@ -1,4 +1,4 @@
-import type { SessionSkillsState, SkillDefinition, WikiConfig, WikiStatus } from '../../shared/domainTypes'
+import type { SessionSkillsState, SkillDefinition, WikiStatus } from '../../shared/domainTypes'
 import { parseTestCardsCommand } from './testCardsCommandService'
 import { parseTestPopCommand } from './testPopCommandService'
 import { parseWikiCommand } from './wikiCommandService'
@@ -25,7 +25,6 @@ export type OutboundClassifierDeps = {
 export async function classifyOutboundMessageWithDeps(
   text: string,
   ctx: {
-    wikiConfig: WikiConfig
     sessionSkillsState: SessionSkillsState
   },
   deps: OutboundClassifierDeps
@@ -41,7 +40,7 @@ export async function classifyOutboundMessageWithDeps(
   if (testPopCmd.type === 'command') return 'immediate-command'
   if (testPopCmd.type === 'run') return 'immediate-command'
 
-  const wikiCmd = await parseWikiCommand(trimmed, ctx.wikiConfig, ctx.sessionSkillsState, {
+  const wikiCmd = await parseWikiCommand(trimmed, ctx.sessionSkillsState, {
     wikiInit: deps.wikiInit,
     wikiStatus: deps.wikiStatus,
     wikiImportRaw: deps.wikiImportRaw

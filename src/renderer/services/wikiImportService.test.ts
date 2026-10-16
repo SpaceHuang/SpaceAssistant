@@ -11,7 +11,6 @@ describe('wikiImportService', () => {
     vi.stubGlobal('window', {
       api: {
         wikiStatus: vi.fn().mockResolvedValue({
-          enabled: true,
           rootPath: 'llm-wiki',
           initialized: true,
           pageCount: 1,
@@ -28,9 +27,8 @@ describe('wikiImportService', () => {
   })
 
   it('detects collectable files', () => {
-    expect(canShowCollectToWiki('docs/a.md', 'llm-wiki', false, true)).toBe(true)
-    expect(canShowCollectToWiki('llm-wiki/wiki/a.md', 'llm-wiki', false, true)).toBe(false)
-    expect(canShowCollectToWiki('docs/a.md', 'llm-wiki', false, false)).toBe(false)
+    expect(canShowCollectToWiki('docs/a.md', 'llm-wiki', false)).toBe(true)
+    expect(canShowCollectToWiki('llm-wiki/wiki/a.md', 'llm-wiki', false)).toBe(false)
   })
 
   it('formats toast for copied and existing raw', () => {
@@ -41,7 +39,6 @@ describe('wikiImportService', () => {
   it('collects external file and triggers ingest', async () => {
     const onSuccess = vi.fn()
     const result = await collectToWiki('docs/note.md', {
-      wikiEnabled: true,
       sessionId: 's1',
       onSuccess
     })
@@ -55,7 +52,6 @@ describe('wikiImportService', () => {
   it('requires session', async () => {
     const onMissingSession = vi.fn()
     const result = await collectToWiki('docs/note.md', {
-      wikiEnabled: true,
       sessionId: null,
       onMissingSession
     })

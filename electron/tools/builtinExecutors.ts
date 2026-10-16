@@ -52,7 +52,6 @@ import { planGrepInvocation, formatGrepNoMatchOutput, type GrepScope } from './g
 import { probeReadPathFact } from '../confirmation/extractors/readPathFacts'
 import { buildReadExecutionPermit } from '../confirmation/readExecutionPermit'
 import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
-import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { isSensitivePath } from '../shell/shellSensitivePaths'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
@@ -310,7 +309,6 @@ export const readFileExecutor: ToolExecutor = {
     if (rel === undefined) {
       return { success: false, error: toolErrMissingPath('read_file'), duration: Date.now() - started }
     }
-    if (!ctx.wikiConfig?.enabled && isWikiVocabularyPath(rel, ctx)) return wikiVocabularyDisabledResult(rel, started)
     ctx.sendProgress('reading', '正在读取文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
@@ -586,7 +584,6 @@ export const listDirectoryExecutor: ToolExecutor = {
     ctx.sendProgress('listing', '正在读取目录...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     const failedPath = typeof input.path === 'string' && input.path ? input.path : '.'
-    if (!ctx.wikiConfig?.enabled && isWikiVocabularyPath(failedPath, ctx)) return wikiVocabularyDisabledResult(failedPath, started)
     try {
       const permitted = await resolveReadPermitTarget('list_directory', input, ctx)
       if (!permitted.ok) return { success: false, error: '目录读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
@@ -767,32 +764,6 @@ function writePathErrorMessage(e: unknown, rel: string): string {
   return msg
 }
 
-/**
- * W3：知识库未启用时，凡「启用后会被 resolveWikiMount 挂载进共享库」的路径
- * （词汇前缀及其大小写 / .-段 / workDir 绝对形态变体，唯一决策点同一套规范化）
- * 一律 fail-closed 拦截——否则落 workDir 普通路径解析会产生误导性成功。
- * 前导 / 的绝对形态在挂载侧越界不挂载（启用时同样被范围守卫拒绝），不在此拦。
- */
-function isWikiVocabularyPath(rawPath: string, ctx: ToolExecutionContext): boolean {
-  if (!ctx.userDataDir) return false
-  const hypothetical = resolveWikiMount(ctx.workDir, { ...(ctx.wikiConfig ?? DEFAULT_WIKI_CONFIG), enabled: true }, ctx.userDataDir, rawPath)
-  return hypothetical.mounted
-}
-
-/**
- * W3：知识库未启用时前缀不挂载——write 会落 workDir 普通路径产生误导性成功，
- * read/list/grep 搜到的也只是同名普通目录。在路径解析入口统一 fail-closed，
- * 给出与 skill 异常处理一致的引导，不绕行。
- */
-function wikiVocabularyDisabledResult(rawPath: string, started: number): ToolExecutorResult {
-  return {
-    success: false,
-    error: `共享知识库未启用：「${rawPath}」指向共享知识库（${WIKI_VOCABULARY_PREFIX}/）命名空间。请在 设置 → Wiki 中开启后重试；不要把内容写入工作目录冒充知识库`,
-    diagnostic: { caseId: 'wiki-vocabulary-disabled', retryable: true, category: 'policy' },
-    duration: Date.now() - started
-  }
-}
-
 async function assertRemoteWriteTargetInsideWorkDir(workDir: string, targetPath: string): Promise<void> {
   try {
     if (await classifyWriteTargetScope(targetPath, workDir) !== 'inside-workdir') {
@@ -810,7 +781,7 @@ async function resolveWriteTargetFromPermit(input: Record<string, unknown>, ctx:
   if (rawPath === undefined) throw new Error('write-path-missing')
   if (!permit && ctx.lane !== 'desktop') {
     // T1.7：远程 lane 无 permit 兜底——wiki 挂载命中改走 realBase 沙箱解析（别名只读拒绝）
-    const mount = ctx.wikiConfig?.enabled
+    const mount = ctx.wikiConfig
       ? resolveWikiMount(ctx.workDir, ctx.wikiConfig, ctx.userDataDir, rawPath)
       : undefined
     if (mount?.mounted) {
@@ -825,7 +796,7 @@ async function resolveWriteTargetFromPermit(input: Record<string, unknown>, ctx:
   if (!valid.ok) throw new Error(valid.caseId)
   // T1.6 一致性守卫：permit 携带词汇路径时对入参二次挂载比对，防探测/执行间状态漂移（R9）
   if (permit.target.vocabularyPath) {
-    if (!ctx.wikiConfig?.enabled) throw new Error('wiki-mount-consistency-mismatch')
+    if (!ctx.wikiConfig) throw new Error('wiki-mount-consistency-mismatch')
     const resolution = resolveWikiMount(ctx.workDir, ctx.wikiConfig, ctx.userDataDir, permit.target.vocabularyPath)
     if (!resolution.mounted) throw new Error('wiki-mount-consistency-mismatch')
     if (resolution.readOnly) throw new Error('wiki-readonly-alias-write-denied')
@@ -866,7 +837,6 @@ export const editFileExecutor: ToolExecutor = {
     if (rel === undefined) {
       return { success: false, error: toolErrMissingPath('edit_file'), duration: Date.now() - started }
     }
-    if (!ctx.wikiConfig?.enabled && isWikiVocabularyPath(rel, ctx)) return wikiVocabularyDisabledResult(rel, started)
     const oldS = typeof input.old_string === 'string' ? input.old_string : ''
     const newS = typeof input.new_string === 'string' ? input.new_string : ''
     const replaceAll = Boolean(input.replace_all)
@@ -1028,7 +998,6 @@ export const writeFileExecutor: ToolExecutor = {
     if (rel === undefined) {
       return { success: false, error: toolErrMissingPath('write_file'), duration: Date.now() - started }
     }
-    if (!ctx.wikiConfig?.enabled && isWikiVocabularyPath(rel, ctx)) return wikiVocabularyDisabledResult(rel, started)
     const content = typeof input.content === 'string' ? input.content : ''
     ctx.sendProgress('writing', '正在写入文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
@@ -1895,10 +1864,10 @@ const dualRootSuppressedCtxs = new WeakSet<object>()
 /** 双根编排的 workDir 子调用携带的挂载前缀排除目录（单根执行路径消费，T1.11c） */
 const dualRootExtrasByCtx = new WeakMap<object, readonly string[]>()
 
-/** wiki 启用且共享根已初始化、且本次无显式 path 时，无 path 全库搜索规划为双根。 */
+/** 共享根已初始化、且本次无显式 path 时，无 path 全库搜索规划为双根。 */
 function planWikiDualRootGrep(ctx: ToolExecutionContext, input: Record<string, unknown>): WikiDualRootPlan | undefined {
   const wc = ctx.wikiConfig
-  if (!wc?.enabled) return undefined
+  if (!wc) return undefined
   if (dualRootSuppressedCtxs.has(ctx)) return undefined
   if (extractPathField(input) !== undefined) return undefined
   const rootDirname = wc.rootPath || DEFAULT_WIKI_ROOT_DIRNAME
@@ -2126,10 +2095,7 @@ export const grepExecutor: ToolExecutor = {
     const gargs: GrepExecArgs = normalized.args
     // 与其余四个文件工具一致走 extractPathField（覆盖 filePath/file_path 别名），防止别名绕过兜底拦截（评审 P2-4）。
     const explicitGrepPath = extractPathField(input) ?? ''
-    if (!ctx.wikiConfig?.enabled && explicitGrepPath && isWikiVocabularyPath(explicitGrepPath, ctx)) {
-      return wikiVocabularyDisabledResult(explicitGrepPath, started)
-    }
-    // T1.11：无 path 全库搜索的 wiki 双根编排（wiki 停用/共享根未初始化/显式 path 时维持单根现状）
+    // T1.11：无 path 全库搜索的 wiki 双根编排（共享根未初始化/显式 path 时维持单根现状）
     const dualPlan = planWikiDualRootGrep(ctx, input)
     if (dualPlan) {
       return executeWikiDualRootGrep(input, ctx, gargs, dualPlan, started)

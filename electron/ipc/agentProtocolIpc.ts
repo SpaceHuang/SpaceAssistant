@@ -935,7 +935,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       const raw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
       return clampMaxParallelChatSessions(raw ? Number(raw) : undefined)
     },
-    readWikiConfig: () => readWikiConfig(ctx.db),
     listSkills: async () => skillManager.list(true),
     getSkill: async (payload) => skillManager.get(payload.name),
     wikiInit: async (payload) =>

@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import { Typography } from 'antd'
-import { useTypedSelector } from '../../hooks'
 import { classifyWikiReferencedPath } from '../../../shared/wikiMarkdown'
 import { useDetailPanel } from './DetailPanelContext'
 import { useReferencedFiles } from './useReferencedFiles'
@@ -20,16 +19,15 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
   const files = useReferencedFiles(sessionId)
   const { selectedFile, openFile } = useDetailPanel()
   const wikiRoot = WIKI_VOCABULARY_PREFIX
-  const wikiEnabled = useTypedSelector((s) => s.config.config?.wiki?.enabled ?? false)
   const [filter, setFilter] = useState<WikiFilter>('all')
 
   const enriched = useMemo(
     () =>
       files.map((file) => ({
         ...file,
-        wikiKind: wikiEnabled ? classifyWikiReferencedPath(file.path, wikiRoot) : null
+        wikiKind: classifyWikiReferencedPath(file.path, wikiRoot)
       })),
-    [files, wikiEnabled, wikiRoot]
+    [files, wikiRoot]
   )
 
   const visible = useMemo(() => {
@@ -50,7 +48,7 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
 
   const handleFileClick = (path: string) => {
     if (path === selectedFile) return
-    const preferWiki = wikiEnabled && isUnderWikiRoot(path, wikiRoot)
+    const preferWiki = isUnderWikiRoot(path, wikiRoot)
     requestFilePaneSelect({ relPath: path, preferWiki: preferWiki || undefined })
     void openFile(path)
   }
@@ -61,7 +59,7 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
         <span className="detail-panel-section-title">{t('referencedFiles.title')}</span>
         {files.length > 0 ? <span className="detail-panel-section-badge">{visible.length}</span> : null}
       </div>
-      {wikiEnabled && files.length > 0 ? (
+      {files.length > 0 ? (
         <div className="referenced-files-filter">
           <div className="referenced-files-segment" role="tablist" aria-label={t('referencedFiles.title')}>
             {filterOptions.map((option) => (

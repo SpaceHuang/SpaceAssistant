@@ -27,7 +27,6 @@ export function resolveWikiRelPath(workDir: string, wikiConfig: WikiConfig, relP
 export type WikiPathKind = 'raw' | 'wiki' | 'schema' | 'other'
 
 export function classifyWikiPath(workDir: string, wikiConfig: WikiConfig, relPath: string): WikiPathKind {
-  if (!wikiConfig.enabled) return 'other'
   // BLK-4（D9/§6.3）：分类基准恒为词汇常量，与 rootPath（物理目录名）解耦
   // BLK-5 残余：结构段比较大小写不敏感——挂载命中大小写变体（llm-wiki/RAW/x）时
   // vocabularyPath 保留入参后缀形态，raw deny 语义不得因大小写漏判
@@ -41,7 +40,7 @@ export function classifyWikiPath(workDir: string, wikiConfig: WikiConfig, relPat
 }
 
 export function isUnderWikiRaw(workDir: string, wikiConfig: WikiConfig, relPath: string): boolean {
-  return wikiConfig.enabled && classifyWikiPath(workDir, wikiConfig, relPath) === 'raw'
+  return classifyWikiPath(workDir, wikiConfig, relPath) === 'raw'
 }
 
 export function wikiSchemaRelPath(wikiConfig: WikiConfig): string {

@@ -93,7 +93,7 @@ function renderPanel(options?: { sessions?: Session[]; currentSessionId?: string
       config: {
         config: {
           workDir: '/tmp/proj',
-          wiki: { enabled: false, rootPath: 'llm-wiki', hideWikiFromFileTree: false },
+          wiki: { rootPath: 'llm-wiki', hideWikiFromFileTree: false },
           activeWorkDirProfileId: '',
           workDirProfiles: []
         },

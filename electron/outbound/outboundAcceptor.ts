@@ -1,4 +1,4 @@
-import type { Message, SessionSkillsState, SkillDefinition, WikiConfig, WikiStatus } from '../../src/shared/domainTypes'
+import type { Message, SessionSkillsState, SkillDefinition, WikiStatus } from '../../src/shared/domainTypes'
 import { normalizeSessionSkillsState } from '../../src/shared/domainTypes'
 import { MAX_CHAT_MESSAGE_QUEUE_SIZE, countQueuedUserMessages } from '../../src/shared/chatMessageQueue'
 import type { OutboundSessionPrefs, OutboundSubmitIntent, OutboundSubmitResult } from '../../src/shared/outboundProtocol'
@@ -34,7 +34,6 @@ export type OutboundSnapshot = {
   apiKeyPresent: boolean
   queuedCount: number
   maxQueueSize: number
-  wikiConfig: WikiConfig
   sessionSkillsState: SessionSkillsState
 }
 
@@ -126,7 +125,7 @@ export async function decideOutbound(
   let wikiModeActive = false
 
   // ⑥ wiki：command → 提示（skillsState 变更随受理事务落库）；run → 改写文本并激活 wiki 模式
-  const wikiCmd = await parseWikiCommand(trimmed, snapshot.wikiConfig, skillsState, {
+  const wikiCmd = await parseWikiCommand(trimmed, skillsState, {
     wikiInit: io.wikiInit,
     wikiStatus: io.wikiStatus,
     wikiImportRaw: io.wikiImportRaw
@@ -183,7 +182,6 @@ export type OutboundAcceptorDeps = {
   apiKeyPresent: () => boolean
   getMaxParallel: () => number
   maxQueueSize?: number
-  readWikiConfig: () => WikiConfig
   listSkills: () => Promise<SkillDefinition[]>
   getSkill: (payload: { name: string }) => Promise<SkillDefinition | null>
   wikiInit: (payload?: {
@@ -451,7 +449,6 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       apiKeyPresent: deps.apiKeyPresent(),
       queuedCount: session ? countQueued(sessionId) : 0,
       maxQueueSize: deps.maxQueueSize ?? MAX_CHAT_MESSAGE_QUEUE_SIZE,
-      wikiConfig: deps.readWikiConfig(),
       sessionSkillsState: normalizeSessionSkillsState(session?.skillsState)
     }
 

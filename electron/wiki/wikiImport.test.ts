@@ -21,7 +21,7 @@ function makeWorkDir(): string {
   return dir
 }
 
-const wikiConfig: WikiConfig = { ...DEFAULT_WIKI_CONFIG, enabled: true }
+const wikiConfig: WikiConfig = { ...DEFAULT_WIKI_CONFIG }
 
 describe('wikiImport', () => {
   it('copies external text file into raw', async () => {
