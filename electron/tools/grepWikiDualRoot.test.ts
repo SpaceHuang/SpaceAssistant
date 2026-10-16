@@ -13,6 +13,7 @@ import { DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG, type WikiConfig } from '../.
 import type { ToolExecutionContext } from './types'
 import { grepExecutor } from './builtinExecutors'
 import { buildReadExecutionPermit } from '../confirmation/readExecutionPermit'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 
 const dirs: string[] = []
 
@@ -139,7 +140,8 @@ async function runGrep(ctx: ToolExecutionContext, input: Record<string, unknown>
 }
 
 describe('grep 双根编排（T1.11a）', () => {
-  it('无 path 双根搜索拒绝指向自定义敏感目录的共享根符号链接', async () => {
+  // 依赖真实 symlink 的用例以能力探测保护：win32 非特权进程 fs.symlink 直接 EPERM；安全语义由下方 mock 通路覆盖。
+  it.skipIf(!canCreateSymlinks())('无 path 双根搜索拒绝指向自定义敏感目录的共享根符号链接', async () => {
     const world = await setupWorld()
     const sensitiveDir = path.join(world.root, 'custom-sensitive')
     await fs.mkdir(sensitiveDir, { recursive: true })
@@ -153,7 +155,7 @@ describe('grep 双根编排（T1.11a）', () => {
     expect(res.output).not.toContain('secret.md')
   })
 
-  it('无 path 双根搜索拒绝指向共享库外普通目录的共享根符号链接', async () => {
+  it.skipIf(!canCreateSymlinks())('无 path 双根搜索拒绝指向共享库外普通目录的共享根符号链接', async () => {
     const world = await setupWorld()
     const externalDir = path.join(world.root, 'external-wiki')
     await fs.mkdir(externalDir, { recursive: true })
@@ -164,6 +166,28 @@ describe('grep 双根编排（T1.11a）', () => {
     const res = await runGrep(world.ctx, { pattern: 'needle', output_mode: 'content' })
     expect(res.output).not.toContain('OUTSIDE_SHARED_ROOT')
     expect(res.output).not.toContain('outside.md')
+  })
+
+  it('mock 通路：共享根 realpath 解析到共享库外时拒绝签发 wiki 根 permit（win32 无特权平台的安全语义锚）', async () => {
+    const world = await setupWorld()
+    const externalDir = path.join(world.root, 'external-wiki')
+    await fs.mkdir(externalDir, { recursive: true })
+    await fs.writeFile(path.join(externalDir, 'outside.md'), 'OUTSIDE_SHARED_ROOT needle\n')
+    const originalRealpath = fs.realpath.bind(fs)
+    const realpathSpy = vi.spyOn(fs, 'realpath').mockImplementation(async (target, ...args) => {
+      if (String(target) === world.realBase) return externalDir
+      return originalRealpath(target, ...args)
+    })
+    try {
+      const res = await runGrep(world.ctx, { pattern: 'needle', output_mode: 'content' })
+      expect(res.success).toBe(true)
+      expect(res.output).toContain('needle in workdir')
+      expect(res.output).not.toContain('OUTSIDE_SHARED_ROOT')
+      expect(res.output).not.toContain('outside.md')
+      expect(res.output).not.toContain('llm-wiki/wiki/shared.md')
+    } finally {
+      realpathSpy.mockRestore()
+    }
   })
 
   it('a① 无 path + wiki 启用 → workDir 与共享根双根命中，wiki 路径为词汇形态', async () => {
