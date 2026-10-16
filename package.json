@@ -10,7 +10,7 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "test": "vitest run --project electron --project renderer",
+    "test": "vitest run --project electron --project agent-sdk --project renderer",
     "pretest": "npm run build:agent-provider-pi-ai",
     "test:watch": "vitest",
     "test:related": "vitest related --run",
@@ -43,7 +43,8 @@
     "check:message-fact-ownership": "node scripts/check-message-fact-ownership.mjs",
     "check:no-nul": "node scripts/check-no-nul.mjs",
     "check:treesitter-wasm": "node scripts/check-treesitter-wasm.mjs",
-    "check:agent-sdk": "node scripts/check-agent-sdk-boundary.mjs && node scripts/check-agent-sdk-dependencies.mjs && node scripts/check-agent-sdk-package-closure.mjs",
+    "check:agent-sdk-dependencies": "node --test scripts/check-agent-sdk-dependencies.test.mjs && node scripts/check-agent-sdk-dependencies.mjs",
+    "check:agent-sdk": "node scripts/check-agent-sdk-boundary.mjs && npm run check:agent-sdk-dependencies && node scripts/check-agent-sdk-package-closure.mjs",
     "model:baseline": "node --import tsx scripts/generate-model-baseline.mjs",
     "check:model-baseline": "node --import tsx scripts/generate-model-baseline.mjs --check",
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
