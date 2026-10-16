@@ -2143,7 +2143,7 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
-  it('limits an incomplete recovery census to streams without a terminal event', () => {
+  it('uses the active workset as the pending recovery census while legacy backfill is incomplete', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
     const insertStream = conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(?,1,1,?)')

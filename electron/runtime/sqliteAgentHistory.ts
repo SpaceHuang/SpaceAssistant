@@ -1273,10 +1273,13 @@ export class SqliteAgentHistory implements HistoryPort {
   async classifyLegacyProjectionRepairs(batchSize = 100): Promise<{ classified: number; recoveryClassified: number; complete: boolean }> {
     if (!Number.isInteger(batchSize) || batchSize < 1) throw new HistoryBatchError('batchSize must be a positive integer')
     return runInTransaction(this.conn, () => {
-      const migration = this.conn.prepare(`SELECT after_invocation_id, status FROM canonical_projection_repair_migration
-        WHERE migration_key = 'legacy-classification-v1'`).get() as { after_invocation_id: string | null; status: string } | undefined
       const recoveryMigration = this.conn.prepare(`SELECT after_invocation_id, status FROM canonical_history_recovery_work_migration
         WHERE migration_key='active-invocations-v1'`).get() as { after_invocation_id: string | null; status: string } | undefined
+      const migration = this.conn.prepare(`SELECT after_invocation_id, status FROM canonical_projection_repair_migration
+        WHERE migration_key = 'legacy-classification-v1'`).get() as { after_invocation_id: string | null; status: string } | undefined
+      // Compatibility bridge: until the session-scoped projection gate is installed,
+      // legacy obligations remain resumably classified. Startup will stop calling this
+      // classifier in the integration phase, after the replacement consumer is wired.
       const classifyRepairs = Boolean(migration && migration.status !== 'complete')
       const classifyRecovery = Boolean(recoveryMigration && recoveryMigration.status !== 'complete')
       let classified = 0
@@ -1326,7 +1329,7 @@ export class SqliteAgentHistory implements HistoryPort {
         const hasMore = streams.length > batchSize
         const batch = hasMore ? streams.slice(0, batchSize) : streams
         const hasTerminal = this.conn.prepare(`SELECT 1 FROM agent_history_events
-          WHERE invocation_id=? AND sequence=? AND kind IN ('invocation-completed','invocation-failed','invocation-interrupted') LIMIT 1`)
+          WHERE invocation_id=? AND sequence=? AND kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked') LIMIT 1`)
         const addWork = this.conn.prepare(`INSERT INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
           VALUES(?,?,?) ON CONFLICT(invocation_id) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at`)
         const removeWork = this.conn.prepare('DELETE FROM canonical_history_recovery_work WHERE invocation_id=?')
@@ -1369,30 +1372,25 @@ export class SqliteAgentHistory implements HistoryPort {
     }
   }
 
-  /** Returns only durable unfinished work after backfill; exhaustive enumeration is temporary during backfill. */
+  /** Returns the durable unfinished-work set while legacy rows are incorporated in resumable batches. */
   listStartupRecoveryWorkset(): Array<{ invocationId: string; sessionId: string | null }> {
     const migration = this.conn.prepare(`SELECT status FROM canonical_history_recovery_work_migration
       WHERE migration_key='active-invocations-v1'`).get() as { status: string } | undefined
-    if (migration?.status === 'complete') {
-      return this.conn.prepare(`SELECT work.invocation_id,work.session_id FROM canonical_history_recovery_work work
-        LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=work.session_id
-        WHERE cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')
-        ORDER BY work.invocation_id`).all()
-        .map((row) => {
-          const value = row as { invocation_id: string; session_id: string | null }
-          return { invocationId: value.invocation_id, sessionId: value.session_id }
-        })
-    }
-    return (this.conn.prepare(`SELECT streams.invocation_id,streams.session_id FROM agent_history_streams streams
+    const query = migration?.status === 'complete' ? `SELECT work.invocation_id,work.session_id FROM canonical_history_recovery_work work
+      LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=work.session_id
+      WHERE cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')
+      ORDER BY work.invocation_id` : `SELECT streams.invocation_id,streams.session_id FROM agent_history_streams streams
       LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=streams.session_id
       WHERE NOT EXISTS (SELECT 1 FROM agent_history_events terminal
-          WHERE terminal.invocation_id=streams.invocation_id
+          WHERE terminal.invocation_id=streams.invocation_id AND terminal.sequence=streams.version
             AND terminal.kind IN ('invocation-completed','invocation-failed'))
         AND (cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
-      ORDER BY streams.invocation_id`).all() as
-      Array<{ invocation_id: string; session_id: string | null }>).map(({ invocation_id, session_id }) => ({
-      invocationId: invocation_id, sessionId: session_id
-    }))
+      ORDER BY streams.invocation_id`
+    return this.conn.prepare(query).all()
+      .map((row) => {
+        const value = row as { invocation_id: string; session_id: string | null }
+        return { invocationId: value.invocation_id, sessionId: value.session_id }
+      })
   }
 
   /** Reports only recovery work that startup will actually attempt now; backed-off repairs stay out of this count. */
