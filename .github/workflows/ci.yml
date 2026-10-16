@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
       # 源文件 NUL 字节检查：只需 git 与 node，放在 npm ci 之前失败即秒级退出

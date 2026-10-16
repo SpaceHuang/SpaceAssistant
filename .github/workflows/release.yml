@@ -15,7 +15,7 @@ concurrency:
 jobs:
   verify:
     name: Quality gate
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
         with:

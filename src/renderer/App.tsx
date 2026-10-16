@@ -20,6 +20,7 @@ import { initTurnDisplayBridge } from './services/turnDisplayStore'
 import { turnDisplayReconciliation } from './services/turnDisplayReconciliation'
 import { initRemoteSessionSwitchBridge } from './services/remoteSessionSwitchService'
 import { initConfirmStores } from './services/confirmStoresInit'
+import { navigateToPendingConfirmation } from './services/notificationNavigation'
 import { initToolExposure } from './services/toolExposureService'
 import { SessionListPane } from './components/SessionList/SessionListPane'
 import { SearchPane } from './components/Search/SearchPane'
@@ -222,6 +223,9 @@ function AppShellInner() {
     window.addEventListener('focus', onFocus)
     const recoveryTimer = window.setInterval(() => { void turnDisplayReconciliation.reconcile().catch(() => {}) }, 5000)
     const offRemoteSessionSwitch = initRemoteSessionSwitchBridge()
+    const offNotificationNavigate = window.api.onNotificationNavigateSession((payload) => {
+      void navigateToPendingConfirmation(payload).catch(() => {})
+    })
     return () => {
       off1()
       off2()
@@ -234,6 +238,7 @@ function AppShellInner() {
       window.removeEventListener('focus', onFocus)
       window.clearInterval(recoveryTimer)
       offRemoteSessionSwitch()
+      offNotificationNavigate()
       offToolExposure()
     }
   }, [dispatch])
