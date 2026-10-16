@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 100
+export const DB_SCHEMA_VERSION = 101
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -1994,6 +1994,39 @@ CREATE TABLE IF NOT EXISTS process_generation_state (
   updated_at INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO process_generation_state(singleton_id,current_generation,updated_at) VALUES(1,0,0);
+`
+
+/** v100 → v101: durable per-ledger readiness, bootstrap provenance, and projection target state. */
+export const MIGRATION_V101_SESSION_LEDGER_READINESS_SQL = `
+CREATE TABLE IF NOT EXISTS session_ledger_projection_state (
+  ledger_location_key TEXT PRIMARY KEY NOT NULL UNIQUE,
+  work_dir_identity TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  session_generation TEXT NOT NULL,
+  origin TEXT NOT NULL CHECK(origin IN ('new_location','legacy')),
+  state TEXT NOT NULL CHECK(state IN ('uninitialized','initializing','unknown','checking','ready','dirty','blocked')),
+  bootstrap_id TEXT,
+  ledger_generation INTEGER NOT NULL DEFAULT 0 CHECK(ledger_generation>=0),
+  canonical_watermark TEXT,
+  proof_file_identity TEXT,
+  proof_file_bytes INTEGER,
+  proof_tail_frame TEXT,
+  proof_index_seq INTEGER,
+  proof_index_event_count INTEGER,
+  proof_index_bytes INTEGER,
+  proof_index_last_at INTEGER,
+  check_token TEXT,
+  checked_at INTEGER,
+  owner_reconciled_process_generation INTEGER NOT NULL DEFAULT 0 CHECK(owner_reconciled_process_generation>=0),
+  retry_scope TEXT CHECK(retry_scope IS NULL OR retry_scope IN ('baseline','target')),
+  failure_class TEXT,
+  updated_at INTEGER NOT NULL,
+  CHECK((origin='new_location' AND bootstrap_id IS NOT NULL) OR (origin='legacy' AND bootstrap_id IS NULL)),
+  UNIQUE(work_dir_identity,session_id,created_at)
+);
+CREATE INDEX IF NOT EXISTS idx_session_ledger_projection_state_session
+  ON session_ledger_projection_state(session_id,session_generation);
 `
 
 /** v51: preserve stable catalog/provider/route identity on usage facts. */

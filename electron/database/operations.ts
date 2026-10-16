@@ -30,6 +30,7 @@ import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
 import { isThinkingEffort } from '../../src/shared/thinkingEffort'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { parseQueueScope, serializeQueueScope, type QueueScope } from '../../src/shared/queueScope'
+import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { deleteSpillReferenceOwnerInTransaction, spillHistoryOwnerKey, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
@@ -295,6 +296,22 @@ export function createSession(
         generation: session.generation,
         fixedWorkDir: session.fixedWorkDir ?? null
       })
+    const profilesRaw = conn.prepare("SELECT value FROM configs WHERE key='config.workDirProfiles'").get() as { value: string } | undefined
+    const activeRaw = conn.prepare("SELECT value FROM configs WHERE key='config.activeWorkDirProfileId'").get() as { value: string } | undefined
+    const fallbackRaw = conn.prepare("SELECT value FROM configs WHERE key='config.workDir'").get() as { value: string } | undefined
+    let profiles: Array<{ id?: string; path?: string; isDefault?: boolean }> = []
+    try { profiles = profilesRaw ? JSON.parse(profilesRaw.value) as typeof profiles : [] } catch { /* legacy config can be repaired by the profile manager */ }
+    const activeId = activeRaw?.value ?? profiles.find((profile) => profile.isDefault)?.id ?? profiles[0]?.id
+    const profile = profiles.find((item) => item.id === (session.workDirProfileId ?? activeId))
+    const workDir = session.fixedWorkDir ?? profile?.path ?? fallbackRaw?.value
+    if (workDir) {
+      const identity = sessionLedgerLocationIdentity({ workDir, sessionId: session.id, createdAt: session.createdAt })
+      conn.prepare(`INSERT INTO session_ledger_projection_state(
+        ledger_location_key,work_dir_identity,created_at,session_id,session_generation,origin,state,bootstrap_id,updated_at)
+        VALUES(?,?,?, ?,?,'new_location','uninitialized',?,?)`).run(
+        identity.key, identity.workDirIdentity, session.createdAt, session.id, session.generation, randomUUID(), now
+      )
+    }
     try {
       const emptyProjection = '[]'
       const emptyProjectionSha256 = createHash('sha256').update(emptyProjection, 'utf8').digest('hex')

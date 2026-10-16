@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import {
   CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL,
   MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL,
@@ -23,6 +24,7 @@ import {
   MIGRATION_V48_SESSION_PROJECTION_LEGACY_POLICY_SQL,
   MIGRATION_V50_HISTORY_RECOVERY_WORK_SQL, MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL,
   MIGRATION_V100_PROCESS_GENERATION_SQL,
+  MIGRATION_V101_SESSION_LEDGER_READINESS_SQL,
   MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL,
   MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
   MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
@@ -1901,6 +1903,42 @@ export function runMigrations(conn: DatabaseSync): void {
           AND terminal.sequence=stream.version AND terminal.kind='invocation-parked')`)
     }
     version = 100
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 100) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V101_SESSION_LEDGER_READINESS_SQL)
+    // Existing rows have no creation provenance; missing files must enter a proof path, never bootstrap.
+    if (hasTable(conn, 'sessions')) {
+      if (!hasColumn(conn, 'sessions', 'fixed_work_dir')) conn.exec('ALTER TABLE sessions ADD COLUMN fixed_work_dir TEXT')
+      const sessionColumns = new Set((conn.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>).map(({ name }) => name))
+      if (!['id', 'generation', 'created_at', 'updated_at'].every((name) => sessionColumns.has(name))) {
+        version = 101
+        conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+        return
+      }
+      const profileColumn = sessionColumns.has('work_dir_profile_id') ? 'work_dir_profile_id' : 'NULL'
+      const fixedColumn = sessionColumns.has('fixed_work_dir') ? 'fixed_work_dir' : 'NULL'
+      const configsExist = hasTable(conn, 'configs')
+      const profilesRaw = configsExist ? conn.prepare("SELECT value FROM configs WHERE key='config.workDirProfiles'").get() as { value: string } | undefined : undefined
+      const activeRaw = configsExist ? conn.prepare("SELECT value FROM configs WHERE key='config.activeWorkDirProfileId'").get() as { value: string } | undefined : undefined
+      const legacyWorkDir = configsExist ? conn.prepare("SELECT value FROM configs WHERE key='config.workDir'").get() as { value: string } | undefined : undefined
+      let profiles: Array<{ id?: string; path?: string; isDefault?: boolean }> = []
+      try { profiles = profilesRaw ? JSON.parse(profilesRaw.value) as typeof profiles : [] } catch { /* unresolved legacy locations remain unregistered */ }
+      const activeId = activeRaw?.value ?? profiles.find((profile) => profile.isDefault)?.id ?? profiles[0]?.id
+      const sessions = conn.prepare(`SELECT id,generation,created_at,updated_at,${profileColumn} AS profile_id,${fixedColumn} AS fixed_work_dir FROM sessions`).all() as
+        Array<{ id: string; generation: string; created_at: number; updated_at: number; profile_id: string | null; fixed_work_dir: string | null }>
+      const insertLegacy = conn.prepare(`INSERT OR IGNORE INTO session_ledger_projection_state(
+        ledger_location_key,work_dir_identity,created_at,session_id,session_generation,origin,state,bootstrap_id,updated_at)
+        VALUES(?,?,?,?,?,'legacy','unknown',NULL,?)`)
+      for (const session of sessions) {
+        const profile = profiles.find((item) => item.id === (session.profile_id ?? activeId))
+        const workDir = session.fixed_work_dir ?? profile?.path ?? legacyWorkDir?.value
+        if (!workDir) continue
+        const identity = sessionLedgerLocationIdentity({ workDir, sessionId: session.id, createdAt: session.created_at })
+        insertLegacy.run(identity.key, identity.workDirIdentity, session.created_at, session.id, session.generation, session.updated_at)
+      }
+    }
+    version = 101
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

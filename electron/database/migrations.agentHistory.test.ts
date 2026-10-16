@@ -7,6 +7,28 @@ import { runMigrations } from './migrations'
 import { DB_SCHEMA_VERSION } from './schema'
 
 describe('agent canonical history migration', () => {
+  it('v101 gives migrated sessions only legacy unknown state and no bootstrap credential', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','100');
+      CREATE TABLE configs(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+      INSERT INTO configs VALUES('config.workDirProfiles','[{"id":"profile-a","path":"/workspace/a","isDefault":true}]');
+      INSERT INTO configs VALUES('config.activeWorkDirProfileId','profile-a');
+      CREATE TABLE sessions(id TEXT PRIMARY KEY,generation TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,
+        work_dir_profile_id TEXT,fixed_work_dir TEXT);
+      INSERT INTO sessions VALUES('legacy-session','legacy-generation',41,42,'profile-a',NULL);`)
+
+    runMigrations(conn)
+
+    expect(conn.prepare('SELECT ledger_location_key,work_dir_identity,session_id,session_generation,origin,state,bootstrap_id FROM session_ledger_projection_state').all())
+      .toEqual([{ ledger_location_key: expect.stringMatching(/^[a-f0-9]{64}$/), work_dir_identity: expect.stringMatching(/^[a-f0-9]{64}$/), session_id: 'legacy-session',
+        session_generation: 'legacy-generation', origin: 'legacy', state: 'unknown', bootstrap_id: null }])
+    expect(() => conn.prepare(`INSERT INTO session_ledger_projection_state(
+      ledger_location_key,work_dir_identity,session_id,session_generation,origin,state,bootstrap_id,updated_at)
+      VALUES('illegal','profile-a','legacy-session','legacy-generation','new_location','uninitialized',NULL,43)`).run()).toThrow()
+    conn.close()
+  })
+
   it('v100 adds process fencing and removes parked streams from legacy recovery work', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
