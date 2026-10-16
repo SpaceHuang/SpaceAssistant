@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 import type { AgentTurnObserver } from '../../packages/agent-sdk/src/turn'
 import { createAgentSdkDesktopObserver } from './agentSdkDesktopObserver'
 import { runAgentTurn } from '../../packages/agent-sdk/src/turn'
@@ -77,7 +78,7 @@ describe('createAgentSdkDesktopObserver', () => {
     }
   })
 
-  it('does not put a symlinked outside-workdir AGENTS.md into provider requests or History', async () => {
+  it.skipIf(!canCreateSymlinks())('does not put a symlinked outside-workdir AGENTS.md into provider requests or History', async () => {
     const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-raced-workdir-'))
     const outsideDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-raced-outside-'))
     const filePath = path.join(workDir, 'AGENTS.md')

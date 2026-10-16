@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
+import { canCreateSymlinks } from '../src/test/symlinkCapability'
 import {
   stripPartialJsonForPersist,
   getSessionEventSink,
@@ -288,6 +289,8 @@ describe('session events', () => {
 
   it.each(['sessions-root', 'session-directory', 'session-parent', 'events-file', 'index-file', 'events-hardlink'] as const)(
     'does not follow a symlink at the %s recovery write boundary', async (linkKind) => {
+      // 依赖真实 symlink 的场景按能力探测跳过（events-hardlink 用 fs.link，win32 无特权也可跑）
+      if (linkKind !== 'events-hardlink' && !canCreateSymlinks()) return
       const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-symlink-confinement-'))
       const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-symlink-target-'))
       const sessionId = linkKind === 'session-parent' ? 'nested/symlink-case' : 'symlink-case'
@@ -759,6 +762,8 @@ describe('session events', () => {
 
   it.each(['sessions-root', 'session-directory', 'events-symlink', 'events-hardlink'] as const)(
     'startup reconciliation refuses a %s path alias', async (aliasKind) => {
+      // 依赖真实 symlink 的场景按能力探测跳过（events-hardlink 用 fs.link，win32 无特权也可跑）
+      if (aliasKind !== 'events-hardlink' && !canCreateSymlinks()) return
       const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-reconcile-alias-root-'))
       const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'session-reconcile-alias-outside-'))
       const sessionsRoot = path.join(root, 'sessions')

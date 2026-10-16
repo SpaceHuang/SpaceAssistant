@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 import { readDirectoryBoundToIdentity } from './directoryHandleReader'
 import { writeFileAtomicallyBoundToDirectory } from './directoryHandleWriter'
 
@@ -93,7 +94,7 @@ describe('writeFileAtomicallyBoundToDirectory', () => {
     expect(await fs.readFile(path.join(targetDir, 'large.bin'))).toEqual(body)
   })
 
-  it('refuses a replacement directory and never writes through its symlink', async () => {
+  it.skipIf(!canCreateSymlinks())('refuses a replacement directory and never writes through its symlink', async () => {
     const root = await tempDir()
     const targetDir = path.join(root, 'target')
     const outside = path.join(root, 'outside')

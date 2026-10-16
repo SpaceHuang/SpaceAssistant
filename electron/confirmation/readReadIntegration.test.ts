@@ -3,6 +3,7 @@ import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
 import { describe, expect, it, vi } from 'vitest'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd() } }))
 const rgAvailability = vi.hoisted(() => ({ unavailable: false }))
@@ -143,7 +144,7 @@ describe('V1 confirmed read executor integration', () => {
     }
   })
 
-  it('拒绝父目录移出 workspace 后通过同 inode symlink 继续访问已许可文件', async () => {
+  it.skipIf(!canCreateSymlinks())('拒绝父目录移出 workspace 后通过同 inode symlink 继续访问已许可文件', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-parent-move-e2e-')))
     const workspace = path.join(root, 'workspace')
     const outside = path.join(root, 'outside')
@@ -173,7 +174,7 @@ describe('V1 confirmed read executor integration', () => {
     }
   })
 
-  it('拒绝父目录移出 workspace 后通过同 inode symlink 搜索已许可文件', async () => {
+  it.skipIf(!canCreateSymlinks())('拒绝父目录移出 workspace 后通过同 inode symlink 搜索已许可文件', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'grep-parent-move-e2e-')))
     const workspace = path.join(root, 'workspace')
     const outside = path.join(root, 'outside')
@@ -202,7 +203,7 @@ describe('V1 confirmed read executor integration', () => {
     }
   })
 
-  it('拒绝获准目录移出 workspace 后通过同 inode symlink 枚举', async () => {
+  it.skipIf(!canCreateSymlinks())('拒绝获准目录移出 workspace 后通过同 inode symlink 枚举', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'list-parent-move-e2e-')))
     const workspace = path.join(root, 'workspace')
     const outside = path.join(root, 'outside')
