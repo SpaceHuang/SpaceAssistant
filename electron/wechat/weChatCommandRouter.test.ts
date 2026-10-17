@@ -264,10 +264,15 @@ describe('WeChatCommandRouter', () => {
     const session = getSession(db, sessionId)!
     const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'context-replay' } }
     getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const originalNow = Date.now
+    let messageCreatedAt = originalNow()
+    vi.spyOn(Date, 'now').mockImplementation(() => messageCreatedAt)
     const persisted = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
       channelMessageId: 'replay-wechat-1', content: '重启后恢复的消息', contextToken: 'context-replay' })
+    messageCreatedAt += 1
     const secondPersisted = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
       channelMessageId: 'replay-wechat-2', content: '第二条恢复消息', contextToken: 'context-replay-2' })
+    vi.restoreAllMocks()
     let turnSequence = 0
     const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `wake-wechat-${++turnSequence}` } })
     const createDeferredConfirmationAdapter = vi.fn(() => ({ defer: vi.fn() }))
