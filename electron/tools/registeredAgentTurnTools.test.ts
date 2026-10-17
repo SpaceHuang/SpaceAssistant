@@ -462,6 +462,45 @@ describe('createRegisteredAgentTurnTools', () => {
     }) }))
   })
 
+  it('retains auto-approved write metadata across confirmation recheck and keeps confirmed writes distinct', async () => {
+    const callInput = { path: 'note.txt', content: 'hello' }
+    const identity = { invocationId, toolCallId: 'refresh-auto-write', toolName: 'write_file', input: callInput }
+    const registry = new TypedToolRegistry()
+    const execute = vi.fn(async (_input: Record<string, unknown>, context: { runtimeContext?: Record<string, unknown> }) => ({ success: true, data: context.runtimeContext }))
+    registry.register(definePlannedTool({ name: 'write_file', parseInput: (raw) => raw as typeof callInput, plan: async (value) => value, execute }))
+    const permits = new InMemorySafetyPermitStore()
+    const tools = createRegisteredAgentTurnTools({ requestId, turnId, registry, permits, admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ workDir: '/workspace', fileAutoApproved: false }),
+      refreshExecutionContext: () => ({ workDir: '/workspace/current', fileAutoApproved: false }), resolveAuthorizationVersion: () => 'policy-v1' })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['write_file'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => {
+      if (binding.phase === 'initial-compat') tools.updateExecutionContext(identity, (context) => {
+        context.fileAutoApproved = true
+        context.autoApprovedWrite = { path: 'note.txt', stats: 'pending' }
+        context.decisionRuleId = 'write-auto-rule'
+      })
+      return binding.phase === 'initial-compat'
+        ? { kind: 'ask', confirmationId: 'confirm-auto-write', answerer: 'user', reasonCode: 'human-confirm' }
+        : { kind: 'allow', authorizationVersion: binding.authorizationVersion }
+    } } })
+    const providers = new ModelProviderRegistry()
+    const responses = [
+      stream({ type: 'tool-call', toolCallId: identity.toolCallId, toolName: identity.toolName, input: callInput },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }),
+      stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    ]
+    providers.register(route, { providerId: 'fake', stream: () => responses.shift()! })
+    const history = new MemoryHistory()
+    await runAgentTurn({ registry: providers, routeId: route.routeId, invocationId, turnId,
+      request: { messages: [{ role: 'user', content: 'write note' }], maxTokens: 20 }, safetyGate,
+      prepareTool: tools.prepareTool, toolExecution: tools.toolExecution,
+      confirmation: async () => ({ kind: 'approved', receipt: 'approved' }), maxModelTurns: 2, history })
+    expect(execute).toHaveBeenCalledWith(callInput, expect.objectContaining({ runtimeContext: expect.objectContaining({
+      fileAutoApproved: true, autoApprovedWrite: { path: 'note.txt', stats: 'pending' }, decisionRuleId: 'write-auto-rule'
+    }) }))
+  })
+
   it('initial policy may attach invocation-private structural permits before fresh recheck', async () => {
     const events: string[] = []
     const registry = new TypedToolRegistry()

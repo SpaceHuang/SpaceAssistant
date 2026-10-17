@@ -83,11 +83,10 @@ import { approvalFallbackReasonFor } from '../confirmation/fallbackReason'
 import type { ConfirmOutcome } from '../../src/shared/confirmation/types'
 import type { CacheKey, Decision } from '../../src/shared/confirmation/types'
 import { cancelToolConfirm } from '../toolConfirmRegistry'
-import { buildConfirmationDiff } from '../confirmation/confirmDiff'
 import { extractHostname } from '../browser/urlSecurity'
 import { rememberBrowserSessionActTrust, rememberBrowserSessionTrustedUrl } from '../browser/browserSessionTrust'
-import { computeDiffLineStats } from '../../src/shared/writeDiffStats'
 import { getBundledImTaskOrchestrationSkill, IM_TASK_ORCHESTRATION_SKILL_NAME } from '../skills/bundled/imTaskOrchestrationSkill'
+import { buildConfirmationDiff } from '../confirmation/confirmDiff'
 
 /**
  * Runtime 唯一装配点（roadmap「Runtime 是唯一装配点」在主进程的落位）。
@@ -847,15 +846,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         onInitialGateResult: async (binding, result, args) => {
           await permitHandoff.onInitialGateResult?.(binding, result, args)
           const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput } as const
-          const metadata: Record<string, unknown> = { decisionRuleId: result.decision.ruleId }
-          if (result.fileAutoApproved === true && (args.toolName === 'write_file' || args.toolName === 'edit_file')) {
-            const diff = await buildConfirmationDiff(args.workDir, args.toolName, args.toolInput)
-            const bytesWritten = args.toolName === 'write_file'
-              ? Buffer.byteLength(typeof args.toolInput.content === 'string' ? args.toolInput.content : '', 'utf8')
-              : diff ? Buffer.byteLength(diff.newContent, 'utf8') : 0
-            const stats = diff ? computeDiffLineStats(diff.oldContent, diff.newContent) : { add: 0, remove: 0 }
-            metadata.autoApprovedWrite = { path: typeof args.toolInput.path === 'string' ? args.toolInput.path : '', added: stats.add, removed: stats.remove, bytesWritten }
-          }
+          const metadata: Record<string, unknown> = { decisionRuleId: result.decision.ruleId, fileAutoApproved: result.fileAutoApproved === true }
+          if (result.fileAutoApproved === true && (args.toolName === 'write_file' || args.toolName === 'edit_file')) metadata.autoApprovedWrite = { path: typeof args.toolInput.path === 'string' ? args.toolInput.path : '', stats: 'pending' }
           registered.updateExecutionContext(call, (context) => Object.assign(context, metadata))
         },
         onConfirmed: (binding, result, args, answerer, selectedMemory) => {
@@ -1320,10 +1312,12 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         resourceLocks: (materials.resourceLocks ?? runtime.resourceLocks) as never,
         toolResourceKeys: input.registeredTools.toolResourceKeys,
         isApprovalCandidate: input.registeredTools.isApprovalCandidate,
-        ...(materials.sessionEventLocation ? { sessionLedgerForToolResult: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, execution: { output: unknown; isError?: boolean; auditRef?: string; executionOutcome?: string; executorEntry?: string; errorCode?: string; invocationDisposition?: string }) => {
+        takeToolAuditOutput: input.registeredTools.takeAuditOutput,
+        ...(materials.sessionEventLocation ? { sessionLedgerForToolResult: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, execution: { output: unknown; auditOutput?: unknown; isError?: boolean; auditRef?: string; executionOutcome?: string; executorEntry?: string; errorCode?: string; invocationDisposition?: string }) => {
           const isError = execution.isError ?? false
+          const ledgerOutput = execution.auditOutput ?? execution.output
           const result = projectCanonicalToolResultForSessionLedger({
-            rawResult: execution.output, isError, toolName: call.toolName, workspaceRoot: materials.resolveWorkDir?.() ?? materials.workDir,
+            rawResult: ledgerOutput, isError, toolName: call.toolName, workspaceRoot: materials.resolveWorkDir?.() ?? materials.workDir,
             ...(execution.auditRef ? { auditRef: execution.auditRef } : {}),
             ...(execution.executionOutcome ? { executionOutcome: execution.executionOutcome as import('../../src/shared/domainTypes').ToolCallResultPersisted['executionOutcome'] } : {}),
             ...(execution.executorEntry ? { executorEntry: execution.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
@@ -1331,7 +1325,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             ...(execution.invocationDisposition ? { invocationDisposition: execution.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
           })
           // FR8/AD10：延迟工具未浮现直调 → 持久化面标记（不进 wire 面工具结果块，B4）
-          const record = execution.output && typeof execution.output === 'object' && !Array.isArray(execution.output) ? execution.output as Record<string, unknown> : undefined
+          const record = ledgerOutput && typeof ledgerOutput === 'object' && !Array.isArray(ledgerOutput) ? ledgerOutput as Record<string, unknown> : undefined
           if (!(isError || record?.success === false) && input.deferredUnsurfacedCheck?.(call.toolName)) result.deferredUnsurfaced = true
           if (execution.executionOutcome) result.executionOutcome = execution.executionOutcome as NonNullable<typeof result.executionOutcome>
           if (execution.executorEntry) result.executorEntry = execution.executorEntry as NonNullable<typeof result.executorEntry>
@@ -1703,11 +1697,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           ...(typeof record?.executionErrorCode === 'string' ? { executionErrorCode: record.executionErrorCode } : {}),
           ...(typeof record?.invocationDisposition === 'string' ? { invocationDisposition: record.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
         }, { workspaceRoot: materials.workDir, processTool: isProcessToolName(call.toolName) })
-        if (projected.success && projected.autoApprovedWrite) {
-          logAgentEvent('info', 'file.auto_approve', { requestId: materials.requestId, sessionId: materials.sessionId,
-            toolUseId: call.toolCallId, tool: call.toolName, relPath: projected.autoApprovedWrite.path,
-            bytesWritten: projected.autoApprovedWrite.bytesWritten, timestamp: Date.now() })
-        }
         return projected
       }
     }),

@@ -54,6 +54,7 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   discardPreparedTool?(call: TCall, reason: string): void | Promise<void>
   confirmation?: ConfirmationPort
   toolExecution: PermitBoundToolExecutionPort<TCall, TResult>
+  takeToolAuditOutput?(call: TCall): unknown
   observer?: AgentTurnObserver
   recordProviderAttemptUsage?(input: Record<string, unknown>): void | Promise<void>
   recoverProviderAttempt?(input: Parameters<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>
@@ -172,6 +173,7 @@ export function createHostedAgentTurnHost<
         ...(dependencies.recordProviderAttemptUsage ? { recordProviderAttemptUsage: dependencies.recordProviderAttemptUsage } : {}),
         ...(dependencies.confirmation ? { confirmation: dependencies.confirmation } : {}),
         toolExecution: dependencies.toolExecution as AgentTurnPorts['toolExecution'],
+        ...(dependencies.takeToolAuditOutput ? { takeToolAuditOutput: dependencies.takeToolAuditOutput as AgentTurnPorts['takeToolAuditOutput'] } : {}),
         request: input.request,
         ...(dependencies.observer ? { observer: dependencies.observer } : {}),
         history: dependencies.hostHistory ?? dependencies.sdkHistory ?? dependencies.history,

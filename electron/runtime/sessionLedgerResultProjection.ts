@@ -23,8 +23,15 @@ export function projectCanonicalToolResultForSessionLedger(input: {
     ...(typeof record?.error === 'string' ? { error: record.error } : {}),
     ...(typeof record?.userMessage === 'string' ? { userMessage: record.userMessage } : {}),
     ...(typeof record?.decisionRuleId === 'string' ? { decisionRuleId: record.decisionRuleId } : {}),
-    ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object'
-      ? { autoApprovedWrite: record.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta }
+    ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object' && !Array.isArray(record.autoApprovedWrite)
+      ? (() => {
+          const meta = record.autoApprovedWrite as Record<string, unknown>
+          const data = record.success === true && record.data && typeof record.data === 'object' && !Array.isArray(record.data) ? record.data as Record<string, unknown> : {}
+          const path = typeof meta.path === 'string' ? meta.path : ''
+          const statsAvailable = typeof data.bytesWritten === 'number' && Number.isFinite(data.bytesWritten) && typeof data.added === 'number' && Number.isFinite(data.added) && typeof data.removed === 'number' && Number.isFinite(data.removed)
+          return path ? { autoApprovedWrite: { path, stats: statsAvailable ? 'available' as const : 'unavailable' as const,
+            ...(statsAvailable ? { bytesWritten: data.bytesWritten as number, added: data.added as number, removed: data.removed as number } : {}) } } : {}
+        })()
       : {})
   }, { ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}), processTool: isProcessToolName(input.toolName) })
   if (input.auditRef) result.auditRef = input.auditRef

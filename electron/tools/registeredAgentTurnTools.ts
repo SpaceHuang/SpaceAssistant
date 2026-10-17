@@ -37,6 +37,7 @@ type TurnToolCall = Readonly<{
   signal?: AbortSignal
 }>
 type TurnToolResult = Readonly<{ output: unknown; replayContent?: unknown; isError?: boolean }>
+type MappedTurnToolResult = TurnToolResult & Readonly<{ auditOutput?: unknown }>
 type PreparedRecord = {
   call: TurnToolCall
   registeredTool: RegisteredTool
@@ -74,7 +75,7 @@ export function createRegisteredAgentTurnTools(input: {
   toolRevocations?: AgentToolRevocationPort
   isRevoked?(call: TurnToolCall): boolean
   subscribeRevocation?(call: TurnToolCall, onRevocation: () => void): () => void
-  mapExecutionResult?(result: unknown, call: TurnToolCall): TurnToolResult
+  mapExecutionResult?(result: unknown, call: TurnToolCall): MappedTurnToolResult
   /** Expose the active SDK dispatch lease to the desktop's exact-identity cancel IPC. */
   registerActiveCancellation?(call: TurnToolCall, cancel: () => void): void | (() => void) | Promise<void | (() => void)>
 }): {
@@ -83,6 +84,7 @@ export function createRegisteredAgentTurnTools(input: {
   getPreparedCall(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): TurnToolCall | undefined
   getPreparedFacts(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): unknown
   updateExecutionContext(call: TurnToolCall, update: (context: Record<string, unknown>) => void): void
+  takeAuditOutput(call: TurnToolCall): unknown
   toolExecution: ReturnType<typeof createPermitBoundToolExecutionPort<TurnToolCall, TurnToolResult>>
   executeDeferred(call: TurnToolCall, input: {
     confirmationReceipt: string
@@ -161,7 +163,7 @@ export function createRegisteredAgentTurnTools(input: {
       if (input.refreshExecutionContext) {
         const currentContext = record.runtimeContext
         if (!isRecord(currentContext)) throw new Error('PREPARED_EXECUTION_CONTEXT_NOT_REFRESHABLE')
-        const safetyOwned = Object.fromEntries(['readExecutionPermit', 'writeExecutionPermit', 'decisionRuleId', 'autoApprovedWrite'].flatMap((key) =>
+        const safetyOwned = Object.fromEntries(['readExecutionPermit', 'writeExecutionPermit', 'decisionRuleId', 'autoApprovedWrite', 'fileAutoApproved'].flatMap((key) =>
           Object.prototype.hasOwnProperty.call(currentContext, key) ? [[key, currentContext[key]]] : []
         ))
         const refreshed = await input.refreshExecutionContext(call, stage, currentContext)
@@ -238,6 +240,7 @@ export function createRegisteredAgentTurnTools(input: {
     update(record.runtimeContext as Record<string, unknown>)
   }
 
+  const auditOutputs = new Map<string, unknown>()
   const permitBoundExecution = createPermitBoundToolExecutionPort<TurnToolCall, TurnToolResult>({
     permits: input.permits,
     admission: input.admission,
@@ -274,7 +277,13 @@ export function createRegisteredAgentTurnTools(input: {
           ? record.runtimeContext as Record<string, unknown>
           : undefined
         const withPolicyMetadata = raw && typeof raw === 'object' && !Array.isArray(raw)
-          ? { ...raw as Record<string, unknown>, ...(typeof runtimeContext?.decisionRuleId === 'string' ? { decisionRuleId: runtimeContext.decisionRuleId } : {}), ...(runtimeContext?.autoApprovedWrite && typeof runtimeContext.autoApprovedWrite === 'object' ? { autoApprovedWrite: runtimeContext.autoApprovedWrite } : {}) }
+          ? {
+              ...raw as Record<string, unknown>,
+              ...(typeof runtimeContext?.decisionRuleId === 'string' ? { decisionRuleId: runtimeContext.decisionRuleId } : {}),
+              ...(runtimeContext?.autoApprovedWrite && typeof runtimeContext.autoApprovedWrite === 'object'
+                ? { autoApprovedWrite: { ...runtimeContext.autoApprovedWrite as Record<string, unknown>, ...(raw as Record<string, unknown>).data && typeof (raw as Record<string, unknown>).data === 'object' ? (raw as { data: Record<string, unknown> }).data : {} }, fileAutoApproved: runtimeContext.fileAutoApproved === true }
+                : {})
+            }
           : raw
         const processValidation = isProcessToolName(call.toolName) ? validateToolExecutorResultWithViolations(withPolicyMetadata) : undefined
         for (const violation of processValidation?.violations ?? []) {
@@ -282,7 +291,9 @@ export function createRegisteredAgentTurnTools(input: {
           logAgentEvent('warn', 'tool.result.contract-violation', { requestId: input.requestId, toolUseId: call.toolCallId, toolName: call.toolName, invariant: violation.invariant, detail: violation.detail })
         }
         const normalized = processValidation?.result ?? validateToolExecutorResultForTool(call.toolName, withPolicyMetadata)
-        return input.mapExecutionResult?.(normalized, call) ?? mapSafeExecutionResult(normalized, call, input.resolveWorkspaceRoot?.() ?? input.workspaceRoot)
+        const mapped = input.mapExecutionResult?.(normalized, call) ?? mapSafeExecutionResult(normalized, call, input.resolveWorkspaceRoot?.() ?? input.workspaceRoot)
+        if (mapped.auditOutput !== undefined) auditOutputs.set(keyFor(call), mapped.auditOutput)
+        return { output: mapped.output, ...(mapped.replayContent !== undefined ? { replayContent: mapped.replayContent } : {}), ...(mapped.isError !== undefined ? { isError: mapped.isError } : {}) }
       } finally {
         combined.dispose()
         cleanupPrepared(record)
@@ -324,6 +335,7 @@ export function createRegisteredAgentTurnTools(input: {
     getPreparedCall,
     getPreparedFacts,
     updateExecutionContext,
+    takeAuditOutput: (call: TurnToolCall) => { const key = keyFor(call); const output = auditOutputs.get(key); auditOutputs.delete(key); return output },
     toolExecution,
     executeDeferred,
     isApprovalCandidate: (call) => {
@@ -351,7 +363,7 @@ function sameRecheckSubject(initial: PermitBinding, recheck: PermitBinding): boo
     initial.planDigest === recheck.planDigest && initial.factsDigest === recheck.factsDigest
 }
 
-function mapSafeExecutionResult(raw: unknown, call: TurnToolCall, workspaceRoot?: string): TurnToolResult {
+function mapSafeExecutionResult(raw: unknown, call: TurnToolCall, workspaceRoot?: string): MappedTurnToolResult {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined
   const success = typeof source?.success === 'boolean' ? source.success : true
   const result = {
@@ -360,13 +372,20 @@ function mapSafeExecutionResult(raw: unknown, call: TurnToolCall, workspaceRoot?
     ...(typeof source?.error === 'string' ? { error: source.error } : {}),
     ...(typeof source?.userMessage === 'string' ? { userMessage: source.userMessage } : {}),
     ...(typeof source?.decisionRuleId === 'string' ? { decisionRuleId: source.decisionRuleId } : {}),
-    ...(source?.autoApprovedWrite && typeof source.autoApprovedWrite === 'object' ? { autoApprovedWrite: source.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta } : {}),
+    ...(source?.autoApprovedWrite && typeof source.autoApprovedWrite === 'object' && !Array.isArray(source.autoApprovedWrite) ? (() => {
+      const meta = source.autoApprovedWrite as Record<string, unknown>
+      const data = success && source.data && typeof source.data === 'object' && !Array.isArray(source.data) ? source.data as Record<string, unknown> : {}
+      const path = typeof meta.path === 'string' ? meta.path : ''
+      const statsAvailable = typeof data.bytesWritten === 'number' && Number.isFinite(data.bytesWritten) && typeof data.added === 'number' && Number.isFinite(data.added) && typeof data.removed === 'number' && Number.isFinite(data.removed)
+      return path ? { autoApprovedWrite: { path, stats: statsAvailable ? 'available' as const : 'unavailable' as const,
+        ...(statsAvailable ? { bytesWritten: data.bytesWritten as number, added: data.added as number, removed: data.removed as number } : {}) } } : {}
+    })() : {}),
     ...(source && 'diagnostic' in source ? { diagnostic: source.diagnostic } : {})
   }
   const options = { workspaceRoot, processTool: isProcessToolName(call.toolName) }
   const output = projectAgentToolResult(result, options)
   const replayContent = compactOversizedToolResultContent(serializeAgentToolResult(result, options)).content
-  return { output, replayContent, isError: !output.success }
+  return { output, auditOutput: { ...result, success, fileAutoApproved: source?.fileAutoApproved === true }, replayContent, isError: !output.success }
 }
 
 async function createBinding(input: {

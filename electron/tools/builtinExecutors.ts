@@ -81,6 +81,7 @@ import { ErrorCodes } from '../../src/shared/errorCodes'
 import { buildEscapeLayerVariants, diagnoseMissingOldString } from './editDiagnosis'
 import type { FileState } from '../fileStateCache'
 import { sliceFileTailLines } from '../../src/shared/readFileRange'
+import { computeDiffLineStats } from '../../src/shared/writeDiffStats'
 import {
   applyReadCharLimit,
   isBinaryBuffer,
@@ -972,9 +973,10 @@ export const editFileExecutor: ToolExecutor = {
           throw e
         }
         await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
+        const lineStats = computeDiffLineStats(cur, next)
         return {
           success: true,
-          data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8'), ...extraData },
+          data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8'), added: lineStats.add, removed: lineStats.remove, ...extraData },
           duration: Date.now() - started
         }
       }
@@ -1048,6 +1050,7 @@ export const writeFileExecutor: ToolExecutor = {
       releaseWikiMutex = wikiVocabularyPath ? await acquireWikiWriteMutex(abs) : undefined
       const existed = writeTarget.existed
       const body = content.replace(/\r\n/g, '\n')
+      let beforeContent = ''
       let expectedIdentity: FileIdentity | null = null
       if (existed) {
         if (!ctx.fileStateCache.hasBeenRead(abs)) {
@@ -1060,6 +1063,7 @@ export const writeFileExecutor: ToolExecutor = {
         let cur: string
         try {
           cur = await fs.readFile(abs, { encoding: 'utf8', signal: op })
+          beforeContent = cur
           expectedIdentity = await captureFileIdentity(abs)
           if (ctx.lane === 'desktop' && !capturedIdentityMatchesPermit(ctx, expectedIdentity)) {
             return { ...writePermitFailure(new Error('write-target-identity-mismatch')), duration: Date.now() - started }
@@ -1113,7 +1117,8 @@ export const writeFileExecutor: ToolExecutor = {
         throw e
       }
       await recordFileStateAfterWrite(ctx.fileStateCache, abs, body)
-      return { success: true, data: { path: rel }, duration: Date.now() - started }
+      const lineStats = computeDiffLineStats(beforeContent, body)
+      return { success: true, data: { path: rel, bytesWritten: Buffer.byteLength(body, 'utf8'), added: lineStats.add, removed: lineStats.remove }, duration: Date.now() - started }
     } finally {
       if (releaseWikiMutex) {
         releaseWikiMutex()

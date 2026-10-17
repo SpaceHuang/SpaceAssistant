@@ -211,6 +211,7 @@ describe('edit/write fileStateCache', () => {
 
     const write = await writeFileExecutor.execute({ path: rel, content: 'hello world' }, ctx)
     expect(write.success).toBe(true)
+    expect(write.data).toMatchObject({ bytesWritten: 11, added: 1, removed: 0 })
     expect(cache.hasBeenRead(abs)).toBe(true)
 
     const edit = await editFileExecutor.execute(
