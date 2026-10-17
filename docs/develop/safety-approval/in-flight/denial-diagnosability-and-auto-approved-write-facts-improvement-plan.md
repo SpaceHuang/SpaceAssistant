@@ -1,7 +1,7 @@
 # 拒绝可诊断性与免确认写入审计事实 —— 优化计划
 
 > **定位**：审核模块（权限闸门 / 确认审批 / 安全审计）的两处**表达与记录**缺陷 —— ① 拦下一次操作时，原因不回给模型，模型只能盲猜；② 「没问你、自动帮你改了文件」这件事的记录数字不可信，且存在记成「另一个文件」的分支。
-> **状态**：源码实施与本机验收完成（2026-10-17）；C-02 外部真机验收待真实应用/模型场景，不阻塞源码关闭｜**核对基线**：worktree `90bbb078`（2026-10-17）
+> **状态**：源码实施与本机验收完成（2026-10-17）；评审发现的写入后 LCS 资源无界问题已关闭；C-02 外部真机验收待真实应用/模型场景，不阻塞源码关闭｜**核对基线**：worktree `90bbb078`（2026-10-17）
 > **范围**：本主题（`electron/confirmation/`、`electron/runtime/invocationAssembler.ts`、审计字段）内的**表达层与审计字段**。
 > **非本计划范围**：`llm-wiki` 侧的路径映射、目录骨架、`grep`/`shell` 的词汇路径问题 —— 另立一份计划，本文不重复定义。
 > **读者标记**：【人必读】= 只做取舍的决策界面；【机｜人工可跳过】= 规格与任务编排。
@@ -178,6 +178,7 @@ rg -n 'bytesWritten' electron/tools/builtinExecutors.ts
 - **统计的唯一起源与提交时点（评审 R-1）**：行数与字节数都由执行器在**写入成功后**产出、随执行结果返回；装配层不再自行计算差异，也不再调用 `buildConfirmationDiff` 承担本用途。理由：预览重演与执行器的匹配语义不同（F-12），任何「另外算一遍」的方案都无法保证与真实写入一致。
 - **目标真源**：记录挂靠的目标是本次调用已经产出的写入目标事实（探测层产出、随写入许可带到执行层，F-11）；装配层**不自行解析路径** —— 用于消除「归零」与「同名目录错对象」。
 - **统计失败不改变写盘结论**：统计缺失只允许把统计标为不可用，**不得**把已完成的写入转成拒绝，也不得丢失执行结果。
+- **写入后统计有界（评审 P1）**：执行器不得为行数统计构造无界二维 LCS 矩阵；输入总长、行数和 LCS 单元数均受固定预算限制，先剔除相同前后缀，再以两行滚动数组计算。超预算或统计异常时标 `unavailable`，保留成功结果与 `bytesWritten`。
 - **不可用只作兜底**：确实拿不到目标或差异时，字段整体标记不可用（`stats: 'unavailable'`），**不得写 `0`**；记录与 `file.auto_approve` 日志取同一值。
 - 本字段仍只落事实面（事件流 / DB）；模型面与遥测面不出现（F-9）。
 
@@ -211,6 +212,7 @@ rg -n 'bytesWritten' electron/tools/builtinExecutors.ts
 | 免确认写入：转义层唯一变体回退命中 | 同上；统计须覆盖回退路径 | ✅ 执行器边界测试 |
 | 免确认写入：替换后内容与原文相同（真实无变化） | `added` / `removed` 为 0 **且这是真实值**；不得与「预览失败」的 0 混淆 | ✅ 执行器边界测试 |
 | 免确认写入：写盘失败（未落盘） | 不生成成功写入事实（无统计、无 `file.auto_approve` 日志）；失败原因照常上报 | ✅ 执行器失败隔离与 hosted 结果投影测试 |
+| 免确认写入：大文本小改、差异超预算、统计计算异常 | 小改精确统计；超预算 / 异常不执行无界 LCS，统计标 `unavailable`，写盘成功、字节数与文件内容仍正确 | ✅ `writeDiffStats.test.ts`、`builtinExecutors.fileState.test.ts` |
 | 并发：同一轮多个写入 | 各调用记录互不串（按 requestId/toolUseId 绑定） | ✅ 调用身份绑定测试；实时多写入场景留 E-2 复跑 |
 | 取消 / 超时：写入未派发 | 不生成该记录 | ✅ hosted 未派发用例 |
 | 重启后读历史事件 | 旧事件（含 0 值旧记录）可读、不报错 | ✅ `electron/messageCodec.test.ts` 与 SessionEvent 投影回归 |
@@ -234,6 +236,7 @@ rg -n 'bytesWritten' electron/tools/builtinExecutors.ts
 | AC-9 | **行数覆盖编辑语义差异（评审 R-1）**：文件 CRLF / 入参 LF 的多行替换、转义层唯一变体回退命中、新建空文件、真实无变化四种成功场景，记录行数与执行器实际写前 / 写后内容可复算一致 | INV-3 | ✅ `npm exec vitest run electron/tools/builtinExecutors.editDiagnosis.test.ts electron/tools/builtinExecutors.fileState.test.ts` |
 | AC-10 | **失败不产生成功事实**：写盘失败（或未落盘）时不生成带统计的成功写入记录，也不产生对应 `file.auto_approve` 日志；失败原因照常上报 | INV-3 | ✅ 执行器失败隔离与 `file.auto_approve` 仅在成功投影后产生日志；由上述执行器与 hosted 集成用例覆盖 |
 | AC-11 | **拒绝解释三处同源（评审 R-2）**：同一次拒绝的当轮模型工具消息、History `tool-call-not-dispatched.payload.replayContent`、session ledger 结果三处文本逐字一致；未映射原因码三处都保持旧文本；该调用只物化一次且未进入执行器 | INV-1/INV-2 | ✅ `npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/claudeStreamHandlers.hostedIntegration.test.ts` |
+| AC-12 | **统计资源有界且写盘结论稳定（评审 P1）**：大文本小改准确产出统计；差异工作量超预算或统计异常时不得执行无界 LCS，结果显式 `unavailable`；`write_file` / `edit_file` 仍返回成功、正确 `bytesWritten` 且落盘内容正确 | INV-3 | ✅ `npm exec vitest run src/shared/writeDiffStats.test.ts electron/tools/builtinExecutors.fileState.test.ts`；4,000 行 / 38,889 字节追加实测约 1 ms、约 0 MiB 堆增长 |
 
 ### 2.6 迁移与回滚
 
@@ -286,7 +289,7 @@ B-06 ─┴→ C-01 → C-02(外部)
 | ID | 动作 | 依赖 | 目标文件 / 模块 | 产物 | 完成判据 | 验证命令 | 环境 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | B-01 | 冻结字段语义（`path` / `bytesWritten` / `added` / `removed`）并同步审计字段映射表 | — | `src/shared/domainTypes.ts`（字段注释）、`docs/develop/security-policy-audit-field-map.md` | ✅ 类型注释 + 文档一行 | 两处表述一致；不可用态有明确表达方式 | `rg -n 'autoApprovedWrite\|bytesWritten' src/shared/domainTypes.ts docs/develop/security-policy-audit-field-map.md` | 本机 |
-| B-02 | **执行层**：两类写工具在写盘成功后，基于**实际使用的写前内容与最终写入内容**产出统计（`bytesWritten` / `added` / `removed`），随执行结果返回；覆盖换行归一与转义回退路径 | B-01 | `electron/tools/builtinExecutors.ts`（写盘实现） | ✅ 代码 + 单测 | AC-9 通过；两类工具口径同一（写入后文件字节数 + 相对实际写前内容的行数增减）；F-10 不再成立 | `npm exec vitest run electron/tools/builtinExecutors.editDiagnosis.test.ts electron/tools/builtinExecutors.fileState.test.ts` | 本机 |
+| B-02 | **执行层**：两类写工具在写盘成功后，基于**实际使用的写前内容与最终写入内容**产出统计（`bytesWritten` / `added` / `removed`），随执行结果返回；统计需有输入、行数与 LCS 工作量预算，越界或异常标 `unavailable` 且不改变成功写入结果；覆盖换行归一与转义回退路径 | B-01 | `electron/tools/builtinExecutors.ts`、`src/shared/writeDiffStats.ts`（有界统计） | ✅ 代码 + 单测 | AC-9、AC-12 通过；两类工具口径一致；F-10 不再成立；无二维 LCS 分配 | `npm exec vitest run src/shared/writeDiffStats.test.ts electron/tools/builtinExecutors.editDiagnosis.test.ts electron/tools/builtinExecutors.fileState.test.ts` | 本机 |
 | B-03 | **装配层**：记录只做关联与投影 —— 挂靠本次调用已冻结的权威写入目标、直接取执行结果里的统计；**删除**自行重演编辑与自行解析路径 | B-02 | `electron/tools/registeredAgentTurnTools.ts`、`electron/runtime/sessionLedgerResultProjection.ts`、`electron/runtime/agentSdkDesktopObserver.ts` | ✅ 代码 | AC-5、AC-6 通过；Session Ledger 投影仅读取执行统计并重新构造字段白名单 | `npm exec vitest run electron/runtime/sqliteAgentHistory.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/claudeStreamHandlers.hostedIntegration.test.ts` | 本机 |
 | B-04 | **兜底与失败隔离**：取不到权威目标或统计时标记不可用（**不写 0**）；写盘失败不生成成功写入事实 | B-03 | 同 B-03 | ✅ 代码 + 用例 | AC-6 不可用分支、AC-10 通过；测试验证 unavailable 不填 0 | `npm exec vitest run electron/runtime/sqliteAgentHistory.test.ts electron/tools/builtinExecutors.fileState.test.ts` | 本机 |
 | B-05 | `file.auto_approve` 日志与记录同源，不可用场景显式标注 | B-04 | `electron/runtime/agentSdkDesktopObserver.ts`、`electron/agentLogger/types.ts` | ✅ 代码 + 日志断言 | AC-7 通过 | `npm exec vitest run electron/runtime/agentSdkDesktopObserver.test.ts electron/claudeStreamHandlers.hostedIntegration.test.ts` | 本机 |
