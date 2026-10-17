@@ -173,9 +173,9 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **动作与产物：** 所有 path fact 输入改为 task roots 集合；根内任意目标标识 inside-workdir；未知/敏感/系统/链接逃逸保留现有更严格分类；automation locked policy 继续通过 Policy Engine 和 trace 管理。
 - **完成判据：** 各根、父子根、交换顺序、重复根、symlink escape、路径不存在、权限拒绝、敏感位置均有边界测试；除范围并集事实外，无策略放宽；policy trace 有稳定 rule ID。
 - **验证命令：** `npm exec vitest run electron/confirmation/extractors/readPathFacts.test.ts electron/confirmation/extractors/writePathFacts.test.ts electron/confirmation/toolCallGate.test.ts src/shared/policy/policyEngine.test.ts src/shared/policy/defaultRules.contract.test.ts`。
-- **证据：** path fact 输入输出对照 + Policy Engine trace assertion；若新增不可配置约束，附 registry entry 与 `npm run check:system-invariant-registry`。
+- **证据：** `readPathFacts.test.ts` 覆盖第二根命中、父子根、根顺序/重复、近似前缀边界及敏感/系统优先；`writePathFacts.test.ts` 覆盖多根写 scope；`toolCallGate.test.ts` 覆盖可信 task roots 进入 read/write facts；原有 symlink 逃逸、路径缺失/权限错误边界保持通过；五个指定 suites 共 290 项通过；`npm run build:electron:incremental` 通过。未新增策略规则或系统 invariant。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-07 将同一根集合贯穿运行快照、执行链与安全审核 Agent
 

@@ -122,6 +122,7 @@ export async function runExtractorsWithReadPathFact(
   env: EnvFacts & {
     userDataDir: string
     homeDir: string
+    workDirs?: readonly string[]
     customSensitivePrefixes?: readonly string[]
     /** wiki 挂载锚点（T1.2，gate 以 resolveWikiMount 结果构造） */
     mountAnchors?: readonly import('./mountAnchors').MountAnchor[]
@@ -135,6 +136,7 @@ export async function runExtractorsWithReadPathFact(
   const probedFact = await probeReadPathFact({
     rawPath,
     workDir: env.workDir,
+    workDirs: env.workDirs,
     userDataDir: env.userDataDir,
     homeDir: env.homeDir,
     customSensitivePrefixes: env.customSensitivePrefixes ?? [],

@@ -45,6 +45,21 @@ describe('buildToolCallGateArgs', () => {
     expect(input.path).toBe('note.txt')
     expect(() => buildToolCallGateArgs({} as never, { toolName: '', toolInput: {}, requestId: 'request', toolUseId: 'call' })).toThrow('TOOL_GATE_CALL_IDENTITY_REQUIRED')
   })
+
+  it('uses trusted task roots as a union for builtin reads and writes', async () => {
+    const rootA = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-task-root-a-')))
+    const rootB = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gate-task-root-b-')))
+    try {
+      await fs.writeFile(path.join(rootB, 'note.txt'), 'ok')
+      const read = await evaluateToolCallGate(base({ toolName: 'read_file', toolInput: { path: path.join(rootB, 'note.txt') }, workDir: rootA, taskWorkDirs: [rootA, rootB] }))
+      expect(read.facts.signals).toContainEqual({ kind: 'path-target', path: path.join(rootB, 'note.txt'), zone: 'workdir-normal' })
+      const write = await evaluateToolCallGate(base({ toolName: 'write_file', toolInput: { path: path.join(rootB, 'new.txt'), content: 'ok' }, workDir: rootA, taskWorkDirs: [rootA, rootB] }))
+      expect(write.facts.signals).toContainEqual({ kind: 'write-target-scope', scope: 'inside-workdir' })
+    } finally {
+      await fs.rm(rootA, { recursive: true, force: true })
+      await fs.rm(rootB, { recursive: true, force: true })
+    }
+  })
 })
 
 let nextGateTestId = 0

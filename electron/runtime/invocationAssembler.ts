@@ -144,6 +144,8 @@ export interface AgentInvocationMaterials {
   /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
   onRemoteTextActivity?: (text: string) => void
   workDir: string
+  /** Trusted task root set from the immutable automation run snapshot. */
+  taskWorkDirs?: readonly string[]
   workDirManager?: import('../workDirManager').WorkDirManager
   resolveWorkDir?: () => string
   userDataDir: string
@@ -795,6 +797,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       toolUseId: binding.toolCallId,
       sessionId: materials.sessionId,
       workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+      ...(materials.taskWorkDirs?.length ? { taskWorkDirs: materials.taskWorkDirs } : {}),
       userDataDir: materials.userDataDir,
       lane: materialsLane,
       remoteContext: materials.remoteContext,

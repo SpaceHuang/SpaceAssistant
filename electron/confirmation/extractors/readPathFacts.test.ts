@@ -14,6 +14,21 @@ describe('probeReadPathFact', () => {
     })).toBe('outside-workdir')
   })
 
+  it('把任一任务根内目标分类为 workdir-normal，根顺序、重复和父子关系不改变并集', () => {
+    const common = { rawPath: '/tmp/work-b/child/file.txt', workDir: '/tmp/work-a', workDirs: ['/tmp/work-a', '/tmp/work-b', '/tmp/work-a', '/tmp/work-a/child'], userDataDir: '/tmp/user-data', homeDir: '/tmp/home', customSensitivePrefixes: [], resolvedPath: '/tmp/work-b/child/file.txt' }
+    expect(classifyReadPathZone(common)).toBe('workdir-normal')
+    expect(classifyReadPathZone({ ...common, workDirs: [...common.workDirs].reverse() })).toBe('workdir-normal')
+    expect(classifyReadPathZone({ ...common, resolvedPath: '/tmp/work-a/child/file.txt' })).toBe('workdir-normal')
+    expect(classifyReadPathZone({ ...common, resolvedPath: '/tmp/work-a-extra/file.txt' })).toBe('outside-workdir')
+  })
+
+  it('多根不覆盖敏感、系统目录和根外真实 symlink 目标的优先分类', () => {
+    const common = { rawPath: '/etc/passwd', workDir: '/tmp/work-a', workDirs: ['/tmp/work-a', '/etc'], userDataDir: '/tmp/user-data', homeDir: '/tmp/home', customSensitivePrefixes: [], resolvedPath: '/etc/passwd' }
+    expect(classifyReadPathZone(common)).toBe('system-dir')
+    expect(classifyReadPathZone({ ...common, resolvedPath: '/tmp/user-data/secret' })).toBe('sensitive-file')
+    expect(classifyReadPathZone({ ...common, workDirs: ['/tmp/work-a'], resolvedPath: '/tmp/outside/secret' })).toBe('outside-workdir')
+  })
+
   it('Windows 工作目录归属比较忽略大小写', () => {
     expect(classifyReadPathZone({
       rawPath: 'C:\\work\\secret.txt', workDir: 'C:\\Work', userDataDir: 'C:\\user-data',

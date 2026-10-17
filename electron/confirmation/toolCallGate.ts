@@ -136,6 +136,8 @@ export interface ToolCallGateArgs {
   toolInput: Record<string, unknown>
   sessionId: string
   workDir: string
+  /** Frozen task roots supplied by the trusted automation run snapshot. */
+  taskWorkDirs?: readonly string[]
   userDataDir: string
   /** R1/R2：装配期解析的工作目录快照（诊断 basis 的权威来源；缺省用 workDir 字符串兜底） */
   workspace?: WorkspaceSnapshot
@@ -386,7 +388,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     for (const literal of pathLiterals) {
       const expanded = literal.replace(/^~(?=$|[\\/])/, home).replace(/\$\{?HOME\}?/g, home).replace(/%USERPROFILE%/ig, home)
       try {
-        const fact = await probeWritePathFact({ rawPath: expanded, workDir: args.workDir, userDataDir: args.userDataDir, homeDir: home, customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
+        const fact = await probeWritePathFact({ rawPath: expanded, workDir: args.workDir, workDirs: args.taskWorkDirs, userDataDir: args.userDataDir, homeDir: home, customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
         if (uniquePaths.has(fact.normalizedPath)) continue
         uniquePaths.add(fact.normalizedPath)
         shellPathSignals.push({ kind: 'path-target', path: fact.normalizedPath, zone: fact.zone })
@@ -628,7 +630,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
     for (const rawPath of scriptPaths.paths) {
       try {
-        const pathFact = await probeWritePathFact({ rawPath, workDir: args.workDir, userDataDir: args.userDataDir, homeDir: os.homedir(), customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
+        const pathFact = await probeWritePathFact({ rawPath, workDir: args.workDir, workDirs: args.taskWorkDirs, userDataDir: args.userDataDir, homeDir: os.homedir(), customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
         signals.push({ kind: 'path-target', path: pathFact.normalizedPath, zone: pathFact.zone })
       } catch {
         signals.push({ kind: 'extraction-failed', reason: 'script-path-probe-failed' })
@@ -672,6 +674,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         writePathFact = await probeWritePathFact({
           rawPath,
           workDir: args.workDir,
+          workDirs: args.taskWorkDirs,
           userDataDir: args.userDataDir,
           homeDir: os.homedir(),
           customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [],
@@ -681,7 +684,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         let writeScope: 'inside-workdir' | 'outside-workdir' | 'unknown'
         try {
           // T1.4：挂载命中时以 scopeBase（realBase）为包含判定根；未挂载行为不变
-          writeScope = await classifyWriteTargetScope(writePathFact.normalizedPath, writePathFact.scopeBase ?? args.workDir)
+          writeScope = await classifyWriteTargetScope(writePathFact.normalizedPath, writePathFact.scopeBase ?? args.workDir, writePathFact.scopeBase ? [writePathFact.scopeBase] : args.taskWorkDirs)
         } catch {
           writeScope = 'unknown'
         }
@@ -741,6 +744,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
             userDataDir: args.userDataDir,
             homeDir: os.homedir(),
             customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [],
+            workDirs: args.taskWorkDirs,
             mountAnchors: readWikiProbe.mountAnchors,
             sensitiveRootExemptions: readWikiProbe.sensitiveRootExemptions
           })

@@ -148,7 +148,6 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     const activeTask = admittedTask
     const workDirsResult = await validateTaskWorkDirs(getAutomationTaskWorkDirs(admittedTask))
     if (!workDirsResult.ok) throw new Error(workDirsResult.error)
-    if (workDirsResult.workDirs.length !== 1) throw new Error('多工作目录执行链尚未完成接入')
     const workDirResult = { ok: true as const, workDir: workDirsResult.workDirs[0]! }
     let modelId = admittedTask.modelId
     let serviceId = admittedTask.modelServiceId
@@ -412,6 +411,7 @@ async function runButlerModelTurn(
     browserConfig: deps.getBrowserConfig?.(),
     shellConfig: deps.getShellConfig?.() ?? null,
     workDir,
+    taskWorkDirs: args.runConfig.workDirs,
     workDirManager: deps.workDirManager,
     resolveWorkDir: deps.workDirManager
       ? () => args.runConfig.workDir!
