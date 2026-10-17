@@ -139,9 +139,9 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **动作与产物：** 实现受限 provider 与 exact/collection/output 结构化 resolver，产出 binding proposal；调用无工具权限的目标分析器并聚合目录候选。持久化字段与事务 API 属于 E-02/E-03，正式提交写入由 E-05 承担。
 - **完成判据：** 唯一与歧义布局结果不同；不存在的输出子路径通过祖先授权检查；collection 在 selector 范围内允许新增成员；普通文件原子替换不构成绑定变化；越界/不完整 coverage fail closed；分析器无工具权限。超时、模型不可用、无效 JSON 阻断。
 - **验证命令：** `npm exec vitest run electron/butler/taskPreflight.test.ts electron/butler/taskConfigValidation.test.ts`；分析器纯逻辑用固定 fixture，不访问外网。
-- **证据：** 判例矩阵、facts coverage/digest、proposal 结构与无工具能力断言。
+- **证据：** RED：新增 `taskPathFacts.test.ts`、`taskTargetResolver.test.ts`、`taskPreflight.test.ts`、`taskPreflightModelAnalyzer.test.ts` 后，目标模块缺失时各自以 `Cannot find module` 失败。GREEN：`TaskPathFactsProvider` 限定已选 roots，symlink 不跟随，深度/每根/总量限额产生 coverage 标记，权限错误 fail closed，规范化 entries 生成 digest；resolver 覆盖唯一/歧义 basename、绝对路径越界、目标类型、output 最近根内祖先、逃逸、symlink 祖先、固定 collection selector 与 incomplete coverage；`runTaskPreflight` 覆盖 empty target blocker、incomplete facts、模型错误、坏 schema、timeout abort；Anthropic adapter 通过任务当前 model/service 调 `resolveLlmCredentialsForPair`，请求没有 `tools`，response JSON 结构校验失败 closed。四个相关测试文件共 16 项通过。`npm run build:electron:incremental`、`npm run typecheck:shared`、`git diff --check` 通过。真实模型语义质量为计划声明的外部验收，未用于源码关闭判据。
 - **可执行环境：** 本机 mock；真实模型质量为外部验收。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-05 将 create/update/enable 门禁留在主进程
 
