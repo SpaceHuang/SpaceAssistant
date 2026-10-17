@@ -22,11 +22,16 @@ import {
 } from './sessionLedgerReadiness'
 import { drainCanonicalLedgerProjectionOutbox, type CanonicalLedgerProjectionTarget } from './sessionLedgerOutbox'
 import type { SessionLedgerLocationInput } from './sessionLedgerIdentity'
+import { withSessionEventWriterDrain } from './sessionEvents'
 
 type LockEntry = { tail: Promise<void>; users: number }
 
 const locationLocks = new Map<string, LockEntry>()
 const heldLocationLocks = new AsyncLocalStorage<ReadonlySet<string>>()
+
+export function isSessionLedgerLifecycleLockHeld(locationKey: string): boolean {
+  return Boolean(heldLocationLocks.getStore()?.has(locationKey))
+}
 
 /** Serializes readiness transitions and JSONL projection writes for one stable ledger location. */
 export async function withSessionLedgerLifecycleLock<T>(locationKey: string, operation: () => Promise<T>): Promise<T> {
@@ -107,10 +112,15 @@ export async function ensureSessionLedgerReady(input: {
   let operation: SessionLedgerLifecycleTrace['operation'] = 'proof-reused'
   let baselineScanCount = 0
   let projectedCount = 0
-  const result: SessionLedgerLifecycleResult = await withSessionLedgerLifecycleLock(readiness.ledgerLocationKey, async (): Promise<SessionLedgerLifecycleResult> => {
+  const runLifecycle = () => withSessionLedgerLifecycleLock(readiness.ledgerLocationKey, async (): Promise<SessionLedgerLifecycleResult> => {
     const now = input.now ?? Date.now
     let current = readSessionLedgerReadiness(input.conn, readiness.ledgerLocationKey)!
-    if (current.ownerReconciledProcessGeneration < input.processGeneration) {
+    const resumeCredentialedBootstrap = current.origin === 'new_location' && current.state === 'initializing' && Boolean(current.bootstrapId)
+    if (resumeCredentialedBootstrap && current.ownerReconciledProcessGeneration < input.processGeneration) {
+      advanceSessionLedgerOwnerReconciliation(input.conn, current.ledgerLocationKey, input.processGeneration, now())
+      current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
+    }
+    if (!resumeCredentialedBootstrap && current.ownerReconciledProcessGeneration < input.processGeneration) {
       if (input.dependencies.reconcilePreviousOwner && (current.ownerReconciledProcessGeneration > 0 || current.origin === 'legacy')) {
         try {
           await input.dependencies.reconcilePreviousOwner(input.location, current.ownerReconciledProcessGeneration, input.processGeneration)
@@ -203,6 +213,10 @@ export async function ensureSessionLedgerReady(input: {
       latest.canonicalWatermark ? 'target' : 'baseline', 'state_transition_exhausted', now())
     return { status: 'blocked', readiness: readSessionLedgerReadiness(input.conn, latest.ledgerLocationKey)! }
   })
+  const initial = readSessionLedgerReadiness(input.conn, readiness.ledgerLocationKey)!
+  const result = initial.origin === 'new_location' && initial.state === 'initializing' && Boolean(initial.bootstrapId)
+    ? await runLifecycle()
+    : await withSessionEventWriterDrain(input.location.workDir, input.location.sessionId, runLifecycle)
   try {
     input.onTrace?.({ operation, status: result.status, baselineScanCount, projectedCount,
       durationMs: Math.max(0, Date.now() - startedAt), failureClass: result.readiness.failureClass })

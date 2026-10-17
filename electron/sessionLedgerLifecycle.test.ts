@@ -56,6 +56,27 @@ describe('session ledger lifecycle lock', () => {
     } finally { db.close() }
   })
 
+  it('resumes a credentialed new-location bootstrap before reconciling a previous owner', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const conn = getDbConnection(db)
+      const location = { workDir: '/tmp/lifecycle-bootstrap-restart', sessionId: 'new-session', createdAt: 11 }
+      const readiness = ensureLegacyLedgerReadiness(conn, location, 'g1')
+      conn.prepare("UPDATE session_ledger_projection_state SET origin='new_location',state='initializing',bootstrap_id='credential',owner_reconciled_process_generation=1 WHERE ledger_location_key=?")
+        .run(readiness.ledgerLocationKey)
+      let bootstrapCalls = 0
+      const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: 'g1', processGeneration: 2,
+        dependencies: {
+          fileExists: async () => false, readProof: async () => proof,
+          bootstrap: async (_location, id) => { bootstrapCalls += 1; expect(id).toBe('credential'); return proof },
+          baseline: async () => proof, applyTarget: async () => ({ eventIds: [], events: [] }),
+          reconcilePreviousOwner: async () => { throw new Error('SESSION_LEDGER_BASELINE_FILE_MISSING') }
+        } })
+      expect(result).toMatchObject({ status: 'ready', readiness: { state: 'ready', bootstrapId: 'credential', ownerReconciledProcessGeneration: 2 } })
+      expect(bootstrapCalls).toBe(1)
+    } finally { db.close() }
+  })
+
   it('builds one baseline proof then reuses it until the file or index proof changes', async () => {
     const db = createMemoryAppDb()
     try {

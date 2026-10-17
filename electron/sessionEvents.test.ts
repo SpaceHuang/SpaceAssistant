@@ -32,6 +32,7 @@ import {
   reconcileSessionEventFilesDetailed,
   reconcileSessionEvents,
   reconcileInterruptedSessionEventLedger,
+  withSessionEventWriterDrain,
   type SessionEvent
 } from './sessionEvents'
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
@@ -122,6 +123,29 @@ describe('session events', () => {
     release()
     await Promise.all([hold, append])
     expect((await readSessionEvents(sink.eventsPath)).map((event) => event.type)).toEqual(['turn_start'])
+    await sink.close()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('serializes a lifecycle gate with an active writer without closing the writer', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-lifecycle-deadlock-'))
+    const location = { workDir: root, sessionId: 'deadlock-writer', createdAt: 1000 }
+    const key = sessionLedgerLocationIdentity(location).key
+    const sink = getSessionEventSink(root, location.sessionId, location.createdAt)
+    let entered!: () => void
+    let release!: () => void
+    const gateEntered = new Promise<void>((resolve) => { entered = resolve })
+    const barrier = new Promise<void>((resolve) => { release = resolve })
+    const gate = withSessionEventWriterDrain(root, location.sessionId, () => withSessionLedgerLifecycleLock(key, async () => {
+      entered()
+      await barrier
+    }))
+    await gateEntered
+    const append = sink.appendCritical({ type: 'turn_start', payload: { turnId: 'deadlock-turn' } })
+    release()
+    await expect(Promise.race([Promise.all([gate, append]), new Promise((_, reject) => setTimeout(() => reject(new Error('deadlock timeout')), 1000))]))
+      .resolves.toBeDefined()
+    expect((await readSessionEvents(sink.eventsPath)).map((event) => event.payload.turnId)).toEqual(['deadlock-turn'])
     await sink.close()
     await fs.rm(root, { recursive: true, force: true })
   })

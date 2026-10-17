@@ -56,7 +56,7 @@ import { signalChatCancel } from './chatCancelRegistry'
 import { cancelAllToolConfirmsForRequest } from './toolConfirmRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, hasActiveSessionEventSink, reconcileInterruptedSessionEventLedger, setSessionEventCommitObserver } from './sessionEvents'
+import { beginSessionEventShutdown, withSessionEventWriterDrain, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, hasActiveSessionEventSink, reconcileInterruptedSessionEventLedger, setSessionEventCommitObserver } from './sessionEvents'
 import { createCanonicalSessionProjectionRetentionPreparer, createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
@@ -594,7 +594,9 @@ app.whenReady().then(async () => {
             const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1] ?? sessionName
             const session = sessionStorage.queries.readSession(sessionId)
             const key = sessionLedgerLocationIdentity({ workDir: root, sessionId, createdAt: session?.createdAt ?? 0 }).key
-            return withSessionLedgerLifecycleLock(key, operation)
+            return session
+              ? withSessionEventWriterDrain(root, sessionId, () => withSessionLedgerLifecycleLock(key, operation))
+              : withSessionLedgerLifecycleLock(key, operation)
           },
           ensureReadyBeforeDelete: async (sessionName, root) => {
             const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1]

@@ -186,12 +186,12 @@ export function listPendingCanonicalLedgerProjectionTargets(conn: DatabaseSync, 
 /** Acknowledges only after the sink confirms the complete expected event identity set. */
 export function acknowledgeCanonicalLedgerProjectionTarget(conn: DatabaseSync, targetId: string,
   observed: { eventIds: readonly string[]; events: readonly SessionEventInput[] }, now = Date.now()): boolean {
-  const row = conn.prepare(`SELECT ledger_location_key,expected_event_ids_json,expected_events_json,status FROM session_ledger_projection_outbox WHERE target_id=?`)
-    .get(targetId) as { ledger_location_key: string; expected_event_ids_json: string; expected_events_json: string; status: string } | undefined
+  const row = conn.prepare(`SELECT ledger_location_key,expected_event_ids_json,expected_events_json,status,projection_kind FROM session_ledger_projection_outbox WHERE target_id=?`)
+    .get(targetId) as { ledger_location_key: string; expected_event_ids_json: string; expected_events_json: string; status: string; projection_kind: string } | undefined
   if (!row) return false
   const expected = JSON.parse(row.expected_event_ids_json) as string[]
   const expectedEvents = JSON.parse(row.expected_events_json) as SessionEventInput[]
-  if (stableJson(expected) !== stableJson(observed.eventIds) || stableJson(expectedEvents) !== stableJson(observed.events)) return false
+  if (stableJson(expected) !== stableJson(observed.eventIds) || !projectionEventsMatch(row.projection_kind, expectedEvents, observed.events)) return false
   if (row.status === 'acked') return true
   return runInTransaction(conn, () => {
     const result = conn.prepare(`UPDATE session_ledger_projection_outbox SET status='acked',acked_at=? WHERE target_id=? AND status='pending'`)
@@ -202,6 +202,19 @@ export function acknowledgeCanonicalLedgerProjectionTarget(conn: DatabaseSync, t
     if (!pending) conn.prepare(`UPDATE session_ledger_projection_state SET state='unknown',updated_at=? WHERE ledger_location_key=? AND state='dirty'`)
       .run(now, row.ledger_location_key)
     return true
+  })
+}
+
+function projectionEventsMatch(kind: string, expected: readonly SessionEventInput[], observed: readonly SessionEventInput[]): boolean {
+  if (kind !== 'invocation-terminal' || expected.length !== observed.length) return stableJson(expected) === stableJson(observed)
+  return expected.every((expectedEvent, index) => {
+    const actual = observed[index]
+    if (!actual || expectedEvent.type !== 'turn_end' || actual.type !== 'turn_end') return stableJson(expectedEvent) === stableJson(actual)
+    const { turnId, reason, ...additionalPayload } = actual.payload
+    const valid = Object.keys(additionalPayload).every((key) => key === 'error' || key === 'errorCode' || key === 'finalSurfaceSnapshot') &&
+      (additionalPayload.error === undefined || typeof additionalPayload.error === 'string') &&
+      (additionalPayload.errorCode === undefined || typeof additionalPayload.errorCode === 'string')
+    return valid && turnId === expectedEvent.payload.turnId && reason === expectedEvent.payload.reason
   })
 }
 

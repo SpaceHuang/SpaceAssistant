@@ -136,6 +136,27 @@ describe('production session ledger lifecycle', () => {
     }
   })
 
+  it('resumes an interrupted bootstrap across process generations when its ledger files are still missing', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-bootstrap-cross-process-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'bootstrap-cross-process', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const row = conn.prepare('SELECT bootstrap_id FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { bootstrap_id: string }
+    conn.prepare("UPDATE session_ledger_projection_state SET state='initializing',owner_reconciled_process_generation=1 WHERE session_id=?").run(session.id)
+
+    const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 2,
+      dependencies: createProductionSessionLedgerLifecycleDependencies(conn) })
+
+    expect(result).toMatchObject({ status: 'ready', readiness: { state: 'ready', bootstrapId: row.bootstrap_id,
+      ownerReconciledProcessGeneration: 2 } })
+    const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    expect(await fs.readFile(paths.eventsPath, 'utf8')).toBe('')
+  })
+
   it('only baselines a previous owner before a canonical process-restart terminal exists', async () => {
     const db = createMemoryAppDb()
     databases.push(db)
@@ -168,6 +189,64 @@ describe('production session ledger lifecycle', () => {
     await verifySink.close()
     expect(events.map(({ type }) => type)).toEqual(['turn_start', 'step_start', 'tool_call'])
     expect(events.some((event) => event.type === 'tool_result' && event.payload.synthetic === true)).toBe(false)
+  })
+
+  it('baselines a previous owner with an active writer and leaves that writer usable', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-active-writer-baseline-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'active-writer-baseline', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    const initialized = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })
+    expect(initialized.status).toBe('ready')
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'active-turn' } })
+    conn.prepare("UPDATE session_ledger_projection_state SET state='unknown',origin='legacy',bootstrap_id=NULL,owner_reconciled_process_generation=1 WHERE session_id=?").run(session.id)
+
+    const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 2, dependencies })
+
+    expect(result).toMatchObject({ status: 'ready', readiness: { ownerReconciledProcessGeneration: 2 } })
+    await expect(sink.appendCritical({ type: 'assistant_chunk', payload: { turnId: 'active-turn', content: 'still open' } })).resolves.toMatchObject({ type: 'assistant_chunk' })
+    expect((await readSessionEvents(sink.eventsPath)).map(({ type }) => type)).toEqual(['turn_start', 'assistant_chunk'])
+    await sink.close()
+  })
+
+  it('acks a canonical terminal after desktop finalization adds a legal snapshot', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-terminal-finalize-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'terminal-finalize', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })).status).toBe('ready')
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([{ invocationId: 'finalize-invocation', turnId: 'finalize-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'finalize-terminal', idempotencyKey: 'finalize-terminal', kind: 'invocation-failed',
+      payload: { status: 'failed', sessionLedger: { location, turnId: 'finalize-turn', reason: 'failed' } } }], 0)
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'finalize-turn' } })
+    await sink.appendCritical({ type: 'turn_end', payload: { turnId: 'finalize-turn', reason: 'failed',
+      error: 'provider failed', errorCode: 'PROVIDER_ERROR', finalSurfaceSnapshot: { text: 'failed output' } } })
+
+    const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })
+
+    expect(result).toMatchObject({ status: 'ready', readiness: { state: 'ready' } })
+    expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id='finalize-terminal'").get()).toEqual({ status: 'acked' })
+    expect((await readSessionEvents(sink.eventsPath)).find(({ type }) => type === 'turn_end')?.payload).toMatchObject({
+      reason: 'failed', error: 'provider failed', errorCode: 'PROVIDER_ERROR', finalSurfaceSnapshot: { text: 'failed output' }
+    })
+    await sink.close()
   })
 
   it('blocks a missing legacy ledger in production without creating an empty replacement', async () => {

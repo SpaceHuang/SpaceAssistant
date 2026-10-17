@@ -95,11 +95,7 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
   const proof = (location: SessionLedgerLocationInput) => readSessionLedgerReadyProof(conn, location)
   const project = async (location: SessionLedgerLocationInput, target: Parameters<typeof projectCanonicalSessionLedgerTarget>[1]) => {
     const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-    try { return await projectCanonicalSessionLedgerTarget(sink, target) }
-    finally {
-      const flushed = await sink.close()
-      if (flushed.failed) throw new Error('SESSION_LEDGER_SINK_FLUSH_FAILED')
-    }
+    return projectCanonicalSessionLedgerTarget(sink, target)
   }
   const dependencies: SessionLedgerLifecycleDependencies = {
     fileExists: async (location) => {
@@ -117,7 +113,7 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
     bootstrap: async (location, bootstrapId) => {
       await bootstrapEmptySessionEventLedger(location.workDir, location.sessionId, location.createdAt, bootstrapId)
       const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-      try { await sink.flush() } finally { await sink.close() }
+      await sink.flush()
       return await proof(location) ?? Promise.reject(new Error('SESSION_LEDGER_BOOTSTRAP_PROOF_MISSING'))
     },
     baseline: async (location) => {

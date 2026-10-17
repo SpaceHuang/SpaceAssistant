@@ -189,6 +189,40 @@ describe('canonical session ledger outbox', () => {
     }
   })
 
+  it('accepts legal terminal diagnostics and snapshot during projection and ack comparison', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-terminal-snapshot-'))
+    const session = createSession(db, { name: 'terminal snapshot' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const readiness = ensureLegacyLedgerReadiness(conn, location, session.generation)
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    const target: CanonicalLedgerProjectionTarget = { ledgerLocationKey: readiness.ledgerLocationKey, sessionId: session.id,
+      sessionGeneration: session.generation, canonicalEventId: 'terminal-event', projectionKind: 'invocation-terminal',
+      expectedEvents: [{ type: 'turn_end', payload: { turnId: 'terminal-turn', reason: 'completed' } }],
+      expectedEventIds: ['turn_end:terminal-turn'] }
+    try {
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'terminal-turn' } })
+      await sink.appendCritical({ type: 'turn_end', payload: { turnId: 'terminal-turn', reason: 'completed',
+        finalSurfaceSnapshot: { text: 'done' } } })
+      const projected = await projectCanonicalSessionLedgerTarget(sink, target)
+      expect(projected.eventIds).toEqual(target.expectedEventIds)
+      expect(projected.events[0]?.payload).toMatchObject({ finalSurfaceSnapshot: { text: 'done' } })
+      appendCanonicalEvent(conn, session.id, 'terminal-event')
+      runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
+      const pending = listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledgerLocationKey)[0]!
+      expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending.target_id, projected)).toBe(true)
+      expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledgerLocationKey)).toEqual([])
+      await expect(projectCanonicalSessionLedgerTarget(sink, { ...target,
+        expectedEvents: [{ type: 'turn_end', payload: { turnId: 'terminal-turn', reason: 'failed' } }] }))
+        .rejects.toThrow(/conflicting invocation terminal projection/)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('drains multiple projections from one canonical event in their declared order', async () => {
     const db = createMemoryAppDb()
     databases.push(db)

@@ -6,7 +6,7 @@ import type { SessionUsage } from '../src/shared/sessionUsage'
 import { foldCompactionEvents, projectCompactionMarkers, type CompactionReplay, type CompactionMarker } from '../src/shared/compactionEvents'
 import { withTransientLockRetry } from './safeAtomicWrite'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
-import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
+import { isSessionLedgerLifecycleLockHeld, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 
 export type SessionEventPayload = Record<string, unknown>
 export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'compaction_start' | 'compaction_summary' | 'compaction_end' | 'session_end_seed'
@@ -370,6 +370,17 @@ export function hasActiveSessionEventSink(workDir: string, sessionId: string, cr
   return writerRegistry.has(eventPaths(workDir, sessionId, createdAt).eventsPath)
 }
 
+export async function withSessionEventWriterDrain<T>(workDir: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
+  const writers = [...writerRegistry.values()].filter((candidate) => candidate.matchesLocation(workDir, sessionId))
+    .sort((left, right) => left.eventsPath.localeCompare(right.eventsPath))
+  return withSessionLifecycleWriterDrains(writers, operation)
+}
+
+function withSessionLifecycleWriterDrains<T>(writers: SessionEventWriter[], operation: () => Promise<T>, index = 0): Promise<T> {
+  const writer = writers[index]
+  return writer ? writer.withLifecycleDrain(() => withSessionLifecycleWriterDrains(writers, operation, index + 1)) : operation()
+}
+
 /** Creates an empty ledger only for a caller holding the durable new-location bootstrap credential. */
 export async function bootstrapEmptySessionEventLedger(workDir: string, sessionId: string, createdAt: number, bootstrapId: string): Promise<void> {
   if (!bootstrapId.trim()) throw new Error('SESSION_LEDGER_BOOTSTRAP_ID_REQUIRED')
@@ -474,11 +485,12 @@ export async function establishExistingSessionEventLedgerBaseline(workDir: strin
       else throw error
     }
   }
+  const hadActiveWriter = hasActiveSessionEventSink(workDir, sessionId, createdAt)
   const sink = getSessionEventSink(workDir, sessionId, createdAt)
   try {
     await (sink as SessionEventWriter).initializeExistingLedgerForBaseline()
     await sink.flush()
-  } finally { await sink.close() }
+  } finally { if (!hadActiveWriter) await sink.close() }
   try { await fs.lstat(paths.indexPath) }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -741,9 +753,25 @@ export class SessionEventWriter implements SessionEventSink {
     this.clearFlushTimer()
     const pending = this.takePendingChunks()
     if (pending.inputs.length) await this.enqueueCommit(async () => { await this.commitQueuedBatch(pending, pending.inputs.length) })
-    else await this.commitTail
+    else if (!isSessionLedgerLifecycleLockHeld(this.lifecycleLocationKey)) await this.commitTail
     this.assertHealthy()
     return this.snapshot()
+  }
+
+  async drainAcceptedCommits(): Promise<void> {
+    this.clearFlushTimer()
+    const pending = this.takePendingChunks()
+    if (pending.inputs.length) await this.enqueueCommit(async () => { await this.commitQueuedBatch(pending, pending.inputs.length) })
+    await this.commitTail
+    this.assertHealthy()
+  }
+
+  matchesLocation(workDir: string, sessionId: string): boolean {
+    return this.location.workDir === workDir && this.location.sessionId === sessionId
+  }
+
+  async withLifecycleDrain<T>(operation: () => Promise<T>): Promise<T> {
+    return this.enqueueCommit(() => withSessionLedgerLifecycleLock(this.lifecycleLocationKey, operation))
   }
 
   /** Forces the read-only load/index validation path for a ledger the caller has proved exists. */
@@ -849,6 +877,7 @@ export class SessionEventWriter implements SessionEventSink {
   }
 
   private enqueueCommit<T>(task: () => Promise<T>): Promise<T> {
+    if (isSessionLedgerLifecycleLockHeld(this.lifecycleLocationKey)) return task()
     const run = this.commitTail.then(task)
     this.commitTail = run.then(() => undefined, (error) => { this.reportError(error) })
     return run

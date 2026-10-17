@@ -52,12 +52,23 @@ export async function projectCanonicalSessionLedgerTarget(
   const persisted = await readSessionEvents(sink.eventsPath)
   const events = target.expectedEvents.map((expected) => {
     const match = persisted.find((event) => sameProjectionIdentity(event, expected))
-    if (!match || stableJson(match.payload) !== stableJson(expected.payload)) throw new Error('SESSION_LEDGER_PROJECTION_EVENT_NOT_COMMITTED')
+    if (!match || !projectionPayloadMatches(target.projectionKind, match, expected)) throw new Error('SESSION_LEDGER_PROJECTION_EVENT_NOT_COMMITTED')
     return { type: match.type, payload: match.payload }
   })
   const eventIds = events.map(projectionEventIdentity)
   if (JSON.stringify(eventIds) !== JSON.stringify(target.expectedEventIds)) throw new Error('SESSION_LEDGER_PROJECTION_IDENTITY_MISMATCH')
   return { eventIds, events }
+}
+
+function projectionPayloadMatches(kind: string, actual: SessionEvent, expected: SessionEventInput): boolean {
+  if (kind !== 'invocation-terminal' || actual.type !== 'turn_end' || expected.type !== 'turn_end') {
+    return stableJson(actual.payload) === stableJson(expected.payload)
+  }
+  const { turnId, reason, ...additionalPayload } = actual.payload
+  const diagnosticsAreValid = Object.keys(additionalPayload).every((key) => key === 'error' || key === 'errorCode' || key === 'finalSurfaceSnapshot') &&
+    (additionalPayload.error === undefined || typeof additionalPayload.error === 'string') &&
+    (additionalPayload.errorCode === undefined || typeof additionalPayload.errorCode === 'string')
+  return diagnosticsAreValid && turnId === expected.payload.turnId && reason === expected.payload.reason
 }
 
 function stableJson(value: unknown): string {
