@@ -77,6 +77,9 @@ export function createSessionLedgerCompactionDependencyGuard(db: AppDatabase): (
   }
   return async (sessionName, workDir) => {
     const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1]
+    // A session still present in the canonical session table can be resumed by the user;
+    // its event ledger remains a required lifecycle dependency even when the transcript is projected to SQLite.
+    if (sessionId && getDbConnection(db).prepare('SELECT 1 FROM sessions WHERE id=?').get(sessionId)) return true
     if (sessionId && compactedSessionIds.has(sessionId)) return true
     const eventsPath = path.join(workDir, 'sessions', sessionName, 'events.jsonl')
     const events = await readSessionEvents(eventsPath)

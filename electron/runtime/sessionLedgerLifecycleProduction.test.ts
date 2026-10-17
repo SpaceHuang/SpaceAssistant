@@ -11,6 +11,7 @@ import { bootstrapEmptySessionEventLedger, getSessionEventSink, readSessionEvent
 import { ensureLegacyLedgerReadiness, refreshSessionLedgerReadyProof } from '../sessionLedgerReadiness'
 import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
 import { createProductionSessionLedgerLifecycleDependencies } from './sessionLedgerLifecycleProduction'
+import { createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from '../storage/sessionEventRetention'
 
 describe('production session ledger lifecycle', () => {
   const databases: ReturnType<typeof createMemoryAppDb>[] = []
@@ -48,6 +49,37 @@ describe('production session ledger lifecycle', () => {
       dependencies, onTrace: (trace) => traces.push(trace) })
     expect(second.status).toBe('ready')
     expect(traces).toMatchObject([{ baselineScanCount: 0 }])
+  })
+
+  it('keeps a resumable session ledger through retention and allows the session to reopen', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-retention-resume-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'retention-resume', workDirProfileId: 'profile' })
+    setConfigValue(db, 'retention.sessionEvent.maxSessions', '1')
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1, dependencies })).status).toBe('ready')
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    await sink.close()
+    const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    const index = JSON.parse(await fs.readFile(paths.indexPath, 'utf8')) as { lastAt: number }
+    await fs.mkdir(path.join(root, 'sessions', 'newer-20990101'), { recursive: true })
+    await fs.writeFile(path.join(root, 'sessions', 'newer-20990101', 'events.index.json'), JSON.stringify({ lastAt: index.lastAt + 1_000_000 }))
+
+    const retention = await runSessionEventRetentionMaintenance(db, root, {
+      shouldRetainSessionDir: createSessionLedgerCompactionDependencyGuard(db),
+      ensureReadyBeforeDelete: async () => true,
+      verifyReadyBeforeDelete: async () => true
+    })
+
+    expect(retention.summary.removed).toBe(0)
+    expect(retention.summary.retained.map(({ sessionName }) => sessionName)).toContain(path.basename(paths.directory))
+    await expect(fs.stat(paths.eventsPath)).resolves.toBeTruthy()
+    expect((await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1, dependencies })).status).toBe('ready')
   })
 
   it('lazily projects a legacy canonical tool proposal into its existing ledger and persists a ready proof', async () => {
