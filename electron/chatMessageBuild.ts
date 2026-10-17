@@ -8,6 +8,7 @@ export async function buildToolChatMessagesFromSource(args: {
   userDataDir: string
   /** 会话工作目录：历史重建的 process 结果需要它才能把 cwd 判定为 workspace 内相对路径 */
   workDir?: string
+  workDirs?: readonly string[]
   sourceMessages: Message[]
   currentUserMessageId: string
   sessionId?: string
@@ -25,6 +26,7 @@ export async function buildToolChatMessagesFromSource(args: {
   return buildClaudeToolChatMessages(args.sourceMessages, {
     currentUserMessageId: args.currentUserMessageId,
     workspaceRoot: args.workDir,
+    ...(args.workDirs?.length ? { workspaceRoots: args.workDirs } : {}),
     resolveImage,
     onOversizedToolResult: (info) => {
       logHistoryOversizedToolResult({

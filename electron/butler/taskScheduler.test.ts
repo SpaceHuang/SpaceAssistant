@@ -76,7 +76,7 @@ describe('ButlerTaskScheduler（fake clock）', () => {
     expect(runTask.mock.calls[0]![1].scheduledFor).toBe(10_000)
     const updated = getAutomationTask(d, task.id)!
     expect(updated.lastRunAt).toBe(12_000)
-    expect(updated.nextRunAt).toBe(12_000 + 30 * MIN)
+    expect(updated.nextRunAt).toBe(10_000 + 30 * MIN)
   })
 
   it('未到期不触发', async () => {
@@ -108,6 +108,62 @@ describe('ButlerTaskScheduler（fake clock）', () => {
     expect(skipped.every((r) => r.error === 'missed-window')).toBe(true)
     const updated = getAutomationTask(d, task.id)!
     expect(updated.nextRunAt).toBe(120 * MIN)
+  })
+
+  it('启动恢复将 claim 后、run-start 前的 queued 槽位以原 runId 续接', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 0 }))
+    const { claimDueSlotAndAdvance, getRunById } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 0, nextSlot: 30 * MIN, clientId: `${task.id}:0` })
+    const runTask = vi.fn(async () => ({ ok: true })) as unknown as SchedulerRunFn
+    const scheduler = new ButlerTaskScheduler({ db: d, runTask, isTrayEnabled: () => true, now: () => 90 * MIN })
+    const recovered = scheduler.recoverOnStartup()
+    expect(recovered).toMatchObject({ skippedCount: 0, catchUpCount: 1 })
+    expect(runTask).toHaveBeenCalledTimes(1)
+    expect(runTask.mock.calls[0]![1]).toMatchObject({ runId: claim.runId, scheduledFor: 0 })
+    expect(getRunById(d, claim.runId!)).toMatchObject({ status: 'queued', runPhase: 'queued-before-start' })
+    expect(listAutomationTaskRuns(d, task.id)).toHaveLength(1)
+  })
+
+  it('正常在线运行后重启只记录真正遗漏槽位，不把历史 completed 重记为 skipped', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 0 }))
+    let now = 0
+    const runTask = vi.fn(async (_taskId: string, request: Parameters<SchedulerRunFn>[1]) => {
+      updateAutomationTaskRun(d, request.runId!, { status: 'completed' })
+      return { ok: true }
+    }) as unknown as SchedulerRunFn
+    const scheduler = new ButlerTaskScheduler({ db: d, runTask, isTrayEnabled: () => true, now: () => now })
+    await scheduler.tick()
+    now = 30 * MIN
+    await scheduler.tick()
+    expect(listAutomationTaskRuns(d, task.id).map((run) => run.status)).toEqual(['completed', 'completed'])
+    now = 90 * MIN
+    const recovered = scheduler.recoverOnStartup()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(recovered).toMatchObject({ skippedCount: 1, catchUpCount: 1 })
+    const runs = listAutomationTaskRuns(d, task.id)
+    expect(runs.filter((run) => run.status === 'skipped').map((run) => run.scheduledFor)).toEqual([60 * MIN])
+    expect(runs.filter((run) => run.status === 'completed').map((run) => run.scheduledFor)).toEqual([0, 30 * MIN, 90 * MIN])
+    expect(runs).toHaveLength(4)
+  })
+
+  it('once 任务成功 claim 后只运行一次并停用', async () => {
+    const d = db()
+    let now = 1_000
+    const task = createAutomationTask(d, taskInput({ schedule: { kind: 'once', at: 1_000 }, nextRunAt: 1_000 }))
+    const runTask = vi.fn(async (_taskId: string, request: Parameters<SchedulerRunFn>[1]) => {
+      updateAutomationTaskRun(d, request.runId!, { status: 'completed' })
+      return { ok: true }
+    }) as unknown as SchedulerRunFn
+    const scheduler = new ButlerTaskScheduler({ db: d, runTask, isTrayEnabled: () => true, now: () => now })
+    await scheduler.tick()
+    expect(getAutomationTask(d, task.id)?.enabled).toBe(false)
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBeUndefined()
+    now += 10_000
+    await scheduler.tick()
+    expect(runTask).toHaveBeenCalledTimes(1)
   })
 
   it('崩溃遗留 running 的 run 在启动恢复时标 interrupted', () => {

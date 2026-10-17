@@ -1054,6 +1054,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             ...(materials.historyForSession ? { historyForSession: materials.historyForSession } : {}),
             policyRuleFloor: materials.policyRuleFloor ?? effectiveRules,
             workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+            ...(materials.taskWorkDirs?.length ? { taskWorkDirs: materials.taskWorkDirs } : {}),
             userDataDir: materials.userDataDir,
             getToolsConfig: () => materials.toolsConfig,
             ...(materials.shellConfig !== undefined ? { getShellConfig: () => materials.shellConfig ?? null } : {}),
@@ -1705,7 +1706,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           ...(typeof record?.executorEntry === 'string' ? { executorEntry: record.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
           ...(typeof record?.executionErrorCode === 'string' ? { executionErrorCode: record.executionErrorCode } : {}),
           ...(typeof record?.invocationDisposition === 'string' ? { invocationDisposition: record.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
-        }, { workspaceRoot: materials.workDir, processTool: isProcessToolName(call.toolName) })
+        }, { workspaceRoot: materials.workDir, ...(materials.taskWorkDirs?.length ? { workspaceRoots: materials.taskWorkDirs } : {}), processTool: isProcessToolName(call.toolName) })
         if (projected.success && projected.autoApprovedWrite) {
           logAgentEvent('info', 'file.auto_approve', { requestId: materials.requestId, sessionId: materials.sessionId,
             toolUseId: call.toolCallId, tool: call.toolName, relPath: projected.autoApprovedWrite.path,

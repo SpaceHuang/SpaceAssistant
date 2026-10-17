@@ -354,6 +354,31 @@ export type InsertAutomationTaskRunInput = {
   sessionId?: string
 }
 
+export function insertManualTaskClaim(db: AppDatabase, taskId: string, clientId: string): { inserted: boolean; runId?: string; scheduleGeneration?: number } {
+  const conn = getDbConnection(db)
+  const result = runInTransaction(conn, () => {
+    const task = conn.prepare('SELECT schedule_generation FROM automation_tasks WHERE id=?').get(taskId) as { schedule_generation: number } | undefined
+    if (!task) return { inserted: false as const }
+    const runId = randomUUID()
+    const now = Date.now()
+    const inserted = conn.prepare(`INSERT OR IGNORE INTO automation_task_runs
+      (id,task_id,client_id,trigger,scheduled_for,status,run_phase,task_revision,schedule_generation,slot_at,created_at,updated_at)
+      SELECT ?,id,?,'manual',0,'queued','queued-before-start',task_revision,schedule_generation,0,?,? FROM automation_tasks WHERE id=?`)
+      .run(runId, clientId, now, now, taskId)
+    if (Number(inserted.changes) !== 1) return { inserted: false as const }
+    return { inserted: true as const, runId, scheduleGeneration: task.schedule_generation }
+  })
+  if (result.inserted) db.save()
+  return result
+}
+
+export function getQueuedClaimIdentity(db: AppDatabase, runId: string): { taskId: string; slot: number; generation: number } | undefined {
+  const row = getDbConnection(db).prepare('SELECT task_id,scheduled_for,schedule_generation,status,run_phase FROM automation_task_runs WHERE id=?')
+    .get(runId) as { task_id: string; scheduled_for: number; schedule_generation: number | null; status: string; run_phase: string } | undefined
+  if (!row || row.status !== 'queued' || row.run_phase !== 'queued-before-start' || row.schedule_generation == null) return undefined
+  return { taskId: row.task_id, slot: row.scheduled_for, generation: row.schedule_generation }
+}
+
 /** 幂等抢占 run 行（client_id 唯一约束 + INSERT OR IGNORE）。返回 inserted=false 时不产生新行。 */
 export function insertAutomationTaskRun(
   db: AppDatabase,
@@ -380,7 +405,7 @@ export function insertAutomationTaskRun(
   return { inserted: true, runId: id }
 }
 
-export type ClaimDueSlotInput = { taskId: string; slot: number; nextSlot: number | null; clientId: string }
+export type ClaimDueSlotInput = { taskId: string; slot: number; nextSlot: number | null; clientId: string; allowCursorAdvance?: boolean }
 export type ClaimDueSlotResult =
   | { claimed: true; runId: string }
   | { claimed: false; reason: 'task-not-found' | 'not-due' | 'pending-claim' | 'already-claimed'; runId?: string }
@@ -388,17 +413,17 @@ export type ClaimDueSlotResult =
 export function claimDueSlotAndAdvance(db: AppDatabase, input: ClaimDueSlotInput): ClaimDueSlotResult {
   const conn = getDbConnection(db)
   const result = runInTransaction(conn, () => {
-    const task = conn.prepare(`SELECT enabled,next_run_at,task_revision,schedule_generation FROM automation_tasks WHERE id=?`)
-      .get(input.taskId) as { enabled: number; next_run_at: number | null; task_revision: number; schedule_generation: number } | undefined
+    const task = conn.prepare(`SELECT enabled,next_run_at,task_revision,schedule_generation,schedule_json FROM automation_tasks WHERE id=?`)
+      .get(input.taskId) as { enabled: number; next_run_at: number | null; task_revision: number; schedule_generation: number; schedule_json: string } | undefined
     if (!task) return { claimed: false as const, reason: 'task-not-found' as const }
-    const state = conn.prepare(`SELECT schedule_generation,pending_run_id FROM automation_task_recovery_state WHERE task_id=?`)
-      .get(input.taskId) as { schedule_generation: number; pending_run_id: string | null } | undefined
+    const state = conn.prepare(`SELECT schedule_generation,pending_run_id,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?`)
+      .get(input.taskId) as { schedule_generation: number; pending_run_id: string | null; recovery_cursor_at: number | null } | undefined
     const existing = conn.prepare('SELECT id,status,run_phase,schedule_generation FROM automation_task_runs WHERE client_id=?').get(input.clientId) as { id: string; status: string; run_phase: string; schedule_generation: number | null } | undefined
     if (existing?.status === 'queued' && existing.run_phase === 'queued-before-start' && state?.pending_run_id === existing.id && existing.schedule_generation === state.schedule_generation) {
       return { claimed: true as const, runId: existing.id }
     }
     if (existing) return { claimed: false as const, reason: 'already-claimed' as const, runId: existing.id }
-    if (task.enabled !== 1 || task.next_run_at !== input.slot) return { claimed: false as const, reason: 'not-due' as const }
+    if (task.enabled !== 1 || (task.next_run_at !== input.slot && !(input.allowCursorAdvance && (task.next_run_at ?? 0) < input.slot && state?.recovery_cursor_at === task.next_run_at))) return { claimed: false as const, reason: 'not-due' as const }
     if (!state || state.schedule_generation !== task.schedule_generation) return { claimed: false as const, reason: 'not-due' as const }
     if (state.pending_run_id) return { claimed: false as const, reason: 'pending-claim' as const }
     const runId = randomUUID()
@@ -406,11 +431,14 @@ export function claimDueSlotAndAdvance(db: AppDatabase, input: ClaimDueSlotInput
     conn.prepare(`INSERT INTO automation_task_runs(id,task_id,client_id,trigger,scheduled_for,status,run_phase,task_revision,schedule_generation,slot_at,created_at,updated_at)
       VALUES(?,?,?,'schedule',?,'queued','queued-before-start',?,?,?,?,?)`)
       .run(runId, input.taskId, input.clientId, input.slot, task.task_revision, task.schedule_generation, input.slot, now, now)
-    conn.prepare('UPDATE automation_tasks SET next_run_at=? WHERE id=? AND next_run_at=? AND schedule_generation=?')
-      .run(input.nextSlot, input.taskId, input.slot, task.schedule_generation)
+    const priorCursor = task.next_run_at
+    const isOnce = parseSchedule(task.schedule_json).kind === 'once'
+    const moved = conn.prepare('UPDATE automation_tasks SET next_run_at=?,enabled=CASE WHEN ? THEN 0 ELSE enabled END WHERE id=? AND next_run_at=? AND schedule_generation=?')
+      .run(isOnce ? null : input.nextSlot, isOnce ? 1 : 0, input.taskId, priorCursor, task.schedule_generation)
+    if (Number(moved.changes) !== 1) throw new Error('scheduled task cursor changed during slot claim')
     conn.prepare(`UPDATE automation_task_recovery_state SET recovery_cursor_at=?,pending_run_id=?,pending_run_slot=?,pending_schedule_generation=?,updated_at=?
       WHERE task_id=? AND schedule_generation=? AND pending_run_id IS NULL`)
-      .run(input.slot, runId, input.slot, task.schedule_generation, now, input.taskId, task.schedule_generation)
+      .run(isOnce ? null : input.slot, runId, input.slot, task.schedule_generation, now, input.taskId, task.schedule_generation)
     return { claimed: true as const, runId }
   })
   if (result.claimed) db.save()
@@ -476,7 +504,7 @@ export function transitionClaimToRunning(
     const taskRow = conn.prepare('SELECT * FROM automation_tasks WHERE id=?').get(taskId) as TaskRow | undefined
     if (!taskRow) return { ok: false as const, reason: 'task-not-found' as const }
     const task = rowToTask(taskRow)
-    const workDirs = getAutomationTaskWorkDirs(task)
+    const workDirs = getAutomationTaskWorkDirs({ workDirs: task.workDirs, workDir: taskRow.work_dir ?? undefined })
     if (workDirs.length === 0) return { ok: false as const, reason: 'invalid-task-config' as const }
     let targetSelections: TargetSelection[] = []
     if (task.preflightVersion === 1) {
@@ -490,6 +518,9 @@ export function transitionClaimToRunning(
     }
     const snapshot: NonNullable<AutomationTaskRun['configSnapshot']> = {
       resolutionStatus: 'resolved',
+      taskName: task.name,
+      deliveryPref: task.deliveryPref,
+      deliveryTarget: task.deliveryTarget,
       prompt: task.prompt,
       schedule: task.schedule,
       taskRevision: task.taskRevision,
@@ -519,12 +550,17 @@ export function finalizeClaimAndClearPending(
 ): { updated: boolean; clearedPending: boolean } {
   const conn = getDbConnection(db)
   const result = runInTransaction(conn, () => {
-    const run = conn.prepare(`SELECT task_id,schedule_generation,status FROM automation_task_runs WHERE id=?`)
-      .get(runId) as { task_id: string; schedule_generation: number | null; status: string } | undefined
+    const run = conn.prepare(`SELECT r.task_id,r.schedule_generation,r.status,t.schedule_json
+      FROM automation_task_runs r JOIN automation_tasks t ON t.id=r.task_id WHERE r.id=?`)
+      .get(runId) as { task_id: string; schedule_generation: number | null; status: string; schedule_json: string } | undefined
     if (!run || !['queued', 'running'].includes(run.status)) return { updated: false, clearedPending: false }
     const updated = conn.prepare(`UPDATE automation_task_runs SET status=?,run_phase='terminal',error=?,updated_at=?
       WHERE id=? AND status IN ('queued','running')`).run(status, error ?? null, Date.now(), runId)
     if (Number(updated.changes) !== 1) return { updated: false, clearedPending: false }
+    if (status === 'completed' && parseSchedule(run.schedule_json).kind === 'once') {
+      conn.prepare('UPDATE automation_tasks SET enabled=0,last_run_at=?,next_run_at=NULL,updated_at=? WHERE id=?')
+        .run(Date.now(), Date.now(), run.task_id)
+    }
     const cleared = run.schedule_generation == null ? { changes: 0 } : conn.prepare(`UPDATE automation_task_recovery_state
       SET recovery_cursor_at=CASE WHEN schedule_generation=? THEN (SELECT next_run_at FROM automation_tasks WHERE id=?) ELSE recovery_cursor_at END,
         pending_run_id=NULL,pending_run_slot=NULL,pending_schedule_generation=NULL,updated_at=?
@@ -534,6 +570,27 @@ export function finalizeClaimAndClearPending(
   })
   if (result.updated) db.save()
   return result
+}
+
+/** Finalize a successful once slot, persist last-run metadata, and clear its matching pending claim atomically. */
+export function finalizeOnceScheduledRun(db: AppDatabase, runId: string, completedAt: number): boolean {
+  const conn = getDbConnection(db)
+  const finalized = runInTransaction(conn, () => {
+    const run = conn.prepare(`SELECT task_id,schedule_generation,status FROM automation_task_runs WHERE id=?`)
+      .get(runId) as { task_id: string; schedule_generation: number | null; status: string } | undefined
+    if (!run || !['queued', 'running', 'completed'].includes(run.status)) return false
+    conn.prepare(`UPDATE automation_task_runs SET status='completed',run_phase='terminal',updated_at=? WHERE id=?`)
+      .run(completedAt, runId)
+    conn.prepare(`UPDATE automation_tasks SET enabled=0,last_run_at=?,next_run_at=NULL,updated_at=? WHERE id=?`)
+      .run(completedAt, completedAt, run.task_id)
+    if (run.schedule_generation != null) conn.prepare(`UPDATE automation_task_recovery_state
+      SET recovery_cursor_at=NULL,pending_run_id=NULL,pending_run_slot=NULL,pending_schedule_generation=NULL,updated_at=?
+      WHERE task_id=? AND pending_run_id=? AND pending_schedule_generation=?`)
+      .run(completedAt, run.task_id, runId, run.schedule_generation)
+    return true
+  })
+  if (finalized) db.save()
+  return finalized
 }
 
 export function updateAutomationTaskRun(
@@ -559,9 +616,19 @@ export function updateAutomationTaskRun(
   if (patch.deliveryStatus !== undefined) { sets.push('delivery_status = @deliveryStatus'); params.deliveryStatus = patch.deliveryStatus }
   if (patch.deliveredAt !== undefined) { sets.push('delivered_at = @deliveredAt'); params.deliveredAt = patch.deliveredAt }
   sets.push('updated_at = @updatedAt')
-  conn
-    .prepare(`UPDATE automation_task_runs SET ${sets.join(', ')} WHERE id = @id`)
-    .run(params)
+  runInTransaction(conn, () => {
+    conn.prepare(`UPDATE automation_task_runs SET ${sets.join(', ')} WHERE id = @id`).run(params)
+    if (patch.status && !['queued', 'running'].includes(patch.status)) {
+      const run = conn.prepare('SELECT task_id,schedule_generation FROM automation_task_runs WHERE id=?').get(runId) as { task_id: string; schedule_generation: number | null } | undefined
+      if (run?.schedule_generation != null) {
+        conn.prepare(`UPDATE automation_task_recovery_state
+          SET recovery_cursor_at=CASE WHEN schedule_generation=? THEN (SELECT next_run_at FROM automation_tasks WHERE id=?) ELSE recovery_cursor_at END,
+            pending_run_id=NULL,pending_run_slot=NULL,pending_schedule_generation=NULL,updated_at=?
+          WHERE task_id=? AND pending_run_id=? AND pending_schedule_generation=?`)
+          .run(run.schedule_generation, run.task_id, Date.now(), run.task_id, runId, run.schedule_generation)
+      }
+    }
+  })
   db.save()
 }
 
@@ -590,13 +657,38 @@ export function listAutomationTaskRuns(db: AppDatabase, taskId: string): Automat
 /** 启动恢复 / 退出停机：活跃（queued/running）run 标记 interrupted（崩溃或显式退出导致）。 */
 export function markActiveRunsInterrupted(db: AppDatabase, error = 'interrupted'): number {
   const conn = getDbConnection(db)
-  const result = conn
-    .prepare(
-      "UPDATE automation_task_runs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('queued', 'running')"
-    )
-    .run(error, Date.now())
-  db.save()
-  return Number(result.changes)
+  const changed = runInTransaction(conn, () => {
+    const rows = conn.prepare(`SELECT r.id,r.task_id,r.schedule_generation
+      FROM automation_task_runs r
+      LEFT JOIN automation_task_recovery_state s ON s.task_id=r.task_id AND s.pending_run_id=r.id
+        AND s.pending_schedule_generation=r.schedule_generation
+      WHERE r.status='running' OR (r.status='queued' AND (r.trigger<>'schedule' OR s.pending_run_id IS NULL))`)
+      .all() as Array<{ id: string; task_id: string; schedule_generation: number | null }>
+    const update = conn.prepare("UPDATE automation_task_runs SET status='interrupted',run_phase='terminal',error=?,updated_at=? WHERE id=? AND status IN ('queued','running')")
+    let count = 0
+    for (const row of rows) {
+      count += Number(update.run(error, Date.now(), row.id).changes)
+      if (row.schedule_generation != null) conn.prepare(`UPDATE automation_task_recovery_state
+        SET recovery_cursor_at=CASE WHEN schedule_generation=? THEN (SELECT next_run_at FROM automation_tasks WHERE id=?) ELSE recovery_cursor_at END,
+          pending_run_id=NULL,pending_run_slot=NULL,pending_schedule_generation=NULL,updated_at=?
+        WHERE task_id=? AND pending_run_id=? AND pending_schedule_generation=?`)
+        .run(row.schedule_generation, row.task_id, Date.now(), row.task_id, row.id, row.schedule_generation)
+    }
+    return count
+  })
+  if (changed) db.save()
+  return changed
+}
+
+export function listPendingScheduledClaims(db: AppDatabase): Array<{ task: AutomationTask; runId: string; slot: number; generation: number }> {
+  const conn = getDbConnection(db)
+  const rows = conn.prepare(`SELECT t.*,r.id AS pending_id,r.slot_at AS pending_slot,r.schedule_generation AS pending_generation
+    FROM automation_task_recovery_state s JOIN automation_task_runs r ON r.id=s.pending_run_id
+    JOIN automation_tasks t ON t.id=s.task_id
+    WHERE r.trigger='schedule' AND r.status='queued' AND r.run_phase='queued-before-start'
+      AND s.schedule_generation=t.schedule_generation AND s.pending_schedule_generation=r.schedule_generation
+    ORDER BY r.slot_at ASC`).all() as Array<TaskRow & { pending_id: string; pending_slot: number; pending_generation: number }>
+  return rows.map((row) => ({ task: rowToTask(row), runId: row.pending_id, slot: row.pending_slot, generation: row.pending_generation }))
 }
 
 /** Reconciles completed task-run delivery summaries with the durable driver journal. */

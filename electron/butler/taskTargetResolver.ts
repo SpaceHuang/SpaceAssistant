@@ -83,3 +83,46 @@ export function resolveTaskTarget(input: ResolveTaskTargetInput): TaskTargetReso
   if (!ancestorFact || ancestorFact.kind !== 'directory') return issue('OUTPUT_ANCESTOR_INVALID')
   return { ok: true, binding: { kind: 'output', path: outputPath, ancestor, relativeSuffix: suffix.join(path.sep), expectedType: target.expectedType, rawText, resolverVersion: RESOLVER_VERSION, rootsDigest: digest, taskRevision } }
 }
+
+export function validatePersistedTargetBindings(input: {
+  bindings: readonly TargetBinding[]
+  roots: readonly string[]
+  facts: TaskPathFacts
+  taskRevision: number
+}): { ok: true } | { ok: false; code: string } {
+  const { bindings, roots, facts, taskRevision } = input
+  if (!roots.length) return { ok: false, code: 'NO_ROOTS' }
+  if (!facts.coverage.complete) return { ok: false, code: 'FACTS_INCOMPLETE' }
+  const digest = rootsDigest(roots)
+  for (const binding of bindings) {
+    if (binding.resolverVersion !== RESOLVER_VERSION) return { ok: false, code: 'RESOLVER_VERSION_UNSUPPORTED' }
+    if (binding.taskRevision !== taskRevision) return { ok: false, code: 'TASK_REVISION_MISMATCH' }
+    if (binding.rootsDigest !== digest) return { ok: false, code: 'ROOTS_DIGEST_MISMATCH' }
+    if (binding.kind === 'exact') {
+      if (!findRoot(roots, binding.path)) return { ok: false, code: 'TARGET_OUTSIDE_ROOTS' }
+      const fact = findFact(facts, binding.path)
+      if (!fact || fact.kind !== binding.targetType) return { ok: false, code: 'TARGET_UNVERIFIABLE' }
+      // Bare-basename references must remain unique; explicit relative/absolute paths retain logical-path semantics.
+      const rawTarget = binding.rawText.trim()
+      if (!path.isAbsolute(rawTarget) && !rawTarget.includes(path.sep) && rawTarget === path.basename(rawTarget)) {
+        const matches = facts.entries.filter((entry) => path.basename(entry.path) === rawTarget && entry.kind === binding.targetType)
+        if (matches.length !== 1 || matches[0]!.path !== binding.path) return { ok: false, code: 'TARGET_AMBIGUOUS_OR_CHANGED' }
+      }
+      continue
+    }
+    if (binding.kind === 'collection') {
+      if (!['*.csv', '*.tsv', 'all'].includes(binding.selector) || binding.sort !== 'canonical-path') return { ok: false, code: 'SELECTOR_UNSUPPORTED' }
+      if (!findRoot(roots, binding.directory)) return { ok: false, code: 'TARGET_OUTSIDE_ROOTS' }
+      if (findFact(facts, binding.directory)?.kind !== 'directory') return { ok: false, code: 'COLLECTION_DIRECTORY_INVALID' }
+      continue
+    }
+    const root = findRoot(roots, binding.ancestor)
+    if (!root || !isWithin(root, binding.path) || !isWithin(root, binding.ancestor)) return { ok: false, code: 'OUTPUT_PATH_ESCAPE' }
+    const ancestor = findFact(facts, binding.ancestor)
+    if (!ancestor || ancestor.kind !== 'directory') return { ok: false, code: 'OUTPUT_ANCESTOR_INVALID' }
+    if (path.isAbsolute(binding.relativeSuffix) || binding.relativeSuffix.split(path.sep).some((part) => part === '..')) return { ok: false, code: 'OUTPUT_SUFFIX_INVALID' }
+    const expectedPath = path.resolve(binding.ancestor, binding.relativeSuffix)
+    if (expectedPath !== path.normalize(binding.path)) return { ok: false, code: 'OUTPUT_SUFFIX_INVALID' }
+  }
+  return { ok: true }
+}

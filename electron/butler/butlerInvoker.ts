@@ -1,4 +1,5 @@
 import type { AppDatabase } from '../database'
+import path from 'node:path'
 import { getConfigValue } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation } from '../runtime/invocationAssembler'
@@ -20,7 +21,7 @@ import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
 import { createButlerSessionEvents } from './butlerSessionEvents'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { deliverTaskResult, type ButlerDeliveryPorts } from './butlerDelivery'
-import { getAutomationTask, getRunById, insertAutomationTaskRun, updateAutomationTaskRun } from './taskStore'
+import { getAutomationTask, getQueuedClaimIdentity, getRunById, insertManualTaskClaim, transitionClaimToRunning, updateAutomationTaskRun } from './taskStore'
 import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRoute'
 import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
@@ -31,6 +32,8 @@ import { getAutomationTaskWorkDirs } from '../../src/shared/automationTaskTypes'
 import { resolveGlobalThinkingEffort } from '../../src/shared/thinkingEffort'
 import { getConfigValue as readConfigValue } from '../database'
 import type { AutomationTaskRunConfigSnapshot } from '../../src/shared/automationTaskTypes'
+import { TaskPathFactsProvider } from './taskPathFacts'
+import { validatePersistedTargetBindings } from './taskTargetResolver'
 
 /**
  * 管家执行链（P4）：定时 / 手动触发的 automation 任务 → 准入取票 → 会话创建（ownership=automation、
@@ -83,6 +86,8 @@ export type ButlerRunRequest = {
   requestId?: string
   /** 定时触发对应的调度时刻（epoch ms）；手动触发为 0。 */
   scheduledFor?: number
+  /** Internal scheduler claim identity; renderer IPC never forwards this field. */
+  runId?: string
 }
 
 export type ButlerRunOutcome =
@@ -107,24 +112,27 @@ function extractTextFromContent(content: unknown[]): string {
 /** 执行一次管家任务（手动触发入口；调度器复用同一函数）。run 行先抢占（幂等），再准入，再执行。 */
 export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, request: ButlerRunRequest): Promise<ButlerRunOutcome> {
   const db = deps.db
-  const sessionStorage = deps.sessionStorage
-  if (!sessionStorage) return { ok: false, error: 'SESSION_STORAGE_REQUIRED' }
-  let task = getAutomationTask(db, taskId)
-  if (!task) return { ok: false, error: `任务不存在：${taskId}` }
-  if (!deps.turnRuntime) return { ok: false, error: 'BUTLER_TURN_RUNTIME_REQUIRED' }
-
   const requestId = request.requestId ?? `butler-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const scheduledFor = request.scheduledFor ?? 0
-  const claim = insertAutomationTaskRun(db, {
-    taskId,
-    clientId: `${taskId}:${request.trigger}:${requestId}`,
-    trigger: request.trigger,
-    scheduledFor
-  })
-  const runId = claim.runId ?? ''
-  if (!claim.inserted || !runId) {
-    return { ok: false, runId, error: '重复触发（幂等键已存在）' }
+  if (request.trigger === 'schedule') {
+    if (!request.runId) return { ok: false, error: 'SCHEDULE_CLAIM_REQUIRED' }
+    const identity = getQueuedClaimIdentity(db, request.runId)
+    if (!identity || identity.taskId !== taskId || identity.slot !== request.scheduledFor) return { ok: false, runId: request.runId, error: 'SCHEDULE_CLAIM_INVALID' }
+    return executeClaimedRun(deps, { ...identity, runId: request.runId, requestId, trigger: 'schedule' })
   }
+  const claim = insertManualTaskClaim(db, taskId, `${taskId}:manual:${requestId}`)
+  const runId = claim.runId ?? ''
+  if (!claim.inserted || !runId) return { ok: false, runId, error: '重复触发（幂等键已存在）' }
+  return executeClaimedRun(deps, { taskId, runId, requestId, trigger: 'manual', slot: 0, generation: claim.scheduleGeneration ?? 0 })
+}
+
+export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId: string; runId: string; requestId: string; trigger: 'manual' | 'schedule'; slot: number; generation: number }): Promise<ButlerRunOutcome> {
+  const db = deps.db
+  const sessionStorage = deps.sessionStorage
+  if (!sessionStorage) return { ok: false, runId: claim.runId, error: 'SESSION_STORAGE_REQUIRED' }
+  let task = getAutomationTask(db, claim.taskId)
+  if (!task) return { ok: false, runId: claim.runId, error: `任务不存在：${claim.taskId}` }
+  if (!deps.turnRuntime) return { ok: false, runId: claim.runId, error: 'BUTLER_TURN_RUNTIME_REQUIRED' }
+  const { runId, requestId } = claim
 
   const admissionGate = deps.admissionGate ?? getCallAdmissionGate()
   const admission = await admissionGate.acquire({
@@ -142,16 +150,30 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
   const ticket = admission.ticket
 
   try {
-    const admittedTask = getAutomationTask(db, taskId)
+    const admittedTask = getAutomationTask(db, claim.taskId)
     if (!admittedTask) throw new Error('任务在准入后已删除')
-    task = admittedTask
-    const activeTask = admittedTask
-    const workDirsResult = await validateTaskWorkDirs(getAutomationTaskWorkDirs(admittedTask))
+    const started = transitionClaimToRunning(db, runId, claim.taskId, claim.slot, claim.generation)
+    if (!started.ok) {
+      if (started.reason === 'invalid-task-config') throw new Error('任务工作目录不能为空')
+      throw new Error(`TASK_CLAIM_START_REJECTED:${started.reason}`)
+    }
+    const claimSnapshot = started.snapshot!
+    const activeTask = { ...admittedTask, name: claimSnapshot.taskName ?? admittedTask.name, prompt: claimSnapshot.prompt ?? admittedTask.prompt,
+      deliveryPref: claimSnapshot.deliveryPref ?? admittedTask.deliveryPref, deliveryTarget: claimSnapshot.deliveryTarget ?? admittedTask.deliveryTarget,
+      workDirs: claimSnapshot.workDirs ?? [], modelId: claimSnapshot.modelId, modelServiceId: claimSnapshot.serviceId,
+      modelOverride: claimSnapshot.providerModelName, reasoningEffort: claimSnapshot.requestedEffort }
+    task = activeTask
+    const workDirsResult = await validateTaskWorkDirs(getAutomationTaskWorkDirs({ workDirs: claimSnapshot.workDirs ?? [] }))
     if (!workDirsResult.ok) throw new Error(workDirsResult.error)
     const workDirResult = { ok: true as const, workDir: workDirsResult.workDirs[0]! }
-    let modelId = admittedTask.modelId
-    let serviceId = admittedTask.modelServiceId
-    let providerModelName = admittedTask.modelOverride
+    if (claimSnapshot.preflightVersion === 1) {
+      const facts = await new TaskPathFactsProvider().collect(workDirsResult.workDirs)
+      const validation = validatePersistedTargetBindings({ bindings: claimSnapshot.targetSelections ?? [], roots: facts.roots, facts, taskRevision: claimSnapshot.taskRevision ?? -1 })
+      if (!validation.ok) throw new Error(`TASK_BINDING_REVALIDATION_FAILED:${validation.code}`)
+    }
+    let modelId = claimSnapshot.modelId
+    let serviceId = claimSnapshot.serviceId
+    let providerModelName = claimSnapshot.providerModelName
     let model: ModelEntry | undefined
     let legacyCredentials: Awaited<ReturnType<typeof resolveLlmCredentialsForModel>> | undefined
     if (modelId && serviceId) {
@@ -159,8 +181,8 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
       if (!model || !providerModelName || model.name !== providerModelName) throw new Error('任务模型目录项已失效，请编辑任务重新选择')
     } else {
       const models = readStoredModels(db)
-      if (admittedTask.modelOverride) {
-        const matches = models.filter((entry) => entry.name === admittedTask.modelOverride)
+      if (activeTask.modelOverride) {
+        const matches = models.filter((entry) => entry.name === activeTask.modelOverride)
         if (matches.length !== 1) throw new Error(matches.length ? '旧任务模型名称存在歧义，请编辑任务选择具体模型' : '旧任务模型已不存在，请编辑任务选择模型')
         model = matches[0]
         const candidates = readLlmServices(db).filter((service) => readActiveLlmServiceIds(db).includes(service.id) && (service.supportedModelIds ?? []).includes(model!.id) && service.apiKeyPresent)
@@ -191,12 +213,13 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
       endpoint: validatedPair.baseUrl,
       credentialRef: `llm-service:${serviceId}`
     }, getDefaultAgentRuntime().modelProviders)
-    const effort = admittedTask.reasoningEffort ?? resolveGlobalThinkingEffort(readConfigValue(db, 'config.thinkingEffort'), readConfigValue(db, 'config.thinkingEnabled'))
+    const effort = activeTask.reasoningEffort ?? resolveGlobalThinkingEffort(readConfigValue(db, 'config.thinkingEffort'), readConfigValue(db, 'config.thinkingEnabled'))
     const effectiveEffort = model.supportsThinking === false ? 'off' : effort
     const configSnapshot: AutomationTaskRunConfigSnapshot = {
+      ...claimSnapshot,
       resolutionStatus: 'resolved', workDir: workDirResult.workDir, workDirs: workDirsResult.workDirs,
-      preflightVersion: admittedTask.preflightVersion ?? 0, taskRevision: admittedTask.taskRevision,
-      targetSelections: admittedTask.targetBindingsJson ? JSON.parse(admittedTask.targetBindingsJson) as import('../../src/shared/automationTaskTypes').TargetSelection[] : [],
+      preflightVersion: claimSnapshot.preflightVersion ?? 0, taskRevision: claimSnapshot.taskRevision,
+      targetSelections: claimSnapshot.targetSelections ?? [],
       workDirSource: 'task', modelId,
       providerModelName, serviceId, routeIdentity,
       requestedEffort: effort, effectiveEffort, reasoningDegraded: effort !== effectiveEffort
@@ -252,7 +275,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
           taskPrompt: activeTask.prompt,
           currentUserMessageId: prepared.userMessage?.id,
           assistantMessageId: prepared.assistantMessage.id,
-          runConfig: { ...configSnapshot, model }
+          runConfig: { ...configSnapshot, model, taskId: activeTask.id }
         })
     })
 
@@ -304,7 +327,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
 
 async function runButlerModelTurn(
   deps: ButlerInvokerDeps,
-  args: { sessionStorage: import('../sessionStorage/contracts').SessionStorage; sessionId: string; requestId: string; turnId?: string; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn; llmServiceId?: string; taskPrompt: string; currentUserMessageId?: string; assistantMessageId?: string; runConfig: AutomationTaskRunConfigSnapshot & { model: ModelEntry } }
+  args: { sessionStorage: import('../sessionStorage/contracts').SessionStorage; sessionId: string; requestId: string; turnId?: string; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn; llmServiceId?: string; taskPrompt: string; currentUserMessageId?: string; assistantMessageId?: string; runConfig: AutomationTaskRunConfigSnapshot & { model: ModelEntry; taskId: string } }
 ): Promise<ButlerTurnResult> {
   const db = deps.db
   const sessionStorage = args.sessionStorage
@@ -329,6 +352,7 @@ async function runButlerModelTurn(
   }
   const built = buildClaudeToolChatMessages(rawMessages, {
     workspaceRoot: args.runConfig.workDir!,
+    workspaceRoots: args.runConfig.workDirs,
     onOversizedToolResult: (info) => {
       logHistoryOversizedToolResult({
         sessionId: args.sessionId,
@@ -367,8 +391,9 @@ async function runButlerModelTurn(
     locale: readAppLocale(db)
   })
 
-  const butlerEvents = createButlerSessionEvents({
-    workDir: args.runConfig.workDir!,
+  const butlerEvents = await createButlerSessionEvents({
+    userDataDir: deps.getUserDataPath(),
+    taskId: args.runConfig.taskId,
     sessionId: args.sessionId,
     sessionCreatedAt: session.createdAt,
     failClosedCriticalEvents: true
@@ -423,7 +448,7 @@ async function runButlerModelTurn(
     historyForSession: (sessionId: string) => sessionStorage.execution.historyFor({ sessionId }),
     locale: readAppLocale(db),
     assistantMessageId: args.assistantMessageId,
-    sessionEventLocation: { workDir: args.runConfig.workDir!, sessionId: args.sessionId, createdAt: session.createdAt },
+    sessionEventLocation: { workDir: path.join(deps.getUserDataPath(), 'automation-sessions', args.runConfig.taskId), sessionId: args.sessionId, createdAt: session.createdAt },
     emitFactEvent: butlerEvents.emitFactEvent,
     emitSessionEvent: butlerEvents.emitSessionEvent,
     onFileTreeChanged: butlerEvents.onFileTreeChanged

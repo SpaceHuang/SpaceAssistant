@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：进行中（E-01、E-02、E-03 已完成；执行方案其余任务继续推进）  
+> 状态：源码阶段完成；外部验收见 §4
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
@@ -184,20 +184,26 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **动作与产物：** 拆分外部新触发 claim 与主进程内部 `executeClaimedRun(runId)`。queued claim 只固定 runId/taskId/slot/generation；入口校验身份后，在唯一 queued→running CAS 事务中读取当前 task revision 并冻结 roots、bindings 和执行配置。CAS 后只加载该 snapshot，不从可变 task 行重建当前 run 配置；不再 insert 第二条 run、不接受 renderer 提供 runId。正常 tick 和恢复分派共用该入口。v1 按 snapshot 中的 exact/collection/output binding 动态构造 selection，v0 遵循旧提示词语义。传递 snapshot roots 给工具 facts、审批 Agent 和 final-check；修正单根 workspaceRoot 隐式依赖。
 - **完成判据：** v1 分别按 exact/collection/output 语义重验；越界、不完整扫描、新歧义或无效祖先在 executor 前失败，动态集合成员变化和逻辑路径上的原子替换按契约通过。v0 旧任务无 bindings 时按需求稿 legacy 语义运行；缺 roots 失败；成功编辑/启用后 v1。运行中保存新 roots 后，当前 run snapshot/facts/审批 roots 不变，后续 run 使用新 roots。snapshot、facts、审批 Agent roots 逐项相同；tool policy deny 是 failed，不是 skipped。直接调用既有 runId 实际进入 invoker 一次，不插入第二条 run；重复/并发消费者最多一个通过 CAS 并进入 Agent；running 后进程退出由恢复逻辑收敛为 interrupted 且不重放。
 - **验证命令：** `npm exec vitest run electron/butler/butlerInvoker.test.ts electron/butler/butlerSessionEvents.test.ts electron/confirmation/automationLane.test.ts electron/chatMessageBuild.test.ts` 与新增 roots integration tests；必要时 `npm run check:system-invariant-registry`。
-- **证据：** 端到端同值对拍、布局变更前后 facts/binding 对照与 executor 未调用断言。
+- **证据：** `taskTargetResolver.test.ts` 覆盖 exact 新歧义 fail、collection 新成员允许、output 尚不存在允许和 task revision 不匹配 fail；`butlerInvoker.test.ts` 覆盖同一 queued run 并发消费仅一方通过 CAS、执行同一 runId、sessionLedger history projection/recovery 指向私有 automation-sessions；`butlerSessionEvents.test.ts` 覆盖任务私有目录与 symlink 边界；共享结果 projection、Claude history 与 approval lane 覆盖多根传递。计划指定 7 个 suites 共 125 项通过，`taskStore.test.ts` + `taskScheduler.test.ts` 43 项通过；`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron:incremental`、`npm run check:system-invariant-registry` 通过。真实审批 Agent 语义为外部验收。
 - **可执行环境：** 本机 mock Agent/模型；真实审批 Agent 语义为外部验收。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-08 实现表单、授权清单与提交反馈
 
+- **界面归属卡（待项目负责人批准）：**
+  1. **入口：** 设置页既有「定时任务」Tab 的新建/编辑表单；任务列表和编辑入口已在此，授权范围属于任务配置，不进入聊天区或全局安全设置。
+  2. **形态：** 改造现有编辑 Modal：宽屏左右双栏、窄窗单栏；工作目录为可增删的完整路径列表；预检候选与阻断原因在表单内联展示，checkbox 默认不勾选；历史沿用现有历史 Modal 并标出 skipped/failed 原因。
+  3. **样式来源：** 沿用 Ant Design Form/Modal/Checkbox/Alert/List、现有 Butler task card、`--sa-*` token 与设置页间距；不新增设计 token、设置项或独立导航。
+  4. **新增还是改造：** 只改造现有定时任务表单、列表和历史弹窗，不创建新页面/面板，不改变既有入口。
+  5. **成本：** 用户需区分任务工作目录与预检提出的候选授权目录；需覆盖待检查/通过/阻断/失败/保存中状态及中英文长路径，增加表单交互与 history reason 的 i18n 和组合测试。
 - **依赖：** E-05、E-05a、E-09。
 - **目标文件：** `src/renderer/components/Config/ButlerTaskSettings.tsx`、对应测试、`src/renderer/styles.css`、`src/renderer/i18n/resources/zh-CN/config.json`、`en-US/config.json`、生成的 i18n types。
 - **动作与产物：** 按已批准归属卡加宽 Modal，宽屏双栏/窄窗单栏；目录列表显示完整路径并可增删；提交触发 preflight，pass 自动保存，blocked 保留输入及候选清单；勾选加入 form roots；历史中的 skipped/failed 显示清楚。
 - **完成判据：** checkbox 默认未选、Tab/Space 可用、路径/用途进 accessible name，长路径可读；检查期间防重复提交；编辑失败内容保留；enable 阻断时打开编辑表单显示报告并保持停用；响应式布局无横向溢出；所有新增文案走 i18n。
 - **验证命令：** `npm exec vitest run src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npm run typecheck:renderer`；`npm run i18n:generate-types`；`npm run i18n:check`。
-- **证据：** component interaction tests + 手动宽/窄窗口和键盘检查记录。
+- **证据：** `ButlerTaskSettings.test.tsx` 21 项通过：目录增删及连续异步选择、预检阻断保留输入/候选默认未选/勾选后二次提交、启用阻断保持停用并打开编辑、skipped 原因本地化；保存前目录必填、失败不关窗。`npm run i18n:generate-types` 与 `npm run i18n:check` 通过（0 条源代码硬编码中文）；`npm run typecheck:renderer` 通过。样式在 `.butler-task-editor__grid` 使用两栏并于 `max-width:720px` 单栏，路径以 `overflow-wrap:anywhere` 换行；`impeccable detect` 对目标文件未发现新增阻断项，config-settings.css 的设计系统 advisory 均落在既有行。桌面实际宽/窄窗口与键盘辅助技术验收列为 X-03。
 - **可执行环境：** 本机自动测试；视觉/辅助技术平台验收外部。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-09 原子恢复错过槽位并恢复补跑 claim
 
@@ -206,9 +212,9 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **动作与产物：** 使用 `schedule_generation` 与首个未核销槽位 cursor；覆盖创建/迁移/正常 tick/改期/停用/启用/删除/重启转移，并排除已有 run 的槽位。scheduler 在事务建立 pending claim 后，只通过内部 scheduler port 把同一个 `runId` 交给 invoker adapter；启动恢复与在线分派使用同一稳定键。普通配置编辑不改变 running snapshot；queued run 在 queued→running CAS 时冻结当前 task revision。queued pending 时调度变更冲突；running pending 时允许重设 schedule generation/cursor，但不覆盖旧 pending；同一 task 串行运行，长运行跨槽时 cursor 停在首个未核销槽位，旧 run 终态后恢复处理。E-09 不实现也不声称真实 invoker 消费：本任务用 spy port 验证只交付既有 runId、不会新建第二 claim；真实入口由 E-07，跨层验收由 E-10。旧 legacy-unknown 活动记录收敛为 interrupted，不依赖 client_id 推断。running 只可终结/中断，绝不转 skipped 或重放。提供稳定 history query 和 skipped 原因。
 - **完成判据：** 正常在线多次执行后重启无重复 skipped；活动运行期间配置编辑成功且 running 快照不变；queued claim 与编辑并发时 CAS 冻结事务顺序中最后提交的配置；queued pending 时改期/停用/启用冲突，running 时调度变更建立新 generation，旧终态不清除不匹配 pending 或改写新 cursor；删除在任一非终态 run 时冲突；长运行跨槽不覆盖 pending，终结后从 cursor 恢复；skipped 后/claim 前退出时 cursor 指向补跑槽位；claim 后退出时恢复器只分派同一 runId；run-start 后退出成为 interrupted 且不重跑；终态与清除匹配 pending 同事务；旧 legacy-unknown 活动记录不被误判为 missed claim；跨重启覆盖无遗漏、无重复；history API 返回稳定原因且 skipped 不触发 delivery。随机操作序列包含配置编辑、调度修改、启停、删除、重启、claim 与退出。历史 UI 由 E-08 展示。
 - **验证命令：** `npm exec vitest run electron/butler/taskScheduler.test.ts electron/butler/butlerDelivery.test.ts electron/butler/taskStore.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`。
-- **证据：** DB history rows、事务退出注入、随机全生命周期序列不变量断言、scheduler port spy、delivery spy。界面状态/原因断言归 E-08。
+- **证据：** `taskStore.test.ts` + `taskScheduler.test.ts` + `butlerDelivery.test.ts` 共 61 项通过：queued claim 在启动时原 runId 续接；run-start 后重启原子 interrupted 且清理匹配 pending、不重放；在线 completed 槽位重启不重复 skipped；missed-window skipped 事务完整/幂等；once 成功后停用；随机 120 步配置/改期/启停/claim/退出序列逐步断言 generation、cursor、pending identity、client_id 唯一和 skipped 原因；delivery 谓词拒绝 skipped。taskStore 故障注入验证 claim 和 recovery 状态事务回滚；mock scheduler port 未插入第二条 claim。`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron:incremental` 和 `git diff --check` 通过。界面状态/原因断言归 E-08。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-10 完成重启恢复、兼容、集成验收与源码关闭
 
@@ -216,10 +222,10 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **目标文件：** 上述变更涉及的全部模块和定向测试；本计划的证据栏。
 - **动作与产物：** 对 R2-01～R2-04、R3-01～R3-02 执行故障注入和集成复核；验证备份恢复回退协议、v0/v1 目标路径分支、恢复游标完整生命周期、预创建 claim 到真实 invoker 的续接、DAG 前置证据和阶段编译；执行相关回归与最终 renderer/shared type/i18n/electron build。
 - **完成判据：** 技术方案 §2.8 所有 AC 有测试或外部验收记录；第二、三轮阻断关闭证据齐全；数据库不承诺直接降级打开；跳过与运行失败区分明确；正常 tick/恢复竞争只有一个消费者进入 Agent，且使用原 runId；安全阶段、rule/invariant ID 与验证命令登记完整。
-- **验证命令：** `npm run test:related -- electron/butler/taskScheduler.ts electron/butler/taskStore.ts electron/butler/taskConfigValidation.ts electron/butler/butlerIpc.ts electron/butler/butlerInvoker.ts electron/confirmation/extractors/readPathFacts.ts electron/confirmation/extractors/writePathFacts.ts electron/confirmation/toolCallGate.ts electron/runtime/invocationAssembler.ts electron/chatMessageBuild.ts src/renderer/components/Config/ButlerTaskSettings.tsx src/shared/automationTaskTypes.ts src/shared/claudeToolHistory.ts src/shared/agentToolResult.ts src/shared/processResultProjection.ts`；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run build:electron:incremental`。按 `AGENTS.md` 不在开发循环中运行全量 `npm test`；最终验收/提交前再按仓库策略执行。
-- **证据：** 命令记录、AC→测试映射、migration fixture、security decision trace、未验证外部项列表。
+- **验证命令与结果：** 执行计划原 `npm run test:related -- ...` 扫描持续高 CPU 且长时间不输出汇总，终止后用明确测试文件集合等价覆盖；`npm exec vitest run -- electron/butler/taskScheduler.test.ts electron/butler/taskStore.test.ts electron/butler/taskConfigValidation.test.ts electron/butler/butlerIpc.test.ts electron/butler/butlerInvoker.test.ts electron/confirmation/extractors/readPathFacts.test.ts electron/confirmation/extractors/writePathFacts.test.ts electron/confirmation/toolCallGate.test.ts electron/runtime/invocationAssembler.test.ts electron/chatMessageBuild.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx src/shared/claudeToolHistory.test.ts src/shared/agentToolResult.test.ts src/shared/processResultProjection.test.ts`：14 files / 485 tests passed。最终 `npm test`：1094 files passed、1 skipped；10,413 tests passed、111 skipped。另通过 `npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`、`npm run build:electron:incremental`、`npm run check:system-invariant-registry`、`git diff --check`。
+- **证据：** AC→测试映射按技术方案 §2.8：AC-01/01a/02/15→`taskStore`、task config validation、path facts；AC-01b/03a/10→`butlerInvoker`、invocation/approval roots tests，locked policy trace 断言 `automation-readonly-allow` / `automation-write-deny`；AC-03/14→resolver exact/collection/output 和运行期 binding tests；AC-04/05/12→IPC contract + Butler renderer blocked/retry tests；AC-06/06a/06b→once constraints、taskOnce/scheduler tests；AC-07/11→v0/v1 invoker + migration fixture（缺 roots 失败、不回退 Profile）；AC-08/09→path security / CAS snapshot / target binding tests；AC-13→renderer interaction + X-03 外部视觉验收；AC-16→scheduler history、delivery guard、history UI。`migrations.automationPreflight.test.ts` 验证 v102→v103、旧根迁移 v0、旧 queued/running 标 legacy-unknown、高版本拒绝、注入失败回滚、备份恢复后再次升级及数据完整。安全阶段为 facts / policy / final-check / invariant；规则决策 trace 保持共享 Policy Engine 的稳定 rule ID `automation-readonly-allow`、`automation-write-deny`；系统不变量登记检查 5 registrations / 9 test references 均通过。最终全量过程中首次发现并修复旧缺根 fixture、once 终态停用与迁移版本断言；最终全量 10,413 项通过。先前 `test:related` 未取得汇总，不作为通过证据。真实模型判例质量/延迟、真实审批 Agent、打包 DB 回退、桌面键盘与 IM 渠道留在 X-01～X-05，不阻塞源码关闭。
 - **可执行环境：** 源码关闭为本机；外部项独立记录。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ## 4. 外部验收（不阻塞源码关闭）
 

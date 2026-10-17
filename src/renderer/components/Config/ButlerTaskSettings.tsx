@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Alert, App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Tag, TimePicker, Space, Typography } from 'antd'
-import { Pencil, Plus, SquarePlay, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Alert, App, Button, Checkbox, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Tag, TimePicker, Space, Typography } from 'antd'
+import { Pencil, Plus, SquarePlay, Trash2, X } from 'lucide-react'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
-import type { AutomationTask, AutomationDeliveryPref, AutomationTaskRun } from '../../../shared/automationTaskTypes'
+import type { AutomationTask, AutomationDeliveryPref, AutomationTaskRun, PreflightReport } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { buildOnceDisabledConstraints, onceAtInFuture } from './onceAtConstraints'
 
@@ -38,6 +38,45 @@ function deliveryText(pref: AutomationDeliveryPref, t: TaskActions['t']): string
   return t(`butler.delivery.${pref}` as 'butler.delivery.desktop')
 }
 
+function runStatusText(status: AutomationTaskRun['status'], t: TaskActions['t']): string {
+  const key = {
+    queued: 'butler.runStatus.queued', running: 'butler.runStatus.running', completed: 'butler.runStatus.completed',
+    failed: 'butler.runStatus.failed', skipped: 'butler.runStatus.skipped', interrupted: 'butler.runStatus.interrupted'
+  }[status] as 'butler.runStatus.queued'
+  return t(key)
+}
+
+function WorkDirList({ value = [], onChange, t }: { value: string[]; onChange: (paths: string[]) => void; t: TaskActions['t'] }) {
+  const pathsRef = useRef(value)
+  pathsRef.current = value
+  const setPaths = (paths: string[]) => { pathsRef.current = paths; onChange(paths) }
+  const browse = async () => {
+    const result = await window.api.butlerChooseWorkDir()
+    const current = pathsRef.current
+    if (!result.cancelled && result.path && !current.includes(result.path)) {
+      const next = [...current, result.path]
+      setPaths(next)
+    }
+  }
+  return (
+    <div className="butler-workdirs">
+      {value.map((workDir) => (
+        <div className="butler-workdirs__row" key={workDir}>
+          <Typography.Text className="butler-workdirs__path" title={workDir}>{workDir}</Typography.Text>
+          <Button size="small" type="text" icon={<X size={14} aria-hidden />} aria-label={t('butler.form.removeWorkDirAria', { path: workDir })} onClick={() => {
+            const next = value.filter((candidate) => candidate !== workDir)
+            setPaths(next)
+          }} />
+        </div>
+      ))}
+      <Space wrap>
+        <Button onClick={() => void browse()}>{t('butler.form.addWorkDir')}</Button>
+        <Button type="link" onClick={() => void browse()}>{t('butler.form.browseWorkDir')}</Button>
+      </Space>
+    </div>
+  )
+}
+
 function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: TaskActions }) {
   const { t, onRun, onEdit, onDelete, onToggle, running } = actions
   return (
@@ -62,7 +101,7 @@ function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: Task
         <span className="butler-task-card__summary-text" title={task.prompt}>
           {task.prompt}
         </span>
-        {task.workDirs.length ? <span className="butler-task-card__workdir" title={task.workDirs.join('\n')}>{t('butler.form.workDir')}: {task.workDirs.join(', ')}</span> : null}
+        {task.workDirs?.length ? <span className="butler-task-card__workdir" title={task.workDirs.join('\n')}>{t('butler.form.workDir')}: {task.workDirs.join(', ')}</span> : null}
         {task.lastRunAt ? (
           <span className="butler-task-card__summary-meta">
             {t('butler.lastRun', { time: dayjs(task.lastRunAt).format('YYYY-MM-DD HH:mm') })}
@@ -101,6 +140,10 @@ export function ButlerTaskSettings() {
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set())
   const [historyTask, setHistoryTask] = useState<AutomationTask | null>(null)
   const [historyRuns, setHistoryRuns] = useState<AutomationTaskRun[]>([])
+  const [preflightReport, setPreflightReport] = useState<PreflightReport | null>(null)
+  const [writeError, setWriteError] = useState<string | null>(null)
+  const [workDirs, setWorkDirs] = useState<string[]>([])
+  const [workDirError, setWorkDirError] = useState(false)
   const [form] = Form.useForm()
   const scheduleKind = Form.useWatch('scheduleKind', form)
   const [modelCandidates, setModelCandidates] = useState<Array<{ modelId: string; providerModelName: string; serviceId: string; serviceName: string; supportsThinking: boolean }>>([])
@@ -131,6 +174,7 @@ export function ButlerTaskSettings() {
     setEditing(null)
     const [defaults, candidates] = await Promise.all([window.api.butlerGetTaskDefaults(), window.api.butlerGetModelCandidates()])
     setModelCandidates(candidates)
+    setWorkDirs([])
     form.setFieldsValue({
       name: '',
       prompt: '',
@@ -139,7 +183,7 @@ export function ButlerTaskSettings() {
       dailyTime: dayjs('09:00', 'HH:mm'),
       onceAt: dayjs().add(1, 'hour'),
       deliveryPref: 'desktop',
-      workDir: undefined,
+      workDirs: [],
       modelId: defaults.modelId,
       modelServiceId: defaults.modelServiceId,
       modelOverride: defaults.modelOverride,
@@ -148,11 +192,14 @@ export function ButlerTaskSettings() {
         ? 'off'
         : defaults.reasoningEffort ?? 'off'
     })
+    setPreflightReport(null)
+    setWriteError(null)
     setEditorOpen(true)
   }
 
   const openEdit = (task: AutomationTask) => {
     setEditing(task)
+    setWorkDirs(task.workDirs ?? [])
     void window.api.butlerGetModelCandidates().then(setModelCandidates)
     form.setFieldsValue({
       name: task.name,
@@ -162,21 +209,30 @@ export function ButlerTaskSettings() {
       dailyTime: dayjs(task.schedule.kind === 'daily' ? task.schedule.time : '09:00', 'HH:mm'),
       onceAt: dayjs(task.schedule.kind === 'once' ? task.schedule.at : Date.now() + 3_600_000),
       deliveryPref: task.deliveryPref,
-      workDir: task.workDirs[0],
+      workDirs: task.workDirs ?? [],
       modelId: task.modelId,
       modelServiceId: task.modelServiceId,
       modelOverride: task.modelOverride,
       modelPair: task.modelId && task.modelServiceId ? `${task.modelId}::${task.modelServiceId}` : undefined,
       reasoningEffort: task.reasoningEffort ?? 'off'
     })
+    setPreflightReport(null)
+    setWriteError(null)
     setEditorOpen(true)
   }
 
   const submit = async () => {
+    if (submitting) return
+    if (workDirs.length === 0) {
+      setWorkDirError(true)
+      return
+    }
+    setWorkDirError(false)
     // 校验失败：antd 已在表单项上展示错误，reject 就地吸收，不产生 unhandled rejection
     const values = await form.validateFields().catch(() => null)
     if (!values) return
     setSubmitting(true)
+    setWriteError(null)
     try {
       const schedule =
         values.scheduleKind === 'daily'
@@ -193,9 +249,7 @@ export function ButlerTaskSettings() {
             patch: {
               expectedTaskRevision: editing.taskRevision ?? 0,
               name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref,
-              ...(typeof values.workDir === 'string' && values.workDir.trim()
-                ? { workDirs: values.workDir === editing.workDirs[0] ? editing.workDirs : [values.workDir] }
-                : {}),
+              workDirs,
               ...(chosen ? {
                 modelId: chosen.modelId, modelServiceId: chosen.serviceId,
                 modelOverride: chosen.providerModelName, reasoningEffort: values.reasoningEffort
@@ -207,16 +261,23 @@ export function ButlerTaskSettings() {
             prompt: values.prompt,
             schedule,
             deliveryPref: values.deliveryPref,
-            workDirs: typeof values.workDir === 'string' && values.workDir.trim() ? [values.workDir] : [],
+            workDirs,
             modelId: values.modelId,
             modelServiceId: values.modelServiceId,
             modelOverride: chosen?.providerModelName,
             reasoningEffort: values.reasoningEffort
           })
       if (!res.ok) {
-        message.error(t('butler.form.saveFailedWithError', { error: res.kind === 'preflight-blocked' ? res.report.blockers.map((item) => item.code).join(', ') : res.error ?? '' }))
+        if (res.kind === 'preflight-blocked') {
+          setPreflightReport(res.report)
+          setWriteError(null)
+        } else {
+          setWriteError(res.error)
+          message.error(t('butler.form.saveFailedWithError', { error: res.error }))
+        }
         return
       }
+      setPreflightReport(null)
       message.success(editing ? t('butler.updated') : t('butler.created'))
       setEditorOpen(false)
       await refresh()
@@ -231,7 +292,12 @@ export function ButlerTaskSettings() {
     try {
       const result = await window.api.butlerUpdateTask({ id: task.id, patch: { enabled, expectedTaskRevision: task.taskRevision ?? 0 } })
       if (!result.ok) {
-        message.error(t('butler.form.saveFailedWithError', { error: result.kind === 'preflight-blocked' ? result.report.blockers.map((item) => item.code).join(', ') : result.error ?? '' }))
+        if (result.kind === 'preflight-blocked') {
+          openEdit(task)
+          setPreflightReport(result.report)
+          return
+        }
+        message.error(t('butler.form.saveFailedWithError', { error: result.error }))
         return
       }
       await refresh()
@@ -309,6 +375,8 @@ export function ButlerTaskSettings() {
         </div>
       )}
       <Modal
+        className="butler-editor-modal"
+        width="min(920px, calc(100vw - 32px))"
         title={editing ? t('butler.form.editTitle') : t('butler.form.createTitle')}
         open={editorOpen}
         onCancel={() => setEditorOpen(false)}
@@ -321,22 +389,45 @@ export function ButlerTaskSettings() {
           </Button>
         ]}
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" className="butler-task-editor">
           {editing && editing.workDirs.length === 0 ? <Alert type="info" showIcon message={t('butler.form.workDirLegacy')} /> : null}
+          {preflightReport ? (
+            <Alert className="butler-preflight-report" type={preflightReport.status === 'blocked' ? 'warning' : 'info'} showIcon message={t('butler.form.preflightTitle')} description={(
+              <div className="butler-preflight-report__content">
+                {preflightReport.blockers.map((item, index) => <Typography.Text key={`${item.code}-${index}`} className="butler-preflight-report__blocker">{t('butler.form.preflightIssue', { code: item.code })}</Typography.Text>)}
+                {preflightReport.suggestedDirectories.length ? <div className="butler-preflight-report__candidates">
+                  <Typography.Text strong>{t('butler.form.suggestedDirectories')}</Typography.Text>
+                  {preflightReport.suggestedDirectories.map((candidate) => (
+                    <Checkbox
+                      key={candidate.path}
+                      checked={workDirs.includes(candidate.path)}
+                      disabled={candidate.validationStatus !== 'valid'}
+                      aria-label={t('butler.form.suggestedDirectoryAria', { path: candidate.path, purpose: candidate.purpose })}
+                      onChange={(event) => {
+                        setWorkDirs(event.target.checked ? [...new Set([...workDirs, candidate.path])] : workDirs.filter((root) => root !== candidate.path))
+                      }}
+                    >
+                      <span className="butler-preflight-report__candidate-path">{candidate.path}</span>
+                      <span className="butler-preflight-report__candidate-purpose">{candidate.purpose}</span>
+                    </Checkbox>
+                  ))}
+                </div> : null}
+              </div>
+            )} />
+          ) : null}
+          {writeError ? <Alert className="butler-preflight-report" type="error" showIcon message={t('butler.form.saveFailedWithError', { error: writeError })} /> : null}
+          <div className="butler-task-editor__grid">
           <Form.Item name="name" label={t('butler.form.name')} rules={[{ required: true, message: t('butler.form.nameRequired') }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="prompt" label={t('butler.form.prompt')} rules={[{ required: true, message: t('butler.form.promptRequired') }]}>
-            <Input.TextArea rows={4} />
-          </Form.Item>
-          <Form.Item label={t('butler.form.workDir')} required>
-            <Space.Compact style={{ width: '100%' }}>
-              <Form.Item name="workDir" noStyle rules={!editing ? [{ required: true, message: t('butler.form.workDirRequired') }] : []}><Input readOnly /></Form.Item>
-              <Button onClick={async () => { const result = await window.api.butlerChooseWorkDir(); if (!result.cancelled && result.path) form.setFieldValue('workDir', result.path) }}>{t('butler.form.browseWorkDir')}</Button>
-            </Space.Compact>
-          </Form.Item>
           <Form.Item name="modelPair" label={t('butler.form.model')} rules={!editing ? [{ required: true, message: t('butler.form.modelRequired') }] : []}>
             <Select options={modelCandidates.map((candidate) => ({ value: `${candidate.modelId}::${candidate.serviceId}`, label: `${candidate.providerModelName} · ${candidate.serviceName}` }))} onChange={(pair: string) => { const candidate = modelCandidates.find((item) => `${item.modelId}::${item.serviceId}` === pair); if (candidate) { form.setFieldsValue({ modelId: candidate.modelId, modelServiceId: candidate.serviceId, modelOverride: candidate.providerModelName }); if (!candidate.supportsThinking) form.setFieldValue('reasoningEffort', 'off') } }} />
+          </Form.Item>
+          <Form.Item name="prompt" className="butler-task-editor__wide" label={t('butler.form.prompt')} rules={[{ required: true, message: t('butler.form.promptRequired') }]}>
+            <Input.TextArea rows={4} />
+          </Form.Item>
+          <Form.Item className="butler-task-editor__wide" label={t('butler.form.workDir')} required validateStatus={workDirError ? 'error' : undefined} help={workDirError ? t('butler.form.workDirRequired') : undefined}>
+            <WorkDirList t={t} value={workDirs} onChange={setWorkDirs} />
           </Form.Item>
           <Form.Item name="modelServiceId" hidden><Input /></Form.Item>
           <Form.Item name="modelId" hidden><Input /></Form.Item>
@@ -387,18 +478,19 @@ export function ButlerTaskSettings() {
               ]}
             />
           </Form.Item>
+          </div>
         </Form>
       </Modal>
       <Modal title={t('butler.historyTitle')} open={Boolean(historyTask)} onCancel={() => setHistoryTask(null)} footer={null}>
         {historyRuns.length === 0 ? <Typography.Text type="secondary">{t('butler.historyEmpty')}</Typography.Text> : historyRuns.map((run) => (
-          <div key={run.id} style={{ borderBottom: '1px solid var(--color-border-secondary, #eee)', padding: '10px 0' }}>
-            <Typography.Text>{dayjs(run.createdAt).format('YYYY-MM-DD HH:mm:ss')} · {run.status}</Typography.Text>
+          <div key={run.id} className={`butler-history-run butler-history-run--${run.status}`}>
+            <Typography.Text>{dayjs(run.createdAt).format('YYYY-MM-DD HH:mm:ss')} · {runStatusText(run.status, t)}</Typography.Text>
             {run.configSnapshot ? <div>
               <Typography.Text strong>{t('butler.runConfig')}</Typography.Text>
               <Typography.Paragraph copyable={{ text: run.configSnapshot.workDir ?? '' }} style={{ marginBottom: 4 }}>{run.configSnapshot.workDir}</Typography.Paragraph>
               <Typography.Text>{run.configSnapshot.providerModelName} · {run.configSnapshot.serviceId} · {run.configSnapshot.requestedEffort} → {run.configSnapshot.effectiveEffort}</Typography.Text>
             </div> : <Typography.Text type="secondary">{t('butler.legacyNoSnapshot')}</Typography.Text>}
-            {run.error ? <Typography.Paragraph type="danger"><Typography.Text strong>{t('butler.runError')}</Typography.Text> {run.error}</Typography.Paragraph> : null}
+            {run.error ? <Typography.Paragraph type={run.status === 'skipped' ? 'secondary' : 'danger'}><Typography.Text strong>{run.status === 'skipped' ? t('butler.form.runReason') : t('butler.runError')}</Typography.Text> {run.status === 'skipped' && run.error === 'missed-window' ? t('butler.runReasonMissedWindow') : run.error}</Typography.Paragraph> : null}
           </div>
         ))}
       </Modal>

@@ -2640,3 +2640,99 @@
 .butler-task-card__footer .ant-btn-dangerous {
   margin-left: auto;
 }
+
+.butler-editor-modal .ant-modal-body {
+  max-height: min(72vh, 760px);
+  overflow-y: auto;
+}
+
+.butler-task-editor__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--sa-config-gap-stack);
+}
+
+.butler-task-editor__wide,
+.butler-preflight-report {
+  grid-column: 1 / -1;
+}
+
+.butler-workdirs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-field);
+  min-width: 0;
+}
+
+.butler-workdirs__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sa-config-gap-tight);
+  min-width: 0;
+  padding: var(--sa-config-gap-tight) var(--sa-config-gap-field);
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-bg-elevated);
+}
+
+.butler-workdirs__path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--sa-text);
+  line-height: var(--sa-config-line);
+}
+
+.butler-preflight-report__content,
+.butler-preflight-report__candidates {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sa-config-gap-field);
+  min-width: 0;
+}
+
+.butler-preflight-report__blocker {
+  color: var(--sa-text);
+}
+
+.butler-preflight-report__candidates {
+  width: 100%;
+  padding-top: var(--sa-config-gap-tight);
+}
+
+.butler-preflight-report__candidates .ant-checkbox-wrapper {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.butler-preflight-report__candidate-path {
+  display: block;
+  color: var(--sa-text);
+  overflow-wrap: anywhere;
+}
+
+.butler-preflight-report__candidate-purpose {
+  display: block;
+  color: var(--sa-text-secondary);
+  white-space: normal;
+}
+
+.butler-history-run {
+  padding: var(--sa-config-gap-substack) 0;
+  border-bottom: 1px solid var(--sa-border);
+}
+
+@media (max-width: 720px) {
+  .butler-task-editor__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .butler-task-editor__wide,
+  .butler-preflight-report {
+    grid-column: auto;
+  }
+}

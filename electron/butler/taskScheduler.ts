@@ -5,6 +5,10 @@ import {
   markActiveRunsInterrupted,
   updateAutomationTask,
   insertAutomationTaskRun,
+  claimDueSlotAndAdvance,
+  recordSkippedSlotAndAdvance,
+  listPendingScheduledClaims,
+  finalizeOnceScheduledRun,
   computeNextRunAt,
   type AutomationTask,
   type AutomationTaskRun,
@@ -24,6 +28,7 @@ export type SchedulerRunRequest = {
   trigger: 'schedule'
   requestId: string
   scheduledFor: number
+  runId?: string
 }
 
 export type SchedulerRunFn = (taskId: string, request: SchedulerRunRequest) => Promise<{ ok: boolean }>
@@ -114,31 +119,27 @@ export class ButlerTaskScheduler {
     const interruptedCount = markActiveRunsInterrupted(this.db, 'interrupted')
     let skippedCount = 0
     let catchUpCount = 0
+    const pendingTaskIds = new Set<string>()
+    for (const pending of listPendingScheduledClaims(this.db)) {
+      pendingTaskIds.add(pending.task.id)
+      void this.runPendingClaim(pending.task, pending.runId, pending.slot, now, `recover-${pending.task.id}-${pending.slot}`)
+      catchUpCount += 1
+    }
     for (const task of this.dueTasks(now)) {
+      if (pendingTaskIds.has(task.id)) continue
       const slots = enumerateMissedSlots(task.schedule, task.nextRunAt!, now)
-      // 更早的槽位：落 skipped 行（audit trail），不执行
+      let cursor = task.nextRunAt!
       for (const slot of slots.slice(0, -1)) {
-        const claim = insertAutomationTaskRun(this.db, {
-          taskId: task.id,
-          clientId: `${task.id}:${slot}`,
-          trigger: 'schedule',
-          scheduledFor: slot
-        })
-        if (claim.inserted) {
-          this.markSkipped(claim.runId!)
-          skippedCount += 1
-        }
+        const nextSlot = computeNextRunAt(task.schedule, slot)
+        const recorded = recordSkippedSlotAndAdvance(this.db, { taskId: task.id, slot, nextSlot, clientId: `${task.id}:${slot}` })
+        if (recorded.recorded) skippedCount += 1
+        cursor = nextSlot
       }
-      // 最近一次错过：有界补跑（走 P4 执行链，准入取票）
-      const lastSlot = slots[slots.length - 1]!
-      if (lastSlot <= now) {
-        void this.runTaskProtected(task, {
-          trigger: 'schedule',
-          requestId: `recover-${task.id}-${lastSlot}`,
-          scheduledFor: lastSlot
-        })
+      const catchUpSlot = slots[slots.length - 1]!
+      if (catchUpSlot <= now) {
+        const current = { ...task, nextRunAt: cursor }
+        void this.claimAndRun(current, catchUpSlot, now, `recover-${task.id}-${catchUpSlot}`)
         catchUpCount += 1
-        this.rearm(task, now)
       }
     }
     return { skippedCount, catchUpCount, interruptedCount }
@@ -152,15 +153,30 @@ export class ButlerTaskScheduler {
       const now = this.nowFn()
       for (const task of this.dueTasks(now)) {
         const scheduledFor = task.nextRunAt!
-        await this.runTaskProtected(task, {
-          trigger: 'schedule',
-          requestId: `sched-${task.id}-${scheduledFor}`,
-          scheduledFor
-        })
-        this.rearm(task, now)
+        await this.claimAndRun(task, scheduledFor, now, `sched-${task.id}-${scheduledFor}`)
       }
     } finally {
       this.ticking = false
+    }
+  }
+
+  private async claimAndRun(task: AutomationTask, slot: number, now: number, requestId: string): Promise<void> {
+    const nextSlot = task.schedule.kind === 'once' ? null : computeNextRunAt(task.schedule, slot)
+    const claim = claimDueSlotAndAdvance(this.db, { taskId: task.id, slot, nextSlot, clientId: `${task.id}:${slot}`, allowCursorAdvance: true })
+    if (!claim.claimed) {
+      if (claim.reason !== 'pending-claim' && claim.reason !== 'not-due') this.logWarn('automation.scheduler.claim-failed', { taskId: task.id, reason: claim.reason })
+      return
+    }
+    await this.runPendingClaim(task, claim.runId, slot, now, requestId)
+  }
+
+  private async runPendingClaim(task: AutomationTask, runId: string, slot: number, now: number, requestId: string): Promise<void> {
+    const result = await this.runTaskProtected(task, { trigger: 'schedule', requestId, scheduledFor: slot, runId })
+    if (result?.ok) {
+      if (task.schedule.kind === 'once') {
+        finalizeOnceScheduledRun(this.db, runId, now)
+      }
+      else updateAutomationTask(this.db, task.id, { lastRunAt: now })
     }
   }
 
@@ -168,14 +184,15 @@ export class ButlerTaskScheduler {
    * 受保护的任务执行入口（评审 P1-1）：单任务异常（执行链抛错 / 退出竞态下落库失败）
    * 吞噬并落 tick-failed 日志，不影响同批后续任务，也不向调用方传播为 unhandled rejection。
    */
-  private async runTaskProtected(task: AutomationTask, request: { trigger: 'schedule'; requestId: string; scheduledFor: number }): Promise<void> {
+  private async runTaskProtected(task: AutomationTask, request: SchedulerRunRequest): Promise<{ ok: boolean } | undefined> {
     try {
-      await this.runTask(task.id, request)
+      return await this.runTask(task.id, request)
     } catch (error) {
       this.logWarn('automation.scheduler.tick-failed', {
         taskId: task.id,
         message: error instanceof Error ? error.message : String(error)
       })
+      return undefined
     }
   }
 

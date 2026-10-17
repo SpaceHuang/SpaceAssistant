@@ -20,6 +20,8 @@ export type AutomationTask = {
   deliveryPref: AutomationDeliveryPref
   deliveryTarget?: string
   workDirs: string[]
+  /** IPC/数据库旧版本兼容字段；新调用统一使用 workDirs。 */
+  workDir?: string
   /** 旧任务迁移为 0；通过新预检创建/编辑/启用后为 1。 */
   preflightVersion?: 0 | 1
   targetBindingsJson?: string | null
@@ -87,13 +89,16 @@ export type AutomationTaskRun = {
 
 export type AutomationTaskRunConfigSnapshot = {
   resolutionStatus: 'resolved' | 'failed'
+  taskName?: string
   prompt?: string
   schedule?: AutomationTaskSchedule
+  deliveryPref?: AutomationDeliveryPref
+  deliveryTarget?: string
   taskRevision?: number
-  workDir?: string
   workDirs?: string[]
   preflightVersion?: 0 | 1
   targetSelections?: TargetSelection[]
+  workDir?: string
   workDirSource?: 'task' | 'legacy-profile'
   modelId?: string
   providerModelName?: string
@@ -147,6 +152,7 @@ export type ButlerRunTaskResult = {
 }
 
 /** Shared canonical roots accessor; legacy conversion is restricted to the IPC/DB boundary. */
-export function getAutomationTaskWorkDirs(task: Pick<AutomationTask, 'workDirs'>): string[] {
-  return Array.isArray(task.workDirs) ? [...task.workDirs] : []
+export function getAutomationTaskWorkDirs(task: Pick<AutomationTask, 'workDirs'> & { workDir?: string }): string[] {
+  if (Array.isArray(task.workDirs)) return [...task.workDirs]
+  return typeof task.workDir === 'string' && task.workDir.length > 0 ? [task.workDir] : []
 }

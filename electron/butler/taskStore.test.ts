@@ -8,8 +8,11 @@ import {
   deleteAutomationTask,
   getAutomationTask,
   listAutomationTasks,
+  listAutomationTaskRuns,
   listEnabledAutomationTasksDue,
   insertAutomationTaskRun,
+  insertManualTaskClaim,
+  transitionClaimToRunning,
   updateAutomationTaskRun,
   syncAutomationTaskRunDeliveryStatuses,
   getLatestRunForTask,
@@ -442,6 +445,17 @@ describe('preflight binding persistence', () => {
 })
 
 describe('queued claim snapshot CAS', () => {
+  it('manual claim freezes task revision exactly once when resumed', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/one', '/workspace/two'] }))
+    const claim = insertManualTaskClaim(d, task.id, 'manual-snapshot')
+    expect(claim.inserted).toBe(true)
+    const updated = updateAutomationTask(d, task.id, { prompt: 'updated prompt', workDirs: ['/workspace/new'] })!
+    const started = transitionClaimToRunning(d, claim.runId!, task.id, 0, claim.scheduleGeneration!)
+    expect(started).toMatchObject({ ok: true, snapshot: { prompt: 'updated prompt', workDirs: ['/workspace/new'], taskRevision: updated.taskRevision } })
+    expect(transitionClaimToRunning(d, claim.runId!, task.id, 0, claim.scheduleGeneration!)).toMatchObject({ ok: false, reason: 'claim-not-queued' })
+  })
+
   it('freezes the latest edited task revision exactly once when queued work starts', async () => {
     const d = db()
     const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/old'], nextRunAt: 123 }))
@@ -477,6 +491,20 @@ describe('claim terminal cleanup identity', () => {
     expect(conn.prepare('SELECT pending_run_id,pending_schedule_generation FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
       .toEqual({ pending_run_id: second.runId, pending_schedule_generation: 1 })
   })
+
+  it('keeps a matching queued schedule claim for same-run recovery and interrupts running claims transactionally', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance, listPendingScheduledClaims, markActiveRunsInterrupted, transitionClaimToRunning } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'recover-existing-claim' })
+    expect(markActiveRunsInterrupted(d)).toBe(0)
+    expect(listPendingScheduledClaims(d).map((pending) => pending.runId)).toEqual([claim.runId])
+    expect(transitionClaimToRunning(d, claim.runId!, task.id, 100, 0).ok).toBe(true)
+    expect(markActiveRunsInterrupted(d)).toBe(1)
+    expect(getRunById(d, claim.runId!)).toMatchObject({ status: 'interrupted', error: 'interrupted' })
+    expect(getDbConnection(d).prepare('SELECT pending_run_id,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ pending_run_id: null, recovery_cursor_at: 200 })
+  })
 })
 
 describe('atomic due slot claim', () => {
@@ -499,6 +527,29 @@ describe('atomic due slot claim', () => {
     expect(finalizeClaimAndClearPending(d, first.runId!, 'completed')).toEqual({ updated: true, clearedPending: true })
     expect(getDbConnection(d).prepare('SELECT recovery_cursor_at,pending_run_id FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
       .toEqual({ recovery_cursor_at: 200, pending_run_id: null })
+  })
+
+  it('allows a startup catch-up claim to advance from the already-recorded recovery cursor', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance, recordSkippedSlotAndAdvance } = await import('./taskStore')
+    expect(recordSkippedSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'skip-100' }).recorded).toBe(true)
+    expect(recordSkippedSlotAndAdvance(d, { taskId: task.id, slot: 200, nextSlot: 300, clientId: 'skip-200' }).recorded).toBe(true)
+    const catchUp = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 300, nextSlot: 400, clientId: 'catch-up-300', allowCursorAdvance: true })
+    expect(catchUp.claimed).toBe(true)
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(400)
+    expect(getRunById(d, catchUp.runId!)).toMatchObject({ status: 'queued', slotAt: 300 })
+  })
+
+  it('terminal update preserves result fields and clears its scheduled pending claim atomically', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'terminal-100' })
+    updateAutomationTaskRun(d, claim.runId!, { status: 'completed', resultSummary: 'done', deliveryStatus: 'pending' })
+    expect(getRunById(d, claim.runId!)).toMatchObject({ status: 'completed', resultSummary: 'done', deliveryStatus: 'pending' })
+    expect(getDbConnection(d).prepare('SELECT recovery_cursor_at,pending_run_id,pending_run_slot FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ recovery_cursor_at: 200, pending_run_id: null, pending_run_slot: null })
   })
 })
 
@@ -564,5 +615,65 @@ describe('task recovery transaction rollback', () => {
     expect(conn.prepare('SELECT COUNT(*) AS count FROM automation_task_runs WHERE client_id=?').get('rollback-claim')).toEqual({ count: 0 })
     expect(conn.prepare('SELECT recovery_cursor_at,pending_run_id FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
       .toEqual({ recovery_cursor_at: 100, pending_run_id: null })
+  })
+})
+
+describe('recovery lifecycle randomized invariants', () => {
+  it('preserves cursor and pending identity through deterministic randomized schedule/config/restart operations', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 1_000_000 }))
+    const { claimDueSlotAndAdvance, markActiveRunsInterrupted, recordSkippedSlotAndAdvance, transitionClaimToRunning } = await import('./taskStore')
+    let seed = 0x51a7
+    const random = () => { seed = (seed * 48271) % 0x7fffffff; return seed }
+    for (let step = 0; step < 120; step += 1) {
+      const current = getAutomationTask(d, task.id)!
+      const recovery = getDbConnection(d).prepare('SELECT * FROM automation_task_recovery_state WHERE task_id=?').get(task.id) as { pending_run_id: string | null; pending_run_slot: number | null; pending_schedule_generation: number | null; recovery_cursor_at: number | null; schedule_generation: number }
+      const op = random() % 7
+      if (op === 0) updateAutomationTask(d, task.id, { prompt: `prompt-${step}` })
+      else if (op === 1 && !recovery.pending_run_id) {
+        const slot = current.nextRunAt ?? Date.now()
+        vi.setSystemTime(slot)
+        claimDueSlotAndAdvance(d, { taskId: task.id, slot, nextSlot: slot + 300_000, clientId: `${task.id}:${slot}` })
+      } else if (op === 2 && recovery.pending_run_id) {
+        const run = getRunById(d, recovery.pending_run_id)!
+        if (run.status === 'queued') transitionClaimToRunning(d, run.id, task.id, run.scheduledFor, run.scheduleGeneration!)
+        else updateAutomationTaskRun(d, run.id, { status: 'completed', resultSummary: `result-${step}` })
+      } else if (op === 3 && !recovery.pending_run_id) {
+        const slot = current.nextRunAt
+        if (slot != null) recordSkippedSlotAndAdvance(d, { taskId: task.id, slot, nextSlot: slot + 300_000, clientId: `${task.id}:${slot}` })
+      } else if (op === 4) {
+        const run = recovery.pending_run_id ? getRunById(d, recovery.pending_run_id) : undefined
+        if (!run || run.status === 'running') markActiveRunsInterrupted(d, `restart-${step}`)
+      } else if (op === 5) {
+        const run = recovery.pending_run_id ? getRunById(d, recovery.pending_run_id) : undefined
+        if (run?.runPhase === 'running' || !run) updateAutomationTask(d, task.id, { schedule: { kind: 'interval', intervalMinutes: step % 2 ? 5 : 10 } })
+      } else if (op === 6 && !recovery.pending_run_id) {
+        updateAutomationTask(d, task.id, { enabled: !current.enabled })
+      }
+
+      const afterTask = getAutomationTask(d, task.id)!
+      const afterState = getDbConnection(d).prepare('SELECT * FROM automation_task_recovery_state WHERE task_id=?').get(task.id) as { pending_run_id: string | null; pending_run_slot: number | null; pending_schedule_generation: number | null; recovery_cursor_at: number | null; schedule_generation: number }
+      expect(afterState.schedule_generation).toBe(afterTask.scheduleGeneration)
+      if (!afterState.pending_run_id) {
+        expect(afterState.pending_run_slot).toBeNull()
+        expect(afterState.pending_schedule_generation).toBeNull()
+        expect(afterState.recovery_cursor_at).toBe(afterTask.nextRunAt ?? null)
+      } else {
+        const pending = getRunById(d, afterState.pending_run_id)!
+        expect(['queued', 'running']).toContain(pending.status)
+        expect(afterState.pending_run_slot).toBe(pending.slotAt)
+        expect(afterState.pending_schedule_generation).toBe(pending.scheduleGeneration)
+        if (pending.status === 'queued') {
+          expect(pending.scheduleGeneration).toBe(afterTask.scheduleGeneration)
+          expect(afterState.recovery_cursor_at).toBe(pending.slotAt)
+          expect(afterTask.nextRunAt).toBeGreaterThan(pending.slotAt!)
+        }
+      }
+      const allRuns = listAutomationTaskRuns(d, task.id)
+      expect(new Set(allRuns.map((run) => run.clientId)).size).toBe(allRuns.length)
+      expect(allRuns.filter((run) => run.status === 'skipped').every((run) => run.error === 'missed-window' && run.runPhase === 'terminal')).toBe(true)
+    }
   })
 })

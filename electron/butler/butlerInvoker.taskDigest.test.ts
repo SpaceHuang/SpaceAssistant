@@ -103,7 +103,8 @@ describe('butlerInvoker 任务声明装配（D）', () => {
       name: '巡检',
       schedule: { kind: 'interval', intervalMinutes: 30 },
       prompt: '检查磁盘空间',
-      deliveryPref: 'none'
+      deliveryPref: 'none',
+      workDirs: [testWorkDir]
     })
     const result = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-digest-1' })
     expect(result.ok, JSON.stringify(result)).toBe(true)

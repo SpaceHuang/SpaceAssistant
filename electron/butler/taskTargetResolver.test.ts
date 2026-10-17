@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveTaskTarget } from './taskTargetResolver'
+import { resolveTaskTarget, validatePersistedTargetBindings } from './taskTargetResolver'
 import type { TaskPathFacts } from './taskPathFacts'
 
 function facts(root: string, entries: TaskPathFacts['entries'], complete = true): TaskPathFacts {
@@ -45,5 +45,33 @@ describe('resolveTaskTarget', () => {
   it('does not treat a symlink as an authorized output ancestor', () => {
     const result = resolveTaskTarget({ rawText: 'write through link', target: { kind: 'output', path: `${root}/link/new.txt`, expectedType: 'file' }, roots: [root], facts: facts(root, [{ path: `${root}/link`, relativePath: 'link', kind: 'symlink' }]), taskRevision: 1 })
     expect(result).toMatchObject({ ok: false, issue: { code: 'OUTPUT_ANCESTOR_INVALID' } })
+  })
+
+  it('revalidates exact ambiguity while allowing collection membership changes and a not-yet-created output', () => {
+    const exact = resolveTaskTarget({ rawText: 'report.csv', target: { kind: 'exact', path: 'report.csv', targetType: 'file' }, roots: [root], facts: facts(root, [{ path: `${root}/report.csv`, relativePath: 'report.csv', kind: 'file' }]), taskRevision: 4 })
+    const collection = resolveTaskTarget({ rawText: 'all csv in data', target: { kind: 'collection', directory: `${root}/data`, selector: '*.csv' }, roots: [root], facts: facts(root, [{ path: `${root}/data`, relativePath: 'data', kind: 'directory' }]), taskRevision: 4 })
+    const output = resolveTaskTarget({ rawText: 'write report', target: { kind: 'output', path: `${root}/out/new/report.txt`, expectedType: 'file' }, roots: [root], facts: facts(root, [{ path: `${root}/out`, relativePath: 'out', kind: 'directory' }]), taskRevision: 4 })
+    expect(exact.ok && collection.ok && output.ok).toBe(true)
+    if (!exact.ok || !collection.ok || !output.ok) return
+    expect(validatePersistedTargetBindings({ bindings: [exact.binding], roots: [root], facts: facts(root, [
+      { path: `${root}/report.csv`, relativePath: 'report.csv', kind: 'file' },
+      { path: `${root}/nested/report.csv`, relativePath: 'nested/report.csv', kind: 'file' }
+    ]), taskRevision: 4 })).toEqual({ ok: false, code: 'TARGET_AMBIGUOUS_OR_CHANGED' })
+    expect(validatePersistedTargetBindings({ bindings: [collection.binding], roots: [root], facts: facts(root, [
+      { path: `${root}/data`, relativePath: 'data', kind: 'directory' },
+      { path: `${root}/data/new.csv`, relativePath: 'data/new.csv', kind: 'file' }
+    ]), taskRevision: 4 })).toEqual({ ok: true })
+    expect(validatePersistedTargetBindings({ bindings: [output.binding], roots: [root], facts: facts(root, [{ path: `${root}/out`, relativePath: 'out', kind: 'directory' }]), taskRevision: 4 })).toEqual({ ok: true })
+    expect(validatePersistedTargetBindings({ bindings: [exact.binding], roots: [root], facts: facts(root, [{ path: `${root}/report.csv`, relativePath: 'report.csv', kind: 'file' }]), taskRevision: 5 })).toEqual({ ok: false, code: 'TASK_REVISION_MISMATCH' })
+  })
+
+  it('keeps an explicit relative exact path bound to its logical path when another basename appears', () => {
+    const result = resolveTaskTarget({ rawText: 'reports/report.csv', target: { kind: 'exact', path: `${root}/reports/report.csv`, targetType: 'file' }, roots: [root], facts: facts(root, [{ path: `${root}/reports/report.csv`, relativePath: 'reports/report.csv', kind: 'file' }]), taskRevision: 4 })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(validatePersistedTargetBindings({ bindings: [{ ...result.binding, rawText: 'reports/report.csv' }], roots: [root], facts: facts(root, [
+      { path: `${root}/reports/report.csv`, relativePath: 'reports/report.csv', kind: 'file' },
+      { path: `${root}/archive/report.csv`, relativePath: 'archive/report.csv', kind: 'file' }
+    ]), taskRevision: 4 })).toEqual({ ok: true })
   })
 })

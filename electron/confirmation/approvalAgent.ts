@@ -55,6 +55,8 @@ export interface ApprovalAgentDeps {
   sessionStorage: SessionStorage
   historyForSession?: (sessionId: string) => import('../../packages/agent-sdk/src/history').HistoryPort
   workDir: string
+  /** Immutable task roots used by approval facts and read-only tool gates. */
+  taskWorkDirs?: readonly string[]
   userDataDir: string
   getToolsConfig: () => ToolsConfig
   getShellConfig?: () => ShellConfig | null
@@ -383,6 +385,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       browserConfig: deps.getBrowserConfig?.(),
       shellConfig: deps.getShellConfig?.() ?? null,
       workDir: deps.resolveWorkDirForSession ? deps.resolveWorkDirForSession(sessionId) : deps.workDir,
+      ...(deps.taskWorkDirs?.length ? { taskWorkDirs: deps.taskWorkDirs } : {}),
       userDataDir: deps.userDataDir,
       getApiKey: deps.getApiKey,
       appDb: db,

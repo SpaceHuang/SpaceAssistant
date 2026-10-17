@@ -96,8 +96,8 @@ vi.mock('./butlerSessionEvents', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./butlerSessionEvents')>()
   return {
     ...actual,
-    createButlerSessionEvents: (args: Parameters<typeof actual.createButlerSessionEvents>[0]) => {
-      const events = actual.createButlerSessionEvents(args)
+    createButlerSessionEvents: async (args: Parameters<typeof actual.createButlerSessionEvents>[0]) => {
+      const events = await actual.createButlerSessionEvents(args)
       return {
         ...events,
         sink: {
@@ -128,8 +128,9 @@ import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { TurnRuntime } from '../turnRuntime'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
-import { runButlerTask } from './butlerInvoker'
-import { createAutomationTask as createStoredAutomationTask, getLatestRunForTask, updateAutomationTask } from './taskStore'
+import { executeClaimedRun, runButlerTask } from './butlerInvoker'
+import { ButlerTaskScheduler, type SchedulerRunRequest } from './taskScheduler'
+import { createAutomationTask, createAutomationTask as createStoredAutomationTask, getLatestRunForTask, getRunById, insertManualTaskClaim, updateAutomationTask } from './taskStore'
 import { getSession } from '../database'
 import { getDbConnection } from '../database'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from '../database/operations'
@@ -145,6 +146,10 @@ import { HostedTurnFinalizedError } from '../runtime/hostedTurnFinalization'
 import { readDisabledPolicyRuleIds, resolveEffectivePolicyRulesWithOrigin, writeDisabledPolicyRuleIds } from '../confirmation/policyRulesRuntime'
 import { registerAppIpcHandlers } from '../appIpc'
 import type { AppIpcContext } from '../appIpc'
+
+function automationEventsRoot(taskId: string): string {
+  return path.join('/tmp/ud', 'automation-sessions', taskId)
+}
 
 function makeRuntime(db: AppDatabase): TurnRuntime {
   return new TurnRuntime({
@@ -233,6 +238,45 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(run.configSnapshot).toMatchObject({ workDir: await fs.realpath(workDir), workDirSource: 'task', modelId, serviceId: 'svc-pinned', requestedEffort: 'high', effectiveEffort: 'high' })
     expect(run.configSnapshot?.routeIdentity).toBeTruthy()
     expect(getSession(db, run.sessionId!)?.fixedWorkDir).toBe(await fs.realpath(workDir))
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
+  it('concurrent consumers of one queued run allow only one invocation past the snapshot CAS', async () => {
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-concurrent-claim-'))
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({ async *[Symbol.asyncIterator]() {}, finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } })) })) } })
+    const task = createAutomationTask(db, { name: 'single consumer', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDirs: [workDir], modelId, modelServiceId: 'svc-pinned', modelOverride: model.name })
+    const claim = insertManualTaskClaim(db, task.id, 'single-consumer-claim')
+    const identity = { taskId: task.id, runId: claim.runId!, requestId: 'single-consumer-request', trigger: 'manual' as const, slot: 0, generation: claim.scheduleGeneration! }
+    const [first, second] = await Promise.all([executeClaimedRun(makeDeps(), identity), executeClaimedRun(makeDeps(), identity)])
+    expect([first, second].filter((result) => result.ok)).toHaveLength(1)
+    expect(mockCreateAnthropicClient).toHaveBeenCalledTimes(1)
+    expect(getRunById(db, claim.runId!)?.status).toBe('completed')
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
+  it('scheduler passes its precreated claim directly into the real invoker without a second run row', async () => {
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-scheduler-invoker-'))
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {},
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'scheduled complete' }], stop_reason: 'end_turn', usage: { input_tokens: 2, output_tokens: 1 } }))
+    })) } })
+    const task = createAutomationTask(db, { name: 'scheduler integration', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDirs: [workDir], modelId, modelServiceId: 'svc-pinned', modelOverride: model.name, nextRunAt: Date.now() })
+    const deps = makeDeps()
+    const port = vi.fn((taskId: string, request: SchedulerRunRequest) => runButlerTask(deps, taskId, request))
+    const scheduler = new ButlerTaskScheduler({ db, runTask: port, isTrayEnabled: () => true, now: () => Date.now() })
+    await scheduler.tick()
+    expect(port).toHaveBeenCalledOnce()
+    const request = port.mock.calls[0]![1]
+    const runs = getDbConnection(db).prepare('SELECT id,status,trigger,scheduled_for FROM automation_task_runs WHERE task_id=?').all(task.id)
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toMatchObject({ id: request.runId, status: 'completed', trigger: 'schedule', scheduled_for: request.scheduledFor })
+    expect(getLatestRunForTask(db, task.id)?.resultSummary).toBe('scheduled complete')
     await fs.rm(workDir, { recursive: true, force: true })
   })
 
@@ -606,7 +650,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(history.events.some((event) => event.kind === 'invocation-failed')).toBe(true)
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
       const session = getSession(db, createdSessionId!)!
-      const sink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const sink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.some((event) => event.type === 'tool_call' || event.type === 'tool_result')).toBe(false)
@@ -686,7 +730,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(canonical.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)))
         .toEqual([expect.objectContaining({ kind: 'invocation-failed' })])
       const session = getSession(db, createdSessionId)!
-      const sink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const sink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
         const turnId = projected.find((event) => event.type === 'turn_start')?.payload.turnId
@@ -729,7 +773,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
 
       expect(result).toMatchObject({ ok: true, summary: 'canonical automation result' })
       const session = getSession(db, createdSessionId)!
-      const beforeRecoverySink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const beforeRecoverySink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
       let beforeRecovery: Awaited<ReturnType<typeof readSessionEvents>>
       try { beforeRecovery = await readSessionEvents(beforeRecoverySink.eventsPath) }
       finally { await beforeRecoverySink.close() }
@@ -751,7 +795,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       const recoveryErrors: unknown[] = []
       await restartedHistory.recoverInterruptedInvocations({ ...repairs, onInvocationTerminalRepairError: (error) => recoveryErrors.push(error) })
       await restartedHistory.recoverInterruptedInvocations({ ...repairs, onInvocationTerminalRepairError: (error) => recoveryErrors.push(error) })
-      const recoveredSink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const recoveredSink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
       try {
         const recovered = await readSessionEvents(recoveredSink.eventsPath)
         const canonical = await restartedHistory.read('req-butler-terminal-recovery')
@@ -810,7 +854,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(providerCalls).toBe(1)
       expect(executor).toHaveBeenCalledOnce()
       const session = getSession(db, createdSessionId)!
-      const beforeRecoverySink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const beforeRecoverySink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
       let beforeRecovery: Awaited<ReturnType<typeof readSessionEvents>>
       try { beforeRecovery = await readSessionEvents(beforeRecoverySink.eventsPath) }
       finally { await beforeRecoverySink.close() }
@@ -821,7 +865,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       const canonicalResult = canonicalEvents.find((event) => event.kind === 'tool-call-finished')
       const resultTurnId = canonicalResult!.turnId
       expect(canonicalResult?.payload).toMatchObject({ toolCallId: 'butler-result-recovery-read', sessionLedger: {
-        location: { workDir: await fs.realpath(workDir), sessionId: session.id, createdAt: session.createdAt }, result: expect.any(Object)
+        location: { workDir: automationEventsRoot(task.id), sessionId: session.id, createdAt: session.createdAt }, result: expect.any(Object)
       } })
       expect(canonicalEvents.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'tool-projection-failed' } })
       const resultLedger = canonicalResult!.payload.sessionLedger as { result: Record<string, unknown>; stepId: string }
@@ -835,7 +879,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       }
       await history.recoverInterruptedInvocations({ ...repairs, onToolLedgerRepairError: (error) => recoveryErrors.push(error) })
       await history.recoverInterruptedInvocations({ ...repairs, onToolLedgerRepairError: (error) => recoveryErrors.push(error) })
-      const recoveredSink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const recoveredSink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
       try {
         const recovered = await readSessionEvents(recoveredSink.eventsPath)
         expect(recoveryErrors).toEqual([])
@@ -914,14 +958,14 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       const acceptedTurn = getDbConnection(db).prepare('SELECT turn_id AS turnId FROM turns WHERE request_id = ?').get(requestId) as { turnId: string }
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(acceptedTurn.turnId)
       const session = getSession(db, getLatestRunForTask(db, task.id)!.sessionId!)!
-      sink = getSessionEventSink(workDir, session.id, session.createdAt)
+      sink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
       const projected = await readSessionEvents(sink.eventsPath)
       const canonicalRequests = history.events.filter((event) => event.kind === 'model-request-started')
       expect(canonicalRequests).toHaveLength(2)
       for (const request of canonicalRequests) {
         const ledger = request.payload.sessionLedger as { location?: unknown; requestHeader?: { requestId?: unknown }; requestContext?: { requestId?: unknown } } | undefined
         expect(ledger).toMatchObject({
-          location: { workDir: await fs.realpath(workDir), sessionId: session.id, createdAt: session.createdAt },
+          location: { workDir: automationEventsRoot(task.id), sessionId: session.id, createdAt: session.createdAt },
           requestHeader: { requestId: expect.any(String) },
           requestContext: { requestId: expect.any(String) }
         })
@@ -1002,7 +1046,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         onToolLedgerRepairError: (error) => recoveryErrors.push(error),
         onInvocationTerminalRepairError: (error) => recoveryErrors.push(error)
       })
-      const recoveredSink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const recoveredSink = getSessionEventSink(automationEventsRoot(task.id), session.id, session.createdAt)
       sink = recoveredSink
       const recovered = await readSessionEvents(recoveredSink.eventsPath)
       expect(recoveryErrors).toEqual([])
@@ -1375,7 +1419,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         expect((runtime.executionAdmission as unknown as { activeLeaseCount(requestId: string): number }).activeLeaseCount(requestId)).toBe(0)
         const session = createdSessionId ? getSession(db, createdSessionId) : undefined
         expect(session).toBeTruthy()
-        const sink = getSessionEventSink(workDir, session!.id, session!.createdAt)
+        const sink = getSessionEventSink(automationEventsRoot(task.id), session!.id, session!.createdAt)
         try {
           const events = await readSessionEvents(sink.eventsPath)
           expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload)), JSON.stringify(events)).toBe(true)
