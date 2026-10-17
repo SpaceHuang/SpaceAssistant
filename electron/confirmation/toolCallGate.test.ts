@@ -492,7 +492,8 @@ describe('evaluateToolCallGate', () => {
     expect(audit.events.find((event) => event.event === 'policy.decision')).toMatchObject({
       requestId: 'audit-request',
       toolUseId: 'audit-tool-use',
-      toolName: 'read_file'
+      toolName: 'read_file',
+      ruleId: expect.any(String)
     })
   })
 
