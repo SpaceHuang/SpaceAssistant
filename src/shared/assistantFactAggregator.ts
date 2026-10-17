@@ -54,7 +54,6 @@ export type TurnExecutionConfig = {
   enableThinking?: boolean
   locale?: string
   projectMemoryEnabled?: boolean
-  agentsMdEnabled?: boolean
   effectiveModelForUsage?: string
   continuationSafetySnapshot?: ContinuationSafetySnapshot
   continuationSource?: ContinuationSource

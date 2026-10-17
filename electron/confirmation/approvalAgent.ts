@@ -377,7 +377,6 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       messages: pairedMessages,
       currentUserMessageId,
       system,
-      agentsMdEnabled: deps.sessionStorage.queries.readSession(sessionId)?.metadata.agentsMdEnabled !== false,
       options: { maxTokens: 2048 },
       ...(inv.deadlineAt !== undefined ? { deadlineAt: inv.deadlineAt } : {}),
       toolsConfig,

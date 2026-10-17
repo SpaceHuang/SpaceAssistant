@@ -12,7 +12,7 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
     appendNonTurnMessage: (message) => appendMessage(db, message),
     createSession: (input) => createSession(db, {
       ...input,
-      metadata: { ...(input.metadata ?? {}), agentsMdEnabled: input.agentsMdEnabled ?? true }
+      metadata: { ...(input.metadata ?? {}) }
     }),
     renameSession: (sessionId, name) => {
       const current = getSession(db, sessionId)
@@ -25,9 +25,7 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
     },
     updateSettings: ({ sessionId, ...settings }) => {
       if (!getSession(db, sessionId)) return undefined
-      const { agentsMdEnabled, ...sessionSettings } = settings
-      const updated = updateSession(db, sessionId, sessionSettings)
-      return agentsMdEnabled === undefined ? updated : commands.updateAgentsMdEnabled(sessionId, agentsMdEnabled)
+      return updateSession(db, sessionId, settings)
     },
     updateUserMetadata: (sessionId, metadataPatch) => {
       const current = getSession(db, sessionId)
@@ -42,7 +40,6 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
         'feishuMessageId',
         'wechatMessageId',
         'wechatMeta',
-        'agentsMdEnabled'
       ]
       for (const key of ownedKeys) {
         if (!Object.prototype.hasOwnProperty.call(metadataPatch, key)) continue
@@ -55,12 +52,6 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
       const current = getSession(db, sessionId)
       if (!current) return undefined
       return updateSession(db, sessionId, { metadata: { ...current.metadata, sessionDirectoryGrants: [...grants] } })
-    },
-    updateAgentsMdEnabled: (sessionId, enabled) => {
-      if (typeof enabled !== 'boolean') throw new Error('AGENTS_MD_ENABLED_MUST_BE_BOOLEAN')
-      const current = getSession(db, sessionId)
-      if (!current) return undefined
-      return updateSession(db, sessionId, { metadata: { ...current.metadata, agentsMdEnabled: enabled } })
     },
     updateTitleSuggestionState: (sessionId, state) => {
       const current = getSession(db, sessionId)

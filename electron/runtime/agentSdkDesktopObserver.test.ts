@@ -23,22 +23,6 @@ import path from 'node:path'
 
 describe('createAgentSdkDesktopObserver', () => {
   afterEach(() => vi.unstubAllEnvs())
-  it('signals remote sessions when the logical request has no usable AGENTS.md snapshot', async () => {
-    const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-remote-status-'))
-    const status = vi.fn()
-    try {
-      const observer = createAgentSdkDesktopObserver({
-        requestId: 'remote-instructions-status', sessionId: 's', turnId: 't', lane: 'feishu',
-        getWorkDir: () => workDir, onAgentsMdNotLoaded: status
-      })
-      await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
-        messages: [{ role: 'user', content: 'hello' }], maxTokens: 100, tools: []
-      } })
-      expect(status).toHaveBeenCalledOnce()
-    } finally {
-      await rm(workDir, { recursive: true, force: true })
-    }
-  })
   it('tells the model when AGENTS.md failed to load so it cannot claim it followed the file', async () => {
     const observer = createAgentSdkDesktopObserver({ requestId: 'failed-instructions', sessionId: 's', turnId: 't', getWorkDir: () => '' })
     const prepared = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
@@ -59,20 +43,16 @@ describe('createAgentSdkDesktopObserver', () => {
         const lane = name as 'desktop' | 'feishu' | 'wechat' | 'automation'
         const observer = createAgentSdkDesktopObserver({
           requestId: 'request-' + name, sessionId: 'session-' + name, turnId: 'turn-' + name,
-          lane, getWorkDir: () => root, agentsMdEnabled: true
+          lane, getWorkDir: () => root
         })
         return observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
           messages: [{ role: 'user', content: 'hello' }], maxTokens: 100, tools: []
         } })
       }))
       for (const [index, result] of results.entries()) {
-        expect(result?.requestMetadata?.agentsMdSnapshot).toMatchObject({
-          status: 'loaded', source: 'AGENTS.md', scope: 'workdir-root',
-          content: 'rules for ' + roots[index].name, workDir: roots[index].root
-        })
+        expect(result?.requestMetadata).not.toHaveProperty('agentsMdSnapshot')
       }
-      expect(results.map((result) => (result?.requestMetadata?.agentsMdSnapshot as { content?: string }).content))
-        .toEqual(roots.map(({ name }) => 'rules for ' + name))
+      expect(results.map((result) => result?.requestPatch?.messages?.[0]?.content)).toEqual(roots.map(({ name }) => expect.stringContaining('rules for ' + name)))
     } finally {
       await Promise.all(roots.map(({ root }) => rm(root, { recursive: true, force: true })))
     }
@@ -105,7 +85,7 @@ describe('createAgentSdkDesktopObserver', () => {
       await runAgentTurn({
         registry, routeId: route.routeId, invocationId, history,
         request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 100 },
-        observer: createAgentSdkDesktopObserver({ requestId: invocationId, sessionId: 'session', turnId: 'turn', getWorkDir: () => workDir, agentsMdEnabled: true }),
+        observer: createAgentSdkDesktopObserver({ requestId: invocationId, sessionId: 'session', turnId: 'turn', getWorkDir: () => workDir }),
         safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
         prepareTool: async () => { throw new Error('no tools expected') },
         toolExecution: createPermitBoundToolExecutionPort({
@@ -120,7 +100,7 @@ describe('createAgentSdkDesktopObserver', () => {
       const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
       expect(JSON.stringify(providerMessages)).not.toContain('PRIVATE_OUTSIDE_WORKDIR')
       expect(JSON.stringify(requestEvents)).not.toContain('PRIVATE_OUTSIDE_WORKDIR')
-      expect(requestEvents[0]?.payload).toMatchObject({ requestMetadata: { agentsMdSnapshot: { status: 'not-file' } } })
+      expect(requestEvents[0]?.payload).not.toHaveProperty('requestMetadata.agentsMdSnapshot')
     } finally {
       await Promise.all([rm(workDir, { recursive: true, force: true }), rm(outsideDir, { recursive: true, force: true })])
     }
@@ -246,13 +226,13 @@ describe('createAgentSdkDesktopObserver', () => {
     expect(emitSessionEvent.mock.calls[3]?.[0].payload).toMatchObject({ requestId: 'r:round:2', model: 'claude-test', contextWindow: { tokens: 1000, source: 'config' } })
   })
 
-  it('freezes one AGENTS.md snapshot for a logical request and reloads after the tool boundary', async () => {
+  it('loads AGENTS.md automatically, freezes one logical request, and reloads after the tool boundary', async () => {
     const workDir = await mkdtemp(path.join(os.tmpdir(), 'agents-md-observer-'))
     try {
       const filePath = path.join(workDir, 'AGENTS.md')
       await writeFile(filePath, 'instruction version one', 'utf8')
       const observer = createAgentSdkDesktopObserver({ requestId: 'agents-request', sessionId: 's', turnId: 't',
-        getWorkDir: () => workDir, agentsMdEnabled: true, contextWindow: 100_000
+        getWorkDir: () => workDir, contextWindow: 100_000
       })
       const request = { messages: [{ role: 'system' as const, content: 'system' }, { role: 'user' as const, content: 'hello' }], maxTokens: 32 }
       const first = await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request })
@@ -264,7 +244,7 @@ describe('createAgentSdkDesktopObserver', () => {
       expect(systemText(retry)).toContain('instruction version one')
       expect(systemText(retry)).not.toContain('instruction version two')
       expect(systemText(next)).toContain('instruction version two')
-      expect(first).toMatchObject({ requestMetadata: { agentsMdSnapshot: { status: 'loaded', byteLength: 23, content: 'instruction version one', source: 'AGENTS.md', scope: 'workdir-root', workDir } } })
+      expect(first?.requestMetadata).not.toHaveProperty('agentsMdSnapshot')
     } finally {
       await rm(workDir, { recursive: true, force: true })
     }
@@ -304,7 +284,7 @@ describe('createAgentSdkDesktopObserver', () => {
         registry, routeId: route.routeId, invocationId, history,
         request: { messages: [{ role: 'system', content: 'base prompt\n\n<project_memory>memory</project_memory>\n\n## Skills\nskill fragment' }, { role: 'user', content: 'hello' }], maxTokens: 100 },
         observer: createAgentSdkDesktopObserver({ requestId: invocationId, sessionId: 'session', turnId: 'agents-turn',
-          getWorkDir: () => workDir, agentsMdEnabled: true, contextWindow: 100_000 }),
+          getWorkDir: () => workDir, contextWindow: 100_000 }),
         recoverProviderAttempt: async ({ error, messages }) => error ? ({ kind: 'retry', reasonCode: 'TEMPORARY_PROVIDER_ERROR', messages }) : undefined,
         safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (value) => ({ kind: 'allow', authorizationVersion: value.authorizationVersion }) } }),
         prepareTool: async (call, stage) => ({ ...binding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName,
@@ -325,8 +305,7 @@ describe('createAgentSdkDesktopObserver', () => {
       expect(systems[1]).not.toContain('instruction B')
       expect(systems.map((system) => system.match(/<project_instructions /g)?.length ?? 0)).toEqual([1, 1, 1])
       const requestEvents = (await history.read(invocationId)).events.filter((event) => event.kind === 'model-request-started')
-      expect(requestEvents.map((event) => (event.payload as { requestMetadata: { agentsMdSnapshot: { content?: string } } }).requestMetadata.agentsMdSnapshot.content))
-        .toEqual(['instruction A', 'instruction A', 'instruction B'])
+      expect(requestEvents.every((event) => !('agentsMdSnapshot' in (event.payload as { requestMetadata: Record<string, unknown> }).requestMetadata))).toBe(true)
     } finally {
       await rm(workDir, { recursive: true, force: true })
     }

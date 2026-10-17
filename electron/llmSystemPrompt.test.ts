@@ -132,9 +132,9 @@ describe('AGENTS.md prompt section', () => {
     expect(prompt).not.toContain('<project_instructions source="AGENTS.md" scope="workdir-root">\nRun the focused test suite.\n</project_instructions>\n\nRun the focused test suite.')
   })
 
-  it('omits the instruction section when disabled or not loaded', async () => {
+  it('omits the instruction section when not loaded', async () => {
     const { buildFinalSystemPrompt: build } = await import('./llmSystemPrompt')
     expect(build({ locale: 'zh-CN', memoryEnabled: false, memoryContent: null, agentsMdContent: null })).not.toContain('project_instructions')
-    expect(build({ locale: 'zh-CN', memoryEnabled: false, memoryContent: null, agentsMdContent: 'hidden', agentsMdEnabled: false })).not.toContain('hidden')
+    expect(build({ locale: 'zh-CN', memoryEnabled: false, memoryContent: null, agentsMdContent: 'loaded automatically' })).toContain('loaded automatically')
   })
 })

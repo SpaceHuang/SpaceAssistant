@@ -180,7 +180,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     'session:create',
     async (
       _e,
-      payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown>; agentsMdEnabled?: boolean; thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort }
+      payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown>; thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort }
     ): Promise<Session> => {
       // 评审 N4:非法档位拒绝(与 session:update / config:set 同口径),不做静默丢弃
       if (payload.thinkingEffort !== undefined && !isThinkingEffort(payload.thinkingEffort)) {
@@ -191,7 +191,6 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       const s = sessionCommands.createSession({
         ...payload,
         metadata,
-        agentsMdEnabled: payload.agentsMdEnabled,
         workDirProfileId: ctx.workDirManager.getActiveProfileId()
       })
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
@@ -244,7 +243,6 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
         maxTokens?: number
         skillsState?: SessionSkillsState
         metadata?: Record<string, unknown>
-        agentsMdEnabled?: boolean
         workDirProfileId?: string
         thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort | null
       }
@@ -280,7 +278,6 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       }
       if (Object.keys(settings).length > 0) sessionCommands.updateSettings({ sessionId: payload.sessionId, ...settings })
       if (payload.metadata !== undefined) sessionCommands.updateUserMetadata(payload.sessionId, metadataPatch)
-      if (payload.agentsMdEnabled !== undefined) sessionCommands.updateAgentsMdEnabled(payload.sessionId, payload.agentsMdEnabled)
       const next = sessionQueries.readSession(payload.sessionId) ?? cur
       if (next) scheduleBackup(ctx, next.id)
       return next
