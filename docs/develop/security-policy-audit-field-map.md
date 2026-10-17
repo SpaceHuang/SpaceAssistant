@@ -10,6 +10,7 @@
 | execution veto | `policy.execution-veto`、`requestId`、`toolUseId`、`decisionId`、`priorDecision`、`toolName`、`decisionRuleId`、`factId`、`pathZone`、`failureClass`、`caseId`、可选 `invariantId` | `recordPolicyExecutionVeto` 对 factId hash化；failureClass 是共享 `ExecutionVetoFailureClass`；read/write permit subject/identity veto 关联 `SYS-PERMIT-001`，并由 permit 带出原 `decisionId` | veto 与 policy.decision 分开；缺少 decision id 时明确 `priorDecision=unavailable`；仅系统底线触发时附 invariantId，普通输入/机制失败不伪装成 invariant |
 | Dispatch / deferred approval | `dispatchKey`、`todoId`、`invocationId`、`executionState`、`notificationState`；部分 remote 任务带 channel、identity/owner、`authorizationEpoch`、rule/facts hash | deferred event 定义与 DB schema；业务 payload 按对应 store 规则脱敏/引用 | 需要逐通道核验 dispatch outcome 是否与原 decision/approval/subject digest 同链；不要将 idempotency key 当作授权身份 |
 | 许可对象 | read permit 的 `requestId`、`toolUseId`、`toolName`、`inputDigest`、targets 中 `factId`/`decisionRuleId`/path zone/kind/identity；memory permit 的 invocation/request/tool/session、plan/facts digest、revision、过期时间 | 许可在内存 registry 绑定 subject digest；执行时比较对象、过期、身份/代次 | 一次普通 `PolicyDecision` 到 receipt、permit、policy dependency fingerprint 尚未由统一契约连接 |
+| Desktop 自动批准写入结果（SessionEvent / `file.auto_approve`） | `requestId`、`toolUseId`、`decisionRuleId`、相对 `path`、`stats`、可用时的 `bytesWritten` / `added` / `removed` | 写盘成功后执行器从实际写入内容计算 UTF-8 字节数与写前/写后行差；不可用时仅记录 `stats: unavailable` | 不记录绝对路径、文件正文或 diff；失败写入不产生成功写入事实 |
 
 ## 脱敏样例（字段结构，不含真实凭据）
 

@@ -20,6 +20,7 @@
 ## 在途（in-flight）
 
 - [security-policy-three-stage-architecture-development-plan.md](./in-flight/security-policy-three-stage-architecture-development-plan.md) —— **草稿（未实施）**：安全策略三阶段架构与硬编码规则收敛开发计划（2026-10-15，`main` 新增）；自述「已审批，可以进入源码实施阶段」，但**尚未开始代码实现**。
+- [denial-diagnosability-and-auto-approved-write-facts-improvement-plan.md](./in-flight/denial-diagnosability-and-auto-approved-write-facts-improvement-plan.md) —— **源码实施与本机验收已完成**（2026-10-17）；拒绝解释和自动批准写入统计已落地，外部真机与真实 IM 场景（E-1..4）仍按计划 §4 留作非阻塞复跑。
 
 > 此前核验后 `in-flight/` 为空；归档件共 10 件见 `../archive/safety-approval/`。
 
