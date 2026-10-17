@@ -11,6 +11,7 @@ export type { AutomationTask, AutomationTaskInput, AutomationTaskSchedule, Autom
 import { getAutomationTaskWorkDirs, type AutomationTask, type AutomationTaskInput, type AutomationTaskSchedule, type AutomationDeliveryPref, type AutomationTaskRun, type AutomationTaskRunStatus, type AutomationTaskRunTrigger, type TargetBinding, type TargetSelection } from '../../src/shared/automationTaskTypes'
 
 export type TrustedTaskPreflightCommit = { targetBindings: TargetBinding[] }
+export type AutomationTaskUpdateResult = { ok: true; task: AutomationTask } | { ok: false; reason: 'task-revision-conflict' | 'schedule-pending' | 'task-not-found' }
 
 type TaskRow = {
   id: string
@@ -230,12 +231,23 @@ export function listEnabledAutomationTasksDue(db: AppDatabase, now: number): Aut
 export function updateAutomationTask(
   db: AppDatabase,
   taskId: string,
-  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[] },
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
   preflight?: TrustedTaskPreflightCommit
 ): AutomationTask | undefined {
+  const result = updateAutomationTaskConditional(db, taskId, patch, preflight)
+  return result.ok ? result.task : undefined
+}
+
+export function updateAutomationTaskConditional(
+  db: AppDatabase,
+  taskId: string,
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
+  preflight?: TrustedTaskPreflightCommit
+): AutomationTaskUpdateResult {
   const cur = getAutomationTask(db, taskId)
-  if (!cur) return undefined
-  const { clearConfig, ...fields } = patch
+  if (!cur) return { ok: false, reason: 'task-not-found' }
+  const { clearConfig, expectedTaskRevision, ...fields } = patch
+  if (expectedTaskRevision !== undefined && (cur.taskRevision ?? 0) !== expectedTaskRevision) return { ok: false, reason: 'task-revision-conflict' }
   const next: AutomationTask = {
     ...cur,
     ...fields,
@@ -275,9 +287,9 @@ export function updateAutomationTask(
       const pending = conn.prepare(`SELECT r.run_phase FROM automation_task_recovery_state s
         JOIN automation_task_runs r ON r.id=s.pending_run_id WHERE s.task_id=?`)
         .get(taskId) as { run_phase: string } | undefined
-      if (pending?.run_phase === 'queued-before-start') return false
+      if (pending?.run_phase === 'queued-before-start') return { ok: false as const, reason: 'schedule-pending' as const }
     }
-    conn
+    const updateResult = conn
       .prepare(
       `UPDATE automation_tasks SET
         name = ?, schedule_json = ?, prompt = ?, delivery_pref = ?, delivery_target = ?,
@@ -285,7 +297,7 @@ export function updateAutomationTask(
         enabled = ?, updated_at = ?, last_run_at = ?, next_run_at = ?,
         preflight_version = ?, target_bindings_json = ?,
         task_revision = ?, schedule_generation = ?
-      WHERE id = ?`
+      WHERE id = ? AND (? IS NULL OR task_revision = ?)`
       )
       .run(
       next.name,
@@ -307,17 +319,20 @@ export function updateAutomationTask(
       next.targetBindingsJson ?? null,
       next.taskRevision ?? 0,
       next.scheduleGeneration ?? 0,
-      taskId
+      taskId,
+      expectedTaskRevision ?? null,
+      expectedTaskRevision ?? null
     )
+    if (Number(updateResult.changes) !== 1) return { ok: false as const, reason: 'task-revision-conflict' as const }
     if (scheduleMutation) {
       conn.prepare(`UPDATE automation_task_recovery_state SET schedule_generation=?,recovery_cursor_at=?,updated_at=? WHERE task_id=?`)
         .run(next.scheduleGeneration ?? 0, next.nextRunAt ?? null, next.updatedAt, taskId)
     }
-    return true
+    return { ok: true as const, task: next }
   })
-  if (!committed) return undefined
+  if (!committed.ok) return committed
   db.save()
-  return next
+  return { ok: true, task: next }
 }
 
 export function deleteAutomationTask(db: AppDatabase, taskId: string): boolean {

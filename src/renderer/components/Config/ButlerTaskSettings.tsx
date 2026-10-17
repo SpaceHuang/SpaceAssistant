@@ -191,6 +191,7 @@ export function ButlerTaskSettings() {
         ? await window.api.butlerUpdateTask({
             id: editing.id,
             patch: {
+              expectedTaskRevision: editing.taskRevision ?? 0,
               name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref,
               ...(typeof values.workDir === 'string' && values.workDir.trim() ? { workDirs: [values.workDir] } : {}),
               ...(chosen ? {
@@ -211,7 +212,7 @@ export function ButlerTaskSettings() {
             reasoningEffort: values.reasoningEffort
           })
       if (!res.ok) {
-        message.error(t('butler.form.saveFailedWithError', { error: res.error ?? '' }))
+        message.error(t('butler.form.saveFailedWithError', { error: res.kind === 'preflight-blocked' ? res.report.blockers.map((item) => item.code).join(', ') : res.error ?? '' }))
         return
       }
       message.success(editing ? t('butler.updated') : t('butler.created'))
@@ -226,7 +227,11 @@ export function ButlerTaskSettings() {
 
   const toggleEnabled = async (task: AutomationTask, enabled: boolean) => {
     try {
-      await window.api.butlerUpdateTask({ id: task.id, patch: { enabled } })
+      const result = await window.api.butlerUpdateTask({ id: task.id, patch: { enabled, expectedTaskRevision: task.taskRevision ?? 0 } })
+      if (!result.ok) {
+        message.error(t('butler.form.saveFailedWithError', { error: result.kind === 'preflight-blocked' ? result.report.blockers.map((item) => item.code).join(', ') : result.error ?? '' }))
+        return
+      }
       await refresh()
     } catch {
       message.error(t('butler.saveFailed'))

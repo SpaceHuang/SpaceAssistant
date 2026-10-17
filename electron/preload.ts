@@ -23,7 +23,7 @@ const api: SpaceAssistantApi = {
   butlerGetTaskDefaults: () => ipcRenderer.invoke('butler:get-defaults'),
   butlerGetModelCandidates: () => ipcRenderer.invoke('butler:model-candidates'),
   butlerCreateTask: (payload) => ipcRenderer.invoke('butler:create', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerTaskWriteResult>,
-  butlerUpdateTask: (payload) => ipcRenderer.invoke('butler:update', payload) as Promise<{ ok: boolean; error?: string }>,
+  butlerUpdateTask: (payload) => ipcRenderer.invoke('butler:update', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerTaskWriteResult>,
   butlerDeleteTask: (payload) => ipcRenderer.invoke('butler:delete', payload) as Promise<{ ok: boolean; error?: string }>,
   butlerRunTask: (payload) => ipcRenderer.invoke('butler:run-task', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerRunTaskResult>,
 

@@ -150,10 +150,10 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **动作与产物：** create/update IPC 将 legacy 单根和新多根输入经 adapter 规范化，在同一 handler 捕获请求时间、校验、预检并原子保存字段与 `preflight_version=1`/bindings；阻断不写。v0 task 主动启用需通过预检后在一个事务升级为 v1 并启用。新增 request fingerprint/version conflict 保障。
 - **完成判据：** 旧单根请求确实调用新 preflight；blocker/超时无 insert/update；通过只写一次；编辑或启用阻断时旧 task、旧 v0 状态不变；成功编辑/启用时 task fields、bindings、version 与启用状态原子一致；新建无 legacy 参数；renderer 不能传 v0；一次性时间使用请求到达时刻且不在预检完成后重算。
 - **验证命令：** `npm exec vitest run electron/butler/butlerIpc.test.ts electron/butler/taskOnce.test.ts`；`npm run typecheck:shared`。
-- **证据：** IPC 调用计数、数据库前后快照、once 时间边界结果。
+- **证据：** `electron/butler/butlerIpc.test.ts` 覆盖旧单根更新、blocker/不可用零写入、通过后 v1 + binding 持久化、once 到达时间边界与并发 taskRevision 冲突；`electron/butler/taskStore.test.ts` 覆盖期望修订号条件提交；`npm exec vitest run -- electron/butler/butlerIpc.test.ts electron/butler/taskStore.test.ts --reporter=dot`（41 项通过）；`npm run build:electron:incremental` 通过。
 - **补充完成判据：** 运行中的 roots/prompt 编辑通过预检后可保存；它不改 running snapshot；queued claim 在 run-start CAS 时使用该事务可见的最新 revision。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-05a 在门禁接通后收紧 workDirs 类型
 

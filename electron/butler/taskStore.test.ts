@@ -4,6 +4,7 @@ import type { AppDatabase } from '../database'
 import {
   createAutomationTask,
   updateAutomationTask,
+  updateAutomationTaskConditional,
   deleteAutomationTask,
   getAutomationTask,
   listAutomationTasks,
@@ -408,6 +409,17 @@ describe('task revision and schedule generation', () => {
     expect(rescheduled).toMatchObject({ taskRevision: 2, scheduleGeneration: 1, nextRunAt: 3_610_000 })
     expect(getDbConnection(d).prepare('SELECT schedule_generation,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
       .toEqual({ schedule_generation: 1, recovery_cursor_at: 3_610_000 })
+  })
+
+  it('conditionally commits a preflight update only against its expected revision', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace'] }))
+    const newer = updateAutomationTask(d, task.id, { prompt: 'newer prompt' })!
+    const stale = updateAutomationTaskConditional(d, task.id, { prompt: 'stale overwrite', expectedTaskRevision: task.taskRevision }, {
+      targetBindings: [{ kind: 'exact', path: '/workspace/a.txt', targetType: 'file', rawText: 'a.txt', resolverVersion: 1, rootsDigest: 'roots', taskRevision: 1 }]
+    })
+    expect(stale).toEqual({ ok: false, reason: 'task-revision-conflict' })
+    expect(getAutomationTask(d, task.id)).toMatchObject({ prompt: 'newer prompt', taskRevision: newer.taskRevision, preflightVersion: 0 })
   })
 })
 
