@@ -380,6 +380,8 @@ export interface SessionStorage {
   readonly execution: SessionExecutionStore
   readonly contexts: ContextPort
   readonly recovery: SessionRecoveryPort
+  /** Ensures the per-session auxiliary event ledger before a ledger-dependent operation. */
+  ensureLedgerReady?(sessionId: string): Promise<boolean>
 }
 
 /** Host-only bootstrap inputs for existing external recovery owners. */

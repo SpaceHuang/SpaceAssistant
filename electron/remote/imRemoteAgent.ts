@@ -204,6 +204,9 @@ export async function runImRemoteAgent(args: {
     sessionEventLocation = persistedSession && resolved?.workDir
       ? { workDir: resolved.workDir, sessionId: args.sessionId, createdAt: persistedSession.createdAt }
       : undefined
+    if (sessionEventLocation && storage.ensureLedgerReady && !(await storage.ensureLedgerReady(args.sessionId))) {
+      throw new Error('SESSION_LEDGER_BLOCKED')
+    }
     sessionEventSink = sessionEventLocation
       ? getSessionEventSink(sessionEventLocation.workDir, sessionEventLocation.sessionId, sessionEventLocation.createdAt)
       : undefined

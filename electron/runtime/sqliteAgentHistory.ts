@@ -15,7 +15,9 @@ import {
   type RebuiltInvocationState
 } from '../../packages/agent-sdk/src/history'
 import { runInTransaction } from '../database/transaction'
+import { currentProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
+import { buildCanonicalToolResultProjectionTargets } from '../sessionLedgerOutbox'
 import { commitSessionTranscriptInTransaction } from '../database/sessionTranscript'
 import type { SessionTranscriptCommitIntent } from '../../packages/agent-sdk/src/history'
 import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
@@ -30,6 +32,8 @@ import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
 import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
+import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
+import { withSessionLedgerLifecycleLocks } from '../sessionLedgerLifecycle'
 
 const CANONICAL_SESSION_CACHE_VERSION = 1
 
@@ -338,12 +342,25 @@ export function reconcileTerminalContentSegments(serializedSegments: string | nu
 /** SQLite adapter for canonical SDK history. Callers must run the current migrations first. */
 export class SqliteAgentHistory implements HistoryPort {
   private readonly spillStore?: SpillStore
+  private readonly processGeneration: number
 
   constructor(private readonly conn: DatabaseSync, private readonly schemaVersion = 1, private readonly now: () => number = Date.now, private readonly sessionId?: string, spillStore?: SpillStore) {
     this.spillStore = spillStore ?? createSpillStoreForDatabase(conn)
+    this.processGeneration = currentProcessGeneration(conn)
   }
 
   async appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
+    const locationKeys = [...new Set(events.flatMap((event) => {
+      const sidecar = isRecord(event.payload) ? event.payload.sessionLedger : undefined
+      const location = isRecord(sidecar) ? sidecar.location : undefined
+      if (!isRecord(location) || typeof location.workDir !== 'string' || !location.workDir.trim() ||
+        typeof location.sessionId !== 'string' || !location.sessionId.trim() || !Number.isSafeInteger(location.createdAt)) return []
+      return [sessionLedgerLocationIdentity({ workDir: location.workDir, sessionId: location.sessionId, createdAt: location.createdAt as number }).key]
+    }))]
+    return withSessionLedgerLifecycleLocks(locationKeys, async () => this.appendBatchWithSpillFence(events, expectedVersion, transcriptCommit))
+  }
+
+  private async appendBatchWithSpillFence(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
     const withFence = this.spillStore?.withSpillRootFence
     if (typeof withFence !== 'function') return this.appendBatchUnderSpillFence(events, expectedVersion, transcriptCommit)
     let entered = false
@@ -427,8 +444,13 @@ export class SqliteAgentHistory implements HistoryPort {
           }
         }
       }
+      const projectionTargets = this.sessionId && expectedSessionGeneration
+        ? buildCanonicalToolResultProjectionTargets(this.conn, events, this.sessionId, expectedSessionGeneration, this.now())
+        : []
       const appended = appendSqliteAgentHistoryBatchInTransaction(this.conn, storedEvents, expectedVersion, {
-        schemaVersion: this.schemaVersion, now: this.now, ...(this.sessionId ? { sessionId: this.sessionId } : {})
+        schemaVersion: this.schemaVersion, now: this.now, processGeneration: this.processGeneration,
+        ...(projectionTargets.length ? { projectionTargets } : {}),
+        ...(this.sessionId ? { sessionId: this.sessionId } : {})
       })
       if (this.sessionId) {
         for (const event of events) {
@@ -1273,10 +1295,13 @@ export class SqliteAgentHistory implements HistoryPort {
   async classifyLegacyProjectionRepairs(batchSize = 100): Promise<{ classified: number; recoveryClassified: number; complete: boolean }> {
     if (!Number.isInteger(batchSize) || batchSize < 1) throw new HistoryBatchError('batchSize must be a positive integer')
     return runInTransaction(this.conn, () => {
-      const migration = this.conn.prepare(`SELECT after_invocation_id, status FROM canonical_projection_repair_migration
-        WHERE migration_key = 'legacy-classification-v1'`).get() as { after_invocation_id: string | null; status: string } | undefined
       const recoveryMigration = this.conn.prepare(`SELECT after_invocation_id, status FROM canonical_history_recovery_work_migration
         WHERE migration_key='active-invocations-v1'`).get() as { after_invocation_id: string | null; status: string } | undefined
+      const migration = this.conn.prepare(`SELECT after_invocation_id, status FROM canonical_projection_repair_migration
+        WHERE migration_key = 'legacy-classification-v1'`).get() as { after_invocation_id: string | null; status: string } | undefined
+      // Compatibility bridge: until the session-scoped projection gate is installed,
+      // legacy obligations remain resumably classified. Startup will stop calling this
+      // classifier in the integration phase, after the replacement consumer is wired.
       const classifyRepairs = Boolean(migration && migration.status !== 'complete')
       const classifyRecovery = Boolean(recoveryMigration && recoveryMigration.status !== 'complete')
       let classified = 0
@@ -1326,7 +1351,7 @@ export class SqliteAgentHistory implements HistoryPort {
         const hasMore = streams.length > batchSize
         const batch = hasMore ? streams.slice(0, batchSize) : streams
         const hasTerminal = this.conn.prepare(`SELECT 1 FROM agent_history_events
-          WHERE invocation_id=? AND sequence=? AND kind IN ('invocation-completed','invocation-failed','invocation-interrupted') LIMIT 1`)
+          WHERE invocation_id=? AND sequence=? AND kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked') LIMIT 1`)
         const addWork = this.conn.prepare(`INSERT INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
           VALUES(?,?,?) ON CONFLICT(invocation_id) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at`)
         const removeWork = this.conn.prepare('DELETE FROM canonical_history_recovery_work WHERE invocation_id=?')
@@ -1369,47 +1394,43 @@ export class SqliteAgentHistory implements HistoryPort {
     }
   }
 
-  /** Returns only durable unfinished work after backfill; exhaustive enumeration is temporary during backfill. */
+  /** Returns the durable unfinished-work set while legacy rows are incorporated in resumable batches. */
   listStartupRecoveryWorkset(): Array<{ invocationId: string; sessionId: string | null }> {
+    const processGeneration = currentProcessGeneration(this.conn)
     const migration = this.conn.prepare(`SELECT status FROM canonical_history_recovery_work_migration
       WHERE migration_key='active-invocations-v1'`).get() as { status: string } | undefined
-    if (migration?.status === 'complete') {
-      return this.conn.prepare(`SELECT work.invocation_id,work.session_id FROM canonical_history_recovery_work work
-        LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=work.session_id
-        WHERE cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')
-        ORDER BY work.invocation_id`).all()
-        .map((row) => {
-          const value = row as { invocation_id: string; session_id: string | null }
-          return { invocationId: value.invocation_id, sessionId: value.session_id }
-        })
-    }
-    return (this.conn.prepare(`SELECT streams.invocation_id,streams.session_id FROM agent_history_streams streams
+    const query = migration?.status === 'complete' ? `SELECT work.invocation_id,work.session_id FROM canonical_history_recovery_work work
+      LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=work.session_id
+      WHERE cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')
+        ${processGeneration > 0 ? `AND (work.owner_generation IS NULL OR work.owner_generation < ${processGeneration})` : ''}
+      ORDER BY work.invocation_id` : `SELECT streams.invocation_id,streams.session_id FROM agent_history_streams streams
       LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=streams.session_id
       WHERE NOT EXISTS (SELECT 1 FROM agent_history_events terminal
-          WHERE terminal.invocation_id=streams.invocation_id
-            AND terminal.kind IN ('invocation-completed','invocation-failed'))
+          WHERE terminal.invocation_id=streams.invocation_id AND terminal.sequence=streams.version
+            AND terminal.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked'))
+        ${processGeneration > 0 ? `AND NOT EXISTS (SELECT 1 FROM canonical_history_recovery_work current_work
+          WHERE current_work.invocation_id=streams.invocation_id AND current_work.owner_generation>=${processGeneration})` : ''}
         AND (cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
-      ORDER BY streams.invocation_id`).all() as
-      Array<{ invocation_id: string; session_id: string | null }>).map(({ invocation_id, session_id }) => ({
-      invocationId: invocation_id, sessionId: session_id
-    }))
+      ORDER BY streams.invocation_id`
+    return this.conn.prepare(query).all()
+      .map((row) => {
+        const value = row as { invocation_id: string; session_id: string | null }
+        return { invocationId: value.invocation_id, sessionId: value.session_id }
+      })
   }
 
   /** Reports only recovery work that startup will actually attempt now; backed-off repairs stay out of this count. */
   getStartupRecoveryWorkSummary(): { unfinishedInvocationCount: number; dueProjectionRepairCount: number; hasWork: boolean } {
     const unfinishedInvocationCount = this.listStartupRecoveryWorkset().length
-    const repairRows = this.conn.prepare(`SELECT repairs.attempts,repairs.updated_at,
-        COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
+    const now = this.now()
+    const dueProjectionRepairCount = (this.conn.prepare(`SELECT COUNT(*) AS count
         FROM canonical_projection_repairs repairs
         LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-        WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
-          cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).all() as Array<{
-            attempts: number; updated_at: number; invocation_repair_count: number
-          }>
-    const now = this.now()
-    const dueProjectionRepairCount = repairRows.filter((row) =>
-      now - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
-    ).length
+        WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND
+          (cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')) AND
+          (repairs.attempts=0 OR repairs.updated_at<=?-CASE repairs.attempts
+            WHEN 1 THEN 1800000 WHEN 2 THEN 3600000 WHEN 3 THEN 7200000 WHEN 4 THEN 14400000
+            WHEN 5 THEN 28800000 WHEN 6 THEN 57600000 ELSE 86400000 END)`).get(now) as { count: number }).count
     return {
       unfinishedInvocationCount,
       dueProjectionRepairCount,
@@ -1887,20 +1908,20 @@ export class SqliteAgentHistory implements HistoryPort {
       invocation_id: invocationId, session_id: sessionId
     }))
     const recovered: RebuiltInvocationState[] = []
+      const retryTime = this.now()
       const repairRows = this.conn.prepare(`SELECT repairs.repair_id,repairs.invocation_id,repairs.repair_kind,repairs.target_key,
-          repairs.attempts,repairs.updated_at,COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
+          repairs.attempts,repairs.updated_at
           FROM canonical_projection_repairs repairs
           LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-          WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
-            cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
-          ORDER BY repairs.updated_at,repairs.repair_id`).all() as Array<{
-            repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number;
-            invocation_repair_count: number
+          WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND
+            (cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')) AND
+            (repairs.attempts=0 OR repairs.updated_at<=?-CASE repairs.attempts
+              WHEN 1 THEN 1800000 WHEN 2 THEN 3600000 WHEN 3 THEN 7200000 WHEN 4 THEN 14400000
+              WHEN 5 THEN 28800000 WHEN 6 THEN 57600000 ELSE 86400000 END)
+          ORDER BY repairs.updated_at,repairs.repair_id`).all(retryTime) as Array<{
+            repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number
           }>
-      const retryTime = this.now()
-      const dueRepairRows = repairRows.filter((row) =>
-        retryTime - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
-      )
+      const dueRepairRows = repairRows
       const work = new Map<string, { sessionId: string | null; repairIds: string[] }>()
     for (const row of streams) work.set(row.invocation_id, { sessionId: row.session_id, repairIds: [] })
     for (const row of dueRepairRows) {
@@ -2020,7 +2041,13 @@ export class SqliteAgentHistory implements HistoryPort {
               (terminalState === 'interrupted' && payload.status === 'cancelled' && ledger.reason === 'cancelled'))) {
             const repairLocation = location as CompactionLedgerLocation
             try {
-              await options.repairInvocationTerminal(repairLocation, { status: payload.status as string, turnId: ledger.turnId, reason: ledger.reason })
+              const processRestart = event.kind === 'invocation-interrupted' && payload.status === 'interrupted' &&
+                (event.payload as { reason?: unknown }).reason === 'process-restart'
+              const toolUseIds = processRestart ? pendingInterruptedToolUseIds(snapshot.events) : []
+              await options.repairInvocationTerminal(repairLocation, {
+                status: payload.status as string, turnId: ledger.turnId, reason: ledger.reason,
+                ...(processRestart ? { canonicalTerminalEventId: event.eventId, toolUseIds } : {})
+              })
               markEventRepair(event.eventId, true)
             }
             catch (error) {
@@ -2374,13 +2401,16 @@ export class SqliteAgentHistory implements HistoryPort {
             }
           }
         }
-        const terminal = { status: 'interrupted', turnId: lastEvent.turnId, reason: 'interrupted' }
+        const processRestartEventId = `${invocationId}:history:${sequence}`
+        const toolUseIds = pendingInterruptedToolUseIds(snapshot.events)
+        const terminal = { status: 'interrupted', turnId: lastEvent.turnId, reason: 'interrupted',
+          canonicalTerminalEventId: processRestartEventId, toolUseIds }
         await this.appendBatch([{
           invocationId,
           turnId: lastEvent.turnId,
           sequence,
           schemaVersion: snapshot.schemaVersion,
-          eventId: `${invocationId}:history:${sequence}`,
+          eventId: processRestartEventId,
           idempotencyKey: `${invocationId}:invocation-interrupted:${sequence}`,
           kind: 'invocation-interrupted',
           payload: {
@@ -2389,7 +2419,7 @@ export class SqliteAgentHistory implements HistoryPort {
           }
         }], snapshot.version)
         if (recoveryLocation && options.repairInvocationTerminal) {
-          const recoveryTerminalEventId = `${invocationId}:history:${sequence}`
+          const recoveryTerminalEventId = processRestartEventId
           const recoveryRepairId = `${invocationId}:invocation-projections:${recoveryTerminalEventId}`
           try {
             await options.repairInvocationTerminal(recoveryLocation, terminal)
@@ -2409,6 +2439,19 @@ export class SqliteAgentHistory implements HistoryPort {
     }
     return recovered
   }
+}
+
+function pendingInterruptedToolUseIds(events: readonly HistoryEvent[]): string[] {
+  const pending = new Set<string>()
+  for (const event of events) {
+    const payload = event.payload as { toolCallId?: unknown } | undefined
+    if (event.kind === 'tool-call-started' && typeof payload?.toolCallId === 'string' && payload.toolCallId.trim()) {
+      pending.add(payload.toolCallId)
+    } else if (['tool-call-finished', 'tool-call-not-dispatched', 'tool-call-deferred'].includes(event.kind) && typeof payload?.toolCallId === 'string') {
+      pending.delete(payload.toolCallId)
+    }
+  }
+  return [...pending].sort()
 }
 
 function fromRow(row: EventRow): HistoryEvent {

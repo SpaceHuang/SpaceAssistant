@@ -309,6 +309,9 @@ async function runButlerModelTurn(
   const sessionStorage = args.sessionStorage
   const session = sessionStorage.queries.readSession(args.sessionId)
   if (!session) return { ok: false, error: 'BUTLER_SESSION_MISSING' }
+  if (sessionStorage.ensureLedgerReady && !(await sessionStorage.ensureLedgerReady(args.sessionId))) {
+    return { ok: false, error: 'SESSION_LEDGER_BLOCKED' }
+  }
 
   const toolsConfig = deps.getToolsConfig()
   let rawMessages: import('../../src/shared/domainTypes').Message[]

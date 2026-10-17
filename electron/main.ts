@@ -56,7 +56,7 @@ import { signalChatCancel } from './chatCancelRegistry'
 import { cancelAllToolConfirmsForRequest } from './toolConfirmRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { beginSessionEventShutdown, withSessionEventWriterDrain, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, hasActiveSessionEventSink, reconcileInterruptedSessionEventLedger, setSessionEventCommitObserver } from './sessionEvents'
 import { createCanonicalSessionProjectionRetentionPreparer, createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
@@ -70,6 +70,7 @@ import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageSt
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
 import { getDbConnection } from './database/sqliteStore'
+import { advanceProcessGeneration, currentProcessGeneration } from './database/processGeneration'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { classifySessionHistoryRepairFailure } from './runtime/sessionHistoryRecoveryDiagnostics'
 import { SessionProjectionMigrationApplication } from './runtime/sessionProjectionMigrationApplication'
@@ -79,6 +80,11 @@ import { SESSION_STORAGE_HISTORY_FORMAT_VERSION, SESSION_STORAGE_SPILL_FORMAT_VE
 import { scheduleSessionMessageContentCleanupMaintenance } from './storage/sessionMessageContentCleanupMaintenance'
 import { scheduleSpillReferenceBackfill } from './storage/spillReferenceBackfillScheduler'
 import { getSessionLedgerRecoveryRoots, isSessionLedgerLocationAllowed, resolveSessionLedgerLocation as resolveAcceptedInputLedgerLocation, toSessionLedgerToolCallProjection, toSessionLedgerToolResultProjection } from './runtime/sessionLedgerRecovery'
+import { ensureSessionLedgerReady } from './sessionLedgerLifecycle'
+import { createProductionSessionLedgerLifecycleDependencies } from './runtime/sessionLedgerLifecycleProduction'
+import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
+import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
+import { readSessionLedgerReadiness, refreshSessionLedgerReadyProof } from './sessionLedgerReadiness'
 import { SCHEMA_META_KEYS } from './database/schema'
 import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
 import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
@@ -467,6 +473,7 @@ app.whenReady().then(async () => {
     // 压缩换入崩溃对账必须在 openDatabase 之前：DatabaseSync 打开缺失路径会静默建空库。
     measureStartupPhase('database.compact-recovery', () => reconcileInterruptedCompaction(dbPath))
     db = await measureStartupPhase('database.open-and-migrations', () => openDatabase(dbPath))
+    await measureStartupPhase('database.process-generation-fence', () => advanceProcessGeneration(getDbConnection(db)))
     remoteAuthorizationRegistry.bindPersistentEpochStore(createRemoteAuthorizationEpochStore(db))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -489,9 +496,23 @@ app.whenReady().then(async () => {
   let sessionHistoryRepairFailureCount = 0
   let recoveredInvocationCount = 0
   let sessionLedgerRepairFailureCount = 0
+  const logSessionLedgerGateTrace = (trace: import('./sessionLedgerLifecycle').SessionLedgerLifecycleTrace) => {
+    logAgentEvent('info', 'session.history.recovery', {
+      kind: 'session-ledger-gate', phase: trace.operation, status: trace.status, durationMs: trace.durationMs,
+      baselineScanCount: trace.baselineScanCount, projectedCount: trace.projectedCount,
+      ...(trace.failureClass ? { reasonCode: trace.failureClass } : {})
+    })
+  }
   let sessionHistoryRecoverySucceeded = false
   const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
   const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
+  const sessionLedgerLifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db))
+  const processGeneration = currentProcessGeneration(getDbConnection(db))
+  setSessionEventCommitObserver(async (location) => {
+    const identity = sessionLedgerLocationIdentity(location)
+    const proof = await sessionLedgerLifecycleDependencies.readProof(location)
+    if (proof) refreshSessionLedgerReadyProof(getDbConnection(db), identity.key, proof)
+  })
   let requestMcpArtifactCapacitySweep: (() => void) | undefined
   let requestAgentLogRetention: (() => void) | undefined
   const dailyRetentionTask = (taskId: string, policyFingerprint: () => string | Promise<string>, rootFingerprint: () => string | undefined,
@@ -515,6 +536,24 @@ app.whenReady().then(async () => {
     storage: {
     getTurnRuntime: () => turnRuntime,
     getUserDataDir: () => app.getPath('userData'),
+    ensureSessionLedgerReady: async ({ session, workDir }) => {
+      const result = await ensureSessionLedgerReady({
+        conn: getDbConnection(db),
+        location: { workDir, sessionId: session.id, createdAt: session.createdAt },
+        sessionGeneration: session.generation,
+        processGeneration,
+        retryBlocked: true,
+        dependencies: sessionLedgerLifecycleDependencies,
+        onTrace: logSessionLedgerGateTrace
+      })
+      if (result.status === 'blocked') {
+        sessionLedgerRepairFailureCount += 1
+        logAgentEvent('warn', 'session.history.repair.failed', {
+          kind: 'session-ledger-gate', reasonCode: result.readiness.failureClass ?? 'unknown'
+        })
+      }
+      return result.status === 'ready'
+    },
     getWorkDirForSession: (sessionId) => {
       if (!workDirManager) return recoveryWorkDir
       return resolveWorkDirForSession(
@@ -550,7 +589,34 @@ app.whenReady().then(async () => {
         () => JSON.stringify(resolveRetentionPolicyFromDb(db).sessionEventMaxSessions), () => workDir, async () => {
         const shouldRetain = createSessionLedgerCompactionDependencyGuard(db)
         const result = await runSessionEventRetentionMaintenance(db, workDir, {
-          prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db), shouldRetainSessionDir: shouldRetain
+          prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db), shouldRetainSessionDir: shouldRetain,
+          withSessionLifecycleLock: async (sessionName, root, operation) => {
+            const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1] ?? sessionName
+            const session = sessionStorage.queries.readSession(sessionId)
+            const key = sessionLedgerLocationIdentity({ workDir: root, sessionId, createdAt: session?.createdAt ?? 0 }).key
+            return session
+              ? withSessionEventWriterDrain(root, sessionId, () => withSessionLedgerLifecycleLock(key, operation))
+              : withSessionLedgerLifecycleLock(key, operation)
+          },
+          ensureReadyBeforeDelete: async (sessionName, root) => {
+            const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1]
+            const session = sessionId ? sessionStorage.queries.readSession(sessionId) : undefined
+            if (!sessionId || !session) return false
+            const result = await ensureSessionLedgerReady({ conn: getDbConnection(db),
+              location: { workDir: root, sessionId, createdAt: session.createdAt }, sessionGeneration: session.generation,
+              processGeneration, retryBlocked: true, dependencies: sessionLedgerLifecycleDependencies, onTrace: logSessionLedgerGateTrace })
+            return result.status === 'ready'
+          },
+          verifyReadyBeforeDelete: async (sessionName, root) => {
+            const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1]
+            const session = sessionId ? sessionStorage.queries.readSession(sessionId) : undefined
+            if (!sessionId || !session) return false
+            const location = { workDir: root, sessionId, createdAt: session.createdAt }
+            const key = sessionLedgerLocationIdentity(location).key
+            const readiness = readSessionLedgerReadiness(getDbConnection(db), key)
+            const pending = getDbConnection(db).prepare("SELECT 1 FROM session_ledger_projection_outbox WHERE ledger_location_key=? AND status='pending' LIMIT 1").get(key)
+            return readiness?.state === 'ready' && !pending && !hasActiveSessionEventSink(root, sessionId, session.createdAt)
+          }
         })
         for (const failure of result.summary.failures) console.warn('[sessionEvents] retention cleanup failed:', failure.sessionName, failure.error)
         if (result.summary.failures.length) {
@@ -695,6 +761,15 @@ app.whenReady().then(async () => {
     if (recoveryStatusRequired || startupHistory.getStartupRecoveryWorkSummary().hasWork) {
       await showStartupStatus('正在整理历史会话数据，请稍候…')
     }
+    const withAcceptedSessionLedger = async <T>(location: { workDir: string; sessionId: string; createdAt: number }, operation: () => Promise<T>): Promise<T> => {
+      if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) throw new Error('canonical session ledger location does not match a configured workspace root')
+      const session = sessionStorage.queries.readSession(location.sessionId)
+      if (!session) throw new Error('SESSION_LEDGER_SESSION_MISSING')
+      const ready = await ensureSessionLedgerReady({ conn: getDbConnection(db), location, sessionGeneration: session.generation,
+        processGeneration, retryBlocked: true, dependencies: sessionLedgerLifecycleDependencies, onTrace: logSessionLedgerGateTrace })
+      if (ready.status !== 'ready') throw new Error(`SESSION_LEDGER_BLOCKED:${ready.readiness.failureClass ?? 'unknown'}`)
+      return operation()
+    }
     const interrupted = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocations({
       resolveSessionLedgerLocation: (sessionId) => {
         const session = sessionStorage.queries.readSession(sessionId)
@@ -714,71 +789,67 @@ app.whenReady().then(async () => {
         logAgentEvent('warn', 'tool.error', { requestId: invocationId, sessionId, toolName: 'history-session-location-recovery', message: error instanceof Error ? error.message : String(error) })
       },
       repairCompaction: async (location, start, summary) => {
-        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
-          throw new Error('canonical compaction ledger location does not match a configured workspace root')
-        }
-        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-        try { await ensureCompactionTransaction(sink, start, summary) }
-        finally { await sink.close() }
+        await withAcceptedSessionLedger(location, async () => {
+          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          try { await ensureCompactionTransaction(sink, start, summary) }
+          finally { await sink.close() }
+        })
       },
       repairToolLedger: async (location, result) => {
-        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
-          throw new Error('canonical tool ledger location does not match a configured workspace root')
-        }
-        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-        try { await ensureToolResultEvent(sink, toSessionLedgerToolResultProjection(result as { toolUseId: string; turnId?: string; stepId: string; result: Record<string, unknown> })) }
-        finally { await sink.close() }
+        await withAcceptedSessionLedger(location, async () => {
+          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          try { await ensureToolResultEvent(sink, toSessionLedgerToolResultProjection(result as { toolUseId: string; turnId?: string; stepId: string; result: Record<string, unknown> })) }
+          finally { await sink.close() }
+        })
       },
       repairInvocationTerminal: async (location, terminal) => {
-        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
-          throw new Error('canonical invocation terminal ledger location does not match a configured workspace root')
-        }
-        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-        try {
-          await ensureTurnStartEvent(sink, String(terminal.turnId))
-          await ensureTurnEndEvent(sink, String(terminal.turnId), String(terminal.reason))
-        }
-        finally { await sink.close() }
+        await withAcceptedSessionLedger(location, async () => {
+          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          try {
+            await ensureTurnStartEvent(sink, String(terminal.turnId))
+            await ensureTurnEndEvent(sink, String(terminal.turnId), String(terminal.reason))
+          }
+          finally { await sink.close() }
+          if (typeof terminal.canonicalTerminalEventId === 'string') await reconcileInterruptedSessionEventLedger({
+            ...location, turnId: String(terminal.turnId), canonicalTerminalEventId: terminal.canonicalTerminalEventId,
+            toolUseIds: Array.isArray(terminal.toolUseIds) ? terminal.toolUseIds.filter((value): value is string => typeof value === 'string') : []
+          })
+        })
       },
       repairToolCallLedger: async (location, toolCall) => {
-        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
-          throw new Error('canonical tool ledger location does not match a configured workspace root')
-        }
-        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-        try { await ensureToolCallEvent(sink, toSessionLedgerToolCallProjection(toolCall as { toolUseId: string; turnId?: string; stepId: string; name: string; args: Record<string, unknown> })) }
-        finally { await sink.close() }
+        await withAcceptedSessionLedger(location, async () => {
+          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          try { await ensureToolCallEvent(sink, toSessionLedgerToolCallProjection(toolCall as { toolUseId: string; turnId?: string; stepId: string; name: string; args: Record<string, unknown> })) }
+          finally { await sink.close() }
+        })
       },
       repairModelRequestLedger: async (location, projection) => {
-        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
-          throw new Error('canonical model request ledger location does not match a configured workspace root')
-        }
-        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-        try { await ensureRequestProjectionEvents(sink, projection) }
-        finally { await sink.close() }
+        await withAcceptedSessionLedger(location, async () => {
+          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          try { await ensureRequestProjectionEvents(sink, projection) }
+          finally { await sink.close() }
+        })
       },
       repairProviderRetryLedger: async (location, retry) => {
-        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
-          throw new Error('canonical provider retry ledger location does not match a configured workspace root')
-        }
-        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-        try { await ensureRequestRetryEvent(sink, retry) }
-        finally { await sink.close() }
+        await withAcceptedSessionLedger(location, async () => {
+          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          try { await ensureRequestRetryEvent(sink, retry) }
+          finally { await sink.close() }
+        })
       },
       repairUsageLedger: async (location, requestUsage) => {
-        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
-          throw new Error('canonical usage ledger location does not match a configured workspace root')
-        }
-        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-        try { await ensureRequestUsageEvent(sink, requestUsage) }
-        finally { await sink.close() }
+        await withAcceptedSessionLedger(location, async () => {
+          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          try { await ensureRequestUsageEvent(sink, requestUsage) }
+          finally { await sink.close() }
+        })
       },
       repairFinalRequestContextLedger: async (location, requestContext) => {
-        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
-          throw new Error('canonical final request context ledger location does not match a configured workspace root')
-        }
-        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-        try { await ensureFinalRequestContextEvent(sink, requestContext) }
-        finally { await sink.close() }
+        await withAcceptedSessionLedger(location, async () => {
+          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+          try { await ensureFinalRequestContextEvent(sink, requestContext) }
+          finally { await sink.close() }
+        })
       },
       onCompactionRepairError: (error, invocationId, compactionId) => {
         void invocationId
@@ -1035,36 +1106,12 @@ app.whenReady().then(async () => {
   // Runtime 已建立后再处理无 turn 的孤儿消息，随后由 appIpc 的同一 recovery 装配继续恢复持久化 turn。
   cleanupStreamingResiduesOnStartup(db)
   try {
-    const recovery = await measureStartupPhase('session-ledger.reconcile', () => reconcileSessionEventFilesDetailed(workDirState))
-    sessionLedgerRepairFailureCount += recovery.failures.length
-    for (const session of recovery.sessions) {
-      for (const issue of session.issues) {
-        console.warn('[sessionEvents] startup event integrity issue:', {
-          sessionName: session.sessionName,
-          eventsPath: issue.eventsPath,
-          line: issue.line,
-          code: issue.code,
-          truncated: issue.truncated,
-          dataLossPossible: issue.dataLossPossible,
-          message: issue.message
-        })
-      }
-    }
-    for (const failure of recovery.failures) {
-      console.warn('[sessionEvents] startup recovery degraded:', {
-        sessionName: failure.sessionName,
-        phase: failure.phase,
-        eventsPath: failure.eventsPath,
-        jsonlCommitted: failure.jsonlCommitted,
-        error: failure.error instanceof Error ? failure.error.message : String(failure.error)
-      })
-    }
-    // S3(偏差 24):保留上限适用于全部 profile roots；仍有 canonical 或台账 compaction 重放依赖的会话先保留。
+    // History 恢复只访问 active invocation；其余 ledger 在具体会话消费者首次请求时按 location gate。
+    // 本阶段不枚举 sessions/，避免已完成历史规模影响窗口启动。
     const spillRoot = path.join(app.getPath('userData'), 'spill')
     await measureStartupPhase('spill-source-truth-gc', () => runSourceTruthSpillGcMaintenance(db, spillRoot))
   } catch (error) {
-    // 目录级扫描失败也不能阻断 IPC 注册和窗口创建；下一次启动继续重试。
-    console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))
+    console.warn('[sessionEvents] source-truth maintenance failed:', error instanceof Error ? error.message : String(error))
   }
   const sessionRecoveryReport = await measureStartupPhase('session-storage.recovery', () => sessionStorage.recovery.recover())
   console.info('[sessionStorage] startup recovery report:', {

@@ -53,6 +53,21 @@ import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { openDatabase } from './index'
 
 describe('appendMessage stored count', () => {
+  it('registers a new ledger location with bootstrap provenance in the session creation transaction', () => {
+    const db = createMemoryAppDb()
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile-a', name: 'A', path: '/workspace/a', isDefault: true }]))
+    setConfigValue(db, 'config.activeWorkDirProfileId', 'profile-a')
+    const session = createSession(db, { name: 'bootstrap-ledger', workDirProfileId: 'profile-a' })
+    const conn = getDbConnection(db)
+    const row = conn.prepare('SELECT work_dir_identity,created_at,session_generation,origin,state,bootstrap_id FROM session_ledger_projection_state WHERE session_id=?')
+      .get(session.id) as { work_dir_identity: string; created_at: number; session_generation: string; origin: string; state: string; bootstrap_id: string }
+    expect(row).toMatchObject({ created_at: session.createdAt, session_generation: session.generation, origin: 'new_location', state: 'uninitialized' })
+    expect(row.work_dir_identity).toMatch(/^[a-f0-9]{64}$/)
+    expect(row.bootstrap_id).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(JSON.stringify(row)).not.toContain('/workspace/a')
+    db.close()
+  })
+
   it('keeps the stored session message counter equal to inserted rows across sequential appends', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'incremental-message-count' })

@@ -141,6 +141,22 @@ describe('SQLite session storage public queries', () => {
     expect(bound.messages).toEqual([])
   })
 
+  it('gates only ledger-dependent context replay while canonical chat history remains readable', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'blocked-ledger-context' })
+    appendMessagesAtomically(db, [{ id: 'still-readable', sessionId: session.id, role: 'user', content: 'canonical', timestamp: 1, status: 'sent' }])
+    const getLedger = vi.fn()
+    const storage = createSqliteSessionStorage(db, {
+      getWorkDirForSession: () => '/tmp/blocked-context', getUserDataDir: () => '/tmp',
+      getSessionEventSink: getLedger as never,
+      ensureSessionLedgerReady: async () => false
+    })
+    expect(storage.queries.readApiBaseline({ sessionId: session.id, limit: 10 }).entries.map(({ message }) => message.content)).toEqual(['canonical'])
+    await expect(createBoundSessionContextAdapter(storage.contexts, { sessionId: session.id, isBusy: () => false }))
+      .rejects.toThrow('SESSION_LEDGER_BLOCKED')
+    expect(getLedger).not.toHaveBeenCalled()
+  })
+
   it('rebuilds readCurrent from committed compaction shadow after recreating the session adapter', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'restart-context-shadow' })

@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 99
+export const DB_SCHEMA_VERSION = 102
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -1919,7 +1919,7 @@ AFTER INSERT ON agent_history_streams BEGIN
   WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
 CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_stream_update
@@ -1930,14 +1930,14 @@ AFTER UPDATE ON agent_history_streams BEGIN
   WHERE stream.invocation_id=OLD.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
   INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
   SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
   WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
 CREATE TRIGGER IF NOT EXISTS remove_history_recovery_work_for_stream_delete
@@ -1952,7 +1952,7 @@ AFTER INSERT ON agent_history_events BEGIN
   WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
 CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_event_update
@@ -1963,14 +1963,14 @@ AFTER UPDATE ON agent_history_events BEGIN
   WHERE stream.invocation_id=OLD.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
   INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
   SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
   WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
 CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_event_delete
@@ -1981,9 +1981,76 @@ AFTER DELETE ON agent_history_events BEGIN
   WHERE stream.invocation_id=OLD.invocation_id AND NOT EXISTS (
     SELECT 1 FROM agent_history_events event
     WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
-      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted','invocation-parked')
   );
 END;
+`
+
+/** v99 → v100: durable process fencing and owner generation on the active invocation registry. */
+export const MIGRATION_V100_PROCESS_GENERATION_SQL = `
+CREATE TABLE IF NOT EXISTS process_generation_state (
+  singleton_id INTEGER PRIMARY KEY NOT NULL CHECK(singleton_id=1),
+  current_generation INTEGER NOT NULL CHECK(current_generation>=0),
+  updated_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO process_generation_state(singleton_id,current_generation,updated_at) VALUES(1,0,0);
+`
+
+/** v100 → v101: durable per-ledger readiness, bootstrap provenance, and projection target state. */
+export const MIGRATION_V101_SESSION_LEDGER_READINESS_SQL = `
+CREATE TABLE IF NOT EXISTS session_ledger_projection_state (
+  ledger_location_key TEXT PRIMARY KEY NOT NULL UNIQUE,
+  work_dir_identity TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  session_generation TEXT NOT NULL,
+  origin TEXT NOT NULL CHECK(origin IN ('new_location','legacy')),
+  state TEXT NOT NULL CHECK(state IN ('uninitialized','initializing','unknown','checking','ready','dirty','blocked')),
+  bootstrap_id TEXT,
+  ledger_generation INTEGER NOT NULL DEFAULT 0 CHECK(ledger_generation>=0),
+  canonical_watermark TEXT,
+  proof_file_identity TEXT,
+  proof_file_bytes INTEGER,
+  proof_tail_frame TEXT,
+  proof_index_seq INTEGER,
+  proof_index_event_count INTEGER,
+  proof_index_bytes INTEGER,
+  proof_index_last_at INTEGER,
+  check_token TEXT,
+  checked_at INTEGER,
+  owner_reconciled_process_generation INTEGER NOT NULL DEFAULT 0 CHECK(owner_reconciled_process_generation>=0),
+  retry_scope TEXT CHECK(retry_scope IS NULL OR retry_scope IN ('baseline','target')),
+  failure_class TEXT,
+  updated_at INTEGER NOT NULL,
+  CHECK((origin='new_location' AND bootstrap_id IS NOT NULL) OR (origin='legacy' AND bootstrap_id IS NULL)),
+  UNIQUE(work_dir_identity,session_id,created_at)
+);
+CREATE INDEX IF NOT EXISTS idx_session_ledger_projection_state_session
+  ON session_ledger_projection_state(session_id,session_generation);
+`
+
+/** v101 → v102: transactional canonical-to-ledger projection targets. */
+export const MIGRATION_V102_SESSION_LEDGER_OUTBOX_SQL = `
+CREATE TABLE IF NOT EXISTS session_ledger_projection_outbox (
+  target_id TEXT PRIMARY KEY NOT NULL,
+  ledger_location_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  session_generation TEXT NOT NULL,
+  canonical_event_id TEXT NOT NULL,
+  canonical_sequence INTEGER NOT NULL CHECK(canonical_sequence>=1),
+  projection_order INTEGER NOT NULL DEFAULT 0 CHECK(projection_order>=0),
+  projection_kind TEXT NOT NULL,
+  expected_events_json TEXT NOT NULL,
+  expected_event_ids_json TEXT NOT NULL,
+  payload_sha256 TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','acked')),
+  created_at INTEGER NOT NULL,
+  acked_at INTEGER,
+  UNIQUE(ledger_location_key,canonical_event_id,projection_kind),
+  FOREIGN KEY(ledger_location_key) REFERENCES session_ledger_projection_state(ledger_location_key) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_session_ledger_projection_outbox_pending
+  ON session_ledger_projection_outbox(ledger_location_key,status,canonical_sequence,projection_order);
 `
 
 /** v51: preserve stable catalog/provider/route identity on usage facts. */

@@ -12,6 +12,7 @@ import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPe
 import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
 import { runMigrations } from '../database/migrations'
+import { advanceProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { runInTransaction } from '../database/transaction'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
@@ -46,6 +47,118 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it('registers tool-result projection obligations with the canonical completion transaction', async () => {
+    const conn = createDb()
+    const sessionId = 'outbox-canonical-session'
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'history-outbox-root-'))
+    conn.prepare(`INSERT INTO sessions(id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation,work_dir_profile_id)
+      VALUES(?, 'outbox', 'model', 0.7, 1024, 1000, 1000, '{}', '{}', 1, 'outbox-generation', 'profile')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+    const location = { workDir, sessionId, createdAt: 1000 }
+    await history.appendBatch([
+      { ...event('outbox-proposal', 1), kind: 'model-response-committed', payload: {
+        modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'outbox-tool', name: 'read_file', input: { path: 'a.txt' } }] },
+        sessionLedger: { location, stepId: 'outbox-step', toolCalls: [{ toolUseId: 'outbox-tool', name: 'read_file', args: { path: 'a.txt' } }] }
+      } },
+      { ...event('outbox-result', 2), kind: 'tool-call-finished', payload: { toolCallId: 'outbox-tool', result: { success: true, data: 'ok' },
+        sessionLedger: { location, stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } } } }
+    ], 0)
+
+    const target = conn.prepare(`SELECT outbox.projection_kind,outbox.canonical_event_id,outbox.expected_event_ids_json,outbox.expected_events_json,
+      state.origin,state.state FROM session_ledger_projection_outbox outbox
+      JOIN session_ledger_projection_state state USING(ledger_location_key) WHERE outbox.canonical_event_id='outbox-result'`).get()
+    expect(target).toMatchObject({ projection_kind: 'tool-result', canonical_event_id: 'outbox-result', origin: 'legacy', state: 'dirty' })
+    expect(JSON.parse((target as { expected_event_ids_json: string }).expected_event_ids_json)).toEqual(['tool_result:outbox-tool'])
+    expect(JSON.parse((target as { expected_events_json: string }).expected_events_json)).toEqual([{
+      type: 'tool_result', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } }
+    }])
+    const proposalTarget = conn.prepare(`SELECT projection_kind,canonical_event_id,expected_events_json FROM session_ledger_projection_outbox
+      WHERE canonical_event_id='outbox-proposal'`).get() as { projection_kind: string; canonical_event_id: string; expected_events_json: string }
+    expect(proposalTarget).toMatchObject({ projection_kind: 'tool-call:outbox-tool', canonical_event_id: 'outbox-proposal' })
+    expect(JSON.parse(proposalTarget.expected_events_json)).toEqual([{
+      type: 'tool_call', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', name: 'read_file', args: { path: 'a.txt' }, turnId: 'turn-1' }
+    }])
+    await fs.rm(workDir, { recursive: true, force: true })
+    conn.close()
+  })
+
+  it('registers the model request header/context pair as one canonical projection target', async () => {
+    const conn = createDb()
+    const sessionId = 'outbox-request-session'
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'history-outbox-request-root-'))
+    conn.prepare(`INSERT INTO sessions(id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation,work_dir_profile_id)
+      VALUES(?, 'outbox', 'model', 0.7, 1024, 1000, 1000, '{}', '{}', 1, 'request-generation', 'profile')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+    const location = { workDir, sessionId, createdAt: 1000 }
+    const requestHeader = { requestId: 'request-invocation:round:1', attempt: 1, turnId: 'request-turn' }
+    const requestContext = { requestId: requestHeader.requestId, attempt: 1, turnId: 'request-turn', contextUsage: { inputTokens: 1 } }
+    await history.appendBatch([{ ...event('request-projection-event', 1), invocationId: 'request-invocation', turnId: 'request-turn',
+      kind: 'model-request-started', payload: { requestId: requestHeader.requestId, modelTurn: 1, attempt: 1,
+        sessionLedger: { location, requestHeader, requestContext } } }], 0)
+
+    const row = conn.prepare(`SELECT projection_kind,expected_event_ids_json,expected_events_json FROM session_ledger_projection_outbox
+      WHERE canonical_event_id='request-projection-event'`).get() as { projection_kind: string; expected_event_ids_json: string; expected_events_json: string }
+    expect(row.projection_kind).toBe('request-projection')
+    expect(JSON.parse(row.expected_event_ids_json)).toEqual(['request_header:request-invocation:round:1:1', 'request_context:request-invocation:round:1:1'])
+    expect(JSON.parse(row.expected_events_json)).toEqual([
+      { type: 'request_header', payload: requestHeader }, { type: 'request_context', payload: requestContext }
+    ])
+    await fs.rm(workDir, { recursive: true, force: true })
+    conn.close()
+  })
+
+  it('fences callbacks created by a previous process generation', async () => {
+    const conn = createDb()
+    advanceProcessGeneration(conn)
+    const staleWriter = new SqliteAgentHistory(conn)
+    advanceProcessGeneration(conn)
+
+    await expect(staleWriter.appendBatch([event('stale-process-write', 1)], 0)).rejects.toThrow('HISTORY_PROCESS_GENERATION_FENCED')
+    await expect(new SqliteAgentHistory(conn).appendBatch([event('current-process-write', 1)], 0)).resolves.toMatchObject({ version: 1 })
+    expect(conn.prepare('SELECT event_id FROM agent_history_events ORDER BY event_id').all()).toEqual([{ event_id: 'current-process-write' }])
+    conn.close()
+  })
+
+  it('keeps parked invocations out of the unfinished recovery workset', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    conn.prepare(`UPDATE canonical_history_recovery_work_migration SET status='complete'
+      WHERE migration_key='active-invocations-v1'`).run()
+    await history.appendBatch([{ ...event('parked-invocation', 1), kind: 'invocation-parked', payload: { status: 'parked' } }], 0)
+
+    expect(history.listStartupRecoveryWorkset()).toEqual([])
+    await expect(history.recoverInterruptedInvocations()).resolves.toEqual([])
+    conn.close()
+  })
+
+  it('recovers only a prior process generation from the durable active workset after reopen', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'history-process-generation-'))
+    const dbPath = path.join(root, 'history.db')
+    let db = openDatabase(dbPath)
+    try {
+      let conn = getDbConnection(db)
+      expect(advanceProcessGeneration(conn)).toBe(1)
+      const currentWriter = new SqliteAgentHistory(conn)
+      await currentWriter.appendBatch([{ ...event('generation-owned-open', 1), payload: { toolCallId: 'generation-tool' } }], 0)
+      expect(conn.prepare('SELECT owner_generation FROM canonical_history_recovery_work WHERE invocation_id=?')
+        .get('inv-1')).toEqual({ owner_generation: 1 })
+      expect(currentWriter.listStartupRecoveryWorkset()).toEqual([])
+      db.close()
+
+      db = openDatabase(dbPath)
+      conn = getDbConnection(db)
+      expect(advanceProcessGeneration(conn)).toBe(2)
+      const nextProcess = new SqliteAgentHistory(conn)
+      expect(nextProcess.listStartupRecoveryWorkset()).toEqual([{ invocationId: 'inv-1', sessionId: null }])
+      await expect(nextProcess.recoverInterruptedInvocations()).resolves.toMatchObject([
+        { invocationId: 'inv-1', state: 'interrupted' }
+      ])
+    } finally {
+      try { db.close() } catch { /* already closed before reopen */ }
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('persists and restores the exact bounded run_shell justification in the canonical response snapshot', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
@@ -2143,7 +2256,7 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
-  it('limits an incomplete recovery census to streams without a terminal event', () => {
+  it('uses the active workset as the pending recovery census while legacy backfill is incomplete', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
     const insertStream = conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(?,1,1,?)')
@@ -2218,6 +2331,32 @@ describe('SqliteAgentHistory', () => {
     expect(history.getStartupRecoveryWorkSummary()).toEqual({
       unfinishedInvocationCount: 0, dueProjectionRepairCount: 10, hasWork: true
     })
+    conn.close()
+  })
+
+  it('does not materialize a large projection-repair queue to discover that every target is backed off', async () => {
+    const conn = createDb()
+    const now = 10_000_000
+    const history = new SqliteAgentHistory(conn, 1, () => now)
+    conn.prepare(`INSERT INTO canonical_projection_repairs(
+      repair_id,session_id,invocation_id,repair_kind,target_key,status,attempts,idempotency_key,updated_at
+    ) VALUES('backed-off-repair','backed-off-session','backed-off-invocation','projection','target','pending',3,'key',?)`)
+      .run(now)
+    const original = conn.prepare.bind(conn)
+    const allSpy = vi.spyOn(conn, 'prepare').mockImplementation(((sql: string) => {
+      const statement = original(sql)
+      if (sql.includes('FROM canonical_projection_repairs repairs') && sql.includes('COUNT(*) OVER')) {
+        return { ...statement, all: vi.fn(() => { throw new Error('must not materialize backed-off targets') }) } as never
+      }
+      return statement
+    }) as typeof conn.prepare)
+
+    await expect(history.recoverInterruptedInvocations()).resolves.toEqual([])
+    expect(history.getStartupRecoveryWorkSummary()).toEqual({
+      unfinishedInvocationCount: 0, dueProjectionRepairCount: 0, hasWork: false
+    })
+
+    expect(allSpy).not.toHaveBeenCalledWith(expect.stringContaining('COUNT(*) OVER'))
     conn.close()
   })
 
@@ -3456,19 +3595,42 @@ describe('SqliteAgentHistory', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
     await history.appendBatch([{ ...event('e1', 1), payload: { toolCallId: 'tc-1' } }], 0)
+    expect(history.listStartupRecoveryWorkset()).toEqual([{ invocationId: 'inv-1', sessionId: null }])
 
-    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([
-      { invocationId: 'inv-1', state: 'interrupted' }
-    ])
+    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([{ invocationId: 'inv-1', state: 'interrupted' }])
     const snapshot = await history.read('inv-1')
     expect(snapshot.events.at(-1)).toMatchObject({
       kind: 'invocation-interrupted',
       payload: { status: 'interrupted', reason: 'process-restart' }
     })
-    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([
-      { invocationId: 'inv-1', state: 'interrupted' }
-    ])
+    await expect(history.recoverInterruptedInvocations()).resolves.toEqual([])
     await expect(history.read('inv-1')).resolves.toMatchObject({ version: 2 })
+    conn.close()
+  })
+
+  it('binds restart recovery identity and tool closure authority to the committed canonical terminal', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const location = { workDir: '/workspace', sessionId: 'restart-authority-session', createdAt: 1000 }
+    await history.appendBatch([
+      { ...event('restart-authority-response', 1), kind: 'model-response-committed', payload: {
+        modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'restart-authority-tool', name: 'read_file', input: {} }] },
+        sessionLedger: { location, stepId: 'restart-authority-step', toolCalls: [{ toolUseId: 'restart-authority-tool', name: 'read_file', args: {} }] }
+      } },
+      { ...event('restart-authority-dispatch', 2), kind: 'tool-call-started', payload: { toolCallId: 'restart-authority-tool', toolName: 'read_file' } }
+    ], 0)
+    const repairInvocationTerminal = vi.fn(async () => undefined)
+
+    await history.recoverInterruptedInvocations({ repairInvocationTerminal })
+
+    expect(repairInvocationTerminal).toHaveBeenCalledWith(location, expect.objectContaining({
+      status: 'interrupted', turnId: 'turn-1', reason: 'interrupted',
+      canonicalTerminalEventId: 'inv-1:history:3', toolUseIds: ['restart-authority-tool']
+    }))
+    await expect(history.read('inv-1')).resolves.toMatchObject({ events: expect.arrayContaining([
+      expect.objectContaining({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart',
+        sessionLedger: { location, turnId: 'turn-1', reason: 'interrupted' } } })
+    ]) })
     conn.close()
   })
 
@@ -3596,10 +3758,11 @@ describe('SqliteAgentHistory', () => {
     const recoveryOptions = { repairInvocationTerminal, onInvocationTerminalRepairError }
     await expect(history.recoverInterruptedInvocations(recoveryOptions)).resolves.toMatchObject([{ state: 'interrupted' }])
 
-    expect(repairInvocationTerminal).toHaveBeenNthCalledWith(1, location, {
-      status: 'interrupted', turnId: 'turn-1', reason: 'interrupted'
-    })
+    expect(repairInvocationTerminal).toHaveBeenNthCalledWith(1, location, expect.objectContaining({
+      status: 'interrupted', turnId: 'turn-1', reason: 'interrupted', canonicalTerminalEventId: 'inv-1:history:2', toolUseIds: []
+    }))
     expect(onInvocationTerminalRepairError).toHaveBeenCalledWith(expect.any(Error), 'inv-1', 'turn-1')
+    conn.prepare("UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id='inv-1'").run(Date.now() - 60 * 60_000)
     await expect(history.recoverInterruptedInvocations(recoveryOptions)).resolves.toMatchObject([{ state: 'interrupted' }])
     expect(repairInvocationTerminal).toHaveBeenCalledTimes(2)
     await expect(history.read('inv-1')).resolves.toMatchObject({
@@ -3629,13 +3792,16 @@ describe('SqliteAgentHistory', () => {
 
     const recoveryOptions = { resolveSessionLedgerLocation, repairInvocationTerminal, onInvocationTerminalRepairError }
     await history.recoverInterruptedInvocations(recoveryOptions)
+    conn.prepare("UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id='inv-1'").run(Date.now() - 60 * 60_000)
     await history.recoverInterruptedInvocations(recoveryOptions)
 
     expect(resolveSessionLedgerLocation).toHaveBeenCalledWith(sessionId)
     expect(resolveSessionLedgerLocation).toHaveBeenCalledOnce()
     expect(repairInvocationTerminal).toHaveBeenCalledTimes(2)
     expect(onInvocationTerminalRepairError).toHaveBeenCalledWith(expect.any(Error), 'inv-1', 'turn-1')
-    expect(repairInvocationTerminal).toHaveBeenCalledWith(location, { status: 'interrupted', turnId: 'turn-1', reason: 'interrupted' })
+    expect(repairInvocationTerminal).toHaveBeenCalledWith(location, expect.objectContaining({
+      status: 'interrupted', turnId: 'turn-1', reason: 'interrupted', canonicalTerminalEventId: 'inv-1:history:2', toolUseIds: []
+    }))
     await expect(history.read('inv-1')).resolves.toMatchObject({ events: [
       expect.objectContaining({ kind: 'session-input-committed', sequence: 1 }),
       expect.objectContaining({ kind: 'invocation-interrupted', payload: {
@@ -4397,9 +4563,7 @@ describe('SqliteAgentHistory', () => {
       payload: { message: { role: 'assistant', toolCalls: [{ id: 'tc-proposed', name: 'write_file', input: { path: 'a.txt' } }] } }
     }], 0)
 
-    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([
-      { invocationId: 'inv-1', state: 'interrupted' }
-    ])
+    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([{ invocationId: 'inv-1', state: 'interrupted' }])
     await expect(history.read('inv-1')).resolves.toMatchObject({
       version: 2,
       events: [expect.objectContaining({ kind: 'model-response-committed' }), expect.objectContaining({

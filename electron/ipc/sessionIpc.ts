@@ -61,6 +61,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const workDir = resolveWorkDirForSession(sessionQueries, sessionId,
       () => ctx.workDirManager.listProfiles(), () => ctx.workDirManager.getActiveProfileId(), () => ctx.workDirManager.getActiveWorkDir())
     if (!workDir) return []
+    if (sessionStorage.ensureLedgerReady && !(await sessionStorage.ensureLedgerReady(sessionId))) throw new Error('SESSION_LEDGER_BLOCKED')
     const sink = getSessionEventSink(workDir.workDir, session.id, session.createdAt)
     const replay = await readCompactionReplay(sink.eventsPath)
     return replay.committed.flatMap(({ compactionId, start, summary, end }) => {

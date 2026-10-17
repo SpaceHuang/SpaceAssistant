@@ -16,6 +16,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   getUserDataDir?: () => string
   getSessionEventSink?: typeof getSessionEventSink
   readCompactionReplay?: typeof readCompactionReplay
+  ensureSessionLedgerReady?: (input: { session: import('../../src/shared/domainTypes').Session; workDir: string }) => Promise<boolean>
   recoveryStages?: Partial<Pick<SessionRecoveryDependencies, 'history' | 'snapshots' | 'coordinator' | 'reconcile' | 'continuations' | 'ledgerRepairs'>>
 } = {}): SessionStorage {
   const queries = createSessionQueries(db)
@@ -25,12 +26,22 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const workDir = options.getWorkDirForSession?.(sessionId)
     const userDataDir = options.getUserDataDir?.()
     if (!session || !workDir || !userDataDir) throw new Error('SESSION_CONTEXT_RESOURCES_UNAVAILABLE')
+    if (options.ensureSessionLedgerReady && !(await options.ensureSessionLedgerReady({ session, workDir }))) {
+      throw new Error('SESSION_LEDGER_BLOCKED')
+    }
     const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
     const replay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
     return createStorageSessionContextAdapter({ sessionId, session, queries, workDir, userDataDir, replay, sink, isBusy })
   })
   const recovery = createSqliteSessionRecoveryPort({ db, queries, execution, getTurnRuntime: options.getTurnRuntime, stages: options.recoveryStages })
-  return Object.freeze({ queries, commands: createSessionCommands(db), execution, contexts, recovery })
+  const ensureLedgerReady = async (sessionId: string): Promise<boolean> => {
+    const session = queries.readSession(sessionId)
+    const workDir = options.getWorkDirForSession?.(sessionId)
+    return session && workDir && options.ensureSessionLedgerReady
+      ? options.ensureSessionLedgerReady({ session, workDir })
+      : !options.ensureSessionLedgerReady
+  }
+  return Object.freeze({ queries, commands: createSessionCommands(db), execution, contexts, recovery, ensureLedgerReady })
 }
 
 /** Host composition additionally binds existing startup recovery owners without exposing them to business consumers. */

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { assertSpillReferencePayloadStrict, replaceSpillReferenceOwnerInTransaction, spillHistoryOwnerKey } from '../storage/spillReferenceIndex'
+import { enqueueCanonicalLedgerProjectionTargetInTransaction, type CanonicalLedgerProjectionTarget } from '../sessionLedgerOutbox'
 import {
   HistoryBatchError,
   HistoryIdempotencyConflict,
@@ -31,7 +32,7 @@ export function appendSqliteAgentHistoryBatchInTransaction(
   conn: DatabaseSync,
   events: readonly HistoryEvent[],
   expectedVersion: number,
-  options: { schemaVersion?: number; sessionId?: string; now?: () => number } = {}
+  options: { schemaVersion?: number; sessionId?: string; now?: () => number; processGeneration?: number; projectionTargets?: readonly CanonicalLedgerProjectionTarget[] } = {}
 ): HistoryAppendResult {
   const schemaVersion = options.schemaVersion ?? 1
   const now = options.now ?? Date.now
@@ -47,6 +48,11 @@ export function appendSqliteAgentHistoryBatchInTransaction(
     }
   })
   const invocationId = events[0].invocationId
+  if (options.processGeneration !== undefined) {
+    const owner = conn.prepare('SELECT current_generation FROM process_generation_state WHERE singleton_id=1').get() as
+      { current_generation: number } | undefined
+    if (!owner || owner.current_generation !== options.processGeneration) throw new HistoryBatchError('HISTORY_PROCESS_GENERATION_FENCED')
+  }
   for (const payloadJson of serialized) assertSpillReferencePayloadStrict(payloadJson)
   const stream = conn.prepare('SELECT invocation_id, version, schema_version, session_id FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as StreamRow | undefined
   if (stream?.session_id && options.sessionId && stream.session_id !== options.sessionId) {
@@ -64,6 +70,12 @@ export function appendSqliteAgentHistoryBatchInTransaction(
     if (!exactDuplicate) {
       const conflicting = events.find((event, index) => existing[index] && !historyEventsEqual(fromRow(existing[index]!), { ...event, payload: JSON.parse(serialized[index]) }))
       throw new HistoryIdempotencyConflict(conflicting?.idempotencyKey ?? events[0].idempotencyKey)
+    }
+    for (const target of options.projectionTargets ?? []) {
+      if (!options.sessionId || target.sessionId !== options.sessionId || !events.some((event) => event.eventId === target.canonicalEventId)) {
+        throw new HistoryBatchError('projection target must be coupled to this session and an event in the canonical batch')
+      }
+      enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target)
     }
     return { version: actualVersion, duplicate: true }
   }
@@ -136,6 +148,16 @@ export function appendSqliteAgentHistoryBatchInTransaction(
   }
   const version = actualVersion + events.length
   conn.prepare('UPDATE agent_history_streams SET version = ? WHERE invocation_id = ?').run(version, invocationId)
+  for (const target of options.projectionTargets ?? []) {
+    if (!options.sessionId || target.sessionId !== options.sessionId || !events.some((event) => event.eventId === target.canonicalEventId)) {
+      throw new HistoryBatchError('projection target must be coupled to this session and an event in the canonical batch')
+    }
+    enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target)
+  }
+  if (options.processGeneration !== undefined) {
+    conn.prepare('UPDATE canonical_history_recovery_work SET owner_generation=? WHERE invocation_id=?')
+      .run(options.processGeneration, invocationId)
+  }
   if (sessionId) {
     // Canonical writes may advance the session watermark without changing a legacy message row
     // (for example a compaction snapshot or continuation context). Keep the API eligibility
