@@ -62,4 +62,25 @@ describe('manual context compaction IPC ContextPort integration', () => {
     expect(appendCompactionTransaction).toHaveBeenCalledWith(sink, expect.objectContaining({ reason: 'user_compact' }), expect.objectContaining({ candidate: expect.objectContaining({ kind: 'summary' }) }))
     expect(storage.contexts).toMatchObject({ readCurrent: expect.any(Function), commitReplacement: expect.any(Function) })
   })
+
+  it('reports a blocked ledger instead of presenting missing compaction markers as an empty history', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'blocked compaction markers', model: 'test-model', maxTokens: 2_000, fixedWorkDir: '/tmp' })
+    const storage = createSqliteSessionStorage(db, {
+      getWorkDirForSession: () => '/tmp', getUserDataDir: () => '/tmp', ensureSessionLedgerReady: async () => false
+    })
+    const handlers = new Map<string, Handler>()
+    const ipc = { handle: (channel: string, handler: Handler) => handlers.set(channel, handler) }
+    const window = { isDestroyed: () => false, webContents: { id: 7 } }
+    vi.mocked(getMainWindow).mockReturnValue(window as never)
+    registerSessionIpc(ipc as never, {
+      db, sessionStorage: storage, backup: {} as never,
+      workDirManager: { listProfiles: () => [], getActiveProfileId: () => 'default', getActiveWorkDir: () => '/tmp' } as never,
+      getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
+      getApiKey: async () => null, setApiKey: async () => undefined, getBrowserDetectContext: () => ({ isPackaged: false, appPath: '/tmp', devRoot: '/tmp' })
+    })
+
+    await expect(handlers.get('chat:get-session-compaction-markers')!({ sender: window.webContents }, session.id))
+      .rejects.toThrow('SESSION_LEDGER_BLOCKED')
+  })
 })

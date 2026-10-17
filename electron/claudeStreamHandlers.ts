@@ -359,6 +359,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         eventTurnId = turnId
         const session = sessionStorage.queries.readSession(sessionId)
         if (session) {
+          if (sessionStorage.ensureLedgerReady && !(await sessionStorage.ensureLedgerReady(sessionId))) throw new Error('SESSION_LEDGER_BLOCKED')
           eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
           await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
           // reset 后 marker 的 output window 不再等于 sessionId；台账读取必须消费完整提交链。

@@ -64,6 +64,14 @@ describe('projectAgentLogFields', () => {
     })).toEqual({ outcome: 'degraded', reconciledCount: 2, failed: 1, pendingRepairs: 173, durationMs: 43, errorCode: 'HISTORY_RECOVERY_FAILED' })
   })
 
+  it('records per-session ledger gate operation counts and latency without a session id or path', () => {
+    expect(projectAgentLogFields('session.history.recovery', {
+      kind: 'session-ledger-gate', phase: 'target', status: 'ready', durationMs: 9,
+      baselineScanCount: 0, projectedCount: 2, failureClass: null,
+      sessionId: 'private-session', workDir: '/private/workspace'
+    })).toEqual({ kind: 'session-ledger-gate', phase: 'target', status: 'ready', durationMs: 9, baselineScanCount: 0, projectedCount: 2 })
+  })
+
   it('keeps per-stage history repair diagnostics while discarding error messages and identifiers', () => {
     expect(projectAgentLogFields('session.history.repair.failed', {
       kind: 'tool-result', reasonCode: 'canonical-projection-rejected',

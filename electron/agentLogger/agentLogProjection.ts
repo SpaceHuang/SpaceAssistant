@@ -36,7 +36,8 @@ const COMMON_KEYS = new Set([
   'consumer', 'source', 'differenceCount', 'fieldNames', 'legacyHash', 'canonicalHash', 'acceptedInputFingerprint',
   'appVersion',
   'releasedUnstarted', 'markedUncertain', 'repairedCheckpoints', 'phase', 'pending', 'completed', 'sharedReference', 'failed',
-  'proposalCount', 'executorEntryCount', 'knownFailureCount', 'unknownOutcomeCount', 'notDispatchedCount'
+  'proposalCount', 'executorEntryCount', 'knownFailureCount', 'unknownOutcomeCount', 'notDispatchedCount',
+  'baselineScanCount', 'projectedCount'
 ])
 
 function hash(value: unknown): string {
@@ -66,6 +67,7 @@ export function projectAgentLogFields(
   const out: Record<string, unknown> = {}
   const processTool = isProcessToolName(typeof fields.toolName === 'string' ? fields.toolName : undefined)
   for (const [key, value] of Object.entries(fields)) {
+    if (fields.kind === 'session-ledger-gate' && ['sessionId', 'invocationId', 'workDir', 'eventsPath'].includes(key)) continue
     if (key === 'command' || key === 'code' || key === 'input') {
       out.inputFingerprint ??= hash(value)
       continue

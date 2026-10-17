@@ -130,6 +130,49 @@ describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
+  it('locks only selected deletion candidates through readiness, dependency recheck and delete', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-lifecycle-lock-'))
+    for (const [name, lastAt] of [['old-19700101', 1], ['new-19700101', 2]] as const) {
+      const dir = path.join(root, 'sessions', name)
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(path.join(dir, 'events.index.json'), JSON.stringify({ lastAt }))
+    }
+    let locked = false
+    const order: string[] = []
+    const result = await enforceSessionEventRetentionDetailed(root, 1, {
+      withSessionLifecycleLock: async (_name, _workDir, operation) => {
+        locked = true
+        order.push('lock')
+        try { return await operation() } finally { locked = false }
+      },
+      ensureReadyBeforeDelete: async () => { expect(locked).toBe(true); order.push('ready'); return true },
+      shouldRetainSessionDir: async () => { expect(locked).toBe(true); order.push('dependency'); return false },
+      verifyReadyBeforeDelete: async () => { expect(locked).toBe(true); order.push('final-check'); return true }
+    })
+    expect(order).toEqual(['lock', 'ready', 'dependency', 'final-check'])
+    expect(result.removed).toBe(1)
+    await expect(fs.stat(path.join(root, 'sessions', 'old-19700101'))).rejects.toThrow()
+    expect(await fs.stat(path.join(root, 'sessions', 'new-19700101'))).toBeTruthy()
+  })
+
+  it('retains a blocked candidate without invoking dependency deletion checks', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-blocked-ledger-'))
+    for (const [name, lastAt] of [['old-19700101', 1], ['new-19700101', 2]] as const) {
+      const dir = path.join(root, 'sessions', name)
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(path.join(dir, 'events.index.json'), JSON.stringify({ lastAt }))
+    }
+    const dependency = vi.fn(async () => false)
+    const result = await enforceSessionEventRetentionDetailed(root, 1, {
+      withSessionLifecycleLock: async (_name, _workDir, operation) => operation(),
+      ensureReadyBeforeDelete: async () => false,
+      shouldRetainSessionDir: dependency
+    })
+    expect(result).toMatchObject({ removed: 0, retained: [{ sessionName: 'old-19700101' }] })
+    expect(dependency).not.toHaveBeenCalled()
+    expect(await fs.stat(path.join(root, 'sessions', 'old-19700101'))).toBeTruthy()
+  })
+
   it('enforces the retention limit for every profile root and preserves canonical compaction dependencies', async () => {
     const db = createMemoryAppDb()
     setConfigValue(db, 'retention.sessionEvent.maxSessions', '1')

@@ -26,6 +26,12 @@ export type SessionRetentionOptions = {
   prepareProjectionForRetention?: (sessionName: string, workDir: string) => void | Promise<void>
   /** Return true to keep a ledger directory that still has a durable canonical recovery dependency. */
   shouldRetainSessionDir?: (sessionName: string, workDir: string) => boolean | Promise<boolean>
+  /** Run readiness, dependency recheck and deletion under the shared per-location exclusive lock. */
+  withSessionLifecycleLock?<T>(sessionName: string, workDir: string, operation: () => Promise<T>): Promise<T>
+  /** Only selected deletion candidates are gated; false retains the candidate. */
+  ensureReadyBeforeDelete?(sessionName: string, workDir: string): boolean | Promise<boolean>
+  /** Final readiness/outbox/writer recheck while the same lock is still held. */
+  verifyReadyBeforeDelete?(sessionName: string, workDir: string): boolean | Promise<boolean>
 }
 
 /** Seed an eligible detached transcript projection before its workDir ledger becomes collectible. */
@@ -107,15 +113,28 @@ export async function enforceSessionEventRetentionDetailed(workDir: string, maxS
   let count = 0
   for (const entry of removed) {
     try {
-      if (await options.shouldRetainSessionDir?.(entry.name, workDir)) {
-        retained.push({ workDir, sessionName: entry.name })
-        continue
+      const removeCandidate = async () => {
+        if (options.ensureReadyBeforeDelete && !(await options.ensureReadyBeforeDelete(entry.name, workDir))) {
+          retained.push({ workDir, sessionName: entry.name })
+          return
+        }
+        if (await options.shouldRetainSessionDir?.(entry.name, workDir)) {
+          retained.push({ workDir, sessionName: entry.name })
+          return
+        }
+        await options.prepareProjectionForRetention?.(entry.name, workDir)
+        if (options.verifyReadyBeforeDelete && !(await options.verifyReadyBeforeDelete(entry.name, workDir))) {
+          retained.push({ workDir, sessionName: entry.name })
+          return
+        }
+        // maxRetries：Windows 上目录/文件被瞬态占用（Defender、自身句柄）时 fs.rm 抛 EPERM/EBUSY，Node 内置重试可自愈
+        await fs.rm(path.join(root, entry.name), { recursive: true, force: true, maxRetries: 5, retryDelay: 250 })
+        count += 1
+        removedSessions.push(entry.name)
       }
-      await options.prepareProjectionForRetention?.(entry.name, workDir)
-      // maxRetries：Windows 上目录/文件被瞬态占用（Defender、自身句柄）时 fs.rm 抛 EPERM/EBUSY，Node 内置重试可自愈
-      await fs.rm(path.join(root, entry.name), { recursive: true, force: true, maxRetries: 5, retryDelay: 250 })
-      count += 1
-      removedSessions.push(entry.name)
+      await (options.withSessionLifecycleLock
+        ? options.withSessionLifecycleLock(entry.name, workDir, removeCandidate)
+        : removeCandidate())
     } catch (error) {
       failures.push({ sessionName: entry.name, phase: 'retention-delete', error, jsonlCommitted: false })
     }
