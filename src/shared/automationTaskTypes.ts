@@ -78,6 +78,10 @@ export type AutomationTaskRun = {
   resultSummary?: string
   usageJson?: string
   configSnapshot?: AutomationTaskRunConfigSnapshot
+  runPhase?: 'queued-before-start' | 'running' | 'terminal' | 'legacy-unknown'
+  taskRevision?: number
+  scheduleGeneration?: number
+  slotAt?: number
   deliveryStatus: 'pending' | 'delivered' | 'failed-degraded' | 'delivery-uncertain' | 'none'
   deliveredAt?: number
   createdAt: number
@@ -86,6 +90,9 @@ export type AutomationTaskRun = {
 
 export type AutomationTaskRunConfigSnapshot = {
   resolutionStatus: 'resolved' | 'failed'
+  prompt?: string
+  schedule?: AutomationTaskSchedule
+  taskRevision?: number
   workDir?: string
   workDirs?: string[]
   preflightVersion?: 0 | 1

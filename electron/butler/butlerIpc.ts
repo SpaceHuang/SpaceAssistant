@@ -164,14 +164,17 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       next.reasoningEffort = config.reasoningEffort
     }
     if (typeof patch.enabled === 'boolean') next.enabled = patch.enabled
-    updateAutomationTask(db, id, next)
+    const updated = updateAutomationTask(db, id, next)
+    if (!updated) return { ok: false, error: 'schedule-pending' }
     return { ok: true }
   })
 
   ipcMain.handle('butler:delete', (_e, payload: { id: string }): { ok: boolean; error?: string } => {
     const id = typeof payload?.id === 'string' ? payload.id : ''
     if (!id) return { ok: false, error: '任务 ID 缺失' }
-    return { ok: deleteAutomationTask(db, id) }
+    const deleted = deleteAutomationTask(db, id)
+    if (deleted) return { ok: true }
+    return { ok: false, error: getAutomationTask(db, id) ? 'task-has-active-run' : 'task-not-found' }
   })
 
   ipcMain.handle('butler:run-task', async (_e, payload: { taskId: string; requestId?: string }): Promise<{ ok: boolean; runId?: string; sessionId?: string; summary?: string; deliveryStatus?: import('../../src/shared/automationTaskTypes').AutomationTaskRun['deliveryStatus']; error?: string }> => {

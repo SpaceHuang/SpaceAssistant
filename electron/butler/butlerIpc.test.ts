@@ -3,7 +3,7 @@ import { realpath } from 'node:fs/promises'
 import os from 'node:os'
 import { openDatabase, type AppDatabase } from '../database'
 import { setConfigValue } from '../database'
-import { createAutomationTask, getAutomationTask } from './taskStore'
+import { claimDueSlotAndAdvance, createAutomationTask, getAutomationTask, transitionClaimToRunning } from './taskStore'
 import { registerButlerIpcHandlers } from './butlerIpc'
 
 const electronMock = vi.hoisted(() => ({
@@ -68,6 +68,16 @@ describe('butler IPC workdir/config fields', () => {
     expect(getAutomationTask(db!, legacy.id)).toMatchObject({ workDir: await realpath(os.tmpdir()), modelOverride: 'old-provider-name' })
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('modelId')
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('reasoningEffort')
+  })
+
+  it('returns stable conflicts for schedule edits and deletion while a run is active', async () => {
+    const map = handlers()
+    const task = createAutomationTask(db!, { name: 'scheduled', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDir: os.tmpdir(), nextRunAt: 100 })
+    const claim = claimDueSlotAndAdvance(db!, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'ipc-pending-conflict' })
+    expect(await map.get('butler:update')!(null, { id: task.id, patch: { schedule: { kind: 'daily', time: '10:00' } } })).toEqual({ ok: false, error: 'schedule-pending' })
+    expect(await map.get('butler:delete')!(null, { id: task.id })).toEqual({ ok: false, error: 'task-has-active-run' })
+    expect(transitionClaimToRunning(db!, claim.runId!, task.id, 100, 0).ok).toBe(true)
+    expect(await map.get('butler:update')!(null, { id: task.id, patch: { schedule: { kind: 'daily', time: '10:00' } } })).toEqual({ ok: true })
   })
 
   it('updates a task with validated canonical multiple roots', async () => {

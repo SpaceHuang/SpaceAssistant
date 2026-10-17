@@ -426,3 +426,129 @@ describe('preflight binding persistence', () => {
     expect(getAutomationTask(d, task.id)).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(targetBindings) })
   })
 })
+
+describe('queued claim snapshot CAS', () => {
+  it('freezes the latest edited task revision exactly once when queued work starts', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/old'], nextRunAt: 123 }))
+    const { claimDueSlotAndAdvance, transitionClaimToRunning } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 123, nextSlot: 456, clientId: 'queued-snapshot-cas' })
+    updateAutomationTask(d, task.id, { prompt: 'new prompt', workDirs: ['/workspace/new'] })
+
+    const first = transitionClaimToRunning(d, claim.runId!, task.id, 123, 0)
+    const duplicate = transitionClaimToRunning(d, claim.runId!, task.id, 123, 0)
+    expect(first).toMatchObject({ ok: true, snapshot: { taskRevision: 1, prompt: 'new prompt', workDirs: ['/workspace/new'] } })
+    expect(duplicate).toEqual({ ok: false, reason: 'claim-not-queued' })
+    expect(getRunById(d, claim.runId!)).toMatchObject({ status: 'running', runPhase: 'running', taskRevision: 1, scheduleGeneration: 0, slotAt: 123 })
+  })
+})
+
+describe('claim terminal cleanup identity', () => {
+  it('clears only the pending claim with the matching run id and schedule generation', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput())
+    const first = insertAutomationTaskRun(d, { taskId: task.id, clientId: 'pending-first', trigger: 'schedule', scheduledFor: 100 })
+    const conn = getDbConnection(d)
+    conn.prepare(`UPDATE automation_task_recovery_state SET pending_run_id=?,pending_run_slot=?,pending_schedule_generation=0 WHERE task_id=?`)
+      .run(first.runId, 100, task.id)
+    const { finalizeClaimAndClearPending } = await import('./taskStore')
+    expect(finalizeClaimAndClearPending(d, first.runId!, 'completed')).toEqual({ updated: true, clearedPending: true })
+    expect(conn.prepare('SELECT pending_run_id,pending_schedule_generation FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ pending_run_id: null, pending_schedule_generation: null })
+
+    const second = insertAutomationTaskRun(d, { taskId: task.id, clientId: 'pending-second', trigger: 'schedule', scheduledFor: 200 })
+    conn.prepare(`UPDATE automation_task_recovery_state SET pending_run_id=?,pending_run_slot=?,pending_schedule_generation=1 WHERE task_id=?`)
+      .run(second.runId, 200, task.id)
+    expect(finalizeClaimAndClearPending(d, first.runId!, 'failed', 'late completion')).toEqual({ updated: false, clearedPending: false })
+    expect(conn.prepare('SELECT pending_run_id,pending_schedule_generation FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ pending_run_id: second.runId, pending_schedule_generation: 1 })
+  })
+})
+
+describe('atomic due slot claim', () => {
+  it('creates one pending claim and advances nextRunAt with the recovery cursor atomically', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(10_000)
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance } = await import('./taskStore')
+    const first = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'due-slot-100' })
+    expect(first).toMatchObject({ claimed: true, runId: expect.any(String) })
+    expect(claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'due-slot-100' })).toEqual(first)
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(200)
+    expect(getRunById(d, first.runId!)).toMatchObject({ status: 'queued', runPhase: 'queued-before-start', slotAt: 100, scheduleGeneration: 0 })
+    expect(getDbConnection(d).prepare('SELECT schedule_generation,recovery_cursor_at,pending_run_id,pending_run_slot,pending_schedule_generation FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ schedule_generation: 0, recovery_cursor_at: 100, pending_run_id: first.runId, pending_run_slot: 100, pending_schedule_generation: 0 })
+    expect(claimDueSlotAndAdvance(d, { taskId: task.id, slot: 200, nextSlot: 300, clientId: 'due-slot-200' })).toEqual({ claimed: false, reason: 'pending-claim' })
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(200)
+    const { finalizeClaimAndClearPending } = await import('./taskStore')
+    expect(finalizeClaimAndClearPending(d, first.runId!, 'completed')).toEqual({ updated: true, clearedPending: true })
+    expect(getDbConnection(d).prepare('SELECT recovery_cursor_at,pending_run_id FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ recovery_cursor_at: 200, pending_run_id: null })
+  })
+})
+
+describe('pending claim task mutation conflicts', () => {
+  it('blocks schedule changes while queued, allows config edits, and keeps running claims across new generations', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/old'], nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance, transitionClaimToRunning } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'pending-mutations' })
+    expect(claim.claimed).toBe(true)
+    expect(updateAutomationTask(d, task.id, { schedule: { kind: 'daily', time: '10:00' } })).toBeUndefined()
+    expect(updateAutomationTask(d, task.id, { prompt: 'edit while queued' })).toMatchObject({ taskRevision: 1, scheduleGeneration: 0 })
+    expect(transitionClaimToRunning(d, claim.runId!, task.id, 100, 0)).toMatchObject({ ok: true })
+    updateAutomationTask(d, task.id, { prompt: 'edit while running', workDirs: ['/workspace/new'] })
+    expect(getRunById(d, claim.runId!)?.configSnapshot).toMatchObject({ prompt: 'edit while queued', workDirs: ['/workspace/old'], taskRevision: 1 })
+
+    const scheduleChanged = updateAutomationTask(d, task.id, { schedule: { kind: 'daily', time: '10:00' } })
+    expect(scheduleChanged).toMatchObject({ scheduleGeneration: 1 })
+    expect(getDbConnection(d).prepare('SELECT schedule_generation,pending_run_id,pending_schedule_generation FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toMatchObject({ schedule_generation: 1, pending_run_id: claim.runId, pending_schedule_generation: 0 })
+    expect(deleteAutomationTask(d, task.id)).toBe(false)
+  })
+})
+
+describe('atomic missed-slot skip', () => {
+  it('writes the complete skipped result and advances the cursor exactly once', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { recordSkippedSlotAndAdvance } = await import('./taskStore')
+    const input = { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'missed-slot-100' }
+    const first = recordSkippedSlotAndAdvance(d, input)
+    expect(first).toMatchObject({ recorded: true, runId: expect.any(String) })
+    expect(getRunById(d, first.runId!)).toMatchObject({ status: 'skipped', error: 'missed-window', deliveryStatus: 'none', runPhase: 'terminal', slotAt: 100 })
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(200)
+    expect(getDbConnection(d).prepare('SELECT recovery_cursor_at,pending_run_id FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ recovery_cursor_at: 200, pending_run_id: null })
+    expect(recordSkippedSlotAndAdvance(d, input)).toEqual(first)
+    expect(getDbConnection(d).prepare("SELECT COUNT(*) AS count FROM automation_task_runs WHERE client_id='missed-slot-100'").get()).toEqual({ count: 1 })
+  })
+})
+
+
+describe('task recovery transaction rollback', () => {
+  it('does not leave a task row when recovery state creation fails', () => {
+    const d = db()
+    const conn = getDbConnection(d)
+    conn.exec(`CREATE TRIGGER reject_recovery_insert BEFORE INSERT ON automation_task_recovery_state
+      BEGIN SELECT RAISE(ABORT,'injected recovery insert failure'); END;`)
+    expect(() => createAutomationTask(d, taskInput())).toThrow(/injected recovery insert failure/)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM automation_tasks').get()).toEqual({ count: 0 })
+  })
+
+  it('rolls back a due run insert and next slot when pending-state write fails', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const conn = getDbConnection(d)
+    conn.exec(`CREATE TRIGGER reject_pending_claim BEFORE UPDATE OF pending_run_id ON automation_task_recovery_state
+      BEGIN SELECT RAISE(ABORT,'injected pending-state failure'); END;`)
+    const { claimDueSlotAndAdvance } = await import('./taskStore')
+    expect(() => claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'rollback-claim' }))
+      .toThrow(/injected pending-state failure/)
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(100)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM automation_task_runs WHERE client_id=?').get('rollback-claim')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT recovery_cursor_at,pending_run_id FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ recovery_cursor_at: 100, pending_run_id: null })
+  })
+})
