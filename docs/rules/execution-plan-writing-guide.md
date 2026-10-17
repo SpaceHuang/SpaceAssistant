@@ -2,8 +2,8 @@
 
 > **定位**：写**执行计划**（任务拆解、顺序与依赖、进度标记）时读本篇。
 > **篇内路由**：只排任务顺序与依赖 → §3；维护进度标记 → §5；交付前自查 → §6。
-> **上位规则**：写法约定见 [`document-writing-guide.md`](document-writing-guide.md)（元指南）。
-> **来源与维护**：依据条目仍在 [`technical-plan-writing-guide-sources.md`](technical-plan-writing-guide-sources.md)（"§5 依据"一节；草稿阶段未迁移）。
+> **通用层**：读者分层与人机分工、写作流程与门禁、人类决策层规则 R1–R8、通用自检见 [`document-writing-guide.md`](document-writing-guide.md) §8–§11（元指南）；本篇只写计划特有的写法。
+> **来源与维护**：见 [`execution-plan-writing-guide-sources.md`](execution-plan-writing-guide-sources.md)（按需查阅，日常不必加载）。
 > **一句话**：执行计划是**易变编排层**——回答"谁在什么时候做什么、按什么顺序、凭什么算做完"，**不重新定义**方案已定的验收与不变量。
 
 ## 1. 与方案篇的分工：单向真源
