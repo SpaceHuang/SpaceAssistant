@@ -7,7 +7,6 @@ import type { SessionEventInput } from '../sessionEvents'
 import type { AgentNotifyEvent } from '../../src/shared/agent/invocation'
 import type { FileTreeChangeEvent } from '../../src/shared/fileTreeSync'
 import type { ExecutionLane } from '../../src/shared/confirmation/types'
-import { logAgentEvent } from '../agentLogger/agentLogger'
 import { buildRequestContextPayload, buildRequestHeaderPayload, computeAnthropicCacheBreakpointPositions } from '../../src/shared/requestContext'
 import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { computeContextPressure } from '../../src/shared/contextMeter'
@@ -584,38 +583,19 @@ export function createAgentSdkDesktopObserver(input: {
       const output = result.output && typeof result.output === 'object' && !Array.isArray(result.output)
         ? result.output as Record<string, unknown>
         : undefined
-      const auditOutput = (result as typeof result & { auditOutput?: unknown }).auditOutput ?? result.output
-      const auditRecord = auditOutput && typeof auditOutput === 'object' && !Array.isArray(auditOutput) ? auditOutput as Record<string, unknown> : undefined
-      const auditData = auditRecord?.data && typeof auditRecord.data === 'object' && !Array.isArray(auditRecord.data) ? auditRecord.data as Record<string, unknown> : undefined
-      const autoApprovedWrite = auditRecord?.success === true && auditRecord.fileAutoApproved === true &&
-        (call.toolName === 'write_file' || call.toolName === 'edit_file')
-        ? { path: typeof call.input.path === 'string' ? call.input.path : '',
-            stats: typeof auditData?.bytesWritten === 'number' && typeof auditData.added === 'number' && typeof auditData.removed === 'number' ? 'available' as const : 'unavailable' as const,
-            ...(typeof auditData?.bytesWritten === 'number' && typeof auditData.added === 'number' && typeof auditData.removed === 'number'
-              ? { bytesWritten: auditData.bytesWritten, added: auditData.added, removed: auditData.removed } : {}) }
-        : undefined
       const projected = {
-        ...(input.mapToolResult?.(call, auditOutput, isError) ?? {
+        ...(input.mapToolResult?.(call, result.output, isError) ?? {
         success: typeof output?.success === 'boolean' ? output.success : !isError,
         ...((typeof output?.error === 'string' || isError) ? { error: typeof output?.error === 'string' ? output.error : String(result.output ?? 'tool failed') } : {}),
         ...(typeof output?.userMessage === 'string' ? { userMessage: output.userMessage } : {}),
         ...('data' in (output ?? {}) ? { data: output!.data } : { data: result.output })
         } as NonNullable<Extract<AssistantFactEvent, { type: 'tool-result' }>['result']>),
-        ...(autoApprovedWrite ? { autoApprovedWrite, ...(typeof auditRecord?.decisionRuleId === 'string' ? { decisionRuleId: auditRecord.decisionRuleId } : {}) } : {}),
         ...(result.executionOutcome ? { executionOutcome: result.executionOutcome } : {}),
         ...(result.executorEntry ? { executorEntry: result.executorEntry } : {}),
         ...(result.errorCode ? { executionErrorCode: result.errorCode } : {}),
         ...(result.invocationDisposition ? { invocationDisposition: result.invocationDisposition } : {})
       }
       if (result.auditRef && projected && typeof projected === 'object') projected.auditRef = result.auditRef
-      if (projected.success && projected.autoApprovedWrite && (call.toolName === 'write_file' || call.toolName === 'edit_file')) {
-        logAgentEvent('info', 'file.auto_approve', {
-          requestId: input.requestId, sessionId: input.sessionId, toolUseId: call.toolCallId, tool: call.toolName,
-          relPath: projected.autoApprovedWrite.path,
-          bytesWritten: projected.autoApprovedWrite.stats === 'available' ? projected.autoApprovedWrite.bytesWritten : undefined,
-          stats: projected.autoApprovedWrite.stats, timestamp: Date.now()
-        })
-      }
       await emitSessionEvent({ type: 'tool_result', payload: { turnId: input.turnId, stepId: toolStepId(call.toolCallId), toolUseId: call.toolCallId, result: projected } })
       emitFact({ type: 'tool-result', id: call.toolCallId, result: projected })
       if (projected.success) {

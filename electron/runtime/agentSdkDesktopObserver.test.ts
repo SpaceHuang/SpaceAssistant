@@ -16,7 +16,6 @@ import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { reduceAssistantFact, type AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivityTimeline'
 import type { Message } from '../../src/shared/domainTypes'
-import * as agentLogger from '../agentLogger/agentLogger'
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -700,35 +699,6 @@ describe('createAgentSdkDesktopObserver', () => {
     expect(notify).toHaveBeenCalledWith({ kind: 'tool-result', requestId: 'r', toolUseId: 'write-1' })
     expect(onFileTreeChanged).toHaveBeenCalledWith({ kind: 'paths', relPaths: ['a.txt'] })
     expect(ordering).toEqual(['session:tool_result', 'fact:tool-result', 'file-tree', 'notify'])
-  })
-
-  it('projects auto-approved write facts from the audit result while keeping the SDK output separate', async () => {
-    const emitSessionEvent = vi.fn()
-    const observer = createAgentSdkDesktopObserver({ requestId: 'r', sessionId: 's', turnId: 't', emitSessionEvent,
-      mapToolResult: (_call, output) => ({ ...(output as Record<string, unknown>) }) as never })
-    await observer.onToolFinished?.(
-      { invocationId: 'r', toolCallId: 'write-audit', toolName: 'write_file', input: { path: 'a.txt' } },
-      { output: { success: true, data: { path: 'a.txt' } }, auditOutput: { success: true, fileAutoApproved: true,
-        decisionRuleId: 'rule-write', autoApprovedWrite: { path: 'a.txt', stats: 'pending' }, data: { path: 'a.txt', bytesWritten: 3, added: 1, removed: 0 } } } as never
-    )
-    expect(emitSessionEvent.mock.calls[0]?.[0].payload.result).toMatchObject({
-      decisionRuleId: 'rule-write', autoApprovedWrite: { path: 'a.txt', bytesWritten: 3, added: 1, removed: 0 }
-    })
-  })
-
-  it('marks unavailable auto-approved write statistics in both the event and audit log', async () => {
-    const emitSessionEvent = vi.fn()
-    const log = vi.spyOn(agentLogger, 'logAgentEvent').mockImplementation(() => {})
-    const observer = createAgentSdkDesktopObserver({ requestId: 'r', sessionId: 's', turnId: 't', emitSessionEvent,
-      mapToolResult: (_call, output) => ({ ...(output as Record<string, unknown>) }) as never })
-    await observer.onToolFinished?.(
-      { invocationId: 'r', toolCallId: 'write-unavailable', toolName: 'write_file', input: { path: 'a.txt' } },
-      { output: { success: true, data: { path: 'a.txt' } }, auditOutput: { success: true, fileAutoApproved: true,
-        autoApprovedWrite: { path: 'a.txt', stats: 'pending' }, data: { path: 'a.txt' } } } as never
-    )
-    expect(emitSessionEvent.mock.calls[0]?.[0].payload.result).toMatchObject({ autoApprovedWrite: { path: 'a.txt', stats: 'unavailable' } })
-    expect(log).toHaveBeenCalledWith('info', 'file.auto_approve', expect.objectContaining({ relPath: 'a.txt', stats: 'unavailable' }))
-    expect((log.mock.calls[0]?.[2] as Record<string, unknown> | undefined)?.bytesWritten).toBeUndefined()
   })
 
   it('correlates Hosted tool results with the invocation request, turn, and lane', async () => {

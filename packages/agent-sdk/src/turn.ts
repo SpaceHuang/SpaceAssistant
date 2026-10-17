@@ -29,7 +29,6 @@ export type AgentTurnPorts = Readonly<{
   recoverOutputLimit?(input: Readonly<{ invocationId: string; modelTurn: number; attempt: number; hadVisibleText: boolean; toolCalls: readonly CanonicalToolExecutionCall[] }>): Promise<Readonly<{ continuation?: CanonicalModelMessage; toolCallErrorContent?: string; retryLocation?: unknown; retryTurnId?: string; retryStepId?: string }> | undefined>
   confirmation?: ConfirmationPort
   toolExecution: PermitBoundToolExecutionPort<CanonicalToolExecutionCall, CanonicalToolExecutionResult>
-  takeToolAuditOutput?(call: CanonicalToolExecutionCall): unknown
   request: Omit<PreparedModelCall['request'], 'messages'>
   observer?: AgentTurnObserver
   routeId: string
@@ -53,7 +52,7 @@ export type AgentTurnPorts = Readonly<{
   toolResourceKeys?(call: CanonicalToolExecutionCall): readonly string[] | undefined
   /** Uses the host's existing tool metadata to preserve bounded approval-candidate scheduling. */
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
-  sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult & Readonly<{ auditOutput?: unknown }>): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   /** Host product policy after a tool result is durably committed and before the next model request. */
   afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection' | 'plan-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
   /** Revalidate host-owned authorization/lifecycle state before another model request. */
@@ -228,15 +227,16 @@ export async function runHostedAgentTurn(input: {
   if (ports.invocationId !== input.invocationId) throw new Error('host returned ports for a different invocation')
   if (input.turnId && ports.turnId !== input.turnId) throw new Error('host returned ports for a different turn')
   if (ports.routeId !== input.routeId) throw new Error('host returned ports for a different route')
-  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, assistantMessageId: input.assistantMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), ...(input.contextProjectionCommitter ?? ports.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? ports.contextProjectionCommitter } : {}), maxToolRounds: ports.maxToolRounds, takeToolAuditOutput: ports.takeToolAuditOutput, observer: input.observer ?? ports.observer })
+  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, assistantMessageId: input.assistantMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), ...(input.contextProjectionCommitter ?? ports.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? ports.contextProjectionCommitter } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
 }
 
 export type { CanonicalContentBlock, CanonicalToolCall } from './model'
 export type CanonicalTurnMessage = CanonicalModelMessage
 
 type CanonicalToolExecutionCall = { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }
-type CanonicalToolExecutionResult = {
+export type CanonicalToolExecutionResult = {
   output: unknown
+  auditOutput?: unknown
   replayContent?: unknown
   isError?: boolean
   auditRef?: string
@@ -252,7 +252,6 @@ export type ToolConfirmationResult = Readonly<{
   answerer?: 'user' | 'agent'
   cause?: string
   userMessage?: string
-  decisionRuleId?: string
   /** Opaque host-selected confirmation memory; consumed by the host callback and never written to History. */
   selectedMemory?: unknown
   promptSendFailure?:
@@ -263,7 +262,7 @@ export type ToolConfirmationResult = Readonly<{
 }> & (
   | Readonly<{ kind: 'approved'; receipt: string }>
   | Readonly<{ kind: 'deferred'; todoId: string; invocationId: string; checkpointRef: Readonly<{ checkpointId: string; workflowRevision: number }>; cause?: string; executionState?: 'not-executed'; retryable?: boolean; nextStep?: 'await-user' }>
-  | Readonly<{ kind: 'denied' | 'timeout' | 'unavailable' | 'cancelled'; decisionRuleId?: string }>
+  | Readonly<{ kind: 'denied' | 'timeout' | 'unavailable' | 'cancelled' }>
 )
 export type ConfirmationPort = (input: {
   call: CanonicalToolExecutionCall
@@ -272,7 +271,6 @@ export type ConfirmationPort = (input: {
   confirmationId: string
   answerer: 'user' | 'agent'
   reasonCode: string
-  decisionRuleId?: string
   context?: unknown
   signal?: AbortSignal
 }) => Promise<ToolConfirmationResult>
@@ -405,7 +403,6 @@ export type RunAgentTurnInput = {
   confirmation?: ConfirmationPort
   /** Only the SDK's permit-bound factory can produce this port; host resolver must use its private prepared record. */
   toolExecution: PermitBoundToolExecutionPort<CanonicalToolExecutionCall, CanonicalToolExecutionResult>
-  takeToolAuditOutput?(call: CanonicalToolExecutionCall): unknown
   invocationId: string
   sessionId?: string
   windowId?: string
@@ -424,7 +421,7 @@ export type RunAgentTurnInput = {
   resourceLocks?: { acquire(keys: readonly string[], options?: { signal?: AbortSignal }): Promise<{ release(): void }> }
   toolResourceKeys?(call: CanonicalToolExecutionCall): readonly string[] | undefined
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
-  sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult & Readonly<{ auditOutput?: unknown }>): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection' | 'plan-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
   beforeModelRequest?(): void | Promise<void>
   sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
@@ -1378,7 +1375,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     const markNotDispatched = async (tool: (typeof toolCalls)[number], reason: string, userMessage?: string, extra?: Record<string, unknown>): Promise<void> => {
       if (toolDispatchStates.get(tool.toolCallId) !== 'pending') return
       const replayContent = userMessage ?? `Tool call was not dispatched (${reason}).`
-      const sessionResult = { success: false, data: replayContent, ...(extra?.decisionRuleId ? { decisionRuleId: extra.decisionRuleId } : {}) }
+      const sessionResult = { success: false, data: replayContent }
       const sessionLedger = input.sessionLedgerForNotDispatched
         ? await input.sessionLedgerForNotDispatched({ ...tool, invocationId }, reason, sessionResult)
         : undefined
@@ -1701,7 +1698,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
 
       let confirmation: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }> | undefined
       if (initialDecision.kind === 'deny') {
-        await markNotDispatched(tool, initialDecision.reasonCode, initialDecision.userMessage, initialDecision.decisionRuleId ? { decisionRuleId: initialDecision.decisionRuleId } : undefined)
+        await markNotDispatched(tool, initialDecision.reasonCode)
         // FR12②：deny 决策可携带模型可见的区分文案（预算未注入 vs 服务不可用）
         throw new ToolDeniedError(initialDecision.reasonCode, initialDecision.userMessage)
       }
@@ -1727,7 +1724,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             approvalId: initialDecision.confirmationId,
             answerer: initialDecision.answerer,
             reasonCode: initialDecision.reasonCode,
-            ...(initialDecision.decisionRuleId ? { decisionRuleId: initialDecision.decisionRuleId } : {}),
             requestId: input.invocationId,
             requestedAt: Date.now()
           }
@@ -1756,7 +1752,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             confirmationId: initialDecision.confirmationId,
             answerer: initialDecision.answerer,
             reasonCode: initialDecision.reasonCode,
-            ...(initialDecision.decisionRuleId ? { decisionRuleId: initialDecision.decisionRuleId } : {}),
             ...(initialDecision.context !== undefined ? { context: structuredClone(initialDecision.context) } : {}),
             ...(input.request.signal ? { signal: input.request.signal } : {})
           })
@@ -1804,10 +1799,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         }
         if (result.kind !== 'approved' || !result.receipt.trim()) {
           const reason = `CONFIRMATION_${result.kind.toUpperCase()}`
-          await markNotDispatched(tool, reason, result.userMessage, {
-            ...(result.promptSendFailure ? { promptSendFailure: result.promptSendFailure } : {}),
-            ...(result.decisionRuleId ? { decisionRuleId: result.decisionRuleId } : initialDecision.kind === 'ask' && initialDecision.decisionRuleId ? { decisionRuleId: initialDecision.decisionRuleId } : {})
-          })
+          await markNotDispatched(tool, reason, result.userMessage, result.promptSendFailure ? { promptSendFailure: result.promptSendFailure } : undefined)
           throw new ToolDeniedError(reason, result.userMessage)
         }
         if (input.request.signal?.aborted) {
@@ -1874,7 +1866,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
               approvalId: authorization.confirmationId,
               answerer: authorization.answerer,
               reasonCode: authorization.reasonCode,
-              ...(authorization.decisionRuleId ? { decisionRuleId: authorization.decisionRuleId } : {}),
               requestId: input.invocationId,
               requestedAt: Date.now()
             }
@@ -1887,7 +1878,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
               confirmationId: authorization.confirmationId,
               answerer: authorization.answerer,
               reasonCode: authorization.reasonCode,
-              ...(authorization.decisionRuleId ? { decisionRuleId: authorization.decisionRuleId } : {}),
               ...(authorization.context !== undefined ? { context: structuredClone(authorization.context) } : {}),
               ...(input.request.signal ? { signal: input.request.signal } : {})
             })
@@ -1936,10 +1926,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           }
           if (freshConfirmation.kind !== 'approved' || !freshConfirmation.receipt.trim()) {
             const reason = `CONFIRMATION_${freshConfirmation.kind.toUpperCase()}`
-            await markNotDispatched(tool, reason, freshConfirmation.userMessage, {
-              ...(freshConfirmation.promptSendFailure ? { promptSendFailure: freshConfirmation.promptSendFailure } : {}),
-              ...(freshConfirmation.decisionRuleId ? { decisionRuleId: freshConfirmation.decisionRuleId } : authorization.kind === 'ask' && authorization.decisionRuleId ? { decisionRuleId: authorization.decisionRuleId } : {})
-            })
+            await markNotDispatched(tool, reason, freshConfirmation.userMessage,
+              freshConfirmation.promptSendFailure ? { promptSendFailure: freshConfirmation.promptSendFailure } : undefined)
             throw new ToolDeniedError(reason, freshConfirmation.userMessage)
           }
           confirmation = { receipt: freshConfirmation.receipt, answerer: freshConfirmation.answerer ?? 'user' }
@@ -2044,10 +2032,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           ...(executionResult.errorCode ? { errorCode: executionResult.errorCode } : {}),
           ...(executionResult.invocationDisposition ? { invocationDisposition: executionResult.invocationDisposition } : {}),
           ...(executionResult.auditRef ? { auditRef: executionResult.auditRef } : {}),
-          ...(input.sessionLedgerForToolResult ? { sessionLedger: await input.sessionLedgerForToolResult({ ...tool, invocationId: input.invocationId }, {
-            ...executionResult,
-            ...(input.takeToolAuditOutput ? { auditOutput: input.takeToolAuditOutput({ ...tool, invocationId: input.invocationId }) } : {})
-          } as CanonicalToolExecutionResult) } : {})
+          ...(input.sessionLedgerForToolResult ? { sessionLedger: await input.sessionLedgerForToolResult({ ...tool, invocationId: input.invocationId }, { ...executionResult, output: executionResult.auditOutput ?? executionResult.output }) } : {})
         }
       }])
       toolDispatchStates.set(tool.toolCallId, 'finished')

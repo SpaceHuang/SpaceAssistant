@@ -315,7 +315,6 @@ describe('edit_file 匹配失败诊断（§7.1 场景）', () => {
     const res = await readThenEdit(tmpDir, cache, rel, { old_string: 'second line', new_string: 'SECOND LINE' })
     expect(res.success).toBe(true)
     expect(await fs.readFile(abs, 'utf8')).toBe('first line\r\nSECOND LINE\r\n')
-    expect(res.data).toMatchObject({ bytesWritten: Buffer.byteLength('first line\r\nSECOND LINE\r\n'), added: 1, removed: 1 })
   })
 
   it('#13 old_string 为空（新建文件）→ 行为不变（回归）', async () => {

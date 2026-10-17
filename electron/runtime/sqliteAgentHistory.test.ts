@@ -3273,22 +3273,6 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
-  it('projects auto-approved write statistics from executor data and marks missing statistics unavailable', () => {
-    const available = projectCanonicalToolResultForSessionLedger({
-      rawResult: { success: true, decisionRuleId: 'write-rule', autoApprovedWrite: { path: 'mapped/target.txt', stats: 'pending' },
-        data: { bytesWritten: 9, added: 2, removed: 1, content: 'must not enter metadata' } },
-      isError: false, toolName: 'write_file', workspaceRoot: '/workspace'
-    })
-    expect(available).toMatchObject({ autoApprovedWrite: { path: 'mapped/target.txt', stats: 'available', bytesWritten: 9, added: 2, removed: 1 } })
-    expect(JSON.stringify(available.autoApprovedWrite)).not.toContain('must not enter metadata')
-
-    const unavailable = projectCanonicalToolResultForSessionLedger({
-      rawResult: { success: true, autoApprovedWrite: { path: 'new.txt', stats: 'pending' }, data: { path: 'new.txt' } },
-      isError: false, toolName: 'write_file', workspaceRoot: '/workspace'
-    })
-    expect(unavailable.autoApprovedWrite).toEqual({ path: 'new.txt', stats: 'unavailable' })
-  })
-
   it('rejects an orphan tool result when canonical model responses declare no tool calls', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)

@@ -3087,9 +3087,6 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const legacyProposal = sessionEvents.find((event) => event.type === 'tool_call' && event.payload.toolUseId === 'desktop-write-denied-1')
     const legacyResult = sessionEvents.find((event) => event.type === 'tool_result' && event.payload.toolUseId === 'desktop-write-denied-1')
     expect(legacyResult?.payload.stepId).toBe(legacyProposal?.payload.stepId)
-    const deniedResult = notDispatched?.payload.sessionLedger as { result?: { data?: unknown; decisionRuleId?: string } } | undefined
-    expect(deniedResult?.result).toMatchObject({ data: expect.any(String), decisionRuleId: expect.any(String) })
-    expect(legacyResult?.payload.result).toMatchObject({ success: false, data: deniedResult?.result?.data })
     expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     expect(getUsageTurnFact(db, 'hosted-denied-turn')).toMatchObject({ stepCount: 2, toolCallCount: 1, toolErrorCount: 0, toolSkippedCount: 1, outcome: 'completed' })
     const usageSteps = getUsageStepFactsForTurn(db, session.id, 'hosted-denied-turn')

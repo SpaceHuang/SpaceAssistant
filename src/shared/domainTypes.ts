@@ -639,14 +639,10 @@ export function builtinToolNeedsConfirmation(name: string): boolean {
 }
 
 export interface AutoApprovedWriteMeta {
-  /** 入参中的相对目标路径原样保留；不记录绝对路径或文件内容。 */
   path: string
-  /** 执行器成功写盘后产生的统计；无法取得统计时标记 unavailable，不以 0 代替。 */
-  stats: 'available' | 'unavailable'
-  /** 与执行器实际写前 / 写后内容相比新增、删除的行数。 */
+  stats: 'pending' | 'available' | 'unavailable'
   added?: number
   removed?: number
-  /** 实际写入内容的 UTF-8 字节数。 */
   bytesWritten?: number
   /** P1-3(a)：不再携带 diff 全文（oldContent/newContent）——渲染层零引用（UI diff 卡片走 confirmDiff 链路），
    *  历史重建白名单投影也一律丢弃；写入全文曾占 events.jsonl/DB 约 10.83 MB/会话（实测 b680b181）。 */

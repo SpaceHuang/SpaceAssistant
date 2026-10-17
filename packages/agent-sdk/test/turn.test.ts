@@ -26,32 +26,6 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
-  it('uses the same denial explanation in current tool message, history replay, and session ledger', async () => {
-    const registry = new ModelProviderRegistry()
-    registry.register(route, { providerId: 'deny-explanation', stream: () => stream(
-      { type: 'tool-call', toolCallId: 'tc-deny-explanation', toolName: 'lookup', input: {} },
-      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
-    ) })
-    const history = new MemoryHistory()
-    const permits = new InMemorySafetyPermitStore()
-    const explanation = '[path-target-unavailable] 目标目录不存在，请使用已存在的目录'
-    const execute = vi.fn()
-    let ledgerResult: Record<string, unknown> | undefined
-    await expect(runAgentTurn({ registry, routeId: route.routeId, invocationId: 'inv-deny-explanation', request: { messages: [], maxTokens: 10 },
-      safetyGate: new SafetyGate({ capabilities: (() => { const registry = new CapabilityRegistry(); registry.define('inv-deny-explanation', ['lookup']); return registry })(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY', userMessage: explanation }) } }),
-      prepareTool: async (_call, stage) => ({ ...toolBinding, invocationId: 'inv-deny-explanation', capabilityId: 'lookup', toolCallId: 'tc-deny-explanation', phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
-      toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 2, history,
-      sessionLedgerForNotDispatched: (_call, _reason, result) => { ledgerResult = result; return { result } }
-    })).rejects.toMatchObject({ code: 'TOOL_DENIED' })
-
-    const event = (await history.read('inv-deny-explanation')).events.find(({ kind }) => kind === 'tool-call-not-dispatched')!
-    const payload = event.payload as { replayContent: string; sessionLedger: { result: { data: string } } }
-    expect(payload.replayContent).toBe(explanation)
-    expect(payload.sessionLedger.result.data).toBe(explanation)
-    expect(ledgerResult?.data).toBe(explanation)
-    expect(execute).not.toHaveBeenCalled()
-  })
-
   it('freezes request patches and metadata across provider retry, then refreshes them for the next model turn', async () => {
     const registry = new ModelProviderRegistry()
     const providerRequests: CanonicalModelMessage[][] = []

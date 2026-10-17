@@ -73,6 +73,41 @@ import { historyReadTool } from './historyTool'
 import { toolSearchTool } from './toolSearchTool'
 import { toolkitFindTool, toolkitCallTool } from '../capabilities/toolkitTool'
 import '../capabilities/registerBuiltinCapabilities'
+
+const MAX_WRITE_STATS_INPUT_CHARS = 2_000_000
+const MAX_WRITE_STATS_WORK_CELLS = 1_000_000
+
+function boundedWriteLineStats(oldText: string, newText: string): { added?: number; removed?: number; stats: 'available' | 'unavailable' } {
+  try {
+    if (oldText.length + newText.length > MAX_WRITE_STATS_INPUT_CHARS) return { stats: 'unavailable' }
+    const oldLines = oldText === '' ? [] : oldText.split('\n')
+    const newLines = newText === '' ? [] : newText.split('\n')
+    if (oldLines.length > 100_000 || newLines.length > 100_000) return { stats: 'unavailable' }
+    let prefix = 0
+    while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix++
+    let oldEnd = oldLines.length
+    let newEnd = newLines.length
+    while (oldEnd > prefix && newEnd > prefix && oldLines[oldEnd - 1] === newLines[newEnd - 1]) { oldEnd--; newEnd-- }
+    const oldLength = oldEnd - prefix
+    const newLength = newEnd - prefix
+    if (oldLength * newLength > MAX_WRITE_STATS_WORK_CELLS) return { stats: 'unavailable' }
+    const outer = oldLength >= newLength ? oldLines : newLines
+    const inner = oldLength >= newLength ? newLines : oldLines
+    const outerEnd = oldLength >= newLength ? oldEnd : newEnd
+    const innerEnd = oldLength >= newLength ? newEnd : oldEnd
+    const width = innerEnd - prefix
+    let previous = new Uint32Array(width + 1)
+    let current = new Uint32Array(width + 1)
+    for (let i = prefix; i < outerEnd; i++) {
+      current[0] = 0
+      for (let j = 1; j <= width; j++) current[j] = outer[i] === inner[prefix + j - 1]
+        ? previous[j - 1]! + 1 : Math.max(previous[j]!, current[j - 1]!)
+      ;[previous, current] = [current, previous]
+    }
+    const common = prefix + (oldLines.length - oldEnd) + previous[width]!
+    return { stats: 'available', added: newLines.length - common, removed: oldLines.length - common }
+  } catch { return { stats: 'unavailable' } }
+}
 import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
 import { switchSessionExecutor } from './remoteSessionExecutors'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
@@ -80,7 +115,6 @@ import { ErrorCodes } from '../../src/shared/errorCodes'
 import { buildEscapeLayerVariants, diagnoseMissingOldString } from './editDiagnosis'
 import type { FileState } from '../fileStateCache'
 import { sliceFileTailLines } from '../../src/shared/readFileRange'
-import { computeBoundedDiffLineStats } from '../../src/shared/writeDiffStats'
 import {
   applyReadCharLimit,
   isBinaryBuffer,
@@ -943,11 +977,9 @@ export const editFileExecutor: ToolExecutor = {
           throw e
         }
         await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
-        const lineStats = computeBoundedDiffLineStats(cur, next)
         return {
           success: true,
-          data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8'),
-            ...(lineStats.kind === 'available' ? { added: lineStats.add, removed: lineStats.remove } : { stats: 'unavailable' }), ...extraData },
+          data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8'), ...extraData },
           duration: Date.now() - started
         }
       }
@@ -1007,6 +1039,7 @@ export const writeFileExecutor: ToolExecutor = {
     let wikiVocabularyPath: string | undefined
     let releaseWikiMutex: (() => void) | undefined
     try {
+      let beforeContent = ''
       let writeTarget: Awaited<ReturnType<typeof resolveSafeWriteTarget>>
       try {
         writeTarget = await resolveWriteTargetFromPermit(input, ctx, 'write_file')
@@ -1020,7 +1053,6 @@ export const writeFileExecutor: ToolExecutor = {
       releaseWikiMutex = wikiVocabularyPath ? await acquireWikiWriteMutex(abs) : undefined
       const existed = writeTarget.existed
       const body = content.replace(/\r\n/g, '\n')
-      let beforeContent = ''
       let expectedIdentity: FileIdentity | null = null
       if (existed) {
         if (!ctx.fileStateCache.hasBeenRead(abs)) {
@@ -1033,7 +1065,6 @@ export const writeFileExecutor: ToolExecutor = {
         let cur: string
         try {
           cur = await fs.readFile(abs, { encoding: 'utf8', signal: op })
-          beforeContent = cur
           expectedIdentity = await captureFileIdentity(abs)
           if (ctx.lane === 'desktop' && !capturedIdentityMatchesPermit(ctx, expectedIdentity)) {
             return { ...writePermitFailure(new Error('write-target-identity-mismatch')), duration: Date.now() - started }
@@ -1043,6 +1074,7 @@ export const writeFileExecutor: ToolExecutor = {
           if (ab) return ab
           throw e
         }
+        beforeContent = cur
         if (stCache) {
           const mismatch = await assertDiskMatchesReadCache(
             abs,
@@ -1087,9 +1119,8 @@ export const writeFileExecutor: ToolExecutor = {
         throw e
       }
       await recordFileStateAfterWrite(ctx.fileStateCache, abs, body)
-      const lineStats = computeBoundedDiffLineStats(beforeContent, body)
-      return { success: true, data: { path: rel, bytesWritten: Buffer.byteLength(body, 'utf8'),
-        ...(lineStats.kind === 'available' ? { added: lineStats.add, removed: lineStats.remove } : { stats: 'unavailable' }) }, duration: Date.now() - started }
+      const lineStats = boundedWriteLineStats(beforeContent, body)
+      return { success: true, data: { path: rel, bytesWritten: Buffer.byteLength(body, 'utf8'), ...lineStats }, duration: Date.now() - started }
     } finally {
       if (releaseWikiMutex) {
         releaseWikiMutex()
