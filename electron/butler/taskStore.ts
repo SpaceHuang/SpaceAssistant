@@ -89,8 +89,7 @@ function rowToTask(row: TaskRow): AutomationTask {
     deliveryPref: normalizeDeliveryPref(row.delivery_pref),
     ...(row.delivery_target ? { deliveryTarget: row.delivery_target } : {}),
     ...(row.model_override ? { modelOverride: row.model_override } : {}),
-    ...(row.work_dir != null ? { workDir: row.work_dir } : {}),
-    ...(workDirs !== undefined ? { workDirs } : {}),
+    workDirs: workDirs ?? (row.work_dir != null ? [row.work_dir] : []),
     preflightVersion: row.preflight_version === 1 ? 1 : 0,
     targetBindingsJson: row.target_bindings_json,
     taskRevision: row.task_revision,
@@ -152,7 +151,7 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
   const enabled = input.enabled !== false
   const nextRunAt = input.nextRunAt ?? (enabled ? computeNextRunAt(input.schedule, now) : null)
   const workDirs = getAutomationTaskWorkDirs(input)
-  const legacyWorkDir = input.workDir ?? (input.workDirs?.length === 1 ? input.workDirs[0] : null)
+  const legacyWorkDir = workDirs.length === 1 ? workDirs[0] : null
   runInTransaction(conn, () => {
     conn.prepare(
       `INSERT INTO automation_tasks (
@@ -231,7 +230,7 @@ export function listEnabledAutomationTasksDue(db: AppDatabase, now: number): Aut
 export function updateAutomationTask(
   db: AppDatabase,
   taskId: string,
-  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
   preflight?: TrustedTaskPreflightCommit
 ): AutomationTask | undefined {
   const result = updateAutomationTaskConditional(db, taskId, patch, preflight)
@@ -241,7 +240,7 @@ export function updateAutomationTask(
 export function updateAutomationTaskConditional(
   db: AppDatabase,
   taskId: string,
-  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
   preflight?: TrustedTaskPreflightCommit
 ): AutomationTaskUpdateResult {
   const cur = getAutomationTask(db, taskId)
@@ -256,19 +255,18 @@ export function updateAutomationTaskConditional(
     scheduleGeneration: (cur.scheduleGeneration ?? 0) + (patch.schedule !== undefined || patch.enabled !== undefined ? 1 : 0),
     ...(preflight ? { preflightVersion: 1 as const, targetBindingsJson: JSON.stringify(preflight.targetBindings) } : {})
   }
-  for (const key of clearConfig ?? []) delete (next as unknown as Record<string, unknown>)[key]
+  for (const key of clearConfig ?? []) if (key !== 'workDirs') delete (next as unknown as Record<string, unknown>)[key]
   const workDirs = patch.workDirs !== undefined
     ? [...patch.workDirs]
-    : patch.workDir !== undefined
-      ? (patch.workDir ? [patch.workDir] : [])
-      : clearConfig?.includes('workDir') || clearConfig?.includes('workDirs')
+    : clearConfig?.includes('workDirs')
         ? []
         : getAutomationTaskWorkDirs(cur)
-  const legacyWorkDir = clearConfig?.includes('workDir') || clearConfig?.includes('workDirs')
+  next.workDirs = workDirs
+  const legacyWorkDir = clearConfig?.includes('workDirs')
     ? null
     : patch.workDirs !== undefined
       ? (patch.workDirs.length === 1 ? patch.workDirs[0] : null)
-      : next.workDir ?? (workDirs.length === 1 ? workDirs[0] : null)
+      : workDirs.length === 1 ? workDirs[0] : null
   // 评审 P0-1：排程语义随状态推导——停用置空（未排程）；schedule 变更 / 重新启用 /
   // 启用但从未武装（历史 NULL 行）时按 schedule 重算；仅改名/提示词等不动既有排程。
   if (!next.enabled) {

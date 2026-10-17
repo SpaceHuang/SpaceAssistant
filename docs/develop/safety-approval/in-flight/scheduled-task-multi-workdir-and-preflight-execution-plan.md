@@ -162,9 +162,9 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **动作与产物：** 全仓调用点迁移且新旧 IPC 兼容转换已由 E-05 覆盖后，将公共 `AutomationTask`/input 的 `workDirs` 改为必填，移除公共 `workDir`；数据库旧列仅保留 migration/恢复用途。
 - **完成判据：** E-02a 的兼容调用迁移已通过；E-05 的旧单根 payload 预检行为已通过；收紧提交本身包含最后剩余调用迁移并通过 shared/renderer typecheck 与 electron incremental build。无断言、空数组占位或 Profile fallback。
 - **验证命令：** `npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron:incremental`。
-- **证据：** `rg workDir` 调用点清单、旧 IPC 转换用例和三项编译记录。
+- **证据：** `AutomationTask`/`AutomationTaskInput` 已将 `workDirs` 收紧为必填且不再暴露 `workDir`；DB 旧列只在 store adapter 读取 legacy row 并转换为数组，IPC 只在旧 payload 边界适配；renderer 读取/展示 canonical 数组。`npm exec vitest run -- electron/butler/taskStore.test.ts electron/butler/butlerIpc.test.ts electron/butler/taskScheduler.test.ts electron/butler/taskStore.armNextRun.test.ts electron/butler/enableByDefault.test.ts --reporter=dot`（61 项通过）；`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron:incremental` 均通过。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-06 让路径 facts 对多个根作并集分类
 

@@ -167,17 +167,17 @@ describe('butler IPC workdir/config fields', () => {
 
   it('legacy directory-only edit sets its explicit path while leaving legacy model and effort NULL', async () => {
     const map = handlers()
-    const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', modelOverride: 'old-provider-name' })
+    const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelOverride: 'old-provider-name' })
     const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: os.tmpdir() } }) as { ok: boolean; error?: string }
     expect(response).toMatchObject({ ok: true })
-    expect(getAutomationTask(db!, legacy.id)).toMatchObject({ workDir: await realpath(os.tmpdir()), modelOverride: 'old-provider-name' })
+    expect(getAutomationTask(db!, legacy.id)).toMatchObject({ workDirs: [await realpath(os.tmpdir())], modelOverride: 'old-provider-name' })
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('modelId')
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('reasoningEffort')
   })
 
   it('returns stable conflicts for schedule edits and deletion while a run is active', async () => {
     const map = handlers()
-    const task = createAutomationTask(db!, { name: 'scheduled', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDir: os.tmpdir(), nextRunAt: 100 })
+    const task = createAutomationTask(db!, { name: 'scheduled', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], nextRunAt: 100 })
     const claim = claimDueSlotAndAdvance(db!, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'ipc-pending-conflict' })
     expect(await map.get('butler:update')!(null, { id: task.id, patch: { schedule: { kind: 'daily', time: '10:00' } } })).toMatchObject({ ok: false, kind: 'validation-error', error: 'schedule-pending' })
     expect(await map.get('butler:delete')!(null, { id: task.id })).toEqual({ ok: false, error: 'task-has-active-run' })
@@ -187,7 +187,7 @@ describe('butler IPC workdir/config fields', () => {
 
   it('updates a task with validated canonical multiple roots', async () => {
     const map = handlers()
-    const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDir: os.tmpdir() })
+    const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()] })
     const child = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(`${os.tmpdir()}/butler-roots-`))
     try {
       const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDirs: [child, os.tmpdir(), child] } }) as { ok: boolean; error?: string }
@@ -200,11 +200,11 @@ describe('butler IPC workdir/config fields', () => {
 
   it('legacy task fields can be edited without submitting new config and keep NULL compatibility columns', async () => {
     const map = handlers()
-    const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'old prompt', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', modelOverride: 'old-provider-name' })
+    const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'old prompt', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelOverride: 'old-provider-name' })
     const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { name: 'renamed', prompt: 'new prompt', schedule: { kind: 'interval', intervalMinutes: 45 } } }) as { ok: boolean; error?: string }
     expect(response).toMatchObject({ ok: true })
     expect(getAutomationTask(db!, legacy.id)).toMatchObject({ name: 'renamed', prompt: 'new prompt', schedule: { kind: 'interval', intervalMinutes: 45 }, modelOverride: 'old-provider-name' })
-    expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('workDir')
+    expect(getAutomationTask(db!, legacy.id)?.workDirs).toEqual([os.tmpdir()])
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('modelId')
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('modelServiceId')
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('reasoningEffort')

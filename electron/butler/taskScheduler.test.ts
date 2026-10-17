@@ -25,6 +25,7 @@ function taskInput(overrides: Partial<AutomationTaskInput> = {}): AutomationTask
     schedule: { kind: 'interval', intervalMinutes: 30 },
     prompt: '检查',
     deliveryPref: 'none',
+    workDirs: ['/tmp/automation-test'],
     ...overrides
   }
 }

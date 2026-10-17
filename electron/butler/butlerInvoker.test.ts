@@ -225,7 +225,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
     setConfigValue(db, 'config.models', JSON.stringify([model]))
     mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({ async *[Symbol.asyncIterator]() {}, finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } })) })) } })
-    const task = createAutomationTask(db, { name: 'pinned', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDir, modelId, modelServiceId: 'svc-pinned', modelOverride: model.name, reasoningEffort: 'high' })
+    const task = createAutomationTask(db, { name: 'pinned', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDirs: [workDir], modelId, modelServiceId: 'svc-pinned', modelOverride: model.name, reasoningEffort: 'high' })
     const deps = makeDeps({ getWorkDir: () => testWorkDir, getActiveWorkDirProfilePath: () => testWorkDir })
     const result = await runButlerTask(deps, task.id, { trigger: 'manual', requestId: 'req-task-root-pinned' })
     expect(result.ok, JSON.stringify(result)).toBe(true)
@@ -241,12 +241,12 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const queuedDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-admission-new-'))
     const modelIds = Object.entries(MODEL_BASELINE).filter(([, baseline]) => baseline.sourceProvider === 'anthropic').slice(0, 2).map(([id]) => id)
     setConfigValue(db, 'config.models', JSON.stringify(modelIds.map((id) => ({ ...MODEL_BASELINE[id]!, id, name: id, enabled: true, supportsThinking: true }))))
-    const task = createAutomationTask(db, { name: 'queued config', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDir: initialDir, modelId: modelIds[0], modelServiceId: 'svc-pinned', modelOverride: modelIds[0], reasoningEffort: 'low' })
+    const task = createAutomationTask(db, { name: 'queued config', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDirs: [initialDir], modelId: modelIds[0], modelServiceId: 'svc-pinned', modelOverride: modelIds[0], reasoningEffort: 'low' })
     let admit!: (value: { ok: true; ticket: { request: never; release: () => boolean } }) => void
     const admissionGate = { acquire: () => new Promise<{ ok: true; ticket: { request: never; release: () => boolean } }>((resolve) => { admit = resolve }) }
     const runPromise = runButlerTask(makeDeps({ admissionGate }), task.id, { trigger: 'manual', requestId: 'req-admission-refresh' })
     await Promise.resolve()
-    updateAutomationTask(db, task.id, { workDir: queuedDir, modelId: modelIds[1], modelServiceId: 'svc-pinned', modelOverride: modelIds[1], reasoningEffort: 'high' })
+    updateAutomationTask(db, task.id, { workDirs: [queuedDir], modelId: modelIds[1], modelServiceId: 'svc-pinned', modelOverride: modelIds[1], reasoningEffort: 'high' })
     admit({ ok: true, ticket: { request: {} as never, release: () => true } })
     const result = await runPromise
     const run = getLatestRunForTask(db, task.id)!
@@ -277,7 +277,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     setConfigValue(db, 'config.models', JSON.stringify([model]))
     const resolved = { model, serviceId: 'svc-pinned', providerModelName: modelId, baseUrl: 'https://mock.local', getApiKey: async () => 'test-key' }
     mockResolveLlmCredentialsForPair.mockResolvedValueOnce(resolved).mockResolvedValueOnce({ error: 'service disabled' })
-    const task = createAutomationTask(db, { name: 'revoked', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDir, modelId, modelServiceId: 'svc-pinned', modelOverride: modelId, reasoningEffort: 'high' })
+    const task = createAutomationTask(db, { name: 'revoked', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDirs: [workDir], modelId, modelServiceId: 'svc-pinned', modelOverride: modelId, reasoningEffort: 'high' })
     const result = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-task-pair-revoked' })
     expect(result).toMatchObject({ ok: false, error: expect.stringContaining('service disabled') })
     expect(mockCreateAnthropicClient).not.toHaveBeenCalled()

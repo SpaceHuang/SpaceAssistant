@@ -24,6 +24,7 @@ function uiTaskInput(overrides: Partial<AutomationTaskInput> = {}): AutomationTa
     schedule: { kind: 'interval', intervalMinutes: 30 },
     prompt: '检查',
     deliveryPref: 'none',
+    workDirs: ['/tmp/automation-test'],
     ...overrides
   }
 }

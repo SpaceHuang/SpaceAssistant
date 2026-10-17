@@ -41,6 +41,7 @@ function taskInput(overrides: Partial<AutomationTaskInput> = {}): AutomationTask
     schedule: { kind: 'interval', intervalMinutes: 30 },
     prompt: '检查磁盘空间并汇报',
     deliveryPref: 'desktop',
+    workDirs: ['/tmp/automation'],
     ...overrides
   }
 }
@@ -142,13 +143,13 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
   it('任务配置字段新建、更新、清除并保留 provider model name 语义', () => {
     const d = db()
     const task = createAutomationTask(d, taskInput({
-      workDir: '/tmp/automation', modelId: 'catalog-a', modelServiceId: 'service-a',
+      workDirs: ['/tmp/automation'], modelId: 'catalog-a', modelServiceId: 'service-a',
       modelOverride: 'same-provider-name', reasoningEffort: 'high'
     }))
-    expect(task).toMatchObject({ workDir: '/tmp/automation', modelId: 'catalog-a', modelServiceId: 'service-a', modelOverride: 'same-provider-name', reasoningEffort: 'high' })
+    expect(task).toMatchObject({ workDirs: ['/tmp/automation'], modelId: 'catalog-a', modelServiceId: 'service-a', modelOverride: 'same-provider-name', reasoningEffort: 'high' })
     expect(listAutomationTasks(d)[0]).toMatchObject({ modelId: 'catalog-a', modelServiceId: 'service-a' })
-    const updated = updateAutomationTask(d, task.id, { clearConfig: ['workDir', 'modelId', 'modelServiceId', 'reasoningEffort'] })
-    expect(updated).not.toHaveProperty('workDir')
+    const updated = updateAutomationTask(d, task.id, { clearConfig: ['workDirs', 'modelId', 'modelServiceId', 'reasoningEffort'] })
+    expect(updated?.workDirs).toEqual([])
     expect(updated).not.toHaveProperty('modelId')
     expect(updated?.modelOverride).toBe('same-provider-name')
   })
@@ -383,10 +384,11 @@ describe('automation task multi-root compatibility storage', () => {
 
   it('adapts a legacy single root into workDirs while preserving the legacy column', () => {
     const d = db()
-    const task = createAutomationTask(d, taskInput({ workDir: '/legacy/root' }))
-    expect(getAutomationTask(d, task.id)).toMatchObject({ workDir: '/legacy/root', workDirs: ['/legacy/root'] })
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/legacy/root'] }))
+    getDbConnection(d).prepare('UPDATE automation_tasks SET work_dirs_json=NULL,work_dir=? WHERE id=?').run('/legacy/root', task.id)
+    expect(getAutomationTask(d, task.id)).toMatchObject({ workDirs: ['/legacy/root'] })
     const row = getDbConnection(d).prepare('SELECT work_dirs_json,work_dir FROM automation_tasks WHERE id=?').get(task.id)
-    expect(row).toEqual({ work_dirs_json: '["/legacy/root"]', work_dir: '/legacy/root' })
+    expect(row).toEqual({ work_dirs_json: null, work_dir: '/legacy/root' })
   })
 })
 

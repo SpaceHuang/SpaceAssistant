@@ -62,7 +62,7 @@ function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: Task
         <span className="butler-task-card__summary-text" title={task.prompt}>
           {task.prompt}
         </span>
-        {task.workDir ? <span className="butler-task-card__workdir" title={task.workDir}>{t('butler.form.workDir')}: {task.workDir}</span> : null}
+        {task.workDirs.length ? <span className="butler-task-card__workdir" title={task.workDirs.join('\n')}>{t('butler.form.workDir')}: {task.workDirs.join(', ')}</span> : null}
         {task.lastRunAt ? (
           <span className="butler-task-card__summary-meta">
             {t('butler.lastRun', { time: dayjs(task.lastRunAt).format('YYYY-MM-DD HH:mm') })}
@@ -162,7 +162,7 @@ export function ButlerTaskSettings() {
       dailyTime: dayjs(task.schedule.kind === 'daily' ? task.schedule.time : '09:00', 'HH:mm'),
       onceAt: dayjs(task.schedule.kind === 'once' ? task.schedule.at : Date.now() + 3_600_000),
       deliveryPref: task.deliveryPref,
-      workDir: task.workDir,
+      workDir: task.workDirs[0],
       modelId: task.modelId,
       modelServiceId: task.modelServiceId,
       modelOverride: task.modelOverride,
@@ -193,7 +193,9 @@ export function ButlerTaskSettings() {
             patch: {
               expectedTaskRevision: editing.taskRevision ?? 0,
               name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref,
-              ...(typeof values.workDir === 'string' && values.workDir.trim() ? { workDirs: [values.workDir] } : {}),
+              ...(typeof values.workDir === 'string' && values.workDir.trim()
+                ? { workDirs: values.workDir === editing.workDirs[0] ? editing.workDirs : [values.workDir] }
+                : {}),
               ...(chosen ? {
                 modelId: chosen.modelId, modelServiceId: chosen.serviceId,
                 modelOverride: chosen.providerModelName, reasoningEffort: values.reasoningEffort
@@ -320,7 +322,7 @@ export function ButlerTaskSettings() {
         ]}
       >
         <Form form={form} layout="vertical">
-          {editing && !editing.workDir ? <Alert type="info" showIcon message={t('butler.form.workDirLegacy')} /> : null}
+          {editing && editing.workDirs.length === 0 ? <Alert type="info" showIcon message={t('butler.form.workDirLegacy')} /> : null}
           <Form.Item name="name" label={t('butler.form.name')} rules={[{ required: true, message: t('butler.form.nameRequired') }]}>
             <Input />
           </Form.Item>

@@ -19,9 +19,7 @@ export type AutomationTask = {
   prompt: string
   deliveryPref: AutomationDeliveryPref
   deliveryTarget?: string
-  /** 兼容旧任务：缺省表示准入后捕获活动 Profile。 */
-  workDir?: string
-  workDirs?: string[]
+  workDirs: string[]
   /** 旧任务迁移为 0；通过新预检创建/编辑/启用后为 1。 */
   preflightVersion?: 0 | 1
   targetBindingsJson?: string | null
@@ -45,8 +43,7 @@ export type AutomationTaskInput = {
   prompt: string
   deliveryPref: AutomationDeliveryPref
   deliveryTarget?: string
-  workDir?: string
-  workDirs?: string[]
+  workDirs: string[]
   modelId?: string
   modelServiceId?: string
   reasoningEffort?: AgentReasoningEffort
@@ -149,10 +146,7 @@ export type ButlerRunTaskResult = {
   error?: string
 }
 
-/** Compatibility adapter: explicit canonical roots win; legacy single root is the only fallback. */
-export function getAutomationTaskWorkDirs(task: Pick<AutomationTask, 'workDir' | 'workDirs'>): string[] {
-  const roots = task.workDirs
-  if (Array.isArray(roots)) return [...roots]
-  if (typeof task.workDir === 'string' && task.workDir.trim().length > 0) return [task.workDir]
-  return []
+/** Shared canonical roots accessor; legacy conversion is restricted to the IPC/DB boundary. */
+export function getAutomationTaskWorkDirs(task: Pick<AutomationTask, 'workDirs'>): string[] {
+  return Array.isArray(task.workDirs) ? [...task.workDirs] : []
 }

@@ -129,11 +129,13 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       return { ok: false, kind: 'validation-error', error: '任务参数不完整（名称 / 提示词 / 触发方式 / 投递偏好）' }
     }
     if (!hasRequiredDeliveryTarget(deliveryPref, payload?.deliveryTarget)) return { ok: false, kind: 'validation-error', error: '飞书或微信投递必须填写有效接收对象' }
+    // Runtime compatibility at the IPC boundary only: older renderer builds may still send workDir.
+    const legacyPayload = payload as Partial<AutomationTaskInput> & { workDir?: unknown }
     const rootsResult = Object.prototype.hasOwnProperty.call(payload ?? {}, 'workDirs')
       ? await validateWorkDirs(payload?.workDirs)
-      : await validateWorkDir(payload?.workDir)
+      : await validateWorkDir(legacyPayload.workDir)
     if (!rootsResult.ok) return { ok: false, kind: 'validation-error', error: rootsResult.error }
-    const workDirs = 'workDirs' in rootsResult ? rootsResult.workDirs : [rootsResult.workDir]
+    const workDirs: string[] = 'workDirs' in rootsResult ? rootsResult.workDirs : [rootsResult.workDir]
     const config = await validateModel(db, {
       modelId: payload?.modelId,
       modelServiceId: payload?.modelServiceId,
@@ -207,7 +209,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     const candidate = { ...existing, ...next }
     const candidateRoots: string[] = Array.isArray(next.workDirs)
       ? next.workDirs as string[]
-      : existing.workDirs ?? (existing.workDir ? [existing.workDir] : [])
+      : existing.workDirs
     const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
     const failure = preflightFailure(inspection)
     if (failure) return failure
