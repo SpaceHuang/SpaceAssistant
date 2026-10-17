@@ -96,6 +96,11 @@ function proofsEqual(readiness: SessionLedgerReadiness, proof: SessionLedgerRead
     readiness.proofIndexLastAt === proof.indexLastAt
 }
 
+function hasCredentialedBootstrap(readiness: SessionLedgerReadiness): boolean {
+  return readiness.origin === 'new_location' && Boolean(readiness.bootstrapId) &&
+    (readiness.state === 'uninitialized' || readiness.state === 'initializing')
+}
+
 /** Ensures only the requested session ledger. Canonical chat history remains outside this gate. */
 export async function ensureSessionLedgerReady(input: {
   conn: DatabaseSync
@@ -115,7 +120,7 @@ export async function ensureSessionLedgerReady(input: {
   const runLifecycle = () => withSessionLedgerLifecycleLock(readiness.ledgerLocationKey, async (): Promise<SessionLedgerLifecycleResult> => {
     const now = input.now ?? Date.now
     let current = readSessionLedgerReadiness(input.conn, readiness.ledgerLocationKey)!
-    const resumeCredentialedBootstrap = current.origin === 'new_location' && current.state === 'initializing' && Boolean(current.bootstrapId)
+    const resumeCredentialedBootstrap = hasCredentialedBootstrap(current)
     if (resumeCredentialedBootstrap && current.ownerReconciledProcessGeneration < input.processGeneration) {
       advanceSessionLedgerOwnerReconciliation(input.conn, current.ledgerLocationKey, input.processGeneration, now())
       current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
@@ -214,7 +219,7 @@ export async function ensureSessionLedgerReady(input: {
     return { status: 'blocked', readiness: readSessionLedgerReadiness(input.conn, latest.ledgerLocationKey)! }
   })
   const initial = readSessionLedgerReadiness(input.conn, readiness.ledgerLocationKey)!
-  const result = initial.origin === 'new_location' && initial.state === 'initializing' && Boolean(initial.bootstrapId)
+  const result = hasCredentialedBootstrap(initial)
     ? await runLifecycle()
     : await withSessionEventWriterDrain(input.location.workDir, input.location.sessionId, runLifecycle)
   try {

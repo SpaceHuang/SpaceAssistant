@@ -136,7 +136,7 @@ describe('production session ledger lifecycle', () => {
     }
   })
 
-  it('resumes an interrupted bootstrap across process generations when its ledger files are still missing', async () => {
+  it.each(['initializing', 'uninitialized'] as const)('resumes a %s bootstrap across process generations when its ledger files are still missing', async (state) => {
     const db = createMemoryAppDb()
     databases.push(db)
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-bootstrap-cross-process-'))
@@ -146,7 +146,7 @@ describe('production session ledger lifecycle', () => {
     const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
     const conn = getDbConnection(db)
     const row = conn.prepare('SELECT bootstrap_id FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { bootstrap_id: string }
-    conn.prepare("UPDATE session_ledger_projection_state SET state='initializing',owner_reconciled_process_generation=1 WHERE session_id=?").run(session.id)
+    conn.prepare('UPDATE session_ledger_projection_state SET state=?,owner_reconciled_process_generation=1 WHERE session_id=?').run(state, session.id)
 
     const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 2,
       dependencies: createProductionSessionLedgerLifecycleDependencies(conn) })
