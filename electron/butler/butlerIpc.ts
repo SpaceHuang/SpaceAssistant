@@ -67,12 +67,9 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     const currentModel = getConfigValue(db, 'config.defaultModel') ?? getConfigValue(db, 'config.model')
     const model = models.find((entry) => entry.id === currentModel || entry.name === currentModel)
     const service = model && services.find((entry) => activeIds.includes(entry.id) && (entry.supportedModelIds ?? []).includes(model.id) && entry.apiKeyPresent)
-    const profiles = JSON.parse(getConfigValue(db, 'config.workDirProfiles') ?? '[]') as Array<{ id: string; path: string }>
-    const activeId = getConfigValue(db, 'config.activeWorkDirProfileId')
-    const workDir = profiles.find((profile) => profile.id === activeId)?.path ?? getConfigValue(db, 'config.workDir') ?? ''
     const configuredEffort = getConfigValue(db, 'config.thinkingEffort') ?? 'off'
     const reasoningEffort = model?.supportsThinking === false ? 'off' : configuredEffort
-    return { workDir, ...(model && service ? { modelId: model.id, modelOverride: model.name, modelServiceId: service.id } : {}), reasoningEffort }
+    return { ...(model && service ? { modelId: model.id, modelOverride: model.name, modelServiceId: service.id } : {}), reasoningEffort }
   })
 
   ipcMain.handle('butler:model-candidates', () => {
@@ -138,15 +135,13 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       return { ok: false, error: '飞书或微信投递必须填写有效接收对象' }
     }
     if (typeof patch.modelOverride === 'string') next.modelOverride = patch.modelOverride
-    if (Object.prototype.hasOwnProperty.call(patch, 'workDir')) {
-      const workDir = await validateTaskWorkDir(patch.workDir)
-      if (!workDir.ok) return { ok: false, error: workDir.error }
-      next.workDir = workDir.workDir
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'workDirs')) {
-      const workDirs = await validateTaskWorkDirs(patch.workDirs)
+    const rootsProvided = Object.prototype.hasOwnProperty.call(patch, 'workDirs') || Object.prototype.hasOwnProperty.call(patch, 'workDir')
+    if (rootsProvided) {
+      const workDirs = Object.prototype.hasOwnProperty.call(patch, 'workDirs')
+        ? await validateTaskWorkDirs(patch.workDirs)
+        : await validateTaskWorkDir(patch.workDir)
       if (!workDirs.ok) return { ok: false, error: workDirs.error }
-      next.workDirs = workDirs.workDirs
+      next.workDirs = 'workDirs' in workDirs ? workDirs.workDirs : [workDirs.workDir]
     }
     const modelKeys = ['modelId', 'modelServiceId', 'reasoningEffort', 'modelOverride']
     if (modelKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key))) {

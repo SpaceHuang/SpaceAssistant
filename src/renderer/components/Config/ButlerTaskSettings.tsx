@@ -139,7 +139,7 @@ export function ButlerTaskSettings() {
       dailyTime: dayjs('09:00', 'HH:mm'),
       onceAt: dayjs().add(1, 'hour'),
       deliveryPref: 'desktop',
-      workDir: defaults.workDir,
+      workDir: undefined,
       modelId: defaults.modelId,
       modelServiceId: defaults.modelServiceId,
       modelOverride: defaults.modelOverride,
@@ -192,7 +192,7 @@ export function ButlerTaskSettings() {
             id: editing.id,
             patch: {
               name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref,
-              ...(typeof values.workDir === 'string' && values.workDir.trim() ? { workDir: values.workDir } : {}),
+              ...(typeof values.workDir === 'string' && values.workDir.trim() ? { workDirs: [values.workDir] } : {}),
               ...(chosen ? {
                 modelId: chosen.modelId, modelServiceId: chosen.serviceId,
                 modelOverride: chosen.providerModelName, reasoningEffort: values.reasoningEffort
@@ -204,7 +204,7 @@ export function ButlerTaskSettings() {
             prompt: values.prompt,
             schedule,
             deliveryPref: values.deliveryPref,
-            workDir: values.workDir,
+            workDirs: typeof values.workDir === 'string' && values.workDir.trim() ? [values.workDir] : [],
             modelId: values.modelId,
             modelServiceId: values.modelServiceId,
             modelOverride: chosen?.providerModelName,

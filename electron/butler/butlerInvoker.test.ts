@@ -129,7 +129,7 @@ import { TurnRuntime } from '../turnRuntime'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { runButlerTask } from './butlerInvoker'
-import { createAutomationTask, getLatestRunForTask, updateAutomationTask } from './taskStore'
+import { createAutomationTask as createStoredAutomationTask, getLatestRunForTask, updateAutomationTask } from './taskStore'
 import { getSession } from '../database'
 import { getDbConnection } from '../database'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from '../database/operations'
@@ -186,7 +186,6 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
   afterEach(async () => {
     await fs.rm(testWorkDir, { recursive: true, force: true })
   })
-
   function makeDeps(overrides: Record<string, unknown> = {}) {
     return {
       db,
@@ -256,9 +255,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     await fs.rm(queuedDir, { recursive: true, force: true })
   })
 
-  it('legacy task without an active Profile path fails before creating a session and records a failed snapshot', async () => {
-    const task = createAutomationTask(db, { name: 'legacy no profile', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none' })
-    const result = await runButlerTask(makeDeps({ getActiveWorkDirProfilePath: () => undefined }), task.id, { trigger: 'manual', requestId: 'req-legacy-no-profile' })
+  it('legacy task without a stored root fails even when an active Profile path exists', async () => {
+    const task = createStoredAutomationTask(db, { name: 'legacy no profile', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none' })
+    const result = await runButlerTask(makeDeps({ getActiveWorkDirProfilePath: () => testWorkDir }), task.id, { trigger: 'manual', requestId: 'req-legacy-no-profile' })
     expect(result).toMatchObject({ ok: false, error: '任务工作目录不能为空' })
     const run = getLatestRunForTask(db, task.id)!
     expect(run).toMatchObject({ status: 'failed', configSnapshot: { resolutionStatus: 'failed', error: '任务工作目录不能为空' } })
@@ -266,7 +265,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
   })
 
   it('database closes during failure handling but still returns a structured task failure', async () => {
-    const task = createAutomationTask(db, { name: 'db close race', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none' })
+    const task = createAutomationTask(db, { name: 'db close race', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDirs: [testWorkDir] })
     const result = await runButlerTask(makeDeps({ onSessionCreated: () => { db.close(); throw new Error('injected execution failure') } }), task.id, { trigger: 'manual', requestId: 'req-db-close-race' })
     expect(result).toMatchObject({ ok: false, runId: expect.any(String), error: 'injected execution failure' })
   })
@@ -292,7 +291,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       name: '巡检',
       schedule: { kind: 'interval', intervalMinutes: 30 },
       prompt: '检查磁盘空间',
-      deliveryPref: 'none'
+      deliveryPref: 'none', workDirs: [testWorkDir]
     })
     mockCreateAnthropicClient.mockReturnValue({
       messages: {
@@ -316,7 +315,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(run?.resultSummary).toContain('磁盘')
     expect(run?.usageJson).toContain('input_tokens')
     expect(run?.trigger).toBe('manual')
-    expect(run?.configSnapshot).toMatchObject({ resolutionStatus: 'resolved', workDir: await fs.realpath(testWorkDir), workDirSource: 'legacy-profile', providerModelName: expect.any(String), serviceId: 'svc-1' })
+    expect(run?.configSnapshot).toMatchObject({ resolutionStatus: 'resolved', workDir: await fs.realpath(testWorkDir), workDirSource: 'task', providerModelName: expect.any(String), serviceId: 'svc-1' })
 
     const session = run?.sessionId ? getSession(db, run.sessionId) : undefined
     expect(session?.ownership).toBe('automation')
@@ -343,7 +342,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
   it('Hosted transcript commit uncertain leaves the automation run interrupted, not failed', async () => {
     const task = createAutomationTask(db, {
       name: 'uncertain transcript commit', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'perform one action', deliveryPref: 'none'
+      prompt: 'perform one action', deliveryPref: 'none', workDirs: [testWorkDir]
     })
     const runTurn = vi.spyOn(toolChatLoop, 'runToolChatSession').mockRejectedValue(
       new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:checkpoint-write-failed'), 'commit-uncertain')
@@ -369,7 +368,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
           WHEN NEW.kind='invocation-completed' BEGIN SELECT RAISE(ABORT, 'injected hosted terminal failure'); END`)
     const task = createAutomationTask(db, {
       name: 'hosted checkpoint uncertainty', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'complete once', deliveryPref: 'none'
+      prompt: 'complete once', deliveryPref: 'none', workDirs: [testWorkDir]
     })
     let providerCalls = 0
     mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
@@ -427,7 +426,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       await fs.writeFile(notePath, 'canonical tool side effect')
       const task = createAutomationTask(db, {
         name: 'tool checkpoint restart', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'read note.txt', deliveryPref: 'none'
+        prompt: 'read note.txt', deliveryPref: 'none', workDirs: [workDir]
       })
       getDbConnection(db).exec(`CREATE TRIGGER fail_tool_transcript_checkpoint BEFORE INSERT ON session_transcript_checkpoints
         WHEN NEW.version > 0 BEGIN SELECT RAISE(ABORT, 'injected tool checkpoint failure'); END`)
@@ -488,7 +487,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
   ] as const)('IM 投递为 $expectedStatus 时不伪记 deliveredAt', async ({ deliveryTarget, expectedStatus, deliveryPorts }) => {
     const task = createAutomationTask(db, {
       name: '不确定送达', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: '检查状态', deliveryPref: 'feishu', ...(deliveryTarget ? { deliveryTarget } : {})
+      prompt: '检查状态', deliveryPref: 'feishu', workDirs: [testWorkDir], ...(deliveryTarget ? { deliveryTarget } : {})
     })
     mockCreateAnthropicClient.mockReturnValue({
       messages: {
@@ -521,7 +520,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       setConfigValue(db, 'config.defaultModel', modelId!)
       const task = createAutomationTask(db, {
         name: 'provider route test', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'summarize status', deliveryPref: 'none'
+        prompt: 'summarize status', deliveryPref: 'none', workDirs: [testWorkDir]
       })
       await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-butler-provider-route' })
       const invocation = runLoop.mock.calls[0]?.[0] as { profile: { providerRouteId?: string }; acceptedTurn?: { turnId: string; requestId: string; currentUserMessageId: string } } | undefined
@@ -544,7 +543,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
   it('Automation rejects a changed accepted prompt before Hosted/provider execution', async () => {
     const task = createAutomationTask(db, {
       name: 'accepted prompt guard', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'original accepted prompt', deliveryPref: 'none'
+      prompt: 'original accepted prompt', deliveryPref: 'none', workDirs: [testWorkDir]
     })
     const runtime = makeRuntime(db)
     const prepare = runtime.prepare.bind(runtime)
@@ -580,7 +579,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       await fs.writeFile(path.join(workDir, 'note.txt'), 'must not be read')
       const task = createAutomationTask(db, {
         name: 'hosted runtime compose failure', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'read note.txt', deliveryPref: 'none'
+        prompt: 'read note.txt', deliveryPref: 'none', workDirs: [workDir]
       })
       let createdSessionId: string | undefined
       mockCreateAnthropicClient.mockReturnValue({
@@ -626,7 +625,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       const task = createAutomationTask(db, {
         name: 'ledger projection failure',
         schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'read note.txt', deliveryPref: 'none'
+        prompt: 'read note.txt', deliveryPref: 'none', workDirs: [workDir]
       })
       let providerCalls = 0
       mockCreateAnthropicClient.mockReturnValue({
@@ -669,7 +668,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     try {
       const task = createAutomationTask(db, {
         name: 'provider terminal failure', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'respond', deliveryPref: 'none'
+        prompt: 'respond', deliveryPref: 'none', workDirs: [workDir]
       })
       mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
         async *[Symbol.asyncIterator]() {},
@@ -711,7 +710,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       setConfigValue(db, 'config.models', JSON.stringify([{ id: defaultModelId, name: defaultModelId, enabled: true, supportsThinking: true, maximumContext: 200000, maxTokens: 8192 }]))
       const task = createAutomationTask(db, {
         name: 'terminal projection recovery', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'respond', deliveryPref: 'none'
+        prompt: 'respond', deliveryPref: 'none', workDirs: [workDir]
       })
       mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
         async *[Symbol.asyncIterator]() {},
@@ -782,7 +781,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       await fs.writeFile(path.join(workDir, 'note.txt'), 'committed canonical tool result')
       const task = createAutomationTask(db, {
         name: 'tool result projection recovery', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'read note.txt', deliveryPref: 'none'
+        prompt: 'read note.txt', deliveryPref: 'none', workDirs: [workDir]
       })
       let providerCalls = 0
       mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
@@ -881,7 +880,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       }
       const task = createAutomationTask(db, {
         name: 'history parity', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'read note.txt', deliveryPref: 'none'
+        prompt: 'read note.txt', deliveryPref: 'none', workDirs: [workDir]
       })
       let providerCalls = 0
       mockCreateAnthropicClient.mockReturnValue({
@@ -1033,7 +1032,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     try {
       const task = createAutomationTask(db, {
         name: 'canonical transcript cutover', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'current automation prompt', deliveryPref: 'none'
+        prompt: 'current automation prompt', deliveryPref: 'none', workDirs: [workDir]
       })
       mockCreateAnthropicClient.mockReturnValue({
         messages: { stream: vi.fn(() => ({
@@ -1072,7 +1071,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     try {
       const task = createAutomationTask(db, {
         name: 'locked shell deny', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'do not execute unauthorized shell commands', deliveryPref: 'none'
+        prompt: 'do not execute unauthorized shell commands', deliveryPref: 'none', workDirs: [workDir]
       })
       const justification = '核对自动化任务的工作目录，以便生成运行状态摘要。'
       let providerCalls = 0
@@ -1125,7 +1124,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     try {
       const task = createAutomationTask(db, {
         name: 'locked script deny', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'do not execute scripts with unresolved file access', deliveryPref: 'none'
+        prompt: 'do not execute scripts with unresolved file access', deliveryPref: 'none', workDirs: [workDir]
       })
       let providerCalls = 0
       mockCreateAnthropicClient.mockReturnValue({
@@ -1177,7 +1176,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       await fs.writeFile(path.join(workDir, 'note.txt'), 'authorized read')
       const task = createAutomationTask(db, {
         name: 'read revocation', schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: 'read note.txt', deliveryPref: 'none'
+        prompt: 'read note.txt', deliveryPref: 'none', workDirs: [workDir]
       })
       let providerCalls = 0
       let executorSignal: AbortSignal | undefined
@@ -1242,7 +1241,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const originalExecute = readFileExecutor.execute
     const task = createAutomationTask(db, {
       name: 'read cancellation', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'read note.txt', deliveryPref: 'none'
+      prompt: 'read note.txt', deliveryPref: 'none', workDirs: [workDir]
     })
     const runtime = getDefaultAgentRuntime()
     const requestId = 'req-butler-hosted-read-cancel'
@@ -1313,7 +1312,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `butler-${toolName}-late-${termination}-`))
       const task = createAutomationTask(db, {
         name: `${toolName} late result`, schedule: { kind: 'interval', intervalMinutes: 30 },
-        prompt: `use ${toolName}`, deliveryPref: 'none'
+        prompt: `use ${toolName}`, deliveryPref: 'none', workDirs: [workDir]
       })
       let createdSessionId: string | undefined
       const runtime = getDefaultAgentRuntime()
@@ -1397,7 +1396,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const originalExecute = readFileExecutor.execute
     const task = createAutomationTask(db, {
       name: 'sensitive read policy change', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'read .env', deliveryPref: 'none'
+      prompt: 'read .env', deliveryPref: 'none', workDirs: [workDir]
     })
     const runtime = getDefaultAgentRuntime()
     writeDisabledPolicyRuleIds(db, ['automation-sensitive-path-deny'])
@@ -1410,7 +1409,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         userDataDir: '/tmp/butler-policy-probe', lane: 'automation', toolsConfig: DEFAULT_TOOLS_CONFIG,
         effectiveRules: resolveEffectivePolicyRulesWithOrigin(db, 'automation').rules,
         disabledPolicyRuleIds: readDisabledPolicyRuleIds(db),
-        decisionCache: { lookup: () => null } as never, shellPrecheck: { touchTrustedCommand: () => undefined }
+        decisionCache: { lookup: () => null } as never, shellPrecheck: { touchTrustedCommand: () => undefined }, workDirs: [workDir]
       })
       expect(initialGate.decision, JSON.stringify(initialGate)).toMatchObject({ type: 'auto-allow', ruleId: 'automation-readonly-allow' })
       let providerCalls = 0
@@ -1490,7 +1489,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const toolPath = path.join(workDir, toolName === 'list_directory' ? 'reports' : 'note.txt')
     const task = createAutomationTask(db, {
       name: `${toolName} claim revocation`, schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: `${toolName} authorized read`, deliveryPref: 'none'
+      prompt: `${toolName} authorized read`, deliveryPref: 'none', workDirs: [workDir]
     })
     const runtime = getDefaultAgentRuntime()
     if (termination === 'authorization-change') {
@@ -1581,7 +1580,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const targetPath = path.join(workDir, 'note.txt')
     const task = createAutomationTask(db, {
       name: 'read target drift', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'read note.txt', deliveryPref: 'none'
+      prompt: 'read note.txt', deliveryPref: 'none', workDirs: [workDir]
     })
     const runtime = getDefaultAgentRuntime()
     const originalAdmission = runtime.executionAdmission
@@ -1662,7 +1661,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const targetPath = path.join(workDir, 'reports')
     const task = createAutomationTask(db, {
       name: 'directory target drift', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'list the reports directory', deliveryPref: 'none'
+      prompt: 'list the reports directory', deliveryPref: 'none', workDirs: [workDir]
     })
     const runtime = getDefaultAgentRuntime()
     const originalAdmission = runtime.executionAdmission
@@ -1734,7 +1733,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const targetPath = path.join(workDir, 'note.txt')
     const task = createAutomationTask(db, {
       name: 'grep target drift', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'search note.txt for status', deliveryPref: 'none'
+      prompt: 'search note.txt for status', deliveryPref: 'none', workDirs: [workDir]
     })
     const runtime = getDefaultAgentRuntime()
     const originalAdmission = runtime.executionAdmission
@@ -1804,7 +1803,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const targetPath = path.join(workDir, 'approved-target.txt')
     const task = createAutomationTask(db, {
       name: 'locked write denial', schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: 'Create approved-target.txt with a short status.', deliveryPref: 'none'
+      prompt: 'Create approved-target.txt with a short status.', deliveryPref: 'none', workDirs: [workDir]
     })
     let providerCalls = 0
     mockCreateAnthropicClient.mockImplementation(() => ({ messages: { stream: vi.fn(() => ({
@@ -1849,7 +1848,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       name: '写文件任务',
       schedule: { kind: 'interval', intervalMinutes: 30 },
       prompt: '请写入 report.txt',
-      deliveryPref: 'none'
+      deliveryPref: 'none', workDirs: [testWorkDir]
     })
     let round = 0
     mockCreateAnthropicClient.mockReturnValue({
@@ -1921,11 +1920,12 @@ describe('管家会话创建推送（渲染端列表即时可见）', () => {
         }))
       }
     })
-    const task = createAutomationTask(db, {
+    const task = createStoredAutomationTask(db, {
       name: '推送任务',
       schedule: { kind: 'interval', intervalMinutes: 30 },
       prompt: '检查',
-      deliveryPref: 'none'
+      deliveryPref: 'none',
+      workDirs: [workDir]
     })
     const onSessionCreated = vi.fn()
     const pushedResult = await runButlerTask(

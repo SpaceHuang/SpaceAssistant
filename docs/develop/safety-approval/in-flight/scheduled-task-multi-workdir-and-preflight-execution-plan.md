@@ -117,9 +117,9 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **动作与产物：** 只按 renderer 输入→IPC→store→run snapshot 迁移调用方到兼容 adapter 输出；旧单根输入规范化为 `workDirs`，本任务不接入预检、不改变运行语义、不收紧类型。
 - **完成判据：** E-01、E-03 的 adapter/interface 可用，现存调用方迁移后可独立编译；旧单根输入转换正确；缺失目录不从 Profile 补值。旧请求预检由 E-05 验收，公共类型收紧由 E-05a 验收。此任务所有证据均来自 E-01/E-03 和本任务自身，不依赖 E-05。
 - **验证命令：** 各小步执行 `npm run typecheck:shared`、`npm run typecheck:renderer`；主进程步骤执行 `npm run build:electron:incremental`。
-- **证据：** 每步变更文件与编译记录、`rg workDir` 调用点清单、旧 IPC 转换测试。
+- **证据：** RED：移除执行端 Profile 路径回退后，原有“无 Profile”测试 fixture 暴露了活动 Profile 仍能补根的缺口；补充“任务无存根、Profile 有路径也失败”断言。GREEN：`butlerInvoker.test.ts` 51 项通过，覆盖执行快照记录 canonical `workDirs`/`preflightVersion`/`taskRevision`/target bindings、旧任务根缺失失败、活动 Profile 不补值；`butlerIpc.test.ts` 与 `ButlerTaskSettings.test.tsx` 合并 25 项通过，覆盖旧单根更新规范化为 `workDirs`、默认值不含 Profile 根、新建请求提交数组根及取消目录选择不填值。`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run typecheck:shared` 与 `git diff --check` 通过。`rg -n "workDir|workDirs"` 确认 preload/shared API 通过共享任务 DTO 推导，无单独旧目录通道；IPC 对旧 `workDir` create/update 请求显式转换为根数组。`ButlerTaskSettings` 新建不再自动预填 Profile 工作目录。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-03 让 taskStore 和目录校验读写 canonical roots
 

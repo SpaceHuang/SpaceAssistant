@@ -50,6 +50,15 @@ describe('butler IPC workdir/config fields', () => {
     setConfigValue(db!, 'config.activeLlmServiceIds', JSON.stringify(['service-1']))
     setConfigValue(db!, 'secrets.llmServiceKeys', JSON.stringify({ 'service-1': 'present' }))
     expect(map.get('butler:get-defaults')!()).toMatchObject({ modelId: 'model-1', modelServiceId: 'service-1', reasoningEffort: 'off' })
+    expect(map.get('butler:get-defaults')!()).not.toHaveProperty('workDir')
+  })
+
+  it('legacy single-root update payload is normalized to workDirs', async () => {
+    const map = handlers()
+    const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop' })
+    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: os.tmpdir() } }) as { ok: boolean; error?: string }
+    expect(response).toEqual({ ok: true })
+    expect(getAutomationTask(db!, legacy.id)?.workDirs).toEqual([await realpath(os.tmpdir())])
   })
 
   it('cannot create without explicit validated workdir and stable model/service pair', async () => {

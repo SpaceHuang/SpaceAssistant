@@ -26,7 +26,8 @@ import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
-import { validateTaskWorkDir } from './taskConfigValidation'
+import { validateTaskWorkDirs } from './taskConfigValidation'
+import { getAutomationTaskWorkDirs } from '../../src/shared/automationTaskTypes'
 import { resolveGlobalThinkingEffort } from '../../src/shared/thinkingEffort'
 import { getConfigValue as readConfigValue } from '../database'
 import type { AutomationTaskRunConfigSnapshot } from '../../src/shared/automationTaskTypes'
@@ -145,11 +146,10 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     if (!admittedTask) throw new Error('任务在准入后已删除')
     task = admittedTask
     const activeTask = admittedTask
-    const legacyProfilePath = deps.getActiveWorkDirProfilePath?.()
-    const workDirResult = admittedTask.workDir
-      ? await validateTaskWorkDir(admittedTask.workDir)
-      : await validateTaskWorkDir(legacyProfilePath)
-    if (!workDirResult.ok) throw new Error(workDirResult.error)
+    const workDirsResult = await validateTaskWorkDirs(getAutomationTaskWorkDirs(admittedTask))
+    if (!workDirsResult.ok) throw new Error(workDirsResult.error)
+    if (workDirsResult.workDirs.length !== 1) throw new Error('多工作目录执行链尚未完成接入')
+    const workDirResult = { ok: true as const, workDir: workDirsResult.workDirs[0]! }
     let modelId = admittedTask.modelId
     let serviceId = admittedTask.modelServiceId
     let providerModelName = admittedTask.modelOverride
@@ -195,8 +195,10 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     const effort = admittedTask.reasoningEffort ?? resolveGlobalThinkingEffort(readConfigValue(db, 'config.thinkingEffort'), readConfigValue(db, 'config.thinkingEnabled'))
     const effectiveEffort = model.supportsThinking === false ? 'off' : effort
     const configSnapshot: AutomationTaskRunConfigSnapshot = {
-      resolutionStatus: 'resolved', workDir: workDirResult.workDir,
-      workDirSource: admittedTask.workDir ? 'task' : 'legacy-profile', modelId,
+      resolutionStatus: 'resolved', workDir: workDirResult.workDir, workDirs: workDirsResult.workDirs,
+      preflightVersion: admittedTask.preflightVersion ?? 0, taskRevision: admittedTask.taskRevision,
+      targetSelections: admittedTask.targetBindingsJson ? JSON.parse(admittedTask.targetBindingsJson) as import('../../src/shared/automationTaskTypes').TargetSelection[] : [],
+      workDirSource: 'task', modelId,
       providerModelName, serviceId, routeIdentity,
       requestedEffort: effort, effectiveEffort, reasoningDegraded: effort !== effectiveEffort
     }
