@@ -81,7 +81,7 @@ import { ErrorCodes } from '../../src/shared/errorCodes'
 import { buildEscapeLayerVariants, diagnoseMissingOldString } from './editDiagnosis'
 import type { FileState } from '../fileStateCache'
 import { sliceFileTailLines } from '../../src/shared/readFileRange'
-import { computeDiffLineStats } from '../../src/shared/writeDiffStats'
+import { computeBoundedDiffLineStats } from '../../src/shared/writeDiffStats'
 import {
   applyReadCharLimit,
   isBinaryBuffer,
@@ -973,10 +973,11 @@ export const editFileExecutor: ToolExecutor = {
           throw e
         }
         await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
-        const lineStats = computeDiffLineStats(cur, next)
+        const lineStats = computeBoundedDiffLineStats(cur, next)
         return {
           success: true,
-          data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8'), added: lineStats.add, removed: lineStats.remove, ...extraData },
+          data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8'),
+            ...(lineStats.kind === 'available' ? { added: lineStats.add, removed: lineStats.remove } : { stats: 'unavailable' }), ...extraData },
           duration: Date.now() - started
         }
       }
@@ -1117,8 +1118,9 @@ export const writeFileExecutor: ToolExecutor = {
         throw e
       }
       await recordFileStateAfterWrite(ctx.fileStateCache, abs, body)
-      const lineStats = computeDiffLineStats(beforeContent, body)
-      return { success: true, data: { path: rel, bytesWritten: Buffer.byteLength(body, 'utf8'), added: lineStats.add, removed: lineStats.remove }, duration: Date.now() - started }
+      const lineStats = computeBoundedDiffLineStats(beforeContent, body)
+      return { success: true, data: { path: rel, bytesWritten: Buffer.byteLength(body, 'utf8'),
+        ...(lineStats.kind === 'available' ? { added: lineStats.add, removed: lineStats.remove } : { stats: 'unavailable' }) }, duration: Date.now() - started }
     } finally {
       if (releaseWikiMutex) {
         releaseWikiMutex()

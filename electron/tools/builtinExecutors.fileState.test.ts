@@ -179,6 +179,77 @@ describe('edit/write fileStateCache', () => {
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
+  it('computes bounded statistics for small write_file and edit_file changes in a large file', async () => {
+    const rel = 'large-small-edit.txt'
+    const abs = path.join(tmpDir, rel)
+    const lines = Array.from({ length: 4_000 }, (_, index) => `line ${index}`)
+    const before = lines.join('\n')
+    const afterWrite = `${before}\nextra`
+    await fs.writeFile(abs, before, 'utf8')
+    const ctx = makeCtx(tmpDir, cache)
+    expect((await executePermittedRead({ path: rel }, ctx)).success).toBe(true)
+
+    const write = await writeFileExecutor.execute({ path: rel, content: afterWrite }, ctx)
+    expect(write).toMatchObject({ success: true, data: { added: 1, removed: 0 } })
+    expect(await fs.readFile(abs, 'utf8')).toBe(afterWrite)
+
+    const editedLine = 'line 2000'
+    const replacement = 'changed 2000'
+    const finalContent = afterWrite.replace(editedLine, replacement)
+    const edit = await editFileExecutor.execute({ path: rel, old_string: editedLine, new_string: replacement }, ctx)
+    expect(edit).toMatchObject({ success: true, data: { added: 1, removed: 1, bytesWritten: Buffer.byteLength(finalContent) } })
+    expect(await fs.readFile(abs, 'utf8')).toBe(finalContent)
+  })
+
+  it('keeps write_file and edit_file successful when bounded line statistics exceed budget', async () => {
+    const rel = 'large-diff.txt'
+    const abs = path.join(tmpDir, rel)
+    const before = Array.from({ length: 2_000 }, (_, index) => `before ${index}`).join('\n')
+    const after = Array.from({ length: 2_000 }, (_, index) => `after ${index}`).join('\n')
+    await fs.writeFile(abs, before, 'utf8')
+    const ctx = makeCtx(tmpDir, cache)
+    expect((await executePermittedRead({ path: rel }, ctx)).success).toBe(true)
+
+    const write = await writeFileExecutor.execute({ path: rel, content: after }, ctx)
+    expect(write).toMatchObject({ success: true, data: { bytesWritten: Buffer.byteLength(after), stats: 'unavailable' } })
+    expect(write.data).not.toHaveProperty('added')
+    expect(write.data).not.toHaveProperty('removed')
+    await expect(fs.readFile(abs, 'utf8')).resolves.toBe(after)
+
+    const edit = await editFileExecutor.execute({ path: rel, old_string: after, new_string: before }, ctx)
+    expect(edit).toMatchObject({ success: true, data: { bytesWritten: Buffer.byteLength(before), stats: 'unavailable' } })
+    expect(edit.data).not.toHaveProperty('added')
+    expect(edit.data).not.toHaveProperty('removed')
+    await expect(fs.readFile(abs, 'utf8')).resolves.toBe(before)
+  })
+
+  it('keeps both write results successful when line-statistics computation throws', async () => {
+    const rel = 'stats-error.txt'
+    const abs = path.join(tmpDir, rel)
+    const before = 'first\nsecond'
+    const after = 'first\nchanged'
+    const originalSplit = String.prototype.split
+    await fs.writeFile(abs, before, 'utf8')
+    const ctx = makeCtx(tmpDir, cache)
+    expect((await executePermittedRead({ path: rel }, ctx)).success).toBe(true)
+
+    const makeThrowingSplit = (text: string) => vi.spyOn(String.prototype, 'split').mockImplementation(function (this: string, separator?: string | RegExp, limit?: number) {
+      if (this === text && separator === '\n') throw new Error('simulated line-statistics failure')
+      return originalSplit.call(this, separator, limit)
+    })
+    const writeSplit = makeThrowingSplit(before)
+    const write = await writeFileExecutor.execute({ path: rel, content: after }, ctx)
+    writeSplit.mockRestore()
+    expect(write).toMatchObject({ success: true, data: { bytesWritten: Buffer.byteLength(after), stats: 'unavailable' } })
+    await expect(fs.readFile(abs, 'utf8')).resolves.toBe(after)
+
+    const editSplit = makeThrowingSplit(after)
+    const edit = await editFileExecutor.execute({ path: rel, old_string: after, new_string: before }, ctx)
+    editSplit.mockRestore()
+    expect(edit).toMatchObject({ success: true, data: { bytesWritten: Buffer.byteLength(before), stats: 'unavailable' } })
+    await expect(fs.readFile(abs, 'utf8')).resolves.toBe(before)
+  })
+
   it('allows consecutive edits on the same file without re-read', async () => {
     const rel = 'sample.txt'
     const abs = path.join(tmpDir, rel)
