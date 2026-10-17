@@ -1,5 +1,6 @@
 import {
   ensureFinalRequestContextEvent,
+  ensureCompactionTransaction,
   ensureRequestProjectionEvents,
   ensureRequestRetryEvent,
   ensureRequestUsageEvent,
@@ -20,7 +21,9 @@ export async function projectCanonicalSessionLedgerTarget(
   target: CanonicalLedgerProjectionTarget
 ): Promise<{ eventIds: readonly string[]; events: readonly SessionEventInput[] }> {
   if (!target.expectedEvents.length) throw new Error('SESSION_LEDGER_PROJECTION_KIND_UNSUPPORTED')
-  if (target.projectionKind === 'request-projection' && target.expectedEvents.length === 2) {
+  if (target.projectionKind === 'compaction' && target.expectedEvents.length === 2) {
+    await ensureCompactionTransaction(sink, target.expectedEvents[0].payload, target.expectedEvents[1].payload)
+  } else if (target.projectionKind === 'request-projection' && target.expectedEvents.length === 2) {
     await ensureRequestProjectionEvents(sink, {
       requestHeader: target.expectedEvents[0].payload,
       requestContext: target.expectedEvents[1].payload
@@ -79,6 +82,8 @@ function projectionEventIdentity(event: SessionEventInput): string {
     case 'request_usage': return `request_usage:${String(payload.requestId)}`
     case 'turn_start': return `turn_start:${String(payload.turnId)}`
     case 'turn_end': return `turn_end:${String(payload.turnId)}`
+    case 'compaction_start': return `compaction_start:${String(payload.compactionId)}`
+    case 'compaction_summary': return `compaction_summary:${String(payload.compactionId)}`
     default: throw new Error('SESSION_LEDGER_PROJECTION_IDENTITY_UNSUPPORTED')
   }
 }
@@ -91,5 +96,6 @@ function sameProjectionIdentity(event: SessionEvent, expected: SessionEventInput
   if (left.requestId !== undefined) return left.requestId === right.requestId && left.attempt === right.attempt &&
     (expected.type !== 'request_context' || left.projectionStage === right.projectionStage)
   if (left.turnId !== undefined) return left.turnId === right.turnId
+  if (left.compactionId !== undefined) return left.compactionId === right.compactionId
   return false
 }

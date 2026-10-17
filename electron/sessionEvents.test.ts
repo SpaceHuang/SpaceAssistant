@@ -25,14 +25,136 @@ import {
   replayCompactionEvents,
   readCompactionMarkers,
   readCompactionReplay,
+  bootstrapEmptySessionEventLedger,
+  establishExistingSessionEventLedgerBaseline,
+  resolveSessionEventPaths,
   reconcileSessionEventFiles,
   reconcileSessionEventFilesDetailed,
   reconcileSessionEvents,
+  reconcileInterruptedSessionEventLedger,
   type SessionEvent
 } from './sessionEvents'
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
+import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
+import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 
 describe('session events', () => {
+  it('writes deterministic interruption closures only for a canonical restart authorization', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-process-restart-'))
+    try {
+      const sink = getSessionEventSink(root, 'process-restart', 2000)
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'restart-turn' } })
+      await sink.appendCritical({ type: 'step_start', payload: { turnId: 'restart-turn', stepId: 'restart-step' } })
+      await sink.appendCritical({ type: 'tool_call', payload: { toolUseId: 'interrupted-tool', turnId: 'restart-turn', stepId: 'restart-step', name: 'read_file', args: {} } })
+      await sink.appendCritical({ type: 'tool_call', payload: { toolUseId: 'real-result-tool', turnId: 'restart-turn', stepId: 'restart-step', name: 'read_file', args: {} } })
+      await sink.appendCritical({ type: 'tool_result', payload: { toolUseId: 'real-result-tool', result: { success: true } } })
+      await sink.appendCritical({ type: 'tool_call', payload: { toolUseId: 'unauthorized-tool', turnId: 'restart-turn', stepId: 'restart-step', name: 'read_file', args: {} } })
+      await sink.close()
+
+      const authorization = { workDir: root, sessionId: 'process-restart', createdAt: 2000, turnId: 'restart-turn',
+        canonicalTerminalEventId: 'canonical-terminal-event', toolUseIds: ['interrupted-tool', 'real-result-tool'] }
+      await expect(reconcileInterruptedSessionEventLedger(authorization)).resolves.toBe(3)
+      await expect(reconcileInterruptedSessionEventLedger(authorization)).resolves.toBe(0)
+      const verify = getSessionEventSink(root, 'process-restart', 2000)
+      const events = await readSessionEvents(verify.eventsPath)
+      await verify.close()
+      expect(events.filter((event) => event.type === 'step_end')).toMatchObject([
+        { payload: { stepId: 'restart-step', reason: 'interrupted', canonicalTerminalEventId: 'canonical-terminal-event', recoveryId: expect.stringMatching(/^[a-f0-9]{64}$/) } }
+      ])
+      expect(events.filter((event) => event.type === 'tool_result').map((event) => event.payload)).toEqual([
+        { toolUseId: 'real-result-tool', result: { success: true } },
+        { toolUseId: 'interrupted-tool', turnId: 'restart-turn', stepId: 'restart-step', synthetic: true, interrupted: true,
+          canonicalTerminalEventId: 'canonical-terminal-event', recoveryId: expect.stringMatching(/^[a-f0-9]{64}$/),
+          result: { success: false, error: '工具调用因应用退出中断' } }
+      ])
+      expect(events.filter((event) => event.type === 'turn_end')).toMatchObject([
+        { payload: { turnId: 'restart-turn', reason: 'interrupted', canonicalTerminalEventId: 'canonical-terminal-event', recoveryId: expect.stringMatching(/^[a-f0-9]{64}$/) } }
+      ])
+      expect(events.some((event) => event.payload.recoveryId?.toString().includes('unauthorized-tool'))).toBe(false)
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('creates a new empty ledger once without replacing existing canonical events', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-bootstrap-'))
+    const paths = resolveSessionEventPaths(root, 'bootstrap-once', 1000)
+    try {
+      await bootstrapEmptySessionEventLedger(root, 'bootstrap-once', 1000, 'bootstrap-credential')
+      expect(JSON.parse(await fs.readFile(paths.indexPath, 'utf8'))).toEqual({ formatVersion: 2, seq: 0, eventCount: 0, bytes: 0, lastAt: 0 })
+      const sink = getSessionEventSink(root, 'bootstrap-once', 1000)
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'preserve-me' } })
+      await sink.close()
+      const before = await fs.readFile(paths.eventsPath, 'utf8')
+      await expect(bootstrapEmptySessionEventLedger(root, 'bootstrap-once', 1000, 'bootstrap-credential'))
+        .rejects.toThrow('SESSION_LEDGER_BOOTSTRAP_EVENTS_MISMATCH')
+      expect(await fs.readFile(paths.eventsPath, 'utf8')).toBe(before)
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('refuses a same-path legacy events file without the matching bootstrap marker', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-bootstrap-existing-'))
+    const paths = resolveSessionEventPaths(root, 'bootstrap-existing', 1001)
+    try {
+      await fs.mkdir(paths.directory, { recursive: true })
+      const original = '{"seq":1,"time":1,"type":"turn_start","payload":{"turnId":"legacy"}}\n'
+      await fs.writeFile(paths.eventsPath, original)
+      await expect(bootstrapEmptySessionEventLedger(root, 'bootstrap-existing', 1001, 'new-bootstrap-id'))
+        .rejects.toThrow('SESSION_LEDGER_BOOTSTRAP_EXISTING_FILE')
+      expect(await fs.readFile(paths.eventsPath, 'utf8')).toBe(original)
+      await expect(fs.access(paths.bootstrapPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('queues JSONL commits behind the same per-location lifecycle lock used by readiness and retention', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-lifecycle-lock-'))
+    const location = { workDir: root, sessionId: 'lock-writer', createdAt: 1000 }
+    const key = sessionLedgerLocationIdentity(location).key
+    let enter!: () => void
+    let release!: () => void
+    const entered = new Promise<void>((resolve) => { enter = resolve })
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const hold = withSessionLedgerLifecycleLock(key, async () => { enter(); await blocked })
+    await entered
+    const sink = getSessionEventSink(root, location.sessionId, location.createdAt)
+    let committed = false
+    const append = sink.appendCritical({ type: 'turn_start', payload: { turnId: 'lock-turn' } }).then(() => { committed = true })
+    await Promise.resolve()
+    expect(committed).toBe(false)
+    release()
+    await Promise.all([hold, append])
+    expect((await readSessionEvents(sink.eventsPath)).map((event) => event.type)).toEqual(['turn_start'])
+    await sink.close()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('refuses to create an event file when establishing a legacy baseline for a missing ledger', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-legacy-missing-'))
+    const paths = resolveSessionEventPaths(root, 'legacy-missing', 1000)
+    try {
+      await expect(establishExistingSessionEventLedgerBaseline(root, 'legacy-missing', 1000)).rejects.toThrow('SESSION_LEDGER_BASELINE_FILE_MISSING')
+      await expect(fs.access(paths.eventsPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('rebuilds a lagging index from existing JSONL but blocks when the index claims missing events', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-index-baseline-'))
+    const paths = resolveSessionEventPaths(root, 'index-baseline', 1000)
+    try {
+      await bootstrapEmptySessionEventLedger(root, 'index-baseline', 1000, 'index-bootstrap')
+      const sink = getSessionEventSink(root, 'index-baseline', 1000)
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'one-event' } })
+      await sink.close()
+      const validIndex = JSON.parse(await fs.readFile(paths.indexPath, 'utf8')) as Record<string, unknown>
+      await fs.writeFile(paths.indexPath, JSON.stringify({ ...validIndex, seq: 0, eventCount: 0 }))
+      await establishExistingSessionEventLedgerBaseline(root, 'index-baseline', 1000)
+      const rebuilt = JSON.parse(await fs.readFile(paths.indexPath, 'utf8'))
+      expect(rebuilt).toMatchObject({ seq: 1, eventCount: 1 })
+
+      await fs.writeFile(paths.indexPath, JSON.stringify({ ...rebuilt, seq: 2, eventCount: 2 }))
+      await expect(establishExistingSessionEventLedgerBaseline(root, 'index-baseline', 1000)).rejects.toThrow('SESSION_LEDGER_INDEX_AHEAD')
+      expect(JSON.parse(await fs.readFile(paths.indexPath, 'utf8'))).toMatchObject({ seq: 2, eventCount: 2 })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
   it('canonical terminal recovery recreates a missing turn_start before turn_end', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-turn-start-recovery-'))
     const sink = getSessionEventSink(root, 'turn-start-recovery', 1000)

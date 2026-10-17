@@ -203,7 +203,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     providerCalls = 0
     hostedRuntimeFailureInjection.requestId = ''
     hostedRuntimeFailureInjection.composeCalls = 0
-    workDir = ''
+    // Canonical ledger sidecars require a valid location identity even when the test uses the in-memory event sink.
+    workDir = path.join(os.tmpdir(), 'spaceassistant-hosted-default-workdir')
     resetDefaultAgentRuntimeForTests()
     db = openDatabase(':memory:')
   })

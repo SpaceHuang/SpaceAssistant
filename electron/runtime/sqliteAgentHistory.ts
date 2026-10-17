@@ -32,6 +32,8 @@ import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
 import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
+import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
+import { withSessionLedgerLifecycleLocks } from '../sessionLedgerLifecycle'
 
 const CANONICAL_SESSION_CACHE_VERSION = 1
 
@@ -348,6 +350,17 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   async appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
+    const locationKeys = [...new Set(events.flatMap((event) => {
+      const sidecar = isRecord(event.payload) ? event.payload.sessionLedger : undefined
+      const location = isRecord(sidecar) ? sidecar.location : undefined
+      if (!isRecord(location) || typeof location.workDir !== 'string' || !location.workDir.trim() ||
+        typeof location.sessionId !== 'string' || !location.sessionId.trim() || !Number.isSafeInteger(location.createdAt)) return []
+      return [sessionLedgerLocationIdentity({ workDir: location.workDir, sessionId: location.sessionId, createdAt: location.createdAt as number }).key]
+    }))]
+    return withSessionLedgerLifecycleLocks(locationKeys, async () => this.appendBatchWithSpillFence(events, expectedVersion, transcriptCommit))
+  }
+
+  private async appendBatchWithSpillFence(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
     const withFence = this.spillStore?.withSpillRootFence
     if (typeof withFence !== 'function') return this.appendBatchUnderSpillFence(events, expectedVersion, transcriptCommit)
     let entered = false
@@ -2028,7 +2041,13 @@ export class SqliteAgentHistory implements HistoryPort {
               (terminalState === 'interrupted' && payload.status === 'cancelled' && ledger.reason === 'cancelled'))) {
             const repairLocation = location as CompactionLedgerLocation
             try {
-              await options.repairInvocationTerminal(repairLocation, { status: payload.status as string, turnId: ledger.turnId, reason: ledger.reason })
+              const processRestart = event.kind === 'invocation-interrupted' && payload.status === 'interrupted' &&
+                (event.payload as { reason?: unknown }).reason === 'process-restart'
+              const toolUseIds = processRestart ? pendingInterruptedToolUseIds(snapshot.events) : []
+              await options.repairInvocationTerminal(repairLocation, {
+                status: payload.status as string, turnId: ledger.turnId, reason: ledger.reason,
+                ...(processRestart ? { canonicalTerminalEventId: event.eventId, toolUseIds } : {})
+              })
               markEventRepair(event.eventId, true)
             }
             catch (error) {
@@ -2382,13 +2401,16 @@ export class SqliteAgentHistory implements HistoryPort {
             }
           }
         }
-        const terminal = { status: 'interrupted', turnId: lastEvent.turnId, reason: 'interrupted' }
+        const processRestartEventId = `${invocationId}:history:${sequence}`
+        const toolUseIds = pendingInterruptedToolUseIds(snapshot.events)
+        const terminal = { status: 'interrupted', turnId: lastEvent.turnId, reason: 'interrupted',
+          canonicalTerminalEventId: processRestartEventId, toolUseIds }
         await this.appendBatch([{
           invocationId,
           turnId: lastEvent.turnId,
           sequence,
           schemaVersion: snapshot.schemaVersion,
-          eventId: `${invocationId}:history:${sequence}`,
+          eventId: processRestartEventId,
           idempotencyKey: `${invocationId}:invocation-interrupted:${sequence}`,
           kind: 'invocation-interrupted',
           payload: {
@@ -2397,7 +2419,7 @@ export class SqliteAgentHistory implements HistoryPort {
           }
         }], snapshot.version)
         if (recoveryLocation && options.repairInvocationTerminal) {
-          const recoveryTerminalEventId = `${invocationId}:history:${sequence}`
+          const recoveryTerminalEventId = processRestartEventId
           const recoveryRepairId = `${invocationId}:invocation-projections:${recoveryTerminalEventId}`
           try {
             await options.repairInvocationTerminal(recoveryLocation, terminal)
@@ -2417,6 +2439,19 @@ export class SqliteAgentHistory implements HistoryPort {
     }
     return recovered
   }
+}
+
+function pendingInterruptedToolUseIds(events: readonly HistoryEvent[]): string[] {
+  const pending = new Set<string>()
+  for (const event of events) {
+    const payload = event.payload as { toolCallId?: unknown } | undefined
+    if (event.kind === 'tool-call-started' && typeof payload?.toolCallId === 'string' && payload.toolCallId.trim()) {
+      pending.add(payload.toolCallId)
+    } else if (['tool-call-finished', 'tool-call-not-dispatched', 'tool-call-deferred'].includes(event.kind) && typeof payload?.toolCallId === 'string') {
+      pending.delete(payload.toolCallId)
+    }
+  }
+  return [...pending].sort()
 }
 
 function fromRow(row: EventRow): HistoryEvent {

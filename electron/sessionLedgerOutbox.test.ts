@@ -11,12 +11,13 @@ import { runInTransaction } from './database/transaction'
 import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 import {
   acknowledgeCanonicalLedgerProjectionTarget,
+  buildCanonicalToolResultProjectionTargets,
   drainCanonicalLedgerProjectionOutbox,
   enqueueCanonicalLedgerProjectionTargetInTransaction,
   listPendingCanonicalLedgerProjectionTargets,
   type CanonicalLedgerProjectionTarget
 } from './sessionLedgerOutbox'
-import { getSessionEventSink, readSessionEvents } from './sessionEvents'
+import { getSessionEventSink, readSessionEvents, type SessionEventSink } from './sessionEvents'
 import { projectCanonicalSessionLedgerTarget } from './runtime/sessionLedgerOutboxProjector'
 
 function appendCanonicalEvent(conn: ReturnType<typeof getDbConnection>, sessionId: string, eventId: string) {
@@ -29,6 +30,39 @@ function appendCanonicalEvent(conn: ReturnType<typeof getDbConnection>, sessionI
 describe('canonical session ledger outbox', () => {
   const databases: ReturnType<typeof createMemoryAppDb>[] = []
   afterEach(() => { for (const db of databases.splice(0)) db.close() })
+
+  it('maps every canonical session sidecar kind to an exact ordered projection target', () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const session = createSession(db, { name: 'outbox mapping' })
+    const location = { workDir: '/tmp/outbox-mapping', sessionId: session.id, createdAt: session.createdAt }
+    const make = (eventId: string, sequence: number, kind: HistoryEvent['kind'], payload: Record<string, unknown>): HistoryEvent => ({
+      invocationId: 'mapping-invocation', turnId: 'mapping-turn', sequence, schemaVersion: 1, eventId, idempotencyKey: eventId, kind, payload
+    })
+    const events = [
+      make('mapping-request', 1, 'model-request-started', { sessionLedger: { location,
+        requestHeader: { requestId: 'mapping-request', attempt: 1 }, requestContext: { requestId: 'mapping-request', attempt: 1 } } }),
+      make('mapping-retry', 2, 'provider-retry-scheduled', { sessionLedger: { location,
+        requestRetry: { requestId: 'mapping-request', attempt: 1, code: 'retry', backoffMs: 1 } } }),
+      make('mapping-response', 3, 'model-response-committed', { sessionLedger: { location, stepId: 'mapping-step',
+        toolCalls: [{ toolUseId: 'mapping-tool', name: 'read_file', args: {} }],
+        requestUsage: { requestId: 'mapping-request', usage: { inputTokens: 1 } },
+        requestContext: { requestId: 'mapping-request', attempt: 1, turnId: 'mapping-turn', contextUsage: { inputTokens: 2 } } } }),
+      make('mapping-result', 4, 'tool-call-finished', { toolCallId: 'mapping-tool', sessionLedger: { location, stepId: 'mapping-step', result: { success: true } } }),
+      make('mapping-compaction', 5, 'transcript-compacted', { sessionLedger: { location,
+        start: { compactionId: 'mapping-compaction' }, summary: { compactionId: 'mapping-compaction' } } }),
+      make('mapping-terminal', 6, 'invocation-interrupted', { sessionLedger: { location, turnId: 'mapping-turn', reason: 'interrupted' } })
+    ]
+
+    const targets = buildCanonicalToolResultProjectionTargets(getDbConnection(db), events, session.id, session.generation)
+
+    expect(targets.map((target) => target.projectionKind)).toEqual([
+      'request-projection', 'request-retry', 'tool-call:mapping-tool', 'request-usage', 'request-final-context',
+      'tool-result', 'compaction', 'invocation-terminal'
+    ])
+    expect(targets[0]?.expectedEventIds).toEqual(['request_header:mapping-request:1', 'request_context:mapping-request:1'])
+    expect(targets[4]?.expectedEventIds).toEqual(['request_context_final:mapping-request:1'])
+  })
 
   it('commits the canonical event and exact projection obligation atomically, then acks only a complete identity set', () => {
     const db = createMemoryAppDb()
@@ -220,6 +254,89 @@ describe('canonical session ledger outbox', () => {
     } finally {
       await sink.close()
       await fs.rm(tempRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('projects retry, usage, final context, terminal and compaction obligations exactly', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-project-all-'))
+    const sink = getSessionEventSink(root, 'project-all', 1000)
+    const targets: CanonicalLedgerProjectionTarget[] = [
+      { ledgerLocationKey: 'location', sessionId: 'project-all', sessionGeneration: 'g', canonicalEventId: 'retry', projectionKind: 'request-retry',
+        expectedEvents: [{ type: 'request_retry', payload: { requestId: 'request-all', attempt: 1, code: 'retry', backoffMs: 2 } }], expectedEventIds: ['request_retry:request-all:1'] },
+      { ledgerLocationKey: 'location', sessionId: 'project-all', sessionGeneration: 'g', canonicalEventId: 'usage', projectionKind: 'request-usage',
+        expectedEvents: [{ type: 'request_usage', payload: { requestId: 'request-all', usage: { inputTokens: 3 } } }], expectedEventIds: ['request_usage:request-all'] },
+      { ledgerLocationKey: 'location', sessionId: 'project-all', sessionGeneration: 'g', canonicalEventId: 'final-context', projectionKind: 'request-final-context',
+        expectedEvents: [{ type: 'request_context', payload: { requestId: 'request-all', attempt: 1, turnId: 'turn-all', projectionStage: 'final', contextUsage: { inputTokens: 4 } } }],
+        expectedEventIds: ['request_context_final:request-all:1'] },
+      { ledgerLocationKey: 'location', sessionId: 'project-all', sessionGeneration: 'g', canonicalEventId: 'terminal', projectionKind: 'invocation-terminal',
+        expectedEvents: [{ type: 'turn_start', payload: { turnId: 'turn-all' } }, { type: 'turn_end', payload: { turnId: 'turn-all', reason: 'interrupted' } }],
+        expectedEventIds: ['turn_start:turn-all', 'turn_end:turn-all'] },
+      { ledgerLocationKey: 'location', sessionId: 'project-all', sessionGeneration: 'g', canonicalEventId: 'compaction', projectionKind: 'compaction',
+        expectedEvents: [
+          { type: 'compaction_start', payload: { compactionId: 'compact-all', windowId: 'window-all', inputSurfaceFingerprint: 'in', targetTokens: 1 } },
+          { type: 'compaction_summary', payload: { compactionId: 'compact-all', windowId: 'window-all', summaryHash: 'hash', outputSurfaceFingerprint: 'out', candidate: {} } }
+        ], expectedEventIds: ['compaction_start:compact-all', 'compaction_summary:compact-all'] }
+    ]
+    try {
+      for (const target of targets) {
+        const projected = await projectCanonicalSessionLedgerTarget(sink, target)
+        expect(projected.eventIds).toEqual(target.expectedEventIds)
+        expect(projected.events).toEqual(target.expectedEvents)
+      }
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a partially projected compaction pending and resumes it without duplicating the prefix', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-compaction-retry-'))
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'compaction retry', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?')
+      .get(session.id) as { ledger_location_key: string }
+    appendCanonicalEvent(conn, session.id, 'compaction-retry-event')
+    const target: CanonicalLedgerProjectionTarget = {
+      ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id, sessionGeneration: session.generation,
+      canonicalEventId: 'compaction-retry-event', projectionKind: 'compaction',
+      expectedEvents: [
+        { type: 'compaction_start', payload: { compactionId: 'retry-compaction', windowId: 'retry-window', inputSurfaceFingerprint: 'in', targetTokens: 1 } },
+        { type: 'compaction_summary', payload: { compactionId: 'retry-compaction', windowId: 'retry-window', summaryHash: 'hash', outputSurfaceFingerprint: 'out', candidate: {} } }
+      ], expectedEventIds: ['compaction_start:retry-compaction', 'compaction_summary:retry-compaction']
+    }
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    try {
+      runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
+      let failSummaryOnce = true
+      const flakySink: SessionEventSink = {
+        eventsPath: sink.eventsPath, indexPath: sink.indexPath,
+        appendCritical: async (event) => {
+          if (event.type === 'compaction_summary' && failSummaryOnce) { failSummaryOnce = false; throw new Error('injected compaction prefix failure') }
+          return sink.appendCritical(event)
+        },
+        appendChunk: (event) => sink.appendChunk(event), waitForCapacity: () => sink.waitForCapacity(),
+        flush: () => sink.flush(), close: () => sink.close()
+      }
+      const failed = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        (pending) => projectCanonicalSessionLedgerTarget(flakySink, pending))
+      expect(failed.failedTargetId).toBeTruthy()
+      expect(conn.prepare('SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id=?').get('compaction-retry-event'))
+        .toEqual({ status: 'pending' })
+      expect((await readSessionEvents(sink.eventsPath)).map((event) => event.type)).toEqual(['compaction_start'])
+
+      const retried = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        (pending) => projectCanonicalSessionLedgerTarget(sink, pending))
+      expect(retried).toEqual({ projected: 1 })
+      const events = await readSessionEvents(sink.eventsPath)
+      expect(events.map((event) => event.type)).toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
+      expect(conn.prepare('SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id=?').get('compaction-retry-event'))
+        .toEqual({ status: 'acked' })
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
     }
   })
 })

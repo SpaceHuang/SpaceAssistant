@@ -112,6 +112,21 @@ export function buildCanonicalToolResultProjectionTargets(conn: DatabaseSync, ev
         }
       }
     }
+    if (event.kind === 'transcript-compacted') {
+      const start = sidecar.start
+      const summary = sidecar.summary
+      if (start && typeof start === 'object' && !Array.isArray(start) && summary && typeof summary === 'object' && !Array.isArray(summary)) {
+        const startRecord = start as Record<string, unknown>
+        const summaryRecord = summary as Record<string, unknown>
+        const compactionId = summaryRecord.compactionId
+        if (typeof compactionId === 'string' && startRecord.compactionId === compactionId) {
+          add('compaction', [
+            { type: 'compaction_start', payload: startRecord },
+            { type: 'compaction_summary', payload: summaryRecord }
+          ], [`compaction_start:${compactionId}`, `compaction_summary:${compactionId}`])
+        }
+      }
+    }
     if (event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted') {
       const terminal = sidecar
       const turnId = terminal.turnId
@@ -137,7 +152,7 @@ export function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: Databa
   if (!location || location.session_id !== target.sessionId || location.session_generation !== target.sessionGeneration) {
     throw new Error('SESSION_LEDGER_PROJECTION_LOCATION_MISMATCH')
   }
-  const canonical = conn.prepare(`SELECT sequence FROM agent_history_events WHERE event_id=? AND session_id=? ORDER BY sequence DESC LIMIT 1`)
+  const canonical = conn.prepare(`SELECT session_seq AS sequence FROM agent_history_events WHERE event_id=? AND session_id=? ORDER BY session_seq DESC LIMIT 1`)
     .get(target.canonicalEventId, target.sessionId) as { sequence: number } | undefined
   if (!canonical) throw new Error('SESSION_LEDGER_CANONICAL_EVENT_MISSING')
   const eventsJson = stableJson(target.expectedEvents)
@@ -146,13 +161,16 @@ export function enqueueCanonicalLedgerProjectionTargetInTransaction(conn: Databa
   const id = canonicalLedgerProjectionTargetId(target)
   const existing = conn.prepare(`SELECT payload_sha256 FROM session_ledger_projection_outbox WHERE target_id=?`).get(id) as { payload_sha256: string } | undefined
   if (existing && existing.payload_sha256 !== digest) throw new Error('SESSION_LEDGER_PROJECTION_TARGET_CONFLICT')
-  conn.prepare(`INSERT OR IGNORE INTO session_ledger_projection_outbox(
+  const insert = conn.prepare(`INSERT OR IGNORE INTO session_ledger_projection_outbox(
     target_id,ledger_location_key,session_id,session_generation,canonical_event_id,canonical_sequence,projection_order,projection_kind,
     expected_events_json,expected_event_ids_json,payload_sha256,status,created_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending',?)`).run(id, target.ledgerLocationKey, target.sessionId, target.sessionGeneration,
-      target.canonicalEventId, canonical.sequence, target.projectionOrder ?? 0, target.projectionKind, eventsJson, eventIdsJson, digest, target.now ?? Date.now())
-  conn.prepare(`UPDATE session_ledger_projection_state SET state='dirty',check_token=NULL,checked_at=NULL,updated_at=?
-    WHERE ledger_location_key=? AND state IN ('unknown','checking','ready','dirty')`).run(target.now ?? Date.now(), target.ledgerLocationKey)
+      target.canonicalEventId, canonical.sequence, target.projectionOrder ?? 0, target.projectionKind, eventsJson, eventIdsJson, digest, target.now ?? Date.now()) as { changes: number | bigint }
+  const existingTarget = conn.prepare('SELECT status FROM session_ledger_projection_outbox WHERE target_id=?').get(id) as { status: string } | undefined
+  if (Number(insert.changes) === 1 || existingTarget?.status === 'pending') {
+    conn.prepare(`UPDATE session_ledger_projection_state SET state='dirty',check_token=NULL,checked_at=NULL,updated_at=?
+      WHERE ledger_location_key=? AND state IN ('unknown','checking','ready','dirty')`).run(target.now ?? Date.now(), target.ledgerLocationKey)
+  }
   return id
 }
 

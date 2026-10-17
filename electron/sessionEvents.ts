@@ -1,10 +1,12 @@
 import fs from 'fs/promises'
 import path from 'path'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { SessionUsage } from '../src/shared/sessionUsage'
 import { foldCompactionEvents, projectCompactionMarkers, type CompactionReplay, type CompactionMarker } from '../src/shared/compactionEvents'
 import { withTransientLockRetry } from './safeAtomicWrite'
+import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
+import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 
 export type SessionEventPayload = Record<string, unknown>
 export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'compaction_start' | 'compaction_summary' | 'compaction_end' | 'session_end_seed'
@@ -38,6 +40,13 @@ export type SessionEventSink = {
   close(): Promise<FlushResult>
   readonly eventsPath: string
   readonly indexPath: string
+}
+
+let sessionEventCommitObserver: ((location: { workDir: string; sessionId: string; createdAt: number }) => Promise<void> | void) | undefined
+
+/** Installs the host's durable proof refresher for ordinary ledger-only appends. */
+export function setSessionEventCommitObserver(observer: typeof sessionEventCommitObserver): void {
+  sessionEventCommitObserver = observer
 }
 
 export async function appendCompactionTransaction(
@@ -344,11 +353,235 @@ function eventInputBytes(input: SessionEventInput): number {
   return Buffer.byteLength(JSON.stringify(input), 'utf8') + 1
 }
 
-function eventPaths(workDir: string, sessionId: string, createdAt: number): { sessionsRoot: string; directory: string; eventsPath: string; indexPath: string } {
+function eventPaths(workDir: string, sessionId: string, createdAt: number): { sessionsRoot: string; directory: string; eventsPath: string; indexPath: string; bootstrapPath: string } {
   const sessionsRoot = path.resolve(workDir, 'sessions')
   const directory = path.resolve(sessionsRoot, sessionDir(sessionId, createdAt))
   if (!isPathInside(sessionsRoot, directory)) throw new Error('session event path escapes sessions root')
-  return { sessionsRoot, directory, eventsPath: path.resolve(directory, 'events.jsonl'), indexPath: path.resolve(directory, 'events.index.json') }
+  return { sessionsRoot, directory, eventsPath: path.resolve(directory, 'events.jsonl'), indexPath: path.resolve(directory, 'events.index.json'),
+    bootstrapPath: path.resolve(directory, 'events.bootstrap.json') }
+}
+
+/** Read-only canonical paths for one session; unlike getSessionEventSink this never creates files. */
+export function resolveSessionEventPaths(workDir: string, sessionId: string, createdAt: number): { sessionsRoot: string; directory: string; eventsPath: string; indexPath: string; bootstrapPath: string } {
+  return eventPaths(workDir, sessionId, createdAt)
+}
+
+export function hasActiveSessionEventSink(workDir: string, sessionId: string, createdAt: number): boolean {
+  return writerRegistry.has(eventPaths(workDir, sessionId, createdAt).eventsPath)
+}
+
+/** Creates an empty ledger only for a caller holding the durable new-location bootstrap credential. */
+export async function bootstrapEmptySessionEventLedger(workDir: string, sessionId: string, createdAt: number, bootstrapId: string): Promise<void> {
+  if (!bootstrapId.trim()) throw new Error('SESSION_LEDGER_BOOTSTRAP_ID_REQUIRED')
+  const paths = eventPaths(workDir, sessionId, createdAt)
+  await ensureDirectoryWithoutSymlink(paths.sessionsRoot, path.dirname(paths.sessionsRoot))
+  await ensureDirectoryWithoutSymlink(paths.directory, paths.sessionsRoot)
+  const realRoot = await fs.realpath(paths.sessionsRoot)
+  const realDirectory = await fs.realpath(paths.directory)
+  if (!isPathInside(realRoot, realDirectory)) throw new Error('session event path resolves outside sessions root')
+  await ensureRegularFileOrMissing(paths.bootstrapPath)
+  await ensureRegularFileOrMissing(paths.eventsPath)
+  await ensureRegularFileOrMissing(paths.indexPath)
+  const locationKey = sessionLedgerLocationIdentity({ workDir, sessionId, createdAt }).key
+  let markerExists = false
+  try {
+    const markerStat = await fs.lstat(paths.bootstrapPath)
+    if (markerStat.isSymbolicLink() || !markerStat.isFile() || markerStat.nlink !== 1) throw new Error('SESSION_LEDGER_BOOTSTRAP_MARKER_NOT_REGULAR')
+    const marker = JSON.parse(await fs.readFile(paths.bootstrapPath, 'utf8')) as { formatVersion?: number; bootstrapId?: string; ledgerLocationKey?: string }
+    if (marker.formatVersion !== 1 || marker.bootstrapId !== bootstrapId || marker.ledgerLocationKey !== locationKey) {
+      throw new Error('SESSION_LEDGER_BOOTSTRAP_MARKER_MISMATCH')
+    }
+    markerExists = true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (!markerExists) {
+    for (const filePath of [paths.eventsPath, paths.indexPath]) {
+      try { await fs.lstat(filePath); throw new Error('SESSION_LEDGER_BOOTSTRAP_EXISTING_FILE') }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    }
+    const marker = JSON.stringify({ formatVersion: 1, bootstrapId, ledgerLocationKey: locationKey })
+    await writeExclusiveFile(paths.bootstrapPath, marker)
+    const markerStat = await fs.lstat(paths.bootstrapPath)
+    const persistedMarker = JSON.parse(await fs.readFile(paths.bootstrapPath, 'utf8')) as { formatVersion?: number; bootstrapId?: string; ledgerLocationKey?: string }
+    if (markerStat.isSymbolicLink() || !markerStat.isFile() || markerStat.nlink !== 1 || persistedMarker.formatVersion !== 1 ||
+      persistedMarker.bootstrapId !== bootstrapId || persistedMarker.ledgerLocationKey !== locationKey) {
+      throw new Error('SESSION_LEDGER_BOOTSTRAP_MARKER_MISMATCH')
+    }
+  }
+  try {
+    const handle = await fs.open(paths.eventsPath, 'wx', 0o600)
+    await handle.close()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    const stat = await fs.lstat(paths.eventsPath)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size !== 0) throw new Error('SESSION_LEDGER_BOOTSTRAP_EVENTS_MISMATCH')
+  }
+  const createdIndex = await writeExclusiveFile(paths.indexPath, JSON.stringify({ formatVersion: 2, seq: 0, eventCount: 0, bytes: 0, lastAt: 0 }))
+  if (!createdIndex) {
+    const stat = await fs.lstat(paths.indexPath)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('SESSION_LEDGER_BOOTSTRAP_INDEX_MISMATCH')
+    const index = JSON.parse(await fs.readFile(paths.indexPath, 'utf8')) as Record<string, unknown>
+    if (index.formatVersion !== 2 || index.seq !== 0 || index.eventCount !== 0 || index.bytes !== 0 || index.lastAt !== 0) {
+      throw new Error('SESSION_LEDGER_BOOTSTRAP_INDEX_MISMATCH')
+    }
+  }
+}
+
+async function writeExclusiveFile(targetPath: string, content: string): Promise<boolean> {
+  const temporaryPath = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}-${randomUUID()}.tmp`)
+  try {
+    const handle = await fs.open(temporaryPath, 'wx', 0o600)
+    try {
+      await handle.writeFile(content)
+      await handle.sync()
+    } finally { await handle.close() }
+    await fs.link(temporaryPath, targetPath)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw error
+  } finally { await fs.rm(temporaryPath, { force: true }) }
+}
+
+/** Performs the one-time full integrity scan for an existing ledger and rebuilds its index without inventing events. */
+export async function establishExistingSessionEventLedgerBaseline(workDir: string, sessionId: string, createdAt: number): Promise<void> {
+  const paths = eventPaths(workDir, sessionId, createdAt)
+  await ensureRegularFileOrMissing(paths.eventsPath)
+  let eventStat: Awaited<ReturnType<typeof fs.lstat>>
+  try { eventStat = await fs.lstat(paths.eventsPath) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('SESSION_LEDGER_BASELINE_FILE_MISSING')
+    throw error
+  }
+  if (eventStat.isSymbolicLink() || !eventStat.isFile()) throw new Error('SESSION_LEDGER_PATH_NOT_REGULAR')
+  const read = await readSessionEventsDetailed(paths.eventsPath, { repairTail: true })
+  if (read.integrity === 'degraded') throw new Error('SESSION_LEDGER_BASELINE_DEGRADED')
+  try {
+    const indexStat = await fs.lstat(paths.indexPath)
+    if (indexStat.isSymbolicLink() || !indexStat.isFile()) throw new Error('SESSION_LEDGER_INDEX_NOT_REGULAR')
+    const index = JSON.parse(await fs.readFile(paths.indexPath, 'utf8')) as { formatVersion?: number; seq?: number; eventCount?: number; bytes?: number }
+    const lastSeq = read.events.reduce((max, event) => Math.max(max, event.seq), 0)
+    if (index.formatVersion === 2 && ((Number.isSafeInteger(index.seq) && index.seq! > lastSeq) ||
+      (Number.isSafeInteger(index.eventCount) && index.eventCount! > read.events.length) ||
+      (Number.isSafeInteger(index.bytes) && index.bytes! > eventStat.size))) {
+      throw new Error('SESSION_LEDGER_INDEX_AHEAD')
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'SESSION_LEDGER_INDEX_AHEAD') throw error
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      if (error instanceof SyntaxError) { /* A malformed, non-ahead index is rebuildable from the JSONL baseline. */ }
+      else throw error
+    }
+  }
+  const sink = getSessionEventSink(workDir, sessionId, createdAt)
+  try {
+    await (sink as SessionEventWriter).initializeExistingLedgerForBaseline()
+    await sink.flush()
+  } finally { await sink.close() }
+  try { await fs.lstat(paths.indexPath) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    if (read.events.length !== 0 || eventStat.size !== 0) throw new Error('SESSION_LEDGER_INDEX_REBUILD_FAILED')
+    const handle = await fs.open(paths.indexPath, 'wx', 0o600)
+    try { await handle.writeFile(JSON.stringify({ formatVersion: 2, seq: 0, eventCount: 0, bytes: 0, lastAt: 0 })) }
+    finally { await handle.close() }
+  }
+}
+
+/** Reconciles only one fenced old-owner ledger. Callers must hold its lifecycle lock and complete canonical projection first. */
+export async function reconcileInterruptedSessionEventLedger(input: {
+  workDir: string
+  sessionId: string
+  createdAt: number
+  turnId: string
+  canonicalTerminalEventId: string
+  toolUseIds: readonly string[]
+}): Promise<number> {
+  if (!input.turnId.trim() || !input.canonicalTerminalEventId.trim()) throw new Error('SESSION_LEDGER_RECOVERY_IDENTITY_REQUIRED')
+  const paths = eventPaths(input.workDir, input.sessionId, input.createdAt)
+  const rootStat = await fs.lstat(paths.sessionsRoot)
+  const directoryStat = await fs.lstat(paths.directory)
+  const realRoot = await fs.realpath(paths.sessionsRoot)
+  const realDirectory = await fs.realpath(paths.directory)
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory() || directoryStat.isSymbolicLink() || !directoryStat.isDirectory() ||
+    !isPathInside(realRoot, realDirectory)) throw new Error('session recovery directory resolves outside sessions root')
+  await ensureRegularFileOrMissing(paths.eventsPath)
+  const read = await readSessionEventsDetailed(paths.eventsPath, { repairTail: true })
+  if (read.integrity === 'degraded') throw new Error('session event ledger is degraded; automatic recovery refused')
+  const authorizedTools = new Set(input.toolUseIds)
+  const locationKey = sessionLedgerLocationIdentity(input).key
+  const recoveryIdFor = (kind: string, identity: readonly string[]) => createHash('sha256')
+    .update(JSON.stringify([locationKey, input.canonicalTerminalEventId, kind, identity])).digest('hex')
+  const openSteps = new Map<string, { turnId: string; stepId: string }>()
+  const toolCalls = new Map<string, Record<string, unknown>>()
+  const toolResults = new Map<string, SessionEvent>()
+  const openTurns = new Set<string>()
+  for (const event of read.events) {
+    const payload = event.payload
+    if (event.type === 'turn_start') openTurns.add(String(payload.turnId))
+    if (event.type === 'turn_end') openTurns.delete(String(payload.turnId))
+    if (event.type === 'step_start') openSteps.set(JSON.stringify([String(payload.turnId), String(payload.stepId)]),
+      { turnId: String(payload.turnId), stepId: String(payload.stepId) })
+    if (event.type === 'step_end') openSteps.delete(JSON.stringify([String(payload.turnId), String(payload.stepId)]))
+    if (event.type === 'tool_call') toolCalls.set(String(payload.toolUseId), payload)
+    if (event.type === 'tool_result') toolResults.set(String(payload.toolUseId), event)
+  }
+  const repairs: SessionEventInput[] = []
+  for (const step of openSteps.values()) if (step.turnId === input.turnId) {
+    const recoveryId = recoveryIdFor('step_end', [step.turnId, step.stepId])
+    const existing = read.events.find((event) => event.payload.recoveryId === recoveryId)
+    const expected = { turnId: step.turnId, stepId: step.stepId, reason: 'interrupted', recoveryId,
+      canonicalTerminalEventId: input.canonicalTerminalEventId }
+    if (existing && (existing.type !== 'step_end' || stableJson(existing.payload) !== stableJson(expected))) {
+      throw new Error('SESSION_LEDGER_RECOVERY_IDENTITY_CONFLICT')
+    }
+    if (!existing) repairs.push({ type: 'step_end', payload: expected })
+  }
+  for (const toolUseId of [...authorizedTools].sort()) {
+    const call = toolCalls.get(toolUseId)
+    const recoveryId = recoveryIdFor('tool_result', [toolUseId])
+    const existingResult = toolResults.get(toolUseId)
+    if (existingResult) {
+      const priorRecoveryId = existingResult.payload.recoveryId
+      if (existingResult.payload.synthetic === true && typeof priorRecoveryId === 'string' && priorRecoveryId !== recoveryId) {
+        throw new Error('SESSION_LEDGER_RECOVERY_IDENTITY_CONFLICT')
+      }
+      continue
+    }
+    if (!call) continue
+    const existing = read.events.find((event) => event.payload.recoveryId === recoveryId)
+    const expected = {
+      toolUseId, turnId: String(call.turnId ?? input.turnId), stepId: String(call.stepId ?? ''),
+      synthetic: true, interrupted: true, recoveryId, canonicalTerminalEventId: input.canonicalTerminalEventId,
+      result: { success: false, error: '工具调用因应用退出中断' }
+    }
+    if (existing && (existing.type !== 'tool_result' || stableJson(existing.payload) !== stableJson(expected))) {
+      throw new Error('SESSION_LEDGER_RECOVERY_IDENTITY_CONFLICT')
+    }
+    if (!existing) repairs.push({ type: 'tool_result', payload: expected })
+  }
+  if (openTurns.has(input.turnId)) {
+    const recoveryId = recoveryIdFor('turn_end', [input.turnId])
+    const existing = read.events.find((event) => event.payload.recoveryId === recoveryId)
+    const expected = { turnId: input.turnId, reason: 'interrupted', recoveryId, canonicalTerminalEventId: input.canonicalTerminalEventId }
+    if (existing && (existing.type !== 'turn_end' || stableJson(existing.payload) !== stableJson(expected))) {
+      throw new Error('SESSION_LEDGER_RECOVERY_IDENTITY_CONFLICT')
+    }
+    if (!existing) repairs.push({ type: 'turn_end', payload: expected })
+  }
+  if (!repairs.length) return 0
+  const sink = getSessionEventSink(input.workDir, input.sessionId, input.createdAt)
+  try { for (const repair of repairs) await sink.appendCritical(repair) }
+  finally { await sink.close() }
+  return repairs.length
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`
+  return JSON.stringify(value)
 }
 
 function isPathInside(root: string, target: string): boolean {
@@ -432,12 +665,14 @@ export async function readCompactionReplay(eventsPath: string): Promise<Compacti
 
 /** 每个事件文件唯一的提交 owner；业务代码应通过 getSessionEventSink 获取。 */
 export class SessionEventWriter implements SessionEventSink {
+  private readonly location: { workDir: string; sessionId: string; createdAt: number }
   readonly sessionsRoot: string
   readonly directory: string
   readonly eventsPath: string
   readonly indexPath: string
   private readonly options: SessionEventSinkOptions
   private readonly onError?: (error: unknown) => void
+  private readonly lifecycleLocationKey: string
   private seq = 0
   private eventCount = 0
   private bytes = 0
@@ -461,9 +696,11 @@ export class SessionEventWriter implements SessionEventSink {
     const paths = eventPaths(workDir, sessionId, createdAt)
     if (writerRegistry.has(paths.eventsPath)) throw new Error('an active session event sink already exists for this session')
     this.sessionsRoot = paths.sessionsRoot
+    this.location = { workDir, sessionId, createdAt }
     this.directory = paths.directory
     this.eventsPath = paths.eventsPath
     this.indexPath = paths.indexPath
+    this.lifecycleLocationKey = sessionLedgerLocationIdentity({ workDir, sessionId, createdAt }).key
     this.options = { ...DEFAULT_OPTIONS, ...options }
     this.onError = options?.onError
     writerRegistry.set(this.eventsPath, this)
@@ -507,6 +744,11 @@ export class SessionEventWriter implements SessionEventSink {
     else await this.commitTail
     this.assertHealthy()
     return this.snapshot()
+  }
+
+  /** Forces the read-only load/index validation path for a ledger the caller has proved exists. */
+  async initializeExistingLedgerForBaseline(): Promise<void> {
+    await this.ensureInitialized()
   }
 
   async close(): Promise<FlushResult> {
@@ -641,6 +883,10 @@ export class SessionEventWriter implements SessionEventSink {
   }
 
   private async commitBatch(inputs: SessionEventInput[], chunkCount: number, chunkBytes: number): Promise<SessionEvent[]> {
+    return withSessionLedgerLifecycleLock(this.lifecycleLocationKey, () => this.commitBatchUnderLifecycleLock(inputs, chunkCount, chunkBytes))
+  }
+
+  private async commitBatchUnderLifecycleLock(inputs: SessionEventInput[], chunkCount: number, chunkBytes: number): Promise<SessionEvent[]> {
     if (!inputs.length) return []
     this.assertHealthy()
     await this.ensureInitialized()
@@ -673,6 +919,10 @@ export class SessionEventWriter implements SessionEventSink {
     } catch (error) {
       this.indexStale = true
       this.reportError(error)
+    }
+    if (!this.indexStale && sessionEventCommitObserver) {
+      try { await sessionEventCommitObserver(this.location) }
+      catch (error) { this.reportError(error) }
     }
     return events
   }

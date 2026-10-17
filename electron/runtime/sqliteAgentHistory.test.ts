@@ -3592,6 +3592,32 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('binds restart recovery identity and tool closure authority to the committed canonical terminal', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const location = { workDir: '/workspace', sessionId: 'restart-authority-session', createdAt: 1000 }
+    await history.appendBatch([
+      { ...event('restart-authority-response', 1), kind: 'model-response-committed', payload: {
+        modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'restart-authority-tool', name: 'read_file', input: {} }] },
+        sessionLedger: { location, stepId: 'restart-authority-step', toolCalls: [{ toolUseId: 'restart-authority-tool', name: 'read_file', args: {} }] }
+      } },
+      { ...event('restart-authority-dispatch', 2), kind: 'tool-call-started', payload: { toolCallId: 'restart-authority-tool', toolName: 'read_file' } }
+    ], 0)
+    const repairInvocationTerminal = vi.fn(async () => undefined)
+
+    await history.recoverInterruptedInvocations({ repairInvocationTerminal })
+
+    expect(repairInvocationTerminal).toHaveBeenCalledWith(location, expect.objectContaining({
+      status: 'interrupted', turnId: 'turn-1', reason: 'interrupted',
+      canonicalTerminalEventId: 'inv-1:history:3', toolUseIds: ['restart-authority-tool']
+    }))
+    await expect(history.read('inv-1')).resolves.toMatchObject({ events: expect.arrayContaining([
+      expect.objectContaining({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart',
+        sessionLedger: { location, turnId: 'turn-1', reason: 'interrupted' } } })
+    ]) })
+    conn.close()
+  })
+
   it('keeps a restarted dispatched invocation fenced from provider replay', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-history-dispatch-restart-'))
     const dbPath = path.join(root, 'history.db')
@@ -3716,9 +3742,9 @@ describe('SqliteAgentHistory', () => {
     const recoveryOptions = { repairInvocationTerminal, onInvocationTerminalRepairError }
     await expect(history.recoverInterruptedInvocations(recoveryOptions)).resolves.toMatchObject([{ state: 'interrupted' }])
 
-    expect(repairInvocationTerminal).toHaveBeenNthCalledWith(1, location, {
-      status: 'interrupted', turnId: 'turn-1', reason: 'interrupted'
-    })
+    expect(repairInvocationTerminal).toHaveBeenNthCalledWith(1, location, expect.objectContaining({
+      status: 'interrupted', turnId: 'turn-1', reason: 'interrupted', canonicalTerminalEventId: 'inv-1:history:2', toolUseIds: []
+    }))
     expect(onInvocationTerminalRepairError).toHaveBeenCalledWith(expect.any(Error), 'inv-1', 'turn-1')
     conn.prepare("UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id='inv-1'").run(Date.now() - 60 * 60_000)
     await expect(history.recoverInterruptedInvocations(recoveryOptions)).resolves.toMatchObject([{ state: 'interrupted' }])
@@ -3757,7 +3783,9 @@ describe('SqliteAgentHistory', () => {
     expect(resolveSessionLedgerLocation).toHaveBeenCalledOnce()
     expect(repairInvocationTerminal).toHaveBeenCalledTimes(2)
     expect(onInvocationTerminalRepairError).toHaveBeenCalledWith(expect.any(Error), 'inv-1', 'turn-1')
-    expect(repairInvocationTerminal).toHaveBeenCalledWith(location, { status: 'interrupted', turnId: 'turn-1', reason: 'interrupted' })
+    expect(repairInvocationTerminal).toHaveBeenCalledWith(location, expect.objectContaining({
+      status: 'interrupted', turnId: 'turn-1', reason: 'interrupted', canonicalTerminalEventId: 'inv-1:history:2', toolUseIds: []
+    }))
     await expect(history.read('inv-1')).resolves.toMatchObject({ events: [
       expect.objectContaining({ kind: 'session-input-committed', sequence: 1 }),
       expect.objectContaining({ kind: 'invocation-interrupted', payload: {
