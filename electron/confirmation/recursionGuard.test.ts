@@ -93,8 +93,8 @@ describe('递归守卫（I5：internalConfirmExemption）', () => {
     const audit = auditSink()
     const r = await evaluateToolCallGate(
       base({
-        toolName: 'read_file',
-        toolInput: { path: 'a.txt' },
+        toolName: 'skills.read',
+        toolInput: { name: 'example' },
         appDb: openDb(),
         audit,
         internalConfirmExemption: 'approval-agent'
