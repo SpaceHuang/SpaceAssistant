@@ -1947,6 +1947,60 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 102
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  if (version === 102) runInTransaction(conn, () => {
+    const tableExists = (table: string) => conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+    const ensureColumns = (table: string, definitions: Array<[string, string]>) => {
+      if (!tableExists(table)) return
+      const columns = new Set((conn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(({ name }) => name))
+      for (const [name, type] of definitions) if (!columns.has(name)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`)
+    }
+
+    if (tableExists('automation_tasks')) {
+      ensureColumns('automation_tasks', [
+        ['work_dirs_json', 'TEXT'], ['preflight_version', 'INTEGER NOT NULL DEFAULT 0'], ['target_bindings_json', 'TEXT'],
+        ['task_revision', 'INTEGER NOT NULL DEFAULT 0'], ['schedule_generation', 'INTEGER NOT NULL DEFAULT 0'],
+      ])
+      const columns = new Set((conn.prepare('PRAGMA table_info(automation_tasks)').all() as Array<{ name: string }>).map(({ name }) => name))
+      if (columns.has('work_dir')) {
+        const rows = conn.prepare('SELECT rowid,work_dir,work_dirs_json FROM automation_tasks').all() as Array<{ rowid: number; work_dir: string | null; work_dirs_json: string | null }>
+        const update = conn.prepare('UPDATE automation_tasks SET work_dirs_json=? WHERE rowid=?')
+        for (const row of rows) {
+          if (row.work_dirs_json !== null) continue
+          update.run(JSON.stringify(row.work_dir ? [row.work_dir] : []), row.rowid)
+        }
+      } else {
+        conn.prepare("UPDATE automation_tasks SET work_dirs_json='[]' WHERE work_dirs_json IS NULL").run()
+      }
+      const taskIdColumn = columns.has('id') ? 'id' : 'task_id'
+      const updatedAtExpression = columns.has('updated_at') ? 'updated_at' : '0'
+      conn.exec(`CREATE TABLE IF NOT EXISTS automation_task_recovery_state (
+        task_id TEXT PRIMARY KEY NOT NULL REFERENCES automation_tasks(${taskIdColumn}) ON DELETE CASCADE,
+        schedule_generation INTEGER NOT NULL DEFAULT 0,
+        recovery_cursor_at INTEGER,
+        pending_run_id TEXT,
+        pending_run_slot INTEGER,
+        pending_schedule_generation INTEGER,
+        updated_at INTEGER NOT NULL DEFAULT 0
+      )`)
+      const taskColumns = new Set((conn.prepare('PRAGMA table_info(automation_tasks)').all() as Array<{ name: string }>).map(({ name }) => name))
+      const cursorExpression = taskColumns.has('next_run_at') ? 'next_run_at' : 'NULL'
+      conn.exec(`INSERT OR IGNORE INTO automation_task_recovery_state(task_id,schedule_generation,recovery_cursor_at,updated_at)
+        SELECT ${taskIdColumn},schedule_generation,${cursorExpression},${updatedAtExpression} FROM automation_tasks`)
+    }
+    if (tableExists('automation_task_runs')) {
+      ensureColumns('automation_task_runs', [
+        ['run_phase', "TEXT NOT NULL DEFAULT 'legacy-unknown'"], ['task_revision', 'INTEGER'],
+        ['schedule_generation', 'INTEGER'], ['slot_at', 'INTEGER'], ['config_snapshot_json', 'TEXT'],
+      ])
+      const runColumns = new Set((conn.prepare('PRAGMA table_info(automation_task_runs)').all() as Array<{ name: string }>).map(({ name }) => name))
+      if (runColumns.has('status')) {
+        conn.exec("UPDATE automation_task_runs SET run_phase='legacy-unknown' WHERE status IN ('queued','running')")
+        conn.exec("UPDATE automation_task_runs SET run_phase='terminal' WHERE status NOT IN ('queued','running')")
+      }
+    }
+    version = 103
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {

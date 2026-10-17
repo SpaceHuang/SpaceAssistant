@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 102
+export const DB_SCHEMA_VERSION = 103
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (

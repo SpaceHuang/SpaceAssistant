@@ -21,6 +21,10 @@ export type AutomationTask = {
   deliveryTarget?: string
   /** 兼容旧任务：缺省表示准入后捕获活动 Profile。 */
   workDir?: string
+  workDirs?: string[]
+  /** 旧任务迁移为 0；通过新预检创建/编辑/启用后为 1。 */
+  preflightVersion?: 0 | 1
+  targetBindingsJson?: string | null
   modelId?: string
   modelServiceId?: string
   reasoningEffort?: AgentReasoningEffort
@@ -40,6 +44,7 @@ export type AutomationTaskInput = {
   deliveryPref: AutomationDeliveryPref
   deliveryTarget?: string
   workDir?: string
+  workDirs?: string[]
   modelId?: string
   modelServiceId?: string
   reasoningEffort?: AgentReasoningEffort
@@ -80,6 +85,9 @@ export type AutomationTaskRun = {
 export type AutomationTaskRunConfigSnapshot = {
   resolutionStatus: 'resolved' | 'failed'
   workDir?: string
+  workDirs?: string[]
+  preflightVersion?: 0 | 1
+  targetSelections?: TargetSelection[]
   workDirSource?: 'task' | 'legacy-profile'
   modelId?: string
   providerModelName?: string
@@ -91,7 +99,37 @@ export type AutomationTaskRunConfigSnapshot = {
   error?: string
 }
 
-export type ButlerTaskWriteResult = { ok: boolean; id?: string; error?: string }
+export type TargetBinding =
+  | { kind: 'exact'; path: string; targetType: 'file' | 'directory'; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
+  | { kind: 'collection'; directory: string; selector: '*.csv' | '*.tsv' | 'all'; sort: 'canonical-path'; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
+  | { kind: 'output'; path: string; ancestor: string; relativeSuffix: string; expectedType: 'file' | 'directory'; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
+
+export type TargetSelection = TargetBinding
+
+export type PreflightIssue = {
+  code: string
+  messageKey: string
+  messageParams?: Record<string, string | number | boolean>
+  field?: string
+}
+
+export type SuggestedDirectory = {
+  path: string
+  purpose: string
+  source: string
+  validationStatus: 'valid' | 'invalid' | 'unavailable'
+}
+
+export type PreflightReport = {
+  status: 'passed' | 'blocked' | 'unavailable'
+  blockers: PreflightIssue[]
+  suggestedDirectories: SuggestedDirectory[]
+}
+
+export type ButlerTaskWriteResult =
+  | { ok: true; id: string; task?: AutomationTask }
+  | { ok: false; kind: 'preflight-blocked'; report: PreflightReport; error?: string }
+  | { ok: false; kind: 'validation-error' | 'preflight-unavailable'; error: string; field?: string }
 
 export type ButlerRunTaskResult = {
   ok: boolean
@@ -101,3 +139,4 @@ export type ButlerRunTaskResult = {
   deliveryStatus?: AutomationTaskRun['deliveryStatus']
   error?: string
 }
+
