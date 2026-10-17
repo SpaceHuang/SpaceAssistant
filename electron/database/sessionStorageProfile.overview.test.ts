@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 import { collectSessionStorageOverview } from './sessionStorageProfile'
 import * as spillStore from '../storage/spillStore'
 
@@ -86,7 +87,7 @@ describe('collectSessionStorageOverview', () => {
     expect(overview.totalBytes).toBeNull()
   })
 
-  it('reports physical observed spill bytes when a symlink makes classification incomplete', () => {
+  it.skipIf(!canCreateSymlinks())('reports physical observed spill bytes when a symlink makes classification incomplete', () => {
     const fixture = createDb()
     const spillRoot = path.join(fixture.root, 'spill')
     fs.mkdirSync(spillRoot)
@@ -107,6 +108,8 @@ describe('collectSessionStorageOverview', () => {
     const spillRoot = path.join(fixture.root, 'spill')
     if (caseName === 'regular-file') fs.writeFileSync(spillRoot, 'not a directory')
     if (caseName === 'symlink-root') {
+      // win32 非特权进程 fs.symlink 直接 EPERM，按能力探测跳过该场景（其余场景不依赖 symlink）
+      if (!canCreateSymlinks()) return
       fs.mkdirSync(path.join(fixture.root, 'spill-target'))
       fs.symlinkSync(path.join(fixture.root, 'spill-target'), spillRoot)
     }

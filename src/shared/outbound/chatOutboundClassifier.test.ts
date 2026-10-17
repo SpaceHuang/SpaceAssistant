@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 import { classifyOutboundMessageWithDeps } from './chatOutboundClassifier'
-import { DEFAULT_WIKI_CONFIG } from '../domainTypes'
 import type { SkillDefinition } from '../domainTypes'
 
 function makeSkill(name: string, scope: SkillDefinition['scope']): SkillDefinition {
@@ -22,7 +21,6 @@ function makeDeps(overrides: Partial<Parameters<typeof classifyOutboundMessageWi
     wikiInit: overrides.wikiInit ?? vi.fn().mockResolvedValue({ ok: true, rootPath: 'llm-wiki', skillInstalled: true }),
     wikiStatus: overrides.wikiStatus ??
       vi.fn().mockResolvedValue({
-        enabled: true,
         rootPath: 'llm-wiki',
         initialized: true,
         pageCount: 2,
@@ -38,7 +36,6 @@ function makeDeps(overrides: Partial<Parameters<typeof classifyOutboundMessageWi
 }
 
 const ctx = {
-  wikiConfig: { ...DEFAULT_WIKI_CONFIG, enabled: true },
   sessionSkillsState: { manualActivated: [], manualDisabled: [] }
 }
 

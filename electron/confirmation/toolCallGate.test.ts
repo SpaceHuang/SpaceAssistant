@@ -1467,7 +1467,7 @@ describe('evaluateToolCallGate', () => {
       const gate = await evaluateToolCallGate(base({
         workDir: root,
         userDataDir: path.join(root, '.userdata'),
-        wikiConfig: { ...DEFAULT_WIKI_CONFIG, enabled: true },
+        wikiConfig: { ...DEFAULT_WIKI_CONFIG },
         toolName: 'write_file',
         toolInput: { path: 'llm-wiki/raw/source.md', content: 'overwrite' }
       }))

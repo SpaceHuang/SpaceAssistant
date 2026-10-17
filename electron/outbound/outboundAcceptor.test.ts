@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createOutboundAcceptor as createSessionStorageOutboundAcceptor, decideOutbound, type OutboundAcceptorDeps, type OutboundSnapshot } from './outboundAcceptor'
 import type { OutboundSubmitIntent } from '../../src/shared/outboundProtocol'
-import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { summarizeFailedInvocation } from './outboundAcceptor'
 import { TransactionCommitUnknownError } from '../database/transaction'
 import { createHash } from 'node:crypto'
@@ -51,7 +50,6 @@ function makeSnapshot(overrides: Partial<OutboundSnapshot> = {}): OutboundSnapsh
     apiKeyPresent: true,
     queuedCount: 0,
     maxQueueSize: 10,
-    wikiConfig: { ...DEFAULT_WIKI_CONFIG, enabled: true },
     sessionSkillsState: { manualActivated: [], manualDisabled: [] },
     ...overrides
   }
@@ -62,7 +60,6 @@ const io = {
   getSkill: vi.fn(async () => null),
   wikiInit: vi.fn(async () => ({ ok: true as const, rootPath: 'llm-wiki', skillInstalled: true })),
   wikiStatus: vi.fn(async () => ({
-    enabled: true,
     rootPath: 'llm-wiki',
     initialized: true,
     pageCount: 1,
@@ -275,8 +272,8 @@ describe('continuation intent acceptance persistence', () => {
       const storage = createSqliteSessionStorage(temp.db)
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined,
         updateSessionState: () => undefined, createSession: () => { throw new Error('unexpected session creation') }, ensureSessionWorkDir: async () => ({ ok: true as const }),
         startTurn: vi.fn(), newRequestId: () => 'generated', audit: () => undefined,
@@ -318,8 +315,8 @@ describe('continuation intent acceptance persistence', () => {
 
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }),
         appendHintMessage: () => undefined, updateSessionState: () => undefined, createSession: () => session,
         ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: vi.fn(), newRequestId: () => 'generated', audit: () => undefined
@@ -352,8 +349,8 @@ describe('continuation intent acceptance persistence', () => {
       })
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: vi.fn(), startContinuation, newRequestId: () => 'generated', audit: () => undefined
       })
@@ -386,8 +383,8 @@ describe('continuation intent acceptance persistence', () => {
       const acceptor = createOutboundAcceptor({
         db: temp.db,
         turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3,
-        maxQueueSize: 10, readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        maxQueueSize: 10, listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: started, newRequestId: () => 'generated', audit: () => undefined
       })
@@ -424,8 +421,8 @@ describe('continuation intent acceptance persistence', () => {
       const started = vi.fn(createPersistedTurnStarter(temp.db, (requestId) => `turn-${requestId}`))
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: started, newRequestId: () => 'gen', audit: () => undefined
       })
@@ -456,8 +453,8 @@ describe('continuation intent acceptance persistence', () => {
       const started = vi.fn(createPersistedTurnStarter(temp.db, (requestId) => `turn-${requestId}`))
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: started, newRequestId: () => 'gen', audit: () => undefined
       })
@@ -487,8 +484,8 @@ describe('continuation intent acceptance persistence', () => {
       const started = vi.fn(createPersistedTurnStarter(temp.db, (requestId) => `turn-${requestId}`))
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: started, newRequestId: () => 'gen', audit: () => undefined
       })
@@ -524,8 +521,8 @@ describe('continuation intent acceptance persistence', () => {
         ])
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [{ turnId: 'busy-turn', sessionId: session.id }] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: vi.fn(), newRequestId: () => 'generated', audit: () => undefined
       })
@@ -571,8 +568,8 @@ describe('continuation intent acceptance persistence', () => {
       const startTurn = vi.fn()
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [{ turnId: 'active-turn', sessionId: session.id }] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn, newRequestId: () => 'generated', audit: () => undefined
       })
@@ -613,8 +610,8 @@ describe('continuation intent acceptance persistence', () => {
       const notifyEnqueued = vi.fn()
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn, notifyEnqueued, newRequestId: () => 'generated', audit: () => undefined
       })
@@ -654,8 +651,8 @@ describe('continuation intent acceptance persistence', () => {
       const notifyEnqueued = vi.fn()
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn, notifyEnqueued, newRequestId: () => 'generated', audit: () => undefined
       })
@@ -692,8 +689,8 @@ describe('continuation intent acceptance persistence', () => {
       const startTurn = vi.fn()
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
-        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
-        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
         createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn, startContinuation: async () => { throw new TransactionCommitUnknownError(new Error('injected')) },
         newRequestId: () => 'gen', audit: () => undefined

@@ -63,7 +63,6 @@ export function resolveWikiMount(
   userDataPath: string,
   pathInput: string
 ): WikiMountResolution {
-  if (!wikiConfig.enabled) return { mounted: false }
   if (typeof pathInput !== 'string' || pathInput.length === 0) return { mounted: false }
 
   const rootDirname = wikiConfig.rootPath || DEFAULT_WIKI_ROOT_DIRNAME

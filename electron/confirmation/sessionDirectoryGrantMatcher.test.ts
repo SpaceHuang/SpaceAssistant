@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
 import { matchSessionDirectoryGrant } from './sessionDirectoryGrantMatcher'
 
@@ -30,7 +31,7 @@ describe('session directory grant matching', () => {
     await expect(matchSessionDirectoryGrant({ grants: [selected], sessionId: 's1', lane: 'desktop', targetPath: path.join(sibling, 'note.txt') })).resolves.toBeUndefined()
   })
 
-  it('rejects symlinks whose real target leaves the selected subtree and replaced roots', async () => {
+  it.skipIf(!canCreateSymlinks())('rejects symlinks whose real target leaves the selected subtree and replaced roots', async () => {
     const parent = await tempDir()
     const root = path.join(parent, 'selected')
     const outside = path.join(parent, 'outside')

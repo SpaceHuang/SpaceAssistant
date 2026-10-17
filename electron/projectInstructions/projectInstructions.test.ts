@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,12 +52,14 @@ describe('loadAgentsMd', () => {
     await fs.mkdir(path.join(root, 'AGENTS.md'))
     await expect(loadAgentsMd(root)).resolves.toMatchObject({ status: 'not-file', content: null })
     await fs.rmdir(path.join(root, 'AGENTS.md'))
+    // 末段依赖真实 symlink，按能力探测跳过（前三段 oversize/编码/目录断言不依赖 symlink）
+    if (!canCreateSymlinks()) return
     await fs.symlink(path.join(outside, 'rule.md'), path.join(root, 'AGENTS.md'))
     await fs.writeFile(path.join(outside, 'rule.md'), 'outside')
     await expect(loadAgentsMd(root)).resolves.toMatchObject({ status: 'not-file', content: null })
   })
 
-  it('rejects a workDir-external symlink swapped in after realpath validation', async () => {
+  it.skipIf(!canCreateSymlinks())('rejects a workDir-external symlink swapped in after realpath validation', async () => {
     const root = await makeRoot()
     const outside = await makeRoot()
     const filePath = path.join(root, 'AGENTS.md')
@@ -68,7 +71,8 @@ describe('loadAgentsMd', () => {
     await expect(loadAgentsMd(root)).resolves.toMatchObject({ status: 'not-file', content: null })
   })
 
-  it('does not read an external target swapped in after the file handle is opened', async () => {
+  // afterOpen 内以真实 symlink 替换目标，win32 非特权进程按能力探测跳过
+  it.skipIf(!canCreateSymlinks())('does not read an external target swapped in after the file handle is opened', async () => {
     const root = await makeRoot()
     const outside = await makeRoot()
     const filePath = path.join(root, 'AGENTS.md')
@@ -86,7 +90,7 @@ describe('loadAgentsMd', () => {
     expect(result.content).toBeNull()
   })
 
-  it('rejects a workDir symlink retargeted outside before open', async () => {
+  it.skipIf(!canCreateSymlinks())('rejects a workDir symlink retargeted outside before open', async () => {
     const root = await makeRoot()
     const outside = await makeRoot()
     const aliasContainer = await makeRoot()
@@ -105,7 +109,7 @@ describe('loadAgentsMd', () => {
     expect(result.content).toBeNull()
   })
 
-  it('rejects an in-workdir symlink and keeps simultaneous directories isolated', async () => {
+  it.skipIf(!canCreateSymlinks())('rejects an in-workdir symlink and keeps simultaneous directories isolated', async () => {
     const a = await makeRoot()
     const b = await makeRoot()
     await fs.writeFile(path.join(a, 'policy.md'), 'A rule')
@@ -116,7 +120,7 @@ describe('loadAgentsMd', () => {
     expect(resultB).toMatchObject({ status: 'loaded', content: 'B rule' })
   })
 
-  it('rejects repeated parent-directory symlink swaps before any outside content is read', async () => {
+  it.skipIf(!canCreateSymlinks())('rejects repeated parent-directory symlink swaps before any outside content is read', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-review-parent-'))
     roots.push(dir)
     const root = path.join(dir, 'project')
@@ -158,7 +162,25 @@ describe('loadAgentsMd', () => {
     }
   })
 
-  it('retries an atomic editor replacement after opening and reads only the complete new version', async () => {
+  // win32 已排查（2026-10-17）：rename 替换「正被打开」的目标会稳定 EPERM（实测，Node 句柄带 FILE_SHARE_DELETE 亦然），
+  // EPERM 由替换方（编辑器）承担并重试保存；读取方 fail-closed 返回 read-error，下次加载即恢复——行为正确非缺陷。
+  // 「打开后、校验前被替换」的中间态在 win32 物理上不可达，本用例为 POSIX 专属竞态；win32 对应的真实场景（替换发生在 open 之前）由常规读取用例覆盖。
+  // 「打开后原路径被替换成新 inode」的全平台可达形态：unlink 被打开的目标（win32 经 FILE_SHARE_DELETE 放行、
+  // POSIX 原生允许）后写入新文件体，attempt 0 检测 inode 漂移 → 重试读新版本。与上方 POSIX 专属 rename 形态互补。
+  it('retries after the opened path is swapped to a new inode (unlink + rewrite) and reads only the complete new version', async () => {
+    const root = await makeRoot()
+    const current = path.join(root, 'AGENTS.md')
+    await fs.writeFile(current, 'old')
+    let replaced = false
+    await expect(loadAgentsMd(root, { afterOpen: async () => {
+      if (replaced) return
+      replaced = true
+      await fs.unlink(current)
+      await fs.writeFile(current, 'complete new rule')
+    } })).resolves.toMatchObject({ status: 'loaded', content: 'complete new rule' })
+  })
+
+  it.skipIf(process.platform === 'win32')('retries an atomic editor replacement after opening and reads only the complete new version', async () => {
     const root = await makeRoot()
     const current = path.join(root, 'AGENTS.md')
     const replacement = path.join(root, '.AGENTS.md.tmp')

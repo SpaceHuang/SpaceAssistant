@@ -130,7 +130,7 @@ describe('Desktop Hosted checkpoint restart', () => {
       getUserDataPath: () => '/tmp', getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 100 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getWikiConfig: () => ({}), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }), turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
     })
     const writeSpy = vi.spyOn(writeFileExecutor, 'execute')

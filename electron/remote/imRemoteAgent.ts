@@ -34,7 +34,7 @@ import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { getSessionEventSink } from '../sessionEvents'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
 import { buildRemoteProgressHookContext } from './buildRemoteProgressContext'
-import { onAgentsMdNotLoaded, onRemoteTextSegmentClosed } from './remoteProgressHooks'
+import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { createImOrchestrationToolRegistry } from './imOrchestrationTools'
@@ -419,7 +419,6 @@ export async function runImRemoteAgent(args: {
       baseUrl,
       messages,
       system: appendix,
-      agentsMdEnabled: frozenConfig.agentsMdEnabled ?? true,
       options: { maxTokens: 8192 },
       currentUserMessageId,
       toolsConfig,
@@ -452,7 +451,6 @@ export async function runImRemoteAgent(args: {
           })) }
         : {}),
       onRemoteTextActivity: (text) => onRemoteTextSegmentClosed(remoteProgressContext, text),
-      onAgentsMdNotLoaded: () => onAgentsMdNotLoaded(remoteProgressContext),
       locale: readAppLocale(args.db),
       ...args.toolChatExtras
       ,emitFactEvent: args.emitFactEvent ?? (() => undefined)

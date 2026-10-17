@@ -3694,31 +3694,12 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
-  it('restores each request instruction snapshot after restart and leaves the invocation interrupted', async () => {
+  it('keeps legacy instruction snapshots readable as inert request metadata', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
-    const snapshot = (version: string) => ({
-      status: 'loaded', source: 'AGENTS.md', scope: 'workdir-root', workDir: '/workspace/a',
-      digest: `digest-${version}`, byteLength: version.length, loadedAt: 100, tokenCount: 1, content: `rule ${version}`
-    })
-    await history.appendBatch([
-      { ...event('agents-request-a', 1), kind: 'model-request-started', payload: {
-        requestId: 'inv-1:round:1', modelTurn: 1, attempt: 1, routeId: 'route-1',
-        requestMetadata: { agentsMdSnapshot: snapshot('A') }
-      } },
-      { ...event('agents-request-b', 2), kind: 'model-request-started', payload: {
-        requestId: 'inv-1:round:2', modelTurn: 2, attempt: 1, routeId: 'route-1',
-        requestMetadata: { agentsMdSnapshot: snapshot('B') }
-      } }
-    ], 0)
-
-    await expect(history.recoverInterruptedInvocations()).resolves.toMatchObject([{ invocationId: 'inv-1', state: 'interrupted' }])
-    const restartedHistory = new SqliteAgentHistory(conn)
-    const restored = await restartedHistory.read('inv-1')
-    const snapshots = restored.events.filter((entry) => entry.kind === 'model-request-started')
-      .map((entry) => (entry.payload as { requestMetadata: { agentsMdSnapshot: { digest: string; content: string } } }).requestMetadata.agentsMdSnapshot)
-    expect(snapshots.map(({ digest, content }) => ({ digest, content }))).toEqual([{ digest: 'digest-A', content: 'rule A' }, { digest: 'digest-B', content: 'rule B' }])
-    expect(restored.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } })
+    await history.appendBatch([{ ...event('legacy-agents-history', 1), kind: 'model-request-started', payload: { requestId: 'inv-1:round:1', modelTurn: 1, attempt: 1, routeId: 'route-1', requestMetadata: { agentsMdSnapshot: { status: 'loaded', content: 'legacy instructions' } } } }], 0)
+    const restored = await history.read('inv-1')
+    expect(restored.events[0]?.payload).toHaveProperty('requestMetadata.agentsMdSnapshot.content', 'legacy instructions')
     conn.close()
   })
 

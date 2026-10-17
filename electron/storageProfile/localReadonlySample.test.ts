@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 import { sampleLocalStorageReadonly } from './localReadonlySample'
 
 function tempDb() {
@@ -32,12 +33,15 @@ describe('sampleLocalStorageReadonly', () => {
 
   it('skips symlinks, corrupt databases and permission failures without exposing paths', async () => {
     const fixture = tempDb()
-    const link = path.join(fixture.root, 'link.db')
     const corrupt = path.join(fixture.root, 'corrupt.db')
-    fs.symlinkSync(fixture.dbPath, link)
     fs.writeFileSync(corrupt, 'not sqlite')
     try {
-      await expect(sampleLocalStorageReadonly({ candidates: [link] })).resolves.toMatchObject({ status: 'skipped', reason: 'symlink' })
+      // win32 非特权进程无法创建 symlink，按能力探测跳过该场景（corrupt/EACCES 场景不依赖 symlink）
+      if (canCreateSymlinks()) {
+        const link = path.join(fixture.root, 'link.db')
+        fs.symlinkSync(fixture.dbPath, link)
+        await expect(sampleLocalStorageReadonly({ candidates: [link] })).resolves.toMatchObject({ status: 'skipped', reason: 'symlink' })
+      }
       await expect(sampleLocalStorageReadonly({ candidates: [corrupt] })).resolves.toMatchObject({ status: 'skipped', reason: 'unreadable-or-corrupt' })
       await expect(sampleLocalStorageReadonly({ candidates: [fixture.dbPath], inspect: () => { const error = new Error('secret path'); (error as NodeJS.ErrnoException).code = 'EACCES'; throw error } })).resolves.toMatchObject({ status: 'skipped', reason: 'permission-denied' })
     } finally { fixture.cleanup() }

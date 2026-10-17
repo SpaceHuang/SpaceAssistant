@@ -48,7 +48,6 @@ import { registerMessagesReloadHandler } from '../../services/invalidationServic
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelThinkingPicker } from './ComposerModelThinkingPicker'
-import { ProjectInstructionsControl } from './ProjectInstructionsControl'
 import { resolveSessionModelBinding, resolveSessionThinkingBinding, resolveAvailableThinkingEfforts } from '../../services/sessionModelBinding'
 import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
@@ -981,8 +980,8 @@ export function ChatView() {
 
   const showArchiveToWikiFor = useCallback(
     (m: Message) =>
-      Boolean(cfg?.wiki?.enabled && m.role === 'assistant' && m.status === 'completed' && m.content.trim()),
-    [cfg?.wiki?.enabled]
+      Boolean(m.role === 'assistant' && m.status === 'completed' && m.content.trim()),
+    []
   )
 
   const canRetryMessage = useCallback(
@@ -1190,7 +1189,6 @@ export function ChatView() {
                 onSelectEffort={(effort) => void handleThinkingSelect(effort)}
                 availableEfforts={availableEfforts}
               />
-              <ProjectInstructionsControl />
             </>
           ) : null
         }

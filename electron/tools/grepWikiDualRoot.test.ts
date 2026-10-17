@@ -13,6 +13,7 @@ import { DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG, type WikiConfig } from '../.
 import type { ToolExecutionContext } from './types'
 import { grepExecutor } from './builtinExecutors'
 import { buildReadExecutionPermit } from '../confirmation/readExecutionPermit'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 
 const dirs: string[] = []
 
@@ -28,8 +29,8 @@ afterEach(async () => {
   }
 })
 
-function wikiConfig(enabled: boolean, legacyRootAliases: string[] = []): WikiConfig {
-  return { ...DEFAULT_WIKI_CONFIG, enabled, rootPath: 'llm-wiki', legacyRootAliases }
+function wikiConfig(legacyRootAliases: string[] = []): WikiConfig {
+  return { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki', legacyRootAliases }
 }
 
 interface World {
@@ -40,7 +41,7 @@ interface World {
   root: string
 }
 
-async function setupWorld(opts: { wikiEnabled?: boolean; withResidue?: boolean } = {}): Promise<World> {
+async function setupWorld(opts: { withResidue?: boolean } = {}): Promise<World> {
   const root = await tmpdir('wiki-grep-')
   const workDir = path.join(root, 'proj')
   const userDataDir = path.join(root, 'ud')
@@ -65,7 +66,7 @@ async function setupWorld(opts: { wikiEnabled?: boolean; withResidue?: boolean }
     signal: AbortSignal.timeout(60_000),
     fileStateCache: new FileStateCache(),
     toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
-    wikiConfig: wikiConfig(opts.wikiEnabled ?? true)
+    wikiConfig: wikiConfig()
   }
   return { workDir, userDataDir, realBase, ctx, root }
 }
@@ -128,7 +129,7 @@ async function runGrep(ctx: ToolExecutionContext, input: Record<string, unknown>
   const rawPath = typeof input.path === 'string' ? input.path : undefined
   if (rawPath === undefined) {
     await attachWorkDirGrepPermit(ctx, input)
-  } else if (ctx.wikiConfig?.enabled) {
+  } else if (ctx.wikiConfig) {
     const { resolveWikiMount } = await import('../wiki/wikiMount')
     const resolution = resolveWikiMount(ctx.workDir, ctx.wikiConfig, ctx.userDataDir, rawPath)
     if (resolution.mounted) await attachWikiPathGrepPermit(ctx, input)
@@ -139,7 +140,8 @@ async function runGrep(ctx: ToolExecutionContext, input: Record<string, unknown>
 }
 
 describe('grep 双根编排（T1.11a）', () => {
-  it('无 path 双根搜索拒绝指向自定义敏感目录的共享根符号链接', async () => {
+  // 依赖真实 symlink 的用例以能力探测保护：win32 非特权进程 fs.symlink 直接 EPERM；安全语义由下方 mock 通路覆盖。
+  it.skipIf(!canCreateSymlinks())('无 path 双根搜索拒绝指向自定义敏感目录的共享根符号链接', async () => {
     const world = await setupWorld()
     const sensitiveDir = path.join(world.root, 'custom-sensitive')
     await fs.mkdir(sensitiveDir, { recursive: true })
@@ -153,7 +155,7 @@ describe('grep 双根编排（T1.11a）', () => {
     expect(res.output).not.toContain('secret.md')
   })
 
-  it('无 path 双根搜索拒绝指向共享库外普通目录的共享根符号链接', async () => {
+  it.skipIf(!canCreateSymlinks())('无 path 双根搜索拒绝指向共享库外普通目录的共享根符号链接', async () => {
     const world = await setupWorld()
     const externalDir = path.join(world.root, 'external-wiki')
     await fs.mkdir(externalDir, { recursive: true })
@@ -166,6 +168,28 @@ describe('grep 双根编排（T1.11a）', () => {
     expect(res.output).not.toContain('outside.md')
   })
 
+  it('mock 通路：共享根 realpath 解析到共享库外时拒绝签发 wiki 根 permit（win32 无特权平台的安全语义锚）', async () => {
+    const world = await setupWorld()
+    const externalDir = path.join(world.root, 'external-wiki')
+    await fs.mkdir(externalDir, { recursive: true })
+    await fs.writeFile(path.join(externalDir, 'outside.md'), 'OUTSIDE_SHARED_ROOT needle\n')
+    const originalRealpath = fs.realpath.bind(fs)
+    const realpathSpy = vi.spyOn(fs, 'realpath').mockImplementation(async (target, ...args) => {
+      if (String(target) === world.realBase) return externalDir
+      return originalRealpath(target, ...args)
+    })
+    try {
+      const res = await runGrep(world.ctx, { pattern: 'needle', output_mode: 'content' })
+      expect(res.success).toBe(true)
+      expect(res.output).toContain('needle in workdir')
+      expect(res.output).not.toContain('OUTSIDE_SHARED_ROOT')
+      expect(res.output).not.toContain('outside.md')
+      expect(res.output).not.toContain('llm-wiki/wiki/shared.md')
+    } finally {
+      realpathSpy.mockRestore()
+    }
+  })
+
   it('a① 无 path + wiki 启用 → workDir 与共享根双根命中，wiki 路径为词汇形态', async () => {
     const { ctx } = await setupWorld()
     const res = await runGrep(ctx, { pattern: 'needle', output_mode: 'content' })
@@ -173,14 +197,6 @@ describe('grep 双根编排（T1.11a）', () => {
     expect(res.output).toContain('needle in workdir')
     expect(res.output).toContain('llm-wiki/wiki/shared.md')
     expect(res.output).toContain('needle in shared wiki')
-  })
-
-  it('a② wiki 停用 → 单根（现状，无 wiki 命中）', async () => {
-    const { ctx } = await setupWorld({ wikiEnabled: false })
-    const res = await runGrep(ctx, { pattern: 'needle', output_mode: 'content' })
-    expect(res.success).toBe(true)
-    expect(res.output).toContain('needle in workdir')
-    expect(res.output).not.toContain('llm-wiki/wiki/shared.md')
   })
 
   it('a③ 显式 path=wiki 词汇 → 仅共享根子路径（挂载 permit 单根）', async () => {

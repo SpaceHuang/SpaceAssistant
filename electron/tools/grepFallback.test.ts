@@ -55,7 +55,7 @@ describe('JavaScript grep fallback', () => {
     expect(out).not.toBe('No matches found')
   })
 
-  it('reads an explicitly authorized file from its permit handle after its path is replaced', async () => {
+  it.skipIf(!canCreateSymlinks())('reads an explicitly authorized file from its permit handle after its path is replaced', async () => {
     const root = fixture({ 'target.txt': 'authorized content' })
     const outside = path.join(root, '..', `sa-grep-outside-${Date.now()}.txt`)
     fs.writeFileSync(outside, 'UNAUTHORIZED_SECRET')

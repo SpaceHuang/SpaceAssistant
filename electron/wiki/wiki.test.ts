@@ -28,7 +28,7 @@ function makeWorkDir(): string {
   return dir
 }
 
-const wikiConfig: WikiConfig = { ...DEFAULT_WIKI_CONFIG, enabled: true }
+const wikiConfig: WikiConfig = { ...DEFAULT_WIKI_CONFIG }
 
 describe('wikiPaths', () => {
   it('classifies raw and wiki paths', () => {

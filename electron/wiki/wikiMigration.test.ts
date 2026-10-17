@@ -31,7 +31,7 @@ afterEach(() => {
 })
 
 function wikiConfig(overrides: Partial<WikiConfig> = {}): WikiConfig {
-  return { ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'llm-wiki', ...overrides }
+  return { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki', ...overrides }
 }
 
 interface World {

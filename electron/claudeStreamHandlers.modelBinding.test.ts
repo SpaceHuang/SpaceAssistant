@@ -116,7 +116,7 @@ describe('claudeStreamHandlers 模型绑定 fail-fast', () => {
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
-      getWikiConfig: () => ({ enabled: false }),
+      getWikiConfig: () => ({}),
       getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir: '/tmp' }),
       turnRuntime: { bindRequest: vi.fn() } as never

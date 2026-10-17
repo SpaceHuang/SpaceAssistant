@@ -55,7 +55,7 @@ async function setupWorld(): Promise<World> {
     fileStateCache: new FileStateCache(),
     toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
     // 挂载世界 = 知识库已启用（生产中 enabled 时 ctx.wikiConfig 必有；执行层以此为挂载前提）
-    wikiConfig: { ...DEFAULT_WIKI_CONFIG, enabled: true }
+    wikiConfig: { ...DEFAULT_WIKI_CONFIG }
   }
   return { workDir, userDataDir, realBase, ctx }
 }
@@ -68,7 +68,7 @@ async function attachMountedReadPermit(
   vocabularyPath: string
 ): Promise<void> {
   const { resolveWikiMount } = await import('../wiki/wikiMount')
-  const wc = { enabled: true, rootPath: 'llm-wiki' } as const
+  const wc = { rootPath: 'llm-wiki' } as const
   const resolution = resolveWikiMount(ctx.workDir, wc as never, ctx.userDataDir, rawPath)
   if (!resolution.mounted) throw new Error('fixture expects mounted path')
   const fact = await probeReadPathFact({

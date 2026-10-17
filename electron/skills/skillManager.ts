@@ -12,7 +12,6 @@ import { getCachedSkills, invalidateSkillsCache } from './skillCache'
 import { matchSkills } from './skillMatcher'
 import { routeSkills } from './skillRouter'
 import { getSkillByName } from './skillScanner'
-import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import {
   deleteUserSkill,
   detectInstallConflict,
@@ -49,19 +48,8 @@ export function createSkillManager(ctx: SkillManagerContext) {
 
     match(userInput: string, sessionState: SessionSkillsState, sessionMetadata?: Record<string, unknown>): SkillDefinition[] {
       const skills = getCachedSkills(ctx.getUserDataPath(), ctx.getWorkDir())
-      let config = ctx.getSkillsConfig()
-      const wikiConfig = ctx.getWikiConfig?.()
-      if (wikiConfig && !wikiConfig.enabled) {
-        config = {
-          ...config,
-          alwaysLoad: config.alwaysLoad.filter((n) => n !== WIKI_VOCABULARY_PREFIX)
-        }
-      }
-      const matched = matchSkills({ userInput, skills, config, sessionState, sessionMetadata })
-      if (wikiConfig && !wikiConfig.enabled) {
-        return matched.filter((s) => s.meta.name !== WIKI_VOCABULARY_PREFIX)
-      }
-      return matched
+      const config = ctx.getSkillsConfig()
+      return matchSkills({ userInput, skills, config, sessionState, sessionMetadata })
     },
 
     async route(args: {
@@ -76,15 +64,8 @@ export function createSkillManager(ctx: SkillManagerContext) {
       signal?: AbortSignal
     }): Promise<SkillRouteResult> {
       const skills = getCachedSkills(ctx.getUserDataPath(), ctx.getWorkDir())
-      let config = ctx.getSkillsConfig()
+      const config = ctx.getSkillsConfig()
       const wikiConfig = ctx.getWikiConfig?.()
-
-      if (wikiConfig && !wikiConfig.enabled) {
-        config = {
-          ...config,
-          alwaysLoad: config.alwaysLoad.filter((n) => n !== WIKI_VOCABULARY_PREFIX)
-        }
-      }
 
       if (config.routing.mode === 'legacy') {
         const matched = matchSkills({
@@ -94,27 +75,18 @@ export function createSkillManager(ctx: SkillManagerContext) {
           sessionState: args.sessionState,
           sessionMetadata: args.sessionMetadata
         })
-        let filtered = matched
-        if (wikiConfig && !wikiConfig.enabled) {
-          filtered = matched.filter((s) => s.meta.name !== WIKI_VOCABULARY_PREFIX)
-        }
         return {
-          skills: filtered,
+          skills: matched,
           meta: {
-            sources: Object.fromEntries(filtered.map((s) => [s.meta.name, 'legacy' as const])),
+            sources: Object.fromEntries(matched.map((s) => [s.meta.name, 'legacy' as const])),
             durationMs: 0
           }
         }
       }
 
-      // P2：!enabled 时从候选中前置剔除 llm-wiki——否则它仍进路由 catalog，被 LLM/手动点名时
-      // 先占住 maxConcurrent 名额、再在尾部过滤被丢弃，挤出本该入选的 skill。
-      const routeSkillsInput = wikiConfig && !wikiConfig.enabled
-        ? skills.filter((s) => s.meta.name !== WIKI_VOCABULARY_PREFIX)
-        : skills
       const result = await routeSkills({
         userInput: args.userInput,
-        skills: routeSkillsInput,
+        skills,
         config,
         sessionState: args.sessionState,
         sessionMetadata: args.sessionMetadata,
@@ -126,14 +98,6 @@ export function createSkillManager(ctx: SkillManagerContext) {
         signal: args.signal,
         wikiConfig
       })
-
-      if (wikiConfig && !wikiConfig.enabled) {
-        const filtered = result.skills.filter((s) => s.meta.name !== WIKI_VOCABULARY_PREFIX)
-        const sources = Object.fromEntries(
-          filtered.map((s) => [s.meta.name, result.meta.sources[s.meta.name]]).filter(([, src]) => src)
-        )
-        return { ...result, skills: filtered, meta: { ...result.meta, sources } }
-      }
 
       return result
     },

@@ -58,7 +58,6 @@ export async function importRawFromWorkDir(
   srcRelPath: string,
   shared?: WikiImportSharedOptions
 ): Promise<WikiImportRawResult> {
-  if (!wikiConfig.enabled) return { ok: false, error: 'Wiki 功能未启用，请先在设置中开启' }
   if (shared?.userDataPath) return importRawToSharedRoot(workDir, wikiConfig, srcRelPath, shared)
 
   const normalized = normalizeRelPath(srcRelPath)

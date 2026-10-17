@@ -129,36 +129,6 @@ export type FileMetadata = {
   isText: boolean
 }
 
-export type AgentsMdRequestSnapshotIndexEntry = Readonly<{
-  invocationId: string
-  requestId: string
-  modelTurn: number
-  attempt: number
-  status: string
-  digest?: string
-  byteLength: number
-  tokenCount: number
-  loadedAt: number
-  source: 'AGENTS.md'
-  scope: 'workdir-root'
-  workDirName?: string
-  approvalTools?: string[]
-  bodyAvailable: boolean
-}>
-
-export type AgentsMdRequestSnapshotBody = Readonly<{
-  invocationId: string
-  modelTurn: number
-  status: string
-  digest?: string
-  content?: string
-}>
-
-export type AgentsMdRequestSnapshotsResponse = Readonly<{
-  entries: AgentsMdRequestSnapshotIndexEntry[]
-  current: Readonly<{ status: string; digest?: string }>
-}>
-
 export type ClaudeChatMessageWithBlocks = {
   role: 'user' | 'assistant'
   content: string | unknown[]
@@ -242,7 +212,6 @@ export type SpaceAssistantApi = {
     temperature?: number
     maxTokens?: number
     metadata?: Record<string, unknown>
-    agentsMdEnabled?: boolean
     /** composer 草稿带入的会话级 Thinking 强度覆盖 */
     thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
   }) => Promise<Session>
@@ -256,7 +225,6 @@ export type SpaceAssistantApi = {
     maxTokens?: number
     skillsState?: SessionSkillsState
     metadata?: Record<string, unknown>
-    agentsMdEnabled?: boolean
     /** 会话级 Thinking 强度覆盖；null = 清除覆盖（回到继承全局） */
     thinkingEffort?: import('./agent/invocation').AgentReasoningEffort | null
   }) => Promise<Session | undefined>
@@ -268,8 +236,6 @@ export type SpaceAssistantApi = {
   usageDelete: (sessionId: string) => Promise<void>
 
   chatGetMessages: (payload: { sessionId: string; limit?: number; offset?: number }) => Promise<Message[]>
-  chatGetAgentsMdRequestSnapshots: (payload: { sessionId: string; limit?: number }) => Promise<AgentsMdRequestSnapshotsResponse>
-  chatGetAgentsMdRequestSnapshot: (payload: { sessionId: string; invocationId: string; modelTurn: number }) => Promise<AgentsMdRequestSnapshotBody | undefined>
   chatCompactSessionContext: (payload: { sessionId: string; requestId: string }) => Promise<({ status: 'committed' } & import('./compactionEvents').CompactionMarker) | { status: 'no-op' | 'uncompressible' | 'busy' | 'failed' | 'stale' | 'forbidden' | 'session-not-found' }>
   chatGetSessionCompactionMarkers: (sessionId: string) => Promise<import('./compactionEvents').CompactionMarker[]>
   chatGetApiContextBaseline: (payload: {

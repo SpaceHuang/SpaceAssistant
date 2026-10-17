@@ -12,7 +12,7 @@ import { buildRequestContextPayload, buildRequestHeaderPayload, computeAnthropic
 import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { computeContextPressure } from '../../src/shared/contextMeter'
 import { estimateTokensFromUtf8Text, projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
-import { loadAgentsMd, type AgentsMdLoadResult } from '../projectInstructions/projectInstructions'
+import { loadAgentsMd } from '../projectInstructions/projectInstructions'
 import { renderAgentsMdSection, renderAgentsMdStatusSection } from '../llmSystemPrompt'
 import { accumulateDeferredDimension, accumulateToolDeclarationSnapshot, accumulateToolResultVolume, buildStepAttribution, emptyTurnToolDimension, estimateDeferredSavings, summarizeToolDeclarations, type DeferredToolDimension, type TurnToolDimension } from '../../src/shared/usageAttribution'
 
@@ -34,7 +34,6 @@ export function createAgentSdkDesktopObserver(input: {
   turnIdForRetry?: string
   stageAssistantContentUntilTurnFinished?: boolean
   onRemoteTextActivity?(text: string): void
-  onAgentsMdNotLoaded?(): void
   assistantMessageId?: string
   onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
   emitSessionEvent?(event: SessionEventInput): void | Promise<void>
@@ -51,7 +50,6 @@ export function createAgentSdkDesktopObserver(input: {
   onDispatchDiagnostic?(event: Readonly<Record<string, unknown>>): void
   getWorkDir?(modelTurn: number): string
   getWorkDirSnapshot?(): Readonly<{ workDir: string; profileId: string; key: string; revision: number }>
-  agentsMdEnabled?: boolean
 }): AgentTurnObserver {
   let pendingChunks: ObserverChunk[] = []
   let streamedText = ''
@@ -92,7 +90,7 @@ export function createAgentSdkDesktopObserver(input: {
     request: NonNullable<ReturnType<typeof requestContexts.get>>
   }>()
   const projectedToolUsage = new Map<number, ContextUsageRaw>()
-  const agentsMdSnapshots = new Map<number, AgentsMdLoadResult>()
+  const agentsMdSnapshots = new Map<number, Awaited<ReturnType<typeof loadAgentsMd>>>()
   const agentsMdWorkspaceBindings = new Map<number, Readonly<{ workDir: string; profileId: string; key: string; revision: number }>>()
   const stepId = (modelTurn: number) => `${input.requestId}:model:${modelTurn}`
   const emitFact = (event: AssistantFactEvent) => input.emitFactEvent?.(event)
@@ -124,15 +122,12 @@ export function createAgentSdkDesktopObserver(input: {
     if (!agentsMdSnapshot) {
       workspaceBinding = input.getWorkDirSnapshot?.()
       if (workspaceBinding) agentsMdWorkspaceBindings.set(request.modelTurn, workspaceBinding)
-      agentsMdSnapshot = await loadAgentsMd(workspaceBinding?.workDir ?? input.getWorkDir?.(request.modelTurn) ?? '', { enabled: input.agentsMdEnabled, contextWindow: input.contextWindow, promptOverheadTokens: estimateTokensFromUtf8Text(renderAgentsMdSection('')) })
+      agentsMdSnapshot = await loadAgentsMd(workspaceBinding?.workDir ?? input.getWorkDir?.(request.modelTurn) ?? '', { contextWindow: input.contextWindow, promptOverheadTokens: estimateTokensFromUtf8Text(renderAgentsMdSection('')) })
       agentsMdSnapshots.set(request.modelTurn, agentsMdSnapshot)
-      if (input.lane === 'feishu' || input.lane === 'wechat') {
-        if (agentsMdSnapshot.status !== 'loaded') input.onAgentsMdNotLoaded?.()
-      }
     }
     const agentsMdSection = agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content
       ? renderAgentsMdSection(agentsMdSnapshot.content)
-      : !input.getWorkDir && !input.getWorkDirSnapshot || agentsMdSnapshot.status === 'missing' || agentsMdSnapshot.status === 'empty' || agentsMdSnapshot.status === 'disabled'
+      : !input.getWorkDir && !input.getWorkDirSnapshot || agentsMdSnapshot.status === 'missing' || agentsMdSnapshot.status === 'empty'
         ? undefined
         : renderAgentsMdStatusSection(agentsMdSnapshot.status)
     let requestPatch: Partial<import('../../packages/agent-sdk/src/model').PreparedModelCall['request']> | undefined
@@ -248,16 +243,7 @@ export function createAgentSdkDesktopObserver(input: {
     const requestContextPayload = { ...context, turnId: input.turnId, attempt: request.attempt }
     requestContexts.set(request.modelTurn, { requestId, messages, header, context, requestHeaderPayload, requestContextPayload })
     return {
-      requestMetadata: { agentsMdSnapshot: {
-        status: agentsMdSnapshot.status,
-        ...(agentsMdSnapshot.digest ? { digest: agentsMdSnapshot.digest } : {}),
-        byteLength: agentsMdSnapshot.byteLength,
-        loadedAt: agentsMdSnapshot.loadedAt,
-        tokenCount: agentsMdSnapshot.tokenCount,
-        source: 'AGENTS.md', scope: 'workdir-root',
-        workDir: agentsMdSnapshot.workDir,
-        ...(agentsMdSnapshot.status === 'loaded' && agentsMdSnapshot.content !== null ? { content: agentsMdSnapshot.content } : {})
-      }, ...(workspaceBinding ? { workspaceBinding } : {}) },
+      requestMetadata: workspaceBinding ? { workspaceBinding } : {},
       ...(requestPatch ? { requestPatch } : {}),
       ...(input.sessionEventLocation ? { sessionLedger: {
         location: input.sessionEventLocation,

@@ -50,7 +50,7 @@ describe('WikiTab 受控改名（T2.6①）', () => {
     render(
       <ConfigProvider locale={{}}>
         <App>
-          <WikiTab wiki={{ ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'llm-wiki' }} onChange={onChange} />
+          <WikiTab wiki={{ ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki' }} onChange={onChange} />
         </App>
       </ConfigProvider>
     )
@@ -120,7 +120,7 @@ describe('WikiTab 迁移报告查看（T2.6② 数据源 config.wiki.migration�
     render(
       <ConfigProvider locale={{}}>
         <App>
-          <WikiTab wiki={{ ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'llm-wiki' }} onChange={vi.fn()} />
+          <WikiTab wiki={{ ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki' }} onChange={vi.fn()} />
         </App>
       </ConfigProvider>
     )
@@ -135,7 +135,7 @@ describe('WikiTab 迁移报告查看（T2.6② 数据源 config.wiki.migration�
     render(
       <ConfigProvider locale={{}}>
         <App>
-          <WikiTab wiki={{ ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'my-lib' }} onChange={vi.fn()} />
+          <WikiTab wiki={{ ...DEFAULT_WIKI_CONFIG, rootPath: 'my-lib' }} onChange={vi.fn()} />
         </App>
       </ConfigProvider>
     )

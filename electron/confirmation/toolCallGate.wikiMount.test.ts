@@ -34,7 +34,7 @@ async function tmpdir(prefix: string): Promise<string> {
 const toolsConfig = (): ToolsConfig => ({ ...DEFAULT_TOOLS_CONFIG, deniedTools: [] })
 
 function wikiConfigEnabled(): WikiConfig {
-  return { ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'llm-wiki' }
+  return { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki' }
 }
 
 function remoteContext(source: 'feishu' | 'wechat'): RemoteContext {
@@ -103,21 +103,6 @@ describe('gate 挂载接入（T1.2 写/读/media 三探测点）', () => {
     const sig = signalOf(r.facts, 'path-target')
     // T1.6②：审批卡片展示词汇路径（真实路径不进渲染层）；探测层 normalizedPath 断言在探测测试覆盖
     expect(sig?.path).toBe('llm-wiki/wiki/index.md')
-  })
-
-  it('T1.2② wiki 停用：探测入参与现状一致（workDir 词法路径、inside-workdir）', async () => {
-    const { workDir, userDataDir } = await setupWikiWorld()
-    await fs.mkdir(path.join(workDir, 'llm-wiki', 'wiki'), { recursive: true })
-    const r = await evaluateToolCallGate(base({
-      toolName: 'write_file',
-      toolInput: { path: 'llm-wiki/wiki/index.md', content: 'x' },
-      workDir,
-      userDataDir,
-      wikiConfig: { ...wikiConfigEnabled(), enabled: false }
-    }))
-    const sig = signalOf(r.facts, 'path-target')
-    expect(sig?.path).toBe(path.join(workDir, 'llm-wiki', 'wiki', 'index.md'))
-    expect(signalOf(r.facts, 'write-target-scope')?.scope).toBe('inside-workdir')
   })
 
   it('T1.2③ 微信 media 探测同验：wiki 附件真实路径在 userData → outside-workdir → locked deny', async () => {

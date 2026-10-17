@@ -630,7 +630,6 @@
     "unknownError": "Unknown error"
   },
   "wiki": {
-    "enableLabel": "Enable LLM Wiki",
     "rootPathLabel": "Wiki root path (relative to work directory)",
     "rootPathPlaceholder": "llm-wiki",
     "hideFromTreeLabel": "Hide Wiki directory from file tree",

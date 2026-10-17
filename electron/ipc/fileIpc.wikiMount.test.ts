@@ -38,8 +38,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function wikiConfig(enabled = true, hideWikiFromFileTree = true, legacyRootAliases: string[] = []): WikiConfig {
-  return { ...DEFAULT_WIKI_CONFIG, enabled, rootPath: 'llm-wiki', hideWikiFromFileTree, legacyRootAliases }
+function wikiConfig(hideWikiFromFileTree = true, legacyRootAliases: string[] = []): WikiConfig {
+  return { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki', hideWikiFromFileTree, legacyRootAliases }
 }
 
 interface World {
@@ -49,7 +49,7 @@ interface World {
   handlers: Map<string, (...args: never[]) => unknown>
 }
 
-async function setupWorld(opts: { wikiEnabled?: boolean; hideWiki?: boolean; withResidue?: boolean; legacyRootAliases?: string[] } = {}): Promise<World> {
+async function setupWorld(opts: { hideWiki?: boolean; withResidue?: boolean; legacyRootAliases?: string[] } = {}): Promise<World> {
   const root = tmpdir('wiki-fipc-')
   const workDir = path.join(root, 'proj')
   const userData = path.join(root, 'ud')
@@ -64,7 +64,7 @@ async function setupWorld(opts: { wikiEnabled?: boolean; hideWiki?: boolean; wit
   }
   const db = openDatabase(':memory:')
   dbs.push(db)
-  setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify(wikiConfig(opts.wikiEnabled ?? true, opts.hideWiki ?? true, opts.legacyRootAliases ?? [])))
+  setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify(wikiConfig(opts.hideWiki ?? true, opts.legacyRootAliases ?? [])))
   const ctx = {
     getWorkDir: () => workDir,
     getUserDataPath: () => userData,
@@ -112,7 +112,7 @@ describe('file:read-file / show-in-explorer 挂载（T1.15）', () => {
     // show-in-explorer 的 shell 调用在测试 electron mock 下不可观察；同一 wikiMountOf 入口
     // 已由 read-file/to-viewer-url 用例验证，真实打开位置属 manual M5。
     const mounted = await import('../wiki/wikiMount')
-    const cfg = { ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'llm-wiki' }
+    const cfg = { ...DEFAULT_WIKI_CONFIG, rootPath: 'llm-wiki' }
     const resolution = mounted.resolveWikiMount((handlers as unknown as { workDir: string }).workDir ?? '', cfg, '', 'llm-wiki/wiki/index.md')
     void realBase
     expect(resolution.mounted).toBe(true)
@@ -159,7 +159,7 @@ describe('BLK-9 根防护与只读别名（fileIpc 写通道）', () => {
     const db = dbs[0]
     const { CONFIG_KEYS } = await import('./ipcShared')
     const { setConfigValue } = await import('../database/operations')
-    setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify(wikiConfig(true, true, ['old-wiki'])))
+    setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify(wikiConfig(true, ['old-wiki'])))
     await expect(handlers.get('file:delete')!(null as never, 'old-wiki/wiki/index.md' as never)).rejects.toThrow(/只读别名/)
     await expect(handlers.get('file:create-file')!(null as never, 'old-wiki/new.md' as never)).rejects.toThrow(/只读别名/)
   })
@@ -185,7 +185,7 @@ describe('P1-10 残余：read-file 失败返回 kind:error + migratedTo', () => 
     const { CONFIG_KEYS } = await import('./ipcShared')
     const { setConfigValue } = await import('../database/operations')
     setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify({
-      ...wikiConfig(true, true),
+      ...wikiConfig(true),
       migration: { status: 'completed', report: { renames: [{ from: 'llm-wiki/wiki/merged.md', to: 'llm-wiki/wiki/merged.from-p-12345678.md' }] } }
     }))
 

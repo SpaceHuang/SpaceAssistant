@@ -55,7 +55,7 @@ function wikiProbeContext(
   pathInput: string
 ): { mountAnchors?: MountAnchor[]; sensitiveRootExemptions?: string[] } {
   const wikiConfig = args.wikiConfig
-  if (!wikiConfig?.enabled) return {}
+  if (!wikiConfig) return {}
   const rootDirname = wikiConfig.rootPath || DEFAULT_WIKI_ROOT_DIRNAME
   const sensitiveRootExemptions = [path.join(args.userDataDir, rootDirname)]
   const resolution = resolveWikiMount(args.workDir, wikiConfig, args.userDataDir, pathInput)
@@ -72,7 +72,7 @@ function wikiProbeContext(
  */
 function isWikiRawSignalTarget(args: { workDir: string; userDataDir: string; wikiConfig?: WikiConfig }, rawPath: string): boolean {
   const wikiConfig = args.wikiConfig
-  if (!wikiConfig?.enabled) return false
+  if (!wikiConfig) return false
   const resolution = resolveWikiMount(args.workDir, wikiConfig, args.userDataDir, rawPath)
   const vocabulary = resolution.mounted
     ? resolution.vocabularyPath

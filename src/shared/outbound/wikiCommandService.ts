@@ -1,4 +1,4 @@
-import type { SessionSkillsState, WikiConfig, WikiStatus } from '../domainTypes'
+import type { SessionSkillsState, WikiStatus } from '../domainTypes'
 import { normalizeSessionSkillsState } from '../domainTypes'
 import { resolveWikiAbsolutePathLink } from '../markdownLinkResolve'
 import { WIKI_VOCABULARY_PREFIX } from '../wikiConstants'
@@ -48,7 +48,6 @@ function formatStatus(status: WikiStatus): string {
 
 export async function parseWikiCommand(
   text: string,
-  wikiConfig: WikiConfig,
   sessionSkillsState: SessionSkillsState,
   deps: WikiCommandDeps
 ): Promise<WikiCommandResult> {
@@ -57,10 +56,6 @@ export async function parseWikiCommand(
 
   const parts = trimmed.split(/\s+/).filter(Boolean)
   const sub = normalizeWikiSubcommand(parts[1])
-
-  if (!wikiConfig.enabled && sub !== 'help') {
-    return { type: 'command', hint: '[Wiki] Wiki 功能未启用，请先在设置中开启' }
-  }
 
   if (!sub || sub === 'help') {
     return {

@@ -208,7 +208,7 @@
       "writeFileFallback": "写入文件",
       "editFileFallback": "编辑文件"
     },
-        "generic": {
+    "generic": {
       "allow": "允许执行",
       "deny": "拒绝执行"
     },
@@ -324,37 +324,6 @@
     "outputTrustSuspect": "输出编码可疑，原始字节已保存：文本可能不是真实输出，如需核对请查看原始字节 artifact。"
   },
   "writeSuccess": {},
-  "projectInstructions": {
-    "button": "工作目录指令",
-    "title": "AGENTS.md 项目指令",
-    "enabled": "使用工作目录根部 AGENTS.md",
-    "toggleHint": "此开关从下次 invocation 生效；文件内容在下次模型请求时重新读取。",
-    "pending": "磁盘上的版本与最近请求不同，将在下次模型请求时采用。",
-    "current": "当前文件：{{status}}",
-    "requests": "请求快照",
-    "approval": "审批关联：{{tool}}",
-    "empty": "暂无请求快照",
-    "view": "查看快照正文",
-    "unavailableBody": "此快照正文不可还原。",
-    "loading": "正在读取快照…",
-    "refresh": "刷新状态",
-    "loadFailed": "无法读取请求快照",
-    "status": {
-      "loaded": "已加载",
-      "missing": "未发现文件",
-      "empty": "文件为空",
-      "disabled": "已关闭",
-      "too-large": "文件过大",
-      "token-budget-exceeded": "超出指令预算",
-      "invalid-workdir": "工作目录无效",
-      "outside-workdir": "文件指向工作目录之外",
-      "not-file": "不是普通文件",
-      "invalid-encoding": "编码无效",
-      "read-error": "读取失败",
-      "unstable": "读取期间文件发生变化",
-      "unavailable": "不可用"
-    }
-  },
   "composer": {
     "prefs": {
       "label": "模型与思考强度",

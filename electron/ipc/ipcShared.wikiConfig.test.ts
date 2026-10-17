@@ -38,7 +38,6 @@ describe('readWikiConfig 新字段默认值（T0.2）', () => {
     const db = createDb()
     const config = readWikiConfig(db)
 
-    expect(config.enabled).toBe(false)
     expect(config.rootPath).toBe('llm-wiki')
     expect(config.hideWikiFromFileTree).toBe(true)
     expect(config.interactiveIngest).toBe(false)
@@ -54,12 +53,11 @@ describe('readWikiConfig 新字段默认值（T0.2）', () => {
     setConfigValue(
       db,
       CONFIG_KEYS.wiki,
-      JSON.stringify({ enabled: true, rootPath: 'my-lib', hideWikiFromFileTree: false, interactiveIngest: true, maxBatchIngest: 5 })
+      JSON.stringify({ rootPath: 'my-lib', hideWikiFromFileTree: false, interactiveIngest: true, maxBatchIngest: 5 })
     )
 
     const config = readWikiConfig(db)
 
-    expect(config.enabled).toBe(true)
     expect(config.rootPath).toBe('my-lib')
     expect(config.legacyRootAliases).toEqual([])
     expect(config.migration?.status).toBe('idle')
@@ -68,7 +66,6 @@ describe('readWikiConfig 新字段默认值（T0.2）', () => {
   it('含 legacyRootAliases 与 migration 的配置 round-trip 读回一致', () => {
     const db = createDb()
     const stored = {
-      enabled: true,
       rootPath: 'llm-wiki',
       hideWikiFromFileTree: true,
       interactiveIngest: false,
@@ -97,7 +94,7 @@ describe('readWikiConfig 新字段默认值（T0.2）', () => {
     setConfigValue(
       db,
       CONFIG_KEYS.wiki,
-      JSON.stringify({ enabled: true, legacyRootAliases: 'old-wiki', migration: 'nope' })
+      JSON.stringify({ legacyRootAliases: 'old-wiki', migration: 'nope' })
     )
 
     const config = readWikiConfig(db)
@@ -119,15 +116,14 @@ describe('readWikiConfig 新字段默认值（T0.2）', () => {
 describe('configIpc wiki set 链透传（T1.18）', () => {
   it('set 链（mergeWikiConfig({...cur, ...payload})）保留 legacyRootAliases/migration，非法值归一', () => {
     // 模拟 configIpc 的写侧组合逻辑（configIpc.ts wiki 分支）
-    const cur = mergeWikiConfig({ enabled: true, legacyRootAliases: ['old-wiki'] })
+    const cur = mergeWikiConfig({ legacyRootAliases: ['old-wiki'] })
     const payload = { maxBatchIngest: 20, legacyRootAliases: ['old-wiki', 'notes-root'] }
     const next = mergeWikiConfig({ ...cur, ...payload })
     expect(next.legacyRootAliases).toEqual(['old-wiki', 'notes-root'])
-    expect(next.enabled).toBe(true)
     expect(next.maxBatchIngest).toBe(20)
 
     // payload 未提供别名字段时 spread 不清空既有值
-    const keep = mergeWikiConfig({ ...cur, ...{ enabled: false } })
+    const keep = mergeWikiConfig({ ...cur })
     expect(keep.legacyRootAliases).toEqual(['old-wiki'])
 
     // 非法值被归一

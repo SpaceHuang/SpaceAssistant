@@ -45,13 +45,13 @@ function createImPolicyTestDb(name: string) {
 }
 
 describe('AcceptedTurn propagation', () => {
-  it('preserves the per-session AGENTS.md setting in the invocation profile', () => {
+  it('does not expose an AGENTS.md session toggle in the invocation profile', () => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: 'agents-md-setting' })
     const { invocation } = assembleInvocation({ requestId: 'agents-md-disabled', sessionId: session.id, model: 'test', locale: 'zh-CN',
-      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', agentsMdEnabled: false,
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
       getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
-    expect(invocation.profile.agentsMdEnabled).toBe(false)
+    expect(invocation.profile.agentsMdEnabled).toBeUndefined()
     db.close()
   })
 
@@ -734,7 +734,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
   it('refuses a source request tool recheck after the session work directory changes', async () => {
     let currentWorkDir = '/workspace/A'
     const requestId = 'workdir-source-binding'
-    const { agentSdk } = assembleInvocation({
+    const { agentSdk, ports: invocationPorts } = assembleInvocation({
       requestId, sessionId: requestId, turnId: requestId, model: 'test-model', providerRouteId: 'hosted-route',
       messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/workspace/A', resolveWorkDir: () => currentWorkDir,
       userDataDir: '/tmp', getApiKey: async () => 'key', agentSdkHistory: new MemoryHistory(),
@@ -749,9 +749,10 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const ports = await hosted.host.createPorts({ invocationId: requestId, turnId: requestId, routeId: 'hosted-route', request: { messages: [], maxTokens: 10 } })
     const call = { invocationId: requestId, toolCallId: 'stale-call', toolName: 'probe-tool', input: {} }
     await ports.prepareTool(call, { kind: 'initial' })
-    currentWorkDir = '/workspace/B'
+    const currentBinding = invocationPorts.workspace.snapshot() as { profileId?: string; key?: string; revision?: number }
+    const sourceBinding = { workDir: '/workspace/B', profileId: currentBinding.profileId, key: currentBinding.key, revision: currentBinding.revision }
     await expect(ports.prepareTool(call, {
-      kind: 'recheck', requestMetadata: { agentsMdSnapshot: { workDir: '/workspace/A' } }
+      kind: 'recheck', requestMetadata: { workspaceBinding: sourceBinding }
     })).rejects.toMatchObject({ reasonCode: 'WORKDIR_BINDING_CHANGED' })
     await hosted.dispose()
   })
@@ -1991,13 +1992,13 @@ describe('P0-A：计划期失败降级为可回传拒绝（T-3，断言打在生
 })
 describe('wikiConfig passthrough (W3 lane parity)', () => {
   it('propagates the assembled wikiConfig into the invocation tools profile', () => {
-    const wikiConfig = { ...DEFAULT_WIKI_CONFIG, enabled: true }
+    const wikiConfig = { ...DEFAULT_WIKI_CONFIG }
     const { invocation } = assembleInvocation({
       requestId: 'req-wiki-passthrough', sessionId: 'session-wiki-passthrough', model: 'test-model', lane: 'automation',
       locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, wikiConfig,
       workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })
-    expect(invocation.profile.tools.wikiConfig).toMatchObject({ enabled: true, rootPath: 'llm-wiki' })
+    expect(invocation.profile.tools.wikiConfig).toMatchObject({ rootPath: 'llm-wiki' })
   })
 })

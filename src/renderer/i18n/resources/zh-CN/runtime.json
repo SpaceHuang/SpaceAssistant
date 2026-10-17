@@ -113,7 +113,6 @@
   "wiki": {
     "importedRaw": "已导入 raw：{{name}}，Ingest 已开始",
     "ingestStarted": "Ingest 已开始：{{name}}",
-    "enableFirst": "请先在设置中启用 Wiki",
     "initializeFirst": "Wiki 尚未初始化，请先在设置或 Wiki 分段中初始化"
   },
   "workDir": {

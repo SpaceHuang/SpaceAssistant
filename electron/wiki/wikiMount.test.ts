@@ -8,7 +8,6 @@ const userData = path.resolve(path.sep, 'users', 'test', 'appdata')
 
 function makeConfig(overrides: Partial<WikiConfig> = {}): WikiConfig {
   return {
-    enabled: true,
     rootPath: 'llm-wiki',
     hideWikiFromFileTree: true,
     interactiveIngest: false,
@@ -81,12 +80,6 @@ describe('resolveWikiMount 八条规则（T0.5）', () => {
   it('⑥ 越界绝对路径不挂载', () => {
     const elsewhere = path.resolve(path.sep, 'elsewhere', 'x.md')
     expectNotMounted(resolveWikiMount(workDir, makeConfig(), userData, elsewhere))
-  })
-
-  it('⑦ disabled 恒不挂载', () => {
-    const config = makeConfig({ enabled: false })
-    expectNotMounted(resolveWikiMount(workDir, config, userData, 'llm-wiki/wiki/index.md'))
-    expectNotMounted(resolveWikiMount(workDir, config, userData, path.join(userData, 'llm-wiki', 'raw', 'x.md')))
   })
 
   it('⑧ 别名前缀 readOnly：词汇不变、realPath 落共享根', () => {

@@ -74,7 +74,6 @@ export function getWikiStatus(
   const initialized = isWikiInitialized(workDir, wikiConfig, opts?.userDataPath)
   if (!initialized) {
     return {
-      enabled: wikiConfig.enabled,
       rootPath: rootRel,
       initialized: false,
       pageCount: 0,
@@ -89,7 +88,6 @@ export function getWikiStatus(
   const logPath = path.join(wikiDir, 'log.md')
 
   return {
-    enabled: wikiConfig.enabled,
     rootPath: rootRel,
     initialized: true,
     pageCount: countMarkdownFiles(wikiDir),

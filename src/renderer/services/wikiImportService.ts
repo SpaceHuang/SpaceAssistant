@@ -8,10 +8,9 @@ export type WikiImportRawResult =
 export function canShowCollectToWiki(
   relPath: string,
   wikiRootPath: string,
-  isDirectory: boolean,
-  wikiEnabled: boolean
+  isDirectory: boolean
 ): boolean {
-  return wikiEnabled && canCollectToWiki(relPath, wikiRootPath, isDirectory)
+  return canCollectToWiki(relPath, wikiRootPath, isDirectory)
 }
 
 export async function importRawToWiki(srcRelPath: string): Promise<WikiImportRawResult> {
@@ -31,17 +30,12 @@ export function triggerWikiIngest(rawRelPath: string): void {
 export async function collectToWiki(
   srcRelPath: string,
   options: {
-    wikiEnabled: boolean
     sessionId: string | null
     onMissingSession?: () => void
     onError?: (message: string) => void
     onSuccess?: (message: string) => void
   }
 ): Promise<WikiImportRawResult | null> {
-  if (!options.wikiEnabled) {
-    options.onError?.(runtimeText('wiki.enableFirst'))
-    return null
-  }
   if (!options.sessionId) {
     options.onMissingSession?.()
     return null

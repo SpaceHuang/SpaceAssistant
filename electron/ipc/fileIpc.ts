@@ -23,11 +23,10 @@ import { assertInsideDir } from '../skills/skillPaths'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 
 /**
- * T1.15（§7.4）：fileIpc 子通道的挂载解析入口。wiki 停用返回 undefined（行为与现状逐字节一致）。
+ * T1.15（§7.4）：fileIpc 子通道的挂载解析入口。知识库恒默认启用，未挂载（非词汇路径等）返回 undefined。
  */
 function wikiMountOf(ctx: AppIpcContext, rel: string) {
   const wikiConfig = readWikiConfig(ctx.db)
-  if (!wikiConfig.enabled) return undefined
   const resolution = resolveWikiMount(ctx.getWorkDir(), wikiConfig, ctx.getUserDataPath(), rel)
   return resolution.mounted ? resolution : undefined
 }
@@ -57,15 +56,12 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const normalized = normalizeRelPathInput(typeof rel === 'string' ? rel : '')
     const mounted = normalized ? wikiMountOf(ctx, normalized) : undefined
     const wikiConfig = readWikiConfig(ctx.db)
-    const wikiEnabled = wikiConfig.enabled
     // §7.7 + BLK-4：排除集恒为词汇前缀（含只读别名）——rootPath 是物理目录名，不参与词汇语义
-    const excludedRootNames = wikiEnabled
-      ? [WIKI_VOCABULARY_PREFIX, ...(wikiConfig.legacyRootAliases ?? [])]
-      : []
+    const excludedRootNames = [WIKI_VOCABULARY_PREFIX, ...(wikiConfig.legacyRootAliases ?? [])]
 
     // 根列表虚拟条目（§7.4-I1）：hideWikiFromFileTree=false 时仅合成 llm-wiki 虚拟目录条目
     // （BLK-7：不做共享根子条目平铺——子内容经虚拟条目展开获取，避免双形态废行）
-    if (wikiEnabled && !wikiConfig.hideWikiFromFileTree && (normalized === '' || normalized === '.') && !mounted) {
+    if (!wikiConfig.hideWikiFromFileTree && (normalized === '' || normalized === '.') && !mounted) {
       const virtualEntry: FileInfo = { name: WIKI_VOCABULARY_PREFIX, path: WIKI_VOCABULARY_PREFIX, isDirectory: true, virtual: true }
       const rest = (await listDirectoryEntries(ctx, root, root)).filter(
         (e) => !excludedRootNames.some((n) => n.toLowerCase() === e.name.toLowerCase())
