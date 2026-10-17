@@ -21,6 +21,16 @@ export async function validateTaskWorkDir(value: unknown): Promise<{ ok: true; w
   }
 }
 
+export async function validateTaskWorkDirs(value: unknown): Promise<{ ok: true; workDirs: string[] } | { ok: false; error: string }> {
+  if (!Array.isArray(value) || value.length === 0) return { ok: false, error: '任务工作目录不能为空' }
+  const validated = await Promise.all(value.map((root) => validateTaskWorkDir(root)))
+  const invalid = validated.find((result) => !result.ok)
+  if (invalid && !invalid.ok) return invalid
+  const workDirs = [...new Set(validated.flatMap((result) => result.ok ? [result.workDir] : []))].sort()
+  if (workDirs.length === 0) return { ok: false, error: '任务工作目录不能为空' }
+  return { ok: true, workDirs }
+}
+
 export async function validateTaskModelConfig(db: AppDatabase, input: {
   modelId: unknown
   modelServiceId: unknown

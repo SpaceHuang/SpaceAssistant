@@ -70,6 +70,19 @@ describe('butler IPC workdir/config fields', () => {
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('reasoningEffort')
   })
 
+  it('updates a task with validated canonical multiple roots', async () => {
+    const map = handlers()
+    const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDir: os.tmpdir() })
+    const child = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(`${os.tmpdir()}/butler-roots-`))
+    try {
+      const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDirs: [child, os.tmpdir(), child] } }) as { ok: boolean; error?: string }
+      expect(response).toEqual({ ok: true })
+      expect(getAutomationTask(db!, legacy.id)?.workDirs).toEqual([await realpath(child), await realpath(os.tmpdir())].sort())
+    } finally {
+      await import('node:fs/promises').then(({ rm }) => rm(child, { recursive: true, force: true }))
+    }
+  })
+
   it('legacy task fields can be edited without submitting new config and keep NULL compatibility columns', async () => {
     const map = handlers()
     const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'old prompt', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', modelOverride: 'old-provider-name' })

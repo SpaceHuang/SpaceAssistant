@@ -10,7 +10,7 @@ import {
   type AutomationTaskInput,
   type AutomationTaskSchedule
 } from './taskStore'
-import { validateTaskModelConfig, validateTaskWorkDir } from './taskConfigValidation'
+import { validateTaskModelConfig, validateTaskWorkDir, validateTaskWorkDirs } from './taskConfigValidation'
 import { readActiveLlmServiceIds, readLlmServices, readStoredModels } from '../llmServiceResolver'
 import { getConfigValue } from '../database'
 
@@ -93,8 +93,11 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       return { ok: false, error: '任务参数不完整（名称 / 提示词 / 触发方式 / 投递偏好）' }
     }
     if (!hasRequiredDeliveryTarget(deliveryPref, payload?.deliveryTarget)) return { ok: false, error: '飞书或微信投递必须填写有效接收对象' }
-    const workDir = await validateTaskWorkDir(payload?.workDir)
-    if (!workDir.ok) return { ok: false, error: workDir.error }
+    const rootsResult = Object.prototype.hasOwnProperty.call(payload ?? {}, 'workDirs')
+      ? await validateTaskWorkDirs(payload?.workDirs)
+      : await validateTaskWorkDir(payload?.workDir)
+    if (!rootsResult.ok) return { ok: false, error: rootsResult.error }
+    const workDirs = 'workDirs' in rootsResult ? rootsResult.workDirs : [rootsResult.workDir]
     const config = await validateTaskModelConfig(db, {
       modelId: payload?.modelId,
       modelServiceId: payload?.modelServiceId,
@@ -109,7 +112,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       deliveryPref,
       ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}),
       ...(payload?.modelOverride ? { modelOverride: payload.modelOverride } : {}),
-      workDir: workDir.workDir,
+      workDirs,
       modelId: config.modelId,
       modelServiceId: config.modelServiceId,
       reasoningEffort: config.reasoningEffort,
@@ -139,6 +142,11 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       const workDir = await validateTaskWorkDir(patch.workDir)
       if (!workDir.ok) return { ok: false, error: workDir.error }
       next.workDir = workDir.workDir
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'workDirs')) {
+      const workDirs = await validateTaskWorkDirs(patch.workDirs)
+      if (!workDirs.ok) return { ok: false, error: workDirs.error }
+      next.workDirs = workDirs.workDirs
     }
     const modelKeys = ['modelId', 'modelServiceId', 'reasoningEffort', 'modelOverride']
     if (modelKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key))) {

@@ -39,3 +39,25 @@ describe('task work directory validation', () => {
     }
   })
 })
+
+import { validateTaskWorkDirs } from './taskConfigValidation'
+
+describe('task work directory set validation', () => {
+  it('requires a non-empty array and canonicalizes, deduplicates, and sorts roots', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'automation-roots-'))
+    dirs.push(root)
+    const child = join(root, 'child')
+    await mkdir(child)
+    const [canonicalRoot, canonicalChild] = await Promise.all([realpath(root), realpath(child)])
+    const result = await validateTaskWorkDirs([child, root, child])
+    expect(result).toEqual({ ok: true, workDirs: [canonicalChild, canonicalRoot].sort() })
+    expect(await validateTaskWorkDirs([])).toMatchObject({ ok: false })
+  })
+
+  it('fails the whole roots set when any entry is not an accessible directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'automation-roots-partial-'))
+    dirs.push(root)
+    await expect(validateTaskWorkDirs([root, join(root, 'missing')])).resolves.toMatchObject({ ok: false })
+    await expect(validateTaskWorkDirs([root, 'relative'])).resolves.toMatchObject({ ok: false })
+  })
+})

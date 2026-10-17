@@ -19,6 +19,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { createDeliveryHub } from '../driver/deliveryHub'
 import { SqliteDeliveryJournal } from '../driver/sqliteDeliveryJournal'
 import { createTempDatabase } from '../database/testHelpers'
+import type { TargetBinding } from '../../src/shared/automationTaskTypes'
 
 const dbs: AppDatabase[] = []
 
@@ -362,5 +363,66 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     createAutomationTask(d, taskInput({ name: 'disabled', schedule: { kind: 'interval', intervalMinutes: 30 }, nextRunAt: 500, enabled: false }))
     const due = listEnabledAutomationTasksDue(d, 5000)
     expect(due.map((t) => t.name)).toEqual(['due'])
+  })
+})
+
+describe('automation task multi-root compatibility storage', () => {
+  it('round-trips multiple canonical roots and treats explicit empty roots as empty', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/a', '/workspace/b'] }))
+    expect(getAutomationTask(d, task.id)).toMatchObject({ workDirs: ['/workspace/a', '/workspace/b'] })
+    expect(getDbConnection(d).prepare('SELECT work_dirs_json,work_dir FROM automation_tasks WHERE id=?').get(task.id)).toEqual({
+      work_dirs_json: '["/workspace/a","/workspace/b"]', work_dir: null,
+    })
+
+    const updated = updateAutomationTask(d, task.id, { workDirs: [] })
+    expect(updated?.workDirs).toEqual([])
+    expect(getAutomationTask(d, task.id)?.workDirs).toEqual([])
+  })
+
+  it('adapts a legacy single root into workDirs while preserving the legacy column', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDir: '/legacy/root' }))
+    expect(getAutomationTask(d, task.id)).toMatchObject({ workDir: '/legacy/root', workDirs: ['/legacy/root'] })
+    const row = getDbConnection(d).prepare('SELECT work_dirs_json,work_dir FROM automation_tasks WHERE id=?').get(task.id)
+    expect(row).toEqual({ work_dirs_json: '["/legacy/root"]', work_dir: '/legacy/root' })
+  })
+})
+
+describe('task revision and schedule generation', () => {
+  it('advances task revision on edits and schedule generation only on scheduling changes', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(10_000)
+    const d = db()
+    const task = createAutomationTask(d, taskInput())
+    expect(task).toMatchObject({ taskRevision: 0, scheduleGeneration: 0 })
+    const initialState = getDbConnection(d).prepare('SELECT schedule_generation,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?').get(task.id)
+    expect(initialState).toEqual({ schedule_generation: 0, recovery_cursor_at: task.nextRunAt })
+
+    const edited = updateAutomationTask(d, task.id, { prompt: 'changed prompt' })
+    expect(edited).toMatchObject({ taskRevision: 1, scheduleGeneration: 0, nextRunAt: task.nextRunAt })
+    expect(getDbConnection(d).prepare('SELECT schedule_generation,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ schedule_generation: 0, recovery_cursor_at: task.nextRunAt })
+
+    const rescheduled = updateAutomationTask(d, task.id, { schedule: { kind: 'interval', intervalMinutes: 60 } })
+    expect(rescheduled).toMatchObject({ taskRevision: 2, scheduleGeneration: 1, nextRunAt: 3_610_000 })
+    expect(getDbConnection(d).prepare('SELECT schedule_generation,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ schedule_generation: 1, recovery_cursor_at: 3_610_000 })
+  })
+})
+
+
+describe('preflight binding persistence', () => {
+  it('commits v1 and target bindings together with task changes', () => {
+    const d = db()
+    const targetBindings: TargetBinding[] = [{
+      kind: 'exact', path: '/workspace/report.csv', targetType: 'file', rawText: 'report.csv',
+      resolverVersion: 1, rootsDigest: 'roots-digest', taskRevision: 1,
+    }]
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace'] }), { targetBindings })
+    expect(task).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(targetBindings) })
+    const updated = updateAutomationTask(d, task.id, { prompt: 'updated' }, { targetBindings })
+    expect(updated).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(targetBindings), taskRevision: 1 })
+    expect(getAutomationTask(d, task.id)).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(targetBindings) })
   })
 })

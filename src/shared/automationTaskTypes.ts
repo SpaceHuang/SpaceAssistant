@@ -25,6 +25,8 @@ export type AutomationTask = {
   /** 旧任务迁移为 0；通过新预检创建/编辑/启用后为 1。 */
   preflightVersion?: 0 | 1
   targetBindingsJson?: string | null
+  taskRevision?: number
+  scheduleGeneration?: number
   modelId?: string
   modelServiceId?: string
   reasoningEffort?: AgentReasoningEffort
@@ -140,3 +142,10 @@ export type ButlerRunTaskResult = {
   error?: string
 }
 
+/** Compatibility adapter: explicit canonical roots win; legacy single root is the only fallback. */
+export function getAutomationTaskWorkDirs(task: Pick<AutomationTask, 'workDir' | 'workDirs'>): string[] {
+  const roots = task.workDirs
+  if (Array.isArray(roots)) return [...roots]
+  if (typeof task.workDir === 'string' && task.workDir.trim().length > 0) return [task.workDir]
+  return []
+}

@@ -41,6 +41,7 @@ describe('getAutomationTaskWorkDirs', () => {
     expect(getAutomationTaskWorkDirs({ workDir: '/legacy' })).toEqual(['/legacy'])
     expect(getAutomationTaskWorkDirs({})).toEqual([])
     expect(getAutomationTaskWorkDirs({ workDirs: [] })).toEqual([])
+    expect(getAutomationTaskWorkDirs({ workDirs: [], workDir: '/legacy' })).toEqual([])
   })
 
   it('returns a defensive copy of canonical roots', () => {

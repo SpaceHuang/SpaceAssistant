@@ -128,9 +128,9 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **动作与产物：** 实现目录数组校验、adapter、`target_bindings_json` 映射和 task transaction；实现 `preflight_version` 读写、v0→v1 原子转换；分离 `task_revision` 与 `schedule_generation`。普通配置编辑可在 queued/running pending 期间通过预检后原子保存，只更新 task revision，不变更 running snapshot、cursor 或 pending；queued claim 尚无 snapshot，queued→running CAS 在同一事务读取并冻结当时 task revision/config。编辑先于 CAS 则 queued run 用新配置，CAS 先于编辑则 run 固定旧配置、编辑只供后续 run。queued pending 时改期/启停返回 `schedule-pending`，running pending 时改期/启停允许创建新 generation 并重算 cursor，但保留旧 run 的 pending 身份；删除在任一非终态 run 存在时冲突。正常 tick 在同一事务创建 queued run、推进 `automation_tasks.next_run_at` 和 cursor；长运行跨槽时不覆盖 pending，cursor 停在首个未核销槽位。实现 skipped/claim/pending 同步事务 primitives，终态按 `runId + pending_schedule_generation` 条件清除。提供 `claimDueSlotAndAdvance`、`transitionClaimToRunning(runId, taskId, slot, generation)`（CAS 同时冻结 snapshot）和 `finalizeClaimAndClearPending` 条件更新/CAS。新契约不从 `work_dir` 或 Profile 回退。
 - **完成判据：** roots 往返与并发冲突正确；v0 空 binding 可读、v1 binding 必须与 task revision 一起写；阻断不改任务；运行中的 roots/prompt 编辑保存成功且旧 snapshot 不变；queued 编辑/CAS 竞争结果符合事务先后且 snapshot revision 与赢家一致；cursor 与 next_run_at 的每类转移同成同败；抢占 runId 只能有一个 queued→running 成功者；旧 run 终态不能清除不匹配 pending 或覆盖新 generation；长运行跨多个 slot 不覆盖 claim；transaction rollback fixture 证明无部分状态。兼容 adapter API 可供 E-02a 使用。
 - **验证命令：** `npm exec vitest run electron/butler/taskStore.test.ts electron/butler/taskConfigValidation.test.ts`；`npm run build:electron:incremental`。
-- **证据：** store/validator 定向用例、根集合序列化样例。
+- **证据：** `taskStore.test.ts` 覆盖多根/legacy round-trip、显式空集合、taskRevision/scheduleGeneration 与 recovery cursor、v0→v1 bindings 持久化；`taskConfigValidation.test.ts` 覆盖 canonicalize/dedupe/fail-whole-set；`butlerIpc.test.ts` 覆盖多根更新。三套测试共 33 项通过；`npm run build:electron:incremental`、`npm run typecheck:shared`、`npm run typecheck:renderer` 通过。仍未覆盖 queued/running pending 冲突、claim CAS 冻结 snapshot、终态身份清理及完整 recovery cursor 生命周期；任务保持进行中。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [～]
 
 ### E-04 实现无工具权限的结构化目标预检
 

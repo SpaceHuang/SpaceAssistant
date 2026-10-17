@@ -8,7 +8,9 @@ import { runInTransaction } from '../database/transaction'
  */
 
 export type { AutomationTask, AutomationTaskInput, AutomationTaskSchedule, AutomationDeliveryPref, AutomationTaskRun, AutomationTaskRunStatus, AutomationTaskRunTrigger } from '../../src/shared/automationTaskTypes'
-import type { AutomationTask, AutomationTaskInput, AutomationTaskSchedule, AutomationDeliveryPref, AutomationTaskRun, AutomationTaskRunStatus, AutomationTaskRunTrigger } from '../../src/shared/automationTaskTypes'
+import { getAutomationTaskWorkDirs, type AutomationTask, type AutomationTaskInput, type AutomationTaskSchedule, type AutomationDeliveryPref, type AutomationTaskRun, type AutomationTaskRunStatus, type AutomationTaskRunTrigger, type TargetBinding } from '../../src/shared/automationTaskTypes'
+
+export type TrustedTaskPreflightCommit = { targetBindings: TargetBinding[] }
 
 type TaskRow = {
   id: string
@@ -19,6 +21,11 @@ type TaskRow = {
   delivery_target: string | null
   model_override: string | null
   work_dir: string | null
+  work_dirs_json: string | null
+  preflight_version: number
+  target_bindings_json: string | null
+  task_revision: number
+  schedule_generation: number
   model_id: string | null
   model_service_id: string | null
   reasoning_effort: string | null
@@ -62,6 +69,13 @@ function normalizeDeliveryPref(value: string): AutomationDeliveryPref {
 }
 
 function rowToTask(row: TaskRow): AutomationTask {
+  let workDirs: string[] | undefined
+  if (typeof row.work_dirs_json === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(row.work_dirs_json)
+      if (Array.isArray(parsed) && parsed.every((root) => typeof root === 'string')) workDirs = parsed
+    } catch { /* malformed historical value is handled as absent; callers still see legacy workDir */ }
+  }
   return {
     id: row.id,
     name: row.name,
@@ -71,6 +85,11 @@ function rowToTask(row: TaskRow): AutomationTask {
     ...(row.delivery_target ? { deliveryTarget: row.delivery_target } : {}),
     ...(row.model_override ? { modelOverride: row.model_override } : {}),
     ...(row.work_dir != null ? { workDir: row.work_dir } : {}),
+    ...(workDirs !== undefined ? { workDirs } : {}),
+    preflightVersion: row.preflight_version === 1 ? 1 : 0,
+    targetBindingsJson: row.target_bindings_json,
+    taskRevision: row.task_revision,
+    scheduleGeneration: row.schedule_generation,
     ...(row.model_id != null ? { modelId: row.model_id } : {}),
     ...(row.model_service_id != null ? { modelServiceId: row.model_service_id } : {}),
     ...(row.reasoning_effort != null ? { reasoningEffort: row.reasoning_effort as AutomationTask['reasoningEffort'] } : {}),
@@ -115,7 +134,7 @@ function rowToRun(row: RunRow): AutomationTaskRun {
   }
 }
 
-export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput): AutomationTask {
+export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput, preflight?: TrustedTaskPreflightCommit): AutomationTask {
   const now = Date.now()
   const id = randomUUID()
   const conn = getDbConnection(db)
@@ -123,15 +142,16 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
   // 落 NULL 会使任务被 due 扫描（next_run_at IS NOT NULL）永久排除。
   const enabled = input.enabled !== false
   const nextRunAt = input.nextRunAt ?? (enabled ? computeNextRunAt(input.schedule, now) : null)
-  conn
-    .prepare(
+  const workDirs = getAutomationTaskWorkDirs(input)
+  const legacyWorkDir = input.workDir ?? (input.workDirs?.length === 1 ? input.workDirs[0] : null)
+  runInTransaction(conn, () => {
+    conn.prepare(
       `INSERT INTO automation_tasks (
         id, name, schedule_json, prompt, delivery_pref, delivery_target, model_override,
-        work_dir, model_id, model_service_id, reasoning_effort,
+        work_dir, work_dirs_json, preflight_version, target_bindings_json, model_id, model_service_id, reasoning_effort,
         enabled, created_at, updated_at, next_run_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
       id,
       input.name,
       JSON.stringify(input.schedule),
@@ -139,7 +159,10 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
       input.deliveryPref,
       input.deliveryTarget ?? null,
       input.modelOverride ?? null,
-      input.workDir ?? null,
+      legacyWorkDir,
+      JSON.stringify(workDirs),
+      preflight ? 1 : 0,
+      preflight ? JSON.stringify(preflight.targetBindings) : null,
       input.modelId ?? null,
       input.modelServiceId ?? null,
       input.reasoningEffort ?? null,
@@ -148,6 +171,9 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
       now,
       nextRunAt
     )
+    conn.prepare(`INSERT INTO automation_task_recovery_state(task_id,schedule_generation,recovery_cursor_at,updated_at)
+      VALUES(?,0,?,?)`).run(id, nextRunAt, now)
+  })
   db.save()
   return getAutomationTask(db, id)!
 }
@@ -196,7 +222,8 @@ export function listEnabledAutomationTasksDue(db: AppDatabase, now: number): Aut
 export function updateAutomationTask(
   db: AppDatabase,
   taskId: string,
-  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDir' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDir' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[] }
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDir' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[] },
+  preflight?: TrustedTaskPreflightCommit
 ): AutomationTask | undefined {
   const cur = getAutomationTask(db, taskId)
   if (!cur) return undefined
@@ -204,9 +231,24 @@ export function updateAutomationTask(
   const next: AutomationTask = {
     ...cur,
     ...fields,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    taskRevision: (cur.taskRevision ?? 0) + 1,
+    scheduleGeneration: (cur.scheduleGeneration ?? 0) + (patch.schedule !== undefined || patch.enabled !== undefined ? 1 : 0),
+    ...(preflight ? { preflightVersion: 1 as const, targetBindingsJson: JSON.stringify(preflight.targetBindings) } : {})
   }
   for (const key of clearConfig ?? []) delete (next as unknown as Record<string, unknown>)[key]
+  const workDirs = patch.workDirs !== undefined
+    ? [...patch.workDirs]
+    : patch.workDir !== undefined
+      ? (patch.workDir ? [patch.workDir] : [])
+      : clearConfig?.includes('workDir') || clearConfig?.includes('workDirs')
+        ? []
+        : getAutomationTaskWorkDirs(cur)
+  const legacyWorkDir = clearConfig?.includes('workDir') || clearConfig?.includes('workDirs')
+    ? null
+    : patch.workDirs !== undefined
+      ? (patch.workDirs.length === 1 ? patch.workDirs[0] : null)
+      : next.workDir ?? (workDirs.length === 1 ? workDirs[0] : null)
   // 评审 P0-1：排程语义随状态推导——停用置空（未排程）；schedule 变更 / 重新启用 /
   // 启用但从未武装（历史 NULL 行）时按 schedule 重算；仅改名/提示词等不动既有排程。
   if (!next.enabled) {
@@ -219,22 +261,26 @@ export function updateAutomationTask(
     next.nextRunAt = computeNextRunAt(next.schedule, Date.now())
   }
   const conn = getDbConnection(db)
-  conn
-    .prepare(
+  runInTransaction(conn, () => {
+    conn
+      .prepare(
       `UPDATE automation_tasks SET
         name = ?, schedule_json = ?, prompt = ?, delivery_pref = ?, delivery_target = ?,
-        model_override = ?, work_dir = ?, model_id = ?, model_service_id = ?, reasoning_effort = ?,
-        enabled = ?, updated_at = ?, last_run_at = ?, next_run_at = ?
+        model_override = ?, work_dir = ?, work_dirs_json = ?, model_id = ?, model_service_id = ?, reasoning_effort = ?,
+        enabled = ?, updated_at = ?, last_run_at = ?, next_run_at = ?,
+        preflight_version = ?, target_bindings_json = ?,
+        task_revision = ?, schedule_generation = ?
       WHERE id = ?`
-    )
-    .run(
+      )
+      .run(
       next.name,
       JSON.stringify(next.schedule),
       next.prompt,
       next.deliveryPref,
       next.deliveryTarget ?? null,
       next.modelOverride ?? null,
-      clearConfig?.includes('workDir') ? null : next.workDir ?? null,
+      legacyWorkDir,
+      JSON.stringify(workDirs),
       clearConfig?.includes('modelId') ? null : next.modelId ?? null,
       clearConfig?.includes('modelServiceId') ? null : next.modelServiceId ?? null,
       clearConfig?.includes('reasoningEffort') ? null : next.reasoningEffort ?? null,
@@ -242,8 +288,17 @@ export function updateAutomationTask(
       next.updatedAt,
       next.lastRunAt ?? null,
       next.nextRunAt ?? null,
+      next.preflightVersion ?? 0,
+      next.targetBindingsJson ?? null,
+      next.taskRevision ?? 0,
+      next.scheduleGeneration ?? 0,
       taskId
     )
+    if (patch.schedule !== undefined || patch.enabled !== undefined) {
+      conn.prepare(`UPDATE automation_task_recovery_state SET schedule_generation=?,recovery_cursor_at=?,updated_at=? WHERE task_id=?`)
+        .run(next.scheduleGeneration ?? 0, next.nextRunAt ?? null, next.updatedAt, taskId)
+    }
+  })
   db.save()
   return next
 }
