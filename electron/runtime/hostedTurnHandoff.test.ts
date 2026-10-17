@@ -1191,7 +1191,7 @@ describe('createHostedTurnHandoff', () => {
 
   it('completed History terminal 缺少 transcript participant 时标记 uncertain 并阻止重试', async () => {
     const db = createMemoryAppDb()
-    const history = new SqliteAgentHistory(db)
+    const history = new SqliteAgentHistory(getDbConnection(db))
     const session = createSession(db, { name: 'incomplete-terminal', model: 'model' })
     commitSessionTranscript(db, {
       sessionId: session.id, turnId: 'prior-turn', baseVersion: 0, outcome: 'completed',
