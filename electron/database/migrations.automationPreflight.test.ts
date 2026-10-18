@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { runMigrations } from './migrations'
+import { DB_SCHEMA_VERSION } from './schema'
 
 function v102(databasePath = ':memory:'): DatabaseSync {
   const db = new DatabaseSync(databasePath)
@@ -30,7 +31,7 @@ describe('migration v103 automation preflight', () => {
   it('preserves legacy roots as v0, creates recovery cursor, and marks active runs legacy-unknown', () => {
     const db = v102()
     runMigrations(db)
-    expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '103' })
+    expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '104' })
     expect(db.prepare('SELECT id,work_dirs_json,preflight_version,target_bindings_json FROM automation_tasks ORDER BY id').all()).toEqual([
       { id: 'empty', work_dirs_json: '[]', preflight_version: 0, target_bindings_json: null },
       { id: 'legacy', work_dirs_json: '["/old/root"]', preflight_version: 0, target_bindings_json: null },
@@ -47,9 +48,29 @@ describe('migration v103 automation preflight', () => {
   })
 })
 
+it('migration v104 leaves output fields empty and never treats legacy work_dir as output_dir', () => {
+  const db = v102()
+  runMigrations(db)
+  const columns = new Set((db.prepare('PRAGMA table_info(automation_tasks)').all() as Array<{ name: string }>).map(({ name }) => name))
+  if (columns.has('output_dir')) db.exec('ALTER TABLE automation_tasks DROP COLUMN output_dir')
+  if (columns.has('output_organization')) db.exec('ALTER TABLE automation_tasks DROP COLUMN output_organization')
+  db.exec("UPDATE schema_meta SET value='103' WHERE key='schema_version'")
+
+  runMigrations(db)
+
+  expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '104' })
+  expect(db.prepare('SELECT id,work_dirs_json,output_dir,output_organization FROM automation_tasks ORDER BY id').all()).toEqual([
+    { id: 'empty', work_dirs_json: '[]', output_dir: null, output_organization: null },
+    { id: 'legacy', work_dirs_json: '["/old/root"]', output_dir: null, output_organization: null },
+  ])
+  runMigrations(db)
+  expect(db.prepare('SELECT COUNT(*) AS count FROM automation_tasks WHERE output_dir IS NOT NULL').get()).toEqual({ count: 0 })
+  db.close()
+})
+
 it('rejects a higher-version database and rolls back a failed v103 migration atomically', () => {
   const db = v102()
-  db.prepare("UPDATE schema_meta SET value='104' WHERE key='schema_version'").run()
+  db.prepare("UPDATE schema_meta SET value=? WHERE key='schema_version'").run(String(DB_SCHEMA_VERSION + 1))
   expect(() => runMigrations(db)).toThrow(/高于当前应用支持的版本/)
   db.prepare("UPDATE schema_meta SET value='102' WHERE key='schema_version'").run()
   db.exec(`CREATE TRIGGER reject_task_migration BEFORE UPDATE OF work_dirs_json ON automation_tasks

@@ -50,6 +50,23 @@ function taskInput(overrides: Partial<AutomationTaskInput> = {}): AutomationTask
 }
 
 describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
+  it('round-trips the result output directory and organization without converting legacy authorized roots', () => {
+    const d = db()
+    const input = Object.assign(taskInput({ workDirs: ['/authorized/source'] }), {
+      authorizedDirs: ['/authorized/source'],
+      outputDir: '/results',
+      outputOrganization: 'hourly',
+    })
+    const task = createAutomationTask(d, input)
+
+    expect(task).toMatchObject({
+      workDirs: ['/authorized/source'],
+      authorizedDirs: ['/authorized/source'],
+      outputDir: '/results',
+      outputOrganization: 'hourly',
+    })
+  })
+
   it('持续离线跨过投递 TTL 后自动过期并同步管家 run 状态', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000)

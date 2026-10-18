@@ -241,11 +241,11 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **依赖：** E-10；用户已裁决 D-4、D-5。
 - **目标文件：** `src/shared/automationTaskTypes.ts`、`electron/database/schema.ts`、`electron/database/migrations.ts`、`electron/butler/taskStore.ts`、对应 shared/migration/store tests、技术方案与执行计划。
 - **动作与产物：** 新增 `authorizedDirs`、`outputDir`、`outputOrganization` 字段契约；新建任务输出目录和策略必填、授权目录可空。DB v104 增加兼容旧行的 nullable 输出列；旧目录仅映射到 authorizedDirs，不推断输出位置；历史快照继续可读。默认策略函数按 daily/interval/once 返回 daily/hourly/direct。
-- **完成判据：** TDD 先补 DTO、默认策略和 v103→v104 migration 失败用例，再实现；迁移可重复/回滚；旧任务字段保持旧语义；空授权目录的新任务有效；缺输出目录或策略的新任务被拒绝。
+- **完成判据：** TDD 先补 DTO、默认策略、存储往返和 v103→v104 migration 失败用例，再实现；迁移可重复/回滚；旧任务字段保持旧语义；schema/store 能表达空授权目录和 nullable 的 legacy 输出字段。新建 IPC 对输出字段的必填门禁由 E-11d 验收。
 - **验证命令：** 执行中登记 `automationTaskTypes`、migration、taskStore 和默认策略的明确 Vitest 文件集合；涉及类型时运行 `npm run typecheck:shared`。
-- **证据：** 待执行。
+- **证据：** RED：新增迁移、store 往返和 schedule 默认值用例分别因版本仍为 103、字段未回读、默认策略函数不存在而失败。GREEN：`npm exec vitest run electron/database/migrations.automationPreflight.test.ts electron/butler/taskStore.test.ts src/shared/automationTaskTypes.test.ts --reporter=dot`：3 files / 44 tests passed；`npm run typecheck:shared`、`npm run build:electron:incremental`、`git diff --check` 通过。v103→v104 保留原 `work_dirs_json` 并将输出列置 NULL，重复 migration 不改变旧任务；store 可往返新输出字段和授权目录。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-11b 实现计划时刻归档目录解析和输出 binding 规则
 

@@ -11,6 +11,15 @@ export type AutomationTaskSchedule =
   | { kind: 'once'; at: number }
 
 export type AutomationDeliveryPref = 'desktop' | 'feishu' | 'wechat' | 'none'
+export type AutomationOutputOrganization = 'direct' | 'daily' | 'hourly'
+
+export function getDefaultAutomationOutputOrganization(schedule: AutomationTaskSchedule): AutomationOutputOrganization {
+  switch (schedule.kind) {
+    case 'daily': return 'daily'
+    case 'interval': return 'hourly'
+    case 'once': return 'direct'
+  }
+}
 
 export type AutomationTask = {
   id: string
@@ -19,9 +28,15 @@ export type AutomationTask = {
   prompt: string
   deliveryPref: AutomationDeliveryPref
   deliveryTarget?: string
+  /** Canonical user-approved roots for reading/modifying existing materials. */
+  authorizedDirs: string[]
+  /** Compatibility projection retained until all run consumers move to authorizedDirs. */
   workDirs: string[]
   /** IPC/数据库旧版本兼容字段；新调用统一使用 workDirs。 */
   workDir?: string
+  /** Null only for historical tasks that have not been edited under the split-directory contract. */
+  outputDir: string | null
+  outputOrganization: AutomationOutputOrganization | null
   /** 旧任务迁移为 0；通过新预检创建/编辑/启用后为 1。 */
   preflightVersion?: 0 | 1
   targetBindingsJson?: string | null
@@ -45,7 +60,11 @@ export type AutomationTaskInput = {
   prompt: string
   deliveryPref: AutomationDeliveryPref
   deliveryTarget?: string
+  /** New IPC payloads use authorizedDirs; workDirs remains during the caller migration. */
+  authorizedDirs?: string[]
   workDirs: string[]
+  outputDir?: string
+  outputOrganization?: AutomationOutputOrganization
   modelId?: string
   modelServiceId?: string
   reasoningEffort?: AgentReasoningEffort

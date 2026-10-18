@@ -8,7 +8,7 @@ import { runInTransaction } from '../database/transaction'
  */
 
 export type { AutomationTask, AutomationTaskInput, AutomationTaskSchedule, AutomationDeliveryPref, AutomationTaskRun, AutomationTaskRunStatus, AutomationTaskRunTrigger } from '../../src/shared/automationTaskTypes'
-import { getAutomationTaskWorkDirs, type AutomationTask, type AutomationTaskInput, type AutomationTaskSchedule, type AutomationDeliveryPref, type AutomationTaskRun, type AutomationTaskRunStatus, type AutomationTaskRunTrigger, type TargetBinding, type TargetSelection } from '../../src/shared/automationTaskTypes'
+import { getAutomationTaskWorkDirs, type AutomationOutputOrganization, type AutomationTask, type AutomationTaskInput, type AutomationTaskSchedule, type AutomationDeliveryPref, type AutomationTaskRun, type AutomationTaskRunStatus, type AutomationTaskRunTrigger, type TargetBinding, type TargetSelection } from '../../src/shared/automationTaskTypes'
 
 export type TrustedTaskPreflightCommit = { targetBindings?: TargetBinding[]; draft?: true }
 export type AutomationTaskUpdateResult = { ok: true; task: AutomationTask } | { ok: false; reason: 'task-revision-conflict' | 'schedule-pending' | 'task-not-found' }
@@ -21,6 +21,8 @@ type TaskRow = {
   delivery_pref: string
   delivery_target: string | null
   model_override: string | null
+  output_dir: string | null
+  output_organization: string | null
   work_dir: string | null
   work_dirs_json: string | null
   preflight_version: number
@@ -89,7 +91,12 @@ function rowToTask(row: TaskRow): AutomationTask {
     deliveryPref: normalizeDeliveryPref(row.delivery_pref),
     ...(row.delivery_target ? { deliveryTarget: row.delivery_target } : {}),
     ...(row.model_override ? { modelOverride: row.model_override } : {}),
+    authorizedDirs: workDirs ?? (row.work_dir != null ? [row.work_dir] : []),
     workDirs: workDirs ?? (row.work_dir != null ? [row.work_dir] : []),
+    outputDir: row.output_dir ?? null,
+    outputOrganization: (['direct', 'daily', 'hourly'] as const).includes(row.output_organization as AutomationOutputOrganization)
+      ? row.output_organization as AutomationOutputOrganization
+      : null,
     preflightVersion: row.preflight_version === 1 ? 1 : 0,
     targetBindingsJson: row.target_bindings_json,
     taskRevision: row.task_revision,
@@ -150,15 +157,15 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
   // 落 NULL 会使任务被 due 扫描（next_run_at IS NOT NULL）永久排除。
   const enabled = input.enabled !== false
   const nextRunAt = input.nextRunAt ?? (enabled ? computeNextRunAt(input.schedule, now) : null)
-  const workDirs = getAutomationTaskWorkDirs(input)
+  const workDirs = Array.isArray(input.authorizedDirs) ? [...input.authorizedDirs] : getAutomationTaskWorkDirs(input)
   const legacyWorkDir = workDirs.length === 1 ? workDirs[0] : null
   runInTransaction(conn, () => {
     conn.prepare(
       `INSERT INTO automation_tasks (
-        id, name, schedule_json, prompt, delivery_pref, delivery_target, model_override,
+        id, name, schedule_json, prompt, delivery_pref, delivery_target, model_override, output_dir, output_organization,
         work_dir, work_dirs_json, preflight_version, target_bindings_json, model_id, model_service_id, reasoning_effort,
         enabled, created_at, updated_at, next_run_at, task_revision
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
       input.name,
@@ -167,6 +174,8 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
       input.deliveryPref,
       input.deliveryTarget ?? null,
       input.modelOverride ?? null,
+      input.outputDir ?? null,
+      input.outputOrganization ?? null,
       legacyWorkDir,
       JSON.stringify(workDirs),
       preflight ? 1 : 0,
@@ -231,7 +240,7 @@ export function listEnabledAutomationTasksDue(db: AppDatabase, now: number): Aut
 export function updateAutomationTask(
   db: AppDatabase,
   taskId: string,
-  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
   preflight?: TrustedTaskPreflightCommit
 ): AutomationTask | undefined {
   const result = updateAutomationTaskConditional(db, taskId, patch, preflight)
@@ -241,7 +250,7 @@ export function updateAutomationTask(
 export function updateAutomationTaskConditional(
   db: AppDatabase,
   taskId: string,
-  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDirs' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
   preflight?: TrustedTaskPreflightCommit
 ): AutomationTaskUpdateResult {
   const cur = getAutomationTask(db, taskId)
@@ -252,21 +261,24 @@ export function updateAutomationTaskConditional(
     ...cur,
     ...fields,
     updatedAt: Date.now(),
-    taskRevision: (cur.taskRevision ?? 0) + (preflight || ['name', 'prompt', 'schedule', 'deliveryPref', 'deliveryTarget', 'modelOverride', 'workDirs', 'modelId', 'modelServiceId', 'reasoningEffort'].some((key) => Object.prototype.hasOwnProperty.call(fields, key)) ? 1 : 0),
+    taskRevision: (cur.taskRevision ?? 0) + (preflight || ['name', 'prompt', 'schedule', 'deliveryPref', 'deliveryTarget', 'modelOverride', 'authorizedDirs', 'workDirs', 'outputDir', 'outputOrganization', 'modelId', 'modelServiceId', 'reasoningEffort'].some((key) => Object.prototype.hasOwnProperty.call(fields, key)) ? 1 : 0),
     scheduleGeneration: (cur.scheduleGeneration ?? 0) + (patch.schedule !== undefined || patch.enabled !== undefined ? 1 : 0),
     ...(preflight ? preflight.draft === true
       ? { preflightVersion: 0 as const, targetBindingsJson: null }
       : { preflightVersion: 1 as const, targetBindingsJson: JSON.stringify(preflight.targetBindings ?? []) }
       : {})
   }
-  for (const key of clearConfig ?? []) if (key !== 'workDirs') delete (next as unknown as Record<string, unknown>)[key]
-  const workDirs = patch.workDirs !== undefined
-    ? [...patch.workDirs]
-    : clearConfig?.includes('workDirs')
+  for (const key of clearConfig ?? []) if (key !== 'workDirs' && key !== 'authorizedDirs') delete (next as unknown as Record<string, unknown>)[key]
+  const workDirs = patch.authorizedDirs !== undefined
+    ? [...patch.authorizedDirs]
+    : patch.workDirs !== undefined
+      ? [...patch.workDirs]
+      : clearConfig?.includes('workDirs') || clearConfig?.includes('authorizedDirs')
         ? []
         : getAutomationTaskWorkDirs(cur)
+  next.authorizedDirs = workDirs
   next.workDirs = workDirs
-  const legacyWorkDir = clearConfig?.includes('workDirs')
+  const legacyWorkDir = clearConfig?.includes('workDirs') || clearConfig?.includes('authorizedDirs')
     ? null
     : patch.workDirs !== undefined
       ? (patch.workDirs.length === 1 ? patch.workDirs[0] : null)
@@ -295,7 +307,7 @@ export function updateAutomationTaskConditional(
       .prepare(
       `UPDATE automation_tasks SET
         name = ?, schedule_json = ?, prompt = ?, delivery_pref = ?, delivery_target = ?,
-        model_override = ?, work_dir = ?, work_dirs_json = ?, model_id = ?, model_service_id = ?, reasoning_effort = ?,
+        model_override = ?, output_dir = ?, output_organization = ?, work_dir = ?, work_dirs_json = ?, model_id = ?, model_service_id = ?, reasoning_effort = ?,
         enabled = ?, updated_at = ?, last_run_at = ?, next_run_at = ?,
         preflight_version = ?, target_bindings_json = ?,
         task_revision = ?, schedule_generation = ?
@@ -308,6 +320,8 @@ export function updateAutomationTaskConditional(
       next.deliveryPref,
       next.deliveryTarget ?? null,
       next.modelOverride ?? null,
+      clearConfig?.includes('outputDir') ? null : next.outputDir ?? null,
+      clearConfig?.includes('outputOrganization') ? null : next.outputOrganization ?? null,
       legacyWorkDir,
       JSON.stringify(workDirs),
       clearConfig?.includes('modelId') ? null : next.modelId ?? null,

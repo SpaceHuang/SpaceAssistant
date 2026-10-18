@@ -2001,6 +2001,16 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 103
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  if (version === 103) runInTransaction(conn, () => {
+    const exists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='automation_tasks'").get() !== undefined
+    if (exists) {
+      const columns = new Set((conn.prepare('PRAGMA table_info(automation_tasks)').all() as Array<{ name: string }>).map(({ name }) => name))
+      if (!columns.has('output_dir')) conn.exec('ALTER TABLE automation_tasks ADD COLUMN output_dir TEXT')
+      if (!columns.has('output_organization')) conn.exec('ALTER TABLE automation_tasks ADD COLUMN output_organization TEXT')
+    }
+    version = 104
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {
