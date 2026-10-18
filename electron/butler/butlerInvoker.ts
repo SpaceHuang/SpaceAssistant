@@ -27,7 +27,7 @@ import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
-import { validateTaskAuthorizedDirs, validateTaskWorkDirs } from './taskConfigValidation'
+import { taskAuthorizedRootSetMatchesSnapshot, validateTaskAuthorizedDirsForRun, validateTaskWorkDirs } from './taskConfigValidation'
 import { getAutomationTaskWorkDirs } from '../../src/shared/automationTaskTypes'
 import { resolveGlobalThinkingEffort } from '../../src/shared/thinkingEffort'
 import { getConfigValue as readConfigValue } from '../database'
@@ -191,7 +191,9 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
     const rootsInput = claimSnapshot.authorizedDirs ?? claimSnapshot.workDirs ?? getAutomationTaskWorkDirs({ workDirs: claimSnapshot.workDirs ?? [] })
     let workDirs: string[]
     if (claimSnapshot.preflightVersion === 1) {
-      const validated = await validateTaskAuthorizedDirs(rootsInput)
+      // final-check SYS-AUTOROOT-001: resolved roots must retain the identity in the approved snapshot;
+      // re-resolve after fact collection and immediately before accepting the run, before session/model/tool dispatch.
+      const validated = await validateTaskAuthorizedDirsForRun(rootsInput, rootsInput)
       if (!validated.ok) throw new Error(validated.error)
       workDirs = validated.authorizedDirs
     } else {
@@ -205,6 +207,9 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
         throw new Error('TASK_OUTPUT_SNAPSHOT_INVALID')
       }
       const facts = await new TaskPathFactsProvider().collect(workDirs, claimSnapshot.outputDir)
+      if (!taskAuthorizedRootSetMatchesSnapshot(facts.roots, rootsInput)) throw new Error('TASK_AUTHORIZED_ROOT_DRIFT')
+      const rootsAfterFacts = await validateTaskAuthorizedDirsForRun(rootsInput, rootsInput)
+      if (!rootsAfterFacts.ok) throw new Error(rootsAfterFacts.error)
       const validation = validatePersistedTargetBindings({ bindings: claimSnapshot.targetSelections ?? [], roots: facts.roots, outputRoot: facts.outputRoot, facts, taskRevision: claimSnapshot.taskRevision ?? -1 })
       if (!validation.ok) throw new Error(`TASK_BINDING_REVALIDATION_FAILED:${validation.code}`)
       const safeRunOutputDir = await ensureAutomationRunOutputDirectory(claimSnapshot.outputDir, claimSnapshot.outputOrganization, claimSnapshot.scheduledFor)
@@ -254,6 +259,10 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
       endpoint: validatedPair.baseUrl,
       credentialRef: `llm-service:${serviceId}`
     }, getDefaultAgentRuntime().modelProviders)
+    if (claimSnapshot.preflightVersion === 1) {
+      const finalRoots = await validateTaskAuthorizedDirsForRun(rootsInput, rootsInput)
+      if (!finalRoots.ok) throw new Error(finalRoots.error)
+    }
     const effort = activeTask.reasoningEffort ?? resolveGlobalThinkingEffort(readConfigValue(db, 'config.thinkingEffort'), readConfigValue(db, 'config.thinkingEnabled'))
     const effectiveEffort = model.supportsThinking === false ? 'off' : effort
     const configSnapshot: AutomationTaskRunConfigSnapshot = {

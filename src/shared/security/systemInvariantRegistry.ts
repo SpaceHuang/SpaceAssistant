@@ -82,6 +82,14 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
     overrideability: 'none'
   },
   {
+    id: 'SYS-AUTOROOT-001', owner: 'electron/butler', stage: 'final-check', category: 'integrity',
+    rationale: 'An unattended run must preserve the canonical directory identities approved in its immutable task snapshot.',
+    effect: 'validate', scope: 'electron/butler/butlerInvoker.ts:executeClaimedRun-before-facts-and-dispatch',
+    audit: 'automation run fails with TASK_AUTHORIZED_ROOT_DRIFT before session creation, model invocation, or tool dispatch',
+    tests: ['electron/butler/taskConfigValidation.test.ts', 'electron/butler/butlerInvoker.test.ts'],
+    overrideability: 'none'
+  },
+  {
     id: 'SYS-CAPABILITY-001', owner: 'agent-sdk', stage: 'admission', category: 'capability',
     rationale: 'A tool without a host granted SDK capability cannot enter the execution port.',
     effect: 'block', scope: 'packages/agent-sdk/src/safetyGate.ts',

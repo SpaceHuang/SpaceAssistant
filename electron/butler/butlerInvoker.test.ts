@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 const mockCreateAnthropicClient = vi.fn()
 const mockResolveLlmCredentials = vi.fn()
 const mockResolveLlmCredentialsForPair = vi.fn()
+const directorySymlinkType = process.platform === 'win32' ? 'junction' : 'dir'
 const sessionEventFailure = vi.hoisted(() => ({ nextType: undefined as string | undefined }))
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
 const ripgrepFixture = vi.hoisted(() => ({ path: '' }))
@@ -132,6 +133,7 @@ import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStora
 import { executeClaimedRun, runButlerTask } from './butlerInvoker'
 import { ButlerTaskScheduler, type SchedulerRunRequest } from './taskScheduler'
 import { claimDueSlotAndAdvance, createAutomationTask, createAutomationTask as createStoredAutomationTask, getLatestRunForTask, getRunById, insertManualTaskClaim, updateAutomationTask } from './taskStore'
+import { TaskPathFactsProvider } from './taskPathFacts'
 import { resolveAutomationRunOutputDir } from './taskOutputDirectory'
 import { getSession } from '../database'
 import { getDbConnection } from '../database'
@@ -289,6 +291,57 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       })
     } finally {
       readSpy.mockRestore()
+      await fs.rm(outputDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects an authorized root replaced by a symlink before model or session creation, even with output-only bindings', async () => {
+    const approvedRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'butler-approved-root-')))
+    const outsideRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'butler-outside-root-')))
+    const outputDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'butler-drift-output-')))
+    const approvedRootMoved = `${approvedRoot}-approved`
+    const scheduledFor = Date.now() - 1_000
+    const binding = {
+      kind: 'output' as const, path: path.join(outputDir, 'summary.txt'), ancestor: outputDir, relativeSuffix: 'summary.txt', outputRoot: outputDir,
+      expectedType: 'file' as const, rawText: 'write summary.txt', resolverVersion: 3,
+      rootsDigest: createHash('sha256').update(JSON.stringify({ outputRoot: path.normalize(outputDir) })).digest('hex'), taskRevision: 1
+    }
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {},
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    })) } })
+    const task = createAutomationTask(db, {
+      name: 'root drift', schedule: { kind: 'interval', intervalMinutes: 60 }, prompt: 'write summary.txt', deliveryPref: 'none',
+      authorizedDirs: [approvedRoot], workDirs: [approvedRoot], outputDir, outputOrganization: 'daily', modelId, modelServiceId: 'svc-pinned', modelOverride: model.name, reasoningEffort: 'off', nextRunAt: scheduledFor
+    }, { targetBindings: [binding] })
+    const claim = claimDueSlotAndAdvance(db, { taskId: task.id, slot: scheduledFor, nextSlot: scheduledFor + 60 * 60 * 1000, clientId: 'butler-root-drift-claim' })
+    const writeDispatch = vi.spyOn(writeFileExecutor, 'execute')
+    const originalCollectFacts = TaskPathFactsProvider.prototype.collect
+    const factsSpy = vi.spyOn(TaskPathFactsProvider.prototype, 'collect').mockImplementation(async function (this: TaskPathFactsProvider, roots, outputRoot) {
+      const facts = await originalCollectFacts.call(this, roots, outputRoot)
+      await fs.rename(approvedRoot, approvedRootMoved)
+      await fs.symlink(outsideRoot, approvedRoot, directorySymlinkType)
+      return facts
+    })
+
+    try {
+      const result = await runButlerTask(makeDeps(), task.id, { trigger: 'schedule', runId: claim.runId, scheduledFor })
+
+      expect(result).toMatchObject({ ok: false, error: 'TASK_AUTHORIZED_ROOT_DRIFT' })
+      expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
+      expect(writeDispatch).not.toHaveBeenCalled()
+      expect(factsSpy).toHaveBeenCalledOnce()
+      expect(getLatestRunForTask(db, task.id)).toMatchObject({ status: 'failed' })
+      expect(getLatestRunForTask(db, task.id)?.sessionId).toBeUndefined()
+    } finally {
+      factsSpy.mockRestore()
+      writeDispatch.mockRestore()
+      await fs.rm(approvedRoot, { recursive: true, force: true })
+      await fs.rm(approvedRootMoved, { recursive: true, force: true })
+      await fs.rm(outsideRoot, { recursive: true, force: true })
       await fs.rm(outputDir, { recursive: true, force: true })
     }
   })

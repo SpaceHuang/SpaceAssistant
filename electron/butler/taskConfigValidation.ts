@@ -1,6 +1,6 @@
 import { constants } from 'node:fs'
 import { access, lstat, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
+import { isAbsolute, normalize, resolve } from 'node:path'
 import type { AgentReasoningEffort } from '../../src/shared/agent/invocation'
 import type { AppDatabase } from '../database'
 import { resolveLlmCredentialsForPair } from '../llmServiceResolver'
@@ -39,6 +39,26 @@ export async function validateTaskAuthorizedDirs(value: unknown): Promise<{ ok: 
   const invalid = validated.find((result) => !result.ok)
   if (invalid && !invalid.ok) return invalid
   return { ok: true, authorizedDirs: [...new Set(validated.flatMap((result) => result.ok ? [result.workDir] : []))].sort() }
+}
+
+/** Compare resolved run roots to the immutable canonical roots approved with the task snapshot. */
+export function taskAuthorizedRootSetMatchesSnapshot(roots: unknown, approvedRoots: unknown): boolean {
+  const canonicalSet = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value) || !value.every((root) => typeof root === 'string' && isAbsolute(root) && normalize(root) === root)) return undefined
+    return [...new Set(value as string[])].sort()
+  }
+  const actual = canonicalSet(roots)
+  const approved = canonicalSet(approvedRoots)
+  return actual !== undefined && approved !== undefined && actual.length === approved.length && actual.every((root, index) => root === approved[index])
+}
+
+/** Final-check for an unattended run: canonicalize current roots, then reject any drift from the approved snapshot. */
+export async function validateTaskAuthorizedDirsForRun(value: unknown, approvedRoots: unknown): Promise<{ ok: true; authorizedDirs: string[] } | { ok: false; error: string }> {
+  const validated = await validateTaskAuthorizedDirs(value)
+  if (!validated.ok || !taskAuthorizedRootSetMatchesSnapshot(validated.authorizedDirs, approvedRoots)) {
+    return { ok: false, error: 'TASK_AUTHORIZED_ROOT_DRIFT' }
+  }
+  return validated
 }
 
 export async function validateTaskOutputDir(value: unknown): Promise<{ ok: true; outputDir: string } | { ok: false; error: string }> {
