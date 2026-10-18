@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseWikiCommand } from '../../src/shared/outbound/wikiCommandService'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { importRawFromWorkDir } from './wikiImport'
-import { createWikiFileStore } from './wikiFileStore'
-import { createWikiSourceService } from './wikiSourceService'
+import { readWikiSourceForContext } from './wikiDomainTools'
+import { createWikiLifecycleController } from './wikiLifecycle'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
@@ -26,8 +26,11 @@ describe('Wiki command to sourceId integration', () => {
     if (imported.type !== 'run') return
     const sourceId = /sourceId=([0-9a-f-]{36})/.exec(imported.text)?.[1]
     expect(sourceId).toBeTruthy()
-    const store = createWikiFileStore(path.join(userDataPath, 'llm-wiki'))
-    const sourceService = createWikiSourceService({ store, resolveSourceRef: () => undefined, validateSource: async () => false, authorize: async () => true })
-    await expect(sourceService.readSource(sourceId!, { callerId: 'assistant', lane: 'chat' })).resolves.toMatchObject({ sourceId, text: 'integration source' })
+    const wikiRoot = path.join(userDataPath, 'llm-wiki')
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const read = await readWikiSourceForContext({ sourceId, sourceRevision: 1 }, {
+      userDataDir: userDataPath, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'assistant', lane: 'chat'
+    })
+    expect(read).toMatchObject({ success: true, data: { sourceId, sourceRevision: 1, text: 'integration source' } })
   })
 })

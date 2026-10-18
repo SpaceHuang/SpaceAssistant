@@ -10,6 +10,7 @@ import { createWikiDomainReadService, WikiDomainReadError, type WikiReadCaller, 
 import { createWikiSourceService, WikiSourceError } from './wikiSourceService'
 
 type WikiInput = Record<string, unknown>
+type WikiDomainContext = Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'sessionId' | 'lane' | 'remoteContext'>
 type PageReadService = ReturnType<typeof createWikiDomainReadService>
 const pageReadServices = new Map<string, { pages: WikiPageReadRecord[]; service: PageReadService }>()
 const sourceReadServices = new Map<string, ReturnType<typeof createWikiSourceService>>()
@@ -76,7 +77,7 @@ export async function searchWikiForContext(input: WikiInput, context: Pick<ToolE
   }
 }
 
-export async function openWikiPageForContext(input: WikiInput, context: ToolExecutionContext): Promise<ToolExecutorResult> {
+export async function openWikiPageForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
   if (typeof input.pageId !== 'string' || !input.pageId) return { success: false, error: 'wiki-page-unavailable' }
   if (input.revision !== undefined && (!Number.isSafeInteger(input.revision) || (input.revision as number) < 1)) return { success: false, error: 'wiki-page-unavailable' }
   try {
@@ -88,7 +89,7 @@ export async function openWikiPageForContext(input: WikiInput, context: ToolExec
   }
 }
 
-export async function readWikiPageForContext(input: WikiInput, context: ToolExecutionContext): Promise<ToolExecutorResult> {
+export async function readWikiPageForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
   if (typeof input.readHandle !== 'string' || !input.readHandle) return { success: false, error: 'page_read_handle_expired' }
   try {
     const store = await getReadyWikiStore(context)
@@ -103,7 +104,7 @@ export async function readWikiPageForContext(input: WikiInput, context: ToolExec
   }
 }
 
-export async function readWikiSourceForContext(input: WikiInput, context: ToolExecutionContext): Promise<ToolExecutorResult> {
+export async function readWikiSourceForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
   if (typeof input.sourceId !== 'string' || !input.sourceId) return { success: false, error: 'source_missing' }
   try {
     const store = await getReadyWikiStore(context)
@@ -156,7 +157,7 @@ export async function searchWikiCatalog(store: WikiFileStore, input: WikiInput) 
   }
 }
 
-async function getReadyWikiStore(context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir'>): Promise<WikiFileStore> {
+async function getReadyWikiStore(context: Pick<WikiDomainContext, 'wikiConfig' | 'userDataDir'>): Promise<WikiFileStore> {
   if (!context.wikiConfig) throw new WikiDomainToolError('wiki_lifecycle_unavailable')
   const root = resolveSharedWikiRoot(context.userDataDir, context.wikiConfig)
   const lifecycle = await createWikiLifecycleController(root).read()
