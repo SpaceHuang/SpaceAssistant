@@ -1,13 +1,13 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：源码阶段完成；外部验收见 §4
+> 状态：既有 E-01～E-10 完成；结果目录拆分补充任务 E-11a～E-11f 进行中
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
 
 ## 第 0 层：执行摘要【人必读】
 
-**目标：** 通过可分段验收的实现，把多个明确授权目录、提交前预检、安全审核 Agent 多根识别和跳过运行历史接入现有定时任务链路。
+**目标：** 既有多目录预检功能已完成；当前补充任务将结果输出目录与资料授权目录拆分，按计划时刻归档，并只允许预检绑定结果写入。
 
 **执行顺序：** 契约/基线 → 数据迁移与目录校验 → 主进程提交门禁 → 多根安全执行链 → 表单和历史 → 启动恢复/兼容集成 → 最终关闭。
 
@@ -43,6 +43,9 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 |---|---|---|
 | D-2 预检模型调用 | A：使用任务当前选定模型；不可用时阻断 | E-04 按技术方案调用无工具权限分析器；提交额外请求可能产生服务费用并发送任务文本 |
 | D-3 会话事件位置 | A：应用私有 `{userData}/automation-sessions/<taskId>` | E-07 仅作为内部事件/session 根，绝不并入任务授权 roots |
+| D-4 目录职责拆分 | 必选结果输出目录 + 可空授权读写目录；旧 workDirs 只迁移为授权目录 | 新任务必须选择结果输出目录；旧任务未编辑保持 legacy 运行，首次编辑须明确选择 |
+| D-5 归档默认 | 每日→日期；间隔定时→日期小时；一次性→直接；用户可改 | 使用本机 `scheduledFor` 确定归档路径；同日/小时运行共享目录 |
+| D-6 无人值守写入 | 仅允许本次预检绑定且位于本次归档目录的结果写入 | 新增稳定 Policy Engine rule；其他写入与 Shell 仍拒绝，输出目录不授权读取 |
 
 ### 第四轮阻断核销（2026-10-17）
 
@@ -60,10 +63,10 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 
 | 检查点 | 依赖证据（产出任务） | 通过条件 | 不通过处理 |
 |---|---|---|---|
-| G0 兼容契约冻结 | E-01；技术方案 D-2、D-3 已裁决 | 可选过渡类型、adapter、目标 facts/binding、状态与 migration 映射契约通过静态评审；D-2/D-3 已明确 | 停止 P1，修订技术方案/此计划 |
+| G0 兼容契约冻结 | E-01；D-2～D-6 已裁决 | 既有 v0/v1 契约与补充 outputDir/organization/authorizedDirs、旧任务迁移和绑定写入边界均已记录 | 停止补充实现，修订技术方案/此计划 |
 | G1 存储安全 | E-02、E-03 | v0/v1 binding schema、recovery state 往返通过；高版本库拒绝降级；备份恢复可执行；旧空目录不回退 Profile | 不开始预检 IPC；修正迁移/存储 |
 | G2 提交门禁 | E-02a、E-03、E-04、E-05 | 旧单根和新多根请求均经预检；阻断零写入、通过恰好一次写入、一次性时间语义正确 | 不接 UI save flow |
-| G3 安全根集合 | E-06、E-07 | run snapshot、事实、策略 trace、审核 Agent 所见 roots 完全一致；原 locked deny 仍在 | 不进入 UI 发布集成；修订安全契约 |
+| G3 安全根集合与结果写入 | E-06、E-07、E-11b～E-11d | 读取授权只含 authorizedDirs；run snapshot 有独立 runOutputDir；仅命中预检 binding 的归档结果写入 allow；其他写入与 Shell 仍拒绝 | 不进入 UI 集成；修订 facts、policy 或 final-check |
 | G4 可操作界面 | E-08、E-09 | 已批准归属卡下完成宽窗/窄窗、键盘清单、失败保留与历史可查 | 修 UI，不改变已冻结后端契约 |
 | G5 全量源码关闭 | E-10 | 所有本机相关测试、类型、i18n、构建、边界审查完成 | 留在源码关闭前；外部验收另列 |
 
@@ -83,6 +86,12 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | E-08 | 实现宽编辑表单、候选清单和门禁反馈 | E-05、E-05a、E-09 | Butler UI/styles/i18n/tests | AC-01、03、04、05、06、12、13、14 | INV-05、06、09 |
 | E-09 | 按调度代次恢复 missed slots 并向内部端口分派既有 claim | E-02、E-03 | scheduler/recovery、taskStore transaction port、history API/tests | AC-07、16 | INV-07、08、12 |
 | E-10 | 完成集成验收与源码关闭 | E-02、E-02a、E-03～E-09、E-05a | related tests、typecheck/i18n/build、review evidence | AC-01–16 | INV-01–13 |
+| E-11a | 冻结拆分目录类型、默认归档与 v104 迁移契约 | E-10；D-4、D-5 | shared task types、schema/migration/store types、migration tests | AC-01、07、11、13 | INV-14、15 |
+| E-11b | 实现计划时刻归档目录解析和输出 binding 规则 | E-11a | output directory helper、target resolver/preflight tests | AC-03、04、08、14 | INV-15 |
+| E-11c | 接入只允许绑定结果路径的自动化写策略 | E-11b；D-6 | facts producer、policy rules、tool final-check、security boundary tests | AC-03a、08、09、10 | INV-15、16 |
+| E-11d | 将拆分配置与 runOutputDir 贯穿存储、IPC 和运行链 | E-11a～E-11c | taskStore、scheduler snapshot、butler IPC/invoker/assembler tests | AC-01、01a、05、07、11 | INV-14～16 |
+| E-11e | 设置表单、动态默认、摘要与中英文文案 | E-11a、E-11d | ButlerTaskSettings、styles、i18n、renderer tests | AC-01、05、13 | INV-14、15 |
+| E-11f | 补充阶段集成验收并关闭结果目录拆分 | E-11a～E-11e | related tests、typecheck/i18n/build、security review | AC-01–16 | INV-14～16 |
 
 任务范围与依赖一旦变化，先更新本表；不在正文另写第二份 DAG。
 
@@ -227,6 +236,72 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **可执行环境：** 源码关闭为本机；外部项独立记录。
 - **状态：** - [x]
 
+### E-11a 冻结拆分目录类型、默认归档与 v104 迁移契约
+
+- **依赖：** E-10；用户已裁决 D-4、D-5。
+- **目标文件：** `src/shared/automationTaskTypes.ts`、`electron/database/schema.ts`、`electron/database/migrations.ts`、`electron/butler/taskStore.ts`、对应 shared/migration/store tests、技术方案与执行计划。
+- **动作与产物：** 新增 `authorizedDirs`、`outputDir`、`outputOrganization` 字段契约；新建任务输出目录和策略必填、授权目录可空。DB v104 增加兼容旧行的 nullable 输出列；旧目录仅映射到 authorizedDirs，不推断输出位置；历史快照继续可读。默认策略函数按 daily/interval/once 返回 daily/hourly/direct。
+- **完成判据：** TDD 先补 DTO、默认策略和 v103→v104 migration 失败用例，再实现；迁移可重复/回滚；旧任务字段保持旧语义；空授权目录的新任务有效；缺输出目录或策略的新任务被拒绝。
+- **验证命令：** 执行中登记 `automationTaskTypes`、migration、taskStore 和默认策略的明确 Vitest 文件集合；涉及类型时运行 `npm run typecheck:shared`。
+- **证据：** 待执行。
+- **可执行环境：** 本机。
+- **状态：** - [ ]
+
+### E-11b 实现计划时刻归档目录解析和输出 binding 规则
+
+- **依赖：** E-11a。
+- **目标文件：** `electron/butler/taskOutputDirectory.ts`、`electron/butler/taskTargetResolver.ts`、`taskPathFacts.ts`、相关 tests。
+- **动作与产物：** 将 direct/daily/hourly 模式映射为输出运行目录；按本机 `scheduledFor` 生成 `yyyymmdd` / `yyyymmdd-HH`。facts provider 只暴露输出根的目录根事实，不扫描其内容。输出 binding 使用相对输出路径，运行重验时重映射到 runOutputDir 并拒绝逃逸。
+- **完成判据：** TDD 先写时区、跨日期边界、直接模式、根 fact 与输出路径逃逸用例；输出目录内容不能成为 exact/collection 输入 facts；输出绑定跨 run 可重映射且不能穿出归档目录。
+- **验证命令：** 执行中登记目标 resolver/path facts/output helper 相关 Vitest 文件集合。
+- **证据：** 待执行。
+- **可执行环境：** 本机。
+- **状态：** - [ ]
+
+### E-11c 接入只允许绑定结果路径的自动化写策略
+
+- **依赖：** E-11b；用户已裁决 D-6。
+- **目标文件：** `src/shared/policy/defaultRules.ts`、`electron/confirmation/` facts/final-check、tool gate 与 policy boundary tests；`src/shared/security/` 仅当需登记不可配置 invariant 时。
+- **动作与产物：** facts 阶段验证 write_file/edit_file 目标与本 run 预检 binding、归档目录完全匹配并发出稳定信号；Policy Engine 通过稳定 rule ID `automation-bound-output-write-allow` 仅允许该信号，同时保留 `automation-write-deny` 对所有未匹配写入的拒绝和 `automation-shell-deny`。final-check 重核同一 run snapshot、binding 与目标；空授权目录不可回退到 outputDir。
+- **完成判据：** TDD 覆盖匹配输出写入 allow；未绑定文件、不同目标、未归档输出、授权资料目录写入、输出目录读取、run_shell 均在 executor 前拒绝；policy trace 显示稳定 rule ID。符合安全阶段注释要求，不把 locked policy rule 登记成 system invariant。
+- **验证命令：** 执行中登记 policy、tool gate、read/write path facts 与 automation invocation 的明确 Vitest 文件集合；运行 `npm run check:system-invariant-registry`。
+- **证据：** 待执行。
+- **可执行环境：** 本机。
+- **状态：** - [ ]
+
+### E-11d 将拆分配置与 runOutputDir 贯穿存储、IPC 和运行链
+
+- **依赖：** E-11a～E-11c。
+- **目标文件：** `electron/butler/taskStore.ts`、`butlerIpc.ts`、`taskScheduler.ts`、`butlerInvoker.ts`、`electron/runtime/invocationAssembler.ts`、调用方与相应 tests。
+- **动作与产物：** 新 task/run snapshot 分别保存授权目录、输出目录、归档策略、scheduledFor、runOutputDir 和输出 bindings；claim 时冻结完整配置；运行时安全创建归档目录并进行 realpath/链接边界检查。读取 tools 与审批 Agent 只收到 authorizedDirs；写工具收到精确绑定的 runOutputDir。旧任务继续走 v0 legacy 分支。
+- **完成判据：** TDD 覆盖存储往返、迁移旧行、运行 snapshot 冻结、并发 task 编辑、归档目录创建失败、empty authorizedDirs 不授权读取、旧 run 快照兼容；创建/编辑 IPC 对缺少 outputDir 拒绝，预检通过只保存一次。
+- **验证命令：** 执行中登记相关 taskStore、IPC、scheduler、invoker、assembler 定向套件。
+- **证据：** 待执行。
+- **可执行环境：** 本机。
+- **状态：** - [ ]
+
+### E-11e 设置表单、动态默认、摘要与中英文文案
+
+- **依赖：** E-11a、E-11d；界面归属卡已由用户批准，已完成 Impeccable 检查点 A/B。
+- **目标文件：** `src/renderer/components/Config/ButlerTaskSettings.tsx`、对应 styles、`src/renderer/i18n/resources/{zh-CN,en-US}/config.json`、组件 tests。
+- **动作与产物：** 在现有定时任务编辑弹窗新增必选结果输出目录和三种归档模式；保留独立可空授权读写目录列表；说明生成结果写入输出目录，读取/修改资料需另加授权目录。创建时按任务 scheduleKind 动态给默认值，用户手动更改后不覆盖；编辑保留保存值。任务卡摘要展示输出位置和策略，不增加页面。
+- **完成判据：** TDD 覆盖字段校验、三种选择、每天/间隔/一次性默认、用户手选、编辑回填、长路径/窄窗呈现及失败保留；i18n keys 中英文对齐，Ant Design 控件、已有目录选择器和 `--sa-*` 样式一致；Impeccable detector 无新阻断。
+- **验证命令：** 组件定向 Vitest、`npm run i18n:generate-types`、`npm run i18n:check`、`npm run typecheck:renderer`、Impeccable detector。
+- **证据：** 待执行。
+- **可执行环境：** 自动化在本机；真实桌面宽/窄窗和键盘验收列 X-06。
+- **状态：** - [ ]
+
+### E-11f 补充阶段集成验收并关闭结果目录拆分
+
+- **依赖：** E-11a～E-11e。
+- **目标文件：** 所有 E-11 触及模块与本执行计划证据栏。
+- **动作与产物：** 运行本阶段相关定向测试、类型/i18n/增量构建和安全边界检查；完成一次 final review；复核开发方案冲突声明、实际 schema 版本、迁移、task/run snapshot、policy trace、表单默认及旧任务兼容，逐项更新 E-11 状态与提交阶段。
+- **完成判据：** 新功能 AC 与 INV-14～16 均有 RED/GREEN 证据；其他写入与 Shell deny；结果目录不能读取；所有计划行状态有对应 commit 与验证证据；最终无未提交变更。
+- **验证命令：** 最终命令在前置任务完成后据真实依赖清单更新；遵守仓库的 phase/final 全量测试策略。
+- **证据：** 待执行。
+- **可执行环境：** 源码本机；X-06 外部验收另列。
+- **状态：** - [ ]
+
 ## 4. 外部验收（不阻塞源码关闭）
 
 | 编号 | 项目 | 验收人/环境 | 证据 |
@@ -236,6 +311,7 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | X-03 | 宽屏双栏、窄窗口回退、中文长路径与键盘辅助技术 | macOS/Windows 桌面包 | 截图、操作记录、键盘可达性清单 |
 | X-04 | 数据库升级/旧版本回退 | 打包应用副本 + v102 数据副本及升级前备份 | 新版迁移成功；旧版打开升级库被高版本保护拒绝；恢复升级前备份后旧版启动成功；再次升级结果可读；列明升级后数据不包含在旧备份中的损失边界 |
 | X-05 | 跳过无特殊通知、运行历史可见；本期不触发 IM 特殊通知 | 配置真实飞书/微信账号的验收环境 | skipped event / delivery journal 对照 |
+| X-06 | 新增输出目录/归档策略的窄窗、中文长路径、键盘焦点和屏幕阅读器标签 | macOS/Windows 桌面应用 | 宽/窄窗口截图、选择与校验操作记录、键盘可达性清单 |
 
 ## 5. 开发进度记录
 

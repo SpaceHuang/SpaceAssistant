@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检开发方案
 
-> 状态：草稿（未实施；已按 2026-10-17 开发方案第四轮评审 R4-01 修订，待复审）  
+> 状态：既有功能已实施；2026-10-18 结果目录拆分修订进行中
 > 需求基线：[定时任务多工作目录与预检需求细化（评审稿）](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 复审依据：[第四轮复审](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-development-plan-review-round-4.md)  
 > 核对基线：工作区 `HEAD 7c0edc4176643627fdee85bff017a8d652059f26`；现状以本方案列出的当前文件和复现命令为准。工作区另有未跟踪目录 `llm-wiki.migrated-20261015-135757/`，与本方案无关。
@@ -67,29 +67,48 @@
 
 下钻：`electron/butler/butlerSessionEvents.ts`、`electron/sessionEvents.ts`、`electron/database/operations.ts`。
 
+### D-4：任务目录是否拆分为结果输出目录与资料授权目录？（已裁决）
+
+- **决定：** 用户必须选择一个结果输出目录；另有可空的授权读写目录列表。输出目录只承载任务生成结果，不因此授权读取、列目录或修改已有资料。界面使用现有目录选择器和定时任务编辑弹窗，提供归档模式：直接输出、按 `yyyymmdd` 子目录、按 `yyyymmdd-HH` 子目录。
+- **数据兼容：** 新增 `outputDir` 与 `outputOrganization`，规范字段名为 `authorizedDirs`。旧任务原 `workDir/workDirs` 只映射为 `authorizedDirs`，不得推断为输出目录；旧任务未编辑时保持既有 legacy 执行语义，首次编辑必须明确选择输出目录。
+- **决定依据：** 同一个工作目录概念无法表达生成结果的归档位置与用户允许读取/修改的资料范围；把输出目录加入授权根会过度开放读取。
+
+### D-5：归档目录命名和默认值（已裁决）
+
+- **决定：** 每日计划默认“按日期”，间隔定时默认“按日期小时”，一次性计划默认“直接输出”。用户仍可自行更改。按日期/小时的文件夹名称使用任务计划触发时刻 `scheduledFor` 的本机时间；同一日期或小时的运行写入同一归档目录。
+- **决定依据：** 默认值应随任务触发粒度匹配，计划时刻可稳定确定归档位置，不受 Agent 实际启动延迟影响。
+
+### D-6：无人值守结果写入边界（已裁决）
+
+- **决定：** 仅允许 `write_file` / `edit_file` 写入本次运行预检绑定的结果目标，且目标必须在该次归档目录内。输出目录不进入读取授权根；其他路径写入及 Shell 继续拒绝。
+- **安全实现：** facts 阶段只报告主进程对规范化路径与预检 binding 的精确匹配；Policy Engine 通过稳定 rule ID `automation-bound-output-write-allow` 允许该匹配，并保留 `automation-write-deny` 对所有其他写入的拒绝及 `automation-shell-deny`。工具 final-check 再核验同一个 run snapshot、目标路径、binding 和归档目录；失败时 executor 不调用。
+- **决定依据：** 结果目录需要实际承接任务生成物；只授权被用户保存前确认的目标并将范围限制在归档目录，可实现写入而不开放任意本地文件写入。
+
+**本次修订优先级：** D-4～D-6 与下列新增 INV-14～INV-16 优先于本方案其他章节中将 `workDirs` 同时称为输出/授权目录、将所有自动化写入无条件拒绝、或将输出目标约束在授权读根内的早期文字。早期章节仍保留为历史实现基线，其冲突处按本修订执行。
+
 **不需要你决定：** 多目录规范化、预检提交门禁、调度跳过记录、数据迁移、策略事实与审计 Agent 的根集合一致性、一次性任务请求到达时刻校验，均按需求稿与本方案规格实现。D-2 只裁决任务目标分析是否可以向模型服务发送一次额外请求，不改变已确认的提交门禁和目录授权规则。
 
 ## 第 1 层：概要【人机共读】
 
 ### 1.1 目标与边界
 
-本期将任务授权集合从单个 `workDir` 扩展为 `workDirs`；一次运行开始时固定该集合，路径事实探测、策略输入和执行侧共享同一组经主进程校验的目录根。新建、编辑和单独启用操作在主进程执行预检；通过后自动保存/启用，阻断则返回问题和候选目录，renderer 保留表单，由用户修改/勾选后再次提交。定时运行不调用目标清晰度模型；运行时配置无效记 `failed`，错过调度槽位记 `skipped` 并留在运行历史。
+本次修订后，任务分别保存必选的 `outputDir`/`outputOrganization` 与可空的 `authorizedDirs`。运行开始时冻结两类目录和计划时刻；授权目录供资料读取/修改，输出目录按归档策略提供绑定结果写入。新建、编辑和单独启用操作在主进程执行预检；通过后自动保存/启用，阻断则返回问题和候选目录，renderer 保留表单。定时运行不调用目标清晰度模型；运行时配置无效记 `failed`，错过调度槽位记 `skipped` 并留在运行历史。
 
 ### 1.2 不做
 
 - 不扫描整台设备寻找候选目录；目录候选只能来自任务中明确的绝对路径、已选择目录的可验证子路径和预检能具体说明来源的路径。无法可靠确定时要求用户在任务文字中补充路径。
 - 不自动勾选候选目录，不把模型猜测写入授权集合。
 - 不新增主目录、默认执行目录或按目录列表顺序决定目标的行为。
-- 不开放 automation 的 Shell、脚本、写入、外发或策略确认能力；多目录只改变路径范围事实，不改既有 allow / confirm / deny。
+- 不开放 automation 的 Shell、脚本、任意路径写入、外发或策略确认能力；唯一新增的文件写入是 D-6 约束的预检绑定结果写入。
 - 不为跳过运行发送特殊通知；不扩展其他运行失败通知（D-1）。
 - 不在本期为所有自动化历史记录增加清理策略、全局筛选或新的通知中心。
 
 ### 1.3 主要方案
 
-1. 数据库存储 `work_dirs_json`，规范化为去重后的绝对 realpath 数组；单目录旧行迁移为长度为 1 的数组，缺失目录旧行保持空集合，不填入桌面活动目录。
-2. 运行快照持久化完整 `workDirs`；D-3 选 A 时，为兼容现有 session/event 存储的单个 `fixedWorkDir`，采用应用管理的 automation session 根作为会话事件/内部持久化位置。该内部根不属于任务授权集合，不传给文件路径事实、审批 Agent 的授权根或工具访问根。任务目标中的文件路径必须在预检时解析为明确绝对目标；路径不明确或命中多个根时阻断。
+1. 历史 `work_dirs_json` 经 adapter 作为 `authorizedDirs` 读取；v104 新增可空 `output_dir`/`output_organization`。新任务必须保存经校验的输出目录与归档模式；旧任务的原目录只映射到授权目录，未编辑前保持 legacy 行为，编辑时要求显式选择输出目录。
+2. 运行快照分别持久化 `authorizedDirs`、输出目录、归档模式、`scheduledFor`、实际 `runOutputDir` 和目标 bindings。D-3 选 A 时，会话/event 仍写入应用私有 automation session root，不属于上述任一授权集合。授权根用于资料 facts；输出根仅提供受限输出事实。预检将输出目标绑定为相对输出根的路径，运行时依据计划时刻重映射到归档目录。
 3. 任务表单提交由既有 create/update IPC 承担预检及保存，不增加独立预检 IPC：校验字段与目录后运行无工具权限的目标分析；通过同一主进程处理器保存同一份规范化表单快照，否则返回 `PreflightReport`，不写任务表。
-4. 目录范围检查在事实层对规范化目标逐根分类；只有所有授权根之外才产生 `outside-workdir`。敏感路径、系统目录、链接逃逸、不可验证目标仍由已有更高优先级事实和策略规则处理。安全审核 Agent 的 workspace 上下文携带全部根集合；不能只在 UI 或 executor 修补。
+4. 资料读取范围只由 `authorizedDirs` 决定，输出目录不得加入读取 facts、审批 Agent 读取授权或工具读取根。D-6 输出写入由 facts 记录精确 binding 匹配、Policy Engine 稳定规则判定，final-check 对 snapshot 和归档目录复核；安全审核 Agent 同时收到独立标识的授权目录与输出范围。
 5. 调度器继续使用唯一 `client_id` 抢占运行；启动恢复写 `skipped/missed-window` 的既有实现补上历史展示与稳定文案。跳过不调用 Agent、不投递，不和运行中的工具拒绝混淆；工具策略拒绝属于已启动运行的失败结果。
 
 ### 1.4 主要风险与排除方案
@@ -134,6 +153,9 @@
 | INV-11 | v1 目标按 exact/collection/output 逻辑规则绑定；运行期只拒绝违反该类规则或授权边界的变化，不冻结普通文件 inode，不把预期集合成员变化误判为失败。 | binding resolver、`TaskPathFactsProvider`、runtime admission。 | 不存在的输出及中间目录通过覆盖检查；动态输入新增文件被纳入；exact 新歧义失败；普通原子替换通过；越界写仍被策略拒绝。 |
 | INV-12 | `recovery_cursor_at` 表示当前 `schedule_generation` 下首个未核销槽位；每个槽位由 run、skipped summary 或 pending claim 唯一核销。普通配置编辑只推进 task revision，不重置调度游标；调度变更按 queued/running 状态在 taskStore 事务中更新 generation/cursor。 | taskStore transaction + scheduler recovery；claim 消费只使用内部既有 runId，终态按 runId/claim generation 条件清理 pending。 | 配置编辑后旧 run 仍用旧快照；queued 时调度变更冲突；running 时改期/启停可建立新代次；旧 run 终态不清除新代次 pending。 |
 | INV-13 | 只有迁移来的 `preflightVersion=0` task 走 legacy 兼容语义；新建任务必须 v1，首次成功编辑或主动启用在同一事务切换到 v1。 | migration defaults、主进程 IPC、taskStore。 | 有效旧任务无 binding 仍按旧语义运行；缺 roots 失败；阻断编辑不变更 v0；成功后 v1；renderer 伪造 v0 被拒绝。 |
+| INV-14 | 新任务必须有有效 `outputDir` 和 `outputOrganization`；`authorizedDirs` 可为空且只表示资料读写授权。旧目录只迁移为 `authorizedDirs`，绝不自动充当输出目录；旧任务首次编辑须明确补选输出目录。 | v104 migration、task DTO adapter、主进程 IPC。 | v103→v104 不改旧目录语义；新建缺输出拒绝；空授权目录允许新任务；旧任务未编辑仍可 legacy 运行，编辑未选输出被拒绝。 |
+| INV-15 | 每个新 run 从冻结的 `scheduledFor` 和归档模式确定唯一 `runOutputDir`；预检 binding 的相对输出路径只能解析到该目录内。输出目录不能授权读取。 | 主进程输出目录解析器、taskStore run snapshot、runtime admission 与路径 final-check。 | daily/hourly 使用本机计划时间；direct 使用根目录；路径逃逸、链接越界、binding/run snapshot 不匹配均在 executor 前失败；read/list/grep 对输出目录仍视作未授权。 |
+| INV-16 | 自动化写入仅在 facts 验证工具目标与本 run 已批准输出 binding 完全匹配且目标落在 `runOutputDir` 内时 allow；其余写入与所有 Shell 继续 deny。 | facts producer、Policy Engine locked rules、tool final-check；稳定规则 ID `automation-bound-output-write-allow`、`automation-write-deny`、`automation-shell-deny`。 | 匹配输出写入进入 executor；未绑定输出、其他输出根、资料授权目录写入和 Shell 均不进入 executor；decision trace 标明稳定 rule ID；empty authorizedDirs 不回退至 outputDir。 |
 
 ### 2.3 契约卡
 
