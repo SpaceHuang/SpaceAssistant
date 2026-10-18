@@ -114,6 +114,8 @@ export type FactSignal =
   | { kind: 'script-path-declaration'; scope: 'workdir-readonly'; consistent: boolean }
   | { kind: 'script-language-analysis'; language: 'javascript' | 'typescript' | 'powershell' | 'unknown'; status: 'unverified' }
   | { kind: 'wiki-raw-target' }
+  | { kind: 'wiki-managed-target' }
+  | { kind: 'wiki-domain-enabled' }
   | { kind: 'feishu-media-target'; boundary: 'inside' | 'outside' | 'unknown' }
   | { kind: 'wechat-media-target'; boundary: 'inside-workdir' | 'outside-workdir' | 'unknown'; zone?: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown' }
   /** Host-measured exact attachment version, included in confirmation and deferred-approval facts. */

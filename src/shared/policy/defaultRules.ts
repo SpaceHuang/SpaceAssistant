@@ -24,6 +24,11 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'deny', locked: true, reason: 'raw/ 为只读源，不可通过工具修改 (WIKI_RAW_READONLY)'
   },
   {
+    id: 'wiki-domain-file-bypass-deny', when: 'invocation',
+    match: { toolName: ['read_file', 'list_directory', 'grep', 'write_file', 'edit_file', 'run_shell'], signals: ['wiki-managed-target', 'wiki-domain-enabled'] },
+    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'domain_enabled Wiki data must use Wiki domain tools'
+  },
+  {
     id: 'wiki-schema-update-automation-deny', when: 'invocation',
     match: { lane: ['automation'], toolName: 'memory.wiki_update_schema' },
     denyClass: 'forbidden', action: 'deny', locked: true, reason: 'automation lane cannot apply Wiki schema changes'

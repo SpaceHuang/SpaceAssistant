@@ -117,6 +117,7 @@ import { sanitizeAgentText } from '../../src/shared/agentSafeText'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 import { CONFIRMATION_LABELS } from '../../src/shared/confirmation/labels'
 import { createInvocationFactsSnapshot } from '../../src/shared/confirmation/invocationFactsSnapshot'
+import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
 
 
 /** 出站写工具判定（等价现 toolChatLoop.isOutboundWriteTool：未知/非读 fail-closed 计写）。 */
@@ -386,10 +387,11 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     for (const literal of pathLiterals) {
       const expanded = literal.replace(/^~(?=$|[\\/])/, home).replace(/\$\{?HOME\}?/g, home).replace(/%USERPROFILE%/ig, home)
       try {
-        const fact = await probeWritePathFact({ rawPath: expanded, workDir: args.workDir, userDataDir: args.userDataDir, homeDir: home, customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
+        const wikiProbe = wikiProbeContext(args, expanded)
+        const fact = await probeWritePathFact({ rawPath: expanded, workDir: args.workDir, userDataDir: args.userDataDir, homeDir: home, customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [], mountAnchors: wikiProbe.mountAnchors, sensitiveRootExemptions: wikiProbe.sensitiveRootExemptions })
         if (uniquePaths.has(fact.normalizedPath)) continue
         uniquePaths.add(fact.normalizedPath)
-        shellPathSignals.push({ kind: 'path-target', path: fact.normalizedPath, zone: fact.zone })
+        shellPathSignals.push({ kind: 'path-target', path: fact.vocabularyPath ?? fact.normalizedPath, zone: fact.zone })
       } catch {
         shellPathProbeFailed = true
       }
@@ -859,6 +861,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
   if (args.toolName === 'run_shell' && facts) facts.signals.push(...shellPathSignals)
+  // facts: report whether this generic filesystem invocation targets the mounted Wiki and whether its lifecycle is enabled.
+  if (facts && args.wikiConfig && ['read_file', 'list_directory', 'grep', 'write_file', 'edit_file', 'run_shell'].includes(args.toolName)) {
+    const rawPaths = args.toolName === 'run_shell'
+      ? shellPathSignals.flatMap((signal) => signal.kind === 'path-target' ? [signal.path] : [])
+      : [extractPathField(args.toolInput)].filter((value): value is string => typeof value === 'string' && value.length > 0)
+    const mounts = rawPaths.map((rawPath) => resolveWikiMount(args.workDir, args.wikiConfig!, args.userDataDir, rawPath)).filter((mount) => mount.mounted)
+    if (mounts.length) {
+      facts.signals.push({ kind: 'wiki-managed-target' })
+      const lifecycle = await createWikiLifecycleController(mounts[0]!.realBase).read().catch(() => undefined)
+      if (lifecycle?.lifecycle === 'domain_enabled') facts.signals.push({ kind: 'wiki-domain-enabled' })
+    }
+  }
   // ===== R5：shell unsupported 事实下传（gate 层零特例——不派发 desktop 规则，照常进引擎）=====
   if (args.toolName === 'run_shell' && result.shellPrecheck) {
     const analysis = result.shellPrecheck.analysis

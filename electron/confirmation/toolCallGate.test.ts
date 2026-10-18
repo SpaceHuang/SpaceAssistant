@@ -306,6 +306,41 @@ describe('Wiki schema change confirmation policy', () => {
     const automation = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'memory.wiki_update_schema', toolInput: { proposalId: 'proposal-1', expectedSchemaVersion: 1 } }))
     expect(automation.decision).toMatchObject({ type: 'deny', ruleId: 'wiki-schema-update-automation-deny' })
   })
+
+  it('locks generic file and shell access to the managed Wiki only after domain_enabled', async () => {
+    const root = await fs.mkdtemp('/tmp/wiki-bypass-gate-')
+    const workDir = path.join(root, 'work')
+    const userDataDir = path.join(root, 'userdata')
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.mkdir(path.join(wikiRoot, 'wiki'), { recursive: true })
+    await fs.writeFile(path.join(wikiRoot, 'wiki', 'secret.md'), '# Secret')
+    const lifecycle = (await import('../wiki/wikiLifecycle')).createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    const args = { workDir, userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG }
+    try {
+      const ready = await evaluateToolCallGate(base({ ...args, toolName: 'read_file', toolInput: { path: 'llm-wiki/wiki/secret.md' } }))
+      expect(ready.decision.ruleId).not.toBe('wiki-domain-file-bypass-deny')
+      await lifecycle.enable()
+      for (const [toolName, toolInput] of [
+        ['read_file', { path: 'llm-wiki/wiki/secret.md' }],
+        ['list_directory', { path: 'llm-wiki/wiki' }],
+        ['grep', { pattern: 'Secret', path: 'llm-wiki/wiki' }],
+        ['write_file', { path: 'llm-wiki/wiki/secret.md', content: 'overwrite' }],
+        ['edit_file', { path: 'llm-wiki/wiki/secret.md', oldText: 'Secret', newText: 'Other' }],
+        ['run_shell', { command: 'cat llm-wiki/wiki/secret.md' }],
+      ] as const) {
+        const gate = await evaluateToolCallGate(base({ ...args, toolName, toolInput }))
+        expect(gate.facts.signals, toolName).toContainEqual({ kind: 'wiki-managed-target' })
+        expect(gate.facts.signals, toolName).toContainEqual({ kind: 'wiki-domain-enabled' })
+        expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'wiki-domain-file-bypass-deny' })
+      }
+      const normalFile = await evaluateToolCallGate(base({ ...args, toolName: 'read_file', toolInput: { path: 'note.txt' } }))
+      expect(normalFile.decision.ruleId).not.toBe('wiki-domain-file-bypass-deny')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('evaluateToolCallGate MCP 载荷（R3）', () => {
