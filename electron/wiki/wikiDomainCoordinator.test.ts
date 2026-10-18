@@ -75,19 +75,46 @@ describe('WikiDomainCoordinator', () => {
     expect((await coordinator.savePage(base)).revision).toBe(1)
   })
 
-  it('preserves page title and parent uniqueness through a deterministic operation sequence', async () => {
+  it('preserves tree, title, and schema invariants through a seeded operation sequence', async () => {
     const { root, coordinator } = await fixture()
-    const pages = new Map<string, string>()
-    for (let index = 0; index < 18; index += 1) {
-      const title = `Page ${index}`
-      const result = await coordinator.savePage({ ...base, requestId: `seq-${index}`, toolUseId: `tool-${index}`, title, summary: '', markdown: `body ${index}` })
-      pages.set(result.pageId, title)
+    let seed = 0x51a7
+    const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 0x1_0000_0000 }
+    const ids: string[] = []
+    for (let step = 0; step < 16; step += 1) {
+      const shouldCreate = ids.length < 2 || random() < 0.35
+      if (shouldCreate) {
+        const index = ids.length
+        const parentIndex = index > 0 && random() < 0.65 ? Math.floor(random() * index) : undefined
+        const result = await coordinator.savePage({ ...base, requestId: `seeded-${step}`, toolUseId: `tool-${step}`, title: `Page ${index}`, summary: '', markdown: `body ${index}`, ...(parentIndex === undefined ? {} : { parentPageId: ids[parentIndex] }) })
+        ids.push(result.pageId)
+      } else {
+        const index = Math.floor(random() * ids.length)
+        const pageId = ids[index]!
+        const catalogBefore = JSON.parse(await readFile(path.join(root, '.wiki-service/catalog.json'), 'utf8')) as { pages: Array<{ pageId: string; revision: number }> }
+        const current = catalogBefore.pages.find(page => page.pageId === pageId)!
+        if (random() < 0.5) {
+          await coordinator.savePage({ ...base, requestId: `seeded-${step}`, toolUseId: `tool-${step}`, pageId, expectedRevision: current.revision, title: `Page ${index}`, summary: '', markdown: `updated ${step}` })
+        } else {
+          const parentCandidates = ids.slice(0, index)
+          const parentPageId = parentCandidates.length && random() < 0.6 ? parentCandidates[Math.floor(random() * parentCandidates.length)]! : null
+          await coordinator.movePage({ ...base, requestId: `seeded-${step}`, toolUseId: `tool-${step}`, pageId, expectedRevision: current.revision, title: `Page ${index}`, summary: '', markdown: `moved ${step}`, parentPageId })
+        }
+      }
+      const catalog = JSON.parse(await readFile(path.join(root, '.wiki-service/catalog.json'), 'utf8')) as { pages: Array<{ pageId: string; title: string; categoryId: string; parentPageId: string | null }> }
+      const byId = new Map(catalog.pages.map(page => [page.pageId, page]))
+      const siblingTitles = catalog.pages.map(page => `${page.categoryId}\0${page.parentPageId ?? ''}\0${page.title.normalize('NFKC').trim().toLocaleLowerCase()}`)
+      expect(new Set(siblingTitles).size).toBe(siblingTitles.length)
+      expect(catalog.pages.every(page => page.categoryId === 'topic' && (!page.parentPageId || byId.has(page.parentPageId)))).toBe(true)
+      for (const page of catalog.pages) {
+        const visited = new Set<string>([page.pageId])
+        let parentId = page.parentPageId
+        while (parentId) {
+          expect(visited.has(parentId)).toBe(false)
+          visited.add(parentId)
+          parentId = byId.get(parentId)?.parentPageId ?? null
+        }
+      }
     }
-    const catalog = JSON.parse(await readFile(path.join(root, '.wiki-service/catalog.json'), 'utf8')) as { pages: Array<{ pageId: string; title: string; parentPageId: string | null }> }
-    expect(catalog.pages).toHaveLength(18)
-    expect(new Set(catalog.pages.map(page => page.title.toLocaleLowerCase()))).toHaveLength(18)
-    expect(catalog.pages.every(page => page.parentPageId === null)).toBe(true)
-    expect([...pages.keys()].every(pageId => catalog.pages.some(page => page.pageId === pageId))).toBe(true)
   })
 
   it('allows equal titles across categories without sharing an activity path', async () => {
