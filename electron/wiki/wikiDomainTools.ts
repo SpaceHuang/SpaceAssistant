@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { defineDirectTool, type RegisteredTool } from '../tools/plannedToolRegistry'
 import type { ToolExecutionContext, ToolExecutorResult } from '../tools/types'
 import { createWikiLifecycleController } from './wikiLifecycle'
+import { reconcileExternalWikiChanges } from './wikiReconciliationService'
 import { createWikiFileStore } from './wikiFileStore'
 import { resolveSharedWikiRoot } from './wikiInit'
 import { parseWikiSchema } from './wikiSchema'
@@ -220,7 +221,12 @@ async function getReadyWikiStore(context: Pick<WikiDomainContext, 'wikiConfig' |
   const root = resolveSharedWikiRoot(context.userDataDir, context.wikiConfig)
   const lifecycle = await createWikiLifecycleController(root).read()
   if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') throw new WikiDomainToolError('wiki_lifecycle_not_ready')
-  return createWikiFileStore(root)
+  const store = createWikiFileStore(root)
+  if (await store.identity('SCHEMA.md') && await store.readCatalog()) {
+    const reconciliation = await reconcileExternalWikiChanges(store)
+    if (reconciliation.diagnostics.length) throw new WikiDomainToolError('wiki_external_change_conflict')
+  }
+  return store
 }
 
 async function getPageReadService(store: WikiFileStore): Promise<PageReadService> {

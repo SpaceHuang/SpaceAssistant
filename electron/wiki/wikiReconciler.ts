@@ -20,7 +20,8 @@ export interface WikiReconcilePage extends WikiReconcileCatalogEntry {
   externalEdit: boolean
 }
 export interface WikiReconcileDiagnostic { code: string; path: string; pageId?: string; message: string }
-export interface WikiReconcileResult { pages: WikiReconcilePage[]; diagnostics: WikiReconcileDiagnostic[] }
+export interface WikiReconcileTombstone { pageId: string; path: string; revision: number; deleted: true }
+export interface WikiReconcileResult { pages: WikiReconcilePage[]; tombstones: WikiReconcileTombstone[]; diagnostics: WikiReconcileDiagnostic[] }
 
 const START = '<!-- wiki-page:start -->'
 const END = '<!-- wiki-page:end -->'
@@ -44,8 +45,9 @@ export function parseWikiPageMarker(content: string): { marker?: WikiPageMarker;
   return { marker: { pageId: data.pageId, categoryId: data.categoryId, summary: data.summary, parentPageId: data.parentPageId as string | null, sourceRefs, revision: data.revision as number }, body }
 }
 
-export function reconcileWikiFiles(files: WikiReconcileInput[], catalog: WikiReconcileCatalogEntry[]): WikiReconcileResult {
+export function reconcileWikiFiles(files: WikiReconcileInput[], catalog: WikiReconcileCatalogEntry[], schema?: { categories: Array<{ id: string; status: 'active' | 'deprecated' }> }): WikiReconcileResult {
   const previousByPath = new Map(catalog.map(entry => [entry.path, entry]))
+  const previousById = new Map(catalog.map(entry => [entry.pageId, entry]))
   const byId = new Map<string, WikiReconcileInput[]>()
   const parsed: Array<{ file: WikiReconcileInput; marker: WikiPageMarker; body: string; hash: string }> = []
   const diagnostics: WikiReconcileDiagnostic[] = []
@@ -66,17 +68,32 @@ export function reconcileWikiFiles(files: WikiReconcileInput[], catalog: WikiRec
   const pages: WikiReconcilePage[] = []
   for (const item of parsed) {
     if (duplicateIds.has(item.marker.pageId)) continue
-    const previous = previousByPath.get(item.file.path)
-    const externalEdit = !!previous && previous.contentHash !== item.hash
+    const previous = previousById.get(item.marker.pageId) ?? previousByPath.get(item.file.path)
+    const externalEdit = !!previous && (previous.contentHash !== item.hash || previous.path !== item.file.path)
     const revision = previous ? (externalEdit ? previous.revision + 1 : previous.revision) : 1
     const title = /^#\s+(.+?)\s*#*\s*$/m.exec(item.body)?.[1]?.trim()
     if (!title) {
       diagnostics.push({ code: 'wiki-page-title-missing', path: item.file.path, pageId: item.marker.pageId, message: 'Page must contain a first-level title.' })
       continue
     }
+    if (schema && !schema.categories.some(category => category.id === item.marker.categoryId && category.status === 'active')) {
+      diagnostics.push({ code: 'wiki-page-category-invalid', path: item.file.path, pageId: item.marker.pageId, message: 'Page references a category that is missing or inactive in SCHEMA.' })
+      continue
+    }
     pages.push({ pageId: item.marker.pageId, path: item.file.path, revision, contentHash: item.hash, title, categoryId: item.marker.categoryId, parentPageId: item.marker.parentPageId, summary: item.marker.summary, sourceRefs: item.marker.sourceRefs, externalEdit })
   }
-  return { pages, diagnostics }
+  const ids = new Set(pages.map(page => page.pageId))
+  for (const page of pages) if (page.parentPageId && !ids.has(page.parentPageId)) diagnostics.push({ code: 'wiki-page-parent-missing', path: page.path, pageId: page.pageId, message: 'Page references a missing parent page.' })
+  const titles = new Map<string, WikiReconcilePage[]>()
+  for (const page of pages) {
+    const key = `${page.categoryId}\0${page.parentPageId ?? ''}\0${normalizeTitle(page.title)}`
+    titles.set(key, [...(titles.get(key) ?? []), page])
+  }
+  for (const matches of titles.values()) if (matches.length > 1) for (const page of matches) diagnostics.push({ code: 'wiki-page-title-conflict', path: page.path, pageId: page.pageId, message: 'Pages share a normalized title in the same category and parent.' })
+  const seenPageIds = new Set(pages.map(page => page.pageId))
+  const tombstones = catalog.filter(entry => !seenPageIds.has(entry.pageId)).map(entry => ({ pageId: entry.pageId, path: entry.path, revision: entry.revision, deleted: true as const }))
+  return { pages, tombstones, diagnostics }
 }
 
 function sha256(content: string): string { return createHash('sha256').update(content, 'utf8').digest('hex') }
+function normalizeTitle(value: string): string { return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US') }

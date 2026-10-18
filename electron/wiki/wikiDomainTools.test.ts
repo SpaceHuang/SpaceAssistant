@@ -6,6 +6,8 @@ import { createWikiFileStore } from './wikiFileStore'
 import { listWikiPageRevisionsForContext, openWikiPageForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog, updateWikiSchemaForContext } from './wikiDomainTools'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
+import { createHash } from 'node:crypto'
+import { serializeWikiPageMarker } from './wikiReconciler'
 
 const roots: string[] = []
 function tempRoot(): string {
@@ -62,6 +64,24 @@ describe('Wiki domain search tool', () => {
     expect(denied).toMatchObject({ success: false, error: 'page_read_handle_expired' })
     await store.writeCatalog({ formatVersion: 1, pages: [] })
     expect(await readWikiPageForContext({ readHandle }, context)).toMatchObject({ success: false, error: 'wiki-access-denied' })
+  })
+
+  it('reconciles an external edit before opening the page and pins the new immutable revision', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(path.join(wikiRoot, 'wiki', 'topics'), { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n')
+    const oldText = `${serializeWikiPageMarker({ pageId: 'p-external', categoryId: 'topic', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })}\n# External\n\nold body\n`
+    const currentText = oldText.replace('old body', 'external edit')
+    await store.write('wiki/topics/external.md', currentText)
+    await store.writeImmutable('.wiki-service/page-history/p-external/1.md', Buffer.from(oldText))
+    await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: 'p-external', path: 'wiki/topics/external.md', revision: 1, contentHash: createHash('sha256').update(oldText).digest('hex'), title: 'External', categoryId: 'topic', summary: '' }] })
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-ext', lane: 'desktop' }
+    const opened = await openWikiPageForContext({ pageId: 'p-external' }, context)
+    expect(opened).toMatchObject({ success: true, data: { pageId: 'p-external', revision: 2 } })
+    expect(await store.identity('.wiki-service/page-history/p-external/2.md')).not.toBeNull()
   })
 
   it('reads only a bound source snapshot and binds continuation cursors to caller and lane', async () => {

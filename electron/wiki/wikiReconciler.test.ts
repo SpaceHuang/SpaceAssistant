@@ -19,6 +19,16 @@ describe('reconcileWikiFiles', () => {
     expect(result.diagnostics.map(item => item.code)).toContain('wiki-page-identity-duplicate')
   })
 
+  it('preserves revision identity across an external move and reports disappeared pages as tombstones', () => {
+    const moved = serializeWikiPageMarker({ pageId: 'p-moved', categoryId: 'topic', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })
+    const result = reconcileWikiFiles([{ path: 'wiki/new-location.md', content: `${moved}\n# Moved\nupdated body` }], [
+      { pageId: 'p-moved', path: 'wiki/old-location.md', revision: 2, contentHash: 'old-content' },
+      { pageId: 'p-deleted', path: 'wiki/deleted.md', revision: 7, contentHash: 'deleted-content' },
+    ])
+    expect(result.pages).toMatchObject([{ pageId: 'p-moved', path: 'wiki/new-location.md', revision: 3, externalEdit: true }])
+    expect(result.tombstones).toEqual([{ pageId: 'p-deleted', path: 'wiki/deleted.md', revision: 7, deleted: true }])
+  })
+
   it('does not guess identity when the marker is missing or malformed', () => {
     const result = reconcileWikiFiles([
       { path: 'wiki/no-marker.md', content: '# Untagged' },
@@ -26,5 +36,11 @@ describe('reconcileWikiFiles', () => {
     ], [])
     expect(result.pages).toEqual([])
     expect(result.diagnostics.map(item => item.code)).toEqual(['wiki-page-marker-invalid', 'wiki-page-marker-missing'])
+  })
+
+  it('does not accept a reconciliation that breaks schema category references', () => {
+    const marker = serializeWikiPageMarker({ pageId: 'p-invalid', categoryId: 'missing-category', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })
+    const result = reconcileWikiFiles([{ path: 'wiki/a.md', content: `${marker}\n# A` }], [], { categories: [{ id: 'topic', status: 'active' }] })
+    expect(result.diagnostics.map(item => item.code)).toContain('wiki-page-category-invalid')
   })
 })

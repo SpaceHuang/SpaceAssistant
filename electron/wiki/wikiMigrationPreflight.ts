@@ -186,6 +186,13 @@ export async function scanWikiMigrationPreflight(store: WikiFileStore): Promise<
   for (const top of ['wiki', 'raw']) {
     const visit = async (relative: string): Promise<void> => {
       const absolute = store.absolutePath(relative)
+      let directoryInfo
+      try { directoryInfo = await lstat(absolute) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+      if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) {
+        diagnostics.push({ code: 'wiki-migration-directory-rejected', paths: [relative], message: 'Wiki paths must be real directories during migration preflight.' })
+        return
+      }
       let entries
       try { entries = await readdir(absolute, { withFileTypes: true }) }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
