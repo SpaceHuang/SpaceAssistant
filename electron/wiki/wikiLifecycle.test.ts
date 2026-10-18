@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -47,5 +47,18 @@ describe('WikiLifecycleController', () => {
     await lifecycle.initialize()
     await lifecycle.enable()
     expect(await lifecycle.read()).toMatchObject({ lifecycle: 'domain_enabled' })
+  })
+
+  it('does not accept a copied seal and state after the Wiki root identity changes', async () => {
+    const root = await rootFixture()
+    const lifecycle = createWikiLifecycleController(root)
+    await lifecycle.initialize()
+    const movedRoot = `${root}-old`
+    await rename(root, movedRoot)
+    await mkdir(root)
+    await cp(path.join(movedRoot, '.wiki-service-bootstrap.json'), path.join(root, '.wiki-service-bootstrap.json'))
+    await mkdir(path.join(root, '.wiki-service'))
+    await cp(path.join(movedRoot, '.wiki-service/state.json'), path.join(root, '.wiki-service/state.json'))
+    expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'recovery_required', reason: 'bootstrap-control-mismatch' })
   })
 })
