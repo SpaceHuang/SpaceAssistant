@@ -13,17 +13,18 @@ export interface WikiLifecycleSnapshot { lifecycle: WikiLifecycleState; initiali
 
 export function createWikiLifecycleController(wikiRoot: string) {
   const root = path.resolve(wikiRoot)
-  const store = createWikiFileStore(root)
+  let store: ReturnType<typeof createWikiFileStore>
   const lock = path.join(root, '.wiki-domain-lock')
   return {
     initialize(options: { fresh?: boolean } = {}): Promise<WikiLifecycleSnapshot> {
       return withWikiWriteMutex(lock, () => initialize(options))
     },
-    read(): Promise<WikiLifecycleSnapshot> { return readSnapshot() },
+    read(): Promise<WikiLifecycleSnapshot> { return readSnapshot().then(snapshot => snapshot ?? { lifecycle: 'recovery_required', reason: 'bootstrap-control-missing-or-invalid' }) },
+    readIfUninitialized(): Promise<WikiLifecycleSnapshot | undefined> { return readSnapshot() },
     completeInitialization(preflightHash: string): Promise<void> {
       return withWikiWriteMutex(lock, async () => {
         const snapshot = await readSnapshot()
-        if (snapshot.lifecycle !== 'initializing' || !preflightHash) throw new Error('wiki-lifecycle-invalid-transition')
+        if (!snapshot || snapshot.lifecycle !== 'initializing' || !preflightHash) throw new Error('wiki-lifecycle-invalid-transition')
         const seal = await readSeal()
         if (!seal) throw new Error('wiki-lifecycle-recovery-required')
         seal.stage = 'domain_ready'
@@ -35,7 +36,7 @@ export function createWikiLifecycleController(wikiRoot: string) {
     beginMigration(preflightHash: string, migrationId: string): Promise<void> {
       return withWikiWriteMutex(lock, async () => {
         const snapshot = await readSnapshot()
-        if (snapshot.lifecycle !== 'initializing' || !preflightHash || !/^[0-9a-f-]{36}$/i.test(migrationId)) throw new Error('wiki-lifecycle-invalid-transition')
+        if (!snapshot || snapshot.lifecycle !== 'initializing' || !preflightHash || !/^[0-9a-f-]{36}$/i.test(migrationId)) throw new Error('wiki-lifecycle-invalid-transition')
         const seal = await readSeal()
         if (!seal) throw new Error('wiki-lifecycle-recovery-required')
         seal.preflightHash = preflightHash
@@ -47,7 +48,7 @@ export function createWikiLifecycleController(wikiRoot: string) {
     completeMigration(preflightHash: string, migrationId: string): Promise<void> {
       return withWikiWriteMutex(lock, async () => {
         const snapshot = await readSnapshot()
-        if (snapshot.lifecycle !== 'initializing' || snapshot.preflightHash !== preflightHash || snapshot.migrationId !== migrationId) throw new Error('wiki-lifecycle-invalid-transition')
+        if (!snapshot || snapshot.lifecycle !== 'initializing' || snapshot.preflightHash !== preflightHash || snapshot.migrationId !== migrationId) throw new Error('wiki-lifecycle-invalid-transition')
         const seal = await readSeal()
         if (!seal) throw new Error('wiki-lifecycle-recovery-required')
         seal.stage = 'domain_ready'
@@ -59,7 +60,7 @@ export function createWikiLifecycleController(wikiRoot: string) {
     enable(): Promise<void> {
       return withWikiWriteMutex(lock, async () => {
         const snapshot = await readSnapshot()
-        if (snapshot.lifecycle !== 'domain_ready') throw new Error('wiki-lifecycle-invalid-transition')
+        if (!snapshot || snapshot.lifecycle !== 'domain_ready') throw new Error('wiki-lifecycle-invalid-transition')
         const seal = await readSeal()
         if (!seal) throw new Error('wiki-lifecycle-recovery-required')
         seal.stage = 'domain_enabled'
@@ -69,6 +70,7 @@ export function createWikiLifecycleController(wikiRoot: string) {
     },
     markRecoveryRequired(options: { lockHeld?: boolean } = {}): Promise<void> {
       const mark = async () => {
+        store ??= createWikiFileStore(root)
         const seal = await readSeal()
         if (!seal) throw new Error('wiki-bootstrap-seal-unavailable')
         await store.write('.wiki-service/state.json', json({ formatVersion: 1, bootstrapId: seal.bootstrapId, lifecycle: 'recovery_required', initialization: seal.initialization } satisfies LifecycleFile))
@@ -81,9 +83,10 @@ export function createWikiLifecycleController(wikiRoot: string) {
   }
 
   async function initialize(options: { fresh?: boolean } = {}): Promise<WikiLifecycleSnapshot> {
+    store ??= createWikiFileStore(root)
     const sealExists = await exists(WIKI_BOOTSTRAP_SEAL)
     const stateExists = await exists('.wiki-service/state.json')
-    if (sealExists || stateExists) return readSnapshot()
+    if (sealExists || stateExists) return (await readSnapshot()) ?? { lifecycle: 'recovery_required', reason: 'bootstrap-control-missing-or-invalid' }
     const identity = await getRootIdentity(root)
     // Only the trusted initializer may mark its newly created root as empty. Existing roots
     // with partial content still require preflight, even when the standard files are absent.
@@ -95,7 +98,15 @@ export function createWikiLifecycleController(wikiRoot: string) {
     return { lifecycle, initialization }
   }
 
-  async function readSnapshot(): Promise<WikiLifecycleSnapshot> {
+  async function readSnapshot(): Promise<WikiLifecycleSnapshot | undefined> {
+    try {
+      const value = await stat(root)
+      if (!value.isDirectory()) return { lifecycle: 'recovery_required', reason: 'wiki-root-not-directory' }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    }
+    store ??= createWikiFileStore(root)
     const [seal, state] = await Promise.all([readSeal(), readState()])
     if (!seal || !state) return { lifecycle: 'recovery_required', reason: 'bootstrap-control-missing-or-invalid' }
     if (state.lifecycle === 'recovery_required') return { lifecycle: 'recovery_required', reason: 'lifecycle-marked-for-recovery' }

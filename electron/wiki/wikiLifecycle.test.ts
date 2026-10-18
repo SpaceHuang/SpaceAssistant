@@ -17,6 +17,18 @@ describe('WikiLifecycleController', () => {
     expect(state.lifecycle).toBe('domain_ready')
   })
 
+  it('treats a not-yet-created Wiki root as uninitialized instead of recovery-required', async () => {
+    const root = path.join(await rootFixture(), 'llm-wiki')
+    const lifecycle = createWikiLifecycleController(root)
+    expect(await lifecycle.readIfUninitialized()).toBeUndefined()
+    expect(await lifecycle.read()).toMatchObject({ lifecycle: 'recovery_required' })
+  })
+
+  it('fails closed when an existing Wiki root has no lifecycle controls', async () => {
+    const root = await rootFixture()
+    expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'recovery_required' })
+  })
+
   it('keeps existing Wiki content in initializing until preflight is explicitly completed', async () => {
     const root = await rootFixture()
     await mkdir(path.join(root, 'wiki'))
