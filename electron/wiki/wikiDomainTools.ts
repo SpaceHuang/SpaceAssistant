@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { definePlannedTool, type DirectToolSpec, type RegisteredTool } from '../tools/plannedToolRegistry'
+import { definePlannedTool, type DirectToolSpec, type RegisteredTool, type ToolExecutionContext as PreparedToolExecutionContext } from '../tools/plannedToolRegistry'
 import type { ToolExecutionContext, ToolExecutorResult } from '../tools/types'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { reconcileExternalWikiChanges } from './wikiReconciliationService'
@@ -29,10 +29,21 @@ function defineWikiTool(spec: DirectToolSpec<WikiInput, ToolExecutorResult>): Re
     actionClass: spec.actionClass,
     parseInput: spec.parseInput,
     plan: async (input) => ({ input: structuredClone(input) }),
-    execute: ({ input }, context) => spec.execute(input, { runtimeContext: context.runtimeContext } as never),
+    execute: ({ input }, context) => spec.execute(input, { runtimeContext: wikiExecutionContext(context) } as never),
     facts: () => ({ operation: spec.name }),
     display: () => ({ operation: spec.name })
   })
+}
+
+function wikiExecutionContext(context: PreparedToolExecutionContext): ToolExecutionContext {
+  // final-check: only the prepared host confirmation receipt supplies confirmation facts to Wiki executors.
+  return {
+    ...(context.runtimeContext ?? {}),
+    requestId: context.requestId,
+    toolUseId: context.toolUseId,
+    toolUserConfirmed: Boolean(context.userConfirmationReceipt),
+    ...(context.userConfirmationAnswerer ? { userConfirmationAnswerer: context.userConfirmationAnswerer } : {})
+  } as ToolExecutionContext
 }
 
 export function createWikiDomainTools(): RegisteredTool[] {

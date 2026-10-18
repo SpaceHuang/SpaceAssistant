@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
-import { applyWikiRestoreForContext, importWikiSourceForContext, listWikiPageRevisionsForContext, openWikiPageForContext, prepareWikiRestoreForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog, searchWikiForContext, updateWikiSchemaForContext } from './wikiDomainTools'
+import { applyWikiRestoreForContext, createWikiDomainTools, importWikiSourceForContext, listWikiPageRevisionsForContext, openWikiPageForContext, prepareWikiRestoreForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog, searchWikiForContext, updateWikiSchemaForContext } from './wikiDomainTools'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { createHash } from 'node:crypto'
@@ -191,6 +191,40 @@ describe('Wiki domain search tool', () => {
     expect(await store.readText('SCHEMA.md')).toBe(initial)
     const applied = await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1, proposalDiff: diff }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-user', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })
     expect(applied).toMatchObject({ success: true, data: { schemaVersion: 2 } })
+    expect(await store.readText('SCHEMA.md')).toBe(proposed)
+  })
+
+  it('passes host user confirmation provenance through the registered schema update tool', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const initial = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    const proposed = initial.replace('"name":"Topic"', '"name":"Updated"')
+    await store.write('SCHEMA.md', initial)
+    const proposalResult = await proposeWikiSchemaChangeForContext({ content: proposed, expectedSchemaVersion: 1 }, {
+      userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-registered', lane: 'desktop', requestId: 'request-propose', toolUseId: 'tool-propose'
+    })
+    expect(proposalResult).toMatchObject({ success: true })
+    const proposal = (proposalResult as { success: true; data: { proposalId: string; diff: { before: string; after: string } } }).data
+    const requestId = 'request-registered-apply'
+    const toolUseId = 'tool-registered-apply'
+    const runtimeContext = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-registered', lane: 'desktop', requestId, toolUseId }
+    const tool = createWikiDomainTools().find(candidate => candidate.name === 'memory.wiki_update_schema')!
+    const handle = await tool.begin({ proposalId: proposal.proposalId, expectedSchemaVersion: 1, proposalDiff: proposal.diff }, { requestId, toolUseId, executionContext: runtimeContext })
+    handle.awaitConfirmation()
+    handle.confirm()
+    handle.beginValidation()
+    const confirmationContext = {
+      requestId, toolUseId, runtimeContext, userConfirmationReceipt: 'host:user-approved', userConfirmationAnswerer: 'user' as const,
+      signal: new AbortController().signal
+    }
+    await handle.validatePrepared(confirmationContext)
+    handle.finishValidation()
+    const applied = await handle.execute(confirmationContext)
+
+    expect(applied, JSON.stringify(applied)).toMatchObject({ success: true, data: { schemaVersion: 2 } })
     expect(await store.readText('SCHEMA.md')).toBe(proposed)
   })
 
