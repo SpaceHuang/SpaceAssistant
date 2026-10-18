@@ -1,0 +1,9 @@
+{
+  "domainMigrationConfirmTitle": "确认 Wiki 领域迁移",
+  "domainMigrationConfirmMessage": "即将按已审阅的清单迁移 Wiki 文件。",
+  "domainMigrationResumeMessage": "即将继续已确认但中断的 Wiki 迁移。",
+  "domainMigrationConfirmDetail": "扫描文件：{{files}}；变更对象：{{changes}}；清单指纹：{{manifestHash}}",
+  "domainMigrationCancel": "取消",
+  "domainMigrationConfirm": "迁移",
+  "domainMigrationResume": "继续迁移"
+}

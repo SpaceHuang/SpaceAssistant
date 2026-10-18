@@ -552,6 +552,8 @@ export type SpaceAssistantApi = {
     overwrite?: boolean
     installSkill?: boolean
   }) => Promise<{ ok: true; rootPath: string; skillInstalled: boolean } | { ok: false; error: string }>
+  wikiDomainMigrationPreview: () => Promise<import('./domainTypes').WikiBootstrapMigrationPreview>
+  wikiDomainMigrationApply: (payload: { manifestHash: string }) => Promise<{ status: 'completed' | 'cancelled' }>
   wikiStatus: () => Promise<WikiStatus>
   wikiGetSchema: () => Promise<{ content: string } | null>
   wikiResolvePath: (payload: {

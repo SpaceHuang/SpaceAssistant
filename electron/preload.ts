@@ -243,6 +243,8 @@ const api: SpaceAssistantApi = {
   skillInvalidateCache: () => ipcRenderer.invoke('skill:invalidate-cache'),
 
   wikiInit: (payload?: { overwrite?: boolean; installSkill?: boolean }) => ipcRenderer.invoke('wiki:init', payload ?? {}),
+  wikiDomainMigrationPreview: () => ipcRenderer.invoke('wiki:domain-migration-preview'),
+  wikiDomainMigrationApply: (payload: { manifestHash: string }) => ipcRenderer.invoke('wiki:domain-migration-apply', payload),
   wikiStatus: () => ipcRenderer.invoke('wiki:status'),
   wikiGetSchema: () => ipcRenderer.invoke('wiki:get-schema'),
   wikiResolvePath: (payload: { relPath: string }) => ipcRenderer.invoke('wiki:resolve-path', payload),

@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { Alert, App, Button, Input, Modal, Tooltip, Typography } from 'antd'
+import { Alert, App, Button, Input, List, Modal, Tooltip, Typography } from 'antd'
 import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
@@ -43,6 +43,9 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   const [extraRootsInput, setExtraRootsInput] = useState('')
   const [migrationReport, setMigrationReport] = useState<WikiMigrationReport | null>(null)
   const [projectNames, setProjectNames] = useState<ReturnType<typeof projectDisplayMap>>(new Map())
+  const [domainMigrationPreview, setDomainMigrationPreview] = useState<import('../../../shared/domainTypes').WikiBootstrapMigrationPreview | null>(null)
+  const [domainMigrationLoading, setDomainMigrationLoading] = useState(false)
+  const [domainMigrationApplying, setDomainMigrationApplying] = useState(false)
 
   const wikiIndexPath = `${wikiRoot}/wiki/index.md`
   const highlightPaths = useMemo(() => [wikiIndexPath], [wikiIndexPath])
@@ -130,6 +133,39 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
     void wikiTreeRef.current?.refresh()
   }
 
+  const openDomainMigrationReview = async () => {
+    setDomainMigrationLoading(true)
+    try {
+      setDomainMigrationPreview(await window.api.wikiDomainMigrationPreview())
+    } catch (e) {
+      message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
+    } finally {
+      setDomainMigrationLoading(false)
+    }
+  }
+
+  const applyDomainMigration = async () => {
+    if (!domainMigrationPreview) return
+    setDomainMigrationApplying(true)
+    try {
+      const result = await window.api.wikiDomainMigrationApply({ manifestHash: domainMigrationPreview.manifestHash })
+      if (result.status === 'cancelled') return
+      setDomainMigrationPreview(null)
+      message.success(t('domainMigration.complete'))
+      await refreshWikiStatus()
+      void wikiTreeRef.current?.refresh()
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('wiki-migration-preflight-stale')) {
+        await openDomainMigrationReview()
+        message.warning(t('domainMigration.staleReview'))
+      } else {
+        message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
+      }
+    } finally {
+      setDomainMigrationApplying(false)
+    }
+  }
+
   return (
     <div className="wiki-pane">
       <div className="wiki-pane-body">
@@ -162,6 +198,18 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
         {domainLifecycle === 'domain_enabled' && (
           <Alert type="info" showIcon message={t('domainEnabledNotice')} style={{ marginBottom: 8 }} />
         )}
+        {domainLifecycle === 'initializing' && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message={t('domainMigration.pending')}
+            action={<Button size="small" loading={domainMigrationLoading} onClick={() => void openDomainMigrationReview()}>{t('domainMigration.review')}</Button>}
+          />
+        )}
+        {domainLifecycle === 'recovery_required' && (
+          <Alert type="error" showIcon style={{ marginBottom: 8 }} message={t('domainMigration.recoveryRequired')} />
+        )}
         {wikiInitialized === false ? (
           <div className="wiki-pane-empty">
             <p className="wiki-pane-empty-title">{t('empty.title')}</p>
@@ -189,6 +237,76 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
           />
         )}
       </div>
+      <Modal
+        open={domainMigrationPreview !== null}
+        title={t('domainMigration.title')}
+        width={720}
+        confirmLoading={domainMigrationApplying}
+        okText={t('domainMigration.confirm')}
+        cancelText={t('domainMigration.cancel')}
+        okButtonProps={{ disabled: Boolean(domainMigrationPreview?.diagnostics.length) }}
+        onOk={() => void applyDomainMigration()}
+        onCancel={() => setDomainMigrationPreview(null)}
+      >
+        {domainMigrationPreview && (
+          <>
+            {domainMigrationPreview.resumeRequired && <Alert type="warning" showIcon message={t('domainMigration.resume')} style={{ marginBottom: 12 }} />}
+            <Typography.Paragraph>
+              {t('domainMigration.summary', { files: domainMigrationPreview.files.length, changes: domainMigrationPreview.changes.length })}
+            </Typography.Paragraph>
+            {domainMigrationPreview.diagnostics.length > 0 ? (
+              <Alert
+                type="error"
+                showIcon
+                message={t('domainMigration.diagnostics')}
+                description={<List size="small" dataSource={domainMigrationPreview.diagnostics} renderItem={item => <List.Item>{item.message} {item.paths.join(', ')}</List.Item>} />}
+                style={{ marginBottom: 12 }}
+              />
+            ) : null}
+            {domainMigrationPreview.changes.length === 0 && <Alert type="info" showIcon message={t('domainMigration.noChanges')} style={{ marginBottom: 12 }} />}
+            <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+              {domainMigrationPreview.changes.length > 0 && (
+                <List
+                  size="small"
+                  header={t('domainMigration.changes')}
+                  dataSource={domainMigrationPreview.changes}
+                  renderItem={item => (
+                    <List.Item>
+                      <div>
+                        <Typography.Text strong>{item.relativePath}</Typography.Text>
+                        <br />
+                        <Typography.Text type="secondary">{t('domainMigration.kind')}: {item.objectKind}</Typography.Text>
+                        <br />
+                        <Typography.Text type="secondary" code>{t('domainMigration.hashChange')}: {item.oldHash.slice(0, 12) || t('domainMigration.newFile')} → {item.newHash.slice(0, 12)}</Typography.Text>
+                      </div>
+                    </List.Item>
+                  )}
+                />
+              )}
+              {domainMigrationPreview.review.categories.length > 0 && (
+                <List
+                  size="small"
+                  header={t('domainMigration.categories')}
+                  dataSource={domainMigrationPreview.review.categories}
+                  renderItem={item => <List.Item>{item.legacyName} → {item.categoryId} · {item.description}</List.Item>}
+                />
+              )}
+              {domainMigrationPreview.review.indexNotes.length > 0 && (
+                <List size="small" header={t('domainMigration.indexNotes')} dataSource={domainMigrationPreview.review.indexNotes} renderItem={item => <List.Item>{item.sourcePath} → {item.targetTitle}</List.Item>} />
+              )}
+              {domainMigrationPreview.review.unclassifiedIndexContent.length > 0 && (
+                <List size="small" header={t('domainMigration.diagnostics')} dataSource={domainMigrationPreview.review.unclassifiedIndexContent} renderItem={item => <List.Item>{item.sourcePath}</List.Item>} />
+              )}
+              {domainMigrationPreview.review.readonlyLogArchives.length > 0 && (
+                <List size="small" header={t('domainMigration.archives')} dataSource={domainMigrationPreview.review.readonlyLogArchives} renderItem={item => <List.Item>{item.sourcePath} → {item.archivePath}</List.Item>} />
+              )}
+              {domainMigrationPreview.files.length > 0 && (
+                <List size="small" header={t('domainMigration.files')} dataSource={domainMigrationPreview.files} renderItem={item => <List.Item>{item.path} · {item.kind}</List.Item>} />
+              )}
+            </div>
+          </>
+        )}
+      </Modal>
       <Modal
         open={pendingMigration !== null && wizardOpen && migrationReport === null}
         title={t('migration.wizardTitle')}

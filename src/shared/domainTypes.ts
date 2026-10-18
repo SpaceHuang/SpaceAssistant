@@ -572,6 +572,20 @@ export interface WikiProjectSummary {
   orphan: boolean
 }
 
+export interface WikiBootstrapMigrationPreview {
+  manifestHash: string
+  resumeRequired: boolean
+  files: Array<{ path: string; sha256: string; kind: 'page' | 'legacy-index' | 'legacy-log' | 'raw' }>
+  diagnostics: Array<{ code: string; paths: string[]; message: string }>
+  changes: Array<{ objectKind: string; relativePath: string; oldHash: string; newHash: string }>
+  review: {
+    categories: Array<{ legacyName: string; categoryId: string; description: string; status: 'active' | 'deprecated'; parentCategoryId?: string }>
+    indexNotes: Array<{ sourcePath: string; targetTitle: string }>
+    unclassifiedIndexContent: Array<{ sourcePath: string }>
+    readonlyLogArchives: Array<{ sourcePath: string; archivePath: string; sha256: string }>
+  }
+}
+
 export interface WikiStatus {
   rootPath: string
   initialized: boolean

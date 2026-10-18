@@ -46,6 +46,18 @@ describe('WikiMigrationJournal', () => {
     expect((await journal.read(prepared.migrationId)).entries[0]!.step).toBe('verified')
   })
 
+  it('recovers a newly created target written before manifest progress without rewriting it', async () => {
+    const { store } = await fixture()
+    const journal = createWikiMigrationJournal({ store })
+    const prepared = await journal.prepare([{ objectKind: 'index-note', relativePath: 'wiki/migrated-notes/new.md', newBytes: Buffer.from('# New note') }])
+    expect(prepared.entries[0]).toMatchObject({ oldExists: false, oldHash: null, step: 'pending' })
+    await expect(journal.apply(prepared.migrationId, { crashAfterWriteIndex: 0 })).rejects.toThrow('injected migration crash')
+    const write = vi.spyOn(store, 'write')
+    await expect(journal.apply(prepared.migrationId)).resolves.toMatchObject({ status: 'completed' })
+    expect(write).not.toHaveBeenCalledWith('wiki/migrated-notes/new.md', expect.anything(), expect.anything())
+    expect(await store.readText('wiki/migrated-notes/new.md')).toBe('# New note')
+  })
+
   it('stops on an external change and marks lifecycle recovery without overwriting it', async () => {
     const { store } = await fixture()
     await store.write('wiki/page.md', 'old')
@@ -71,6 +83,18 @@ describe('WikiMigrationJournal', () => {
     await expect(journal.rollback(prepared.migrationId)).resolves.toMatchObject({ status: 'rolled_back' })
     expect(await store.readText('SCHEMA.md')).toBe('old')
     await expect(store.read('wiki/new.md')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('does not delete a created target during rollback after an external edit', async () => {
+    const { store } = await fixture()
+    const recovery = vi.fn()
+    const journal = createWikiMigrationJournal({ store, markRecoveryRequired: recovery })
+    const prepared = await journal.prepare([{ objectKind: 'page', relativePath: 'wiki/new.md', newBytes: Buffer.from('# New') }])
+    await journal.apply(prepared.migrationId)
+    await writeFile(store.absolutePath('wiki/new.md'), '# External')
+    await expect(journal.rollback(prepared.migrationId)).rejects.toMatchObject({ code: 'wiki-migration-conflict' })
+    expect(await store.readText('wiki/new.md')).toBe('# External')
+    expect(recovery).toHaveBeenCalledOnce()
   })
 
   it('does not roll back over a file changed externally after migration', async () => {
