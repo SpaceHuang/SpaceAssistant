@@ -1,5 +1,7 @@
 import { createSnapshotReadRegisteredTool } from '../tools/snapshotReadRegisteredTool'
-import type { ToolExecutorResult } from '../tools/types'
+import type { ToolExecutionContext, ToolExecutorResult } from '../tools/types'
+import { createWikiLifecycleController } from './wikiLifecycle'
+import { resolveSharedWikiRoot } from './wikiInit'
 
 export interface WikiDiscoveredTool { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required?: string[]; additionalProperties?: boolean } }
 export interface WikiToolDiscoveryResult { matches: WikiDiscoveredTool[]; totalMatches: number; truncated: boolean; usage: string }
@@ -34,14 +36,26 @@ export const WIKI_DISCOVERY_TOOL_DEFINITION = {
 } as const
 
 /** 首轮广告的 discovery executor；schema 发现本身不改变后续工具授权。 */
-export const wikiDiscoveryTool = createSnapshotReadRegisteredTool('memory', async (input) => ({
-  success: true,
-  data: discoverWikiTools({
-    ...(typeof input.query === 'string' ? { query: input.query } : {}),
-    ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
-    ...(typeof input.offset === 'number' ? { offset: input.offset } : {}),
-  }),
-} satisfies ToolExecutorResult))
+export const wikiDiscoveryTool = createSnapshotReadRegisteredTool('memory', async (input, context) =>
+  executeWikiDiscovery(input, context)
+)
+
+export async function executeWikiDiscovery(input: Record<string, unknown>, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir'>): Promise<ToolExecutorResult> {
+  if (!context.wikiConfig) return { success: false, error: 'wiki_lifecycle_unavailable' }
+  const root = resolveSharedWikiRoot(context.userDataDir, context.wikiConfig)
+  const lifecycle = await createWikiLifecycleController(root).read()
+  if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') {
+    return { success: false, error: 'wiki_lifecycle_not_ready' }
+  }
+  return {
+    success: true,
+    data: discoverWikiTools({
+      ...(typeof input.query === 'string' ? { query: input.query } : {}),
+      ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
+      ...(typeof input.offset === 'number' ? { offset: input.offset } : {}),
+    }),
+  }
+}
 
 export function discoverWikiTools(input: { query?: string; limit?: number; offset?: number }): WikiToolDiscoveryResult {
   const query = (input.query ?? '').normalize('NFKC').trim().toLocaleLowerCase()
