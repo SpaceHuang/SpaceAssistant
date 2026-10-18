@@ -255,7 +255,7 @@ function getSchemaProposalService(store: WikiFileStore): ReturnType<typeof creat
       const value = receipt as Record<string, unknown>
       return value.proposalId === proposalId && typeof value.requestId === 'string' && !!value.requestId &&
         typeof value.toolUseId === 'string' && !!value.toolUseId && typeof value.sessionId === 'string' && !!value.sessionId &&
-        value.lane !== 'automation' && value.confirmed === true && value.answerer === 'user'
+        typeof value.lane === 'string' && value.lane !== 'automation' && value.confirmed === true && value.answerer === 'user'
     } })
     schemaProposalServices.set(store.root, service)
   }
