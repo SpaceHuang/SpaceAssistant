@@ -24,6 +24,17 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'deny', locked: true, reason: 'raw/ 为只读源，不可通过工具修改 (WIKI_RAW_READONLY)'
   },
   {
+    id: 'wiki-schema-update-automation-deny', when: 'invocation',
+    match: { lane: ['automation'], toolName: 'memory.wiki_update_schema' },
+    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'automation lane cannot apply Wiki schema changes'
+  },
+  // policy: stable locked rule requires a real user answer; the executor final-check binds it to this proposal invocation.
+  {
+    id: 'wiki-schema-update-human-confirm', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'memory.wiki_update_schema' },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'user', humanRequired: true, locked: true, reason: 'Wiki schema changes require user confirmation'
+  },
+  {
     id: 'remote-outside-write-deny',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:outside-workdir'] },

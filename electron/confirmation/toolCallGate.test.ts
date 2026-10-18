@@ -299,6 +299,15 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
   })
 })
 
+describe('Wiki schema change confirmation policy', () => {
+  it('requires a user confirmation for apply and rejects unattended automation', async () => {
+    const desktop = await evaluateToolCallGate(base({ toolName: 'memory.wiki_update_schema', toolInput: { proposalId: 'proposal-1', expectedSchemaVersion: 1 } }))
+    expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'wiki-schema-update-human-confirm', answerer: 'user' })
+    const automation = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'memory.wiki_update_schema', toolInput: { proposalId: 'proposal-1', expectedSchemaVersion: 1 } }))
+    expect(automation.decision).toMatchObject({ type: 'deny', ruleId: 'wiki-schema-update-automation-deny' })
+  })
+})
+
 describe('evaluateToolCallGate MCP 载荷（R3）', () => {
   function mcpEntry(overrides: Record<string, unknown> = {}) {
     const value = {

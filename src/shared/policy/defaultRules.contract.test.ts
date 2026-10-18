@@ -20,6 +20,8 @@ const EXPECTED_RULE_IDS = [
   'outbound-incomplete-standard-review',
   'outbound-incomplete-loose-review',
   'wiki-raw-write-deny',
+  'wiki-schema-update-automation-deny',
+  'wiki-schema-update-human-confirm',
   'remote-outside-write-deny',
   'remote-write-scope-unknown-deny',
   'remote-outside-read-deny',
@@ -119,6 +121,9 @@ describe('DEFAULT_POLICY_RULES 零改动契约（T1.5）', () => {
     expect(wikiRaw.action).toBe('deny')
     expect(JSON.stringify(wikiRaw.match)).toContain('wiki-raw-target')
     expect(JSON.stringify(wikiRaw.match)).toContain('write_file')
+
+    expect(byId.get('wiki-schema-update-automation-deny')).toMatchObject({ locked: true, action: 'deny', match: { lane: ['automation'], toolName: 'memory.wiki_update_schema' } })
+    expect(byId.get('wiki-schema-update-human-confirm')).toMatchObject({ locked: true, action: 'ask', answerer: 'user', humanRequired: true, match: { toolName: 'memory.wiki_update_schema' } })
 
     const remoteWrite = byId.get('remote-outside-write-deny')!
     expect(remoteWrite.locked).toBe(true)
