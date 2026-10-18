@@ -8,6 +8,7 @@ import { parseWikiSchema } from './wikiSchema'
 import type { WikiFileStore } from './wikiFileStore'
 import { createWikiDomainReadService, WikiDomainReadError, type WikiReadCaller, type WikiPageReadRecord } from './wikiDomainRead'
 import { createWikiSourceService, WikiSourceError } from './wikiSourceService'
+import { listWikiPageRevisions } from './wikiHistoryService'
 
 type WikiInput = Record<string, unknown>
 type WikiDomainContext = Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'sessionId' | 'lane' | 'remoteContext'>
@@ -41,6 +42,11 @@ export function createWikiDomainTools(): RegisteredTool[] {
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => readWikiSourceForContext(input, context.runtimeContext as ToolExecutionContext)
+  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+    name: 'memory.wiki_list_page_revisions',
+    actionClass: 'read',
+    parseInput: (input) => requireRecord(input),
+    execute: async (input, context) => listWikiPageRevisionsForContext(input, context.runtimeContext as ToolExecutionContext)
   })]
 }
 
@@ -121,6 +127,16 @@ export async function readWikiSourceForContext(input: WikiInput, context: WikiDo
     }) }
   } catch (error) {
     return { success: false, error: error instanceof WikiSourceError ? error.code : error instanceof WikiDomainToolError ? error.code : 'source_missing' }
+  }
+}
+
+export async function listWikiPageRevisionsForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
+  if (typeof input.pageId !== 'string' || !input.pageId) return { success: false, error: 'wiki-page-unavailable' }
+  try {
+    const store = await getReadyWikiStore(context)
+    return { success: true, data: await listWikiPageRevisions(store, input.pageId) }
+  } catch (error) {
+    return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'wiki-page-unavailable' }
   }
 }
 

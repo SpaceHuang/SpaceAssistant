@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
-import { openWikiPageForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog } from './wikiDomainTools'
+import { listWikiPageRevisionsForContext, openWikiPageForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog } from './wikiDomainTools'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 
@@ -81,5 +81,23 @@ describe('Wiki domain search tool', () => {
     const second = await readWikiSourceForContext({ sourceId, cursor, maxChars: 2 }, context)
     expect(second).toMatchObject({ success: true, data: { text: '丙丁', startOffset: 2, endOffset: 4, hasMore: true } })
     expect(await readWikiSourceForContext({ sourceId, cursor, maxChars: 2 }, { ...context, lane: 'lark' })).toMatchObject({ success: false, error: 'source_cursor_invalid' })
+  })
+
+  it('lists page revision metadata only after lifecycle readiness and never returns storage paths', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.writeImmutable('.wiki-service/page-history/p-1/1.md', Buffer.from('first snapshot'))
+    const result = await listWikiPageRevisionsForContext({ pageId: 'p-1' }, {
+      userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-a', lane: 'desktop'
+    })
+    expect(result).toMatchObject({ success: true, data: [{ revision: 1, externalEdit: false, deleted: false }] })
+    expect(JSON.stringify(result)).not.toContain(wikiRoot)
+    await createWikiLifecycleController(wikiRoot).markRecoveryRequired()
+    expect(await listWikiPageRevisionsForContext({ pageId: 'p-1' }, {
+      userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-a', lane: 'desktop'
+    })).toMatchObject({ success: false, error: 'wiki_lifecycle_not_ready' })
   })
 })

@@ -60,21 +60,7 @@ export function createWikiHistoryService(options: {
 
   return {
     async listPageRevisions(pageId: string) {
-      const dir = options.store.absolutePath(`.wiki-service/page-history/${pageId}`)
-      let names: string[]
-      try { names = await readdir(dir) } catch { return [] }
-      const revisions = []
-      for (const name of names) {
-        if (!/^\d+\.md$/.test(name)) continue
-        const revision = Number(name.slice(0, -3))
-        const filePath = path.join(dir, name)
-        const timestamp = (await stat(filePath)).mtime.toISOString()
-        let body = ''
-        try { body = await options.store.readText(`.wiki-service/page-history/${pageId}/${name}`) } catch { continue }
-        const parsed = parseWikiPageMarker(body)
-        revisions.push({ revision, timestamp, changeSummary: parsed.marker?.summary ?? '', externalEdit: false, deleted: false })
-      }
-      return revisions.sort((a, b) => b.revision - a.revision)
+      return listWikiPageRevisions(options.store, pageId)
     },
     async prepareRestore(input: RestoreInput) {
       const proposal = await prepare(input)
@@ -103,6 +89,25 @@ export function createWikiHistoryService(options: {
       }
     },
   }
+}
+
+export async function listWikiPageRevisions(store: WikiFileStore, pageId: string) {
+  if (!pageId || pageId.includes('/') || pageId.includes('\\') || pageId.includes('\0') || pageId === '.' || pageId === '..') return []
+  const dir = store.absolutePath(`.wiki-service/page-history/${pageId}`)
+  let names: string[]
+  try { names = await readdir(dir) } catch { return [] }
+  const revisions = []
+  for (const name of names) {
+    if (!/^\d+\.md$/.test(name)) continue
+    const revision = Number(name.slice(0, -3))
+    const filePath = path.join(dir, name)
+    const timestamp = (await stat(filePath)).mtime.toISOString()
+    let body = ''
+    try { body = await store.readText(`.wiki-service/page-history/${pageId}/${name}`) } catch { continue }
+    const parsed = parseWikiPageMarker(body)
+    revisions.push({ revision, timestamp, changeSummary: parsed.marker?.summary ?? '', externalEdit: false, deleted: false })
+  }
+  return revisions.sort((a, b) => b.revision - a.revision)
 }
 
 function normalizeTitle(value: string): string { return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US') }

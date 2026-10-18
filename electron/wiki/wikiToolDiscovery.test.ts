@@ -18,6 +18,7 @@ describe('Wiki domain tool discovery', () => {
     expect(registry.get('memory.wiki_get_schema')).toBeDefined()
     expect(registry.get('memory.wiki_search')).toBeDefined()
     expect(registry.get('memory.wiki_read_source')).toBeDefined()
+    expect(registry.get('memory.wiki_list_page_revisions')).toBeDefined()
   })
 
   it('returns operation names, use descriptions, and complete schemas for matching tools', () => {
