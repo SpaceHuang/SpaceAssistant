@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
-import { applyWikiRestoreForContext, importWikiSourceForContext, listWikiPageRevisionsForContext, openWikiPageForContext, prepareWikiRestoreForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog, updateWikiSchemaForContext } from './wikiDomainTools'
+import { applyWikiRestoreForContext, importWikiSourceForContext, listWikiPageRevisionsForContext, openWikiPageForContext, prepareWikiRestoreForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog, searchWikiForContext, updateWikiSchemaForContext } from './wikiDomainTools'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { createHash } from 'node:crypto'
@@ -84,6 +84,38 @@ describe('Wiki domain search tool', () => {
     const opened = await openWikiPageForContext({ pageId: 'p-external' }, context)
     expect(opened).toMatchObject({ success: true, data: { pageId: 'p-external', revision: 2 } })
     expect(await store.identity('.wiki-service/page-history/p-external/2.md')).not.toBeNull()
+  })
+
+  it('reconciles schema and raw external edits before a domain search and rebuilds index/log projections', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(path.join(wikiRoot, 'wiki', 'topics'), { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const previousSchema = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    const schema = previousSchema.replace('# Rules', '# Rules\n\nExternally clarified rule.')
+    await store.write('SCHEMA.md', schema)
+    await store.writeImmutable('.wiki-service/schema-history/1.md', previousSchema)
+    await store.write('.wiki-service/schema-state.json', JSON.stringify({ formatVersion: 1, schemaVersion: 1, contentHash: createHash('sha256').update(previousSchema).digest('hex') }))
+    const previousPage = `${serializeWikiPageMarker({ pageId: 'p-reconcile', categoryId: 'topic', summary: 'external page', parentPageId: null, sourceRefs: [], revision: 1 })}\n# External Page\n\nprevious content\n`
+    const page = previousPage.replace('previous content', 'written outside the app')
+    await store.write('wiki/topics/external.md', page)
+    await store.writeImmutable('.wiki-service/page-history/p-reconcile/1.md', Buffer.from(previousPage))
+    await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: 'p-reconcile', path: 'wiki/topics/external.md', revision: 1, contentHash: createHash('sha256').update(previousPage).digest('hex'), title: 'External Page', categoryId: 'topic', summary: 'external page' }] })
+    await store.write('raw/e16-fixture/source.md', '# external raw source\n')
+
+    const result = await searchWikiForContext({ query: '' }, { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG })
+
+    expect(result).toMatchObject({ success: true, data: { matches: [{ pageId: 'p-reconcile', title: 'External Page', revision: 2 }] } })
+    expect((await store.readText('SCHEMA.md')).trim()).toBe(schema.trim())
+    expect(await store.readText('wiki/topics/external.md')).toContain('written outside the app')
+    expect(await store.readText('raw/e16-fixture/source.md')).toContain('external raw source')
+    expect(await store.readCatalog()).toMatchObject({ pages: [{ pageId: 'p-reconcile', path: 'wiki/topics/external.md', revision: 2 }] })
+    expect(await store.readText('wiki/index.md')).toContain('External Page')
+    expect(await store.readText('wiki/log.md')).toMatch(/^# Wiki Operation Log/m)
+    expect(await store.identity('.wiki-service/schema-state.json')).not.toBeNull()
+    expect(await store.readText('.wiki-service/schema-state.json')).toContain('"schemaVersion": 2')
+    expect(await store.identity('.wiki-service/page-history/p-reconcile/2.md')).not.toBeNull()
   })
 
   it('reads only a bound source snapshot and binds continuation cursors to caller and lane', async () => {
