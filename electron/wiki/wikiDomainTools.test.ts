@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
-import { listWikiPageRevisionsForContext, openWikiPageForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog, updateWikiSchemaForContext } from './wikiDomainTools'
+import { applyWikiRestoreForContext, importWikiSourceForContext, listWikiPageRevisionsForContext, openWikiPageForContext, prepareWikiRestoreForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog, updateWikiSchemaForContext } from './wikiDomainTools'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { createHash } from 'node:crypto'
@@ -15,6 +15,8 @@ function tempRoot(): string {
   roots.push(root)
   return root
 }
+async function storeReadText(root: string, relativePath: string): Promise<string> { return createWikiFileStore(root).readText(relativePath) }
+async function storeWrite(root: string, relativePath: string, body: string): Promise<void> { await createWikiFileStore(root).write(relativePath, body) }
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
 
 describe('Wiki domain search tool', () => {
@@ -103,6 +105,22 @@ describe('Wiki domain search tool', () => {
     expect(await readWikiSourceForContext({ sourceId, cursor, maxChars: 2 }, { ...context, lane: 'lark' })).toMatchObject({ success: false, error: 'source_cursor_invalid' })
   })
 
+  it('imports only an existing application-bound source id and rejects path-like model input', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const sourceId = '12345678-1234-4234-8234-123456789abc'
+    const sourcePath = `.wiki-service/source-history/${sourceId}/1.md`
+    await storeWrite(wikiRoot, sourcePath, 'trusted content')
+    await storeWrite(wikiRoot, `.wiki-service/sources/${sourceId}.json`, JSON.stringify({ formatVersion: 1, sourceId, sourceRevision: 1, displayName: 'trusted.md', projectId: 'project-a', rawPath: 'raw/project-a/notes.md' }))
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-import', lane: 'desktop', remoteContext: { authOwner: 'owner-a' } }
+    expect(await importWikiSourceForContext({ sourceRef: '../trusted-source.md' }, context)).toMatchObject({ success: false, error: 'source_missing' })
+    const imported = await importWikiSourceForContext({ sourceRef: sourceId }, context)
+    expect(imported).toMatchObject({ success: true, data: { sourceId, sourceRevision: 1, displayName: 'trusted.md', projectId: 'project-a' } })
+    expect(await storeReadText(wikiRoot, sourcePath)).toBe('trusted content')
+  })
+
   it('lists page revision metadata only after lifecycle readiness and never returns storage paths', async () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
@@ -141,5 +159,30 @@ describe('Wiki domain search tool', () => {
     const applied = await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1 }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-user', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })
     expect(applied).toMatchObject({ success: true, data: { schemaVersion: 2 } })
     expect(await store.readText('SCHEMA.md')).toBe(proposed)
+  })
+
+  it('prepares a full restore proposal and applies only the exact material after host user confirmation', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n')
+    const pageId = 'restore-page-1'
+    const marker = serializeWikiPageMarker({ pageId: 'restore-page-1', categoryId: 'topic', summary: 'Saved summary', parentPageId: null, sourceRefs: [], revision: 1 })
+    const oldText = `${marker}\n# Restored title\n\nOriginal body\n`
+    await store.writeImmutable(`.wiki-service/page-history/${pageId}/1.md`, Buffer.from(oldText))
+    await store.write('wiki/current.md', `${marker.replace('"revision":1', '"revision":2')}\n# Current title\n\nCurrent body\n`)
+    await store.writeCatalog({ formatVersion: 1, pages: [{ pageId, path: 'wiki/current.md', revision: 2, contentHash: createHash('sha256').update(`${marker.replace('\"revision\":1', '\"revision\":2')}\n# Current title\n\nCurrent body\n`).digest('hex'), title: 'Current title', categoryId: 'topic', summary: 'Saved summary' }] })
+    const base = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-restore', lane: 'desktop', requestId: 'request-restore', toolUseId: 'prepare-restore' }
+    const prepared = await prepareWikiRestoreForContext({ pageId, targetRevision: 1, expectedCurrentRevision: 2 }, base)
+    expect(prepared.success, JSON.stringify(prepared)).toBe(true)
+    expect(prepared).toMatchObject({ success: true, data: { conflicts: [], finalPage: { title: 'Restored title', markdown: 'Original body', categoryId: 'topic' } } })
+    const { proposalId, finalPage } = prepared.data as { proposalId: string; finalPage: Record<string, unknown> }
+    expect(await applyWikiRestoreForContext({ proposalId, finalPage }, { ...base, toolUseId: 'unconfirmed', toolUserConfirmed: false, userConfirmationAnswerer: 'user' })).toMatchObject({ success: false, error: 'confirmation_required' })
+    expect(await applyWikiRestoreForContext({ proposalId, finalPage: { ...finalPage, markdown: 'tampered' } }, { ...base, toolUseId: 'tampered', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })).toMatchObject({ success: false, error: 'restore_material_mismatch' })
+    const applied = await applyWikiRestoreForContext({ proposalId, finalPage }, { ...base, toolUseId: 'apply-restore', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })
+    expect(applied).toMatchObject({ success: true, data: { pageId, revision: 3 } })
+    expect(await store.readText('wiki/current.md')).toContain('Original body')
   })
 })

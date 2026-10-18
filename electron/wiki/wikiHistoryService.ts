@@ -25,10 +25,11 @@ export function createWikiHistoryService(options: {
   async function prepare(input: RestoreInput, proposalId: string = randomUUID()): Promise<PreparedRestore> {
     const catalog = await options.store.readCatalog()
     const page = catalog?.pages.find(item => item.pageId === input.pageId)
+    const tombstone = catalog?.tombstones?.find(item => item.pageId === input.pageId)
     const schema = options.schema()
     const conflicts: WikiRestoreConflict[] = []
-    if (!page) conflicts.push({ code: 'page_not_found', message: 'Page is not active.', pageId: input.pageId })
-    else if (page.revision !== input.expectedCurrentRevision) conflicts.push({ code: 'revision_conflict', message: 'Current page revision changed.', pageId: input.pageId })
+    if (!page && !tombstone) conflicts.push({ code: 'page_not_found', message: 'Page is not active and has no tombstone.', pageId: input.pageId })
+    else if ((page?.revision ?? tombstone?.revision) !== input.expectedCurrentRevision) conflicts.push({ code: 'revision_conflict', message: 'Current page revision changed.', pageId: input.pageId })
     let snapshotText = ''
     try { snapshotText = await options.store.readText(`.wiki-service/page-history/${input.pageId}/${input.targetRevision}.md`) }
     catch { conflicts.push({ code: 'revision_not_found', message: 'Target revision is unavailable.', pageId: input.pageId }) }
@@ -48,7 +49,7 @@ export function createWikiHistoryService(options: {
     const category = schema.categories.find(item => item.id === finalPage.categoryId && item.status === 'active')
     if (!category) conflicts.push({ code: 'category_invalid', message: 'Target category is not active in the current SCHEMA.' })
     if (finalPage.parentPageId && !catalog?.pages.some(item => item.pageId === finalPage.parentPageId)) conflicts.push({ code: 'parent_invalid', message: 'Target parent page is unavailable.' })
-    if (page && catalog?.pages.some(item => item.pageId !== page.pageId && item.categoryId === finalPage.categoryId && (item.parentPageId ?? null) === finalPage.parentPageId && normalizeTitle(item.title ?? '') === normalizeTitle(finalPage.title))) conflicts.push({ code: 'title_conflict', message: 'Another page already uses this title in the same category and parent.' })
+    if (catalog?.pages.some(item => item.pageId !== input.pageId && item.categoryId === finalPage.categoryId && (item.parentPageId ?? null) === finalPage.parentPageId && normalizeTitle(item.title ?? '') === normalizeTitle(finalPage.title))) conflicts.push({ code: 'title_conflict', message: 'Another page already uses this title in the same category and parent.' })
     for (const source of finalPage.sourceRefs) {
       try { await options.store.read(`.wiki-service/source-history/${source.sourceId}/${source.sourceRevision}.md`) }
       catch { conflicts.push({ code: 'source_revision_missing', message: `Source revision ${source.sourceId} is unavailable.` }) }
@@ -67,12 +68,13 @@ export function createWikiHistoryService(options: {
       if (!proposal.conflicts.length && (!proposal.finalPage.title || !proposal.finalPage.markdown)) proposal.conflicts.push({ code: 'revision_invalid', message: 'Target revision content is incomplete.' })
       return { proposalId: proposal.proposalId, conflicts: proposal.conflicts, finalPage: proposal.finalPage }
     },
-    async applyRestore(proposalId: string, invocation: { requestId: string; toolUseId: string; callerId: string; lane: string; receipt: unknown }): Promise<WikiSavePageResult> {
+    async applyRestore(proposalId: string, invocation: { requestId: string; toolUseId: string; callerId: string; lane: string; receipt: unknown; expectedFinalPage?: PreparedRestore['finalPage'] }): Promise<WikiSavePageResult> {
       const proposal = proposals.get(proposalId)
       if (!proposal || !/^[0-9a-f-]{36}$/i.test(proposalId)) throw codedError('restore_proposal_expired')
       if (proposal.input.callerId !== invocation.callerId || proposal.input.lane !== invocation.lane) throw codedError('restore_conflict')
       if (invocation.lane === 'automation' || !await options.verifyConfirmation(invocation.receipt, proposalId)) throw codedError('confirmation_required')
       if (proposal.conflicts.length) throw Object.assign(codedError('restore_conflict'), { conflicts: proposal.conflicts })
+      if (invocation.expectedFinalPage && stableJson(invocation.expectedFinalPage) !== stableJson(proposal.finalPage)) throw codedError('restore_material_mismatch')
       const current = await prepare({ ...proposal.input }, proposalId)
       if (current.conflicts.length || current.baseSchemaVersion !== proposal.baseSchemaVersion || JSON.stringify(current.finalPage) !== JSON.stringify(proposal.finalPage)) throw Object.assign(codedError('restore_conflict'), { conflicts: current.conflicts })
       try {
@@ -111,4 +113,9 @@ export async function listWikiPageRevisions(store: WikiFileStore, pageId: string
 }
 
 function normalizeTitle(value: string): string { return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US') }
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  return `{${Object.keys(value as Record<string, unknown>).sort().map(key => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(',')}}`
+}
 function codedError(code: string): Error { return Object.assign(new Error(code), { code }) }

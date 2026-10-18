@@ -52,9 +52,10 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     const category = schema.categories.find(item => item.id === input.categoryId && item.status === 'active')
     if (!category) throw codedError('category_invalid')
     const existingPage = input.pageId ? catalog.pages.find(page => page.pageId === input.pageId) : undefined
-    if (input.pageId && !existingPage) throw codedError('page_not_found')
+    const tombstone = input.operationKind === 'restored' && input.pageId ? catalog.tombstones?.find(page => page.pageId === input.pageId) : undefined
+    if (input.pageId && !existingPage && !tombstone) throw codedError('page_not_found')
     if (existingPage && existingPage.revision !== input.expectedRevision) throw codedError('revision_conflict')
-    if (!existingPage && input.expectedRevision !== undefined) throw codedError('revision_conflict')
+    if (!existingPage && input.expectedRevision !== undefined && (!tombstone || tombstone.revision !== input.expectedRevision)) throw codedError('revision_conflict')
     const parentPageId = input.parentPageId !== undefined ? input.parentPageId : existingPage?.parentPageId ?? null
     if (parentPageId && !catalog.pages.some(page => page.pageId === parentPageId)) throw codedError('parent_invalid')
     if (category.allowedParentCategoryIds && parentPageId) {
@@ -64,9 +65,9 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     if (parentPageId && isDescendant(catalog.pages, parentPageId, existingPage?.pageId ?? '')) throw codedError('parent_invalid')
     const titleKey = normalizeTitle(input.title)
     if (catalog.pages.some(page => page.pageId !== existingPage?.pageId && page.categoryId === input.categoryId && (page.parentPageId ?? null) === parentPageId && normalizeTitle(page.title ?? '') === titleKey)) throw codedError('title_conflict')
-    const pageId = existingPage?.pageId ?? randomUUID()
-    const revision = (existingPage?.revision ?? 0) + 1
-    const relPath = existingPage?.path ?? `wiki/${slug(input.title)}-${pageId.slice(0, 8)}.md`
+    const pageId = existingPage?.pageId ?? input.pageId ?? randomUUID()
+    const revision = (existingPage?.revision ?? tombstone?.revision ?? 0) + 1
+    const relPath = existingPage?.path ?? tombstone?.path ?? `wiki/${slug(input.title)}-${pageId.slice(0, 8)}.md`
     const marker = serializeWikiPageMarker({ pageId, categoryId: input.categoryId, summary: input.summary, parentPageId, sourceRefs: input.sourceRefs ?? [], revision })
     const pageBody = `${marker}\n# ${input.title.trim()}\n\n${input.markdown.trimEnd()}\n`
     const bytes = Buffer.from(pageBody)
@@ -107,7 +108,7 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     const decoded = parsePage(staged.toString('utf8'))
     const existing = catalog.pages.find(page => page.pageId === journal.result.pageId)
     const page = { pageId: journal.result.pageId, path: journal.targetPath, revision: journal.result.revision, contentHash: journal.newHash, title: decoded.title, categoryId: decoded.categoryId, summary: decoded.summary, parentPageId: decoded.parentPageId }
-    const nextCatalog = { formatVersion: 1 as const, pages: [...catalog.pages.filter(item => item.pageId !== page.pageId), page] }
+    const nextCatalog = { formatVersion: 1 as const, pages: [...catalog.pages.filter(item => item.pageId !== page.pageId), page], tombstones: (catalog.tombstones ?? []).filter(item => item.pageId !== page.pageId) }
     await options.store.writeCatalog(nextCatalog)
     await writeSnapshotIfMissing(options.store, `.wiki-service/page-history/${page.pageId}/${page.revision}.md`, staged)
     const ops = await listOperations(options.store)

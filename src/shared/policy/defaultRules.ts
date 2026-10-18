@@ -33,6 +33,16 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['automation'], toolName: 'memory.wiki_update_schema' },
     denyClass: 'forbidden', action: 'deny', locked: true, reason: 'automation lane cannot apply Wiki schema changes'
   },
+  {
+    id: 'wiki-page-restore-automation-deny', when: 'invocation',
+    match: { lane: ['automation'], toolName: 'memory.wiki_apply_restore' },
+    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'automation lane cannot restore Wiki pages'
+  },
+  {
+    id: 'wiki-page-restore-human-confirm', when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'memory.wiki_apply_restore' },
+    denyClass: 'insufficient-info', action: 'ask', answerer: 'user', humanRequired: true, locked: true, reason: 'Wiki page restores require user confirmation'
+  },
   // policy: stable locked rule requires a real user answer; the executor final-check binds it to this proposal invocation.
   {
     id: 'wiki-schema-update-human-confirm', when: 'invocation',

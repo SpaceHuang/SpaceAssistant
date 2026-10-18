@@ -48,4 +48,18 @@ describe('WikiHistoryService', () => {
     const proposal = await service.prepareRestore({ pageId: page.pageId, targetRevision: 1, expectedCurrentRevision: 1, callerId: 'bot', lane: 'automation' })
     await expect(service.applyRestore(proposal.proposalId, { requestId: 'auto', toolUseId: 'auto', callerId: 'bot', lane: 'automation', receipt: 'approved' })).rejects.toMatchObject({ code: 'confirmation_required' })
   })
+
+  it('restores a tombstoned page as the same pageId with a higher revision', async () => {
+    const { root, store, coordinator, service } = await fixture()
+    const page = await coordinator.savePage(input)
+    const catalog = await store.readCatalog()
+    await store.remove(catalog!.pages[0]!.path)
+    await store.writeCatalog({ formatVersion: 1, pages: [], tombstones: [{ pageId: page.pageId, path: catalog!.pages[0]!.path, revision: 1, deleted: true }] })
+    const proposal = await service.prepareRestore({ pageId: page.pageId, targetRevision: 1, expectedCurrentRevision: 1, callerId: 'assistant', lane: 'chat' })
+    expect(proposal.conflicts).toEqual([])
+    await expect(service.applyRestore(proposal.proposalId, { requestId: 'restore-tombstone', toolUseId: 'restore-tombstone', callerId: 'assistant', lane: 'chat', receipt: 'approved' })).resolves.toMatchObject({ pageId: page.pageId, revision: 2 })
+    expect((await store.readCatalog())?.tombstones).toEqual([])
+    expect((await store.readCatalog())?.pages).toMatchObject([{ pageId: page.pageId, revision: 2 }])
+    expect(await readFile(path.join(root, 'wiki', 'alpha-' + page.pageId.slice(0, 8) + '.md'), 'utf8').catch(() => '')).not.toBe('')
+  })
 })

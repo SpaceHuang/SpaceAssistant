@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseWikiCommand } from '../../src/shared/outbound/wikiCommandService'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { importRawFromWorkDir } from './wikiImport'
-import { readWikiSourceForContext } from './wikiDomainTools'
+import { importWikiSourceForContext, readWikiSourceForContext } from './wikiDomainTools'
 import { createWikiLifecycleController } from './wikiLifecycle'
 
 const roots: string[] = []
@@ -28,8 +28,10 @@ describe('Wiki command to sourceId integration', () => {
     expect(sourceId).toBeTruthy()
     const wikiRoot = path.join(userDataPath, 'llm-wiki')
     await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const context = { userDataDir: userDataPath, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'assistant', lane: 'chat' }
+    expect(await importWikiSourceForContext({ sourceRef: sourceId }, context)).toMatchObject({ success: true, data: { sourceId, sourceRevision: 1 } })
     const read = await readWikiSourceForContext({ sourceId, sourceRevision: 1 }, {
-      userDataDir: userDataPath, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'assistant', lane: 'chat'
+      ...context
     })
     expect(read).toMatchObject({ success: true, data: { sourceId, sourceRevision: 1, text: 'integration source' } })
   })

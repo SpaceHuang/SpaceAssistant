@@ -19,6 +19,8 @@ describe('Wiki domain tool discovery', () => {
     expect(registry.get('memory.wiki_search')).toBeDefined()
     expect(registry.get('memory.wiki_read_source')).toBeDefined()
     expect(registry.get('memory.wiki_list_page_revisions')).toBeDefined()
+    expect(registry.get('memory.wiki_restore_page')).toBeDefined()
+    expect(registry.get('memory.wiki_apply_restore')).toBeDefined()
     expect(registry.get('memory.wiki_propose_schema_change')).toBeDefined()
     expect(registry.get('memory.wiki_update_schema')).toBeDefined()
   })

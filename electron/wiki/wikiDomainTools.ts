@@ -11,6 +11,8 @@ import { createWikiDomainReadService, WikiDomainReadError, type WikiReadCaller, 
 import { createWikiSourceService, WikiSourceError } from './wikiSourceService'
 import { listWikiPageRevisions } from './wikiHistoryService'
 import { createWikiSchemaProposalService, WikiSchemaProposalError } from './wikiSchemaProposal'
+import { createWikiDomainCoordinator, type WikiDomainSchema } from './wikiDomainCoordinator'
+import { createWikiHistoryService, type WikiRestoreConflict } from './wikiHistoryService'
 
 type WikiInput = Record<string, unknown>
 type WikiDomainContext = Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'sessionId' | 'lane' | 'remoteContext' | 'requestId' | 'toolUseId' | 'toolUserConfirmed' | 'userConfirmationAnswerer'>
@@ -18,6 +20,7 @@ type PageReadService = ReturnType<typeof createWikiDomainReadService>
 const pageReadServices = new Map<string, { pages: WikiPageReadRecord[]; service: PageReadService }>()
 const sourceReadServices = new Map<string, ReturnType<typeof createWikiSourceService>>()
 const schemaProposalServices = new Map<string, ReturnType<typeof createWikiSchemaProposalService>>()
+const historyServices = new Map<string, { schema: WikiDomainSchema; service: ReturnType<typeof createWikiHistoryService> }>()
 
 export function createWikiDomainTools(): RegisteredTool[] {
   return [defineDirectTool<WikiInput, ToolExecutorResult>({
@@ -25,6 +28,11 @@ export function createWikiDomainTools(): RegisteredTool[] {
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (_input, context) => getWikiSchemaForContext(context.runtimeContext as ToolExecutionContext)
+  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+    name: 'memory.wiki_import_source',
+    actionClass: 'write',
+    parseInput: (input) => requireRecord(input),
+    execute: async (input, context) => importWikiSourceForContext(input, context.runtimeContext as ToolExecutionContext)
   }), defineDirectTool<WikiInput, ToolExecutorResult>({
     name: 'memory.wiki_search',
     actionClass: 'read',
@@ -50,6 +58,16 @@ export function createWikiDomainTools(): RegisteredTool[] {
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => listWikiPageRevisionsForContext(input, context.runtimeContext as ToolExecutionContext)
+  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+    name: 'memory.wiki_restore_page',
+    actionClass: 'read',
+    parseInput: (input) => requireRecord(input),
+    execute: async (input, context) => prepareWikiRestoreForContext(input, context.runtimeContext as ToolExecutionContext)
+  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+    name: 'memory.wiki_apply_restore',
+    actionClass: 'write',
+    parseInput: (input) => requireRecord(input),
+    execute: async (input, context) => applyWikiRestoreForContext(input, context.runtimeContext as ToolExecutionContext)
   }), defineDirectTool<WikiInput, ToolExecutorResult>({
     name: 'memory.wiki_propose_schema_change',
     actionClass: 'write',
@@ -86,6 +104,26 @@ export async function getWikiSchemaForContext(context: Pick<ToolExecutionContext
 
 export class WikiDomainToolError extends Error {
   constructor(readonly code: string) { super(code); this.name = 'WikiDomainToolError' }
+}
+
+export async function importWikiSourceForContext(
+  input: WikiInput,
+  context: WikiDomainContext
+): Promise<ToolExecutorResult> {
+  if (typeof input.sourceRef !== 'string' || !input.sourceRef || input.sourceRef.length > 1024) return { success: false, error: 'source_missing' }
+  try {
+    const store = await getReadyWikiStore(context)
+    if (!/^[0-9a-f-]{36}$/i.test(input.sourceRef)) return { success: false, error: 'source_missing' }
+    const sourceId = input.sourceRef
+    const bindingText = await store.readText(`.wiki-service/sources/${sourceId}.json`).catch(() => undefined)
+    if (!bindingText) return { success: false, error: 'source_missing' }
+    const binding = JSON.parse(bindingText) as { formatVersion?: unknown; sourceId?: unknown; sourceRevision?: unknown; displayName?: unknown; projectId?: unknown; rawPath?: unknown }
+    if (binding.formatVersion !== 1 || binding.sourceId !== sourceId || !Number.isSafeInteger(binding.sourceRevision) || typeof binding.displayName !== 'string' || !binding.displayName || typeof binding.rawPath !== 'string' || !binding.rawPath.startsWith('raw/')) return { success: false, error: 'source_missing' }
+    await store.read(`.wiki-service/source-history/${sourceId}/${binding.sourceRevision}.md`)
+    return { success: true, data: { sourceId, sourceRevision: binding.sourceRevision, displayName: binding.displayName, ...(typeof binding.projectId === 'string' ? { projectId: binding.projectId } : {}) } }
+  } catch (error) {
+    return { success: false, error: error instanceof WikiSourceError ? error.code : error instanceof WikiDomainToolError ? error.code : 'source_missing' }
+  }
 }
 
 export async function searchWikiForContext(input: WikiInput, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir'>): Promise<ToolExecutorResult> {
@@ -151,6 +189,35 @@ export async function listWikiPageRevisionsForContext(input: WikiInput, context:
   } catch (error) {
     return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'wiki-page-unavailable' }
   }
+}
+
+export async function prepareWikiRestoreForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
+  if (typeof input.pageId !== 'string' || !input.pageId || !Number.isSafeInteger(input.targetRevision) || (input.targetRevision as number) < 1 || !Number.isSafeInteger(input.expectedCurrentRevision) || (input.expectedCurrentRevision as number) < 1) return { success: false, error: 'restore_conflict' }
+  try {
+    const store = await getReadyWikiStore(context)
+    const runtime = await getHistoryRuntime(store)
+    const overrides = {
+      ...(typeof input.title === 'string' ? { title: input.title } : {}),
+      ...(typeof input.categoryId === 'string' ? { categoryId: input.categoryId } : {}),
+      ...(Object.prototype.hasOwnProperty.call(input, 'parentPageId') ? { parentPageId: typeof input.parentPageId === 'string' ? input.parentPageId : null } : {})
+    }
+    const proposal = await runtime.service.prepareRestore({ pageId: input.pageId, targetRevision: input.targetRevision as number, expectedCurrentRevision: input.expectedCurrentRevision as number,
+      callerId: wikiCaller(context).callerId, lane: context.lane ?? 'desktop', ...(Object.keys(overrides).length ? { overrides } : {}) })
+    return { success: true, data: proposal }
+  } catch (error) { return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'restore_conflict' } }
+}
+
+export async function applyWikiRestoreForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
+  if (typeof input.proposalId !== 'string' || !input.proposalId || !isRestoreFinalPage(input.finalPage)) return { success: false, error: 'restore_conflict' }
+  try {
+    const store = await getReadyWikiStore(context)
+    const runtime = await getHistoryRuntime(store)
+    const receipt = { proposalId: input.proposalId, requestId: context.requestId, toolUseId: context.toolUseId, sessionId: context.sessionId,
+      lane: context.lane ?? 'desktop', confirmed: context.toolUserConfirmed === true, answerer: context.userConfirmationAnswerer }
+    const result = await runtime.service.applyRestore(input.proposalId, { requestId: context.requestId ?? '', toolUseId: context.toolUseId ?? '', callerId: wikiCaller(context).callerId,
+      lane: context.lane ?? 'desktop', receipt, expectedFinalPage: input.finalPage })
+    return { success: true, data: result }
+  } catch (error) { return { success: false, error: error instanceof WikiDomainToolError ? error.code : (error as { code?: string }).code ?? 'restore_conflict' } }
 }
 
 export async function proposeWikiSchemaChangeForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
@@ -266,6 +333,44 @@ function getSchemaProposalService(store: WikiFileStore): ReturnType<typeof creat
     schemaProposalServices.set(store.root, service)
   }
   return service
+}
+
+async function getHistoryRuntime(store: WikiFileStore) {
+  const content = await store.readText('SCHEMA.md').catch(() => undefined)
+  if (content === undefined) throw new WikiDomainToolError('wiki_schema_unavailable')
+  const parsed = parseWikiSchema(content)
+  if (!parsed.valid) throw new WikiDomainToolError('wiki_schema_unavailable')
+  const stateText = await store.readText('.wiki-service/schema-state.json').catch(() => undefined)
+  let schemaVersion = 1
+  if (stateText !== undefined) {
+    try {
+      const state = JSON.parse(stateText) as { formatVersion?: unknown; schemaVersion?: unknown }
+      if (state.formatVersion !== 1 || !Number.isSafeInteger(state.schemaVersion) || (state.schemaVersion as number) < 1) throw new Error()
+      schemaVersion = state.schemaVersion as number
+    } catch { throw new WikiDomainToolError('wiki_schema_state_invalid') }
+  }
+  let runtime = historyServices.get(store.root)
+  if (!runtime) {
+    const state: { schema: WikiDomainSchema } = { schema: { schemaVersion, categories: parsed.categories } }
+    const coordinator = createWikiDomainCoordinator({ store, schema: () => state.schema })
+    const service = createWikiHistoryService({ store, coordinator, schema: () => ({ schemaVersion: state.schema.schemaVersion, categories: state.schema.categories }), verifyConfirmation: (receipt, proposalId) => {
+      if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return false
+      const value = receipt as Record<string, unknown>
+      return value.proposalId === proposalId && typeof value.requestId === 'string' && !!value.requestId && typeof value.toolUseId === 'string' && !!value.toolUseId &&
+        typeof value.sessionId === 'string' && !!value.sessionId && typeof value.lane === 'string' && value.lane !== 'automation' && value.confirmed === true && value.answerer === 'user'
+    } })
+    runtime = { schema: state.schema, service }
+    historyServices.set(store.root, runtime)
+  } else runtime.schema = { schemaVersion, categories: parsed.categories }
+  return runtime
+}
+
+function isRestoreFinalPage(value: unknown): value is { title: string; categoryId: string; summary: string; markdown: string; parentPageId: string | null; sourceRefs: Array<{ sourceId: string; sourceRevision: number }> } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const page = value as Record<string, unknown>
+  return typeof page.title === 'string' && typeof page.categoryId === 'string' && typeof page.summary === 'string' && typeof page.markdown === 'string' &&
+    (page.parentPageId === null || typeof page.parentPageId === 'string') && Array.isArray(page.sourceRefs) && page.sourceRefs.every(ref => !!ref && typeof ref === 'object' &&
+      typeof (ref as { sourceId?: unknown }).sourceId === 'string' && Number.isSafeInteger((ref as { sourceRevision?: unknown }).sourceRevision))
 }
 
 function wikiCaller(context: Pick<ToolExecutionContext, 'sessionId' | 'lane' | 'remoteContext'>): WikiReadCaller {
