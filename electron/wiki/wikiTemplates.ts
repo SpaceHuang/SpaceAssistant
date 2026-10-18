@@ -116,6 +116,7 @@ author: "SpaceAssistant"
 ## 路径约定
 
 Wiki 是 SpaceAssistant 的**跨项目共享记忆库**：所有工作目录共享同一份。通过 \`memory\` 工具发现 \`memory.wiki_*\` 操作。**不得**向 Agent 暴露或使用 Wiki 物理路径。
+原始来源按 \`raw/[project:<id>]/\` 隔离保存；不要用 shell 绕过 Wiki 领域工具访问这些文件。
 
 ## 共享协作守则
 

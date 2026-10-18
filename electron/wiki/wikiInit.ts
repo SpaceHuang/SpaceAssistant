@@ -9,6 +9,7 @@ import { resolveWikiRootAbs } from './wikiPaths'
 import { DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
 import type { WikiConfig } from '../../src/shared/domainTypes'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
+import { createWikiLifecycleController } from './wikiLifecycle'
 
 /** 共享库物理根：{userData}/<wikiConfig.rootPath>（T1.12a；目录名读配置 D9）。 */
 export function resolveSharedWikiRoot(userDataPath: string, wikiConfig: WikiConfig): string {
@@ -96,8 +97,10 @@ export async function initWikiStructure(
 
   const root = options.userDataPath ? resolveSharedWikiRoot(options.userDataPath, wikiConfig) : resolveWikiRootAbs(workDir, wikiConfig)
   const already = isWikiInitialized(workDir, wikiConfig, options.userDataPath)
+  const rootExisted = fs.existsSync(root)
 
   if (already && !options.overwrite) {
+    await createWikiLifecycleController(root).initialize()
     let skillInstalled = false
     if (options.installSkill !== false) {
       const r = await installBundledLlmWikiSkill(workDir, false, options.userDataPath)
@@ -156,6 +159,7 @@ export async function initWikiStructure(
       if (options.userDataPath) removeProjectWikiSkillCopy(workDir)
     }
 
+    await createWikiLifecycleController(root).initialize({ fresh: !rootExisted })
     const rootRel = wikiConfig.rootPath.replace(/\\/g, '/').replace(/^\/+/, '')
     return { ok: true, rootPath: rootRel, skillInstalled }
   } catch (e) {
