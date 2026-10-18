@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：既有 E-01～E-10 完成；结果目录拆分 E-11a～E-11e 完成，E-11f 进行中
+> 状态：既有 E-01～E-10 完成；结果目录拆分 E-11a～E-11f 完成
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
@@ -297,10 +297,10 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **目标文件：** 所有 E-11 触及模块与本执行计划证据栏。
 - **动作与产物：** 运行本阶段相关定向测试、类型/i18n/增量构建和安全边界检查；完成一次 final review；复核开发方案冲突声明、实际 schema 版本、迁移、task/run snapshot、policy trace、表单默认及旧任务兼容，逐项更新 E-11 状态与提交阶段。
 - **完成判据：** 新功能 AC 与 INV-14～16 均有 RED/GREEN 证据；其他写入与 Shell deny；结果目录不能读取；所有计划行状态有对应 commit 与验证证据；最终无未提交变更。
-- **验证命令：** 最终命令在前置任务完成后据真实依赖清单更新；遵守仓库的 phase/final 全量测试策略。
-- **证据：** 待执行。
+- **验证命令：** `npm exec vitest run electron/database/migrations.wikiProjects.test.ts electron/database/taskControl.test.ts electron/confirmation/deferredExecutionResultStore.test.ts electron/confirmation/deferredTodoCapacity.test.ts electron/confirmation/securityActionIntentStore.test.ts`；`npm test`；`npm run typecheck:shared`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build`；`git diff --check`。
+- **证据：** RED/GREEN：最终全量测试初次发现 5 处既有迁移断言仍固定为 schema v103；改为读取 `DB_SCHEMA_VERSION`，并将 wiki migration 当前版本断言更新为 v104。5 个相关测试文件 / 21 项通过；共享默认归档 helper 与组件/共享类型测试 3 个文件 / 51 项通过。`npm test` 全量通过：1096 个测试文件通过、1 个跳过；10459 个用例通过、111 个跳过。`npm run typecheck:shared`、`npm run i18n:check`（0 个源代码硬编码中文，1443 个均在测试）、`npm run check:system-invariant-registry`（6 个登记、13 个测试引用）及 `npm run build` 均通过；`git diff --check` 通过。Final review 覆盖正确性、结构、策略与执行边界：输出根未进入读取授权；只有冻结的预检 binding 可匹配本次 runOutputDir；permit final-check 拒绝缺失、漂移或非绑定写入；automation 的其他写入与 Shell 仍为锁定拒绝；归档目录拒绝符号链接和非目录冲突。未发现需阻断问题。E-11a～E-11e 阶段提交：`accc4616`、`0d140f17`、`fac21b4e`、`d4099718`、`87e7ab9c`、`ebb532d9`；E-11f 收尾提交：`feb77fcf`、`b6848a33`。
 - **可执行环境：** 源码本机；X-06 外部验收另列。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ## 4. 外部验收（不阻塞源码关闭）
 
