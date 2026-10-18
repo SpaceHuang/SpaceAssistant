@@ -281,6 +281,16 @@ describe('resolveMessageToolsInteractive', () => {
     expect(interactive).toEqual({ requestId: 'req-pending' })
   })
 
+  it('does not restore an actionable confirmation for a terminal turn when pending state is stale', () => {
+    const cancelledMessage: Message = { ...confirmingMessage, status: 'cancelled' }
+    expect(resolveMessageToolsInteractive({
+      message: cancelledMessage,
+      sessionId: 'sess-1',
+      pendingItems: [pendingItem],
+      streamingRequestId: null
+    })).toBeUndefined()
+  })
+
   it('restores interaction when a reloaded message status is stale but the pending store still has the tool', () => {
     const reloadedMessage: Message = {
       ...confirmingMessage,

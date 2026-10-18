@@ -3,7 +3,7 @@ import { abortSessionRun, clearLiveSession, finishSessionRun, getLiveMessages, r
 import { pendingConfirmStore } from './pendingConfirmStore'
 import { clearRunRequestIndex, resolveRunRequest } from './runRequestIndex'
 import { store } from '../store'
-import { resetChatUi, setChatStatus } from '../store/chatSlice'
+import { resetChatUi, setChatStatus, setMessages, setSession } from '../store/chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 function assistantConfirm(sessionId: string): Message {
@@ -54,5 +54,25 @@ describe('abortSessionRun turn-scoped cleanup', () => {
     finishSessionRun('session-a', requestId)
     expect(resolveRunRequest('session-b', requestId)).toMatchObject({ turnId: turnB })
     expect(store.getState().chat.runningSessions['session-b']).toMatchObject({ turnId: turnB })
+  })
+
+  it('accepted cancellation settles the active assistant confirmation in the current view', async () => {
+    const requestId = 'cancel-current-view'
+    const turnId = 'cancel-current-view-turn'
+    const assistant = assistantConfirm('session-a')
+    vi.mocked(window.api.chatCancelTurn).mockResolvedValue(true)
+    store.dispatch(setSession('session-a'))
+    store.dispatch(setMessages([assistant]))
+    store.dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: 'session-a', turnId }))
+    registerSessionRun('session-a', requestId, turnId)
+    resetLiveSessionMessages('session-a', [assistant])
+    pendingConfirmStore.syncFromProjection({ sessionId: 'session-a', requestId, turnId, turnVersion: 1, message: assistant })
+
+    await abortSessionRun('session-a')
+
+    expect(store.getState().chat.messages[0]).toMatchObject({
+      status: 'cancelled',
+      toolCalls: [{ id: 'tool-session-a', status: 'failed' }]
+    })
   })
 })

@@ -138,6 +138,26 @@ export function clearLiveSession(sessionId: string): void {
   liveBySession.delete(sessionId)
 }
 
+function findRunningAssistantMessage(sessionId: string): Message | undefined {
+  const liveAssistant = [...(liveBySession.get(sessionId) ?? [])].reverse().find((message) =>
+    message.role === 'assistant' && message.status === 'streaming'
+  )
+  const storedAssistant = [...store.getState().chat.messages].reverse().find((message) =>
+    message.sessionId === sessionId && message.role === 'assistant' && message.status === 'streaming'
+  )
+  return liveAssistant ?? storedAssistant
+}
+
+function settleAbortedAssistantMessage(sessionId: string, assistant: Message | undefined): void {
+  if (!assistant) return
+  routePatchMessage(sessionId, assistant.id, {
+    status: 'cancelled',
+    ...(assistant.toolCalls
+      ? { toolCalls: assistant.toolCalls.map((tool) => tool.status === 'confirming' ? { ...tool, status: 'failed' as const } : tool) }
+      : {})
+  })
+}
+
 export function countRunningSessions(): number {
   return Object.keys(store.getState().chat.runningSessions).length
 }
@@ -162,6 +182,7 @@ export function finishSessionRun(sessionId: string, requestId: string, assistant
  *（turn 不存在或 IPC 失败时为 false），供列表按钮区分「已中止」与「任务已结束」。 */
 export async function abortSessionRun(sessionId: string): Promise<boolean> {
   const meta = store.getState().chat.runningSessions[sessionId]
+  const activeAssistant = meta ? findRunningAssistantMessage(sessionId) : undefined
   const cancelPromise = meta?.turnId
     ? Promise.resolve(window.api.chatCancelTurn(meta.turnId)).catch(() => false)
     : Promise.resolve(false)
@@ -170,5 +191,7 @@ export async function abortSessionRun(sessionId: string): Promise<boolean> {
   pendingConfirmStore.rejectAllForSession(sessionId)
   clearLiveSession(sessionId)
   store.dispatch(removeRunningSession(sessionId))
-  return meta ? cancelPromise : false
+  const accepted = meta ? await cancelPromise : false
+  if (accepted) settleAbortedAssistantMessage(sessionId, activeAssistant)
+  return accepted
 }
