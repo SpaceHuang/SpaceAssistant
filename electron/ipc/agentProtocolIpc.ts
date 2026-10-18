@@ -38,7 +38,7 @@ import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generatePr
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { getWikiStatus } from '../wiki/wikiStatus'
 import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
-import { importRawFromWorkDir, wikiImportFileTreeChange } from '../wiki/wikiImport'
+import { importAllRawFromWorkDir, importRawFromWorkDir, wikiImportFileTreeChange } from '../wiki/wikiImport'
 import { initWikiStructure, readWikiSchema } from '../wiki/wikiInit'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { makeRecordTrustToCache } from './ipcShared'
@@ -988,6 +988,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       }),
     wikiStatus: async () => getWikiStatus(ctx.getWorkDir(), readWikiConfig(ctx.db), { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
     wikiImportRaw: (payload) => importRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), payload.srcRelPath, { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
+    wikiImportAllRaw: () => importAllRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
     appendHintMessage: async (sessionId, hint) => {
       const msg = createSkillHintSystemMessage(sessionId, hint)
       const { sequence } = sessionCommands.appendNonTurnMessage(msg)

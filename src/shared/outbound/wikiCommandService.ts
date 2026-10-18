@@ -17,6 +17,7 @@ export type WikiCommandDeps = {
   wikiImportRaw: (payload: {
     srcRelPath: string
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number } | { ok: false; error: string }>
+  wikiImportAllRaw?: () => Promise<{ ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> } | { ok: false; error: string }>
 }
 
 const WIKI_SKILL = WIKI_VOCABULARY_PREFIX
@@ -92,10 +93,14 @@ export async function parseWikiCommand(
       return { type: 'command', hint: '[Wiki] 用法: /wiki ingest|摄取|提取 <workDir内路径> 或 /wiki ingest --all' }
     }
     if (target === '--all') {
+      if (!deps.wikiImportAllRaw) return { type: 'command', hint: '[Wiki] 批量来源导入不可用，请升级应用后重试' }
+      const imported = await deps.wikiImportAllRaw()
+      if (!imported.ok) return { type: 'command', hint: `[Wiki] 批量来源导入失败: ${imported.error}` }
+      if (!imported.sources.length) return { type: 'command', hint: '[Wiki] 当前工作目录没有可导入的文本来源' }
       return {
         type: 'run',
-        text: '请先通过 memory.wiki_search 和 memory.wiki_import_source 逐个导入本次任务明确选中的资料；不要使用通用文件工具读取 Wiki 路径。',
-        hint: '[Wiki] Ingest 已开始：--all',
+        text: `请通过 memory.wiki_read_source 读取并整理以下已绑定来源，再通过 memory.wiki_save_page 保存知识页面。\n${imported.sources.map(source => `- sourceId=${source.sourceId} sourceRevision=${source.sourceRevision} displayName=${source.displayName}`).join('\n')}`,
+        hint: `[Wiki] 已绑定 ${imported.sources.length} 个知识来源，Ingest 已开始`,
         skillsState,
         wikiModeActive: true
       }

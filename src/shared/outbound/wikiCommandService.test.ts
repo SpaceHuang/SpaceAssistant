@@ -76,6 +76,30 @@ describe('wikiCommandService', () => {
     }
   })
 
+  it('host imports every selected source for --all and passes only bound source ids to the agent', async () => {
+    const deps = {
+      ...makeDeps(),
+      wikiImportAllRaw: vi.fn().mockResolvedValue({ ok: true as const, sources: [
+        { sourceId: 'source-a', sourceRevision: 1, displayName: 'a.md' },
+        { sourceId: 'source-b', sourceRevision: 2, displayName: 'b.txt' }
+      ] })
+    }
+    const result = await parseWikiCommand('/wiki ingest --all', { manualActivated: [], manualDisabled: [] }, deps)
+    expect(deps.wikiImportAllRaw).toHaveBeenCalledOnce()
+    expect(result.type).toBe('run')
+    if (result.type === 'run') {
+      expect(result.text).toContain('sourceId=source-a')
+      expect(result.text).toContain('sourceId=source-b')
+      expect(result.text).not.toContain('llm-wiki/raw')
+    }
+  })
+
+  it('does not ask the agent to enumerate files when the host bulk import port is unavailable', async () => {
+    const result = await parseWikiCommand('/wiki ingest --all', { manualActivated: [], manualDisabled: [] }, makeDeps())
+    expect(result.type).toBe('command')
+    if (result.type === 'command') expect(result.hint).toContain('批量来源导入不可用')
+  })
+
   it.each(['摄取', '提取'])('runs ingest via Chinese alias %s', async (alias) => {
     const r = await parseWikiCommand(
       `/wiki ${alias} raw/article.md`,

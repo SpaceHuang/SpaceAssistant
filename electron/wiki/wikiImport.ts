@@ -22,6 +22,10 @@ export type WikiImportRawResult =
   | { ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number }
   | { ok: false; error: string }
 
+export type WikiImportAllRawResult =
+  | { ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> }
+  | { ok: false; error: string }
+
 export function wikiImportFileTreeChange(result: WikiImportRawResult): FileTreeChangeEvent | null {
   if (result.ok && result.copied) {
     return { kind: 'paths', relPaths: [result.rawRelPath] }
@@ -99,6 +103,56 @@ export async function importRawFromWorkDir(
     return { ok: true, rawRelPath, copied: true }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** Host-only bulk selection: enumerate regular Markdown/text files under workDir, never follow symlinks. */
+export async function importAllRawFromWorkDir(
+  workDir: string,
+  wikiConfig: WikiConfig,
+  shared: WikiImportSharedOptions
+): Promise<WikiImportAllRawResult> {
+  const supported = new Set(['.md', '.markdown', '.txt'])
+  const excluded = new Set(['.git', '.worktrees', 'node_modules', 'dist', 'build', 'target'])
+  const candidates: string[] = []
+  const pending = ['']
+  try {
+    while (pending.length) {
+      const relative = pending.pop()!
+      const absolute = resolveSafePath(workDir, relative || '.')
+      const entries = await fs.readdir(absolute, { withFileTypes: true })
+      for (const entry of entries) {
+        if (entry.name.startsWith('.') || excluded.has(entry.name)) continue
+        const child = relative ? `${relative}/${entry.name}` : entry.name
+        if (entry.isSymbolicLink()) continue
+        if (entry.isDirectory()) {
+          if (entry.name !== wikiConfig.rootPath) pending.push(child)
+          continue
+        }
+        if (entry.isFile() && supported.has(path.extname(entry.name).toLowerCase())) candidates.push(child)
+      }
+      if (candidates.length > 250) return { ok: false, error: '可导入文本超过 250 个，请改用单文件 ingest' }
+    }
+    candidates.sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    const sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> = []
+    let totalBytes = 0
+    for (const srcRelPath of candidates) {
+      const absolute = resolveSafePath(workDir, srcRelPath)
+      const stat = await fs.stat(absolute)
+      const metadata = await getFileMetadata(absolute)
+      if (!metadata.isText || stat.size > 10 * 1024 * 1024) return { ok: false, error: `${srcRelPath}: 仅支持 10 MiB 内的文本资料` }
+      totalBytes += stat.size
+      if (totalBytes > 50 * 1024 * 1024) return { ok: false, error: '可导入文本总量超过 50 MiB，请改用单文件 ingest' }
+    }
+    for (const srcRelPath of candidates) {
+      const result = await importRawFromWorkDir(workDir, wikiConfig, srcRelPath, shared)
+      if (!result.ok) return { ok: false, error: `${srcRelPath}: ${result.error}` }
+      if (!result.sourceId || !result.sourceRevision) return { ok: false, error: `${srcRelPath}: 来源绑定未完成` }
+      sources.push({ sourceId: result.sourceId, sourceRevision: result.sourceRevision, displayName: path.basename(srcRelPath) })
+    }
+    return { ok: true, sources }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
 }
 
