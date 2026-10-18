@@ -1,6 +1,6 @@
 # Wiki 专属能力接口发布验收记录
 
-> 状态：E-14 本机源码已关闭；E-15 桌面本地 HTTPS mock 下的提案与拒绝链路已有部分证据，批准、取消及真实渠道仍未通过；E-16 已完成 macOS 候选包静态校验、隔离副本首次启动/初始化，以及候选包进程内 fixture reconciler 验收；原样安装和旧版二进制写入仍待完成。未经验收不得执行 E-17 或将 Wiki lifecycle 转为 `domain_enabled`。
+> 状态：E-14 本机源码已关闭；E-15 桌面本地 HTTPS mock 下的提案、批准、拒绝和取消执行已有隔离证据，长正文、取消后 UI 收敛及真实渠道仍未通过；E-16 已完成 macOS 候选包静态校验、隔离副本首次启动/初始化，以及候选包进程内 fixture reconciler 验收；原样安装和旧版二进制写入仍待完成。未经验收不得执行 E-17 或将 Wiki lifecycle 转为 `domain_enabled`。
 > 执行计划：[wiki-domain-tools-execution-plan.md](./wiki-domain-tools-execution-plan.md)
 
 ## 验收信息
@@ -8,9 +8,9 @@
 | 项目 | 记录 |
 | --- | --- |
 | 验收日期 | 2026-10-18 |
-| 源码关闭提交 | `f5b27dbd`（实现）、`61e320a7`（策略分类）、`e66bbf17`（E-14 证据）、`2737d84f`（首次启动 lifecycle 显示修复） |
+| 源码关闭提交 | `f5b27dbd`（实现）、`61e320a7`（策略分类）、`e66bbf17`（E-14 证据）、`2737d84f`（首次启动 lifecycle 显示修复）、`e7262730`（保留 Wiki executor 的宿主确认来源） |
 | 候选版本 | SpaceAssistant 0.2.7 |
-| 当前结论 | 源码修复后的本机全量验收通过；E-15/E-16 有部分隔离证据，但仍缺批准/取消、真实渠道及原样安装/旧版二进制验收；不启用 |
+| 当前结论 | 源码修复后的本机定向验收通过；E-15/E-16 有部分隔离证据，但仍缺长正文、真实渠道及原样安装/旧版二进制验收；不启用 |
 
 ## E-14 本机源码验收
 
@@ -28,7 +28,7 @@
 
 | 验收项 | 环境/版本 | 匿名化证据 | 结论 | 负责人/日期 |
 | --- | --- | --- | --- | --- |
-| 桌面 Wiki Schema 提案及确认流程（本地 mock） | macOS 26.5.2 arm64；SpaceAssistant 0.2.7 临时副本；隔离 userData `/tmp/wiki-e15-desktop-userdata` | 配置本机 HTTPS Anthropic mock（临时 CA 仅注入候选进程），聊天真实经过 `memory` discovery → `memory_wiki_propose_schema_change` → `memory_wiki_update_schema`。提案工具由 UI 确认后仅生成绑定基线的 proposal；更新卡展示完整 `proposalDiff` 参数。拒绝后 UI 返回“已按用户选择拒绝”，DB `confirmation_submissions` 记录该 update_schema 的 `denied/committed`；取消后 canonical history 记录 `approval-resolved`（`approved:false`、`outcome:cancelled`）、`tool-call-not-dispatched`（`REQUEST_CANCELLED`、`executorEntry:not-entered`）和 `invocation-interrupted`（`cancelled`）。两条路径后 `SCHEMA.md` 与 schema history/1 的 SHA-256 均为 `36c020b2d80346498b555c75e49bc496089bb83a3922b0936b4bcf1d723991a6`，schemaVersion 仍为 1。取消已阻止 executor，但 UI 仍短暂显示“等待确认”；批准未能验证。相关现有回归命令 `npm exec vitest run src/renderer/services/pendingConfirmStore.test.ts src/renderer/components/Chat/GenericConfirmCard.test.tsx electron/wiki/wikiDomainTools.test.ts electron/confirmation/toolCallGate.test.ts`：4 文件、217 项通过；测试未覆盖这次 UI 状态表现。 | 拒绝与取消执行子项通过；批准及取消后 UI 收敛待复核，整体部分通过；本地 mock 不替代真实服务、飞书/微信或 automation | Codex / 2026-10-18 |
+| 桌面 Wiki Schema 提案及确认流程（本地 mock） | macOS 26.5.2 arm64；SpaceAssistant 0.2.7 临时副本；隔离 userData `/tmp/wiki-e15-desktop-userdata` | 配置本机 HTTPS Anthropic mock（临时 CA 仅注入候选进程），聊天真实经过 `memory` discovery → `memory_wiki_propose_schema_change` → `memory_wiki_update_schema`。提案工具由 UI 确认后仅生成绑定基线的 proposal；更新卡展示完整 `proposalDiff` 参数。拒绝后 UI 返回“已按用户选择拒绝”，DB `confirmation_submissions` 记录该 update_schema 的 `denied/committed`；取消后 canonical history 记录 `approval-resolved`（`approved:false`、`outcome:cancelled`）、`tool-call-not-dispatched`（`REQUEST_CANCELLED`、`executorEntry:not-entered`）和 `invocation-interrupted`（`cancelled`）。两条路径后 `SCHEMA.md` 与 schema history/1 的 SHA-256 均为 `36c020b2d80346498b555c75e49bc496089bb83a3922b0936b4bcf1d723991a6`，schemaVersion 仍为 1。批准首次暴露注册工具适配器丢失宿主确认来源的问题：确认提交已批准，但 Wiki executor 的 final-check 返回 `confirmation_required`，文件未变。TDD 回归 `passes host user confirmation provenance through the registered schema update tool` 在修复前失败、修复后通过；`npm exec vitest run electron/wiki/wikiDomainTools.test.ts electron/wiki/wikiSchemaProposal.test.ts electron/wiki/wikiToolDiscovery.test.ts electron/tools/registeredAgentTurnTools.test.ts`：4 文件、53 项通过；`npm run check:system-invariant-registry` 与 `npm run build:electron:incremental` 通过。提交 `e7262730` 修复适配器，仅在临时 app 副本内替换编译主进程模块并 ad-hoc 签名后，用同一隔离 userData/HTTPS mock 新建会话复验批准：UI 返回“隔离 Schema 更新已获用户确认并写入”；DB `confirmation_submissions` 记录 `approved/committed`；SCHEMA 与 `.wiki-service/schema-history/2.md` SHA-256 均为 `7f840417681b5739a7eb7094ba57b6b621b51457aa56d202d720829ff911bfc7`，schemaVersion 为 2。取消确实阻止 executor；重启/重开后会话收敛为已结束，但取消瞬间仍曾短暂保留“等待确认”字样，尚未量化收敛时限或验证长正文展示。临时 CA、候选副本与 userData 均为隔离测试材料；本地 mock 不替代真实服务、飞书/微信或 automation。 | 提案、批准、拒绝和取消执行子项有本机隔离证据；取消后 UI 收敛时限、长正文及真实飞书/微信/automation 仍待验收，整体部分通过 | Codex / 2026-10-18 |
 | 桌面长正文恢复确认可读性 | 待提供隔离环境 | 待记录 | 待验收 | — |
 | 飞书真实会话确认、拒绝与取消 | 待提供隔离测试账号 | 待记录 | 待验收 | — |
 | 微信真实会话确认、拒绝与取消 | 待提供隔离测试账号 | 待记录 | 待验收 | — |
