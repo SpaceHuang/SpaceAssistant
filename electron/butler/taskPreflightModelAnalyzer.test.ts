@@ -72,6 +72,32 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(output.requiredTools).toEqual(['run_shell'])
   })
 
+  it('gives Git history preflight a concrete repository and local-shell permission example', async () => {
+    const prompt = '总结一下昨天合并进 main 分支，并推送 GitHub 的所有内容。'
+    create.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({
+      targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
+      requiredTools: ['run_shell'],
+      clarifications: []
+    }) }] })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    const output = await analyzer.analyze({
+      prompt, scheduleSummary: 'daily 09:00', deliverySummary: 'none',
+      authorizedRoots: ['/workspace'], outputRoot: '/results',
+      facts: { gitRepositories: ['/workspace'], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' }] } as never,
+      tools: [], responseFormat: 'json'
+    }, new AbortController().signal)
+
+    const system = create.mock.calls[0]?.[0].system as string
+    expect(system).toContain('facts.gitRepositories 恰有一个仓库')
+    expect(system).toContain('过去时的“已推送/推送了什么”是查询历史，不是本次执行 git push')
+    expect(system).toContain('本地 refs/reflog 只能作为本机记录，不代表 GitHub 服务器时间')
+    expect(system).toContain('不因出现 GitHub 一词就要求联网')
+    expect(system).toContain('{"targets":[{"kind":"exact","path":"/workspace","targetType":"directory"}],"requiredTools":["run_shell"],"clarifications":[]}')
+    expect(system).toContain('没有明确要求写入文件时，不生成 output target')
+    expect(output).toMatchObject({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredTools: ['run_shell'], clarifications: [] })
+  })
+
   it('treats a Git history request as a clear target when no repository is present in authorized facts', async () => {
     const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
     create.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({
