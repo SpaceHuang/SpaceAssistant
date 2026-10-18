@@ -6,7 +6,7 @@ import { resolveWikiServicePath } from './wikiPaths'
 
 export interface WikiCatalog {
   formatVersion: 1
-  pages: Array<{ pageId: string; path: string; revision?: number; contentHash?: string }>
+  pages: Array<{ pageId: string; path: string; revision?: number; contentHash?: string; title?: string; categoryId?: string; summary?: string; parentPageId?: string | null; sourceRefs?: Array<{ sourceId: string; sourceRevision: number }> }>
 }
 
 export interface WikiFileStore {
@@ -15,7 +15,7 @@ export interface WikiFileStore {
   readText(relativePath: string): Promise<string>
   identity(relativePath: string): Promise<FileIdentity | null>
   absolutePath(relativePath: string): string
-  write(relativePath: string, body: string | Buffer): Promise<FileIdentity>
+  write(relativePath: string, body: string | Buffer, expectedIdentity?: FileIdentity | null): Promise<FileIdentity>
   writeImmutable(relativePath: string, body: string | Buffer): Promise<FileIdentity>
   remove(relativePath: string, expectedIdentity?: FileIdentity): Promise<void>
   readCatalog(): Promise<WikiCatalog | undefined>
@@ -56,10 +56,12 @@ export function createWikiFileStore(wikiRoot: string): WikiFileStore {
       try { return await captureFileIdentity(target) }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
     },
-    async write(relativePath, body) {
+    async write(relativePath, body, expected) {
       const { target, parent } = await parentFor(relativePath)
-      let expectedIdentity: FileIdentity | undefined
-      try { expectedIdentity = await captureFileIdentity(target) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      let expectedIdentity = expected
+      if (expected === undefined) {
+        try { expectedIdentity = await captureFileIdentity(target) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      }
       return safeAtomicWrite({ targetPath: target, parentReal: parent, body, expectedIdentity: expectedIdentity ?? null })
     },
     async writeImmutable(relativePath, body) {

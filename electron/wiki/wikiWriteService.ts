@@ -35,7 +35,7 @@ export function createWikiWriteService(store: WikiFileStore): WikiWriteService {
         if (beforeCommit) await beforeCommit(store.absolutePath(normalized))
         const latest = await store.identity(normalized)
         if (!sameIdentity(current, latest)) throw new WikiWriteConflictError()
-        await store.write(normalized, body)
+        await store.write(normalized, body, current)
         const bytes = await store.read(normalized)
         const identity = await store.identity(normalized)
         if (!identity) throw new WikiWriteConflictError('Wiki file missing after write.')
