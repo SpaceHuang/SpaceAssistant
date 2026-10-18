@@ -3,6 +3,7 @@ import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { formatToolLabel } from './toolCallDisplay'
 import { sanitizeCapabilityParamsForDisplay } from '../../../shared/capabilityParamSanitize'
+import { toolIdToOpenAiCompatibleApiToolName } from '../../../shared/anthropicToolSanitize'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
@@ -11,6 +12,9 @@ type Props = {
 }
 
 const PARAMS_PREVIEW_MAX = 600
+const FULL_CONFIRMATION_MATERIAL_TOOLS = new Set(
+  ['memory.wiki_apply_restore', 'memory.wiki_update_schema'].flatMap((name) => [name, toolIdToOpenAiCompatibleApiToolName(name)])
+)
 
 /**
  * 通用确认兜底卡：任何进入 confirming 状态但没有专用确认卡的工具都渲染此卡。
@@ -24,7 +28,7 @@ export function GenericConfirmCard({ record, onConfirm }: Props) {
   try {
     // 参数脱敏（吸收远端 93d133a5 的 sanitize 增强）：凭据类入参只出存在性布尔
     paramsPreview = JSON.stringify(sanitizeCapabilityParamsForDisplay(record.input), null, 2)
-    if (!['memory.wiki_apply_restore', 'memory.wiki_update_schema'].includes(record.toolName) && paramsPreview.length > PARAMS_PREVIEW_MAX) paramsPreview = paramsPreview.slice(0, PARAMS_PREVIEW_MAX) + '\n…'
+    if (!FULL_CONFIRMATION_MATERIAL_TOOLS.has(record.toolName) && paramsPreview.length > PARAMS_PREVIEW_MAX) paramsPreview = paramsPreview.slice(0, PARAMS_PREVIEW_MAX) + '\n…'
   } catch {
     paramsPreview = ''
   }
