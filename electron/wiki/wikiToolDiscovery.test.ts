@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { discoverWikiTools, WIKI_DISCOVERY_TOOL_DEFINITION, WIKI_DOMAIN_TOOL_DEFINITIONS } from './wikiToolDiscovery'
+import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
+import { isBuiltinToolName } from '../toolsConfigRuntime'
 
 describe('Wiki domain tool discovery', () => {
   it('registers memory as a real lightweight discovery tool', () => {
     expect(WIKI_DISCOVERY_TOOL_DEFINITION).toMatchObject({ name: 'memory', input_schema: { type: 'object' } })
     expect(WIKI_DOMAIN_TOOL_DEFINITIONS.every(tool => tool.name.startsWith('memory.wiki_'))).toBe(true)
+    expect(isBuiltinToolName('memory')).toBe(true)
+    expect(createBuiltinToolRegistry().get('memory')).toBeDefined()
   })
 
   it('returns operation names, use descriptions, and complete schemas for matching tools', () => {

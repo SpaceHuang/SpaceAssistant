@@ -4,6 +4,12 @@ import { authorizeToolCall, computeEffectiveTools } from './effectiveTools'
 const cfg = { enabled: false, allowedTools: [], deniedTools: [] }
 
 describe('computeEffectiveTools', () => {
+  it('通过内置工具开关时在首轮请求广告并授权 memory discovery', () => {
+    const result = computeEffectiveTools({ builtinConfig: { enabled: true, allowedTools: ['memory'], deniedTools: [] } })
+    expect(result.toolNames).toEqual(['memory'])
+    expect(result.authorizedToolNames.has('memory')).toBe(true)
+  })
+
   it('内置关闭时仍保留桌面 MCP，并用同一名称集合生成授权白名单', () => {
     const result = computeEffectiveTools({
       builtinConfig: cfg,

@@ -1,3 +1,6 @@
+import { createSnapshotReadRegisteredTool } from '../tools/snapshotReadRegisteredTool'
+import type { ToolExecutorResult } from '../tools/types'
+
 export interface WikiDiscoveredTool { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required?: string[]; additionalProperties?: boolean } }
 export interface WikiToolDiscoveryResult { matches: WikiDiscoveredTool[]; totalMatches: number; truncated: boolean; usage: string }
 
@@ -29,6 +32,16 @@ export const WIKI_DISCOVERY_TOOL_DEFINITION = {
   description: '发现 Wiki 知识操作并返回匹配操作的完整参数 schema；只披露工具，不授予访问权限。',
   input_schema: { type: 'object', properties: { query: string('按操作名称或用途筛选；省略时列出全部 Wiki 操作'), limit: integer('结果数量，默认 8，上限 20', 1, 20), offset: integer('分页偏移量', 0) }, additionalProperties: false },
 } as const
+
+/** 首轮广告的 discovery executor；schema 发现本身不改变后续工具授权。 */
+export const wikiDiscoveryTool = createSnapshotReadRegisteredTool('memory', async (input) => ({
+  success: true,
+  data: discoverWikiTools({
+    ...(typeof input.query === 'string' ? { query: input.query } : {}),
+    ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
+    ...(typeof input.offset === 'number' ? { offset: input.offset } : {}),
+  }),
+} satisfies ToolExecutorResult))
 
 export function discoverWikiTools(input: { query?: string; limit?: number; offset?: number }): WikiToolDiscoveryResult {
   const query = (input.query ?? '').normalize('NFKC').trim().toLocaleLowerCase()

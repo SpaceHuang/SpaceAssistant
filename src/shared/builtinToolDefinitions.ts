@@ -286,6 +286,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
 
 // 恢复工具由主进程 executor 注册；schema 必须同时进入 provider exposure/authorization。
 BUILTIN_TOOL_DEFINITIONS.push(
+  { name: 'memory', description: '发现 Wiki 知识操作并返回匹配操作的完整参数 schema；只披露工具，不授予访问权限。', input_schema: { type: 'object', properties: { query: { type: 'string', description: '按操作名称或用途筛选；省略时列出全部 Wiki 操作' }, limit: { type: 'integer', minimum: 1, maximum: 20, description: '结果数量，默认 8，上限 20' }, offset: { type: 'integer', minimum: 0, description: '分页偏移量' } }, additionalProperties: false } },
   { name: 'history.read', description: '读取被压缩的历史事实，支持按窗口、条目或关键词查询。', input_schema: { type: 'object', properties: { window_id: { type: 'string' }, entry_id: { type: 'string' }, query: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'integer' }, max_tokens: { type: 'integer' } } } },
   { name: 'skills.read', description: '读取技能目录中指定技能的完整说明。', input_schema: { type: 'object', properties: { name: { type: 'string' }, max_chars: { type: 'integer' } }, required: ['name'] } },
   // 能力集合（toolkit）网关：模型面恒定两条，能力增删不改变 schema（docs/requirement/agent-toolkit-capability-gateway-requirement.md §3.1）
