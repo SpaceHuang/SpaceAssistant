@@ -4,6 +4,7 @@ import { createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { runMigrations } from '../database/migrations'
+import { DB_SCHEMA_VERSION } from '../database/schema'
 import { createSecurityActionIntentStore } from './securityActionIntentStore'
 
 describe('security action intent checkpoint state machine', () => {
@@ -67,7 +68,7 @@ describe('security action intent checkpoint state machine', () => {
     conn.exec('DROP TABLE security_action_intents')
     conn.prepare("UPDATE schema_meta SET value='71' WHERE key='schema_version'").run()
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '103' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='security_action_intents'").get())
       .toEqual({ name: 'security_action_intents' })
     db.close()

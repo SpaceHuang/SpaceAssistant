@@ -3,6 +3,7 @@ import { createSession } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { runMigrations } from './migrations'
+import { DB_SCHEMA_VERSION } from './schema'
 import { commitDeferredTaskCheckpoint, ensureImTurnTaskControl, getTaskControlRecord, putTaskControlRecord } from './taskControl'
 
 describe('trusted IM task control records', () => {
@@ -90,7 +91,7 @@ describe('trusted IM task control records', () => {
     conn.exec('DROP TABLE im_task_control')
     conn.prepare("UPDATE schema_meta SET value='65' WHERE key='schema_version'").run()
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '103' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='im_task_control'").get())
       .toEqual({ name: 'im_task_control' })
     db.close()

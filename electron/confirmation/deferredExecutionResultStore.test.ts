@@ -7,6 +7,7 @@ import { createDeferredExecutionResultStore } from './deferredExecutionResultSto
 import { listWakeEvents } from '../database/wakeEvents'
 import { createDeferredTodoStore } from './deferredTodoStore'
 import { createSession } from '../database/operations'
+import { DB_SCHEMA_VERSION } from '../database/schema'
 
 describe('deferred execution result recovery', () => {
   it('emits a safe causal result audit only after the execution result is committed', () => {
@@ -91,7 +92,7 @@ describe('deferred execution result recovery', () => {
     conn.exec('DROP TABLE deferred_completion_outbox; DROP TABLE deferred_execution_results')
     conn.prepare("UPDATE schema_meta SET value='72' WHERE key='schema_version'").run()
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '103' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deferred_execution_results'").get())
       .toEqual({ name: 'deferred_execution_results' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deferred_completion_outbox'").get())
