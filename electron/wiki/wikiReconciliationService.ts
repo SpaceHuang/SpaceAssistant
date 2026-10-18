@@ -12,6 +12,16 @@ export async function reconcileExternalWikiChanges(store: WikiFileStore): Promis
   const schemaText = await store.readText('SCHEMA.md').catch(() => '')
   const schema = parseWikiSchema(schemaText)
   if (!schema.valid) return { pages: 0, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-schema-invalid', path: 'SCHEMA.md', message: 'SCHEMA must parse before external files can be reconciled.' }] }
+  const schemaHash = hashText(schemaText)
+  const schemaStateText = await store.readText('.wiki-service/schema-state.json').catch(() => undefined)
+  let schemaState: { formatVersion: 1; schemaVersion: number; contentHash: string } | undefined
+  if (schemaStateText !== undefined) {
+    try {
+      const value = JSON.parse(schemaStateText) as { formatVersion?: unknown; schemaVersion?: unknown; contentHash?: unknown }
+      if (value.formatVersion !== 1 || !Number.isSafeInteger(value.schemaVersion) || (value.schemaVersion as number) < 1 || typeof value.contentHash !== 'string') throw new Error('invalid')
+      schemaState = value as { formatVersion: 1; schemaVersion: number; contentHash: string }
+    } catch { return { pages: 0, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-schema-state-invalid', path: '.wiki-service/schema-state.json', message: 'Schema state is invalid.' }] } }
+  }
   const files: Array<{ path: string; content: string }> = []
   const diagnostics: WikiReconciliationResult['diagnostics'] = []
   const visit = async (relative: string): Promise<void> => {
@@ -41,6 +51,21 @@ export async function reconcileExternalWikiChanges(store: WikiFileStore): Promis
   const reconciled = reconcileWikiFiles(files, catalog.pages.map(page => ({ pageId: page.pageId, path: page.path, revision: page.revision ?? 1, contentHash: page.contentHash ?? '' })), schema)
   diagnostics.push(...reconciled.diagnostics)
   if (diagnostics.length) return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics }
+
+  if (schemaState && schemaState.contentHash !== schemaHash) {
+    try {
+      const previous = await store.read(`.wiki-service/schema-history/${schemaState.schemaVersion}.md`)
+      if (hashText(previous.toString('utf8')) !== schemaState.contentHash) throw new Error('hash-mismatch')
+    } catch { return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-schema-history-missing', path: 'SCHEMA.md', message: 'Previous schema snapshot is missing or invalid; external schema change is preserved for manual recovery.' }] } }
+  }
+  const nextSchemaState = schemaState
+    ? schemaState.contentHash === schemaHash ? schemaState : { formatVersion: 1 as const, schemaVersion: schemaState.schemaVersion + 1, contentHash: schemaHash }
+    : { formatVersion: 1 as const, schemaVersion: 1, contentHash: schemaHash }
+  if (!schemaState && !(await store.identity('.wiki-service/schema-history/1.md'))) await store.writeImmutable('.wiki-service/schema-history/1.md', schemaText)
+  if (schemaState && schemaState.contentHash !== schemaHash && !(await store.identity(`.wiki-service/schema-history/${nextSchemaState.schemaVersion}.md`))) {
+    await store.writeImmutable(`.wiki-service/schema-history/${nextSchemaState.schemaVersion}.md`, schemaText)
+  }
+  await store.write('.wiki-service/schema-state.json', `${JSON.stringify(nextSchemaState, null, 2)}\n`)
 
   const changedPages = reconciled.pages.filter(page => page.externalEdit)
   const updatedBodies = new Map<string, string>()

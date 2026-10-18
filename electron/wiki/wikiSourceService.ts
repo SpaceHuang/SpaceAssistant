@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { WikiFileStore } from './wikiFileStore'
 import type { WikiReadCaller } from './wikiDomainRead'
+import { normalizeWikiRelativePath } from './wikiPaths'
 
 export interface WikiBoundSource { path: string; displayName: string; projectId?: string }
-interface StoredSource { formatVersion: 1; sourceId: string; sourceRevision: number; displayName: string; projectId?: string }
+interface StoredSource { formatVersion: 1; sourceId: string; sourceRevision: number; displayName: string; projectId?: string; rawPath?: string }
 interface SourceCursor { sourceId: string; sourceRevision: number; offset: number; callerId: string; lane: string }
 export class WikiSourceError extends Error { constructor(readonly code: string) { super(code); this.name = 'WikiSourceError' } }
 
@@ -28,15 +29,21 @@ export function createWikiSourceService(options: {
       const sourceId = randomUUID()
       const sourceRevision = 1
       await options.store.writeImmutable(`.wiki-service/source-history/${sourceId}/${sourceRevision}.md`, bytes)
-      const stored: StoredSource = { formatVersion: 1, sourceId, sourceRevision, displayName: source.displayName, ...(source.projectId ? { projectId: source.projectId } : {}) }
+      const projectSegment = safeSegment(source.projectId ?? 'unassigned')
+      const displayName = baseName(source.displayName).replace(/[^\p{L}\p{N}._-]/gu, '_') || 'source.md'
+      const rawPath = normalizeWikiRelativePath(`raw/${projectSegment}/${sourceId}/${displayName}`)
+      await options.store.writeImmutable(rawPath, bytes)
+      const stored: StoredSource = { formatVersion: 1, sourceId, sourceRevision, displayName, rawPath, ...(source.projectId ? { projectId: source.projectId } : {}) }
       await options.store.write(`.wiki-service/sources/${sourceId}.json`, `${JSON.stringify(stored, null, 2)}\n`)
       return { sourceId, sourceRevision, displayName: stored.displayName, projectId: stored.projectId }
     },
     async readSource(sourceId: string, caller: WikiReadCaller, input: { sourceRevision?: number; cursor?: string; maxChars?: number } = {}) {
-      const stored = await readBinding(options.store, sourceId)
+      let stored = await readBinding(options.store, sourceId)
       const allowed = stored && await options.authorize(sourceId, caller)
-      const revision = input.sourceRevision ?? stored?.sourceRevision
-      if (!stored || !allowed || revision !== stored.sourceRevision) throw new WikiSourceError('source_missing')
+      if (!stored || !allowed) throw new WikiSourceError('source_missing')
+      stored = await reconcileRawSource(options.store, stored, maxBytes)
+      const revision = input.sourceRevision ?? stored.sourceRevision
+      if (!Number.isSafeInteger(revision) || revision < 1 || revision > stored.sourceRevision) throw new WikiSourceError('source_missing')
       const bytes = await options.store.read(`.wiki-service/source-history/${sourceId}/${revision}.md`).catch(() => { throw new WikiSourceError('source_missing') })
       const text = bytes.toString('utf8')
       const codepoints = Array.from(text)
@@ -61,8 +68,26 @@ async function readBinding(store: WikiFileStore, sourceId: string): Promise<Stor
     const value = JSON.parse(await store.readText(`.wiki-service/sources/${sourceId}.json`)) as Partial<StoredSource> | null
     if (!value || value.formatVersion !== 1 || value.sourceId !== sourceId || !Number.isSafeInteger(value.sourceRevision) || (value.sourceRevision as number) < 1 ||
       typeof value.displayName !== 'string' || !value.displayName || value.displayName.includes('/') || value.displayName.includes('\\') ||
-      (value.projectId !== undefined && typeof value.projectId !== 'string')) return undefined
+      (value.projectId !== undefined && typeof value.projectId !== 'string') ||
+      (value.rawPath !== undefined && (typeof value.rawPath !== 'string' || !value.rawPath.startsWith('raw/') || normalizeWikiRelativePath(value.rawPath) !== value.rawPath))) return undefined
     return value as StoredSource
   }
   catch { return undefined }
 }
+
+async function reconcileRawSource(store: WikiFileStore, stored: StoredSource, maxBytes: number): Promise<StoredSource> {
+  if (!stored.rawPath) return stored
+  let bytes: Buffer
+  try { bytes = await store.read(stored.rawPath) } catch { throw new WikiSourceError('source_missing') }
+  if (bytes.length > maxBytes || bytes.includes(0)) throw new WikiSourceError('source_missing')
+  const current = await store.read(`.wiki-service/source-history/${stored.sourceId}/${stored.sourceRevision}.md`).catch(() => { throw new WikiSourceError('source_missing') })
+  if (hash(bytes) === hash(current)) return stored
+  const next = { ...stored, sourceRevision: stored.sourceRevision + 1 }
+  await store.writeImmutable(`.wiki-service/source-history/${stored.sourceId}/${next.sourceRevision}.md`, bytes)
+  await store.write(`.wiki-service/sources/${stored.sourceId}.json`, `${JSON.stringify(next, null, 2)}\n`)
+  return next
+}
+
+function safeSegment(value: string): string { return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(value) ? value : 'unassigned' }
+function baseName(value: string): string { return value.replace(/\\/g, '/').split('/').at(-1) ?? '' }
+function hash(value: Buffer): string { return createHash('sha256').update(value).digest('hex') }

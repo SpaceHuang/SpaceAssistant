@@ -25,6 +25,25 @@ describe('WikiSourceService', () => {
     expect(await readFile(path.join(root, 'wiki', '.wiki-service', 'sources', `${imported.sourceId}.json`), 'utf8')).not.toContain(outside)
   })
 
+  it('creates a raw mirror and advances immutable source revisions after an external raw edit', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wiki-source-reconcile-'))
+    roots.push(root)
+    await mkdir(path.join(root, 'wiki'))
+    const outside = path.join(root, 'source.md')
+    await writeFile(outside, 'revision one')
+    const store = createWikiFileStore(path.join(root, 'wiki'))
+    const service = createWikiSourceService({ store, resolveSourceRef: () => ({ path: outside, displayName: 'source.md', projectId: 'p-a' }), validateSource: async () => true, authorize: async () => true })
+    const imported = await service.importSource('app-bound-ref', { callerId: 'c', lane: 'chat' })
+    const binding = JSON.parse(await store.readText(`.wiki-service/sources/${imported.sourceId}.json`)) as { rawPath: string }
+    expect(binding.rawPath).toBe(`raw/p-a/${imported.sourceId}/source.md`)
+    expect(await store.readText(binding.rawPath)).toBe('revision one')
+    await store.write(binding.rawPath, 'revision two')
+    const latest = await service.readSource(imported.sourceId, { callerId: 'c', lane: 'chat' })
+    const old = await service.readSource(imported.sourceId, { callerId: 'c', lane: 'chat' }, { sourceRevision: 1 })
+    expect(latest).toMatchObject({ sourceRevision: 2, text: 'revision two' })
+    expect(old).toMatchObject({ sourceRevision: 1, text: 'revision one' })
+  })
+
   it('returns the same error for unknown and unauthorized ids and rejects unsafe sources', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wiki-source-deny-'))
     roots.push(root)
