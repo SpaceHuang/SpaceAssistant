@@ -1,13 +1,13 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：既有 E-01～E-10 完成；结果目录拆分 E-11a～E-11f 完成
+> 状态：既有 E-01～E-10、结果目录拆分 E-11a～E-11f、2026-10-18 任务访问授权与 Git 预检 E-12a～E-12d 全部完成
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
 
 ## 第 0 层：执行摘要【人必读】
 
-**目标：** 既有多目录预检功能已完成；当前补充任务将结果输出目录与资料授权目录拆分，按计划时刻归档，并只允许预检绑定结果写入。
+**目标：** 在已完成的多目录预检与结果目录归档上，增加任务级“授权访问权限”，使用户可一次确认目录和本地 `run_shell` 能力；本地 Git 历史查询由选定模型根据仓库 facts 做目标绑定，执行阶段按冻结授权与现有 Shell 安全边界判断。
 
 **执行顺序：** 契约/基线 → 数据迁移与目录校验 → 主进程提交门禁 → 多根安全执行链 → 表单和历史 → 启动恢复/兼容集成 → 最终关闭。
 
@@ -45,7 +45,8 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | D-3 会话事件位置 | A：应用私有 `{userData}/automation-sessions/<taskId>` | E-07 仅作为内部事件/session 根，绝不并入任务授权 roots |
 | D-4 目录职责拆分 | 必选结果输出目录 + 可空授权读写目录；旧 workDirs 只迁移为授权目录 | 新任务必须选择结果输出目录；旧任务未编辑保持 legacy 运行，首次编辑须明确选择 |
 | D-5 归档默认 | 每日→日期；间隔定时→日期小时；一次性→直接；用户可改 | 使用本机 `scheduledFor` 确定归档路径；同日/小时运行共享目录 |
-| D-6 无人值守写入 | 仅允许本次预检绑定且位于本次归档目录的结果写入 | 新增稳定 Policy Engine rule；其他写入与 Shell 仍拒绝，输出目录不授权读取 |
+| D-6 无人值守写入 | 文件工具只允许写本次预检绑定且位于本次归档目录的结果 | 新增稳定 Policy Engine rule；输出目录不授权读取；任务级 Shell 权限由 D-7 定义 |
+| D-7 任务级访问授权 | 用户确认后，授权目录和 `run_shell` 能力一起写入任务；旧任务无 Shell grant | E-12a～E-12d 持久化、冻结并完成全量验证；获批 Shell 通过既有安全预检和策略边界；不新增 Git 工具 |
 
 ### 第四轮阻断核销（2026-10-17）
 
@@ -63,10 +64,10 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 
 | 检查点 | 依赖证据（产出任务） | 通过条件 | 不通过处理 |
 |---|---|---|---|
-| G0 兼容契约冻结 | E-01；D-2～D-6 已裁决 | 既有 v0/v1 契约与补充 outputDir/organization/authorizedDirs、旧任务迁移和绑定写入边界均已记录 | 停止补充实现，修订技术方案/此计划 |
+| G0 兼容契约冻结 | E-01；D-2～D-7 已裁决 | 既有 v0/v1 契约与补充 outputDir/organization/authorizedDirs/accessPermissions、旧任务迁移、绑定写入和任务 Shell 授权边界均已记录 | 停止补充实现，修订技术方案/此计划 |
 | G1 存储安全 | E-02、E-03 | v0/v1 binding schema、recovery state 往返通过；高版本库拒绝降级；备份恢复可执行；旧空目录不回退 Profile | 不开始预检 IPC；修正迁移/存储 |
 | G2 提交门禁 | E-02a、E-03、E-04、E-05 | 旧单根和新多根请求均经预检；阻断零写入、通过恰好一次写入、一次性时间语义正确 | 不接 UI save flow |
-| G3 安全根集合与结果写入 | E-06、E-07、E-11b～E-11d | 读取授权只含 authorizedDirs；run snapshot 有独立 runOutputDir；仅命中预检 binding 的归档结果写入 allow；其他写入与 Shell 仍拒绝 | 不进入 UI 集成；修订 facts、policy 或 final-check |
+| G3 安全根集合、结果写入与 Shell 授权 | E-06、E-07、E-11b～E-11d、E-12a～E-12d | 输出目录仍不进入读取授权；文件工具写入仍要求预检绑定；Shell 仅在冻结访问权限明确包含 `run_shell` 且通过危险/路径/完整度/unsupported 检查后 allow | 不进入 UI 集成；修订 facts、policy 或 final-check |
 | G4 可操作界面 | E-08、E-09 | 已批准归属卡下完成宽窗/窄窗、键盘清单、失败保留与历史可查 | 修 UI，不改变已冻结后端契约 |
 | G5 全量源码关闭 | E-10 | 所有本机相关测试、类型、i18n、构建、边界审查完成 | 留在源码关闭前；外部验收另列 |
 
@@ -92,6 +93,10 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | E-11d | 将拆分配置与 runOutputDir 贯穿存储、IPC 和运行链 | E-11a～E-11c | taskStore、scheduler snapshot、butler IPC/invoker/assembler tests | AC-01、01a、05、07、11 | INV-14～16 |
 | E-11e | 设置表单、动态默认、摘要与中英文文案 | E-11a、E-11d | ButlerTaskSettings、styles、i18n、renderer tests | AC-01、05、13 | INV-14、15 |
 | E-11f | 补充阶段集成验收并关闭结果目录拆分 | E-11a～E-11e | related tests、typecheck/i18n/build、security review | AC-01–16 | INV-14～16 |
+| E-12a | 持久化任务级访问权限并冻结到 run snapshot | E-11d；D-7 | shared task types、schema/migration、taskStore、Butler IPC、store/migration/IPC tests | AC-17 | INV-17 |
+| E-12b | 提供本地 Git 仓库 facts 并增强目标预检 | E-12a、E-04 | `taskPathFacts.ts`、preflight/analyzer、local Git prompt and clarification tests | AC-17 | INV-17 |
+| E-12c | 接通授权 Shell 策略与任务设置表单 | E-12a、E-12b | tool gate、invocation assembler、policy rules、invariant registry、Butler UI/i18n/tests | AC-17 | INV-16、17 |
+| E-12d | 集成验证并关闭访问授权扩展 | E-12a～E-12c | related tests、typecheck/i18n/build、system invariant check、review and plan status | AC-17 | INV-16、17 |
 
 任务范围与依赖一旦变化，先更新本表；不在正文另写第二份 DAG。
 
@@ -300,6 +305,50 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **验证命令：** `npm exec vitest run electron/database/migrations.wikiProjects.test.ts electron/database/taskControl.test.ts electron/confirmation/deferredExecutionResultStore.test.ts electron/confirmation/deferredTodoCapacity.test.ts electron/confirmation/securityActionIntentStore.test.ts`；`npm test`；`npm run typecheck:shared`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build`；`git diff --check`。
 - **证据：** RED/GREEN：最终全量测试初次发现 5 处既有迁移断言仍固定为 schema v103；改为读取 `DB_SCHEMA_VERSION`，并将 wiki migration 当前版本断言更新为 v104。5 个相关测试文件 / 21 项通过；共享默认归档 helper 与组件/共享类型测试 3 个文件 / 51 项通过。`npm test` 全量通过：1096 个测试文件通过、1 个跳过；10459 个用例通过、111 个跳过。`npm run typecheck:shared`、`npm run i18n:check`（0 个源代码硬编码中文，1443 个均在测试）、`npm run check:system-invariant-registry`（6 个登记、13 个测试引用）及 `npm run build` 均通过；`git diff --check` 通过。Final review 覆盖正确性、结构、策略与执行边界：输出根未进入读取授权；只有冻结的预检 binding 可匹配本次 runOutputDir；permit final-check 拒绝缺失、漂移或非绑定写入；automation 的其他写入与 Shell 仍为锁定拒绝；归档目录拒绝符号链接和非目录冲突。未发现需阻断问题。E-11a～E-11e 阶段提交：`accc4616`、`0d140f17`、`fac21b4e`、`d4099718`、`87e7ab9c`、`ebb532d9`；E-11f 收尾提交：`feb77fcf`、`b6848a33`。
 - **可执行环境：** 源码本机；X-06 外部验收另列。
+- **状态：** - [x]
+
+### E-12a 持久化任务级访问权限并冻结到 run snapshot
+
+- **依赖：** E-11d；用户已确认 D-7。
+- **目标文件：** `src/shared/automationTaskTypes.ts`、`electron/database/schema.ts`、`electron/database/migrations.ts`、`electron/butler/taskStore.ts`、`electron/butler/butlerIpc.ts` 及迁移/store/IPC tests。
+- **动作与产物：** 增加 `accessPermissions` 契约，内含 canonical 授权目录和允许的本地工具；schema v105 为 v104 数据增加该字段，旧任务工具清单为空；IPC 对工具权限做白名单校验；task revision 更新和 queued→running claim snapshot 同步冻结权限，目录投影始终由主进程规范化 roots 生成。
+- **完成判据：** 目录和 `run_shell` grant 往返一致；旧任务不自动获得 Shell grant；伪造未知工具权限被 IPC 拒绝；用户变更后续 task revision 生效，已 claim snapshot 不变；v104→v105 migration 保留授权目录且工具权限为空。
+- **验证命令：** `npm exec vitest run electron/database/migrations.automationPreflight.test.ts electron/butler/taskStore.test.ts electron/butler/butlerIpc.test.ts`。
+- **证据：** GREEN：上述 3 个测试文件包含于 E-12 集成回归（10 files / 222 tests passed）；覆盖 v105 旧行迁移、访问权限字段往返、未知 capability 拒绝及 claim snapshot 冻结。新测试还断言输入的目录投影不能绕过 IPC/store 的 canonical directory 集合。
+- **可执行环境：** 本机。
+- **状态：** - [x]
+
+### E-12b 提供本地 Git 仓库 facts 并增强目标预检
+
+- **依赖：** E-12a、E-04。
+- **目标文件：** `electron/butler/taskPathFacts.ts`、`taskPreflight.ts`、`taskPreflightModelAnalyzer.ts`、对应 tests、`src/shared/automationTaskTypes.ts` 和预检 i18n 文案。
+- **动作与产物：** facts 阶段通过不跟随链接的 `.git` marker `lstat` 检测所选授权 roots 中的工作树，并跳过 Git 内部元数据枚举；仓库列表进入 facts digest。预检模型输入明确包含 `accessPermissions` 和 Git roots：有本地 Shell grant 时将 Git 任务绑定到仓库目录；多个仓库列出歧义候选；缺少 grant 时返回本地 Shell 权限说明，不误报文件或目录缺失。预检仍无工具调用。
+- **完成判据：** `.git` 目录、worktree `.git` 文件、嵌套仓库可识别；链接 `.git` 不跟随；仓库元数据不导致目录覆盖误报截断；Git query 在授权且无歧义时产出 exact directory binding；缺权限产出稳定、可读的权限 blocker；本机 Git facts 不推断 GitHub 推送时间。
+- **验证命令：** `npm exec vitest run electron/butler/taskPathFacts.test.ts electron/butler/taskPreflight.test.ts electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskTargetResolver.test.ts`。
+- **证据：** RED：首轮 4 个目标用例在 4 个测试文件中失败（24 个既有用例通过），分别显示 facts 缺少 Git roots、分析器提示词未解释本地 Git 权限、预检没有访问授权输入、已授权 Shell 仍被 locked deny。GREEN：10 个相关测试文件合计 222 项通过；本任务覆盖 Git facts、worktree marker、模型提示词、Git 目录 binding 和缺权限说明。
+- **可执行环境：** 本机；真实选定模型的判例质量继续列为现有外部验收 X-01。
+- **状态：** - [x]
+
+### E-12c 接通授权 Shell 策略与任务设置表单
+
+- **依赖：** E-12a、E-12b。
+- **目标文件：** `electron/confirmation/toolCallGate.ts`、`electron/runtime/invocationAssembler.ts`、`src/shared/policy/defaultRules.ts`、`systemInvariantRegistry.ts`、automation lane tests、`ButlerTaskSettings.tsx`、组件测试和中英文 i18n。
+- **动作与产物：** 设置页把本地 Shell 作为任务级访问权限显式勾选；gate 只从 immutable run snapshot 产出权限 facts。无 grant 使用稳定 Shell deny；有 grant 时运行既有 Shell precheck，但不读写桌面信任缓存；locked policy 仍拒绝危险、敏感/系统位置、授权目录外路径、路径事实不完整、分析不完整和 unsupported 结构；只有满足授权且完整分析的调用进入授权 allow。
+- **完成判据：** 表单新建默认不授予 Shell，编辑时读回并提交用户选择；旧任务仍无 grant；授权 shell 正常通过；无授权、dangerous precheck、unsupported、analysis/path facts incomplete、授权 roots 外路径均在 executor 前拒绝；授权不产生桌面 trusted command cache side effect；输出写入仍使用 D-6 binding；新不变量 `SYS-AUTOSHELL-001` 登记为权限事实来源约束，不代替 Policy Engine 做 allow/deny。
+- **验证命令：** `npm exec vitest run electron/confirmation/automationLane.test.ts src/shared/policy/defaultRules.contract.test.ts src/shared/policy/policyEngine.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npm run i18n:generate-types`；`npm run i18n:check`；`npm run typecheck:renderer`；`npm run typecheck:shared`。
+- **证据：** GREEN：E-12 集成回归 10 files / 222 tests passed。automation lane 用例覆盖授权 allow、缺授权 deny、危险预检 deny 且不触碰 trust cache、unsupported deny 和根外路径 deny；renderer 用例覆盖显式勾选后携带 canonical 目录与 `run_shell` grant。中英文资源及生成类型已更新。
+- **可执行环境：** 本机；实际桌面宽窄窗验收可复用已有 X-06 外部视觉验收。
+- **状态：** - [x]
+
+### E-12d 集成验证并关闭访问授权扩展
+
+- **依赖：** E-12a～E-12c。
+- **目标文件：** E-12 触及模块、技术方案和本执行计划。
+- **动作与产物：** 执行全量测试及本地类型、i18n、增量构建、system invariant registry 检查；复核 migration 105、访问权限快照来源、Git facts/preflight、Shell policy ordering 和 UI payload；更新本任务及计划状态。
+- **完成判据：** AC-17 与 INV-17 有 RED/GREEN 证据；旧任务无隐式 Shell grant；grant 只来自冻结任务 snapshot；危险/不完整/授权根外 Shell 不派发；文件工具结果写入仍受输出 binding 限制；本机集成门禁通过，diff 无空白错误。
+- **验证命令：** `npm test`；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
+- **证据：** RED/GREEN：E-12a～E-12c 首轮目标用例先失败、实现后 10 个集成测试文件 / 222 项通过。阶段验收先发现 locked-floor 分类文档漏列 4 条 Shell 安全规则、wiki schema 版本断言仍为 104；补全策略分类并更新断言到 v105 后，两处定向回归 2 个文件 / 3 项全过。最终 `npm test` 全量通过：1096 个测试文件通过、1 个跳过；10471 个用例通过、111 个跳过。`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`、`npm run build:electron:incremental` 和 `npm run check:system-invariant-registry` 均通过；不变量登记 7 项、16 个测试引用；`git diff --check` 通过。复核确认 v105 旧任务迁移不授予 Shell，运行授权仅取自冻结 snapshot；危险、分析/路径事实不完整、unsupported、敏感/系统路径及授权根外命令由 locked policy 拒绝；文件工具结果写入仍要求本次 output binding。全量测试运行期间有既有 `MaxListenersExceededWarning`，最终退出码为 0。
+- **可执行环境：** 本机；真实模型稳定性与桌面视觉继续作为外部验收，不阻塞源码关闭。
 - **状态：** - [x]
 
 ## 4. 外部验收（不阻塞源码关闭）

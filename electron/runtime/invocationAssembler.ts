@@ -146,6 +146,8 @@ export interface AgentInvocationMaterials {
   workDir: string
   /** Trusted task root set from the immutable automation run snapshot. */
   taskWorkDirs?: readonly string[]
+  /** Access permissions copied from the immutable automation run snapshot. */
+  taskAccessPermissions?: import('../../src/shared/automationTaskTypes').AutomationTaskAccessPermissions
   /** Preflight-approved output binding set and archive target for this scheduled run. */
   taskOutputBindings?: readonly import('../../src/shared/automationTaskTypes').TargetBinding[]
   taskRunOutputDir?: string
@@ -801,6 +803,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       sessionId: materials.sessionId,
       workDir: materials.resolveWorkDir?.() ?? materials.workDir,
       ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
+      ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
       ...(materials.taskOutputBindings ? { taskOutputBindings: materials.taskOutputBindings } : {}),
       ...(materials.taskRunOutputDir ? { taskRunOutputDir: materials.taskRunOutputDir } : {}),
       userDataDir: materials.userDataDir,
@@ -1060,6 +1063,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             policyRuleFloor: materials.policyRuleFloor ?? effectiveRules,
             workDir: materials.resolveWorkDir?.() ?? materials.workDir,
             ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
+            ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
             userDataDir: materials.userDataDir,
             getToolsConfig: () => materials.toolsConfig,
             ...(materials.shellConfig !== undefined ? { getShellConfig: () => materials.shellConfig ?? null } : {}),

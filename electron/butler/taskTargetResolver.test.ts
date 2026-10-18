@@ -4,7 +4,7 @@ import { resolveTaskTarget, validatePersistedTargetBindings } from './taskTarget
 import type { TaskPathFacts } from './taskPathFacts'
 
 function facts(root: string, entries: TaskPathFacts['entries'], complete = true): TaskPathFacts {
-  return { roots: [root], entries, coverage: { complete, truncated: !complete, roots: 1, visited: entries.length, errors: 0 }, digest: 'facts-digest' }
+  return { roots: [root], gitRepositories: [], entries, coverage: { complete, truncated: !complete, roots: 1, visited: entries.length, errors: 0 }, digest: 'facts-digest' }
 }
 
 describe('resolveTaskTarget', () => {
@@ -42,7 +42,7 @@ describe('resolveTaskTarget', () => {
       relativeSuffix: path.join('reports', 'summary.txt'), resolverVersion: 3,
     } })
     if (!result.ok) return
-    const outputFacts = { roots: [], outputRoot, entries: [], coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'output-only' }
+    const outputFacts = { roots: [], outputRoot, gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'output-only' }
     expect(validatePersistedTargetBindings({ bindings: [result.binding], roots: [], outputRoot, facts: outputFacts, taskRevision: 9 })).toEqual({ ok: true })
     expect(validatePersistedTargetBindings({ bindings: [result.binding], roots: [], outputRoot: '/elsewhere', facts: outputFacts, taskRevision: 9 })).toEqual({ ok: false, code: 'OUTPUT_ROOT_MISMATCH' })
   })

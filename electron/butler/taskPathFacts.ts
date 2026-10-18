@@ -13,6 +13,8 @@ export type TaskPathFacts = {
   roots: string[]
   /** Write-only destination root; intentionally excluded from entries and roots. */
   outputRoot?: string
+  /** Local repository roots discovered from .git markers; facts only, never a permission decision. */
+  gitRepositories: string[]
   entries: TaskPathFactEntry[]
   coverage: { complete: boolean; truncated: boolean; roots: number; visited: number; errors: number }
   digest: string
@@ -54,11 +56,21 @@ export class TaskPathFactsProvider {
     }
     const canonicalRoots = [...new Set(roots)].sort()
     const entries: TaskPathFactEntry[] = canonicalRoots.map((root) => ({ path: root, relativePath: '', kind: 'directory' }))
+    const gitRepositories = new Set<string>()
     let truncated = false
     let errors = 0
     for (const root of canonicalRoots) {
       let rootVisited = 0
+      const recordGitMarker = async (directory: string) => {
+        try {
+          const marker = await lstat(path.join(directory, '.git'))
+          if (!marker.isSymbolicLink() && (marker.isDirectory() || marker.isFile())) gitRepositories.add(directory)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') errors += 1
+        }
+      }
       const walk = async (directory: string, depth: number): Promise<void> => {
+        await recordGitMarker(directory)
         if (truncated) return
         if (depth > this.limits.maxDepth) {
           try {
@@ -70,6 +82,8 @@ export class TaskPathFactsProvider {
         try { names = await readdir(directory) } catch { errors += 1; return }
         names.sort((a, b) => a.localeCompare(b, 'en'))
         for (const name of names) {
+          // .git is repository metadata, not a task target. Detect it via lstat above and never enumerate it.
+          if (name === '.git') continue
           if (rootVisited >= this.limits.maxEntriesPerRoot || entries.length >= this.limits.maxEntriesTotal) { truncated = true; return }
           const fullPath = path.join(directory, name)
           let info
@@ -90,10 +104,12 @@ export class TaskPathFactsProvider {
     const uniqueEntries = [...new Map(entries.map((entry) => [entry.path, entry])).values()]
     uniqueEntries.sort((a, b) => a.path.localeCompare(b.path, 'en'))
     const complete = !truncated && errors === 0
-    const digestInput = JSON.stringify({ authorizedRoots: canonicalRoots, outputRoot: outputRoot ?? null, entries: uniqueEntries, coverage: { complete, truncated, errors, visited: uniqueEntries.length } })
+    const sortedGitRepositories = [...gitRepositories].sort((a, b) => a.localeCompare(b, 'en'))
+    const digestInput = JSON.stringify({ authorizedRoots: canonicalRoots, outputRoot: outputRoot ?? null, gitRepositories: sortedGitRepositories, entries: uniqueEntries, coverage: { complete, truncated, errors, visited: uniqueEntries.length } })
     return {
       roots: canonicalRoots,
       ...(outputRoot ? { outputRoot } : {}),
+      gitRepositories: sortedGitRepositories,
       entries: uniqueEntries,
       coverage: { complete, truncated, roots: canonicalRoots.length, visited: uniqueEntries.length, errors },
       digest: createHash('sha256').update(digestInput).digest('hex')

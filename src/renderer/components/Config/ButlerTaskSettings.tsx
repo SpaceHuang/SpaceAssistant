@@ -119,6 +119,9 @@ function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: Task
           <span className="butler-task-card__authorized-dirs" title={authorizedDirs.join('\n')}>
             {t('butler.form.authorizedDirs')}: {authorizedDirs.length ? authorizedDirs.join(', ') : t('butler.form.authorizedDirsEmpty')}
           </span>
+          <span className="butler-task-card__access-permissions">
+            {t('butler.form.localShellPermission')}: {task.accessPermissions?.tools.includes('run_shell') ? t('butler.form.permissionEnabled') : t('butler.form.permissionDisabled')}
+          </span>
           {task.lastRunAt ? <span className="butler-task-card__summary-meta">{t('butler.lastRun', { time: dayjs(task.lastRunAt).format('YYYY-MM-DD HH:mm') })}</span> : null}
         </div>
       </div>
@@ -207,6 +210,7 @@ export function ButlerTaskSettings() {
       outputDir: undefined,
       outputOrganization: 'hourly',
       workDirs: [],
+      allowRunShell: false,
       modelId: defaults.modelId,
       modelServiceId: defaults.modelServiceId,
       modelOverride: defaults.modelOverride,
@@ -237,6 +241,7 @@ export function ButlerTaskSettings() {
       outputDir: task.outputDir ?? undefined,
       outputOrganization: task.outputOrganization ?? getDefaultAutomationOutputOrganization(task.schedule),
       workDirs: roots,
+      allowRunShell: task.accessPermissions?.tools.includes('run_shell') === true,
       modelId: task.modelId,
       modelServiceId: task.modelServiceId,
       modelOverride: task.modelOverride,
@@ -287,6 +292,7 @@ export function ButlerTaskSettings() {
               expectedTaskRevision: editing.taskRevision ?? 0,
               name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref,
               authorizedDirs,
+              accessPermissions: { directories: authorizedDirs, tools: values.allowRunShell ? ['run_shell'] : [] },
               workDirs: authorizedDirs,
               outputDir: values.outputDir,
               outputOrganization: values.outputOrganization,
@@ -302,6 +308,7 @@ export function ButlerTaskSettings() {
             schedule,
             deliveryPref: values.deliveryPref,
             authorizedDirs,
+            accessPermissions: { directories: authorizedDirs, tools: values.allowRunShell ? ['run_shell'] : [] },
             workDirs: authorizedDirs,
             outputDir: values.outputDir,
             outputOrganization: values.outputOrganization,
@@ -606,6 +613,12 @@ export function ButlerTaskSettings() {
                 <Form.Item className="butler-task-editor__wide" label={t('butler.form.authorizedDirs')} extra={t('butler.form.authorizedDirsHint')}>
                   <AuthorizedDirList t={t} value={authorizedDirs} onChange={setAuthorizedDirs} />
                 </Form.Item>
+                <Form.Item name="allowRunShell" valuePropName="checked" className="butler-task-editor__wide">
+                  <Checkbox>{t('butler.form.localShellPermission')}</Checkbox>
+                </Form.Item>
+                <Typography.Paragraph className="butler-task-editor__wide" type="secondary">
+                  {t('butler.form.localShellPermissionHint')}
+                </Typography.Paragraph>
               </div>
             </section>
           </div>

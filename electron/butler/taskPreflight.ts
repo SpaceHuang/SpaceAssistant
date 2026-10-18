@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { getPreflightIssueMessageKey, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
+import { getPreflightIssueMessageKey, type AutomationTaskAccessPermissions, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider, type TaskPathFacts } from './taskPathFacts'
 import { resolveTaskTarget, type ProposedTaskTarget } from './taskTargetResolver'
 
@@ -8,6 +8,7 @@ export type TaskPreflightAnalysisInput = {
   scheduleSummary: string
   deliverySummary: string
   authorizedRoots: string[]
+  accessPermissions: AutomationTaskAccessPermissions
   outputRoot?: string
   facts: TaskPathFacts
   tools: readonly []
@@ -17,7 +18,7 @@ export type TaskPreflightAnalysisInput = {
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
 export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }> }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
-export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number }
+export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; accessPermissions?: AutomationTaskAccessPermissions; outputDir?: string; taskRevision: number }
 export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string }
 export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; factsProvider?: Pick<TaskPathFactsProvider, 'collect'>; timeoutMs?: number; now?: () => number }
 
@@ -36,7 +37,7 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
     return undefined
   }
   const clarifications = (value as { clarifications?: unknown }).clarifications
-  const allowedReasons = new Set(['no_target_identified', 'scope_unclear', 'missing_location', 'multiple_matches', 'target_missing', 'other'])
+  const allowedReasons = new Set(['no_target_identified', 'scope_unclear', 'missing_location', 'multiple_matches', 'target_missing', 'capability_not_authorized', 'other'])
   if (clarifications !== undefined && (!Array.isArray(clarifications) || clarifications.some((item) => {
     if (!item || typeof item !== 'object') return true
     const clarification = item as Record<string, unknown>
@@ -69,6 +70,7 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       scheduleSummary: input.scheduleSummary,
       deliverySummary: input.deliverySummary,
       authorizedRoots: facts.roots,
+      accessPermissions: { directories: facts.roots, tools: [...(input.accessPermissions?.tools ?? [])] },
       outputRoot: facts.outputRoot,
       facts,
       tools: [],
@@ -91,7 +93,10 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       const allCandidates = modelCandidates.length > 1 ? modelCandidates : inferredCandidates
       const candidates = [...new Set(allCandidates)].slice(0, 20)
       const reasonCode = clarification.reasonCode === 'multiple_matches' && candidates.length < 2 ? 'other' : clarification.reasonCode
-      const code = reasonCode === 'multiple_matches' ? 'TARGET_AMBIGUOUS' : reasonCode === 'target_missing' ? 'TARGET_NOT_FOUND' : 'TARGET_UNCLEAR'
+      const code = reasonCode === 'multiple_matches' ? 'TARGET_AMBIGUOUS'
+        : reasonCode === 'target_missing' ? 'TARGET_NOT_FOUND'
+          : reasonCode === 'capability_not_authorized' ? 'TOOL_PERMISSION_REQUIRED'
+            : 'TARGET_UNCLEAR'
       return issue(code, 'prompt', {
         reference: clarification.reference,
         reasonCode,

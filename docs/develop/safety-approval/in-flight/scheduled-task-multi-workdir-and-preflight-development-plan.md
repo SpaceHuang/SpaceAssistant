@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检开发方案
 
-> 状态：既有功能已实施；2026-10-18 结果目录拆分修订进行中
+> 状态：既有功能与结果目录拆分已实施；2026-10-18 任务级访问授权与 Git 预检修订已完成
 > 需求基线：[定时任务多工作目录与预检需求细化（评审稿）](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 复审依据：[第四轮复审](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-development-plan-review-round-4.md)  
 > 核对基线：工作区 `HEAD 7c0edc4176643627fdee85bff017a8d652059f26`；现状以本方案列出的当前文件和复现命令为准。工作区另有未跟踪目录 `llm-wiki.migrated-20261015-135757/`，与本方案无关。
@@ -80,11 +80,18 @@
 
 ### D-6：无人值守结果写入边界（已裁决）
 
-- **决定：** 仅允许 `write_file` / `edit_file` 写入本次运行预检绑定的结果目标，且目标必须在该次归档目录内。输出目录不进入读取授权根；其他路径写入及 Shell 继续拒绝。
-- **安全实现：** facts 阶段只报告主进程对规范化路径与预检 binding 的验证结果：文件型 binding 只匹配该文件，目录型 binding 只匹配其归档目录下的普通文件；Policy Engine 通过稳定 rule ID `automation-bound-output-write-allow` 允许该信号，并保留 `automation-write-deny` 对未匹配写入的 locked 拒绝及 `automation-shell-deny`。final-check 以系统不变量 `SYS-AUTOOUTPUT-001` 确保 automation 写许可始终携带本 run 输出 binding，即使策略配置改变也不能派发未绑定写入；执行端再核验目标路径、binding 和归档目录，失败时 executor 不调用。
+- **决定：** 文件工具只允许写入本次运行预检绑定的结果目标，且目标必须在该次归档目录内。输出目录不进入读取授权根；授权读写目录与本地工具权限由 D-7 定义。
+- **安全实现：** facts 阶段只报告主进程对规范化路径与预检 binding 的验证结果：文件型 binding 只匹配该文件，目录型 binding 只匹配其归档目录下的普通文件；Policy Engine 通过稳定 rule ID `automation-bound-output-write-allow` 允许该信号，并保留 `automation-write-deny` 对未匹配文件工具写入的 locked 拒绝。final-check 以系统不变量 `SYS-AUTOOUTPUT-001` 确保文件工具写许可始终携带本 run 输出 binding，即使策略配置改变也不能派发未绑定写入；执行端再核验目标路径、binding 和归档目录，失败时 executor 不调用。
 - **决定依据：** 结果目录需要实际承接任务生成物；只授权被用户保存前确认的目标并将范围限制在归档目录，可实现写入而不开放任意本地文件写入。
 
-**本次修订优先级：** D-4～D-6 与下列新增 INV-14～INV-16 优先于本方案其他章节中将 `workDirs` 同时称为输出/授权目录、将所有自动化写入无条件拒绝、或将输出目标约束在授权读根内的早期文字。早期章节仍保留为历史实现基线，其冲突处按本修订执行。
+### D-7：任务是否可一次确认本地工具权限？（用户已确认）
+
+- **决定：** 将原授权读写目录配置扩展为任务级“授权访问权限”：保存 canonical 授权目录和用户明确勾选的本地工具权限。当前新增 `run_shell` 选项；用户保存任务即确认该任务可在无人值守时调用本地 Shell。旧任务迁移时工具权限为空，不能自动获得 Shell 授权。
+- **运行边界：** run snapshot 必须冻结这份权限。`run_shell` 仍经过现有危险命令预检和主机路径事实检查；无授权、危险或无法完整分析的命令、敏感/系统路径、授权目录之外的路径仍在 executor 前拒绝。结果文件仍通过 D-6 的预检绑定目标写入；输出目录不因此变成读取授权目录。不得新增专用 Git 工具。
+- **Git 目标预检：** 用户授权本地 Shell 且所选授权目录内发现 Git 仓库时，预检可把仓库目录作为 exact 目标绑定；多个可用仓库必须列出候选并要求用户说明。Git 本机查询能核验本地 refs/提交记录；本地记录没有包含 GitHub 推送事件时，不得声称知道推送时间。
+- **依据与可逆性：** 用户已明确要求把目录清单扩展为访问权限并允许经人工确认的 `run_shell` 无人执行。目录与工具权限可在编辑任务时撤销；变更只影响后续 claim，已运行任务仍使用冻结权限。迁移仅新增空工具权限，保留现有目录值。
+
+**本次修订优先级：** D-4～D-7 与下列新增 INV-14～INV-17 优先于本方案其他章节中将 `workDirs` 同时称为输出/授权目录、将所有自动化写入无条件拒绝、将输出目标约束在授权读根内、或无条件拒绝无人值守 Shell 的早期文字。早期章节仍保留为历史实现基线，其冲突处按本修订执行。
 
 **不需要你决定：** 多目录规范化、预检提交门禁、调度跳过记录、数据迁移、策略事实与审计 Agent 的根集合一致性、一次性任务请求到达时刻校验，均按需求稿与本方案规格实现。D-2 只裁决任务目标分析是否可以向模型服务发送一次额外请求，不改变已确认的提交门禁和目录授权规则。
 
@@ -99,7 +106,7 @@
 - 不扫描整台设备寻找候选目录；目录候选只能来自任务中明确的绝对路径、已选择目录的可验证子路径和预检能具体说明来源的路径。无法可靠确定时要求用户在任务文字中补充路径。
 - 不自动勾选候选目录，不把模型猜测写入授权集合。
 - 不新增主目录、默认执行目录或按目录列表顺序决定目标的行为。
-- 不开放 automation 的 Shell、脚本、任意路径写入、外发或策略确认能力；唯一新增的文件写入是 D-6 约束的预检绑定结果写入。
+- 不开放 automation 的脚本、任意路径文件工具写入、外发或策略确认能力；本地 Shell 仅按 D-7 的任务级授权使用并保留安全预检。文件工具新增写入仍只限 D-6 约束的预检绑定结果。
 - 不为跳过运行发送特殊通知；不扩展其他运行失败通知（D-1）。
 - 不在本期为所有自动化历史记录增加清理策略、全局筛选或新的通知中心。
 
@@ -108,7 +115,7 @@
 1. 历史 `work_dirs_json` 经 adapter 作为 `authorizedDirs` 读取；v104 新增可空 `output_dir`/`output_organization`。新任务必须保存经校验的输出目录与归档模式；旧任务的原目录只映射到授权目录，未编辑前保持 legacy 行为，编辑时要求显式选择输出目录。
 2. 运行快照分别持久化 `authorizedDirs`、输出目录、归档模式、`scheduledFor`、实际 `runOutputDir` 和目标 bindings。D-3 选 A 时，会话/event 仍写入应用私有 automation session root，不属于上述任一授权集合。授权根用于资料 facts；输出根仅提供受限输出事实。预检将输出目标绑定为相对输出根的路径，运行时依据计划时刻重映射到归档目录。
 3. 任务表单提交由既有 create/update IPC 承担预检及保存，不增加独立预检 IPC：校验字段与目录后运行无工具权限的目标分析；通过同一主进程处理器保存同一份规范化表单快照，否则返回 `PreflightReport`，不写任务表。
-4. 资料读取范围只由 `authorizedDirs` 决定，输出目录不得加入读取 facts、审批 Agent 读取授权或工具读取根。D-6 输出写入由 facts 记录精确 binding 匹配、Policy Engine 稳定规则判定，final-check 对 snapshot 和归档目录复核；安全审核 Agent 同时收到独立标识的授权目录与输出范围。
+4. 资料读写目录由 `authorizedDirs` 决定，输出目录不得加入读取 facts、审批 Agent 读取授权或工具读取根。任务的 `accessPermissions` 同时冻结授权目录和工具权限；`run_shell` 的放行事实只从 claim 时冻结的工具权限产生。D-6 输出写入由 facts 记录精确 binding 匹配、Policy Engine 稳定规则判定，final-check 对 snapshot 和归档目录复核；执行上下文独立携带授权目录和输出范围。
 5. 调度器继续使用唯一 `client_id` 抢占运行；启动恢复写 `skipped/missed-window` 的既有实现补上历史展示与稳定文案。跳过不调用 Agent、不投递，不和运行中的工具拒绝混淆；工具策略拒绝属于已启动运行的失败结果。
 
 ### 1.4 主要风险与排除方案
@@ -155,7 +162,8 @@
 | INV-13 | 只有迁移来的 `preflightVersion=0` task 走 legacy 兼容语义；新建任务必须 v1，首次成功编辑或主动启用在同一事务切换到 v1。 | migration defaults、主进程 IPC、taskStore。 | 有效旧任务无 binding 仍按旧语义运行；缺 roots 失败；阻断编辑不变更 v0；成功后 v1；renderer 伪造 v0 被拒绝。 |
 | INV-14 | 新任务必须有有效 `outputDir` 和 `outputOrganization`；`authorizedDirs` 可为空且只表示资料读写授权。旧目录只迁移为 `authorizedDirs`，绝不自动充当输出目录；旧任务首次编辑须明确补选输出目录。 | v104 migration、task DTO adapter、主进程 IPC。 | v103→v104 不改旧目录语义；新建缺输出拒绝；空授权目录允许新任务；旧任务未编辑仍可 legacy 运行，编辑未选输出被拒绝。 |
 | INV-15 | 每个新 run 从冻结的 `scheduledFor` 和归档模式确定唯一 `runOutputDir`；预检 binding 的相对输出路径只能解析到该目录内。输出目录不能授权读取。 | 主进程输出目录解析器、taskStore run snapshot、runtime admission 与路径 final-check。 | daily/hourly 使用本机计划时间；direct 使用根目录；路径逃逸、链接越界、binding/run snapshot 不匹配均在 executor 前失败；read/list/grep 对输出目录仍视作未授权。 |
-| INV-16 | 自动化写入仅在 facts 验证工具目标与本 run 已批准输出 binding 匹配时 allow：文件 binding 要求目标完全相同，目录 binding 只覆盖该目录下的普通文件；目标必须落在 `runOutputDir` 内。其余写入与所有 Shell 继续 deny。 | facts producer、共享 Policy Engine rules、tool final-check；稳定规则 ID `automation-bound-output-write-allow`、`automation-write-deny`、`automation-shell-deny`；final-check 系统不变量 `SYS-AUTOOUTPUT-001`。 | 匹配输出写入进入 executor；未绑定输出、绑定目录之外的目标、其他输出根、资料授权目录写入和 Shell 均不进入 executor；decision trace 标明稳定 rule ID；empty authorizedDirs 不回退至 outputDir；即使管理员停用 locked write deny，final-check 仍拒绝无 binding 的 automation write permit。 |
+| INV-16 | 文件工具自动化写入仅在 facts 验证工具目标与本 run 已批准输出 binding 匹配时 allow：文件 binding 要求目标完全相同，目录 binding 只覆盖该目录下的普通文件；目标必须落在 `runOutputDir` 内。 | facts producer、共享 Policy Engine rules、tool final-check；稳定规则 ID `automation-bound-output-write-allow`、`automation-write-deny`；系统不变量 `SYS-AUTOOUTPUT-001`。 | 匹配输出写入进入 executor；未绑定输出、绑定目录之外的目标、其他输出根、资料授权目录文件工具写入均不进入 executor；输出根不能读取；decision trace 标明稳定 rule ID；empty authorizedDirs 不回退至 outputDir；即使管理员停用 locked write deny，final-check 仍拒绝无 binding 的 automation write permit。 |
+| INV-17 | 定时任务的访问权限由用户保存并冻结到 claim snapshot；旧任务默认无工具授权。automation `run_shell` 仅在冻结权限明确包含 `run_shell` 时可达，且现有 Shell 预检、完整度、敏感/系统位置、授权目录外路径与 unsupported 结构边界继续生效。Git 仓库 facts 仅报告所选 roots 中的本机仓库位置，不替策略放行。 | task IPC/store/snapshot、`TaskPathFactsProvider`、preflight model analyzer、`toolCallGate.ts`；稳定 rule IDs `automation-shell-deny`、`automation-authorized-shell-allow`、`automation-shell-analysis-incomplete-deny`、`automation-shell-outside-root-deny`；系统不变量 `SYS-AUTOSHELL-001`。 | 旧任务无 Shell grant；用户授权后本地 Git 查询绑定仓库目录；多仓库歧义列出候选；缺授权、预检危险、unsupported/不完整、敏感/系统或授权根外路径均不进入 executor；修改权限只改变后续 run snapshot；不为 Git 新增专用工具，也不把本机提交时间推断为 GitHub 推送时间。 |
 
 ### 2.3 契约卡
 
@@ -190,7 +198,7 @@
 
 - 新建 `ResolvedAutomationRunConfig`，唯一含有已校验 `workDirs`、model route、effort、task snapshot revision、preflightVersion 与运行时解析出的 `TargetSelection[]`。v1 按 binding kind 解析；v0 明确走需求认可的 legacy 分支。due slot 被 claim 时，taskStore 将当前 task revision 与完整执行配置 snapshot 原子绑定到 run；`runButlerTask` admission 后只从该 run snapshot 校验和构造配置，不从可能已编辑的 task 行重读执行输入。
 - `readPathFacts`、写路径 facts（当前 automation 写入仍 locked deny）、grep/list/read 工具 gate 增加 `workDirs` 输入；范围为 `inside` iff realpath-safe target under any root。多根集合是无序集。目录项失效时整个 run admission 失败，不静默丢掉坏根继续。
-- Policy Engine 仍以稳定 rule ID 处理 `outside-workdir`。多授权根仅改变 facts 的包含根计算；无人值守结果写入例外按 D-6 / INV-16 精确绑定处理，敏感路径 deny/confirm 与 Shell deny 保持原边界；新增/调整 policy rules 必须有 decision trace 与自动化策略边界测试。
+- Policy Engine 仍以稳定 rule ID 处理 `outside-workdir`。多授权根仅改变 facts 的包含根计算；无人值守结果写入例外按 D-6 / INV-16 精确绑定处理。D-7 为明确获批的任务新增 Shell 能力，但不改变敏感/系统位置、授权根外路径、不完整分析和 unsupported 结构的拒绝边界；新增/调整 policy rules 必须有 decision trace 与自动化策略边界测试。
 - `invocationAssembler` 将 `workDirs` 明确传入审批 Agent；审批上下文说明这些根是用户在该任务表单中明确选定的范围。审批 Agent 输出不得反算授权；工具 final-check 仍核验同一 roots 快照。
 - `TaskPathFactsProvider` 与 `TargetBinding` 属于业务 facts/resolution 层；它们不授予工具权限。运行 admission 在 session/executor 创建前按绑定 kind 解析；final-check 只核验已批准身份、对象、授权代次、permit 与执行材料，不重新消歧。
 - `exact` basename 解析出现歧义时失败；`collection` 允许按明确 selector 动态增删成员；`output` 允许目标尚不存在但须维持已授权祖先与安全相对后缀。不得把普通文件替换一概判失败，也不得因“动态”而扩大 selector 到授权 roots 之外。本期不允许用户相对路径产生目录优先级。
@@ -283,6 +291,7 @@
 | AC-13 | 宽 Modal 双栏、窄窗单栏、可访问的候选清单 | Butler component tests + macOS 浏览器/真机视觉验收 |
 | AC-15（目录重叠样例） | roots 去重与父子重叠按集合解释 | validation/path fact tests |
 | AC-16 | skipped history 可查、missed-window 本地化，无特殊通知；安全拒绝是 failed | scheduler/history tests、delivery guard tests、history component tests |
+| AC-17（2026-10-18 用户确认的 D-7） | 任务级授权访问目录和 `run_shell` 权限往返持久化并冻结；旧任务不获得 Shell grant；Git 预检识别本地仓库和权限缺口；Shell 放行需匹配任务授权并通过现有安全边界 | task store/migration/IPC、preflight facts/analyzer、automation lane gate、Butler component tests |
 
 ### 2.9 阶段边界与回退实体
 
@@ -295,8 +304,9 @@
 | P4 类型收紧 | 门禁接通且调用方迁移完成后将 workDirs 收紧为必填 | shared types/callers | 全仓旧入口检索与三端编译通过 | 独立类型收紧 commit |
 | P5 多根运行与历史恢复 | v0/v1 run 分支、approval roots、recovery cursor/claim | invoker、policy facts、scheduler/history | 运行时路径矩阵、退出注入及策略 trace | 安全/恢复分别提交 |
 | P6 UI、i18n、集成关闭 | 宽表单、授权清单、历史标签和最终验收 | renderer/i18n/related integration | renderer tests、i18n、typecheck/build、review matrix | 可按功能提交回退；DB 回退恢复备份 |
+| P7 任务级访问授权与 Git 预检 | `accessPermissions`、权限快照、本地仓库 facts、获批 Shell 策略与任务编辑控件 | shared/store/IPC、preflight/provider、policy/gate/renderer | 旧任务无工具 grant；本地 Git 目标绑定；Shell 授权和拒绝边界、schema v105 migration 回归通过 | 独立权限/预检/policy/UI commits；迁移回退恢复 v104 备份 |
 
-该阶段表与执行计划 DAG 一致：P2 可独立于预检门禁完成，P3 接通门禁后 P4 才收紧类型；运行安全链依赖 P3 的持久化绑定；UI 集成在门禁与类型契约稳定后进行。
+该阶段表与执行计划 DAG 一致：P2 可独立于预检门禁完成，P3 接通门禁后 P4 才收紧类型；运行安全链依赖 P3 的持久化绑定；UI 集成在门禁与类型契约稳定后进行；P7 扩展已关闭的结果目录拆分，Shell 权限必须沿用户表单到 claim snapshot 冻结后才可放行。
 
 ### 2.10 外部验收与当前环境门禁
 

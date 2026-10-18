@@ -9,7 +9,7 @@ import { resolveAutomationRunOutputDir } from './taskOutputDirectory'
  */
 
 export type { AutomationTask, AutomationTaskInput, AutomationTaskSchedule, AutomationDeliveryPref, AutomationTaskRun, AutomationTaskRunStatus, AutomationTaskRunTrigger } from '../../src/shared/automationTaskTypes'
-import { getAutomationTaskWorkDirs, type AutomationOutputOrganization, type AutomationTask, type AutomationTaskInput, type AutomationTaskSchedule, type AutomationDeliveryPref, type AutomationTaskRun, type AutomationTaskRunStatus, type AutomationTaskRunTrigger, type TargetBinding, type TargetSelection } from '../../src/shared/automationTaskTypes'
+import { getAutomationTaskWorkDirs, type AutomationOutputOrganization, type AutomationTask, type AutomationTaskAccessPermissions, type AutomationTaskInput, type AutomationTaskSchedule, type AutomationDeliveryPref, type AutomationTaskRun, type AutomationTaskRunStatus, type AutomationTaskRunTrigger, type TargetBinding, type TargetSelection } from '../../src/shared/automationTaskTypes'
 
 export type TrustedTaskPreflightCommit = { targetBindings?: TargetBinding[]; draft?: true }
 export type AutomationTaskUpdateResult = { ok: true; task: AutomationTask } | { ok: false; reason: 'task-revision-conflict' | 'schedule-pending' | 'task-not-found' }
@@ -26,6 +26,7 @@ type TaskRow = {
   output_organization: string | null
   work_dir: string | null
   work_dirs_json: string | null
+  access_permissions_json: string | null
   preflight_version: number
   target_bindings_json: string | null
   task_revision: number
@@ -76,6 +77,19 @@ function normalizeDeliveryPref(value: string): AutomationDeliveryPref {
   return value === 'feishu' || value === 'wechat' || value === 'none' ? value : 'desktop'
 }
 
+function normalizeTaskTools(value: unknown): AutomationTaskAccessPermissions['tools'] {
+  return Array.isArray(value) && value.includes('run_shell') ? ['run_shell'] : []
+}
+
+function parseAccessPermissions(raw: string | null, directories: string[]): AutomationTaskAccessPermissions {
+  try {
+    const parsed = raw ? JSON.parse(raw) as { tools?: unknown } : undefined
+    return { directories: [...directories], tools: normalizeTaskTools(parsed?.tools) }
+  } catch {
+    return { directories: [...directories], tools: [] }
+  }
+}
+
 function rowToTask(row: TaskRow): AutomationTask {
   let workDirs: string[] | undefined
   if (typeof row.work_dirs_json === 'string') {
@@ -93,6 +107,7 @@ function rowToTask(row: TaskRow): AutomationTask {
     ...(row.delivery_target ? { deliveryTarget: row.delivery_target } : {}),
     ...(row.model_override ? { modelOverride: row.model_override } : {}),
     authorizedDirs: workDirs ?? (row.work_dir != null ? [row.work_dir] : []),
+    accessPermissions: parseAccessPermissions(row.access_permissions_json, workDirs ?? (row.work_dir != null ? [row.work_dir] : [])),
     workDirs: workDirs ?? (row.work_dir != null ? [row.work_dir] : []),
     outputDir: row.output_dir ?? null,
     outputOrganization: (['direct', 'daily', 'hourly'] as const).includes(row.output_organization as AutomationOutputOrganization)
@@ -159,14 +174,15 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
   const enabled = input.enabled !== false
   const nextRunAt = input.nextRunAt ?? (enabled ? computeNextRunAt(input.schedule, now) : null)
   const workDirs = Array.isArray(input.authorizedDirs) ? [...input.authorizedDirs] : getAutomationTaskWorkDirs(input)
+  const accessPermissions = { directories: [...workDirs], tools: normalizeTaskTools(input.accessPermissions?.tools) }
   const legacyWorkDir = workDirs.length === 1 ? workDirs[0] : null
   runInTransaction(conn, () => {
     conn.prepare(
       `INSERT INTO automation_tasks (
         id, name, schedule_json, prompt, delivery_pref, delivery_target, model_override, output_dir, output_organization,
-        work_dir, work_dirs_json, preflight_version, target_bindings_json, model_id, model_service_id, reasoning_effort,
+        work_dir, work_dirs_json, access_permissions_json, preflight_version, target_bindings_json, model_id, model_service_id, reasoning_effort,
         enabled, created_at, updated_at, next_run_at, task_revision
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
       input.name,
@@ -179,6 +195,7 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
       input.outputOrganization ?? null,
       legacyWorkDir,
       JSON.stringify(workDirs),
+      JSON.stringify(accessPermissions),
       preflight ? 1 : 0,
       preflight && !preflight.draft ? JSON.stringify(preflight.targetBindings ?? []) : null,
       input.modelId ?? null,
@@ -241,7 +258,7 @@ export function listEnabledAutomationTasksDue(db: AppDatabase, now: number): Aut
 export function updateAutomationTask(
   db: AppDatabase,
   taskId: string,
-  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'authorizedDirs' | 'accessPermissions' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
   preflight?: TrustedTaskPreflightCommit
 ): AutomationTask | undefined {
   const result = updateAutomationTaskConditional(db, taskId, patch, preflight)
@@ -251,7 +268,7 @@ export function updateAutomationTask(
 export function updateAutomationTaskConditional(
   db: AppDatabase,
   taskId: string,
-  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'authorizedDirs' | 'accessPermissions' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('authorizedDirs' | 'workDirs' | 'outputDir' | 'outputOrganization' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[]; expectedTaskRevision?: number },
   preflight?: TrustedTaskPreflightCommit
 ): AutomationTaskUpdateResult {
   const cur = getAutomationTask(db, taskId)
@@ -262,7 +279,7 @@ export function updateAutomationTaskConditional(
     ...cur,
     ...fields,
     updatedAt: Date.now(),
-    taskRevision: (cur.taskRevision ?? 0) + (preflight || ['name', 'prompt', 'schedule', 'deliveryPref', 'deliveryTarget', 'modelOverride', 'authorizedDirs', 'workDirs', 'outputDir', 'outputOrganization', 'modelId', 'modelServiceId', 'reasoningEffort'].some((key) => Object.prototype.hasOwnProperty.call(fields, key)) ? 1 : 0),
+    taskRevision: (cur.taskRevision ?? 0) + (preflight || ['name', 'prompt', 'schedule', 'deliveryPref', 'deliveryTarget', 'modelOverride', 'authorizedDirs', 'accessPermissions', 'workDirs', 'outputDir', 'outputOrganization', 'modelId', 'modelServiceId', 'reasoningEffort'].some((key) => Object.prototype.hasOwnProperty.call(fields, key)) ? 1 : 0),
     scheduleGeneration: (cur.scheduleGeneration ?? 0) + (patch.schedule !== undefined || patch.enabled !== undefined ? 1 : 0),
     ...(preflight ? preflight.draft === true
       ? { preflightVersion: 0 as const, targetBindingsJson: null }
@@ -279,6 +296,7 @@ export function updateAutomationTaskConditional(
         : getAutomationTaskWorkDirs(cur)
   next.authorizedDirs = workDirs
   next.workDirs = workDirs
+  next.accessPermissions = { directories: [...workDirs], tools: normalizeTaskTools(patch.accessPermissions?.tools ?? cur.accessPermissions?.tools) }
   const legacyWorkDir = clearConfig?.includes('workDirs') || clearConfig?.includes('authorizedDirs')
     ? null
     : patch.workDirs !== undefined
@@ -308,7 +326,7 @@ export function updateAutomationTaskConditional(
       .prepare(
       `UPDATE automation_tasks SET
         name = ?, schedule_json = ?, prompt = ?, delivery_pref = ?, delivery_target = ?,
-        model_override = ?, output_dir = ?, output_organization = ?, work_dir = ?, work_dirs_json = ?, model_id = ?, model_service_id = ?, reasoning_effort = ?,
+        model_override = ?, output_dir = ?, output_organization = ?, work_dir = ?, work_dirs_json = ?, access_permissions_json = ?, model_id = ?, model_service_id = ?, reasoning_effort = ?,
         enabled = ?, updated_at = ?, last_run_at = ?, next_run_at = ?,
         preflight_version = ?, target_bindings_json = ?,
         task_revision = ?, schedule_generation = ?
@@ -325,6 +343,7 @@ export function updateAutomationTaskConditional(
       clearConfig?.includes('outputOrganization') ? null : next.outputOrganization ?? null,
       legacyWorkDir,
       JSON.stringify(workDirs),
+      JSON.stringify(next.accessPermissions),
       clearConfig?.includes('modelId') ? null : next.modelId ?? null,
       clearConfig?.includes('modelServiceId') ? null : next.modelServiceId ?? null,
       clearConfig?.includes('reasoningEffort') ? null : next.reasoningEffort ?? null,
@@ -553,6 +572,7 @@ export function transitionClaimToRunning(
       schedule: task.schedule,
       taskRevision: task.taskRevision,
       authorizedDirs: workDirs,
+      accessPermissions: { directories: [...workDirs], tools: [...(task.accessPermissions?.tools ?? [])] },
       workDirs,
       ...(task.preflightVersion === 1 ? {
         outputDir: task.outputDir!,

@@ -46,6 +46,10 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`automation-output-binding:${signal.status}`)
         break
+      case 'automation-shell-permission':
+        tokens.add(signal.kind)
+        tokens.add(`automation-shell-permission:${signal.status}`)
+        break
       case 'policy-tier':
         tokens.add(`policy-tier:${signal.tier}`)
         break

@@ -74,6 +74,14 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
     overrideability: 'none'
   },
   {
+    id: 'SYS-AUTOSHELL-001', owner: 'electron/butler + electron/confirmation', stage: 'final-check', category: 'capability',
+    rationale: 'An unattended Shell grant must come only from the immutable task revision frozen when the run is claimed.',
+    effect: 'validate', scope: 'electron/butler/taskStore.ts:transitionClaimToRunning;electron/confirmation/toolCallGate.ts:automation-shell-permission',
+    audit: 'policy decision records automation-shell-permission status and the matched or missing automation Shell rule',
+    tests: ['electron/butler/taskStore.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/toolCallGate.test.ts'],
+    overrideability: 'none'
+  },
+  {
     id: 'SYS-CAPABILITY-001', owner: 'agent-sdk', stage: 'admission', category: 'capability',
     rationale: 'A tool without a host granted SDK capability cannot enter the execution port.',
     effect: 'block', scope: 'packages/agent-sdk/src/safetyGate.ts',

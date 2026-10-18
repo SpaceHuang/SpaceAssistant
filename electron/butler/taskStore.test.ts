@@ -68,6 +68,21 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     })
   })
 
+  it('persists task access permissions and freezes them into the claimed run snapshot', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({
+      authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'],
+      accessPermissions: { directories: ['/ignored/client-copy'], tools: ['run_shell'] }
+    }))
+    const claimed = insertManualTaskClaim(d, task.id, 'shell-grant-snapshot')
+    const started = transitionClaimToRunning(d, claimed.runId!, task.id, 0, claimed.scheduleGeneration!)
+
+    expect(task.accessPermissions).toEqual({ directories: ['/authorized/source'], tools: ['run_shell'] })
+    expect(started).toMatchObject({ ok: true, snapshot: { accessPermissions: { directories: ['/authorized/source'], tools: ['run_shell'] } } })
+    updateAutomationTaskConditional(d, task.id, { accessPermissions: { directories: ['/authorized/source'], tools: [] } })
+    expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions).toEqual({ directories: ['/authorized/source'], tools: ['run_shell'] })
+  })
+
   it('持续离线跨过投递 TTL 后自动过期并同步管家 run 状态', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000)

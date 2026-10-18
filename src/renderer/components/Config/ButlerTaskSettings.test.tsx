@@ -131,7 +131,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       '大模型服务',
       '执行与投递',
       '结果输出',
-      '资料访问'
+      '资料与本机访问权限'
     ])
 
     const modelServiceSection = screen.getByRole('region', { name: '大模型服务' })
@@ -150,13 +150,14 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await waitFor(() => expect(screen.getByText('/tmp/chosen-root')).toBeTruthy())
+    fireEvent.click(screen.getByRole('checkbox', { name: '允许本地 Shell 命令' }))
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
-    const payload = butlerCreateTask.mock.calls[0]![0] as { name: string; prompt: string; schedule: unknown; authorizedDirs: string[]; outputDir: string; outputOrganization: string }
+    const payload = butlerCreateTask.mock.calls[0]![0] as { name: string; prompt: string; schedule: unknown; authorizedDirs: string[]; accessPermissions: unknown; outputDir: string; outputOrganization: string }
     expect(payload.name).toBe('周报汇总')
     expect(payload.prompt).toBe('汇总本周会话')
     expect(payload.schedule).toEqual({ kind: 'interval', intervalMinutes: 30 })
-    expect(payload).toMatchObject({ authorizedDirs: ['/tmp/chosen-root'], outputDir: '/tmp/output-root', outputOrganization: 'hourly', modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'medium' })
+    expect(payload).toMatchObject({ authorizedDirs: ['/tmp/chosen-root'], accessPermissions: { directories: ['/tmp/chosen-root'], tools: ['run_shell'] }, outputDir: '/tmp/output-root', outputOrganization: 'hourly', modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'medium' })
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalledTimes(2))
   })
 

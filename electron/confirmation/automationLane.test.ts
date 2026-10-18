@@ -133,7 +133,7 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     expect(r.decision.ruleId).toBe('automation-readonly-allow')
   })
 
-  it('run_shell 在 automation lane 由 locked 规则终局拒绝', async () => {
+  it('run_shell 在 automation lane 没有任务级授权时由 locked 规则终局拒绝', async () => {
     const r = await evaluateToolCallGate(
       base({
         lane: 'automation',
@@ -150,6 +150,79 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
       })
     )
     expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'automation-shell-deny' })
+  })
+
+  it('run_shell 在 automation lane 获得任务级授权后通过策略，并仍执行 Shell 预检', async () => {
+    const precheck = vi.fn(async () => ({
+      ok: true as const,
+      analysis: { verdict: 'allow', facts: { analysisCompleteness: 'complete' }, shellSecurityHints: { requiresRiskAck: false, outsideWorkDirRisk: false, warnings: [], scannedPaths: [], violationCodes: [] } } as never,
+      legacyAutoAllowEligible: false,
+      legacyPolicy: {} as never,
+      hints: {} as never
+    }))
+    const r = await evaluateToolCallGate(base({
+      lane: 'automation', toolName: 'run_shell', toolInput: { command: 'git log --oneline -5' },
+      taskAccessPermissions: { directories: [], tools: ['run_shell'] },
+      taskWorkDirs: [os.tmpdir()], runShellPrecheck: precheck, appDb: openDb()
+    }))
+
+    expect(r.decision).toMatchObject({ type: 'auto-allow', ruleId: 'automation-authorized-shell-allow' })
+    expect(precheck).toHaveBeenCalledOnce()
+    expect(r.facts.signals).toContainEqual({ kind: 'automation-shell-permission', status: 'matched' })
+  })
+
+  it('任务授权不会跳过危险命令预检，也不会写入桌面 Shell 信任缓存', async () => {
+    let receivedPrecheckArgs: Record<string, unknown> | undefined
+    const precheck = vi.fn(async (args: Record<string, unknown>) => {
+      receivedPrecheckArgs = args
+      return { ok: false as const, error: '危险命令已拒绝', auditReason: 'dangerous-command', denyType: 'strong' as const }
+    })
+    const touchTrustedCommand = vi.fn()
+    const r = await evaluateToolCallGate(base({
+      lane: 'automation', toolName: 'run_shell', toolInput: { command: 'rm -rf /' },
+      taskAccessPermissions: { directories: [], tools: ['run_shell'] },
+      runShellPrecheck: precheck, shellPrecheck: { touchTrustedCommand }, appDb: openDb()
+    }))
+
+    expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'shell-precheck-deny' })
+    expect(precheck).toHaveBeenCalledOnce()
+    expect(receivedPrecheckArgs).toMatchObject({ command: 'rm -rf /', shellPrecheck: undefined })
+    expect(touchTrustedCommand).not.toHaveBeenCalled()
+  })
+
+  it('任务授权不会放行无法解析的 Shell 结构', async () => {
+    const r = await evaluateToolCallGate(base({
+      lane: 'automation', toolName: 'run_shell', toolInput: { command: 'echo hi' },
+      taskAccessPermissions: { directories: [os.tmpdir()], tools: ['run_shell'] }, taskWorkDirs: [os.tmpdir()],
+      runShellPrecheck: async () => ({
+        ok: true, analysis: { verdict: 'unsupported', unsupportedStructures: ['test-structure'], unsupportedReason: 'structure', facts: { analysisCompleteness: 'partial' }, shellSecurityHints: { requiresRiskAck: false, outsideWorkDirRisk: false, warnings: [], scannedPaths: [], violationCodes: [] } } as never,
+        legacyAutoAllowEligible: false, legacyPolicy: {} as never, hints: {} as never
+      }), appDb: openDb()
+    }))
+
+    expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'automation-unsupported-deny' })
+  })
+
+  it('任务授权不会放行触及授权目录以外路径的命令', async () => {
+    const authorizedRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-shell-authorized-')))
+    const outsideRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-shell-outside-')))
+    try {
+      const precheck = async () => ({
+        ok: true as const,
+        analysis: { verdict: 'allow', facts: { analysisCompleteness: 'complete' }, shellSecurityHints: { requiresRiskAck: false, outsideWorkDirRisk: false, warnings: [], scannedPaths: [outsideRoot], violationCodes: [] } } as never,
+        legacyAutoAllowEligible: false, legacyPolicy: {} as never, hints: {} as never
+      })
+      const r = await evaluateToolCallGate(base({
+        lane: 'automation', toolName: 'run_shell', toolInput: { command: `git -C ${outsideRoot} log --oneline -1` },
+        taskAccessPermissions: { directories: [authorizedRoot], tools: ['run_shell'] }, taskWorkDirs: [authorizedRoot], workDir: authorizedRoot,
+        runShellPrecheck: precheck, appDb: openDb()
+      }))
+
+      expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'automation-shell-outside-root-deny' })
+    } finally {
+      await fs.rm(authorizedRoot, { recursive: true, force: true })
+      await fs.rm(outsideRoot, { recursive: true, force: true })
+    }
   })
 
   it('decision cache 隔离：desktop lane 预写的信任条目，automation 同签名不命中', async () => {

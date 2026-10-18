@@ -2011,6 +2011,30 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 104
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  if (version === 104) runInTransaction(conn, () => {
+    const exists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='automation_tasks'").get() !== undefined
+    if (exists) {
+      const columns = new Set((conn.prepare('PRAGMA table_info(automation_tasks)').all() as Array<{ name: string }>).map(({ name }) => name))
+      if (!columns.has('access_permissions_json')) {
+        conn.exec(`ALTER TABLE automation_tasks ADD COLUMN access_permissions_json TEXT NOT NULL DEFAULT '{"directories":[],"tools":[]}'`)
+      }
+      const rows = conn.prepare('SELECT rowid,work_dir,work_dirs_json FROM automation_tasks').all() as Array<{ rowid: number; work_dir: string | null; work_dirs_json: string | null }>
+      const update = conn.prepare('UPDATE automation_tasks SET access_permissions_json=? WHERE rowid=?')
+      for (const row of rows) {
+        let directories: string[] = []
+        try {
+          const parsed: unknown = row.work_dirs_json ? JSON.parse(row.work_dirs_json) : undefined
+          if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) directories = parsed
+          else if (row.work_dir) directories = [row.work_dir]
+        } catch {
+          if (row.work_dir) directories = [row.work_dir]
+        }
+        update.run(JSON.stringify({ directories, tools: [] }), row.rowid)
+      }
+    }
+    version = 105
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {

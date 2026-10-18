@@ -98,11 +98,22 @@ describe('butler IPC workdir/config fields', () => {
 
     const response = await map.get('butler:create')!(null, {
       name: 'output only', prompt: '检查并生成摘要', schedule: { kind: 'interval', intervalMinutes: 60 }, deliveryPref: 'none',
-      authorizedDirs: [], outputDir: os.tmpdir(), outputOrganization: 'hourly', modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off'
-    }) as { ok: boolean; task?: { authorizedDirs: string[]; outputDir: string | null; outputOrganization: string | null; preflightVersion?: number } }
+      authorizedDirs: [], accessPermissions: { directories: [], tools: ['run_shell'] }, outputDir: os.tmpdir(), outputOrganization: 'hourly', modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off'
+    }) as { ok: boolean; task?: { authorizedDirs: string[]; accessPermissions?: unknown; outputDir: string | null; outputOrganization: string | null; preflightVersion?: number } }
 
-    expect(response).toMatchObject({ ok: true, task: { authorizedDirs: [], outputDir: await realpath(os.tmpdir()), outputOrganization: 'hourly', preflightVersion: 1 } })
-    expect(preflight).toHaveBeenCalledWith(expect.objectContaining({ roots: [], outputDir: await realpath(os.tmpdir()) }), expect.any(Object))
+    expect(response).toMatchObject({ ok: true, task: { authorizedDirs: [], accessPermissions: { directories: [], tools: ['run_shell'] }, outputDir: await realpath(os.tmpdir()), outputOrganization: 'hourly', preflightVersion: 1 } })
+    expect(preflight).toHaveBeenCalledWith(expect.objectContaining({ roots: [], accessPermissions: { directories: [], tools: ['run_shell'] }, outputDir: await realpath(os.tmpdir()) }), expect.any(Object))
+  })
+
+  it('rejects unknown task access capabilities at the IPC boundary', async () => {
+    const map = handlers()
+    const response = await map.get('butler:create')!(null, {
+      name: 'invalid permission', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop',
+      authorizedDirs: [], accessPermissions: { directories: [], tools: ['run_arbitrary'] }, outputDir: os.tmpdir(), outputOrganization: 'hourly'
+    })
+
+    expect(response).toMatchObject({ ok: false, kind: 'validation-error', error: '任务访问权限无效' })
+    expect(map.get('butler:list')!()).toEqual([])
   })
 
   it('blocks an ambiguous target with a structured report and writes no task', async () => {

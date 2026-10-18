@@ -20,6 +20,31 @@ describe('TaskPathFactsProvider', () => {
     expect(first.coverage).toMatchObject({ complete: true, roots: 1, visited: expect.any(Number) })
   })
 
+  it('reports Git repositories found at authorized roots as local facts', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-path-facts-git-'))
+    await fs.mkdir(path.join(root, '.git'))
+
+    const facts = await new TaskPathFactsProvider().collect([root])
+
+    expect(facts.gitRepositories).toEqual([await fs.realpath(root)])
+    expect(facts.entries.some((entry) => entry.path.includes(`${path.sep}.git${path.sep}`))).toBe(false)
+    expect(facts.digest).toBeTruthy()
+  })
+
+  it('recognizes worktree .git files and nested repositories without following marker symlinks', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-path-facts-nested-git-'))
+    const nested = path.join(root, 'project')
+    await fs.mkdir(nested)
+    await fs.writeFile(path.join(nested, '.git'), 'gitdir: ../.git/worktrees/project')
+    const symlinkRepo = path.join(root, 'linked')
+    await fs.mkdir(symlinkRepo)
+    await fs.symlink(path.join(nested, '.git'), path.join(symlinkRepo, '.git'))
+
+    const facts = await new TaskPathFactsProvider().collect([root])
+
+    expect(facts.gitRepositories).toEqual([await fs.realpath(nested)])
+  })
+
   it('fails closed when scan bounds are exceeded', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-path-facts-bound-'))
     for (let index = 0; index < 4; index += 1) await fs.writeFile(path.join(root, `${index}.txt`), 'x')

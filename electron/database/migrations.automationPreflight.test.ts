@@ -31,7 +31,7 @@ describe('migration v103 automation preflight', () => {
   it('preserves legacy roots as v0, creates recovery cursor, and marks active runs legacy-unknown', () => {
     const db = v102()
     runMigrations(db)
-    expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '104' })
+    expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '105' })
     expect(db.prepare('SELECT id,work_dirs_json,preflight_version,target_bindings_json FROM automation_tasks ORDER BY id').all()).toEqual([
       { id: 'empty', work_dirs_json: '[]', preflight_version: 0, target_bindings_json: null },
       { id: 'legacy', work_dirs_json: '["/old/root"]', preflight_version: 0, target_bindings_json: null },
@@ -41,6 +41,10 @@ describe('migration v103 automation preflight', () => {
     ])
     expect(db.prepare('SELECT task_id,recovery_cursor_at FROM automation_task_recovery_state ORDER BY task_id').all()).toEqual([
       { task_id: 'empty', recovery_cursor_at: 5678 }, { task_id: 'legacy', recovery_cursor_at: 1234 },
+    ])
+    expect(db.prepare('SELECT id,access_permissions_json FROM automation_tasks ORDER BY id').all()).toEqual([
+      { id: 'empty', access_permissions_json: '{"directories":[],"tools":[]}' },
+      { id: 'legacy', access_permissions_json: '{"directories":["/old/root"],"tools":[]}' },
     ])
     runMigrations(db)
     expect(db.prepare('SELECT COUNT(*) AS count FROM automation_task_recovery_state').get()).toEqual({ count: 2 })
@@ -58,10 +62,10 @@ it('migration v104 leaves output fields empty and never treats legacy work_dir a
 
   runMigrations(db)
 
-  expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '104' })
-  expect(db.prepare('SELECT id,work_dirs_json,output_dir,output_organization FROM automation_tasks ORDER BY id').all()).toEqual([
-    { id: 'empty', work_dirs_json: '[]', output_dir: null, output_organization: null },
-    { id: 'legacy', work_dirs_json: '["/old/root"]', output_dir: null, output_organization: null },
+  expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '105' })
+  expect(db.prepare('SELECT id,work_dirs_json,output_dir,output_organization,access_permissions_json FROM automation_tasks ORDER BY id').all()).toEqual([
+    { id: 'empty', work_dirs_json: '[]', output_dir: null, output_organization: null, access_permissions_json: '{"directories":[],"tools":[]}' },
+    { id: 'legacy', work_dirs_json: '["/old/root"]', output_dir: null, output_organization: null, access_permissions_json: '{"directories":["/old/root"],"tools":[]}' },
   ])
   runMigrations(db)
   expect(db.prepare('SELECT COUNT(*) AS count FROM automation_tasks WHERE output_dir IS NOT NULL').get()).toEqual({ count: 0 })

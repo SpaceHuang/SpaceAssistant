@@ -12,6 +12,8 @@ export type AutomationTaskSchedule =
 
 export type AutomationDeliveryPref = 'desktop' | 'feishu' | 'wechat' | 'none'
 export type AutomationOutputOrganization = 'direct' | 'daily' | 'hourly'
+export type AutomationTaskToolPermission = 'run_shell'
+export type AutomationTaskAccessPermissions = { directories: string[]; tools: AutomationTaskToolPermission[] }
 
 export function getDefaultAutomationOutputOrganization(schedule: Pick<AutomationTaskSchedule, 'kind'>): AutomationOutputOrganization {
   switch (schedule.kind) {
@@ -30,6 +32,8 @@ export type AutomationTask = {
   deliveryTarget?: string
   /** Canonical user-approved roots for reading/modifying existing materials. */
   authorizedDirs: string[]
+  /** Per-task access grant snapshot; older tasks default to directory access only. */
+  accessPermissions?: AutomationTaskAccessPermissions
   /** Compatibility projection retained until all run consumers move to authorizedDirs. */
   workDirs: string[]
   /** IPC/数据库旧版本兼容字段；新调用统一使用 workDirs。 */
@@ -62,6 +66,7 @@ export type AutomationTaskInput = {
   deliveryTarget?: string
   /** New IPC payloads use authorizedDirs; workDirs remains during the caller migration. */
   authorizedDirs?: string[]
+  accessPermissions?: AutomationTaskAccessPermissions
   workDirs: string[]
   outputDir?: string
   outputOrganization?: AutomationOutputOrganization
@@ -116,6 +121,7 @@ export type AutomationTaskRunConfigSnapshot = {
   taskRevision?: number
   /** Canonical read/write material roots copied from the immutable task revision. */
   authorizedDirs?: string[]
+  accessPermissions?: AutomationTaskAccessPermissions
   workDirs?: string[]
   outputDir?: string
   outputOrganization?: AutomationOutputOrganization
@@ -156,6 +162,7 @@ export const PREFLIGHT_ISSUE_MESSAGE_KEYS = {
   TARGET_OUTSIDE_ROOTS: 'butler.preflight.target_outside_roots',
   TARGET_UNVERIFIABLE: 'butler.preflight.target_unverifiable',
   TARGET_TYPE_MISMATCH: 'butler.preflight.target_type_mismatch',
+  TOOL_PERMISSION_REQUIRED: 'butler.preflight.tool_permission_required',
   NO_ROOTS: 'butler.preflight.no_roots',
   OUTPUT_PATH_ESCAPE: 'butler.preflight.output_path_escape',
   OUTPUT_ANCESTOR_INVALID: 'butler.preflight.output_ancestor_invalid',
@@ -168,6 +175,7 @@ export const PREFLIGHT_CLARIFICATION_REASON_MESSAGE_KEYS = {
   missing_location: 'butler.preflight.reasons.missing_location',
   multiple_matches: 'butler.preflight.reasons.multiple_matches',
   target_missing: 'butler.preflight.reasons.target_missing',
+  capability_not_authorized: 'butler.preflight.reasons.capability_not_authorized',
   other: 'butler.preflight.reasons.other'
 } as const
 

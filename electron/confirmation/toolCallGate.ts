@@ -140,6 +140,8 @@ export interface ToolCallGateArgs {
   workDir: string
   /** Frozen task roots supplied by the trusted automation run snapshot. */
   taskWorkDirs?: readonly string[]
+  /** Access grants frozen into the trusted automation run snapshot. */
+  taskAccessPermissions?: import('../../src/shared/automationTaskTypes').AutomationTaskAccessPermissions
   /** Frozen output targets from this run's validated preflight snapshot. */
   taskOutputBindings?: readonly TargetBinding[]
   /** Archive directory resolved from the run's frozen scheduledFor slot. */
@@ -410,13 +412,13 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (shellAnalysis.shellSecurityHints.outsideWorkDirRisk) shellPathSignals.push({ kind: 'path-outside-heuristic', reason: 'command-may-touch-outside-workdir' })
     shellPathSignals.push({ kind: 'command-effect', effect: classifyShellCommandEffect(command, shellAnalysis) })
     if (shellPathProbeFailed) shellPathSignals.push({ kind: 'extraction-failed', reason: 'shell-path-facts-incomplete' })
-    if (lane !== 'automation') {
     const precheck = await (args.runShellPrecheck ?? precheckRunShellTool)({
       command,
       workDir: args.workDir,
       userDataDir: args.userDataDir,
       shellConfig: args.shellConfig,
-      shellPrecheck: args.phase === 'recheck' ? undefined : args.shellPrecheck,
+      // Automation uses per-task approval, never desktop trusted-command state or its cache side effects.
+      shellPrecheck: lane === 'automation' || args.phase === 'recheck' ? undefined : args.shellPrecheck,
       analysis: shellAnalysis
     })
     if (!precheck.ok) {
@@ -462,9 +464,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       hints: precheck.hints
     }
     shellLegacyAutoAllowEligible = precheck.legacyAutoAllowEligible && !shellPathProbeFailed && !shellPathSignals.some((s) => s.kind === 'path-target' && (s.zone === 'sensitive-file' || s.zone === 'system-dir'))
-    } else {
-      shellLegacyAutoAllowEligible = false
-    }
+    if (lane === 'automation') shellLegacyAutoAllowEligible = false
   }
 
   // ===== 生效规则集（§4 第 1 区 + §2.1「自动」语义）：装配期解析注入（B1，门控不持库）=====
@@ -892,7 +892,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
   }
 
-  if (args.toolName === 'run_shell' && facts) facts.signals.push(...shellPathSignals)
+  if (args.toolName === 'run_shell' && facts) {
+    facts.signals.push(...shellPathSignals)
+    if (lane === 'automation') facts.signals.push({ kind: 'automation-shell-permission', status: args.taskAccessPermissions?.tools.includes('run_shell') ? 'matched' : 'missing' })
+  }
   // ===== R5：shell unsupported 事实下传（gate 层零特例——不派发 desktop 规则，照常进引擎）=====
   if (args.toolName === 'run_shell' && result.shellPrecheck) {
     const analysis = result.shellPrecheck.analysis

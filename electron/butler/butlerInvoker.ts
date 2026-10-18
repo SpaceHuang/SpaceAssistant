@@ -45,11 +45,21 @@ import { ensureAutomationRunOutputDirectory, resolveBoundOutputTarget } from './
 
 export const BUTLER_SYSTEM_APPENDIX = [
   '你是 SpaceAssistant 的后台管家（automation lane），由定时任务或用户手动触发，无人值守运行。',
-  '本回合按任务指令完成检查、总结、提醒、报表等只读 / 汇报型工作。',
-  '安全边界：无法获得人工确认。只有本次预检绑定的结果目标允许写入；其他本地文件写入和 Shell 均会被拒绝。',
+  '本回合按任务指令完成查询、处理、总结、提醒、报表等工作。',
+  '安全边界：无法获得人工确认。文件工具只能写入本次预检绑定的结果目标；run_shell 只有在本任务授权访问明确授予时可用，并且仍经过 Shell 安全预检，危险、敏感或系统位置以及无法完整分析的命令会被拒绝。',
   '请优先使用只读工具完成任务，若被拒绝，请在最终回复中说明原因与已完成的部分。',
   '最终回复即任务结果汇报，请直接给出结论与关键数据，不要反问。'
 ].join('\n')
+
+export function buildButlerSystemAppendix(accessPermissions?: import('../../src/shared/automationTaskTypes').AutomationTaskAccessPermissions): string {
+  const shellGranted = accessPermissions?.tools.includes('run_shell') === true
+  return [
+    BUTLER_SYSTEM_APPENDIX,
+    shellGranted
+      ? '本任务已获批 run_shell。可用它查询授权目录中的本机信息，例如 Git 历史；查询 GitHub 推送时间时，只能在本机事实可验证时报告。结果文件仍须写入本次预检绑定的结果目标。'
+      : '本任务未获批 run_shell。遇到 Git 历史等本地命令需求时，说明任务需要用户在“授权访问”中批准本地 Shell 命令，不要猜测文件目标，也不要改用其他工具绕过权限。'
+  ].join('\n')
+}
 
 // 任务声明摘要已提取为两端共用模块（§5.6）：automation 任务 prompt 与桌面当前 turn 用户消息共用。
 import { APPROVAL_TASK_DIGEST_MAX_CHARS, buildApprovalTaskDigest, buildApprovalTaskEvidence } from '../../src/shared/approvalTaskDigest'
@@ -417,7 +427,7 @@ async function runButlerModelTurn(
   }, getDefaultAgentRuntime().modelProviders)
 
   const system = buildFinalSystemPrompt({
-    system: BUTLER_SYSTEM_APPENDIX,
+    system: buildButlerSystemAppendix(args.runConfig.accessPermissions),
     memoryContent: null,
     memoryEnabled: false,
     locale: readAppLocale(db)
@@ -469,6 +479,7 @@ async function runButlerModelTurn(
     shellConfig: deps.getShellConfig?.() ?? null,
     workDir,
     taskWorkDirs: args.runConfig.workDirs,
+    taskAccessPermissions: args.runConfig.accessPermissions,
     ...(args.runConfig.preflightVersion === 1 ? {
       taskOutputBindings: args.runConfig.targetSelections ?? [],
       ...(args.runConfig.runOutputDir ? { taskRunOutputDir: args.runConfig.runOutputDir } : {})
