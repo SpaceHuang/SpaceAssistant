@@ -392,7 +392,7 @@ E 编号 DAG 只由执行计划维护；本表为阶段归属说明：P0=E-00/E-
 ## 附录 A：证据和来源
 
 - 需求真源：[wiki-domain-tools-requirement.md](../../../requirement/knowledge-skills/in-flight/wiki-domain-tools-requirement.md)，尤其 D-01 至 D-06、§4–§13、AC-01–AC-26。
-- 当前代码事实：HEAD 28dd3223，复核命令见 §1.3；工作区在本次文档任务开始前已有其他用户改动，本方案未覆盖或清理这些文件。
+- 实施基线记录（E-00）：HEAD `28dd3223`，复核命令见 §1.3；本机关闭证据见执行计划 §7.1 的 E-14。工作区在本次文档任务开始前已有其他用户改动，本方案未覆盖或清理这些文件。
 - 历史规则：LLM Wiki 当前 Skill、Wiki mount/import、安全策略及 MCP 延迟加载的实际源码路径见 F-01 至 F-07。
 - D-TP-01 至 D-TP-05 已按负责人选择记录；实施前须按 E-00/E-01 复核代码事实和安全写入签名，若事实变化则先修订方案与 DAG。旧版应用仍可按原代码写原 Wiki 文件，是已明确的兼容事实。
 
@@ -400,16 +400,24 @@ E 编号 DAG 只由执行计划维护；本表为阶段归属说明：P0=E-00/E-
 
 | 评审项 | 修订位置与计划证据 | 当前状态 |
 | --- | --- | --- |
-| B-01 幂等查询顺序与调用映射 | §2.5、§2.6；E-07 成功重试、pending 恢复、同键异参测试 | 方案已闭合，待实现证据 |
+| B-01 幂等查询顺序与调用映射 | §2.5、§2.6；E-07 成功重试、pending 恢复、同键异参测试 | 已实现验证；证据见执行计划 §7.1 E-07、E-14 |
 | B-02 外部编辑器竞态 | D-TP-05；复用 `safeAtomicWrite`、Wiki mutex 与既有文件工具竞态用例；E-04 接入验证 | **已按既有文件写入契约收敛**；Wiki service 不得复制或绕过既有安全写入链路 |
-| B-03（首轮）多文件迁移恢复 | §2.9 durable manifest、逐文件 step 与重启算法；E-13 逐文件故障注入 | 方案已闭合，待实现证据 |
-| B-04 源码入口与启用状态 | §2.9 lifecycle 状态机；E-10 真实本地命令/Skill/sourceId 路由，E-11 状态统一门控，E-14 本地源码关闭 | 方案已闭合，待实现证据 |
+| B-03（首轮）多文件迁移恢复 | §2.9 durable manifest、逐文件 step 与重启算法；E-13 逐文件故障注入 | 已实现验证；证据见执行计划 §7.1 E-13、E-14 |
+| B-04 源码入口与启用状态 | §2.9 lifecycle 状态机；E-10 真实本地命令/Skill/sourceId 路由，E-11 状态统一门控，E-14 本地源码关闭 | 源码阶段已验证；真实渠道与启用仍由 E-15/E-16/E-17 验收 |
 | B-05 SQLite 备份开工证据（已不适用） | 负责人裁决复用现有文件存储后，SQLite 备份探针不再适用；文件权限与安全写入能力由 E-00/E-01/E-13 核验 | 已从门禁移除；不新增数据库备份前置 |
-| B-03（本轮）迁移 pending + new_hash 恢复 | §2.9 完整 step/存在性/hash 分支；E-13 在写入后、manifest 更新前强制崩溃 | 方案已闭合，待实现证据 |
-| B-07 跨页/SCHEMA 并发约束 | INV-07/09、§2.6 域锁与固定锁顺序；E-07/E-08 交错与随机序列测试 | 方案已闭合，待实现证据 |
-| B-08 日志投影循环 | §2.5/2.6/2.8 以 `domain_committed` 为事件提交点，log 消费 domain_committed/completed，completed 仅表示投影完成 | 方案已闭合，待实现证据 |
-| B-09 首次初始化路径 | §2.9 bootstrap seal、existing/empty 分流和损坏恢复；E-11/E-13 覆盖初始化入口与中断 | 方案已闭合，待实现证据 |
+| B-03（本轮）迁移 pending + new_hash 恢复 | §2.9 完整 step/存在性/hash 分支；E-13 在写入后、manifest 更新前强制崩溃 | 已实现验证；证据见执行计划 §7.1 E-13、E-14 |
+| B-07 跨页/SCHEMA 并发约束 | INV-07/09、§2.6 域锁与固定锁顺序；E-07/E-08 交错与随机序列测试 | 已实现验证；证据见执行计划 §7.1 E-07 至 E-09、E-14 |
+| B-08 日志投影循环 | §2.5/2.6/2.8 以 `domain_committed` 为事件提交点，log 消费 domain_committed/completed，completed 仅表示投影完成 | 已实现验证；证据见执行计划 §7.1 E-07、E-14 |
+| B-09 首次初始化路径 | §2.9 bootstrap seal、existing/empty 分流和损坏恢复；E-11/E-13 覆盖初始化入口与中断 | 已实现验证；证据见执行计划 §7.1 E-11、E-13、E-14 |
 | B-06 发布前外部验收 | §3.4 外部证据阻塞 domain_enabled；E-15/E-16 为 E-17 的必需前置 | 门禁已闭合；未有签署证据不得启用 |
 
 可执行性补充已纳入执行计划：E-03 负责文件模型与可独立验证的数据访问，不实现生产 operation recovery/projection；后者由 E-07 完成。E-05 只做只读预检和外部文件协调，不代替 E-13 迁移级恢复。每项任务都有独立定向命令；P/E/G 映射唯一；安全事实、策略、permit、executor 分别指向具体模块和测试。
+
+### 附录 C：E-14 本机关闭证据（2026-10-18）
+
+- 修复与门禁对账提交：代码 `f5b27dbd`，锁定策略分类文档 `61e320a7`。全量测试首次暴露的 7 个失败已修复并由最终重跑覆盖。
+- `npm test`：1108 个测试文件通过、1 个跳过；10474 项通过、111 项跳过。
+- `npm run build`：通过。Vite 输出既有 `INEFFECTIVE_DYNAMIC_IMPORT` 与 chunk size 警告，无构建错误。
+- `npm run typecheck:renderer`、`npm run typecheck:shared`、`npx tsc -p tsconfig.electron.json --noEmit`、`npm run i18n:check`、`npm run check:system-invariant-registry`：通过。
+- E-15/E-16 需要真实 IM/automation 会话与隔离候选安装包验收证据；未据本机源码结果推定通过。E-17 仍保持关闭。
 
