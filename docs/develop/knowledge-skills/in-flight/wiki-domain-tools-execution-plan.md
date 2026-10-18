@@ -13,7 +13,7 @@
 
 **本机源码阶段：** parser、真实命令入口集成、sourceId 导入链路、外部文件变化协调、幂等重试和工具安全矩阵均须完成；E-14 的验收必须经过真实本地 `/wiki` 路由和 Skill 路由，不能以伪造入口替代。
 
-**外部验收与源码关闭分开：** 真实飞书/微信确认、桌面长正文确认展示、正式安装包升级、旧版应用写入后的新版本文件变化协调、各平台 userData 权限与安全文件发布能力。它们不阻止 E-14 源码关闭；每项都是 E-17 启用的硬前置，缺少任一证据只能停在 `domain_ready`。
+**外部验收与源码关闭分开：** 真实飞书/微信确认、桌面长正文确认展示、正式安装包升级、旧版应用写入后的新版本文件变化协调，以及本次候选发布目标平台（macOS arm64）的 userData 权限与安全文件发布能力。它们不阻止 E-14 源码关闭；本次 macOS 候选发布适用的 E-15/E-16 项是该目标安装 E-17 的前置。Windows 和其他平台的运行验收是各自平台发布的外部验收，不作为当前 macOS 候选发布或源码推进门禁；不得把 macOS 证据外推为其他平台通过。
 
 **当前工作区保护：** 在 worktree `/Users/space/Documents/Develop/SpaceAssistant/.worktrees/wiki-domain-tools`、分支 `codex/wiki-domain-tools` 工作。开始本轮续跑时 HEAD 为 `47fd2687`，工作区仅有 E-09 恢复相关未提交改动；原工作区不作代码写入。每个代码阶段独立提交，文档阶段与代码提交分开。
 
@@ -38,7 +38,7 @@ D-TP-01 至 D-TP-05 的产品/技术边界已有裁决；E-04 复用现有文件
 | --- | --- | --- | --- |
 | 本机 | 定向 Vitest、真实本地命令/Skill 到 service 的集成测试、权限矩阵、迁移故障注入、类型/i18n/构建、完整测试 | 必须通过 | 必须通过 |
 | 外部渠道 | 真实飞书/微信确认与拒绝、automation 无人工确认拒绝、桌面长恢复正文展示 | 不阻塞 | 必须有逐项记录 |
-| 外部发布与文件系统 | 正式安装包升级、旧版应用写入后新版本对外部文件变化的协调、userData 权限、现有 safeAtomicWrite 所需文件系统能力、冲突版本可读 | 不阻塞 | 必须有逐项记录 |
+| 外部发布与文件系统 | 本次 macOS arm64 候选包升级、旧版应用写入后新版本对外部文件变化的协调、该目标 userData 权限、现有 safeAtomicWrite 文件系统能力、冲突版本可读 | 不阻塞 | 本次目标安装必须有逐项记录；Windows/其他平台单列为对应平台发布验收，不阻塞本次 macOS 候选发布 |
 
 外部验收记录路径为 `docs/develop/knowledge-skills/in-flight/wiki-domain-tools-release-acceptance.md`，由 E-15/E-16 创建并填写。它不得被 mock 结果或源码测试报告替代。
 
@@ -62,15 +62,15 @@ D-TP-01 至 D-TP-05 的产品/技术边界已有裁决；E-04 复用现有文件
 | E-13 | 实现必要原位迁移的 manifest/写屏障与逐项恢复 | E-03、E-04、E-05、E-07、E-08、E-10、E-11、E-12 | `electron/wiki/wikiMigrationCoordinator.ts`；`wikiMigrationJournal.ts`；`wikiMigrationPreflight.ts`；`wikiLifecycle.ts`；对应测试 | AC-13、AC-16、AC-19、AC-20、AC-21、AC-22、AC-25、AC-26 | 使用 E-11 已建立的 bootstrap/lifecycle。覆盖存量集中库首次 seal→preflight→用户确认→迁移→domain_ready；空 Wiki→domain_ready；初始化中断后的 migration 恢复及控制面缺失/损坏不得重置 legacy。必要迁移前确认 E-05 报告；逐项写入后、manifest 更新前强制崩溃，验证 pending+new_hash 核验后幂等补记；覆盖 old_exists true/false 的继续和回退删除分支。SCHEMA 分类区块、marker/categoryId 与 index/log 视图仍在原根迁移；冲突停 recovery_required 且保留现场。命令：`npm exec vitest run electron/wiki/wikiBootstrapMigrationApproval.test.ts electron/wiki/wikiBootstrapMigration.test.ts electron/wiki/wikiMigrationCoordinator.test.ts electron/wiki/wikiMigrationJournal.test.ts electron/wiki/wikiMigrationPreflight.test.ts electron/wiki/wikiLifecycle.test.ts electron/wiki/wikiInit.shared.test.ts src/renderer/components/WikiPane/WikiPane.test.tsx`。WikiPane 展示预检文件、类型、hash 差异、分类/索引/日志摘要；主进程原生对话框绑定用户确认与 manifest hash；apply 前重新预检，过期/诊断/取消零写入；中断按已确认 migrationId 恢复；覆盖 old_exists true/false、pending+new_hash、外部变化回滚保留。8 文件/55 项通过；renderer/Electron 类型检查、i18n 检查通过。 | 本机故障注入 | - [x] |
 | E-14 | 关闭本机源码阶段并完成本地故障恢复演练 | E-01、E-02、E-03、E-04、E-05、E-06、E-07、E-08、E-09、E-10、E-11、E-12、E-13 | Wiki/工具/策略/渲染测试；类型/i18n/构建；技术方案证据附录 | AC-01–AC-26 | 所有 AC 对应用例通过；集成用例使用真实 `/wiki`/Skill 路由和 memory discovery；安全、跨页交错、日志提交点、bootstrap 中断与逐文件迁移恢复证据齐全。命令：`npm test`、`npm run build`、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run i18n:check`、`npm run check:system-invariant-registry` | 本机 | - [x] |
 | E-15 | 完成真实渠道与确认展示验收 | E-14 | `wiki-domain-tools-release-acceptance.md`；真实桌面/飞书/微信/automation 会话记录 | AC-10、AC-15、AC-19、AC-23、AC-24 | 逐项记录真实渠道授权、Schema/恢复确认、拒绝、取消、长正文可读性和 automation 无确认拒绝；记录应用版本、lane、匿名化证据和结论；任一失败不得通过 | 外部账号 + 桌面 | - [～] |
-| E-16 | 完成候选安装包与外部文件变化协调验收 | E-14 | `wiki-domain-tools-release-acceptance.md`；候选安装包；隔离 userData fixture | AC-11、AC-12、AC-16、AC-19、AC-20、AC-22、AC-26 | 在目标平台验证候选版本使用原有 Wiki 文件与存储位置；用旧版应用/外部编辑器修改 fixture Wiki 后启动新版，验证 reconciler 检测并协调页面、SCHEMA、raw 变化及 index/log 重建；确认迁移报告和目标标题冲突处理符合 AC-16；验证 userData 权限及现有 safeAtomicWrite 的平台兼容性。不得执行数据格式反向迁移；不得用真实用户数据代替 fixture，除非另有批准窗口 | 外部平台/安装包 | - [～] |
-| E-17 | 在外部验收通过后启用领域工具与旁路规则 | E-14、E-15、E-16 | 现有 Wiki 根 bootstrap seal、`.wiki-service/state.json`；发布记录；必要迁移 manifest | AC-01、AC-08、AC-11、AC-14、AC-16、AC-25 | 所有 E-15/E-16 项有通过证据；目标 Wiki 根 bootstrap seal/state 身份匹配、格式有效且生命周期可从 domain_ready 转换；同一生命周期转换使新工具可用、当前版本旧路由改道、当前版本通用文件旁路门禁生效。旧版运行期间可直接写原 Wiki 文件，新版重启后通过 reconciler 协调，不设置旧版拦截或版本下限。无记录、待复核或未知状态均不得启用 | 外部发布 + 启用 | - [ ] |
+| E-16 | 完成本次 macOS arm64 候选安装包与外部文件变化协调验收 | E-14 | `wiki-domain-tools-release-acceptance.md`；macOS 候选安装包；隔离 userData fixture | AC-11、AC-12、AC-16、AC-19、AC-20、AC-22、AC-26 | 在本次 macOS arm64 目标验证候选版本使用原有 Wiki 文件与存储位置；用旧版应用/外部编辑器修改 fixture Wiki 后启动新版，验证 reconciler 检测并协调页面、SCHEMA、raw 变化及 index/log 重建；确认迁移报告和目标标题冲突处理符合 AC-16；验证该 macOS 目标 userData 权限及现有 safeAtomicWrite 能力。Windows 与其他平台各自发布时单独验收，不阻塞本次目标。不得执行数据格式反向迁移；不得用真实用户数据代替 fixture，除非另有批准窗口 | 本次目标平台/安装包 | - [～] |
+| E-17 | 在本次目标平台外部验收通过后启用领域工具与旁路规则 | E-14、E-15、E-16 | 本次 macOS 目标 Wiki 根 bootstrap seal、`.wiki-service/state.json`；发布记录；必要迁移 manifest | AC-01、AC-08、AC-11、AC-14、AC-16、AC-25 | 本次 macOS 目标适用的 E-15/E-16 项均有通过证据；目标 Wiki 根 bootstrap seal/state 身份匹配、格式有效且生命周期可从 domain_ready 转换；同一生命周期转换使新工具可用、当前版本旧路由改道、当前版本通用文件旁路门禁生效。旧版运行期间可直接写原 Wiki 文件，新版重启后通过 reconciler 协调，不设置旧版拦截或版本下限。Windows/其他平台没有因 macOS 证据被视为通过；在其平台发布/启用前另行完成对应平台外部验收。无本次目标适用记录、待复核或未知状态均不得启用 | macOS 候选发布 + 目标安装启用 | - [ ] |
 
 ### 2.1 DAG 与职责自检
 
 - DAG 唯一真源是上表；无自依赖、跨阶段环或验收自环。
 - E-03 只做文件模型/适配器；E-07 拥有生产 operation recovery 与 projection；E-05 只做只读预检/外部文件协调；E-13 仅对必要原位迁移维护 manifest 与重启恢复，无迁移时验收为无写入 no-op。
 - E-10 在 E-14 前完成并以真实 `/wiki` 命令/Skill 本地链路验收；E-11 的生命周期 gate 也在 E-14 前完成，不依赖 E-17 启用。
-- E-14 仅依赖本机证据。E-15/E-16 是外部任务，不阻塞源码；E-17 显式依赖两者全部通过。
+- E-14 仅依赖本机证据。E-15/E-16 是外部任务，不阻塞源码；E-17 只依赖本次目标平台适用的 E-15/E-16 证据。其他平台验收归入各自平台发布，不阻塞当前候选目标。
 - AC-01 至 AC-26 至少映射一项实现任务；需求稿仍是 AC 真源。
 
 ## 3. 阶段检查点
@@ -84,8 +84,8 @@ D-TP-01 至 D-TP-05 的产品/技术边界已有裁决；E-04 复用现有文件
 | G4 SCHEMA 与历史恢复 | E-08、E-09 | 确认绑定正确；冲突零写入；最终恢复内容展示和 automation 拒绝通过 | 不接入 Agent 路由 |
 | G5 真实入口与旁路 | E-10、E-11、E-12 | `/wiki` 命令/Skill 真实链路走 sourceId；真实 `memory` discovery/schema 注入和生命周期状态跨 registry/dispatch/policy/file IPC 一致；安全矩阵和 WikiPane 测试通过 | 保持 domain_ready；不运行原位迁移 |
 | G6 迁移与源码关闭 | E-13、E-14 | 每文件故障可继续或停冲突；本机 AC、回退、类型、i18n、完整测试/构建证据通过 | recovery_required 或继续源码修复；外部验收未开始不影响 E-14 |
-| G7 外部发布验收 | E-15、E-16 | release acceptance 中每项有版本、环境、证据、结论和负责人确认；不允许“待复核” | 保持 domain_ready，不启用 |
-| G8 发布启用 | E-17 | 所有外部签署证据齐备，目标 Wiki 根的状态与必要迁移清单通过 | 不转 domain_enabled；保留原文件与诊断 |
+| G7 外部发布验收 | E-15、E-16 | 本次 macOS 目标适用的每项均有版本、环境、证据、结论和负责人确认；Windows/其他平台另列为其平台发布验收，不在本门禁范围 | 保持 domain_ready，不启用 |
+| G8 发布启用 | E-17 | 本次 macOS 目标适用的外部签署证据齐备，目标 Wiki 根的状态与必要迁移清单通过；该结论不代表其他平台验收通过 | 不转 domain_enabled；保留原文件与诊断 |
 
 门禁仅引用本行之前的任务证据。G0 不依赖数据库探针；G7 的外部证据在 G8 之前产出；不存在 G8 之后补验再追认启用。
 
@@ -146,8 +146,8 @@ D-TP-01 至 D-TP-05 的产品/技术边界已有裁决；E-04 复用现有文件
 | 构建 | E-11 阶段提交 `2d16c458` 前执行 | `npx tsc -p tsconfig.electron.json --noEmit`、`npm run build:electron:incremental` 通过 |
 | E-14 | `f5b27dbd`、`61e320a7`、`2737d84f`；修复全量验收发现的工具注册/元数据/策略缺项，以及首次启动 Wiki lifecycle 错误恢复告警 | 最终 `npm test`：1108 文件通过、1 跳过；10477 项通过、111 跳过。`npm run build`、renderer/shared/Electron 类型检查、i18n 与 system invariant registry 检查通过；构建仅有既有动态导入和大 chunk 警告。首次启动回归 RED/GREEN 与生命周期 fail-closed 边界见 release acceptance |
 | E-15 | 桌面隔离 HTTPS mock 已通过提案生成、拒绝、取消和修复后的批准写入 | 提交 `e7262730`：TDD 用例 `passes host user confirmation provenance through the registered schema update tool` 修复前 RED、修复后 GREEN；边界回归 4 文件/53 项通过，`npm run check:system-invariant-registry` 与 `npm run build:electron:incremental` 通过。临时候选副本内替换新编译主进程后，批准 UI 返回“隔离 Schema 更新已获用户确认并写入”，SQLite `confirmation_submissions` 为 `approved/committed`，SCHEMA 与 schema history/2 哈希一致、schemaVersion 为 2。拒绝与取消证据仍有效：拒绝记录 `denied/committed`；取消记录 `approval-resolved(cancelled)`、`tool-call-not-dispatched(REQUEST_CANCELLED, executorEntry:not-entered)`、`invocation-interrupted(cancelled)`，且取消瞬间界面仍短暂显示待确认、重开后才收敛。renderer 确认、取消和终态边界 4 文件/76 项通过；automation policy/gate/wiki service 边界 4 文件/173 项通过。取消后 UI 收敛时限、桌面长正文实显及真实飞书/微信/automation turn 仍待验收；详见 `wiki-domain-tools-release-acceptance.md` |
-| E-16 | macOS DMG 静态校验、隔离 userData 候选副本首启/初始化、本机 fixture、候选包 reconciler，以及旧版二进制实际 `write_file` 后新版候选进程协调页面和新版候选进程协调外部 page/有效 SCHEMA/raw 变化的隔离链路已验证；原样安装/default appData、候选进程冲突处理及其他平台仍待验收 | 最终 x64/arm64 DMG 哈希、`domain_ready` seal/state 与权限、旧版 `read_file`→`write_file` 后 revision 2→3、候选进程协调外部 page/SCHEMA/raw 后 revision 3→4 和 schemaVersion 2→3 并重建 index/log 的证据见 release acceptance。旧版模型调用由本机 HTTPS mock 驱动；候选进程只有临时副本含 gated runtime hook 与 userData 重定向。目标默认 appData 安装位置、候选进程内无效 SCHEMA/标题冲突处置及其他平台兼容仍需验收 | - [～] |
+| E-16 | macOS arm64 DMG 静态校验、隔离 userData 候选副本首启/初始化、本机 fixture、候选包 reconciler，以及旧版二进制实际 `write_file` 后新版候选进程协调页面和新版候选进程协调外部 page/有效 SCHEMA/raw 变化、标题冲突零写入的隔离链路已验证；原样安装/default appData 仍待验收 | 最终 x64/arm64 DMG 哈希、`domain_ready` seal/state 与权限、旧版 `read_file`→`write_file` 后 revision 2→3、候选进程协调外部 page/SCHEMA/raw 后 revision 3→4 和 schemaVersion 2→3 并重建 index/log、标题冲突前后 Wiki 文件 SHA-256 不变的证据见 release acceptance。旧版模型调用由本机 HTTPS mock 驱动；候选进程只有临时副本含 gated runtime hook 与 userData 重定向。当前 macOS 目标仍缺原样安装/default appData 验收；Windows 与其他平台验收各归其平台后续发布，不阻塞本目标 | - [～] |
 | E-17 | 未执行 | E-15/E-16 尚无完整外部通过证据；不得启用 `domain_enabled` |
 
-| E-15/E-16 本轮补充 | macOS 本机隔离桌面和候选 app 副本；证据明细见 `wiki-domain-tools-release-acceptance.md` | 旧版 app.asar 实际通过通用 `read_file` / `write_file` 改写 Wiki 页面；新版候选进程从同一隔离 userData 启动，命中该页面并推进 revision 2→3，保留正文并重建 index。另一隔离副本中候选进程协调外部 page、有效 SCHEMA 和 raw 变化：revision 3→4、schemaVersion 2→3、正文/raw 保留、index/log 重建。曾记录的 `MODEL_PROVIDER_ERROR` 已定位为 Wiki 开关未启用且 mock 未匹配 SDK 的拼接路径，旧版写入现已成功。E-15 真实渠道/桌面呈现与 E-16 冲突分支、原样安装/default appData 和其他平台未完，不能关闭 E-15/E-16，也不能执行 E-17。 |
+| E-15/E-16 本轮补充 | macOS 本机隔离桌面和候选 app 副本；证据明细见 `wiki-domain-tools-release-acceptance.md` | 旧版 app.asar 实际通过通用 `read_file` / `write_file` 改写 Wiki 页面；新版候选进程从同一隔离 userData 启动，命中该页面并推进 revision 2→3，保留正文并重建 index。另一隔离副本中候选进程协调外部 page、有效 SCHEMA 和 raw 变化：revision 3→4、schemaVersion 2→3、正文/raw 保留、index/log 重建；标题冲突演练返回 `wiki_external_change_conflict` 且 Wiki 文件 SHA-256 全部不变。曾记录的 `MODEL_PROVIDER_ERROR` 已定位为 Wiki 开关未启用且 mock 未匹配 SDK 的拼接路径，旧版写入现已成功。E-15 真实渠道/桌面呈现与 E-16 原样安装/default appData 未完，不能关闭 E-15/E-16，也不能执行 E-17。Windows/其他平台验证按对应平台发布执行，不阻塞当前 macOS 目标，也不由本次通过替代。 |
 
