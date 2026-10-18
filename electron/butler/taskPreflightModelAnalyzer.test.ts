@@ -72,7 +72,7 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(output.requiredTools).toEqual(['run_shell'])
   })
 
-  it('gives Git history preflight a concrete repository and local-shell permission example', async () => {
+  it('explains how to derive tools and scope from the operation and local facts', async () => {
     const prompt = '总结一下昨天合并进 main 分支，并推送 GitHub 的所有内容。'
     create.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({
       targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
@@ -89,12 +89,13 @@ describe('createTaskPreflightModelAnalyzer', () => {
     }, new AbortController().signal)
 
     const system = create.mock.calls[0]?.[0].system as string
-    expect(system).toContain('facts.gitRepositories 恰有一个仓库')
-    expect(system).toContain('过去时的“已推送/推送了什么”是查询历史，不是本次执行 git push')
-    expect(system).toContain('本地 refs/reflog 只能作为本机记录，不代表 GitHub 服务器时间')
-    expect(system).toContain('不因出现 GitHub 一词就要求联网')
-    expect(system).toContain('{"targets":[{"kind":"exact","path":"/workspace","targetType":"directory"}],"requiredTools":["run_shell"],"clarifications":[]}')
-    expect(system).toContain('没有明确要求写入文件时，不生成 output target')
+    expect(system).toContain('按任务的操作类型和数据来源推导目标与工具')
+    expect(system).toContain('本机命令可访问的本地事实源')
+    expect(system).toContain('过去发生的动作描述是查询，不代表要再次执行该动作')
+    expect(system).toContain('提及外部平台本身不代表需要联网')
+    expect(system).toContain('只有任务要求写入文件时才生成 output target')
+    expect(system).not.toContain(prompt)
+    expect(system).not.toContain('"/workspace"')
     expect(output).toMatchObject({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredTools: ['run_shell'], clarifications: [] })
   })
 
@@ -112,11 +113,11 @@ describe('createTaskPreflightModelAnalyzer', () => {
     }, new AbortController().signal)
 
     const system = create.mock.calls[0]?.[0].system as string
-    expect(system).toContain('Git 历史查询是明确的任务范围，不需要普通文件名或目录名')
+    expect(system).toContain('对 Git 历史类任务，只能从 facts.gitRepositories 选择仓库目标')
     expect(system).toContain('git_repository_not_found')
-    expect(system).toContain('authorizedRoots 为空时 targets=[]、requiredTools=[]')
-    expect(system).toContain('capability_not_authorized 说明用户需要添加目标仓库目录')
-    expect(system).toContain('不得判为 missing_location')
+    expect(system).toContain('authorizedRoots 为空则用 capability_not_authorized 说明需先授权仓库目录')
+    expect(system).toContain('授权范围非空但未发现仓库则用 git_repository_not_found')
+    expect(system).toContain('不要把工具能力不足误判为 missing_location')
   })
 
   it('rejects missing model selection, provider errors, and malformed JSON', async () => {
