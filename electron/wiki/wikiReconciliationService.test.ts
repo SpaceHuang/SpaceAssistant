@@ -113,4 +113,27 @@ describe('reconcileExternalWikiChanges', () => {
     expect(JSON.parse(await store.readText('.wiki-service/schema-state.json')).schemaVersion).toBe(1)
     expect(await store.readText('wiki/topics/a.md')).toBe(currentPage)
   })
+
+  it('preserves all files and catalog when external pages introduce a normalized title conflict', async () => {
+    const { store } = await fixture()
+    const existing = page('page-a', 1, 'Café', 'existing body')
+    const introduced = page('page-b', 1, 'Café', 'new external body')
+    await store.write('wiki/topics/a.md', existing)
+    await store.write('wiki/topics/b.md', introduced)
+    await store.writeImmutable('.wiki-service/page-history/page-a/1.md', existing)
+    await store.writeCatalog({ formatVersion: 1, pages: [
+      { pageId: 'page-a', path: 'wiki/topics/a.md', revision: 1, contentHash: sha(existing), title: 'Café', categoryId: 'topic', summary: '' }
+    ] })
+    const originalCatalog = await store.readText('.wiki-service/catalog.json')
+    const originalSchemaState = await store.readText('.wiki-service/schema-state.json').catch(() => undefined)
+
+    const result = await reconcileExternalWikiChanges(store)
+
+    expect(result.diagnostics.map(item => item.code)).toContain('wiki-page-title-conflict')
+    expect(result.changed).toBe(0)
+    expect(await store.readText('wiki/topics/a.md')).toBe(existing)
+    expect(await store.readText('wiki/topics/b.md')).toBe(introduced)
+    expect(await store.readText('.wiki-service/catalog.json')).toBe(originalCatalog)
+    expect(await store.readText('.wiki-service/schema-state.json').catch(() => undefined)).toBe(originalSchemaState)
+  })
 })
