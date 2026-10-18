@@ -9,6 +9,7 @@ import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initWikiStructure, isWikiInitialized, renameWikiRoot } from './wikiInit'
 import { getWikiStatus } from './wikiStatus'
+import { createWikiLifecycleController } from './wikiLifecycle'
 import { openDatabase } from '../database'
 import { insertWikiProject, markWikiProjectOrphan } from './wikiProjectStore'
 import { DEFAULT_WIKI_CONFIG, type WikiConfig } from '../../src/shared/domainTypes'
@@ -49,6 +50,7 @@ describe('initWikiStructure 共享根（T1.12a）', () => {
     const meta = JSON.parse(fs.readFileSync(path.join(root, '.wiki-meta.json'), 'utf8'))
     expect(meta.schemaVersion).toBe(2)
     expect(meta.storage).toBe('shared')
+    expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'domain_ready', initialization: 'empty' })
     // workDir 侧不建骨架
     expect(fs.existsSync(path.join(workDir, 'llm-wiki'))).toBe(false)
   })
@@ -79,6 +81,16 @@ describe('initWikiStructure 共享根（T1.12a）', () => {
     expect(isWikiInitialized(workDir, wikiConfig(), userData)).toBe(false)
     await initWikiStructure(workDir, wikiConfig(), { userDataPath: userData })
     expect(isWikiInitialized(workDir, wikiConfig(), userData)).toBe(true)
+  })
+
+  it('存量部分 Wiki 初始化后进入 preflight 状态，不当作空库', async () => {
+    const userData = tmpdir('wiki-init-legacy-')
+    const workDir = tmpdir('wiki-init-legacy-wd-')
+    const root = path.join(userData, 'llm-wiki')
+    fs.mkdirSync(path.join(root, 'raw', 'legacy'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'raw', 'legacy', 'note.md'), 'legacy content', 'utf8')
+    await initWikiStructure(workDir, wikiConfig(), { userDataPath: userData })
+    expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'initializing', initialization: 'existing-content' })
   })
 })
 
