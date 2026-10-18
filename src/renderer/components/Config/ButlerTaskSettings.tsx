@@ -28,6 +28,81 @@ type TaskActions = {
   running: boolean
 }
 
+const TASK_DRAFT_STORAGE_PREFIX = 'spaceassistant:butler-task-draft:v1:'
+
+type StoredTaskDraft = {
+  values: Record<string, unknown>
+  authorizedDirs: string[]
+  outputOrganizationTouched: boolean
+}
+
+function taskDraftStorageKey(taskId: string | null): string {
+  return `${TASK_DRAFT_STORAGE_PREFIX}${taskId ? encodeURIComponent(taskId) : 'new'}`
+}
+
+function persistTaskDraft(key: string, values: Record<string, unknown>, authorizedDirs: string[], outputOrganizationTouched: boolean): void {
+  try {
+    const savedValues: Record<string, string | number> = {}
+    for (const field of ['name', 'prompt', 'scheduleKind', 'deliveryPref', 'outputDir', 'outputOrganization', 'modelId', 'modelServiceId', 'modelOverride', 'modelPair', 'reasoningEffort']) {
+      const value = values[field]
+      if (typeof value === 'string') savedValues[field] = value
+    }
+    if (typeof values.intervalMinutes === 'number' && Number.isFinite(values.intervalMinutes)) savedValues.intervalMinutes = values.intervalMinutes
+    if (dayjs.isDayjs(values.dailyTime) && values.dailyTime.isValid()) savedValues.dailyTime = values.dailyTime.format('HH:mm')
+    if (typeof values.dailyTime === 'string') savedValues.dailyTime = values.dailyTime
+    if (dayjs.isDayjs(values.onceAt) && values.onceAt.isValid()) savedValues.onceAt = values.onceAt.valueOf()
+    if (typeof values.onceAt === 'number' && Number.isFinite(values.onceAt)) savedValues.onceAt = values.onceAt
+
+    window.localStorage.setItem(key, JSON.stringify({
+      version: 1,
+      values: savedValues,
+      authorizedDirs,
+      outputOrganizationTouched
+    }))
+  } catch {
+    // 浏览器存储不可用时仍允许当前表单继续预检与保存。
+  }
+}
+
+function readTaskDraft(key: string): StoredTaskDraft | null {
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { version?: unknown; values?: unknown; authorizedDirs?: unknown; outputOrganizationTouched?: unknown }
+    if (parsed.version !== 1 || !parsed.values || typeof parsed.values !== 'object' || Array.isArray(parsed.values) || !Array.isArray(parsed.authorizedDirs)) return null
+
+    const savedValues = parsed.values as Record<string, unknown>
+    const values: Record<string, unknown> = {}
+    for (const field of ['name', 'prompt', 'deliveryPref', 'outputDir', 'modelId', 'modelServiceId', 'modelOverride', 'modelPair', 'reasoningEffort']) {
+      if (typeof savedValues[field] === 'string') values[field] = savedValues[field]
+    }
+    if (savedValues.scheduleKind === 'interval' || savedValues.scheduleKind === 'daily' || savedValues.scheduleKind === 'once') values.scheduleKind = savedValues.scheduleKind
+    if (savedValues.outputOrganization === 'direct' || savedValues.outputOrganization === 'daily' || savedValues.outputOrganization === 'hourly') values.outputOrganization = savedValues.outputOrganization
+    if (typeof savedValues.intervalMinutes === 'number' && Number.isFinite(savedValues.intervalMinutes)) values.intervalMinutes = savedValues.intervalMinutes
+    if (typeof savedValues.dailyTime === 'string') {
+      const dailyTime = dayjs(savedValues.dailyTime, 'HH:mm', true)
+      if (dailyTime.isValid()) values.dailyTime = dailyTime
+    }
+    if (typeof savedValues.onceAt === 'number' && Number.isFinite(savedValues.onceAt)) values.onceAt = dayjs(savedValues.onceAt)
+
+    return {
+      values,
+      authorizedDirs: parsed.authorizedDirs.filter((path): path is string => typeof path === 'string'),
+      outputOrganizationTouched: typeof parsed.outputOrganizationTouched === 'boolean' ? parsed.outputOrganizationTouched : false
+    }
+  } catch {
+    return null
+  }
+}
+
+function clearTaskDraft(key: string): void {
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // 清理失败不影响已经完成的任务保存。
+  }
+}
+
 function outputOrganizationText(value: AutomationOutputOrganization | null, t: TaskActions['t']): string {
   if (value === 'daily') return t('butler.form.outputOrganizationDailyShort')
   if (value === 'direct') return t('butler.form.outputOrganizationDirectShort')
@@ -173,6 +248,7 @@ export function ButlerTaskSettings() {
   const [writeError, setWriteError] = useState<string | null>(null)
   const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([])
   const outputOrganizationTouched = useRef(false)
+  const activeTaskDraftKey = useRef<string | null>(null)
   const authorizationDraftRevision = useRef(0)
   const [form] = Form.useForm()
   const scheduleKind = Form.useWatch('scheduleKind', form) as AutomationTaskSchedule['kind'] | undefined
@@ -188,6 +264,12 @@ export function ButlerTaskSettings() {
     setAuthorizationReview(null)
     setPreflightReport(null)
     setWriteError(null)
+  }
+
+  const persistActiveTaskDraft = (directories = authorizedDirs) => {
+    if (activeTaskDraftKey.current) {
+      persistTaskDraft(activeTaskDraftKey.current, form.getFieldsValue(true), directories, outputOrganizationTouched.current)
+    }
   }
 
   useEffect(() => {
@@ -216,10 +298,13 @@ export function ButlerTaskSettings() {
   const openCreate = async () => {
     authorizationDraftRevision.current += 1
     setEditing(null)
-    outputOrganizationTouched.current = false
+    const draftKey = taskDraftStorageKey(null)
+    const savedDraft = readTaskDraft(draftKey)
+    activeTaskDraftKey.current = savedDraft ? draftKey : null
+    outputOrganizationTouched.current = savedDraft?.outputOrganizationTouched ?? false
     const [defaults, candidates] = await Promise.all([window.api.butlerGetTaskDefaults(), window.api.butlerGetModelCandidates()])
     setModelCandidates(candidates)
-    setAuthorizedDirs([])
+    setAuthorizedDirs(savedDraft?.authorizedDirs ?? [])
     form.setFieldsValue({
       name: '',
       prompt: '',
@@ -237,7 +322,8 @@ export function ButlerTaskSettings() {
       modelPair: defaults.modelId && defaults.modelServiceId ? `${defaults.modelId}::${defaults.modelServiceId}` : undefined,
       reasoningEffort: candidates.find((candidate) => candidate.modelId === defaults.modelId && candidate.serviceId === defaults.modelServiceId)?.supportsThinking === false
         ? 'off'
-        : defaults.reasoningEffort ?? 'off'
+        : defaults.reasoningEffort ?? 'off',
+      ...savedDraft?.values
     })
     setPreflightReport(null)
     setAuthorizationReview(null)
@@ -248,9 +334,12 @@ export function ButlerTaskSettings() {
   const openEdit = (task: AutomationTask) => {
     authorizationDraftRevision.current += 1
     setEditing(task)
-    outputOrganizationTouched.current = true
+    const draftKey = taskDraftStorageKey(task.id)
+    const savedDraft = readTaskDraft(draftKey)
+    activeTaskDraftKey.current = savedDraft ? draftKey : null
+    outputOrganizationTouched.current = savedDraft?.outputOrganizationTouched ?? true
     const roots = task.authorizedDirs ?? task.workDirs ?? []
-    setAuthorizedDirs(roots)
+    setAuthorizedDirs(savedDraft?.authorizedDirs ?? roots)
     void window.api.butlerGetModelCandidates().then(setModelCandidates)
     form.setFieldsValue({
       name: task.name,
@@ -267,7 +356,8 @@ export function ButlerTaskSettings() {
       modelServiceId: task.modelServiceId,
       modelOverride: task.modelOverride,
       modelPair: task.modelId && task.modelServiceId ? `${task.modelId}::${task.modelServiceId}` : undefined,
-      reasoningEffort: task.reasoningEffort ?? 'off'
+      reasoningEffort: task.reasoningEffort ?? 'off',
+      ...savedDraft?.values
     })
     setPreflightReport(null)
     setAuthorizationReview(null)
@@ -281,6 +371,7 @@ export function ButlerTaskSettings() {
       if (!result.cancelled && result.path) {
         form.setFieldValue('outputDir', result.path)
         invalidateAuthorizationReview()
+        persistActiveTaskDraft()
         void form.validateFields(['outputDir']).catch(() => undefined)
       } else if (!result.cancelled && result.error) {
         setWriteError(result.error)
@@ -292,6 +383,10 @@ export function ButlerTaskSettings() {
 
   const submit = async () => {
     if (submitting) return
+    const draftKey = activeTaskDraftKey.current ?? taskDraftStorageKey(editing?.id ?? null)
+    activeTaskDraftKey.current = draftKey
+    // 点击预检的同步阶段先保存草稿，即使表单校验或后续模型调用失败也不丢用户输入。
+    persistTaskDraft(draftKey, form.getFieldsValue(true), authorizedDirs, outputOrganizationTouched.current)
     // 校验失败：antd 已在表单项上展示错误，reject 就地吸收，不产生 unhandled rejection
     const values = await form.validateFields().catch(() => null)
     if (!values) return
@@ -369,6 +464,8 @@ export function ButlerTaskSettings() {
       }
       setPreflightReport(null)
       setAuthorizationReview(null)
+      clearTaskDraft(draftKey)
+      activeTaskDraftKey.current = null
       message.success(editing ? t('butler.updated') : t('butler.created'))
       setEditorOpen(false)
       await refresh()
@@ -406,6 +503,7 @@ export function ButlerTaskSettings() {
   const remove = async (task: AutomationTask) => {
     try {
       await window.api.butlerDeleteTask({ id: task.id })
+      clearTaskDraft(taskDraftStorageKey(task.id))
       message.success(t('butler.deleted'))
       await refresh()
     } catch {
@@ -493,6 +591,7 @@ export function ButlerTaskSettings() {
           onValuesChange={(changedValues) => {
             if (Object.prototype.hasOwnProperty.call(changedValues, 'outputOrganization')) outputOrganizationTouched.current = true
             invalidateAuthorizationReview()
+            persistActiveTaskDraft()
           }}
         >
           {editing && !editing.outputDir ? <Alert className="butler-task-editor__wide" type="info" showIcon message={t('butler.form.outputDirLegacy')} /> : null}
@@ -547,8 +646,10 @@ export function ButlerTaskSettings() {
                       disabled={candidate.validationStatus !== 'valid'}
                       aria-label={t('butler.form.suggestedDirectoryAria', { path: candidate.path, purpose: candidate.purpose })}
                       onChange={(event) => {
-                        setAuthorizedDirs(event.target.checked ? [...new Set([...authorizedDirs, candidate.path])] : authorizedDirs.filter((root) => root !== candidate.path))
+                        const directories = event.target.checked ? [...new Set([...authorizedDirs, candidate.path])] : authorizedDirs.filter((root) => root !== candidate.path)
+                        setAuthorizedDirs(directories)
                         invalidateAuthorizationReview()
+                        persistActiveTaskDraft(directories)
                       }}
                     >
                       <span className="butler-preflight-report__candidate-path">{candidate.path}</span>
@@ -675,7 +776,7 @@ export function ButlerTaskSettings() {
               <Typography.Title id="butler-task-section-access" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionAccess')}</Typography.Title>
               <div className="butler-task-editor__section-grid">
                 <Form.Item className="butler-task-editor__wide" label={t('butler.form.authorizedDirs')} extra={t('butler.form.authorizedDirsHint')}>
-                  <AuthorizedDirList t={t} value={authorizedDirs} onChange={(directories) => { setAuthorizedDirs(directories); invalidateAuthorizationReview() }} />
+                  <AuthorizedDirList t={t} value={authorizedDirs} onChange={(directories) => { setAuthorizedDirs(directories); invalidateAuthorizationReview(); persistActiveTaskDraft(directories) }} />
                 </Form.Item>
                 <Typography.Paragraph className="butler-task-editor__wide" type="secondary">
                   {t('butler.form.permissionReviewHelp')}
