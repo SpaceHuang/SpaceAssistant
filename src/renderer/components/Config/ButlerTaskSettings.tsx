@@ -3,7 +3,7 @@ import { Alert, App, Button, Checkbox, DatePicker, Form, Input, InputNumber, Mod
 import { Pencil, Plus, SquarePlay, Trash2, X } from 'lucide-react'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
-import type { AutomationTask, AutomationDeliveryPref, AutomationTaskRun, PreflightReport } from '../../../shared/automationTaskTypes'
+import { getPreflightClarificationReasonMessageKey, getPreflightIssueMessageKey, type AutomationTask, type AutomationDeliveryPref, type AutomationTaskRun, type PreflightReport } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { buildOnceDisabledConstraints, onceAtInFuture } from './onceAtConstraints'
 
@@ -272,11 +272,21 @@ export function ButlerTaskSettings() {
           setPreflightReport(res.report)
           setWriteError(null)
         } else {
-          setWriteError(res.error)
-          message.error(t('butler.form.saveFailedWithError', { error: res.error }))
+          const errorMessage = res.kind === 'preflight-unavailable'
+            ? t(getPreflightIssueMessageKey(res.error) as Parameters<TaskActions['t']>[0])
+            : res.error
+          setWriteError(errorMessage)
+          message.error(t('butler.form.saveFailedWithError', { error: errorMessage }))
         }
         return
       }
+      if (res.preflightReport) {
+        setPreflightReport(res.preflightReport)
+        message.warning(t('butler.form.draftSavedTargetUnclear'))
+        await refresh()
+        return
+      }
+      setPreflightReport(null)
       setPreflightReport(null)
       message.success(editing ? t('butler.updated') : t('butler.created'))
       setEditorOpen(false)
@@ -394,7 +404,27 @@ export function ButlerTaskSettings() {
           {preflightReport ? (
             <Alert className="butler-preflight-report" type={preflightReport.status === 'blocked' ? 'warning' : 'info'} showIcon message={t('butler.form.preflightTitle')} description={(
               <div className="butler-preflight-report__content">
-                {preflightReport.blockers.map((item, index) => <Typography.Text key={`${item.code}-${index}`} className="butler-preflight-report__blocker">{t('butler.form.preflightIssue', { code: item.code })}</Typography.Text>)}
+                {preflightReport.blockers.map((item, index) => {
+                  const hasTargetIssue = ['TARGET_UNCLEAR', 'TARGET_AMBIGUOUS', 'TARGET_NOT_FOUND', 'TARGET_OUTSIDE_ROOTS'].includes(item.code)
+                  const candidates = item.candidates ?? []
+                  return (
+                    <div key={`${item.code}-${index}`} className="butler-preflight-report__issue">
+                      <Typography.Text className="butler-preflight-report__blocker">{t(getPreflightIssueMessageKey(item.code) as Parameters<TaskActions['t']>[0], item.messageParams)}</Typography.Text>
+                      {item.reasonCode ? <Typography.Text type="secondary">{t(getPreflightClarificationReasonMessageKey(item.reasonCode) as Parameters<TaskActions['t']>[0])}</Typography.Text> : null}
+                      {item.reference ? <Typography.Text type="secondary">{t('butler.form.preflightReference', { reference: item.reference })}</Typography.Text> : null}
+                      {candidates.length ? (
+                        <div className="butler-preflight-report__issue-candidates">
+                          <Typography.Text strong>{t('butler.form.preflightCandidates')}</Typography.Text>
+                          <ul>
+                            {candidates.map((candidate) => <li key={candidate}><Typography.Text code>{candidate}</Typography.Text></li>)}
+                          </ul>
+                          {typeof item.candidateCount === 'number' && item.candidateCount > candidates.length ? <Typography.Text type="secondary">{t('butler.form.preflightCandidateOverflow', { total: item.candidateCount, shown: candidates.length })}</Typography.Text> : null}
+                        </div>
+                      ) : null}
+                      {hasTargetIssue ? <Typography.Text type="secondary">{t('butler.form.preflightClarifyHint')}</Typography.Text> : null}
+                    </div>
+                  )
+                })}
                 {preflightReport.suggestedDirectories.length ? <div className="butler-preflight-report__candidates">
                   <Typography.Text strong>{t('butler.form.suggestedDirectories')}</Typography.Text>
                   {preflightReport.suggestedDirectories.map((candidate) => (

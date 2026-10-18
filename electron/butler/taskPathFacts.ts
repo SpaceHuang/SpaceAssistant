@@ -43,13 +43,19 @@ export class TaskPathFactsProvider {
       roots.push(canonical)
     }
     const canonicalRoots = [...new Set(roots)].sort()
-    const entries: TaskPathFactEntry[] = []
+    const entries: TaskPathFactEntry[] = canonicalRoots.map((root) => ({ path: root, relativePath: '', kind: 'directory' }))
     let truncated = false
     let errors = 0
     for (const root of canonicalRoots) {
       let rootVisited = 0
       const walk = async (directory: string, depth: number): Promise<void> => {
-        if (depth > this.limits.maxDepth || truncated) return
+        if (truncated) return
+        if (depth > this.limits.maxDepth) {
+          try {
+            if ((await readdir(directory)).length > 0) truncated = true
+          } catch { errors += 1 }
+          return
+        }
         let names: string[]
         try { names = await readdir(directory) } catch { errors += 1; return }
         names.sort((a, b) => a.localeCompare(b, 'en'))
@@ -62,17 +68,23 @@ export class TaskPathFactsProvider {
           const kind: TaskPathFactEntry['kind'] = info.isSymbolicLink() ? 'symlink' : info.isDirectory() ? 'directory' : info.isFile() ? 'file' : 'special'
           entries.push({ path: fullPath, relativePath: path.relative(root, fullPath).split(path.sep).join('/'), kind })
           if (kind === 'directory' && depth < this.limits.maxDepth) await walk(fullPath, depth + 1)
+          else if (kind === 'directory' && depth === this.limits.maxDepth) {
+            try {
+              if ((await readdir(fullPath)).length > 0) truncated = true
+            } catch { errors += 1 }
+          }
         }
       }
       await walk(root, 1)
     }
-    entries.sort((a, b) => a.path.localeCompare(b.path, 'en'))
+    const uniqueEntries = [...new Map(entries.map((entry) => [entry.path, entry])).values()]
+    uniqueEntries.sort((a, b) => a.path.localeCompare(b.path, 'en'))
     const complete = !truncated && errors === 0
-    const digestInput = JSON.stringify({ roots: canonicalRoots, entries, coverage: { complete, truncated, errors, visited: entries.length } })
+    const digestInput = JSON.stringify({ roots: canonicalRoots, entries: uniqueEntries, coverage: { complete, truncated, errors, visited: uniqueEntries.length } })
     return {
       roots: canonicalRoots,
-      entries,
-      coverage: { complete, truncated, roots: canonicalRoots.length, visited: entries.length, errors },
+      entries: uniqueEntries,
+      coverage: { complete, truncated, roots: canonicalRoots.length, visited: uniqueEntries.length, errors },
       digest: createHash('sha256').update(digestInput).digest('hex')
     }
   }

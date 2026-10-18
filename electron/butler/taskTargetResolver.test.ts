@@ -11,7 +11,7 @@ describe('resolveTaskTarget', () => {
 
   it('resolves one unambiguous root basename to an exact binding', () => {
     const result = resolveTaskTarget({ rawText: 'read report.csv', target: { kind: 'exact', path: 'report.csv', targetType: 'file' }, roots: [root], facts: facts(root, [{ path: `${root}/report.csv`, relativePath: 'report.csv', kind: 'file' }]), taskRevision: 3 })
-    expect(result).toMatchObject({ ok: true, binding: { kind: 'exact', path: `${root}/report.csv`, resolverVersion: 1, taskRevision: 3 } })
+    expect(result).toMatchObject({ ok: true, binding: { kind: 'exact', path: `${root}/report.csv`, targetReference: { kind: 'basename', value: 'report.csv' }, resolverVersion: 2, taskRevision: 3 } })
   })
 
   it('blocks basename ambiguity and incomplete coverage', () => {
@@ -61,8 +61,12 @@ describe('resolveTaskTarget', () => {
       { path: `${root}/data`, relativePath: 'data', kind: 'directory' },
       { path: `${root}/data/new.csv`, relativePath: 'data/new.csv', kind: 'file' }
     ]), taskRevision: 4 })).toEqual({ ok: true })
+    expect(validatePersistedTargetBindings({ bindings: [{ ...collection.binding, resolverVersion: 1 }], roots: [root], facts: facts(root, [
+      { path: `${root}/data`, relativePath: 'data', kind: 'directory' }
+    ]), taskRevision: 4 })).toEqual({ ok: true })
     expect(validatePersistedTargetBindings({ bindings: [output.binding], roots: [root], facts: facts(root, [{ path: `${root}/out`, relativePath: 'out', kind: 'directory' }]), taskRevision: 4 })).toEqual({ ok: true })
     expect(validatePersistedTargetBindings({ bindings: [exact.binding], roots: [root], facts: facts(root, [{ path: `${root}/report.csv`, relativePath: 'report.csv', kind: 'file' }]), taskRevision: 5 })).toEqual({ ok: false, code: 'TASK_REVISION_MISMATCH' })
+    expect(validatePersistedTargetBindings({ bindings: [{ ...exact.binding, resolverVersion: 1 }], roots: [root], facts: facts(root, [{ path: `${root}/report.csv`, relativePath: 'report.csv', kind: 'file' }]), taskRevision: 4 })).toEqual({ ok: false, code: 'RESOLVER_VERSION_UNSUPPORTED' })
   })
 
   it('keeps an explicit relative exact path bound to its logical path when another basename appears', () => {

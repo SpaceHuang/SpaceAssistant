@@ -31,7 +31,7 @@ describe('butler IPC workdir/config fields', () => {
     } as never, {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'provider-model', reasoningEffort: 'off' as const })),
       createAnalyzer: () => ({ analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: os.tmpdir(), targetType: 'directory' }] })) }),
-      preflight: vi.fn(async (input) => ({ report: { status: 'passed', blockers: [], suggestedDirectories: [] }, bindings: [{ kind: 'exact', path: input.roots[0]!, targetType: 'directory', rawText: input.prompt, resolverVersion: 1, rootsDigest: 'test', taskRevision: input.taskRevision }] }))
+      preflight: vi.fn(async (input) => ({ report: { status: 'passed', blockers: [], suggestedDirectories: [] }, bindings: [{ kind: 'exact', path: input.roots[0]!, targetType: 'directory', targetReference: { kind: 'path' as const, value: input.roots[0]! }, rawText: input.prompt, resolverVersion: 2, rootsDigest: 'test', taskRevision: input.taskRevision }] }))
     })
     return map
   }
@@ -73,7 +73,7 @@ describe('butler IPC workdir/config fields', () => {
     expect(response).toMatchObject({ ok: false, error: '任务工作目录不能为空' })
   })
 
-  it('blocks a valid create with a structured report and writes no task', async () => {
+  it('blocks an ambiguous target with a structured report and writes no task', async () => {
     const map = handlers()
     const blockedPreflight = vi.fn(async () => ({ report: { status: 'blocked' as const, blockers: [{ code: 'TARGET_AMBIGUOUS', messageKey: 'butler.preflight.target_ambiguous' }], suggestedDirectories: [] }, bindings: [] }))
     const fresh = openDatabase(':memory:')
@@ -91,6 +91,19 @@ describe('butler IPC workdir/config fields', () => {
     expect(blockedPreflight).toHaveBeenCalledOnce()
   })
 
+  it('saves TARGET_UNCLEAR as a disabled draft without valid bindings', async () => {
+    const d = openDatabase(':memory:')
+    db = d
+    const map = new Map<string, (...args: unknown[]) => unknown>()
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d } as never, {
+      validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
+      preflight: vi.fn(async () => ({ report: { status: 'blocked' as const, blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear' }], suggestedDirectories: [] }, bindings: [] }))
+    })
+    const response = await map.get('butler:create')!(null, { name: '草稿', prompt: '帮我处理一下', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' }) as { ok: boolean; task?: { id: string; enabled: boolean; preflightVersion?: number } }
+    expect(response).toMatchObject({ ok: true, task: { enabled: false, preflightVersion: 0 } })
+    expect(getAutomationTask(d, response.task!.id)).toMatchObject({ enabled: false, preflightVersion: 0 })
+  })
+
   it('commits passed preflight bindings with the created task', async () => {
     const map = handlers()
     setConfigValue(db!, 'config.models', JSON.stringify([{ id: 'model-1', name: 'provider-model', enabled: true }]))
@@ -101,8 +114,8 @@ describe('butler IPC workdir/config fields', () => {
       name: 'preflighted', prompt: 'report.csv', schedule: { kind: 'interval', intervalMinutes: 30 },
       deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelId: 'model-1', modelServiceId: 'service-1',
       modelOverride: 'provider-model', reasoningEffort: 'off'
-    }) as { ok: boolean; id?: string; task?: { preflightVersion: number; targetBindingsJson?: string | null } }
-    expect(response).toMatchObject({ ok: true, task: { preflightVersion: 1 } })
+    }) as { ok: boolean; id?: string; task?: { preflightVersion: number; taskRevision: number; targetBindingsJson?: string | null } }
+    expect(response).toMatchObject({ ok: true, task: { preflightVersion: 1, taskRevision: 1 } })
     const bindingPath = await realpath(os.tmpdir())
     expect(JSON.parse(response.task?.targetBindingsJson ?? '[]')).toMatchObject([{ path: bindingPath, kind: 'exact' }])
     const stored = getAutomationTask(db!, response.id!)

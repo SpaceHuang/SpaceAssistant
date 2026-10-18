@@ -16,7 +16,7 @@ import { readActiveLlmServiceIds, readLlmServices, readStoredModels } from '../l
 import { getConfigValue } from '../database'
 import { runTaskPreflight, type TaskPreflightAnalyzer } from './taskPreflight'
 import { createTaskPreflightModelAnalyzer } from './taskPreflightModelAnalyzer'
-import type { PreflightReport, ButlerTaskWriteResult } from '../../src/shared/automationTaskTypes'
+import { getPreflightIssueMessageKey, type PreflightReport, type ButlerTaskWriteResult } from '../../src/shared/automationTaskTypes'
 
 /**
  * 管家 IPC（P6 任务 CRUD 面 + P4 手动触发）。渲染进程只表达意图：
@@ -68,7 +68,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
 
   async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; modelId?: string; modelServiceId?: string; taskRevision: number; requestReceivedAt: number }) {
     if (input.schedule.kind === 'once' && input.schedule.at <= input.requestReceivedAt) {
-      return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: 'butler.preflight.once_at_not_future' }], suggestedDirectories: [] }, bindings: [] }
+      return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: getPreflightIssueMessageKey('ONCE_AT_NOT_FUTURE') }], suggestedDirectories: [] }, bindings: [] }
     }
     return preflight({
       prompt: input.prompt,
@@ -83,6 +83,10 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     if (result.report.status === 'passed') return undefined
     if (result.report.status === 'unavailable') return { ok: false, kind: 'preflight-unavailable', error: result.report.blockers[0]?.code ?? 'PREFLIGHT_UNAVAILABLE' }
     return { ok: false, kind: 'preflight-blocked', report: result.report }
+  }
+
+  function onlyTargetUnclear(result: Awaited<ReturnType<typeof inspectTask>>): boolean {
+    return result.report.status === 'blocked' && result.report.blockers.length > 0 && result.report.blockers.every((blocker) => blocker.code === 'TARGET_UNCLEAR')
   }
 
   ipcMain.handle('butler:list', () => listAutomationTasks(db))
@@ -144,6 +148,16 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     })
     if (!config.ok) return { ok: false, kind: 'validation-error', error: config.error }
     const inspection = await inspectTask({ prompt, schedule, deliveryPref, roots: workDirs, modelId: config.modelId, modelServiceId: config.modelServiceId, taskRevision: 1, requestReceivedAt })
+    if (onlyTargetUnclear(inspection)) {
+      const task = createAutomationTask(db, {
+        name, prompt, schedule, deliveryPref,
+        ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}),
+        ...(payload?.modelOverride ? { modelOverride: payload.modelOverride } : {}),
+        workDirs, modelId: config.modelId, modelServiceId: config.modelServiceId,
+        reasoningEffort: config.reasoningEffort, enabled: false
+      })
+      return { ok: true, id: task.id, task, preflightReport: inspection.report }
+    }
     const failure = preflightFailure(inspection)
     if (failure) return failure
     const task = createAutomationTask(db, {
@@ -211,6 +225,11 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       ? next.workDirs as string[]
       : existing.workDirs
     const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
+    if (onlyTargetUnclear(inspection) && patch.enabled !== true) {
+      const saved = updateAutomationTaskConditional(db, id, { ...next, enabled: false, expectedTaskRevision }, { draft: true })
+      if (!saved.ok) return { ok: false, kind: 'validation-error', error: saved.reason }
+      return { ok: true, id, task: saved.task, preflightReport: inspection.report }
+    }
     const failure = preflightFailure(inspection)
     if (failure) return failure
     const commit = updateAutomationTaskConditional(db, id, { ...next, expectedTaskRevision }, { targetBindings: inspection.bindings })

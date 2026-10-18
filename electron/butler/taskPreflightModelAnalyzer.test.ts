@@ -28,6 +28,15 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty('tools')
   })
 
+  it('asks the model to identify exact unclear prompt fragments and structured reasons', async () => {
+    create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[],"clarifications":[{"reference":"帮我处理一下","reasonCode":"scope_unclear"}]}' }] })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+    const output = await analyzer.analyze({ prompt: '帮我处理一下', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], facts: {} as never, tools: [], responseFormat: 'json' }, new AbortController().signal)
+
+    expect(output).toMatchObject({ clarifications: [{ reference: '帮我处理一下', reasonCode: 'scope_unclear' }] })
+    expect(create.mock.calls[0]?.[0].system).toContain('clarifications')
+  })
+
   it('rejects missing model selection, provider errors, and malformed JSON', async () => {
     const noSelection = createTaskPreflightModelAnalyzer({} as never, {})
     await expect(noSelection.analyze({} as never, new AbortController().signal)).rejects.toThrow('PREFLIGHT_MODEL_NOT_SELECTED')

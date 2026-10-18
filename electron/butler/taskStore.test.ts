@@ -421,7 +421,7 @@ describe('task revision and schedule generation', () => {
     const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace'] }))
     const newer = updateAutomationTask(d, task.id, { prompt: 'newer prompt' })!
     const stale = updateAutomationTaskConditional(d, task.id, { prompt: 'stale overwrite', expectedTaskRevision: task.taskRevision }, {
-      targetBindings: [{ kind: 'exact', path: '/workspace/a.txt', targetType: 'file', rawText: 'a.txt', resolverVersion: 1, rootsDigest: 'roots', taskRevision: 1 }]
+      targetBindings: [{ kind: 'exact', path: '/workspace/a.txt', targetType: 'file', targetReference: { kind: 'basename', value: 'a.txt' }, rawText: 'a.txt', resolverVersion: 2, rootsDigest: 'roots', taskRevision: 1 }]
     })
     expect(stale).toEqual({ ok: false, reason: 'task-revision-conflict' })
     expect(getAutomationTask(d, task.id)).toMatchObject({ prompt: 'newer prompt', taskRevision: newer.taskRevision, preflightVersion: 0 })
@@ -433,14 +433,15 @@ describe('preflight binding persistence', () => {
   it('commits v1 and target bindings together with task changes', () => {
     const d = db()
     const targetBindings: TargetBinding[] = [{
-      kind: 'exact', path: '/workspace/report.csv', targetType: 'file', rawText: 'report.csv',
-      resolverVersion: 1, rootsDigest: 'roots-digest', taskRevision: 1,
+      kind: 'exact', path: '/workspace/report.csv', targetType: 'file', targetReference: { kind: 'basename', value: 'report.csv' }, rawText: 'report.csv',
+      resolverVersion: 2, rootsDigest: 'roots-digest', taskRevision: 1,
     }]
     const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace'] }), { targetBindings })
     expect(task).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(targetBindings) })
-    const updated = updateAutomationTask(d, task.id, { prompt: 'updated' }, { targetBindings })
-    expect(updated).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(targetBindings), taskRevision: 1 })
-    expect(getAutomationTask(d, task.id)).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(targetBindings) })
+    const updatedBindings = targetBindings.map((binding) => ({ ...binding, taskRevision: 2 }))
+    const updated = updateAutomationTask(d, task.id, { prompt: 'updated' }, { targetBindings: updatedBindings })
+    expect(updated).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(updatedBindings), taskRevision: 2 })
+    expect(getAutomationTask(d, task.id)).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(updatedBindings) })
   })
 })
 

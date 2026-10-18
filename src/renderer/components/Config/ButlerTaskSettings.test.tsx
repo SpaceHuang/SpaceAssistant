@@ -123,6 +123,24 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ reasoningEffort: 'off' })
   })
 
+  it('TARGET_UNCLEAR 时仍创建停用草稿并在表单显示预检问题', async () => {
+    butlerCreateTask.mockResolvedValueOnce({ ok: true, id: 'draft-1', task: task({ id: 'draft-1', enabled: false }), preflightReport: { status: 'blocked', blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear', reference: '帮我处理一下', reasonCode: 'scope_unclear' }], suggestedDirectories: [] } })
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '待补充目标' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '帮我处理一下' } })
+    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
+    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
+    await waitFor(() => expect(screen.getByText('/tmp/chosen-root')).toBeTruthy())
+    fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
+    await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('无法确定要处理的文件、目录或范围，请在任务提示词中补充具体目标。')).toBeTruthy()
+    expect(screen.getByText('相关描述：帮我处理一下')).toBeTruthy()
+    expect(screen.getByLabelText('任务提示词')).toBeTruthy()
+    expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ name: '待补充目标' })
+  })
+
   it('旧任务编辑显示未设置目录，加载时不触发保存或自动填值', async () => {
     butlerListTasks.mockResolvedValue([task()])
     renderTab()
@@ -272,6 +290,20 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(butlerListTasks).toHaveBeenCalledTimes(1)
   })
 
+  it('预检不可用时把内部错误码转换为可理解的说明', async () => {
+    butlerCreateTask.mockResolvedValueOnce({ ok: false, kind: 'preflight-unavailable', error: 'ANALYZER_UNAVAILABLE' })
+    renderTab()
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '预检服务不可用' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '读取 report.csv' } })
+    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
+    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
+    fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
+
+    expect(await screen.findByText(/暂时无法调用任务模型完成预检/)).toBeTruthy()
+    expect(screen.queryByText('ANALYZER_UNAVAILABLE')).toBeNull()
+  })
+
   it('目录列表可添加多个根并移除单项', async () => {
     renderTab()
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
@@ -292,7 +324,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
 
   it('阻断报告保留表单并列出默认未选候选，勾选后重新提交多根', async () => {
     butlerCreateTask
-      .mockResolvedValueOnce({ ok: false, kind: 'preflight-blocked', report: { status: 'blocked', blockers: [{ code: 'TARGET_AMBIGUOUS', messageKey: 'butler.preflight.target_ambiguous' }], suggestedDirectories: [{ path: '/tmp/suggested', purpose: '报告输入', source: 'prompt', validationStatus: 'valid' }] } })
+      .mockResolvedValueOnce({ ok: false, kind: 'preflight-blocked', report: { status: 'blocked', blockers: [{ code: 'TARGET_AMBIGUOUS', messageKey: 'butler.preflight.target_ambiguous', reference: 'report.csv', candidates: ['/tmp/root-a/a/report.csv', '/tmp/root-a/b/report.csv'] }], suggestedDirectories: [{ path: '/tmp/suggested', purpose: '报告输入', source: 'prompt', validationStatus: 'valid' }] } })
       .mockResolvedValueOnce({ ok: true, id: 'new-2' })
     renderTab()
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
@@ -302,6 +334,9 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
     const candidate = await screen.findByRole('checkbox', { name: /\/tmp\/suggested/ })
+    expect(screen.getByText('相关描述：report.csv')).toBeTruthy()
+    expect(screen.getByText('/tmp/root-a/a/report.csv')).toBeTruthy()
+    expect(screen.getByText('/tmp/root-a/b/report.csv')).toBeTruthy()
     expect(candidate).toHaveProperty('checked', false)
     expect(screen.getByLabelText('任务名称')).toHaveProperty('value', '预检任务')
     fireEvent.click(candidate)

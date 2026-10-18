@@ -241,3 +241,29 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 
 本节只记录实际进度，不改变技术方案中的验收或契约。开始实现后，每个任务状态变化时更新相应登记项，并在任务下注明验证证据；没有证据不得勾选完成。
 
+### 2026-10-18 评审阻断修复（B-01～B-04）
+
+| 评审项 | 修复与边界 | TDD 证据 | 状态 |
+|---|---|---|---|
+| B-01 任务/binding revision 及运行写回 | 新建带 binding 的 v1 task 同事务写入 `task_revision=1`；运行元数据（`lastRunAt`、`nextRunAt`）不推进配置 revision；配置变更仍递增并重做预检。 | RED：评审探针观察新建 revision=0 且首次重验 `TASK_REVISION_MISMATCH`；GREEN：`taskPreflightReviewRegression.test.ts` 用真实 resolver binding、新建 store 和两次元数据写回重验，revision 保持 1。 | - [x] |
+| B-02 整段 prompt 被当作 basename | exact binding 新增结构化 `targetReference`（basename/path + 原始目标片段）；重验只按该片段检查 basename 唯一性，不从 prompt 字符形状推断。resolver version 升至 2；旧版 exact binding fail closed 并要求重新预检，语义未变的 v1 collection/output binding 继续兼容。 | RED：评审复现完整自然语言误判/含其他路径绕过；GREEN：`taskPreflightReviewRegression.test.ts` 验证不变目标通过、后续新增同名文件失败；`taskTargetResolver.test.ts` 验证旧 exact resolver version 拒绝且旧 collection binding 兼容。 | - [x] |
+| B-03 path facts 缺根目录 | provider 把已验证 canonical roots 作为 directory facts，供根目录 collection、exact directory 和首个输出祖先查找。 | RED：评审探针真实临时空目录复现 `TARGET_NOT_FOUND` / `OUTPUT_ANCESTOR_INVALID`；GREEN：`taskPreflightReviewRegression.test.ts` 经真实 provider 分别验证根目录 collection 和根下新输出通过。 | - [x] |
+| B-04 深度截断误报 complete | 深度边界目录仍有未扫描内容时标记 `truncated=true`、`complete=false`；resolver 与运行重验因此拒绝不完整 facts。 | RED：评审探针发现深层同名项未收集但 coverage complete；GREEN：`taskPreflightReviewRegression.test.ts` 验证深层同名布局产生不完整覆盖，并被 resolver 与 persisted-binding revalidation 拒绝。 | - [x] |
+
+**合并验证：** `npm exec vitest run -- electron/butler/taskPreflightReviewRegression.test.ts electron/butler/taskPreflight.test.ts electron/butler/taskTargetResolver.test.ts electron/butler/taskPathFacts.test.ts electron/butler/taskStore.test.ts electron/butler/taskScheduler.test.ts electron/butler/butlerIpc.test.ts`：7 files / 82 tests passed。`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron:incremental`、`git diff --check` 通过。
+
+### 源码关闭后的缺陷修正：目标不清晰时允许保存草稿
+
+- **问题：** 真实界面遇到 `TARGET_UNCLEAR` 时返回“预检未通过，任务尚未保存”，造成先保存再补充目标的流程无法开始。
+- **处理：** create/update 对仅含 `TARGET_UNCLEAR` 的报告仍提交配置，写为停用草稿并返回报告；编辑草稿时清除旧 binding 并恢复 `preflightVersion=0`，防止沿用过期授权选择。界面提示草稿已保存、展示预检报告并保留表单；补充目标且预检通过后按原提交门禁保存绑定。其他 blocker、模型不可用、路径/字段校验仍按原门禁处理。
+- **TDD 证据：** RED：`butlerIpc.test.ts` 的 `saves TARGET_UNCLEAR as a disabled draft without valid bindings` 在旧代码中因 `ok:false` 失败。GREEN：`npm exec vitest run -- electron/butler/butlerIpc.test.ts electron/butler/taskStore.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx` 通过 3 files / 69 tests，覆盖已保存停用草稿、旧 binding 清除、保存后报告展示与表单保留。`npm run i18n:generate-types`、`npm run i18n:check`、`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron:incremental` 均通过；首轮类型检查发现 draft 判别类型收窄错误，修正后构建通过。
+
+### 2026-10-18 预检解释与歧义定位修正
+
+| 问题 | 修复与边界 | TDD 证据 | 状态 |
+|---|---|---|---|
+| 问题只显示代码，目标不清楚时无解释 | 新增共享稳定 code→messageKey 映射，并在 zh-CN/en-US `butler.preflight` 统一维护全部预检问题说明；表单显示人话说明、原因、任务原文片段和下一步，不显示内部代码。预检不可用错误也经同一映射本地化。 | RED：组件断言找不到 `TARGET_UNCLEAR` 的用户说明；GREEN：`ButlerTaskSettings.test.tsx` 覆盖问题说明、原文片段与预检不可用的可读提示。 | - [x] |
+| `TARGET_UNCLEAR` 不指出含糊位置；同名歧义没有候选 | 模型澄清协议增加原文精确片段、固定原因码及候选字段；主进程校验片段属于用户原文，并把候选路径限制为已采集 facts。解析器遇到同名目标时返回所有匹配路径（最多显示 20 项并保留总数）；表单提示用户明确路径/范围后重存。 | RED：`taskPreflight.test.ts` 缺少原文片段、原因和候选路径；模型提示词测试缺少 `clarifications` 协议。GREEN：5 个定向测试文件 / 55 项通过，覆盖模型协议、无目标解释、同名候选、预检不可用和表单展示。 | - [x] |
+
+**合并验证：** `npm exec -- vitest run electron/butler/taskPreflight.test.ts electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskTargetResolver.test.ts electron/butler/butlerIpc.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`：5 files / 55 tests passed。`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run i18n:check`、`npm run check:system-invariant-registry`、`npm run build:electron:incremental`、`git diff --check` 通过。`npm run dev` 的 renderer 返回 HTTP 200，开发窗口可进入定时任务设置；实际错误详情由组件回归覆盖。
+

@@ -111,17 +111,58 @@ export type AutomationTaskRunConfigSnapshot = {
 }
 
 export type TargetBinding =
-  | { kind: 'exact'; path: string; targetType: 'file' | 'directory'; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
+  | { kind: 'exact'; path: string; targetType: 'file' | 'directory'; targetReference: { kind: 'basename' | 'path'; value: string }; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
   | { kind: 'collection'; directory: string; selector: '*.csv' | '*.tsv' | 'all'; sort: 'canonical-path'; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
   | { kind: 'output'; path: string; ancestor: string; relativeSuffix: string; expectedType: 'file' | 'directory'; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
 
 export type TargetSelection = TargetBinding
+
+export const PREFLIGHT_ISSUE_MESSAGE_KEYS = {
+  ONCE_AT_NOT_FUTURE: 'butler.preflight.once_at_not_future',
+  ROOT_FACTS_UNAVAILABLE: 'butler.preflight.root_facts_unavailable',
+  FACTS_INCOMPLETE: 'butler.preflight.facts_incomplete',
+  ANALYZER_UNAVAILABLE: 'butler.preflight.analyzer_unavailable',
+  ANALYZER_INVALID_RESPONSE: 'butler.preflight.analyzer_invalid_response',
+  TARGET_UNCLEAR: 'butler.preflight.target_unclear',
+  TARGET_AMBIGUOUS: 'butler.preflight.target_ambiguous',
+  TARGET_NOT_FOUND: 'butler.preflight.target_not_found',
+  TARGET_OUTSIDE_ROOTS: 'butler.preflight.target_outside_roots',
+  TARGET_UNVERIFIABLE: 'butler.preflight.target_unverifiable',
+  TARGET_TYPE_MISMATCH: 'butler.preflight.target_type_mismatch',
+  NO_ROOTS: 'butler.preflight.no_roots',
+  OUTPUT_PATH_ESCAPE: 'butler.preflight.output_path_escape',
+  OUTPUT_ANCESTOR_INVALID: 'butler.preflight.output_ancestor_invalid',
+  SELECTOR_UNSUPPORTED: 'butler.preflight.selector_unsupported'
+} as const
+
+export const PREFLIGHT_CLARIFICATION_REASON_MESSAGE_KEYS = {
+  no_target_identified: 'butler.preflight.reasons.no_target_identified',
+  scope_unclear: 'butler.preflight.reasons.scope_unclear',
+  missing_location: 'butler.preflight.reasons.missing_location',
+  multiple_matches: 'butler.preflight.reasons.multiple_matches',
+  target_missing: 'butler.preflight.reasons.target_missing',
+  other: 'butler.preflight.reasons.other'
+} as const
+
+export type PreflightClarificationReasonCode = keyof typeof PREFLIGHT_CLARIFICATION_REASON_MESSAGE_KEYS
+
+export function getPreflightIssueMessageKey(code: string): string {
+  return PREFLIGHT_ISSUE_MESSAGE_KEYS[code as keyof typeof PREFLIGHT_ISSUE_MESSAGE_KEYS] ?? 'butler.preflight.unknown'
+}
+
+export function getPreflightClarificationReasonMessageKey(reasonCode: string): string {
+  return PREFLIGHT_CLARIFICATION_REASON_MESSAGE_KEYS[reasonCode as PreflightClarificationReasonCode] ?? PREFLIGHT_CLARIFICATION_REASON_MESSAGE_KEYS.other
+}
 
 export type PreflightIssue = {
   code: string
   messageKey: string
   messageParams?: Record<string, string | number | boolean>
   field?: string
+  reference?: string
+  reasonCode?: PreflightClarificationReasonCode
+  candidates?: string[]
+  candidateCount?: number
 }
 
 export type SuggestedDirectory = {
@@ -138,7 +179,7 @@ export type PreflightReport = {
 }
 
 export type ButlerTaskWriteResult =
-  | { ok: true; id: string; task?: AutomationTask }
+  | { ok: true; id: string; task?: AutomationTask; preflightReport?: PreflightReport }
   | { ok: false; kind: 'preflight-blocked'; report: PreflightReport; error?: string }
   | { ok: false; kind: 'validation-error' | 'preflight-unavailable'; error: string; field?: string }
 

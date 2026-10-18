@@ -10,7 +10,7 @@ import { runInTransaction } from '../database/transaction'
 export type { AutomationTask, AutomationTaskInput, AutomationTaskSchedule, AutomationDeliveryPref, AutomationTaskRun, AutomationTaskRunStatus, AutomationTaskRunTrigger } from '../../src/shared/automationTaskTypes'
 import { getAutomationTaskWorkDirs, type AutomationTask, type AutomationTaskInput, type AutomationTaskSchedule, type AutomationDeliveryPref, type AutomationTaskRun, type AutomationTaskRunStatus, type AutomationTaskRunTrigger, type TargetBinding, type TargetSelection } from '../../src/shared/automationTaskTypes'
 
-export type TrustedTaskPreflightCommit = { targetBindings: TargetBinding[] }
+export type TrustedTaskPreflightCommit = { targetBindings?: TargetBinding[]; draft?: true }
 export type AutomationTaskUpdateResult = { ok: true; task: AutomationTask } | { ok: false; reason: 'task-revision-conflict' | 'schedule-pending' | 'task-not-found' }
 
 type TaskRow = {
@@ -157,8 +157,8 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
       `INSERT INTO automation_tasks (
         id, name, schedule_json, prompt, delivery_pref, delivery_target, model_override,
         work_dir, work_dirs_json, preflight_version, target_bindings_json, model_id, model_service_id, reasoning_effort,
-        enabled, created_at, updated_at, next_run_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        enabled, created_at, updated_at, next_run_at, task_revision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
       input.name,
@@ -170,14 +170,15 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
       legacyWorkDir,
       JSON.stringify(workDirs),
       preflight ? 1 : 0,
-      preflight ? JSON.stringify(preflight.targetBindings) : null,
+      preflight && !preflight.draft ? JSON.stringify(preflight.targetBindings ?? []) : null,
       input.modelId ?? null,
       input.modelServiceId ?? null,
       input.reasoningEffort ?? null,
       enabled ? 1 : 0,
       now,
       now,
-      nextRunAt
+      nextRunAt,
+      preflight ? 1 : 0
     )
     conn.prepare(`INSERT INTO automation_task_recovery_state(task_id,schedule_generation,recovery_cursor_at,updated_at)
       VALUES(?,0,?,?)`).run(id, nextRunAt, now)
@@ -251,9 +252,12 @@ export function updateAutomationTaskConditional(
     ...cur,
     ...fields,
     updatedAt: Date.now(),
-    taskRevision: (cur.taskRevision ?? 0) + 1,
+    taskRevision: (cur.taskRevision ?? 0) + (preflight || ['name', 'prompt', 'schedule', 'deliveryPref', 'deliveryTarget', 'modelOverride', 'workDirs', 'modelId', 'modelServiceId', 'reasoningEffort'].some((key) => Object.prototype.hasOwnProperty.call(fields, key)) ? 1 : 0),
     scheduleGeneration: (cur.scheduleGeneration ?? 0) + (patch.schedule !== undefined || patch.enabled !== undefined ? 1 : 0),
-    ...(preflight ? { preflightVersion: 1 as const, targetBindingsJson: JSON.stringify(preflight.targetBindings) } : {})
+    ...(preflight ? preflight.draft === true
+      ? { preflightVersion: 0 as const, targetBindingsJson: null }
+      : { preflightVersion: 1 as const, targetBindingsJson: JSON.stringify(preflight.targetBindings ?? []) }
+      : {})
   }
   for (const key of clearConfig ?? []) if (key !== 'workDirs') delete (next as unknown as Record<string, unknown>)[key]
   const workDirs = patch.workDirs !== undefined

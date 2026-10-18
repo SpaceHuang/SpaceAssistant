@@ -2696,6 +2696,30 @@
   color: var(--sa-text);
 }
 
+.butler-preflight-report__issue {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sa-config-gap-tight);
+  min-width: 0;
+}
+
+.butler-preflight-report__issue-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-tight);
+  max-width: 100%;
+}
+
+.butler-preflight-report__issue-candidates ul {
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+.butler-preflight-report__issue-candidates li {
+  overflow-wrap: anywhere;
+}
+
 .butler-preflight-report__candidates {
   width: 100%;
   padding-top: var(--sa-config-gap-tight);

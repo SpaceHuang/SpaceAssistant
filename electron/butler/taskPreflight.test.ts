@@ -9,6 +9,42 @@ describe('runTaskPreflight', () => {
     expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Read report.csv and summarize it', roots: ['/workspace'], facts: expect.any(Object), tools: [] }), expect.any(AbortSignal))
   })
 
+  it('preserves the unclear source phrase and reason when the model cannot identify a target', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [],
+      clarifications: [{ reference: '帮我处理一下', reasonCode: 'scope_unclear' }]
+    } as never)) }
+    const result = await runTaskPreflight({ prompt: '帮我处理一下', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) }
+    })
+
+    expect(result.report.blockers).toEqual([expect.objectContaining({
+      code: 'TARGET_UNCLEAR',
+      messageKey: 'butler.preflight.target_unclear',
+      reference: '帮我处理一下',
+      reasonCode: 'scope_unclear'
+    })])
+  })
+
+  it('shows the exact reference and every matching path for an ambiguous target', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: 'report.csv', targetType: 'file' }] })) }
+    const result = await runTaskPreflight({ prompt: '读取 report.csv', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], entries: [
+        { path: '/workspace/a/report.csv', relativePath: 'a/report.csv', kind: 'file' as const },
+        { path: '/workspace/b/report.csv', relativePath: 'b/report.csv', kind: 'file' as const }
+      ], coverage: { complete: true, truncated: false, roots: 1, visited: 2, errors: 0 }, digest: 'facts' })) }
+    })
+
+    expect(result.report.blockers).toEqual([expect.objectContaining({
+      code: 'TARGET_AMBIGUOUS',
+      messageKey: 'butler.preflight.target_ambiguous',
+      reference: 'report.csv',
+      candidates: ['/workspace/a/report.csv', '/workspace/b/report.csv']
+    })])
+  })
+
   it('blocks ambiguity, unknown scope, and incomplete coverage', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: 'report.csv', targetType: 'file' }] })) }
     const factsProvider = { collect: vi.fn(async () => ({ roots: ['/workspace'], entries: [
