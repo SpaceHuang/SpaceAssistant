@@ -107,11 +107,41 @@ describe('runTaskPreflight', () => {
     expect(result.report.blockers.map((item) => item.code)).toContain('FACTS_INCOMPLETE')
   })
 
-  it('returns unavailable on model error or timeout and never exposes tools', async () => {
+  it('returns unavailable on model request errors and never exposes tools', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => { throw new Error('provider unavailable') }) }
     const result = await runTaskPreflight({ prompt: 'read one file', scheduleSummary: 'once', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 1, visited: 0, errors: 0 }, digest: 'facts' })) } })
     expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_UNAVAILABLE' }] })
     expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ tools: [] }), expect.any(AbortSignal))
+  })
+
+  it('reports a model response parsing failure separately from a failed model call', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => { throw new Error('PREFLIGHT_MODEL_INVALID_JSON') }) }
+    const result = await runTaskPreflight({ prompt: 'read one file', scheduleSummary: 'once', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 1, visited: 0, errors: 0 }, digest: 'facts' })) } })
+
+    expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_INVALID_RESPONSE' }] })
+  })
+
+  it('allows up to 60 seconds for the selected model to finish preflight', async () => {
+    vi.useFakeTimers()
+    try {
+      let signal: AbortSignal | undefined
+      const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn((_input, requestSignal) => {
+        signal = requestSignal
+        return new Promise(() => undefined)
+      }) }
+      const pending = runTaskPreflight({ prompt: 'read one file', scheduleSummary: 'once', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 1, visited: 0, errors: 0 }, digest: 'facts' })) } })
+
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(44_999)
+      expect(signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(signal?.aborted).toBe(true)
+      await expect(pending).resolves.toMatchObject({ report: { status: 'unavailable', blockers: [{ code: 'ANALYZER_TIMEOUT' }] } })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects malformed or unsupported analyzer output as unavailable', async () => {
@@ -143,6 +173,6 @@ describe('runTaskPreflight', () => {
       factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 1, visited: 0, errors: 0 }, digest: 'facts' })) }
     })
     expect(signal?.aborted).toBe(true)
-    expect(result.report.status).toBe('unavailable')
+    expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_TIMEOUT' }] })
   })
 })

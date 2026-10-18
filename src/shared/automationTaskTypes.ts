@@ -176,6 +176,7 @@ export const PREFLIGHT_ISSUE_MESSAGE_KEYS = {
   ROOT_FACTS_UNAVAILABLE: 'butler.preflight.root_facts_unavailable',
   FACTS_INCOMPLETE: 'butler.preflight.facts_incomplete',
   ANALYZER_UNAVAILABLE: 'butler.preflight.analyzer_unavailable',
+  ANALYZER_TIMEOUT: 'butler.preflight.analyzer_timeout',
   ANALYZER_INVALID_RESPONSE: 'butler.preflight.analyzer_invalid_response',
   TARGET_UNCLEAR: 'butler.preflight.target_unclear',
   TARGET_AMBIGUOUS: 'butler.preflight.target_ambiguous',

@@ -3,7 +3,7 @@ import { resolveLlmCredentialsForPair } from '../llmServiceResolver'
 import type { AppDatabase } from '../database'
 import type { TaskPreflightAnalyzer, TaskPreflightAnalysisInput, TaskPreflightAnalysisOutput } from './taskPreflight'
 
-type PreflightModelClient = { messages: { create(input: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<{ content: Array<{ type: string; text?: string }> }> } }
+type PreflightModelClient = { messages: { create(input: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<{ content: Array<{ type: string; text?: string }>; stop_reason?: string | null }> } }
 type PreflightClientFactory = (apiKey: string, baseUrl?: string) => PreflightModelClient
 
 const SYSTEM_PROMPT = [
@@ -19,7 +19,9 @@ const SYSTEM_PROMPT = [
 
 function parseTargets(content: string): TaskPreflightAnalysisOutput {
   let parsed: unknown
-  try { parsed = JSON.parse(content) } catch { throw new Error('PREFLIGHT_MODEL_INVALID_JSON') }
+  const trimmed = content.trim()
+  const fencedJson = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1]
+  try { parsed = JSON.parse(fencedJson ?? trimmed) } catch { throw new Error('PREFLIGHT_MODEL_INVALID_JSON') }
   if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { targets?: unknown }).targets)) throw new Error('PREFLIGHT_MODEL_INVALID_SCHEMA')
   return parsed as TaskPreflightAnalysisOutput
 }
@@ -34,12 +36,13 @@ export function createTaskPreflightModelAnalyzer(db: AppDatabase, task: { modelI
       if ('error' in resolved) throw new Error(resolved.error)
       const response = await clientFactory(await resolved.getApiKey() ?? '', resolved.baseUrl).messages.create({
         model: resolved.providerModelName,
-        max_tokens: 1024,
+        max_tokens: 2048,
         temperature: 0,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: JSON.stringify({ task: input.prompt, schedule: input.scheduleSummary, delivery: input.deliverySummary, authorizedRoots: input.authorizedRoots, outputRoot: input.outputRoot ?? null, facts: input.facts }) }],
         stream: false
       }, { signal })
+      if (response.stop_reason === 'max_tokens') throw new Error('PREFLIGHT_MODEL_TRUNCATED_RESPONSE')
       const text = response.content.find((block) => block.type === 'text')?.text
       if (typeof text !== 'string') throw new Error('PREFLIGHT_MODEL_EMPTY_RESPONSE')
       return parseTargets(text)

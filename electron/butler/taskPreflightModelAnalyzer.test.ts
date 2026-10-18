@@ -28,6 +28,22 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty('tools')
   })
 
+  it('accepts a fenced JSON response from an Anthropic-compatible model', async () => {
+    create.mockResolvedValue({ content: [{ type: 'text', text: '```json\n{"targets":[{"kind":"exact","path":"/workspace","targetType":"directory"}],"requiredTools":["run_shell"]}\n```' }] })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    await expect(analyzer.analyze({ prompt: 'inspect Git history', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'], facts: {} as never, tools: [], responseFormat: 'json' }, new AbortController().signal))
+      .resolves.toEqual({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredTools: ['run_shell'] })
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ max_tokens: 2048 })
+  })
+
+  it('identifies a response truncated by the provider token limit', async () => {
+    create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[' }], stop_reason: 'max_tokens' })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    await expect(analyzer.analyze({} as never, new AbortController().signal)).rejects.toThrow('PREFLIGHT_MODEL_TRUNCATED_RESPONSE')
+  })
+
   it('asks the model to identify exact unclear prompt fragments and structured reasons', async () => {
     create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[],"clarifications":[{"reference":"帮我处理一下","reasonCode":"scope_unclear"}]}' }] })
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })

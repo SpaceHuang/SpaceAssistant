@@ -23,6 +23,14 @@ export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; facts
 
 const issue = (code: string, field = 'prompt', details: Partial<PreflightIssue> = {}): PreflightIssue => ({ code, field, messageKey: getPreflightIssueMessageKey(code), ...details })
 const emptyReport = (status: PreflightReport['status'], blockers: PreflightIssue[], suggestedDirectories: SuggestedDirectory[] = []): PreflightReport => ({ status, blockers, suggestedDirectories })
+const DEFAULT_ANALYZER_TIMEOUT_MS = 60_000
+
+function classifyAnalyzerFailure(error: unknown): 'ANALYZER_TIMEOUT' | 'ANALYZER_INVALID_RESPONSE' | 'ANALYZER_UNAVAILABLE' {
+  const code = error instanceof Error ? error.message : ''
+  if (code === 'PREFLIGHT_TIMEOUT') return 'ANALYZER_TIMEOUT'
+  if (code === 'PREFLIGHT_MODEL_EMPTY_RESPONSE' || code === 'PREFLIGHT_MODEL_INVALID_JSON' || code === 'PREFLIGHT_MODEL_INVALID_SCHEMA' || code === 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE') return 'ANALYZER_INVALID_RESPONSE'
+  return 'ANALYZER_UNAVAILABLE'
+}
 
 function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefined {
   if (!value || typeof value !== 'object' || !Array.isArray((value as { targets?: unknown }).targets)) return undefined
@@ -75,9 +83,9 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       facts,
       tools: [],
       responseFormat: 'json'
-    }, signal), deps.timeoutMs ?? 15_000))
-  } catch {
-    return { report: emptyReport('unavailable', [issue('ANALYZER_UNAVAILABLE')]), bindings: [], factsDigest: facts.digest }
+    }, signal), deps.timeoutMs ?? DEFAULT_ANALYZER_TIMEOUT_MS))
+  } catch (error) {
+    return { report: emptyReport('unavailable', [issue(classifyAnalyzerFailure(error))]), bindings: [], factsDigest: facts.digest }
   }
   if (!analysis) return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
   const requiredTools = [...new Set(analysis.requiredTools ?? [])]

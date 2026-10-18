@@ -977,6 +977,7 @@
       "root_facts_unavailable": "The selected work directories could not be checked. Confirm they exist and are accessible.",
       "facts_incomplete": "The selected work directories could not be checked completely, so the target cannot be confirmed. Narrow the directory scope and try again.",
       "analyzer_unavailable": "The task model could not be reached for preflight. Check the model settings and network connection, then try again.",
+      "analyzer_timeout": "The task model did not finish preflight within 60 seconds. The model settings may still be valid. Try again later or narrow the authorized directory scope.",
       "analyzer_invalid_response": "The task model returned a preflight result that could not be understood. Try again; if this continues, check the selected model service.",
       "target_unclear": "The file, directory, or scope to process could not be identified. Add a specific target to the task prompt.",
       "target_ambiguous": "This description matches multiple locations. Choose one candidate and add its full path to the task prompt.",
