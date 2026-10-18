@@ -36,8 +36,8 @@ export type WritePathProbeInput = {
 
 export { type MountAnchor } from './mountAnchors'
 
-export async function classifyWriteTargetScope(normalizedPath: string, workDir: string, workDirs: readonly string[] = [workDir]): Promise<'inside-workdir' | 'outside-workdir'> {
-  const roots = workDirs.length ? workDirs : [workDir]
+export async function classifyWriteTargetScope(normalizedPath: string, workDir: string, workDirs?: readonly string[]): Promise<'inside-workdir' | 'outside-workdir'> {
+  const roots = workDirs === undefined ? [workDir] : workDirs
   const windowsPath = isWindowsAbsolute(normalizedPath) || roots.some(isWindowsAbsolute)
   const pathApi = windowsPath ? path.win32 : path
   // workDir 真实存在时用 realpath（防 symlink 化的 workDir 误判归属）；尚未创建（新会话首写是常态）

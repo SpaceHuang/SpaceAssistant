@@ -651,6 +651,40 @@ describe('createAgentSdkSafetyPolicy', () => {
     })
   })
 
+  it('把自动化输出 binding 放进签名 permit，并标记为策略自动放行', () => {
+    const contexts = new Map<string, Record<string, unknown>>()
+    const handoff = createAgentSdkStructuralPermitHandoff({
+      updateExecutionContext: (call, update) => {
+        const key = JSON.stringify([call.invocationId, call.toolCallId])
+        const context = contexts.get(key) ?? {}
+        update(context)
+        contexts.set(key, context)
+      }
+    })
+    const input = { path: '/tmp/results/20261018/reports/summary.txt', content: 'result' }
+    const outputBinding = {
+      kind: 'output' as const, path: '/tmp/results/reports/summary.txt', ancestor: '/tmp/results', relativeSuffix: 'reports/summary.txt',
+      outputRoot: '/tmp/results', expectedType: 'file' as const, rawText: 'write the summary', resolverVersion: 3,
+      rootsDigest: 'output-roots-digest', taskRevision: 8
+    }
+    const automationOutputBinding = { binding: outputBinding, runOutputDir: '/tmp/results/20261018' }
+    const args = { ...baseArgs, toolName: 'write_file', toolInput: input, requestId: binding.requestId, toolUseId: binding.toolCallId } as ToolCallGateArgs
+    const gateResult = {
+      ...result({ type: 'auto-allow', ruleId: 'automation-bound-output-write-allow', reason: 'bound scheduled output' }),
+      lane: 'automation',
+      writePathFact: {
+        rawPath: input.path, normalizedPath: input.path, zone: 'outside-workdir' as const, targetKind: 'missing' as const,
+        parentReal: '/tmp/results/20261018/reports', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 0, mtimeMs: 1, nlink: 2 }
+      },
+      automationOutputBinding
+    }
+
+    handoff.onInitialGateResult?.(binding, gateResult as never, args)
+    expect(contexts.get(JSON.stringify([binding.invocationId, binding.toolCallId]))?.writeExecutionPermit).toMatchObject({
+      decisionRuleId: 'automation-bound-output-write-allow', approval: 'auto-allow', lane: 'automation', automationOutputBinding
+    })
+  })
+
   it('finalizes a user fallback approval even when the original decision asked the approval agent', async () => {
     const registry = new ReadConfirmationRegistry({ now: () => 10 })
     const input = { path: '/tmp/approved.txt' }

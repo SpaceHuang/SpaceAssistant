@@ -281,9 +281,9 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   {
     id: 'automation-write-deny',
-    when: 'invocation', match: { lane: ['automation'], toolName: ['write_file', 'edit_file'] },
+    when: 'invocation', match: { lane: ['automation'], toolName: ['write_file', 'edit_file'], excludeSignals: ['automation-output-binding:matched'] },
     denyClass: 'forbidden',
-    action: 'deny', locked: true, reason: '无人值守调用不得写入本地文件'
+    action: 'deny', locked: true, reason: '无人值守调用不得写入未绑定的本地文件'
   },
   {
     id: 'automation-shell-deny',
@@ -703,6 +703,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
 
   // ===== automation lane（偏差 21/22：无人值守链路的显式规则集，§P2-4）=====
   // 无人类应答者：规则显式写出，兜底 fail-closed；automation 不继承任何 desktop 专属豁免。
+  // Policy phase: only a host-produced validated output-binding fact can reach this narrow write allow.
+  {
+    id: 'automation-bound-output-write-allow',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: ['write_file', 'edit_file'], signals: ['automation-output-binding:matched'] },
+    action: 'allow',
+    reason: '无人值守写入仅限本次预检绑定的结果输出目标'
+  },
   {
     id: 'automation-readonly-allow',
     when: 'invocation',

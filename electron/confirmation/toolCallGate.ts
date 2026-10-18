@@ -44,6 +44,8 @@ import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirect
 import { matchSessionDirectoryGrant } from './sessionDirectoryGrantMatcher'
 import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmationTimeout'
 import { SYSTEM_INVARIANT_ID_BY_GATE_RULE } from '../../src/shared/security/systemInvariantIds'
+import type { TargetBinding } from '../../src/shared/automationTaskTypes'
+import { matchesBoundOutputWriteTarget } from '../butler/taskOutputDirectory'
 
 /**
  * T1.2/T1.3：以 resolveWikiMount 为本次路径入参构造探测锚点与敏感根豁免。
@@ -138,6 +140,10 @@ export interface ToolCallGateArgs {
   workDir: string
   /** Frozen task roots supplied by the trusted automation run snapshot. */
   taskWorkDirs?: readonly string[]
+  /** Frozen output targets from this run's validated preflight snapshot. */
+  taskOutputBindings?: readonly TargetBinding[]
+  /** Archive directory resolved from the run's frozen scheduledFor slot. */
+  taskRunOutputDir?: string
   userDataDir: string
   /** R1/R2：装配期解析的工作目录快照（诊断 basis 的权威来源；缺省用 workDir 字符串兜底） */
   workspace?: WorkspaceSnapshot
@@ -226,6 +232,8 @@ export function buildToolCallGateArgs(
 }
 
 export interface ToolCallGateResult {
+  /** Host-derived execution lane, carried into write permits for lane-specific final checks. */
+  lane?: ExecutionLane
   decision: Decision
   policyDecision?: import('../../src/shared/policy/policyDecision').PolicyDecision
   facts: ContentFacts
@@ -237,6 +245,8 @@ export interface ToolCallGateResult {
   wechatMediaPathFact?: ReadPathFact
   feishuMediaFact?: FeishuMediaTargetFact
   writePathFact?: WritePathFact
+  /** Host-issued output binding attestation; consumed by the execution permit final-check. */
+  automationOutputBinding?: { binding: Extract<TargetBinding, { kind: 'output' }>; runOutputDir: string }
   writeExecutionPermit?: WriteExecutionPermit
   /** run_shell 预检通过时的结构化结果（供日志/确认卡片 hints）。 */
   shellPrecheck?: { analysis: ShellAnalysisResult; legacyAutoAllowEligible: boolean; legacyPolicy: import('../shell/legacyShellPolicyAdapter').LegacyShellPolicyInput; hints: ShellSecurityHints }
@@ -285,6 +295,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   const origin: OriginInfo = { kind: 'direct-owner' }
   const audit = args.audit ?? getSecurityAuditLog()
   const result: ToolCallGateResult = {
+    lane,
     decision: undefined as unknown as Decision,
     facts: undefined as unknown as ContentFacts,
     approvedFactIds: []
@@ -496,6 +507,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   let feishuMediaFact: FeishuMediaTargetFact | undefined
   let readPathProbeFailure: ReadPathProbeError | undefined
   let writePathFact: WritePathFact | undefined
+  let automationOutputBinding: ToolCallGateResult['automationOutputBinding']
   let writePathProbeFailure: WritePathProbeError | undefined
   let wikiRawTargetFailure = false
   let writePathInputFailure = false
@@ -688,6 +700,23 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         } catch {
           writeScope = 'unknown'
         }
+        // Facts phase: only host-owned run bindings may attest an exact ordinary output file.
+        if (lane === 'automation' && args.taskRunOutputDir
+          && writePathFact.zone !== 'sensitive-file' && writePathFact.zone !== 'system-dir'
+          && (writePathFact.targetKind === 'file' || writePathFact.targetKind === 'missing')
+          && (args.toolName !== 'edit_file' || writePathFact.targetKind === 'file')) {
+          for (const binding of args.taskOutputBindings ?? []) {
+            if (binding.kind !== 'output' || binding.resolverVersion !== 3) continue
+            try {
+              if (matchesBoundOutputWriteTarget(binding, args.taskRunOutputDir, writePathFact.normalizedPath)) {
+                automationOutputBinding = { binding, runOutputDir: args.taskRunOutputDir }
+                break
+              }
+            } catch {
+              // Invalid/out-of-archive bindings are facts that fail to match; policy remains deny.
+            }
+          }
+        }
         facts = {
           toolName: descriptor.toolName,
           actionClass: descriptor.actionClass,
@@ -699,6 +728,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           ],
           summary: { text: `${args.toolName} 写入目标已检查` }
         }
+        if (automationOutputBinding) facts.signals.push({ kind: 'automation-output-binding', status: 'matched' })
         if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
           && args.toolName === 'write_file' && writePathFact.targetKind === 'missing' && writePathFact.zone === 'workdir-normal'
           && writeScope === 'inside-workdir') facts.signals.push({ kind: 'write-target-new' })
@@ -1322,5 +1352,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   result.wechatMediaPathFact = wechatMediaPathFact
   result.feishuMediaFact = feishuMediaFact
   result.writePathFact = writePathFact
+  result.automationOutputBinding = automationOutputBinding
   return result
 }

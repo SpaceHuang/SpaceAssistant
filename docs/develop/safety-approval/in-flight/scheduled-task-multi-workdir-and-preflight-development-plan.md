@@ -81,7 +81,7 @@
 ### D-6：无人值守结果写入边界（已裁决）
 
 - **决定：** 仅允许 `write_file` / `edit_file` 写入本次运行预检绑定的结果目标，且目标必须在该次归档目录内。输出目录不进入读取授权根；其他路径写入及 Shell 继续拒绝。
-- **安全实现：** facts 阶段只报告主进程对规范化路径与预检 binding 的精确匹配；Policy Engine 通过稳定 rule ID `automation-bound-output-write-allow` 允许该匹配，并保留 `automation-write-deny` 对所有其他写入的拒绝及 `automation-shell-deny`。工具 final-check 再核验同一个 run snapshot、目标路径、binding 和归档目录；失败时 executor 不调用。
+- **安全实现：** facts 阶段只报告主进程对规范化路径与预检 binding 的验证结果：文件型 binding 只匹配该文件，目录型 binding 只匹配其归档目录下的普通文件；Policy Engine 通过稳定 rule ID `automation-bound-output-write-allow` 允许该信号，并保留 `automation-write-deny` 对未匹配写入的 locked 拒绝及 `automation-shell-deny`。final-check 以系统不变量 `SYS-AUTOOUTPUT-001` 确保 automation 写许可始终携带本 run 输出 binding，即使策略配置改变也不能派发未绑定写入；执行端再核验目标路径、binding 和归档目录，失败时 executor 不调用。
 - **决定依据：** 结果目录需要实际承接任务生成物；只授权被用户保存前确认的目标并将范围限制在归档目录，可实现写入而不开放任意本地文件写入。
 
 **本次修订优先级：** D-4～D-6 与下列新增 INV-14～INV-16 优先于本方案其他章节中将 `workDirs` 同时称为输出/授权目录、将所有自动化写入无条件拒绝、或将输出目标约束在授权读根内的早期文字。早期章节仍保留为历史实现基线，其冲突处按本修订执行。
@@ -155,7 +155,7 @@
 | INV-13 | 只有迁移来的 `preflightVersion=0` task 走 legacy 兼容语义；新建任务必须 v1，首次成功编辑或主动启用在同一事务切换到 v1。 | migration defaults、主进程 IPC、taskStore。 | 有效旧任务无 binding 仍按旧语义运行；缺 roots 失败；阻断编辑不变更 v0；成功后 v1；renderer 伪造 v0 被拒绝。 |
 | INV-14 | 新任务必须有有效 `outputDir` 和 `outputOrganization`；`authorizedDirs` 可为空且只表示资料读写授权。旧目录只迁移为 `authorizedDirs`，绝不自动充当输出目录；旧任务首次编辑须明确补选输出目录。 | v104 migration、task DTO adapter、主进程 IPC。 | v103→v104 不改旧目录语义；新建缺输出拒绝；空授权目录允许新任务；旧任务未编辑仍可 legacy 运行，编辑未选输出被拒绝。 |
 | INV-15 | 每个新 run 从冻结的 `scheduledFor` 和归档模式确定唯一 `runOutputDir`；预检 binding 的相对输出路径只能解析到该目录内。输出目录不能授权读取。 | 主进程输出目录解析器、taskStore run snapshot、runtime admission 与路径 final-check。 | daily/hourly 使用本机计划时间；direct 使用根目录；路径逃逸、链接越界、binding/run snapshot 不匹配均在 executor 前失败；read/list/grep 对输出目录仍视作未授权。 |
-| INV-16 | 自动化写入仅在 facts 验证工具目标与本 run 已批准输出 binding 完全匹配且目标落在 `runOutputDir` 内时 allow；其余写入与所有 Shell 继续 deny。 | facts producer、Policy Engine locked rules、tool final-check；稳定规则 ID `automation-bound-output-write-allow`、`automation-write-deny`、`automation-shell-deny`。 | 匹配输出写入进入 executor；未绑定输出、其他输出根、资料授权目录写入和 Shell 均不进入 executor；decision trace 标明稳定 rule ID；empty authorizedDirs 不回退至 outputDir。 |
+| INV-16 | 自动化写入仅在 facts 验证工具目标与本 run 已批准输出 binding 匹配时 allow：文件 binding 要求目标完全相同，目录 binding 只覆盖该目录下的普通文件；目标必须落在 `runOutputDir` 内。其余写入与所有 Shell 继续 deny。 | facts producer、共享 Policy Engine rules、tool final-check；稳定规则 ID `automation-bound-output-write-allow`、`automation-write-deny`、`automation-shell-deny`；final-check 系统不变量 `SYS-AUTOOUTPUT-001`。 | 匹配输出写入进入 executor；未绑定输出、绑定目录之外的目标、其他输出根、资料授权目录写入和 Shell 均不进入 executor；decision trace 标明稳定 rule ID；empty authorizedDirs 不回退至 outputDir；即使管理员停用 locked write deny，final-check 仍拒绝无 binding 的 automation write permit。 |
 
 ### 2.3 契约卡
 
@@ -190,7 +190,7 @@
 
 - 新建 `ResolvedAutomationRunConfig`，唯一含有已校验 `workDirs`、model route、effort、task snapshot revision、preflightVersion 与运行时解析出的 `TargetSelection[]`。v1 按 binding kind 解析；v0 明确走需求认可的 legacy 分支。due slot 被 claim 时，taskStore 将当前 task revision 与完整执行配置 snapshot 原子绑定到 run；`runButlerTask` admission 后只从该 run snapshot 校验和构造配置，不从可能已编辑的 task 行重读执行输入。
 - `readPathFacts`、写路径 facts（当前 automation 写入仍 locked deny）、grep/list/read 工具 gate 增加 `workDirs` 输入；范围为 `inside` iff realpath-safe target under any root。多根集合是无序集。目录项失效时整个 run admission 失败，不静默丢掉坏根继续。
-- Policy Engine 仍以稳定 rule ID 处理 `outside-workdir`。仅改变 facts 的包含根计算，不修改 `automation-write-deny`、`automation-shell-deny`、敏感路径 deny/confirm 或策略档位；新增/调整 locked rules 必须有 decision trace 与现有自动化策略边界测试。
+- Policy Engine 仍以稳定 rule ID 处理 `outside-workdir`。多授权根仅改变 facts 的包含根计算；无人值守结果写入例外按 D-6 / INV-16 精确绑定处理，敏感路径 deny/confirm 与 Shell deny 保持原边界；新增/调整 policy rules 必须有 decision trace 与自动化策略边界测试。
 - `invocationAssembler` 将 `workDirs` 明确传入审批 Agent；审批上下文说明这些根是用户在该任务表单中明确选定的范围。审批 Agent 输出不得反算授权；工具 final-check 仍核验同一 roots 快照。
 - `TaskPathFactsProvider` 与 `TargetBinding` 属于业务 facts/resolution 层；它们不授予工具权限。运行 admission 在 session/executor 创建前按绑定 kind 解析；final-check 只核验已批准身份、对象、授权代次、permit 与执行材料，不重新消歧。
 - `exact` basename 解析出现歧义时失败；`collection` 允许按明确 selector 动态增删成员；`output` 允许目标尚不存在但须维持已授权祖先与安全相对后缀。不得把普通文件替换一概判失败，也不得因“动态”而扩大 selector 到授权 roots 之外。本期不允许用户相对路径产生目录优先级。
@@ -237,7 +237,7 @@
 | Facts | `electron/confirmation/extractors/readPathFacts.ts`、写路径 facts、`toolCallGate.ts` | 仅报告 canonical target 与 roots 的关系、解析来源、覆盖完整度；不作 allow/deny。未知、失效、逃逸与敏感事实保留分类。 |
 | Policy | `src/shared/policy/defaultRules.ts` / Policy Engine | 保留当前 locked deny/allow/confirm 意义；outside 指示仅当目标不在任何任务授权根。任何规则变更使用稳定 rule ID 并可查询 trace。 |
 | Final-check | invocation/tool final-check 消费运行授权集合处 | 核对获批 task/run、roots snapshot、permit 与执行材料绑定相同 roots；不重新判定业务歧义。失败用稳定 failure class/case ID，executor 不调用。 |
-| Invariant | `systemInvariantRegistry.ts` | 不把 Policy locked decision 登记为 invariant。若实现引入额外且不可配置的“任何路径必须属于 task roots”系统约束，先登记 owner、范围、审计和测试，再进入阶段验收。 |
+| Invariant | `systemInvariantRegistry.ts` | 不把 Policy locked decision 登记为 invariant。E-11c 的执行端约束只校验 automation write permit 是否携带匹配本 run 的结果 binding，登记为 `SYS-AUTOOUTPUT-001`；写入策略 verdict 仍由共享 Policy Engine trace 表达。 |
 
 ### 2.6 迁移、兼容与回滚
 

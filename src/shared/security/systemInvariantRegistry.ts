@@ -66,6 +66,14 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
     overrideability: 'none'
   },
   {
+    id: 'SYS-AUTOOUTPUT-001', owner: 'electron/confirmation', stage: 'final-check', category: 'integrity',
+    rationale: 'An unattended write must carry the exact output binding approved for its scheduled run.',
+    effect: 'block', scope: 'electron/confirmation/writeExecutionPermit.ts:validateWriteExecutionPermit',
+    audit: 'policy.execution-veto with automation-output-binding-* case ID and decision rule linkage',
+    tests: ['electron/confirmation/writeExecutionPermit.test.ts', 'electron/confirmation/toolCallGate.test.ts', 'electron/confirmation/agentSdkSafetyPolicy.test.ts', 'electron/tools/registeredAgentTurnTools.test.ts'],
+    overrideability: 'none'
+  },
+  {
     id: 'SYS-CAPABILITY-001', owner: 'agent-sdk', stage: 'admission', category: 'capability',
     rationale: 'A tool without a host granted SDK capability cannot enter the execution port.',
     effect: 'block', scope: 'packages/agent-sdk/src/safetyGate.ts',

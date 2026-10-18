@@ -79,6 +79,7 @@ const EXPECTED_RULE_IDS = [
   'mcp-readonly-allow',
   'mcp-tool-ask',
   'im-write-ask',
+  'automation-bound-output-write-allow',
   'automation-readonly-allow',
   'automation-unsupported-deny',
   'automation-default-confirm',

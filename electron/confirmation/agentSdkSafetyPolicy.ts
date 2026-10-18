@@ -190,7 +190,9 @@ export function createAgentSdkStructuralPermitHandoff(input: {
           input: args.toolInput,
           target: result.writePathFact,
           decisionRuleId: result.decision.ruleId,
-          approval: result.fileAutoApproved ? 'auto-allow' : 'confirmed',
+          approval: result.decision.ruleId === 'automation-bound-output-write-allow' || result.fileAutoApproved ? 'auto-allow' : 'confirmed',
+          lane: result.lane,
+          ...(result.automationOutputBinding ? { automationOutputBinding: result.automationOutputBinding } : {}),
           ...(result.policyDecision ? { decisionId: result.policyDecision.decisionId, policyDependencyFingerprint: result.policyDecision.dependencyFingerprint } : {})
         })
         input.updateExecutionContext({ invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }, (context) => {
@@ -221,7 +223,9 @@ export function createAgentSdkStructuralPermitHandoff(input: {
           input: args.toolInput,
           target: result.writePathFact,
           decisionRuleId: result.decision.ruleId,
-          approval: result.fileAutoApproved ? 'auto-allow' : 'confirmed',
+          approval: result.decision.ruleId === 'automation-bound-output-write-allow' || result.fileAutoApproved ? 'auto-allow' : 'confirmed',
+          lane: result.lane,
+          ...(result.automationOutputBinding ? { automationOutputBinding: result.automationOutputBinding } : {}),
           ...(result.policyDecision ? { decisionId: result.policyDecision.decisionId, policyDependencyFingerprint: result.policyDecision.dependencyFingerprint } : {})
         })
         input.updateExecutionContext(call, (context) => { context.writeExecutionPermit = writePermit })

@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：既有 E-01～E-10 完成；结果目录拆分补充任务 E-11a～E-11f 进行中
+> 状态：既有 E-01～E-10 完成；结果目录拆分 E-11a～E-11c 完成，E-11d～E-11f 进行中
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
@@ -261,13 +261,13 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 ### E-11c 接入只允许绑定结果路径的自动化写策略
 
 - **依赖：** E-11b；用户已裁决 D-6。
-- **目标文件：** `src/shared/policy/defaultRules.ts`、`electron/confirmation/` facts/final-check、tool gate 与 policy boundary tests；`src/shared/security/` 仅当需登记不可配置 invariant 时。
-- **动作与产物：** facts 阶段验证 write_file/edit_file 目标与本 run 预检 binding、归档目录完全匹配并发出稳定信号；Policy Engine 通过稳定 rule ID `automation-bound-output-write-allow` 仅允许该信号，同时保留 `automation-write-deny` 对所有未匹配写入的拒绝和 `automation-shell-deny`。final-check 重核同一 run snapshot、binding 与目标；空授权目录不可回退到 outputDir。
-- **完成判据：** TDD 覆盖匹配输出写入 allow；未绑定文件、不同目标、未归档输出、授权资料目录写入、输出目录读取、run_shell 均在 executor 前拒绝；policy trace 显示稳定 rule ID。符合安全阶段注释要求，不把 locked policy rule 登记成 system invariant。
-- **验证命令：** 执行中登记 policy、tool gate、read/write path facts 与 automation invocation 的明确 Vitest 文件集合；运行 `npm run check:system-invariant-registry`。
-- **证据：** 待执行。
+- **目标文件：** `src/shared/policy/defaultRules.ts`、`electron/confirmation/` facts/final-check、tool gate 与 policy boundary tests、`src/shared/security/systemInvariantRegistry.ts`。
+- **动作与产物：** facts 阶段验证 write_file/edit_file 目标与本 run 预检 binding、归档目录的关系并发出稳定信号：文件 binding 精确匹配，目录 binding 仅覆盖其下的普通文件；Policy Engine 通过稳定 rule ID `automation-bound-output-write-allow` 仅允许该信号，同时保留 `automation-write-deny` 对未匹配写入的 locked 拒绝和 `automation-shell-deny`。系统不变量 `SYS-AUTOOUTPUT-001` 要求 automation 写许可携带 binding，即使策略配置停用 locked write deny 也不能派发未绑定写入。final-check 重核 binding 与目标；空授权目录不可回退到 outputDir。
+- **完成判据：** TDD 覆盖文件型精确绑定与目录型子树绑定 allow；未绑定文件、目录 binding 外目标、未归档输出、授权资料目录写入、输出目录读取、run_shell 均在 executor 前拒绝；policy trace 显示稳定 rule ID。Policy rule 保持在共享 Policy Engine；执行端 binding 完整性登记为系统不变量。
+- **验证命令：** `npm exec vitest run electron/butler/taskOutputDirectory.test.ts src/shared/policy/policyEngine.test.ts src/shared/policy/defaultRules.contract.test.ts src/shared/policy/defaultRules.lint.test.ts src/shared/policy/lockedFloorClassification.test.ts src/shared/security/systemInvariantRegistry.test.ts electron/confirmation/writeExecutionPermit.test.ts electron/confirmation/toolCallGate.test.ts electron/confirmation/automationLane.test.ts electron/confirmation/agentSdkSafetyPolicy.test.ts electron/tools/registeredAgentTurnTools.test.ts electron/tools/writePermitReapproval.integration.test.ts`；`npm run typecheck:shared`；`npx tsc -p tsconfig.electron.json --noEmit`；`npm run build:electron:incremental`；`npm run check:system-invariant-registry`；`git diff --check`。
+- **证据：** RED：定向用例分别复现策略缺少 bound-output allow、无 binding 的 automation fallback permit 被接受、目录 binding 无匹配器/被 gate 拒绝，以及计划阶段 permit 拒绝未写 execution-veto 审计。GREEN：12 个测试文件 / 365 个用例通过；共享类型检查、阶段主进程增量构建、最终主进程 TypeScript 检查、系统不变量登记与 diff 检查通过。用例覆盖文件 binding 精确写入、目录 binding 子树文件写入、未绑定目标/授权资料写入拒绝、输出根读取拒绝、Shell 拒绝、签名 permit 传递及 executor 不调用；`SYS-AUTOOUTPUT-001` 覆盖 locked deny 配置停用后的 final-check。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-11d 将拆分配置与 runOutputDir 贯穿存储、IPC 和运行链
 

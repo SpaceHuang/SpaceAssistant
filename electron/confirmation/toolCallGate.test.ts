@@ -1659,6 +1659,93 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
+  it('automation 仅允许精确绑定到本次归档目录的结果写入，输出目录不授权读取', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-bound-output-')))
+    const outputRunDir = path.join(root, '20261018-07')
+    const authorizedRoot = path.join(root, 'authorized')
+    await fs.mkdir(path.join(outputRunDir, 'reports'), { recursive: true })
+    await fs.mkdir(authorizedRoot)
+    await fs.writeFile(path.join(outputRunDir, 'existing.txt'), 'output')
+    await fs.writeFile(path.join(outputRunDir, 'reports', 'edit.txt'), 'before')
+    await fs.writeFile(path.join(authorizedRoot, 'source.txt'), 'authorized')
+    const binding = {
+      kind: 'output' as const,
+      path: path.join(root, 'reports', 'summary.txt'),
+      ancestor: root,
+      relativeSuffix: 'reports/summary.txt',
+      outputRoot: root,
+      expectedType: 'file' as const,
+      rawText: 'write summary',
+      resolverVersion: 3,
+      rootsDigest: 'test-output-digest',
+      taskRevision: 3
+    }
+    const editBinding = { ...binding, path: path.join(root, 'reports', 'edit.txt'), relativeSuffix: 'reports/edit.txt', rawText: 'edit summary' }
+    try {
+      const writeInput = { path: path.join(outputRunDir, 'reports', 'summary.txt'), content: 'summary' }
+      const boundWrite = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: outputRunDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [],
+        toolName: 'write_file', toolInput: writeInput,
+        taskOutputBindings: [binding, editBinding], taskRunOutputDir: outputRunDir
+      } as never))
+      expect(boundWrite.decision).toMatchObject({ type: 'auto-allow', ruleId: 'automation-bound-output-write-allow' })
+      expect(boundWrite.facts.signals).toContainEqual({ kind: 'automation-output-binding', status: 'matched' })
+      expect(boundWrite).toMatchObject({ automationOutputBinding: { binding, runOutputDir: outputRunDir } })
+
+      const boundEdit = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: outputRunDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [],
+        toolName: 'edit_file', toolInput: { path: path.join(outputRunDir, 'reports', 'edit.txt'), old_text: 'before', new_text: 'after' },
+        taskOutputBindings: [binding, editBinding], taskRunOutputDir: outputRunDir
+      } as never))
+      expect(boundEdit.decision).toMatchObject({ type: 'auto-allow', ruleId: 'automation-bound-output-write-allow' })
+      expect(boundEdit).toMatchObject({ automationOutputBinding: { binding: editBinding, runOutputDir: outputRunDir } })
+
+      const directoryBinding = { ...binding, path: path.join(root, 'reports'), relativeSuffix: 'reports', expectedType: 'directory' as const, rawText: 'save under reports' }
+      const directoryBoundWrite = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: outputRunDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [],
+        toolName: 'write_file', toolInput: { path: path.join(outputRunDir, 'reports', 'monthly.txt'), content: 'monthly result' },
+        taskOutputBindings: [directoryBinding], taskRunOutputDir: outputRunDir
+      } as never))
+      expect(directoryBoundWrite.decision).toMatchObject({ type: 'auto-allow', ruleId: 'automation-bound-output-write-allow' })
+      expect(directoryBoundWrite).toMatchObject({ automationOutputBinding: { binding: directoryBinding, runOutputDir: outputRunDir } })
+
+      const directoryUnboundWrite = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: outputRunDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [],
+        toolName: 'write_file', toolInput: { path: path.join(outputRunDir, 'private.txt'), content: 'outside bound output directory' },
+        taskOutputBindings: [directoryBinding], taskRunOutputDir: outputRunDir
+      } as never))
+      expect(directoryUnboundWrite.decision).toMatchObject({ type: 'deny', ruleId: 'automation-write-deny' })
+
+      const unboundWrite = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: outputRunDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [],
+        toolName: 'write_file', toolInput: { path: path.join(outputRunDir, 'reports', 'other.txt'), content: 'other' },
+        taskOutputBindings: [binding], taskRunOutputDir: outputRunDir
+      } as never))
+      expect(unboundWrite.decision).toMatchObject({ type: 'deny', ruleId: 'automation-write-deny' })
+
+      const authorizedMaterialWrite = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: outputRunDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [authorizedRoot],
+        toolName: 'write_file', toolInput: { path: path.join(authorizedRoot, 'new.txt'), content: 'not a result' },
+        taskOutputBindings: [binding], taskRunOutputDir: outputRunDir
+      } as never))
+      expect(authorizedMaterialWrite.decision).toMatchObject({ type: 'deny', ruleId: 'automation-write-deny' })
+
+      const outputRead = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: outputRunDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [],
+        toolName: 'read_file', toolInput: { path: path.join(outputRunDir, 'existing.txt') }
+      }))
+      expect(outputRead.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-read-deny' })
+
+      const authorizedRead = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: outputRunDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [authorizedRoot],
+        toolName: 'read_file', toolInput: { path: path.join(authorizedRoot, 'source.txt') }
+      }))
+      expect(authorizedRead.decision).toMatchObject({ type: 'auto-allow', ruleId: 'automation-readonly-allow' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('V4 automation 对敏感/系统读取及飞书媒体越界在显式只读 allow 前终局拒绝', async () => {
     const workDir = await fs.realpath(await fs.mkdtemp('/tmp/automation-boundary-work-'))
     const userDataDir = await fs.realpath(await fs.mkdtemp('/tmp/automation-boundary-user-'))

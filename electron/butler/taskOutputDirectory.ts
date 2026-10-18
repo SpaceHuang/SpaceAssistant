@@ -52,3 +52,27 @@ export function resolveBoundOutputTarget(
   if (runTarget === canonicalRunOutputDir || !isWithin(canonicalRunOutputDir, runTarget)) throw new Error('OUTPUT_PATH_ESCAPE')
   return runTarget
 }
+
+/** Facts/final-check helper: file bindings are exact; directory bindings cover only descendants. */
+export function matchesBoundOutputWriteTarget(
+  binding: Extract<TargetBinding, { kind: 'output' }>,
+  runOutputDir: string,
+  normalizedTarget: string,
+): boolean {
+  if (binding.expectedType !== 'file' && binding.expectedType !== 'directory') throw new Error('OUTPUT_BINDING_TYPE_INVALID')
+  const boundTarget = resolveBoundOutputTarget(binding, runOutputDir)
+  const windowsPath = process.platform === 'win32'
+    || /^[a-z]:[\\/]/i.test(boundTarget) || /^[a-z]:[\\/]/i.test(normalizedTarget)
+    || boundTarget.startsWith('\\\\') || normalizedTarget.startsWith('\\\\')
+  const pathApi = windowsPath ? path.win32 : path
+  const bound = pathApi.normalize(boundTarget)
+  const target = pathApi.normalize(normalizedTarget)
+  const equivalent = windowsPath
+    ? bound.toLocaleLowerCase('en-US') === target.toLocaleLowerCase('en-US')
+    : bound === target
+  if (binding.expectedType === 'file') return equivalent
+  if (equivalent) return false
+  const relative = pathApi.relative(bound, target)
+  const escapes = relative === '..' || relative.startsWith(`..${pathApi.sep}`) || pathApi.isAbsolute(relative)
+  return !escapes
+}

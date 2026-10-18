@@ -79,7 +79,7 @@ function isSystemDir(candidate: string): boolean {
 /** 路径 zone 的唯一纯分类入口，读写事实探测共同消费其结果。 */
 export function classifyReadPathZone(input: ProbeInput & { resolvedPath: string }): PathZone {
   const platform = isWindowsAbsolute(input.resolvedPath) ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
-  const workDirs = input.workDirs?.length ? input.workDirs : [input.workDir]
+  const workDirs = input.workDirs === undefined ? [input.workDir] : input.workDirs
   const insideWorkDirs = () => workDirs.some((root) => under(input.resolvedPath, root))
   const exemptedByWikiRoot = (input.sensitiveRootExemptions ?? []).some((prefix) => prefix && under(input.resolvedPath, prefix))
   if (exemptedByWikiRoot) {

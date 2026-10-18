@@ -2,9 +2,10 @@ import { definePlannedTool, type RegisteredTool, type ToolPlanningContext, type 
 import type { ToolExecutor, ToolExecutionContext as RuntimeExecutionContext, ToolExecutorResult } from './types'
 import { validateWriteExecutionPermit, type WriteExecutionPermit } from '../confirmation/writeExecutionPermit'
 import { recordPolicyExecutionVeto } from '../confirmation/audit'
+import { SYSTEM_INVARIANT_ID_BY_GATE_RULE } from '../../src/shared/security/systemInvariantIds'
 
 type WriteToolName = 'write_file' | 'edit_file'
-type PermitSnapshot = Pick<WriteExecutionPermit, 'requestId' | 'invocationId' | 'toolUseId' | 'toolName' | 'inputDigest' | 'decisionId' | 'policyDependencyFingerprint' | 'subjectDigest' | 'schemaVersion' | 'decisionRuleId' | 'approval'> & {
+type PermitSnapshot = Pick<WriteExecutionPermit, 'requestId' | 'invocationId' | 'toolUseId' | 'toolName' | 'inputDigest' | 'decisionId' | 'policyDependencyFingerprint' | 'subjectDigest' | 'schemaVersion' | 'decisionRuleId' | 'approval' | 'automationOutputBinding' | 'lane'> & {
   target: WriteExecutionPermit['target']
 }
 type PreparedWrite = Readonly<{
@@ -19,9 +20,12 @@ function currentRuntime(context: ToolExecutionContext): RuntimeExecutionContext 
 }
 
 function auditPermitVeto(runtime: RuntimeExecutionContext, name: WriteToolName, permit: WriteExecutionPermit | undefined, caseId: string): void {
-  recordPolicyExecutionVeto({ audit: runtime.audit, lane: (runtime.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop',
+  const invariantId = caseId.startsWith('automation-output-')
+    ? SYSTEM_INVARIANT_ID_BY_GATE_RULE['automation-output-binding-required']
+    : 'SYS-PERMIT-001'
+  recordPolicyExecutionVeto({ audit: runtime.audit, lane: (runtime.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? permit?.lane ?? 'desktop',
     sessionId: runtime.sessionId, requestId: runtime.requestId, toolUseId: runtime.toolUseId, toolName: name,
-    decisionId: permit?.decisionId, decisionRuleId: permit?.decisionRuleId, failureClass: 'integration-violation', caseId, invariantId: 'SYS-PERMIT-001' })
+    decisionId: permit?.decisionId, decisionRuleId: permit?.decisionRuleId, failureClass: 'integration-violation', caseId, invariantId })
 }
 
 function snapshotPermit(permit: WriteExecutionPermit | undefined): PermitSnapshot | undefined {
@@ -38,7 +42,9 @@ function snapshotPermit(permit: WriteExecutionPermit | undefined): PermitSnapsho
     schemaVersion: permit.schemaVersion,
     decisionRuleId: permit.decisionRuleId,
     approval: permit.approval,
-    target: permit.target
+    lane: permit.lane,
+    target: permit.target,
+    ...(permit.automationOutputBinding ? { automationOutputBinding: permit.automationOutputBinding } : {})
   })
 }
 
@@ -67,7 +73,10 @@ function registerWriteTool(name: WriteToolName, executor: ToolExecutor): Registe
           toolName: name,
           input
         })
-        if (!valid.ok) throw new Error(valid.caseId)
+        if (!valid.ok) {
+          auditPermitVeto(runtime as unknown as RuntimeExecutionContext, name, permit, valid.caseId)
+          throw new Error(valid.caseId)
+        }
       }
       return { input: structuredClone(input), ...(permit ? { permit: snapshotPermit(permit)! } : {}) }
     },

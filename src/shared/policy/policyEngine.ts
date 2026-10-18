@@ -42,6 +42,10 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`write-target-scope:${signal.scope}`)
         break
+      case 'automation-output-binding':
+        tokens.add(signal.kind)
+        tokens.add(`automation-output-binding:${signal.status}`)
+        break
       case 'policy-tier':
         tokens.add(`policy-tier:${signal.tier}`)
         break
