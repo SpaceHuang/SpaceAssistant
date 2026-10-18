@@ -121,6 +121,7 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
       continue
     }
     if (kind === 'legacy-log') {
+      if (!file.content.trim()) continue
       const archivePath = `.wiki-service/migrations/history/${sha(normalized).slice(0, 12)}-${pathSafeBase(normalized)}`
       review.readonlyLogArchives.push({ sourcePath: normalized, archivePath, sha256 })
       changes.push({ objectKind: 'legacy-log-archive', relativePath: archivePath, oldHash: sha(''), newBytes: file.content })

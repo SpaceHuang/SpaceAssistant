@@ -10,6 +10,8 @@ import { DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
 import type { WikiConfig } from '../../src/shared/domainTypes'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { createWikiLifecycleController } from './wikiLifecycle'
+import { createWikiFileStore } from './wikiFileStore'
+import { scanWikiMigrationPreflight } from './wikiMigrationPreflight'
 
 /** 共享库物理根：{userData}/<wikiConfig.rootPath>（T1.12a；目录名读配置 D9）。 */
 export function resolveSharedWikiRoot(userDataPath: string, wikiConfig: WikiConfig): string {
@@ -100,7 +102,12 @@ export async function initWikiStructure(
   const rootExisted = fs.existsSync(root)
 
   if (already && !options.overwrite) {
-    await createWikiLifecycleController(root).initialize()
+    const lifecycle = createWikiLifecycleController(root)
+    const state = await lifecycle.initialize()
+    if (state.lifecycle === 'initializing') {
+      const report = await scanWikiMigrationPreflight(createWikiFileStore(root))
+      if (!report.diagnostics.length && !report.changes?.length) await lifecycle.completeInitialization(report.manifestHash)
+    }
     let skillInstalled = false
     if (options.installSkill !== false) {
       const r = await installBundledLlmWikiSkill(workDir, false, options.userDataPath)

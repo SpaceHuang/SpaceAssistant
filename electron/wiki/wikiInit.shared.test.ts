@@ -13,6 +13,8 @@ import { createWikiLifecycleController } from './wikiLifecycle'
 import { openDatabase } from '../database'
 import { insertWikiProject, markWikiProjectOrphan } from './wikiProjectStore'
 import { DEFAULT_WIKI_CONFIG, type WikiConfig } from '../../src/shared/domainTypes'
+import { DEFAULT_SCHEMA_MD } from './wikiTemplates'
+import { serializeWikiPageMarker } from './wikiReconciler'
 
 const dirs: string[] = []
 
@@ -91,6 +93,19 @@ describe('initWikiStructure 共享根（T1.12a）', () => {
     fs.writeFileSync(path.join(root, 'raw', 'legacy', 'note.md'), 'legacy content', 'utf8')
     await initWikiStructure(workDir, wikiConfig(), { userDataPath: userData })
     expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'initializing', initialization: 'existing-content' })
+  })
+
+  it('已符合领域格式且预检无写入的存量 Wiki 完成 bootstrap 并进入 domain_ready', async () => {
+    const userData = tmpdir('wiki-init-ready-')
+    const workDir = tmpdir('wiki-init-ready-wd-')
+    const root = path.join(userData, 'llm-wiki')
+    fs.mkdirSync(path.join(root, 'wiki', 'topics'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'SCHEMA.md'), DEFAULT_SCHEMA_MD)
+    fs.writeFileSync(path.join(root, 'wiki', 'index.md'), '# Wiki Index\n')
+    fs.writeFileSync(path.join(root, 'wiki', 'log.md'), '')
+    fs.writeFileSync(path.join(root, 'wiki', 'topics', 'known.md'), `${serializeWikiPageMarker({ pageId: 'known-page', categoryId: 'topic', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })}\n# Known\n\nBody\n`)
+    await initWikiStructure(workDir, wikiConfig(), { userDataPath: userData })
+    expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'domain_ready', initialization: 'existing-content' })
   })
 })
 
