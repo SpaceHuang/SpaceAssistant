@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
-import { listWikiPageRevisionsForContext, openWikiPageForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog } from './wikiDomainTools'
+import { listWikiPageRevisionsForContext, openWikiPageForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog, updateWikiSchemaForContext } from './wikiDomainTools'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 
@@ -99,5 +99,27 @@ describe('Wiki domain search tool', () => {
     expect(await listWikiPageRevisionsForContext({ pageId: 'p-1' }, {
       userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-a', lane: 'desktop'
     })).toMatchObject({ success: false, error: 'wiki_lifecycle_not_ready' })
+  })
+
+  it('keeps schema proposals inert and applies them only with a host confirmed matching invocation', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const initial = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    const proposed = initial.replace('"name":"Topic"', '"name":"Knowledge"')
+    await store.write('SCHEMA.md', initial)
+    const baseContext = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-a', lane: 'desktop', requestId: 'request-a', toolUseId: 'propose-a' }
+    const proposalResult = await proposeWikiSchemaChangeForContext({ content: proposed, expectedSchemaVersion: 1 }, baseContext)
+    expect(proposalResult).toMatchObject({ success: true, data: { addedCategoryIds: [], removedCategoryIds: [] } })
+    expect(await store.readText('SCHEMA.md')).toBe(initial)
+    const proposalId = (proposalResult.data as { proposalId: string }).proposalId
+    expect(await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1 }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-unconfirmed', toolUserConfirmed: false, userConfirmationAnswerer: 'user' })).toMatchObject({ success: false, error: 'confirmation_required' })
+    expect(await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1 }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-agent', toolUserConfirmed: true, userConfirmationAnswerer: 'agent' })).toMatchObject({ success: false, error: 'confirmation_required' })
+    expect(await store.readText('SCHEMA.md')).toBe(initial)
+    const applied = await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1 }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-user', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })
+    expect(applied).toMatchObject({ success: true, data: { schemaVersion: 2 } })
+    expect(await store.readText('SCHEMA.md')).toBe(proposed)
   })
 })

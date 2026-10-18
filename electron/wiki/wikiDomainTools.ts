@@ -9,12 +9,14 @@ import type { WikiFileStore } from './wikiFileStore'
 import { createWikiDomainReadService, WikiDomainReadError, type WikiReadCaller, type WikiPageReadRecord } from './wikiDomainRead'
 import { createWikiSourceService, WikiSourceError } from './wikiSourceService'
 import { listWikiPageRevisions } from './wikiHistoryService'
+import { createWikiSchemaProposalService, WikiSchemaProposalError } from './wikiSchemaProposal'
 
 type WikiInput = Record<string, unknown>
-type WikiDomainContext = Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'sessionId' | 'lane' | 'remoteContext'>
+type WikiDomainContext = Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'sessionId' | 'lane' | 'remoteContext' | 'requestId' | 'toolUseId' | 'toolUserConfirmed' | 'userConfirmationAnswerer'>
 type PageReadService = ReturnType<typeof createWikiDomainReadService>
 const pageReadServices = new Map<string, { pages: WikiPageReadRecord[]; service: PageReadService }>()
 const sourceReadServices = new Map<string, ReturnType<typeof createWikiSourceService>>()
+const schemaProposalServices = new Map<string, ReturnType<typeof createWikiSchemaProposalService>>()
 
 export function createWikiDomainTools(): RegisteredTool[] {
   return [defineDirectTool<WikiInput, ToolExecutorResult>({
@@ -47,6 +49,16 @@ export function createWikiDomainTools(): RegisteredTool[] {
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => listWikiPageRevisionsForContext(input, context.runtimeContext as ToolExecutionContext)
+  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+    name: 'memory.wiki_propose_schema_change',
+    actionClass: 'write',
+    parseInput: (input) => requireRecord(input),
+    execute: async (input, context) => proposeWikiSchemaChangeForContext(input, context.runtimeContext as ToolExecutionContext)
+  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+    name: 'memory.wiki_update_schema',
+    actionClass: 'write',
+    parseInput: (input) => requireRecord(input),
+    execute: async (input, context) => updateWikiSchemaForContext(input, context.runtimeContext as ToolExecutionContext)
   })]
 }
 
@@ -140,6 +152,36 @@ export async function listWikiPageRevisionsForContext(input: WikiInput, context:
   }
 }
 
+export async function proposeWikiSchemaChangeForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
+  if (typeof input.content !== 'string' || !Number.isSafeInteger(input.expectedSchemaVersion) || (input.expectedSchemaVersion as number) < 1) return { success: false, error: 'schema_invalid' }
+  try {
+    const store = await getReadyWikiStore(context)
+    const service = getSchemaProposalService(store)
+    return { success: true, data: await service.propose(input.content, input.expectedSchemaVersion as number) }
+  } catch (error) {
+    return { success: false, error: error instanceof WikiSchemaProposalError ? error.code : error instanceof WikiDomainToolError ? error.code : 'schema_invalid' }
+  }
+}
+
+export async function updateWikiSchemaForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
+  if (typeof input.proposalId !== 'string' || !input.proposalId || !Number.isSafeInteger(input.expectedSchemaVersion) || (input.expectedSchemaVersion as number) < 1) return { success: false, error: 'schema_proposal_missing' }
+  try {
+    const store = await getReadyWikiStore(context)
+    const receipt = {
+      proposalId: input.proposalId,
+      requestId: context.requestId,
+      toolUseId: context.toolUseId,
+      sessionId: context.sessionId,
+      lane: context.lane ?? 'desktop',
+      confirmed: context.toolUserConfirmed === true,
+      answerer: context.userConfirmationAnswerer
+    }
+    return { success: true, data: await getSchemaProposalService(store).apply(input.proposalId, input.expectedSchemaVersion as number, receipt) }
+  } catch (error) {
+    return { success: false, error: error instanceof WikiSchemaProposalError ? error.code : error instanceof WikiDomainToolError ? error.code : 'schema_conflict' }
+  }
+}
+
 export async function searchWikiCatalog(store: WikiFileStore, input: WikiInput) {
   if (typeof input.query !== 'string' || input.query.length > 256) throw new WikiDomainToolError('wiki-search-query-invalid')
   const query = input.query.normalize('NFKC').trim().toLocaleLowerCase()
@@ -202,6 +244,22 @@ async function getPageReadService(store: WikiFileStore): Promise<PageReadService
     summary: page.summary ?? '', parentPageId: page.parentPageId ?? null, sourceRefs: page.sourceRefs ?? []
   })))
   return cached.service
+}
+
+function getSchemaProposalService(store: WikiFileStore): ReturnType<typeof createWikiSchemaProposalService> {
+  let service = schemaProposalServices.get(store.root)
+  if (!service) {
+    service = createWikiSchemaProposalService({ store, verifyConfirmation: (receipt, proposalId) => {
+      // final-check: only host-derived confirmation on the current non-automation invocation can apply this proposal.
+      if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return false
+      const value = receipt as Record<string, unknown>
+      return value.proposalId === proposalId && typeof value.requestId === 'string' && !!value.requestId &&
+        typeof value.toolUseId === 'string' && !!value.toolUseId && typeof value.sessionId === 'string' && !!value.sessionId &&
+        value.lane !== 'automation' && value.confirmed === true && value.answerer === 'user'
+    } })
+    schemaProposalServices.set(store.root, service)
+  }
+  return service
 }
 
 function wikiCaller(context: Pick<ToolExecutionContext, 'sessionId' | 'lane' | 'remoteContext'>): WikiReadCaller {
