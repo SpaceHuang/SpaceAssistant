@@ -72,6 +72,27 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(output.requiredTools).toEqual(['run_shell'])
   })
 
+  it('treats a Git history request as a clear target when no repository is present in authorized facts', async () => {
+    const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
+    create.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({
+      targets: [],
+      clarifications: [{ reference: prompt, reasonCode: 'git_repository_not_found' }]
+    }) }] })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    await analyzer.analyze({
+      prompt, scheduleSummary: 'daily 09:00', deliverySummary: 'none', authorizedRoots: ['/tmp/materials'], outputRoot: '/tmp/results',
+      facts: { gitRepositories: [], entries: [] } as never, tools: [], responseFormat: 'json'
+    }, new AbortController().signal)
+
+    const system = create.mock.calls[0]?.[0].system as string
+    expect(system).toContain('Git 历史查询是明确的任务范围，不需要普通文件名或目录名')
+    expect(system).toContain('git_repository_not_found')
+    expect(system).toContain('authorizedRoots 为空时 targets=[]、requiredTools=[]')
+    expect(system).toContain('capability_not_authorized 说明用户需要添加目标仓库目录')
+    expect(system).toContain('不得判为 missing_location')
+  })
+
   it('rejects missing model selection, provider errors, and malformed JSON', async () => {
     const noSelection = createTaskPreflightModelAnalyzer({} as never, {})
     await expect(noSelection.analyze({} as never, new AbortController().signal)).rejects.toThrow('PREFLIGHT_MODEL_NOT_SELECTED')

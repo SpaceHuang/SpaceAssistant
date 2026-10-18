@@ -197,6 +197,7 @@ export const PREFLIGHT_CLARIFICATION_REASON_MESSAGE_KEYS = {
   missing_location: 'butler.preflight.reasons.missing_location',
   multiple_matches: 'butler.preflight.reasons.multiple_matches',
   target_missing: 'butler.preflight.reasons.target_missing',
+  git_repository_not_found: 'butler.preflight.reasons.git_repository_not_found',
   capability_not_authorized: 'butler.preflight.reasons.capability_not_authorized',
   other: 'butler.preflight.reasons.other'
 } as const

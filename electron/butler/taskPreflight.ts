@@ -46,7 +46,7 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
   const requiredTools = (value as { requiredTools?: unknown }).requiredTools
   if (requiredTools !== undefined && (!Array.isArray(requiredTools) || requiredTools.some((tool) => tool !== 'run_shell'))) return undefined
   const clarifications = (value as { clarifications?: unknown }).clarifications
-  const allowedReasons = new Set(['no_target_identified', 'scope_unclear', 'missing_location', 'multiple_matches', 'target_missing', 'capability_not_authorized', 'other'])
+  const allowedReasons = new Set(['no_target_identified', 'scope_unclear', 'missing_location', 'multiple_matches', 'target_missing', 'git_repository_not_found', 'capability_not_authorized', 'other'])
   if (clarifications !== undefined && (!Array.isArray(clarifications) || clarifications.some((item) => {
     if (!item || typeof item !== 'object') return true
     const clarification = item as Record<string, unknown>
@@ -107,7 +107,7 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       const candidates = [...new Set(allCandidates)].slice(0, 20)
       const reasonCode = clarification.reasonCode === 'multiple_matches' && candidates.length < 2 ? 'other' : clarification.reasonCode
       const code = reasonCode === 'multiple_matches' ? 'TARGET_AMBIGUOUS'
-        : reasonCode === 'target_missing' ? 'TARGET_NOT_FOUND'
+        : reasonCode === 'target_missing' || reasonCode === 'git_repository_not_found' ? 'TARGET_NOT_FOUND'
           : reasonCode === 'capability_not_authorized' ? 'TOOL_PERMISSION_REQUIRED'
             : 'TARGET_UNCLEAR'
       return issue(code, 'prompt', {

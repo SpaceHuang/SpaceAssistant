@@ -38,6 +38,44 @@ describe('runTaskPreflight', () => {
     })])
   })
 
+  it('reports a missing Git repository instead of claiming the prompt lacks a file location', async () => {
+    const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [],
+      clarifications: [{ reference: prompt, reasonCode: 'git_repository_not_found' }]
+    } as never)) }
+    const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/workspace'], taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [
+        { path: '/workspace', relativePath: '', kind: 'directory' as const }
+      ], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'no-git-repository' })) }
+    })
+
+    expect(result.report.blockers).toEqual([expect.objectContaining({
+      code: 'TARGET_NOT_FOUND',
+      reference: prompt,
+      reasonCode: 'git_repository_not_found'
+    })])
+  })
+
+  it('asks the user to add a repository directory when a Git request has no authorized roots', async () => {
+    const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [],
+      clarifications: [{ reference: prompt, reasonCode: 'capability_not_authorized' }]
+    } as never)) }
+    const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: [], outputDir: '/results', taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: [], outputRoot: '/results', gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'no-authorized-roots' })) }
+    })
+
+    expect(result.report.blockers).toEqual([expect.objectContaining({
+      code: 'TOOL_PERMISSION_REQUIRED',
+      reference: prompt,
+      reasonCode: 'capability_not_authorized'
+    })])
+  })
+
   it('returns a Shell permission requirement for a Git history task without treating it as already authorized', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredTools: ['run_shell'] } as never)) }
     const result = await runTaskPreflight({

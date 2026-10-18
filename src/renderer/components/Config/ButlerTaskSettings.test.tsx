@@ -363,6 +363,27 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(butlerListTasks).toHaveBeenCalledTimes(1)
   })
 
+  it('Git 查询缺少授权仓库时说明要添加仓库目录', async () => {
+    const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
+    butlerCreateTask.mockResolvedValueOnce({ ok: false, kind: 'preflight-blocked', report: {
+      status: 'blocked', blockers: [{ code: 'TARGET_NOT_FOUND', messageKey: 'butler.preflight.target_not_found', reference: prompt, reasonCode: 'git_repository_not_found' }], suggestedDirectories: []
+    } })
+    renderTab()
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: 'Git 提交汇总' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: prompt } })
+    await chooseOutputDir()
+    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/materials' })
+    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
+    await clickTaskSubmit()
+
+    expect(await screen.findByText('在已授权的读写目录中没有找到这个目标。请检查名称或把目标所在目录加入授权读写目录。')).toBeTruthy()
+    expect(screen.getByText('已授权目录中没有发现 Git 仓库。请把目标仓库根目录加入授权读写目录，再重新预检。')).toBeTruthy()
+    expect(screen.getByText(`相关描述：${prompt}`)).toBeTruthy()
+    expect(screen.getByText('按上方说明补充任务提示词或调整授权读写目录列表，然后再次预检。')).toBeTruthy()
+    expect(butlerCreateTask).toHaveBeenCalledTimes(1)
+  })
+
   it('旧任务编辑显示未设置目录，加载时不触发保存或自动填值', async () => {
     butlerListTasks.mockResolvedValue([task()])
     renderTab()
