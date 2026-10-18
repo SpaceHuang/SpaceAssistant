@@ -13,15 +13,19 @@ export interface WikiSavePageInput {
   requestId: string; toolUseId: string; callerId: string; lane: string
   pageId?: string; title: string; categoryId: string; summary: string; markdown: string
   schemaVersion: number; expectedRevision?: number; parentPageId?: string | null
-  sourceRefs?: Array<{ sourceId: string; sourceRevision: number }>; operationKind?: 'saved' | 'moved'; crashAt?: 'after-target-write' | 'after-domain-commit' | 'after-log-write'
+  sourceRefs?: Array<{ sourceId: string; sourceRevision: number }>; operationKind?: 'saved' | 'moved' | 'restored'; crashAt?: 'after-target-write' | 'after-domain-commit' | 'after-log-write'
 }
 export interface WikiSavePageResult { pageId: string; revision: number; projectionStatus: 'complete'; operationId: string }
+export interface WikiDomainCoordinator {
+  savePage(input: WikiSavePageInput): Promise<WikiSavePageResult>
+  movePage(input: WikiSavePageInput & { pageId: string; expectedRevision: number; parentPageId: string | null }): Promise<WikiSavePageResult>
+}
 interface OperationJournal {
   formatVersion: 1; operationId: string; inputFingerprint: string; callerId: string; lane: string; status: 'prepared' | 'domain_committed' | 'completed' | 'conflict'
   targetPath: string; oldHash: string | null; newHash: string; stagingPath: string; result: WikiSavePageResult; eventMaterial: WikiSuccessEvent; successEvent?: WikiSuccessEvent; errorCode?: string
 }
 
-export function createWikiDomainCoordinator(options: { store: WikiFileStore; schema: () => WikiDomainSchema; now?: () => Date; beforeProjection?: (projection: 'index' | 'log') => void | Promise<void> }) {
+export function createWikiDomainCoordinator(options: { store: WikiFileStore; schema: () => WikiDomainSchema; now?: () => Date; beforeProjection?: (projection: 'index' | 'log') => void | Promise<void> }): WikiDomainCoordinator {
   const writeService = createWikiWriteService(options.store)
   const now = options.now ?? (() => new Date())
   return { savePage(input: WikiSavePageInput): Promise<WikiSavePageResult> {
