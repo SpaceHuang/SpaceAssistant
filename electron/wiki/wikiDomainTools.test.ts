@@ -152,11 +152,12 @@ describe('Wiki domain search tool', () => {
     const proposalResult = await proposeWikiSchemaChangeForContext({ content: proposed, expectedSchemaVersion: 1 }, baseContext)
     expect(proposalResult).toMatchObject({ success: true, data: { addedCategoryIds: [], removedCategoryIds: [] } })
     expect(await store.readText('SCHEMA.md')).toBe(initial)
-    const proposalId = (proposalResult.data as { proposalId: string }).proposalId
-    expect(await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1 }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-unconfirmed', toolUserConfirmed: false, userConfirmationAnswerer: 'user' })).toMatchObject({ success: false, error: 'confirmation_required' })
-    expect(await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1 }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-agent', toolUserConfirmed: true, userConfirmationAnswerer: 'agent' })).toMatchObject({ success: false, error: 'confirmation_required' })
+    const { proposalId, diff } = proposalResult.data as { proposalId: string; diff: { before: string; after: string } }
+    expect(await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1, proposalDiff: diff }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-unconfirmed', toolUserConfirmed: false, userConfirmationAnswerer: 'user' })).toMatchObject({ success: false, error: 'confirmation_required' })
+    expect(await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1, proposalDiff: diff }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-agent', toolUserConfirmed: true, userConfirmationAnswerer: 'agent' })).toMatchObject({ success: false, error: 'confirmation_required' })
+    expect(await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1, proposalDiff: { ...diff, after: initial }, }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-tampered', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })).toMatchObject({ success: false, error: 'schema_material_mismatch' })
     expect(await store.readText('SCHEMA.md')).toBe(initial)
-    const applied = await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1 }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-user', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })
+    const applied = await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1, proposalDiff: diff }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-user', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })
     expect(applied).toMatchObject({ success: true, data: { schemaVersion: 2 } })
     expect(await store.readText('SCHEMA.md')).toBe(proposed)
   })

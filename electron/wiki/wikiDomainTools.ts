@@ -12,7 +12,7 @@ import { createWikiSourceService, WikiSourceError } from './wikiSourceService'
 import { listWikiPageRevisions } from './wikiHistoryService'
 import { createWikiSchemaProposalService, WikiSchemaProposalError } from './wikiSchemaProposal'
 import { createWikiDomainCoordinator, type WikiDomainSchema } from './wikiDomainCoordinator'
-import { createWikiHistoryService, type WikiRestoreConflict } from './wikiHistoryService'
+import { createWikiHistoryService } from './wikiHistoryService'
 
 type WikiInput = Record<string, unknown>
 type WikiDomainContext = Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'sessionId' | 'lane' | 'remoteContext' | 'requestId' | 'toolUseId' | 'toolUserConfirmed' | 'userConfirmationAnswerer'>
@@ -232,7 +232,7 @@ export async function proposeWikiSchemaChangeForContext(input: WikiInput, contex
 }
 
 export async function updateWikiSchemaForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
-  if (typeof input.proposalId !== 'string' || !input.proposalId || !Number.isSafeInteger(input.expectedSchemaVersion) || (input.expectedSchemaVersion as number) < 1) return { success: false, error: 'schema_proposal_missing' }
+  if (typeof input.proposalId !== 'string' || !input.proposalId || !Number.isSafeInteger(input.expectedSchemaVersion) || (input.expectedSchemaVersion as number) < 1 || !isSchemaProposalDiff(input.proposalDiff)) return { success: false, error: 'schema_proposal_missing' }
   try {
     const store = await getReadyWikiStore(context)
     const receipt = {
@@ -244,10 +244,16 @@ export async function updateWikiSchemaForContext(input: WikiInput, context: Wiki
       confirmed: context.toolUserConfirmed === true,
       answerer: context.userConfirmationAnswerer
     }
-    return { success: true, data: await getSchemaProposalService(store).apply(input.proposalId, input.expectedSchemaVersion as number, receipt) }
+    return { success: true, data: await getSchemaProposalService(store).apply(input.proposalId, input.expectedSchemaVersion as number, receipt, input.proposalDiff) }
   } catch (error) {
     return { success: false, error: error instanceof WikiSchemaProposalError ? error.code : error instanceof WikiDomainToolError ? error.code : 'schema_conflict' }
   }
+}
+
+function isSchemaProposalDiff(value: unknown): value is { before: string; after: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const diff = value as Record<string, unknown>
+  return typeof diff.before === 'string' && typeof diff.after === 'string' && Object.keys(diff).every(key => key === 'before' || key === 'after')
 }
 
 export async function searchWikiCatalog(store: WikiFileStore, input: WikiInput) {

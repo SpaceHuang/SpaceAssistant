@@ -38,13 +38,14 @@ export function createWikiSchemaProposalService(options: {
         return { proposalId, diff: { before: current.content, after: content }, addedCategoryIds: [...after].filter(id => !before.has(id)), removedCategoryIds: [...before].filter(id => !after.has(id)), expiresAt: proposal.expiresAt }
       })
     },
-    async apply(proposalId: string, expectedSchemaVersion: number, receipt: unknown) {
+    async apply(proposalId: string, expectedSchemaVersion: number, receipt: unknown, expectedDiff?: { before: string; after: string }) {
       return withWikiWriteMutex(`${options.store.root}/.wiki-domain-lock`, async () => {
         if (!await options.verifyConfirmation(receipt, proposalId)) throw new WikiSchemaProposalError('confirmation_required')
         const proposal = await readProposal(options.store, proposalId)
         if (proposal.expiresAt <= now()) throw new WikiSchemaProposalError('schema_proposal_expired')
         const current = await readCurrent(options.store)
         if (proposal.baseVersion !== expectedSchemaVersion || current.state.schemaVersion !== expectedSchemaVersion || current.hash !== proposal.baseHash) throw new WikiSchemaProposalError('schema_conflict')
+        if (expectedDiff && (expectedDiff.before !== current.content || expectedDiff.after !== proposal.content)) throw new WikiSchemaProposalError('schema_material_mismatch')
         const parsed = parseWikiSchema(proposal.content)
         if (!parsed.valid) throw new WikiSchemaProposalError('schema_invalid')
         const catalog = await options.store.readCatalog()

@@ -24,7 +24,7 @@ export function GenericConfirmCard({ record, onConfirm }: Props) {
   try {
     // 参数脱敏（吸收远端 93d133a5 的 sanitize 增强）：凭据类入参只出存在性布尔
     paramsPreview = JSON.stringify(sanitizeCapabilityParamsForDisplay(record.input), null, 2)
-    if (record.toolName !== 'memory.wiki_apply_restore' && paramsPreview.length > PARAMS_PREVIEW_MAX) paramsPreview = paramsPreview.slice(0, PARAMS_PREVIEW_MAX) + '\n…'
+    if (!['memory.wiki_apply_restore', 'memory.wiki_update_schema'].includes(record.toolName) && paramsPreview.length > PARAMS_PREVIEW_MAX) paramsPreview = paramsPreview.slice(0, PARAMS_PREVIEW_MAX) + '\n…'
   } catch {
     paramsPreview = ''
   }

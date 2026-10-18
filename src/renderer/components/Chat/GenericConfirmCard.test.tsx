@@ -65,4 +65,16 @@ describe('GenericConfirmCard（confirming 批准入口兜底，全工具守卫�
     const preview = screen.getByText((content) => content.includes('"proposalId"'))
     expect(JSON.parse(preview.textContent ?? '')).toMatchObject({ finalPage: { markdown } })
   })
+
+  it('SCHEMA 确认展示完整修改前后内容', () => {
+    const before = `# Rules\n\n${'旧规则。'.repeat(100)}`
+    const after = `# Rules\n\n${'新规则。'.repeat(100)}`
+    const record = {
+      id: 'schema-call', toolName: 'memory.wiki_update_schema', status: 'confirming',
+      input: { proposalId: 'proposal-schema', expectedSchemaVersion: 1, proposalDiff: { before, after } }
+    } as unknown as ToolCallRecord
+    render(<GenericConfirmCard record={record} onConfirm={vi.fn()} />)
+    const preview = screen.getByText((content) => content.includes('"proposalDiff"'))
+    expect(JSON.parse(preview.textContent ?? '')).toMatchObject({ proposalDiff: { before, after } })
+  })
 })

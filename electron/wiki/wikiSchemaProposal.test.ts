@@ -35,6 +35,16 @@ describe('WikiSchemaProposalService', () => {
     expect(await readFile(path.join(root, 'SCHEMA.md'), 'utf8')).toBe(schema('External'))
   })
 
+  it('requires the exact before and after material shown in the confirmation invocation', async () => {
+    const { root, service } = await fixture()
+    const proposed = schema('Knowledge')
+    const proposal = await service.propose(proposed, 1)
+    const diff = { before: schema(), after: proposed }
+    await expect(service.apply(proposal.proposalId, 1, 'approved', { ...diff, after: schema('Tampered') })).rejects.toMatchObject({ code: 'schema_material_mismatch' })
+    expect(await readFile(path.join(root, 'SCHEMA.md'), 'utf8')).toBe(schema())
+    await expect(service.apply(proposal.proposalId, 1, 'approved', diff)).resolves.toMatchObject({ schemaVersion: 2 })
+  })
+
   it('rejects invalid proposals before persisting them', async () => {
     const { root, service } = await fixture()
     await expect(service.propose('# Invalid', 1)).rejects.toMatchObject({ code: 'schema_invalid' })

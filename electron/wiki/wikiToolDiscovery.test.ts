@@ -23,6 +23,7 @@ describe('Wiki domain tool discovery', () => {
     expect(registry.get('memory.wiki_apply_restore')).toBeDefined()
     expect(registry.get('memory.wiki_propose_schema_change')).toBeDefined()
     expect(registry.get('memory.wiki_update_schema')).toBeDefined()
+    expect(WIKI_DOMAIN_TOOL_DEFINITIONS.find(tool => tool.name === 'memory.wiki_update_schema')?.input_schema).toMatchObject({ required: ['proposalId', 'expectedSchemaVersion', 'proposalDiff'] })
   })
 
   it('returns operation names, use descriptions, and complete schemas for matching tools', () => {
