@@ -144,8 +144,8 @@ D-TP-01 至 D-TP-05 的产品/技术边界已有裁决；E-04 复用现有文件
 | E-12 | `d4980bb4`；补充 policy/gate 的 alias、case、dot-segment、absolute、shell、symlink 路径矩阵 | 4 个测试文件、187 项通过；拒绝后 executor 未调用和 file IPC 操作覆盖 |
 | E-13 | `dbe843b2`；bootstrap 预检、WikiPane 审阅、主进程原生确认、hash final-check 与 journal resume 接通 | 8 文件/55 项通过；renderer/Electron 类型检查、i18n 检查通过 |
 | 构建 | E-11 阶段提交 `2d16c458` 前执行 | `npx tsc -p tsconfig.electron.json --noEmit`、`npm run build:electron:incremental` 通过 |
-| E-14 | `f5b27dbd`、`61e320a7`；修复全量验收发现的 Wiki direct registration、工具设置元数据、批量导入命令分类与策略清单缺项 | `npm test`：1108 文件通过、1 跳过；10474 项通过、111 跳过。`npm run build` 通过；renderer/shared/Electron 类型检查、i18n 与 system invariant registry 检查通过。全量构建仅有既有动态导入和大 chunk 警告 |
+| E-14 | `f5b27dbd`、`61e320a7`、`2737d84f`；修复全量验收发现的工具注册/元数据/策略缺项，以及首次启动 Wiki lifecycle 错误恢复告警 | 最终 `npm test`：1108 文件通过、1 跳过；10477 项通过、111 跳过。`npm run build`、renderer/shared/Electron 类型检查、i18n 与 system invariant registry 检查通过；构建仅有既有动态导入和大 chunk 警告。首次启动回归 RED/GREEN 与生命周期 fail-closed 边界见 release acceptance |
 | E-15 | 外部会话未接入 | 尚无真实飞书/微信/automation 确认、拒绝、取消及长正文验收证据；详见 `wiki-domain-tools-release-acceptance.md` |
-| E-16 | macOS 包已生成并做静态校验；隔离运行时验收待安全 fixture | x64/arm64 DMG 校验和、架构及 ad-hoc 签名记录见 release acceptance。隔离启动尝试误用了现有 `SpaceAssistant-dev` 资料；候选进程已停止，未执行 Wiki 迁移。操作前无快照，目录内 22 个文件的近时修改无法准确归因或回滚；不再访问该目录。旧版/外部文件变化协调与 userData 权限仍待隔离环境验收 |
+| E-16 | macOS DMG 静态校验、独立 userData 候选副本首启/初始化、reconciler 本机集成 fixture 已完成；目标平台/旧版二进制端到端验收待完成 | 最终 x64/arm64 DMG 哈希、临时副本 Bundle ID/userData 隔离方式、`domain_ready` seal/state 与权限记录见 release acceptance。reconciler fixture 覆盖外部 Schema/page/raw 变化及 page revision/history/catalog/index/log 投影，28 项定向与 10477 项全量测试通过。临时副本启动的旧阶段误用资料事件仍保留记录，不再访问该目录。未在候选 app 内配置 provider 或执行领域工具，也未以旧版二进制写 fixture；目标平台安装和真实旧版/外部编辑器→候选包重启链路仍需验收 |
 | E-17 | 未执行 | E-15/E-16 尚无完整外部通过证据；不得启用 `domain_enabled` |
 
