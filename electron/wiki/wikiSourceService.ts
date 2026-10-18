@@ -57,6 +57,12 @@ export function createWikiSourceService(options: {
 
 async function readBinding(store: WikiFileStore, sourceId: string): Promise<StoredSource | undefined> {
   if (!/^[0-9a-f-]{36}$/i.test(sourceId)) return undefined
-  try { return JSON.parse(await store.readText(`.wiki-service/sources/${sourceId}.json`)) as StoredSource }
+  try {
+    const value = JSON.parse(await store.readText(`.wiki-service/sources/${sourceId}.json`)) as Partial<StoredSource> | null
+    if (!value || value.formatVersion !== 1 || value.sourceId !== sourceId || !Number.isSafeInteger(value.sourceRevision) || (value.sourceRevision as number) < 1 ||
+      typeof value.displayName !== 'string' || !value.displayName || value.displayName.includes('/') || value.displayName.includes('\\') ||
+      (value.projectId !== undefined && typeof value.projectId !== 'string')) return undefined
+    return value as StoredSource
+  }
   catch { return undefined }
 }

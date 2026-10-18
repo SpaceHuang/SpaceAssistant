@@ -35,4 +35,22 @@ describe('WikiSourceService', () => {
     await expect(service.importSource('unsafe', { callerId: 'c', lane: 'chat' })).rejects.toMatchObject({ code: 'source_missing' })
     await expect(service.readSource('unknown', { callerId: 'c', lane: 'chat' })).rejects.toMatchObject({ code: 'source_missing' })
   })
+
+  it.each([
+    { formatVersion: 1, sourceId: '01234567-89ab-cdef-0123-456789abcdef', sourceRevision: '2', displayName: 'notes.md' },
+    { formatVersion: 1, sourceId: 'different-id', sourceRevision: 1, displayName: 'notes.md' },
+    { formatVersion: 2, sourceId: '01234567-89ab-cdef-0123-456789abcdef', sourceRevision: 1, displayName: 'notes.md' },
+  ])('fails closed for malformed source binding metadata', async binding => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wiki-source-corrupt-'))
+    roots.push(root)
+    const wikiRoot = path.join(root, 'wiki')
+    await mkdir(wikiRoot)
+    const store = createWikiFileStore(wikiRoot)
+    const sourceId = '01234567-89ab-cdef-0123-456789abcdef'
+    await store.write('.wiki-service/sources/' + sourceId + '.json', JSON.stringify(binding))
+    await store.writeImmutable(`.wiki-service/source-history/${sourceId}/1.md`, Buffer.from('current snapshot'))
+    await store.writeImmutable(`.wiki-service/source-history/${sourceId}/2.md`, Buffer.from('forged snapshot'))
+    const service = createWikiSourceService({ store, resolveSourceRef: () => undefined, validateSource: async () => false, authorize: async () => true })
+    await expect(service.readSource(sourceId, { callerId: 'c', lane: 'chat' })).rejects.toMatchObject({ code: 'source_missing' })
+  })
 })
