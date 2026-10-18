@@ -664,15 +664,16 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
   }
 }
 
-async function ensureInitialHistoryContext(input: RunAgentTurnInput, call: PreparedModelCall, appendHistory: AppendTurnHistory): Promise<void> {
-  if (!input.history) return
+async function ensureInitialHistoryContext(input: RunAgentTurnInput, call: PreparedModelCall, appendHistory: AppendTurnHistory): Promise<readonly HistoryEvent[]> {
+  if (!input.history) return []
   const snapshot = await input.history.read(input.invocationId)
   if (snapshot.events.some(({ kind }) => kind === 'invocation-completed' || kind === 'invocation-failed' || kind === 'invocation-interrupted' || kind === 'invocation-parked')) {
     throw new AgentTurnHistoryAlreadyTerminalError(input.invocationId)
   }
   if (snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
-    assertHistoryRequestCompatibility(snapshot.events, call)
-    return
+    // Compatibility is checked after the host has had a chance to restore request-local
+    // dynamic tool schemas. The base request still supplies every non-dynamic option.
+    return snapshot.events
   }
   const requiredUserMessage = input.requiredUserMessage
   if (input.currentUserMessageId && (!requiredUserMessage || requiredUserMessage.id !== input.currentUserMessageId)) {
@@ -703,10 +704,11 @@ async function ensureInitialHistoryContext(input: RunAgentTurnInput, call: Prepa
         : {})
     }
   }])
+  return []
 }
 
-function assertHistoryRequestCompatibility(events: readonly HistoryEvent[], call: PreparedModelCall): void {
-  const withoutMessages = (request: Record<string, unknown>) => Object.fromEntries(Object.entries(request).filter(([key]) => key !== 'messages'))
+function assertHistoryRequestCompatibility(events: readonly HistoryEvent[], call: PreparedModelCall, allowDynamicTools = false): void {
+  const withoutMessages = (request: Record<string, unknown>) => Object.fromEntries(Object.entries(request).filter(([key]) => key !== 'messages' && !(allowDynamicTools && key === 'tools')))
   const allowedOptions: string[] = []
   let latestOptions: Record<string, unknown> | undefined
   for (const event of events) {
@@ -929,7 +931,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       ...requestTemplate, ...patch, messages: patch?.messages ?? messagesForModelTurn()
     })
     let call = prepareRequest()
-    await ensureInitialHistoryContext(input, call, appendHistory)
+    const existingHistoryEvents = await ensureInitialHistoryContext(input, call, appendHistory)
     const initialResponse = modelTurns === 1 ? input.initialResponse : undefined
     let requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
     let preparedRequestProjection = !initialResponse ? await input.observer?.prepareModelRequest?.(requestObservation) : undefined
@@ -937,6 +939,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       call = prepareRequest(preparedRequestProjection.requestPatch)
       requestObservation = { ...requestObservation, request: call.request }
     }
+    const allowsDynamicTools = Array.isArray(preparedRequestProjection?.requestPatch?.tools)
+    if (existingHistoryEvents.length > 0) assertHistoryRequestCompatibility(existingHistoryEvents, call, allowsDynamicTools)
     if (!initialResponse && input.planContextReplacement) {
       const requestExceedsBudget = (projection: unknown): boolean => {
         if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return false

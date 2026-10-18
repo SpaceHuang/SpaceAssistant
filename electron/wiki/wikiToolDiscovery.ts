@@ -1,5 +1,6 @@
 import { createSnapshotReadRegisteredTool } from '../tools/snapshotReadRegisteredTool'
 import type { ToolExecutionContext, ToolExecutorResult } from '../tools/types'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { resolveSharedWikiRoot } from './wikiInit'
 
@@ -36,11 +37,13 @@ export const WIKI_DISCOVERY_TOOL_DEFINITION = {
 } as const
 
 /** 首轮广告的 discovery executor；schema 发现本身不改变后续工具授权。 */
-export const wikiDiscoveryTool = createSnapshotReadRegisteredTool('memory', async (input, context) =>
-  executeWikiDiscovery(input, context)
-)
+export const wikiDiscoveryTool = createSnapshotReadRegisteredTool('memory', async (input, context) => {
+  const registry = getDefaultAgentRuntime().builtinRegistry
+  const available = WIKI_DOMAIN_TOOL_DEFINITIONS.filter((entry) => registry.get(entry.name)).map((entry) => entry.name)
+  return executeWikiDiscovery(input, context, new Set(available))
+})
 
-export async function executeWikiDiscovery(input: Record<string, unknown>, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir'>): Promise<ToolExecutorResult> {
+export async function executeWikiDiscovery(input: Record<string, unknown>, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir'>, availableToolNames: ReadonlySet<string> = new Set(WIKI_DOMAIN_TOOL_DEFINITIONS.map((tool) => tool.name))): Promise<ToolExecutorResult> {
   if (!context.wikiConfig) return { success: false, error: 'wiki_lifecycle_unavailable' }
   const root = resolveSharedWikiRoot(context.userDataDir, context.wikiConfig)
   const lifecycle = await createWikiLifecycleController(root).read()
@@ -53,17 +56,17 @@ export async function executeWikiDiscovery(input: Record<string, unknown>, conte
       ...(typeof input.query === 'string' ? { query: input.query } : {}),
       ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
       ...(typeof input.offset === 'number' ? { offset: input.offset } : {}),
-    }),
+    }, availableToolNames),
   }
 }
 
-export function discoverWikiTools(input: { query?: string; limit?: number; offset?: number }): WikiToolDiscoveryResult {
+export function discoverWikiTools(input: { query?: string; limit?: number; offset?: number }, availableToolNames: ReadonlySet<string> = new Set(WIKI_DOMAIN_TOOL_DEFINITIONS.map((tool) => tool.name))): WikiToolDiscoveryResult {
   const query = (input.query ?? '').normalize('NFKC').trim().toLocaleLowerCase()
   const terms = query ? query.split(/\s+/) : []
-  const matches = WIKI_DOMAIN_TOOL_DEFINITIONS.filter(entry => {
+  const matches = WIKI_DOMAIN_TOOL_DEFINITIONS.filter(entry => availableToolNames.has(entry.name) && (() => {
     const searchable = `${entry.name} ${entry.description}`.normalize('NFKC').toLocaleLowerCase()
     return terms.every(term => searchable.includes(term))
-  })
+  })())
   const limit = Math.min(20, Math.max(1, Math.floor(input.limit ?? 8)))
   const offset = Math.max(0, Math.floor(input.offset ?? 0))
   const page = matches.slice(offset, offset + limit).map(entry => ({ ...entry, input_schema: { ...entry.input_schema, properties: { ...entry.input_schema.properties } } }))

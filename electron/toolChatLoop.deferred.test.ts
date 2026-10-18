@@ -245,7 +245,8 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
   it('Wiki memory discovery 的 schema 只在下一轮 request 注入', async () => {
     const routeId = 'route-wiki-discovery-roundtrip'
     const { providerCalls } = registerProvider(routeId, [
-      { calls: [{ toolName: 'memory', input: { query: 'search', limit: 5 } }] },
+      { calls: [{ toolName: 'memory', input: { query: 'schema', limit: 5 } }] },
+      { calls: [{ toolName: 'memory_wiki_get_schema', input: {} }] },
       { calls: [] }
     ])
     const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-tool-loop-'))
@@ -261,9 +262,12 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
       expect(result.ok).toBe(true)
       const first = providerCalls[0]!.request.tools.map((tool) => tool.name)
       const second = providerCalls[1]!.request.tools.map((tool) => tool.name)
+      const third = providerCalls[2]!.request.tools.map((tool) => tool.name)
       expect(first).toContain('memory')
-      expect(first).not.toContain('memory_wiki_search')
-      expect(second).toContain('memory_wiki_search')
+      expect(first).not.toContain('memory_wiki_get_schema')
+      expect(second).toContain('memory_wiki_get_schema')
+      expect(third).toContain('memory_wiki_get_schema')
+      expect(JSON.stringify(providerCalls[2]!.request.messages.filter((message) => message.role === 'tool'))).toContain('schemaVersion')
     } finally {
       fs.rmSync(userDataDir, { recursive: true, force: true })
       fs.rmSync(workDir, { recursive: true, force: true })

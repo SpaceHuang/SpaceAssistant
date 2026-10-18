@@ -13,7 +13,9 @@ describe('Wiki domain tool discovery', () => {
     expect(WIKI_DISCOVERY_TOOL_DEFINITION).toMatchObject({ name: 'memory', input_schema: { type: 'object' } })
     expect(WIKI_DOMAIN_TOOL_DEFINITIONS.every(tool => tool.name.startsWith('memory.wiki_'))).toBe(true)
     expect(isBuiltinToolName('memory')).toBe(true)
-    expect(createBuiltinToolRegistry().get('memory')).toBeDefined()
+    const registry = createBuiltinToolRegistry()
+    expect(registry.get('memory')).toBeDefined()
+    expect(registry.get('memory.wiki_get_schema')).toBeDefined()
   })
 
   it('returns operation names, use descriptions, and complete schemas for matching tools', () => {
@@ -31,6 +33,12 @@ describe('Wiki domain tool discovery', () => {
     expect(first.matches.map(item => item.name)).not.toEqual(second.matches.map(item => item.name))
     expect(first.matches.every(item => item.input_schema.properties)).toBe(true)
     expect(first.usage).toContain('授权')
+  })
+
+  it('只返回运行时 registry 已注册的 Wiki 操作', () => {
+    const result = discoverWikiTools({}, new Set(['memory.wiki_get_schema']))
+    expect(result.matches.map((item) => item.name)).toEqual(['memory.wiki_get_schema'])
+    expect(result.totalMatches).toBe(1)
   })
 
   it('在每次 discovery dispatch 时复核 lifecycle，未就绪或控制面损坏时 fail closed', async () => {

@@ -705,6 +705,9 @@ async function runToolChatSessionInner(
   const retryTracker = new SemanticToolRetryTracker(maxConsecutiveToolErrors)
   const discoveredWikiTools = new Map<string, DynamicModelTool>()
   const discoveredWikiToolNames = new Map<string, string>()
+  for (const definition of WIKI_DOMAIN_TOOL_DEFINITIONS) {
+    discoveredWikiToolNames.set(toolIdToOpenAiCompatibleApiToolName(definition.name), definition.name)
+  }
   const afterToolResult: NonNullable<import('../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']> = async (call, result, source) => {
     const output = result.output && typeof result.output === 'object' && !Array.isArray(result.output)
       ? result.output as Record<string, unknown>
@@ -941,6 +944,9 @@ async function runToolChatSessionInner(
     deferredPlan
   })
   const { tools, toolNames, authorizedToolNames, compatToInternal, deferredToolNames } = effectiveTools
+  const wikiDeferredToolNames = new Set(toolNames.includes('memory') ? WIKI_DOMAIN_TOOL_DEFINITIONS.map((tool) => toolIdToOpenAiCompatibleApiToolName(tool.name)) : [])
+  const hostedAuthorizedToolNames = new Set([...authorizedToolNames, ...wikiDeferredToolNames])
+  const hostedDeferredToolNames = new Set([...deferredToolNames, ...wikiDeferredToolNames])
   if (effectiveTools.deferredDegradedToEager && deferredPlan.mode === 'deferred') {
     // O4（边界 11）：tool_search 被裁出广告面，延迟计划整体失效回退 eager（agentLogger warn，不进 wire 面与会话事件流）
     logAgentEvent('warn', 'mcp.deferredDegradedToEager', {
@@ -1069,14 +1075,14 @@ async function runToolChatSessionInner(
         try {
           const handoff = await args.onHostedTurnHandoff({
             request: canonicalRequest,
-            authorizedToolNames,
+            authorizedToolNames: hostedAuthorizedToolNames,
             resolveRegisteredToolName: (providerToolName) => compatToInternal.get(providerToolName) ?? discoveredWikiToolNames.get(providerToolName) ?? providerToolName,
             dynamicToolsForNextRequest: () => [...discoveredWikiTools.values()],
             afterToolResult,
             beforeToolDispatch,
             beforeDispatchLease,
             // FR3/A 方案：延迟名随依赖传入，capabilities.define 并入 known + authorized（门禁簿记，零上下文成本）
-            deferredToolNames,
+            deferredToolNames: hostedDeferredToolNames,
             deferredUnsurfacedCheck,
             // FR8：延迟维度（turn 计量；索引每轮重发，节省量按轮落日志）
             ...(deferredToolNames.size > 0 && mcpCatalog && deferredPlan.mode === 'deferred'
