@@ -54,6 +54,22 @@ describe('WikiLifecycleController', () => {
     expect(await lifecycle.initialize()).toMatchObject({ lifecycle: 'recovery_required' })
   })
 
+  it('accepts a trusted backup restored to the same root only after identity and bootstrap fields match', async () => {
+    const root = await rootFixture()
+    const lifecycle = createWikiLifecycleController(root)
+    await lifecycle.initialize()
+    const sealPath = path.join(root, '.wiki-service-bootstrap.json')
+    const statePath = path.join(root, '.wiki-service/state.json')
+    const trustedSeal = await readFile(sealPath)
+    const trustedState = await readFile(statePath)
+    await writeFile(statePath, '{corrupt')
+    expect(await lifecycle.read()).toMatchObject({ lifecycle: 'recovery_required' })
+
+    await writeFile(sealPath, trustedSeal)
+    await writeFile(statePath, trustedState)
+    expect(await lifecycle.read()).toMatchObject({ lifecycle: 'domain_ready', initialization: 'empty' })
+  })
+
   it('allows domain_enabled only after domain_ready and records the transition', async () => {
     const root = await rootFixture()
     const lifecycle = createWikiLifecycleController(root)
