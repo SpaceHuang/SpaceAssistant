@@ -7,6 +7,7 @@ import type {
   AgentNotifyEvent
 } from '../../src/shared/agent/invocation'
 import type { AgentHostPorts } from '../../packages/agent-sdk/src/invocation'
+import { withDynamicToolsObserver, type DynamicModelTool } from './dynamicToolRequest'
 import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../../src/shared/agent/invocation'
 import type { FloatingNotificationManager } from '../floatingNotificationManager'
 import { readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
@@ -1251,6 +1252,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       deferredUnsurfacedCheck?: (toolName: string) => boolean
       /** FR12②：广告面层被裁工具名（computeEffectiveTools.eagerBudgetDropped），与快照层合并进被拒文案区分。 */
       eagerBudgetDroppedNames?: ReadonlySet<string>
+      dynamicToolsForNextRequest?: () => readonly DynamicModelTool[]
       resolveRegisteredToolName?: (providerToolName: string) => string
     }) => {
       const currentMcpSnapshot = ports.mcp?.snapshot as McpToolSnapshot | undefined ?? mcpSnapshot
@@ -1313,7 +1315,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.beforeToolDispatch ? { beforeToolDispatch: input.beforeToolDispatch } : {}),
         ...(input.beforeDispatchLease ? { beforeDispatchLease: input.beforeDispatchLease } : {}),
-        observer: ports.observer,
+        observer: input.dynamicToolsForNextRequest
+          ? withDynamicToolsObserver(ports.observer, input.dynamicToolsForNextRequest)
+          : ports.observer,
         recordProviderAttemptUsage: ports.recordProviderAttemptUsage,
         recoverProviderAttempt: input.recoverProviderAttempt,
         recoverOutputLimit: createAgentSdkOutputRecovery({ location: materials.sessionEventLocation, turnId: runtimeTurnId, stepId: materials.requestId }),
@@ -1416,6 +1420,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       deferredUnsurfacedCheck?: (toolName: string) => boolean
       /** FR12②：广告面层被裁工具名（computeEffectiveTools.eagerBudgetDropped）。 */
       eagerBudgetDroppedNames?: ReadonlySet<string>
+      dynamicToolsForNextRequest?: () => readonly DynamicModelTool[]
       resolveRegisteredToolName?: (providerToolName: string) => string
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
       sessionTranscriptBaseVersion?: number
@@ -1520,6 +1525,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.deferredToolNames ? { deferredToolNames: input.deferredToolNames } : {}),
         // FR8：延迟工具未浮现判定（sessionLedgerForToolResult 持久化投影查询用）
         ...(input.deferredUnsurfacedCheck ? { deferredUnsurfacedCheck: input.deferredUnsurfacedCheck } : {}),
+        ...(input.dynamicToolsForNextRequest ? { dynamicToolsForNextRequest: input.dynamicToolsForNextRequest } : {}),
         ...(input.hostHistory ? { hostHistory: input.hostHistory } : {}),
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.beforeToolDispatch ? { beforeToolDispatch: input.beforeToolDispatch } : {}),

@@ -80,6 +80,11 @@ import { McpConcurrencyGate } from './mcp/mcpToolExecutor'
 import { ToolRevocationRegistry } from './toolRevocationRegistry'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { throwIfChatCancelled } from './chatCancelRegistry'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import { initWikiStructure } from './wiki/wikiInit'
+import { DEFAULT_WIKI_CONFIG } from '../src/shared/domainTypes'
 import type { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
 import type { McpConnectionManager } from './mcp/mcpConnectionManager'
 
@@ -235,6 +240,34 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
     const toolResultText = JSON.stringify(round2Messages.filter((m) => m.role === 'tool'))
     expect(toolResultText).toContain('input_schema')
     expect(toolResultText).toContain(MCP_TOOL)
+  })
+
+  it('Wiki memory discovery 的 schema 只在下一轮 request 注入', async () => {
+    const routeId = 'route-wiki-discovery-roundtrip'
+    const { providerCalls } = registerProvider(routeId, [
+      { calls: [{ toolName: 'memory', input: { query: 'search', limit: 5 } }] },
+      { calls: [] }
+    ])
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-tool-loop-'))
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-tool-loop-wd-'))
+    try {
+      await initWikiStructure(workDir, DEFAULT_WIKI_CONFIG, { userDataPath: userDataDir, installSkill: false })
+      const { result } = await runWith(baseMaterials({
+        providerRouteId: routeId,
+        userDataDir,
+        wikiConfig: DEFAULT_WIKI_CONFIG,
+        toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'always' }
+      }), { snapshot: { entries: new Map(), budgetDropped: [] } })
+      expect(result.ok).toBe(true)
+      const first = providerCalls[0]!.request.tools.map((tool) => tool.name)
+      const second = providerCalls[1]!.request.tools.map((tool) => tool.name)
+      expect(first).toContain('memory')
+      expect(first).not.toContain('memory_wiki_search')
+      expect(second).toContain('memory_wiki_search')
+    } finally {
+      fs.rmSync(userDataDir, { recursive: true, force: true })
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
   })
 
   it('兜底直调：执行成功、deferredUnsurfaced 落事件面与持久化面、wire 面结果块不含自定义字段（D2/AD10/B4/10.1.5）', async () => {
