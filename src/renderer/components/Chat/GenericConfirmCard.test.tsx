@@ -54,4 +54,15 @@ describe('GenericConfirmCard（confirming 批准入口兜底，全工具守卫�
     render(<GenericConfirmCard record={record} onConfirm={vi.fn()} />)
     expect(screen.getByText(/…$/)).toBeDefined()
   })
+
+  it('页面恢复确认展示完整最终正文，不截断用户需要核对的材料', () => {
+    const markdown = `# 最终页面\n\n${'恢复正文。'.repeat(100)}`
+    const record = {
+      id: 'restore-call', toolName: 'memory.wiki_apply_restore', status: 'confirming',
+      input: { proposalId: 'proposal-1', finalPage: { title: '最终页面', categoryId: 'topic', summary: '摘要', markdown, parentPageId: null, sourceRefs: [] } }
+    } as unknown as ToolCallRecord
+    render(<GenericConfirmCard record={record} onConfirm={vi.fn()} />)
+    const preview = screen.getByText((content) => content.includes('"proposalId"'))
+    expect(JSON.parse(preview.textContent ?? '')).toMatchObject({ finalPage: { markdown } })
+  })
 })
