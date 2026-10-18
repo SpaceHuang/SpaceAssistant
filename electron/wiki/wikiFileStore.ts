@@ -73,7 +73,9 @@ export function createWikiFileStore(wikiRoot: string): WikiFileStore {
       return safeAtomicWrite({ targetPath: target, parentReal: parent, body, expectedIdentity: null })
     },
     async remove(relativePath, expectedIdentity) {
-      const target = resolveWikiServicePath(await canonicalRootPromise, relativePath)
+      const canonicalRoot = await canonicalRootPromise
+      const target = resolveWikiServicePath(canonicalRoot, relativePath)
+      await assertNoSymlinkParents(canonicalRoot, target)
       if (expectedIdentity) {
         const current = await captureFileIdentity(target)
         if (current.dev !== expectedIdentity.dev || current.ino !== expectedIdentity.ino || current.size !== expectedIdentity.size || current.mtimeMs !== expectedIdentity.mtimeMs) throw new Error('Wiki target identity changed.')

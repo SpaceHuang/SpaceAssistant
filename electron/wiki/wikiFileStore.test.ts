@@ -35,6 +35,7 @@ describe('WikiFileStore', () => {
     await expect(store.write('linked/page.md', 'unsafe')).rejects.toThrow()
     await expect(store.readText('linked/secret.md')).rejects.toThrow()
     await expect(store.identity('linked/secret.md')).rejects.toThrow()
+    await expect(store.remove('linked/secret.md')).rejects.toThrow()
   })
 
   it('writes and reads rebuildable catalog data separately from authority files', async () => {
