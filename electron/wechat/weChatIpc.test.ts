@@ -3,11 +3,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IpcMain } from 'electron'
-import { mergeToolsConfig } from '../../src/shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG, mergeToolsConfig } from '../../src/shared/domainTypes'
 import type { ConfirmRequest } from '../../src/shared/confirmation/types'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getWeChatBundle, registerWeChatIpcHandlers, shutdownWeChatServices } from './weChatIpc'
 import { WeChatImChannel } from './weChatImChannel'
+import { WIKI_CONFIG_DB_KEY } from '../wiki/wikiConfigReader'
 
 const request: ConfirmRequest = {
   facts: { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'write file' } },
@@ -71,5 +72,19 @@ describe('wechat:confirm-response main-process IPC baseline', () => {
     imChannel.tryResolveFromInboundMessage({ userId: 'wx-owner', messageId: 'wechat-answer', quotedMessageId: 'wechat-prompt-1', text: `Y ${pending.confirmId}` }, { allowedUserIds: ['wx-owner'] })
     await expect(outcome).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
     expect(imChannel.listPending()).toHaveLength(0)
+  })
+
+  it('composes the WeChat router with Wiki config from the app database', async () => {
+    db = createMemoryAppDb()
+    userDataDir = mkdtempSync(path.join(os.tmpdir(), 'wechat-ipc-wiki-config-'))
+    const ipcMain = { handle: vi.fn() } as unknown as IpcMain
+    const { setConfigValue } = await import('../database')
+    setConfigValue(db, WIKI_CONFIG_DB_KEY, JSON.stringify({ ...DEFAULT_WIKI_CONFIG, rootPath: 'isolated-wiki' }))
+    registerWeChatIpcHandlers(ipcMain, {
+      db, getUserDataPath: () => userDataDir!, getWorkDir: () => userDataDir!, workDirManager: {} as never,
+      getApiKey: async () => null, getBaseUrl: () => 'https://example.invalid', getModel: () => 'test-model',
+      getMaxParallel: () => 1, getToolsConfig: () => mergeToolsConfig({}), appVersion: 'test'
+    })
+    expect(getWeChatBundle()?.router?.['deps'].getWikiConfig?.()).toMatchObject({ rootPath: 'isolated-wiki' })
   })
 })

@@ -86,6 +86,8 @@ import path from 'path'
 import { createHash } from 'node:crypto'
 import { initWikiStructure } from './wiki/wikiInit'
 import { DEFAULT_WIKI_CONFIG } from '../src/shared/domainTypes'
+import { getDbConnection } from './database'
+import { commitImPolicySnapshot } from './confirmation/imPolicyStore'
 import { createWikiFileStore } from './wiki/wikiFileStore'
 import type { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
 import type { McpConnectionManager } from './mcp/mcpConnectionManager'
@@ -270,6 +272,39 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
       expect(second).toContain('memory_wiki_get_schema')
       expect(third).toContain('memory_wiki_get_schema')
       expect(JSON.stringify(providerCalls[2]!.request.messages.filter((message) => message.role === 'tool'))).toContain('schemaVersion')
+    } finally {
+      fs.rmSync(userDataDir, { recursive: true, force: true })
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('在 IM lane 执行 memory discovery 时保留内部工具名并传入 Wiki config', async () => {
+    const routeId = 'route-wiki-discovery-im-context'
+    const { providerCalls } = registerProvider(routeId, [
+      { calls: [{ toolName: 'memory', input: { query: 'search', limit: 5 } }] },
+      { calls: [] }
+    ])
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-im-discovery-'))
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-im-discovery-wd-'))
+    try {
+      await initWikiStructure(workDir, DEFAULT_WIKI_CONFIG, { userDataPath: userDataDir, installSkill: false })
+      const appDb = createMemoryAppDb('zh-CN')
+      commitImPolicySnapshot(getDbConnection(appDb), {
+        policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'wiki-im-discovery-policy'
+      })
+      const { result } = await runWith(baseMaterials({
+        providerRouteId: routeId,
+        userDataDir,
+        wikiConfig: DEFAULT_WIKI_CONFIG,
+        appDb,
+        lane: 'wechat',
+        remoteContext: { source: 'wechat', authOwner: 'test-owner' } as never,
+        toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'always' }
+      }), { snapshot: { entries: new Map(), budgetDropped: [] } })
+      expect(result.ok).toBe(true)
+      const resultMessages = providerCalls[1]!.request.messages.filter((message) => message.role === 'tool')
+      expect(JSON.stringify(resultMessages)).toContain('memory.wiki_search')
+      expect(JSON.stringify(resultMessages)).not.toContain('wiki_lifecycle_unavailable')
     } finally {
       fs.rmSync(userDataDir, { recursive: true, force: true })
       fs.rmSync(workDir, { recursive: true, force: true })

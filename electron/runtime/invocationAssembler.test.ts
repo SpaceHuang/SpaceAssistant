@@ -10,6 +10,7 @@ import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG } fro
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { createAgentRuntime } from './agentRuntime'
 import { resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from './agentRuntimeDefaults'
+import { createDesktopAgentRuntime } from './desktopAgentRuntime'
 import { assembleInvocation } from '../testSupport/invocationAssembler'
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 import type { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
@@ -1991,6 +1992,12 @@ describe('P0-A：计划期失败降级为可回传拒绝（T-3，断言打在生
   })
 })
 describe('wikiConfig passthrough (W3 lane parity)', () => {
+  beforeEach(() => {
+    setDefaultAgentRuntime(createDesktopAgentRuntime())
+  })
+
+  afterEach(() => resetDefaultAgentRuntimeForTests())
+
   it('propagates the assembled wikiConfig into the invocation tools profile', () => {
     const wikiConfig = { ...DEFAULT_WIKI_CONFIG }
     const { invocation } = assembleInvocation({
@@ -2000,5 +2007,32 @@ describe('wikiConfig passthrough (W3 lane parity)', () => {
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })
     expect(invocation.profile.tools.wikiConfig).toMatchObject({ rootPath: 'llm-wiki' })
+  })
+
+  it('propagates Wiki config into the registered tool execution context for IM discovery', async () => {
+    const wikiConfig = { ...DEFAULT_WIKI_CONFIG }
+    let executionContext: Record<string, unknown> | undefined
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    runtime.modelProviders.register({ routeId: 'wiki-context-route', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, {
+      providerId: 'wiki-context-probe', stream: async function* () { yield { type: 'finish' as const, reason: 'stop' as const } }
+    })
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({
+      name: 'wiki-context-probe', parseInput: (raw) => raw as Record<string, unknown>,
+      plan: async (_input, context) => { executionContext = context.executionContext as Record<string, unknown>; return {} },
+      execute: async () => ({ success: true })
+    }))
+    const { agentSdk } = assembleInvocation({
+      requestId: 'req-wiki-context', sessionId: 'session-wiki-context', model: 'test-model', providerRouteId: 'wiki-context-route', lane: 'wechat',
+      locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, wikiConfig, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', agentSdkHistory: new MemoryHistory(), emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const hosted = await agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['wiki-context-probe']) })
+    try {
+      const ports = await hosted.host.createPorts({ invocationId: 'req-wiki-context', turnId: 'req-wiki-context', routeId: 'wiki-context-route', request: { messages: [], maxTokens: 10 } })
+      await ports.prepareTool({ invocationId: 'req-wiki-context', toolCallId: 'wiki-context-call', toolName: 'wiki-context-probe', input: {} }, { kind: 'initial' })
+      expect(executionContext?.wikiConfig).toMatchObject({ rootPath: 'llm-wiki' })
+    } finally { await hosted.dispose() }
   })
 })

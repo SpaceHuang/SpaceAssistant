@@ -46,6 +46,7 @@ import { createDeferredTodoTaskControlSafetyPort } from '../remote/deferredTodoT
 import { flushWeChatCliLogger, logWeChatCliEvent } from './weChatCliLogger'
 import { isTrayEnabled } from '../tray'
 import type { TurnRuntime } from '../turnRuntime'
+import { readWikiConfig } from '../wiki/wikiConfigReader'
 import { ensureRemoteImModelConfigMigrated } from '../remote/remoteImModelConfigDb'
 import { migrateLegacyImConfigBeforeChannelWrite, stripChannelPolicyFields } from '../confirmation/legacyImConfigBoundary'
 
@@ -91,6 +92,7 @@ export function createWeChatBundle(deps: {
   getModel: () => string
   getMaxParallel: () => number
   getToolsConfig: () => ReturnType<typeof mergeToolsConfig>
+  getWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
   appVersion: string
   onReachabilityChange?: (reachable: boolean) => void
   turnRuntime?: TurnRuntime
@@ -283,6 +285,7 @@ export function createWeChatBundle(deps: {
     getModel: deps.getModel,
     getToolsConfig: deps.getToolsConfig,
     getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
+    getWikiConfig: deps.getWikiConfig ?? (() => readWikiConfig(deps.db)),
     getShellConfig: () => readShellConfigFromDb(deps.db),
     turnRuntime: deps.turnRuntime,
     isRemoteAsyncApprovalEnabled: () => readCfg().remoteEnabled && readCfg().loggedIn,

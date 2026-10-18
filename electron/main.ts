@@ -10,6 +10,7 @@ import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } f
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
+import { readWikiConfig } from './wiki/wikiConfigReader'
 import { registerButlerIpcHandlers } from './butler/butlerIpc'
 import { createDeliveryHub } from './driver/deliveryHub'
 import { SqliteDeliveryJournal } from './driver/sqliteDeliveryJournal'
@@ -1455,6 +1456,7 @@ app.whenReady().then(async () => {
         return mergeToolsConfig(null)
       }
     },
+    getWikiConfig: () => readWikiConfig(db),
     appVersion: getTelemetryAppVersion(),
     onReachabilityChange: (reachable) => { wechatDeliveryReachable = reachable; if (reachable) flushDeliveries('wechat') }
   })
