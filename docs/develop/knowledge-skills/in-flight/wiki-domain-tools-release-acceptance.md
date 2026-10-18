@@ -1,6 +1,6 @@
 # Wiki 专属能力接口发布验收记录
 
-> 状态：E-14 本机源码已关闭；E-15 修复版 macOS 候选 renderer 的真实 DeepSeek 长正文确认卡可读至末尾，取消修复经 TDD 与真实会话复验通过，automation 定时任务的无人值守拒绝路径零写入通过；真实飞书/微信仍待验收。E-16 已完成 macOS 候选包静态校验、隔离副本启动、旧版 `write_file` 后新版协调、外部 page/SCHEMA/raw 协调、标题冲突零写入，以及候选包在隔离 HOME 下通过默认 `Application Support/SpaceAssistant` userData 路径的 page/SCHEMA/raw 与 index/log 重建验收。测试包仅调整 Bundle ID 用于进程隔离并 ad-hoc 签名，产品名和 userData 默认路径未改；原 `/Applications/SpaceAssistant.app` 用户数据未触碰。Windows/其他平台验收归入各自发布，不阻塞本次 macOS 目标，也不由本次证据外推通过。E-15 真实 IM 尚未全部通过，因此 E-17 仍未执行，Wiki lifecycle 继续保持 `domain_ready`。
+> 状态：E-14 本机源码已关闭；E-15 修复版 macOS 候选 renderer 的真实 DeepSeek 长正文确认卡可读至末尾，取消修复经 TDD 与真实会话复验通过，automation 定时任务的无人值守拒绝路径零写入通过；真实飞书/微信仍待验收。E-16 已完成 macOS 候选包静态校验、隔离副本启动、旧版 `write_file` 后新版协调、外部 page/SCHEMA/raw 协调、标题冲突零写入，以及候选包在隔离 HOME 下通过默认 `Application Support/SpaceAssistant` userData 路径的 page/SCHEMA/raw 与 index/log 重建验收；但 E-16 判据要求的候选包迁移报告展示尚未实机核验，因此 E-16 仍未关闭。测试包仅调整 Bundle ID 用于进程隔离并 ad-hoc 签名，产品名和 userData 默认路径未改；原 `/Applications/SpaceAssistant.app` 用户数据未触碰。Windows/其他平台验收归入各自发布，不阻塞本次 macOS 目标，也不由本次证据外推通过。E-15/E-16 尚未全部通过，因此 E-17 仍未执行，Wiki lifecycle 继续保持 `domain_ready`。
 > 执行计划：[wiki-domain-tools-execution-plan.md](./wiki-domain-tools-execution-plan.md)
 
 ## 验收信息
@@ -10,7 +10,7 @@
 | 验收日期 | 2026-10-18 |
 | 源码关闭提交 | `f5b27dbd`（实现）、`61e320a7`（策略分类）、`e66bbf17`（E-14 证据）、`2737d84f`（首次启动 lifecycle 显示修复）、`e7262730`（保留 Wiki executor 的宿主确认来源） |
 | 候选版本 | SpaceAssistant 0.2.7 |
-| 当前结论 | 源码修复后的本机定向验收通过；E-15 的真实 DeepSeek 长正文、取消收敛和 automation 拒绝边界已有链路证据；E-16 候选包已在隔离 HOME 的默认 userData 路径完成 page/SCHEMA/raw 协调与 index/log 重建。真实飞书/微信仍待验收，E-17 暂不启用；Windows/其他平台留待各自发布验收，不阻塞本目标 |
+| 当前结论 | 源码修复后的本机定向验收通过；E-15 的真实 DeepSeek 长正文、取消收敛和 automation 拒绝边界已有链路证据；E-16 候选包的文件协调、默认 userData 路径和权限验收已通过，候选包迁移报告展示仍待核验。真实飞书/微信仍待验收，E-15/E-16 未关闭，E-17 暂不启用；Windows/其他平台留待各自发布验收，不阻塞本目标 |
 
 ## E-14 本机源码验收
 
@@ -55,6 +55,7 @@
 | 未隔离 HOME 时的默认 userData 启动探测（历史结果） | macOS 26.5.2 arm64；`/tmp/SpaceAssistant-Wiki-E16.app`；原版 SpaceAssistant 同时运行 | 临时候选 app 的 `CFBundleIdentifier` 为 `com.spaceassistant.wikie16`，`productName` 仍为 `SpaceAssistant`；打包路径未注入 userData 重定向。启动源码先申请 `app.requestSingleInstanceLock()`，成功后才打开数据库。原版 `/Applications/SpaceAssistant.app` 当时仍运行；直接启动和 LaunchServices 启动均很快退出，控制台出现 shutdown 清理提示，没有进入数据库阶段。该次探测未触碰原安装数据。后续通过隔离 HOME 的候选包默认路径验收，证据见下一行 | 此次启动被同一 HOME 下的 single-instance gate 阻止；不是最终验收结果。后续候选包在隔离 HOME 下打开默认 `Application Support/SpaceAssistant` 并完成协调 | Codex / 2026-10-18 |
 | 候选包默认 userData 路径协调 page、SCHEMA、raw 与投影 | macOS 26.5.2 arm64；当前 SpaceAssistant 0.2.7 候选包临时副本；隔离 HOME `/private/tmp/wiki-e16-default-candidate-home` | 由已验证候选包复制临时 app，仅将 `CFBundleIdentifier` 改为 `com.spaceassistant.wikie16default` 以与已运行实例隔离；保留 `productName=SpaceAssistant`，ad-hoc 签名后 `codesign --verify --deep --strict` 通过。用 `HOME`/`CFFIXED_USER_HOME` 指向隔离 HOME；没有设置 `SPACEASSISTANT_E16_USER_DATA`，因此未调用 `app.setPath('userData', ...)`。临时包用 `SPACEASSISTANT_E16_RECONCILE=1` 门控启动后调用包内 `searchWikiForContext`；`lsof` 确认主进程打开默认路径 `/private/tmp/wiki-e16-default-candidate-home/Library/Application Support/SpaceAssistant/spaceassistant-data.db`。fixture 数据库 schemaVersion 为 102，移除了 API key 与渠道配置、无 automation task；Wiki bootstrap seal 的 rootIdentity 重算为隔离根实际 dev/inode。第一次外部 page 编辑被协调，search 返回 `runtime-page` revision 5，page history 与 catalog 同为 revision 5。第二轮外部有效 SCHEMA 编辑和新 raw 文件后，schemaVersion 3→4 且 schema-history/4 存在，raw 正文 SHA-256 `a0f3217d0b5930d55b8ca1d15840508a868e7975f1fd6a0fedd279b0c4c729c0` 保留，index 重建为 revision 5、log 中 stale 内容移除、projection backups 共 7 份；lifecycle 保持 `domain_ready`。候选 reconciler 的实际写入覆盖了 Wiki page/history/catalog/schema/index/log 文件，Wiki 根、`.wiki-service` 与 `wiki/topics` 目录权限为 0755、Wiki 文件为 0600；数据库目录为 0755、DB 文件为 0644，均归当前隔离用户。测试钩子、fixture 和默认 userData 全在临时 HOME；原 `/Applications/SpaceAssistant.app` 与其用户数据未改动 | 候选包默认 userData 路径的 page/SCHEMA/raw 外部编辑协调、index/log 重建、隔离权限与原子文件写入通过；这不是对 Windows 或其他 macOS 架构的推断 | Codex / 2026-10-18 |
 | 目标平台 userData 权限与 `safeAtomicWrite` 兼容性 | macOS 26.5.2 arm64 隔离默认 HOME fixture | 候选包在默认 userData 路径真实协调 page history、catalog、schema history、index 和 log；Wiki 根、`.wiki-service` 与 `wiki/topics` 目录权限为 0755、Wiki 文件 0600，DB 目录 0755、数据库文件 0644，owner 均为隔离用户。对 Wiki 文件的实际原子协调写入成功；其他 macOS 版本与 x64 硬件未验证 | 当前 arm64 候选目标通过；其他目标平台留待各自发布验收 | Codex / 2026-10-18 |
+| 候选包迁移报告展示（待完成） | macOS 26.5.2 arm64；0.2.7 临时副本 `com.spaceassistant.wikie16migration`；隔离 HOME `/private/tmp/wiki-e16-migration-home`，默认 userData 路径 | 在默认 `Application Support/SpaceAssistant/llm-wiki` 准备 legacy SCHEMA、带说明/未分类区块的旧 index、旧 log、legacy page 与 raw fixture；记录五个旧文件 SHA-256 后启动 ad-hoc 签名候选副本。系统锁屏导致桌面工具无法读取候选窗口；当前未产生 `.wiki-service` 控制目录，五个 legacy 文件 hash 与启动前一致，未批准或执行迁移 | 尚未验收迁移报告展示；需要解锁 macOS 后检查报告字段、内容分类和确认入口，并再次核对旧 index/log 逐字备份要求 | Codex / 2026-10-18 |
 
 ## E-17 启用门禁
 
