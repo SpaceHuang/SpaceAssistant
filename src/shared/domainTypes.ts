@@ -590,6 +590,8 @@ export interface WikiStatus {
   projects?: WikiProjectSummary[]
   /** 迁移状态持久化镜像（T2.6 报告查看数据源 = config.wiki.migration） */
   migration?: WikiMigrationState
+  /** Current domain-tool lifecycle; omitted for legacy roots without a valid bootstrap control plane. */
+  domainLifecycle?: 'initializing' | 'domain_ready' | 'domain_enabled' | 'recovery_required'
 }
 
 export interface SessionWikiState {

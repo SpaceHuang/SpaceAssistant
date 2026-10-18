@@ -31,7 +31,7 @@ vi.mock('../FileTree/FileTree', () => ({
 }))
 
 function renderWikiPane(wikiInitialized = true, apiOverride: Record<string, unknown> = {}) {
-  const wikiStatus = (apiOverride.wikiStatus as ReturnType<typeof vi.fn>) ?? vi.fn().mockResolvedValue({ initialized: wikiInitialized })
+  const wikiStatus = (apiOverride.wikiStatus as ReturnType<typeof vi.fn>) ?? vi.fn().mockResolvedValue({ initialized: wikiInitialized, domainLifecycle: 'domain_ready' })
   ;(window as Record<string, unknown>).api = {
     wikiStatus,
     wikiInit: vi.fn(),
@@ -101,6 +101,12 @@ describe('WikiPane', () => {
     await waitFor(() => {
       expect(screen.getByTestId('wiki-tree')).toBeDefined()
     })
+  })
+
+  it('domain_enabled 时保留可浏览树并说明页面由领域工具管理', async () => {
+    renderWikiPane(true, { wikiStatus: vi.fn().mockResolvedValue({ initialized: true, domainLifecycle: 'domain_enabled' }) })
+    await waitFor(() => expect(screen.getByTestId('wiki-tree')).toBeDefined())
+    expect(screen.getByText('当前 Wiki 使用领域工具管理知识内容；此处可继续浏览和打开页面。')).toBeDefined()
   })
 
   it('switches wiki tab and selects wiki paths from navigation', async () => {

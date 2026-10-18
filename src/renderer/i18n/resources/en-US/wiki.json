@@ -25,5 +25,6 @@
     "conflictsTitle": "Conflict duplicates (manual merge needed)",
     "failedTitle": "Failed items (retryable; legacy folders untouched)",
     "reportClose": "Got it"
-  }
+  },
+  "domainEnabledNotice": "Domain tools manage Wiki content. You can still browse and open pages here."
 }

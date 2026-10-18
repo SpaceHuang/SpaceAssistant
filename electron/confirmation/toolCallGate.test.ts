@@ -30,6 +30,14 @@ import { readFeishuAttachmentExecutor } from '../tools/readFeishuAttachmentExecu
 import type { ToolExecutionContext } from '../tools/types'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { recordUserAnswerFromDecision } from './decisionCacheWriter'
+import { createAgentSdkSafetyPolicy } from './agentSdkSafetyPolicy'
+import { ModelProviderRegistry, type StreamChunk } from '../../packages/agent-sdk/src/model'
+import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
+import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
+import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
+import { runAgentTurn } from '../../packages/agent-sdk/src/turn'
+import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
+import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
 
 const shells: AppDatabase[] = []
 describe('buildToolCallGateArgs', () => {
@@ -345,6 +353,60 @@ describe('Wiki schema change confirmation policy', () => {
       }
       const normalFile = await evaluateToolCallGate(base({ ...args, toolName: 'read_file', toolInput: { path: 'note.txt' } }))
       expect(normalFile.decision.ruleId).not.toBe('wiki-domain-file-bypass-deny')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('denies a generic Wiki file read before the executor is entered', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wiki-bypass-executor-'))
+    const workDir = path.join(root, 'work')
+    const userDataDir = path.join(root, 'userdata')
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    await fs.mkdir(workDir, { recursive: true })
+    await fs.mkdir(path.join(wikiRoot, 'wiki'), { recursive: true })
+    await fs.writeFile(path.join(wikiRoot, 'wiki', 'secret.md'), '# Secret')
+    const lifecycle = (await import('../wiki/wikiLifecycle')).createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
+
+    const invocationId = `wiki-bypass-${Date.now()}`
+    const callInput = { path: 'llm-wiki/wiki/secret.md' }
+    const inputSnapshotHash = createHash('sha256').update(JSON.stringify(callInput)).digest('hex')
+    const route = { routeId: 'wiki-bypass-test', protocol: 'anthropic-messages' as const, dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }
+    const registry = new ModelProviderRegistry()
+    async function* modelStream(...chunks: StreamChunk[]) { yield* chunks }
+    registry.register(route, { providerId: invocationId, stream: () => modelStream(
+      { type: 'tool-call', toolCallId: 'wiki-read-1', toolName: 'read_file', input: callInput },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['read_file'])
+    const permits = new InMemorySafetyPermitStore()
+    const execute = vi.fn(async () => ({ output: '# Secret' }))
+    const bindingBase = { requestId: 'wiki-bypass-request', turnId: invocationId, invocationId, toolCallId: 'wiki-read-1', capabilityId: 'read_file', inputSnapshotHash,
+      planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth-v1' }
+    const safetyPolicy = createAgentSdkSafetyPolicy({
+      resolveToolCall: () => ({ invocationId, toolCallId: 'wiki-read-1', toolName: 'read_file', input: callInput }),
+      resolveGateArgs: async (binding) => ({
+        ...base({ workDir, userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, toolName: 'read_file', toolInput: callInput, requestId: binding.requestId, toolUseId: binding.toolCallId }),
+        phase: binding.phase === 'recheck' ? 'recheck' : 'initial',
+        ...(binding.phase === 'recheck' ? { previouslyConfirmed: true } : {})
+      })
+    })
+    const gate = new SafetyGate({ capabilities, permitStore: permits, policy: safetyPolicy })
+    const toolExecution = createPermitBoundToolExecutionPort({
+      permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+      resolveExpected: async (call) => ({ ...bindingBase, toolCallId: call.toolCallId, phase: 'recheck' }),
+      execute
+    })
+
+    try {
+      await expect(runAgentTurn({ registry, routeId: route.routeId, invocationId, request: { messages: [], maxTokens: 10 }, safetyGate: gate,
+        prepareTool: async (_call, stage) => ({ ...bindingBase, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+        toolExecution, maxModelTurns: 2 })).rejects.toMatchObject({ code: 'TOOL_DENIED', reasonCode: 'POLICY_DENY' })
+      expect(execute).not.toHaveBeenCalled()
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

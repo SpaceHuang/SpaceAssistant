@@ -13,6 +13,7 @@ import { openDatabase } from '../database'
 import { DEFAULT_WIKI_CONFIG, type WikiConfig } from '../../src/shared/domainTypes'
 import { CONFIG_KEYS } from './ipcShared'
 import { setConfigValue } from '../database/operations'
+import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
 
 const startContentWatchMock = vi.fn()
 const stopContentWatchMock = vi.fn()
@@ -49,7 +50,7 @@ interface World {
   handlers: Map<string, (...args: never[]) => unknown>
 }
 
-async function setupWorld(opts: { hideWiki?: boolean; withResidue?: boolean; legacyRootAliases?: string[] } = {}): Promise<World> {
+async function setupWorld(opts: { hideWiki?: boolean; withResidue?: boolean; legacyRootAliases?: string[]; enabled?: boolean } = {}): Promise<World> {
   const root = tmpdir('wiki-fipc-')
   const workDir = path.join(root, 'proj')
   const userData = path.join(root, 'ud')
@@ -57,6 +58,10 @@ async function setupWorld(opts: { hideWiki?: boolean; withResidue?: boolean; leg
   fs.mkdirSync(workDir, { recursive: true })
   fs.mkdirSync(path.join(realBase, 'wiki'), { recursive: true })
   fs.writeFileSync(path.join(realBase, 'wiki', 'index.md'), 'shared index', 'utf8')
+  if (opts.enabled) {
+    await createWikiLifecycleController(realBase).initialize({ fresh: true })
+    await createWikiLifecycleController(realBase).enable()
+  }
   fs.writeFileSync(path.join(workDir, 'plain.txt'), 'plain', 'utf8')
   if (opts.withResidue) {
     fs.mkdirSync(path.join(workDir, 'llm-wiki'), { recursive: true })
@@ -137,6 +142,29 @@ describe('file:delete/rename/move/copy（T1.15）', () => {
 
     await expect(handlers.get('file:move')!(null as never, 'llm-wiki/wiki/index.md', '.' as never)).rejects.toThrow(/跨.*边界|共享库/)
     void realBase
+  })
+})
+
+describe('domain_enabled file IPC boundary', () => {
+  it.each([
+    ['file:delete', ['llm-wiki/wiki/index.md']],
+    ['file:rename', ['llm-wiki/wiki/index.md', 'renamed.md']],
+    ['file:move', ['llm-wiki/wiki/index.md', 'llm-wiki/wiki']],
+    ['file:copy', [{ srcRelPath: 'plain.txt', destRelPath: 'llm-wiki/wiki/copied.txt' }]],
+    ['file:copy', [{ srcRelPath: 'llm-wiki/wiki/index.md', destRelPath: 'copied.txt' }]],
+  ] as const)('拒绝启用态操作 %s', async (channel, args) => {
+    const { handlers, realBase, workDir } = await setupWorld({ enabled: true })
+    const targetBefore = fs.readFileSync(path.join(realBase, 'wiki', 'index.md'), 'utf8')
+    await expect((handlers.get(channel)! as (...args: unknown[]) => unknown)(null, ...args)).rejects.toThrow('Wiki 已启用领域工具')
+    expect(fs.readFileSync(path.join(realBase, 'wiki', 'index.md'), 'utf8')).toBe(targetBefore)
+    expect(fs.existsSync(path.join(workDir, 'copied.txt'))).toBe(false)
+    expect(fs.existsSync(path.join(realBase, 'wiki', 'copied.txt'))).toBe(false)
+  })
+
+  it('domain_ready 下仍允许文件树操作，保留既有迁移期兼容', async () => {
+    const { handlers, realBase } = await setupWorld()
+    await (handlers.get('file:rename')! as (...args: unknown[]) => unknown)(null, 'llm-wiki/wiki/index.md', 'renamed.md')
+    expect(fs.existsSync(path.join(realBase, 'wiki', 'renamed.md'))).toBe(true)
   })
 })
 

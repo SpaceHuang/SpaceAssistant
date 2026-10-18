@@ -21,6 +21,7 @@ import { resolveWikiMount } from '../wiki/wikiMount'
 import { readWikiConfig } from './ipcShared'
 import { assertInsideDir } from '../skills/skillPaths'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
+import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
 
 /**
  * T1.15（§7.4）：fileIpc 子通道的挂载解析入口。知识库恒默认启用，未挂载（非词汇路径等）返回 undefined。
@@ -47,6 +48,14 @@ function resolveMigratedTarget(ctx: AppIpcContext, relPath: string): string | nu
 function assertWikiWritable(mounted: ReturnType<typeof wikiMountOf>): void {
   if (mounted?.readOnly) {
     throw new Error(`该路径为历史迁移保留的只读别名，请在 ${WIKI_VOCABULARY_PREFIX}/ 下的对应位置操作`)
+  }
+}
+
+async function assertWikiDomainFileOperationAllowed(mounted: ReturnType<typeof wikiMountOf>): Promise<void> {
+  if (!mounted) return
+  const lifecycle = await createWikiLifecycleController(mounted.realBase).read()
+  if (lifecycle.lifecycle === 'domain_enabled') {
+    throw new Error('Wiki 已启用领域工具，请通过 Wiki 页面操作管理知识内容')
   }
 }
 
@@ -326,6 +335,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const root = ctx.getWorkDir()
     const mounted = wikiMountOf(ctx, rel)
     assertWikiWritable(mounted)
+    await assertWikiDomainFileOperationAllowed(mounted)
     // BLK-9：挂载根本身（llm-wiki）禁止删除——防止递归删除整个共享知识库
     if (mounted && !mounted.realRel) {
       throw new Error('不能删除共享库根目录；如需清空请删除其中的具体文件')
@@ -343,6 +353,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const root = ctx.getWorkDir()
     const mounted = wikiMountOf(ctx, rel)
     assertWikiWritable(mounted)
+    await assertWikiDomainFileOperationAllowed(mounted)
     // BLK-9：挂载根本身禁止改名（改名共享库请用设置页「共享库目录名」受控改名）
     if (mounted && !mounted.realRel) {
       throw new Error('不能直接重命名共享库根目录；请在设置页使用共享库目录名改名')
@@ -362,6 +373,8 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const destMounted = wikiMountOf(ctx, destDirRel)
     assertWikiWritable(srcMounted)
     assertWikiWritable(destMounted)
+    await assertWikiDomainFileOperationAllowed(srcMounted)
+    await assertWikiDomainFileOperationAllowed(destMounted)
     // §7.4：move 跨挂载边界首版显式拒绝（避免 EXDEV / 部分成功歧义）；copy 允许
     if (Boolean(srcMounted) !== Boolean(destMounted)) {
       throw new Error('不能在共享库与工作目录之间移动，请使用复制')
@@ -386,6 +399,8 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const srcMounted = wikiMountOf(ctx, payload.srcRelPath)
     const destMounted = wikiMountOf(ctx, payload.destRelPath)
     assertWikiWritable(destMounted)
+    await assertWikiDomainFileOperationAllowed(srcMounted)
+    await assertWikiDomainFileOperationAllowed(destMounted)
     if (!srcMounted && !destMounted) {
       await copyFileInWorkDir(root, payload.srcRelPath, payload.destRelPath)
       return

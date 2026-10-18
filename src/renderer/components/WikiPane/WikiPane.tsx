@@ -32,6 +32,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   const wikiRoot = WIKI_VOCABULARY_PREFIX // BLK-4（D9）：词汇根恒为常量
 
   const [wikiInitialized, setWikiInitialized] = useState<boolean | null>(null)
+  const [domainLifecycle, setDomainLifecycle] = useState<import('../../../shared/domainTypes').WikiStatus['domainLifecycle']>()
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const wikiTreeRef = useRef<FileTreeHandle>(null)
   // T2.5：迁移提示条 / 向导 / 项目显示名数据源（wiki:status.projects，v1.12）
@@ -49,6 +50,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   const refreshWikiStatus = useCallback(async () => {
     const status = (await window.api.wikiStatus()) as import('../../../shared/domainTypes').WikiStatus
     setWikiInitialized(status.initialized)
+    setDomainLifecycle(status.domainLifecycle)
     setPendingMigration(
       status.pendingLegacyMigration ? { legacyRoots: status.legacyRoots ?? [] } : null
     )
@@ -156,6 +158,9 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
               </Tooltip>
             ))}
           </div>
+        )}
+        {domainLifecycle === 'domain_enabled' && (
+          <Alert type="info" showIcon message={t('domainEnabledNotice')} style={{ marginBottom: 8 }} />
         )}
         {wikiInitialized === false ? (
           <div className="wiki-pane-empty">

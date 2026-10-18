@@ -37,6 +37,7 @@ import { existsSync } from 'fs'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from '../projectMemory'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { getWikiStatus } from '../wiki/wikiStatus'
+import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
 import { importRawFromWorkDir, wikiImportFileTreeChange } from '../wiki/wikiImport'
 import { initWikiStructure, readWikiSchema } from '../wiki/wikiInit'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -1470,12 +1471,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     // BLK-1（§10.1/§12.1）：wiki:status 同样携带迁移检测——WikiPane 提示条/向导门控的唯一数据源
     const wikiConfig = readWikiConfig(ctx.db)
     const status = getWikiStatus(ctx.getWorkDir(), wikiConfig, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
+    const lifecycle = await createWikiLifecycleController(path.join(ctx.getUserDataPath(), wikiConfig.rootPath)).read()
     const detection = detectLegacyWikiRoots({
       profiles: ctx.workDirManager.listProfiles().map((p) => ({ workDir: p.path })),
       storedRootPath: wikiConfig.rootPath,
       sharedRootInitialized: status.initialized === true
     })
-    return { ...status, pendingLegacyMigration: detection.pendingLegacyMigration, legacyRoots: detection.legacyRoots }
+    return { ...status, domainLifecycle: lifecycle.lifecycle, pendingLegacyMigration: detection.pendingLegacyMigration, legacyRoots: detection.legacyRoots }
   })
 
   ipcMain.handle('wiki:get-schema', async (): Promise<{ content: string } | null> => {

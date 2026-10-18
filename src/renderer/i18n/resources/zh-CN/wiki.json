@@ -25,5 +25,6 @@
     "conflictsTitle": "冲突双保留清单（待人工合并）",
     "failedTitle": "迁移失败项（可重试，旧目录未动）",
     "reportClose": "知道了"
-  }
+  },
+  "domainEnabledNotice": "当前 Wiki 使用领域工具管理知识内容；此处可继续浏览和打开页面。"
 }
