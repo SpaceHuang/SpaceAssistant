@@ -44,7 +44,9 @@ export function createWikiFileStore(wikiRoot: string): WikiFileStore {
     get root() { return root },
     absolutePath(relativePath) { return resolveWikiServicePath(root, relativePath) },
     async read(relativePath) {
-      const target = resolveWikiServicePath(await canonicalRootPromise, relativePath)
+      const canonicalRoot = await canonicalRootPromise
+      const target = resolveWikiServicePath(canonicalRoot, relativePath)
+      await assertNoSymlinkParents(canonicalRoot, target)
       const bytes = await readFile(target)
       const targetStat = await lstat(target)
       if (!targetStat.isFile() || targetStat.isSymbolicLink()) throw new Error('Wiki target is not a regular file.')
@@ -52,7 +54,9 @@ export function createWikiFileStore(wikiRoot: string): WikiFileStore {
     },
     async readText(relativePath) { return (await this.read(relativePath)).toString('utf8') },
     async identity(relativePath) {
-      const target = resolveWikiServicePath(await canonicalRootPromise, relativePath)
+      const canonicalRoot = await canonicalRootPromise
+      const target = resolveWikiServicePath(canonicalRoot, relativePath)
+      await assertNoSymlinkParents(canonicalRoot, target)
       try { return await captureFileIdentity(target) }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
     },
@@ -81,6 +85,20 @@ export function createWikiFileStore(wikiRoot: string): WikiFileStore {
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error }
     },
     async writeCatalog(catalog) { return this.write('.wiki-service/catalog.json', `${JSON.stringify(catalog, null, 2)}\n`) },
+  }
+}
+
+async function assertNoSymlinkParents(canonicalRoot: string, target: string): Promise<void> {
+  const relativeParent = path.relative(canonicalRoot, path.dirname(target))
+  let current = canonicalRoot
+  for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment)
+    let parentStat
+    try { parentStat = await lstat(current) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory() || !isWithinRoot(canonicalRoot, await realpath(current))) {
+      throw new Error('Wiki path contains an invalid parent directory.')
+    }
   }
 }
 

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -26,12 +26,15 @@ describe('WikiFileStore', () => {
     expect(await readFile(path.join(root, 'nested/page.md'), 'utf8')).toBe('# Wiki page\n')
   })
 
-  it('refuses a symlink in an intermediate path', async () => {
+  it('refuses a symlink in an intermediate path for reads and writes', async () => {
     const { root, store } = await fixture()
     const outside = await mkdtemp(path.join(os.tmpdir(), 'wiki-file-store-outside-'))
     roots.push(outside)
+    await writeFile(path.join(outside, 'secret.md'), 'outside data')
     await symlink(outside, path.join(root, 'linked'))
     await expect(store.write('linked/page.md', 'unsafe')).rejects.toThrow()
+    await expect(store.readText('linked/secret.md')).rejects.toThrow()
+    await expect(store.identity('linked/secret.md')).rejects.toThrow()
   })
 
   it('writes and reads rebuildable catalog data separately from authority files', async () => {
