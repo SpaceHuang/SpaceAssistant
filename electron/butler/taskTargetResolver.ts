@@ -10,12 +10,16 @@ export type ProposedTaskTarget =
 
 export type TaskTargetResolution = { ok: true; binding: TargetBinding } | { ok: false; issue: { code: string; field: string; reference?: string; candidates?: string[]; candidateCount?: number } }
 
-type ResolveTaskTargetInput = { rawText: string; target: ProposedTaskTarget; roots: readonly string[]; facts: TaskPathFacts; taskRevision: number }
+type ResolveTaskTargetInput = { rawText: string; target: ProposedTaskTarget; roots: readonly string[]; outputRoot?: string; facts: TaskPathFacts; taskRevision: number }
 
-const RESOLVER_VERSION = 2
+const RESOLVER_VERSION = 3
 
 function rootsDigest(roots: readonly string[]): string {
   return createHash('sha256').update(JSON.stringify([...new Set(roots)].sort())).digest('hex')
+}
+
+function outputRootDigest(outputRoot: string): string {
+  return createHash('sha256').update(JSON.stringify({ outputRoot: path.normalize(outputRoot) })).digest('hex')
 }
 
 function isWithin(root: string, target: string): boolean {
@@ -44,7 +48,32 @@ function resolveExistingPath(targetPath: string, roots: readonly string[], facts
 }
 
 export function resolveTaskTarget(input: ResolveTaskTargetInput): TaskTargetResolution {
-  const { rawText, target, roots, facts, taskRevision } = input
+  const { rawText, target, roots, outputRoot: requestedOutputRoot, facts, taskRevision } = input
+  if (target.kind === 'output' && requestedOutputRoot) {
+    const outputRoot = path.normalize(requestedOutputRoot)
+    if (!path.isAbsolute(outputRoot) || (facts.outputRoot !== undefined && path.normalize(facts.outputRoot) !== outputRoot)) return issue('OUTPUT_ROOT_INVALID', { reference: target.path })
+    const rawPath = target.path.trim()
+    if (!rawPath || path.win32.isAbsolute(rawPath) && !path.isAbsolute(rawPath)) return issue('OUTPUT_PATH_ESCAPE', { reference: target.path })
+    let relative = ''
+    if (path.isAbsolute(rawPath)) {
+      const absolute = path.normalize(rawPath)
+      if (!isWithin(outputRoot, absolute)) return issue('OUTPUT_PATH_ESCAPE', { reference: target.path })
+      relative = path.relative(outputRoot, absolute)
+    } else {
+      const normalized = path.posix.normalize(rawPath.replace(/\\/g, '/'))
+      const pieces = normalized.split('/')
+      if (path.posix.isAbsolute(normalized) || pieces.some((part) => part === '..')) return issue('OUTPUT_PATH_ESCAPE', { reference: target.path })
+      relative = pieces.filter((part) => part && part !== '.').join(path.sep)
+    }
+    if (!relative || relative === '.') return issue('OUTPUT_PATH_INVALID', { reference: target.path })
+    const outputPath = path.resolve(outputRoot, relative)
+    if (!isWithin(outputRoot, outputPath) || outputPath === outputRoot) return issue('OUTPUT_PATH_ESCAPE', { reference: target.path })
+    return { ok: true, binding: {
+      kind: 'output', path: outputPath, ancestor: outputRoot, relativeSuffix: relative, outputRoot,
+      expectedType: target.expectedType, rawText, resolverVersion: RESOLVER_VERSION,
+      rootsDigest: outputRootDigest(outputRoot), taskRevision,
+    } }
+  }
   if (roots.length === 0) return issue('NO_ROOTS')
   if (!facts.coverage.complete) return issue('FACTS_INCOMPLETE', { reference: target.kind === 'collection' ? target.directory : target.path })
   const digest = rootsDigest(roots)
@@ -90,22 +119,32 @@ export function resolveTaskTarget(input: ResolveTaskTargetInput): TaskTargetReso
   }
   const ancestorFact = findFact(facts, ancestor)
   if (!ancestorFact || ancestorFact.kind !== 'directory') return issue('OUTPUT_ANCESTOR_INVALID', { reference: target.path })
-  return { ok: true, binding: { kind: 'output', path: outputPath, ancestor, relativeSuffix: suffix.join(path.sep), expectedType: target.expectedType, rawText, resolverVersion: RESOLVER_VERSION, rootsDigest: digest, taskRevision } }
+  return { ok: true, binding: { kind: 'output', path: outputPath, ancestor, relativeSuffix: suffix.join(path.sep), expectedType: target.expectedType, rawText, resolverVersion: 2, rootsDigest: digest, taskRevision } }
 }
 
 export function validatePersistedTargetBindings(input: {
   bindings: readonly TargetBinding[]
   roots: readonly string[]
+  outputRoot?: string
   facts: TaskPathFacts
   taskRevision: number
 }): { ok: true } | { ok: false; code: string } {
-  const { bindings, roots, facts, taskRevision } = input
-  if (!roots.length) return { ok: false, code: 'NO_ROOTS' }
+  const { bindings, roots, outputRoot, facts, taskRevision } = input
+  if (!roots.length && !(bindings.length > 0 && bindings.every((binding) => binding.kind === 'output'))) return { ok: false, code: 'NO_ROOTS' }
   if (!facts.coverage.complete) return { ok: false, code: 'FACTS_INCOMPLETE' }
   const digest = rootsDigest(roots)
   for (const binding of bindings) {
-    if (binding.resolverVersion !== RESOLVER_VERSION && !(binding.resolverVersion === 1 && binding.kind !== 'exact')) return { ok: false, code: 'RESOLVER_VERSION_UNSUPPORTED' }
+    if (binding.resolverVersion !== RESOLVER_VERSION && binding.resolverVersion !== 2 && !(binding.resolverVersion === 1 && binding.kind !== 'exact')) return { ok: false, code: 'RESOLVER_VERSION_UNSUPPORTED' }
     if (binding.taskRevision !== taskRevision) return { ok: false, code: 'TASK_REVISION_MISMATCH' }
+    if (binding.kind === 'output' && binding.resolverVersion === RESOLVER_VERSION) {
+      if (!outputRoot || !binding.outputRoot || path.normalize(outputRoot) !== path.normalize(binding.outputRoot)) return { ok: false, code: 'OUTPUT_ROOT_MISMATCH' }
+      if (binding.rootsDigest !== outputRootDigest(outputRoot)) return { ok: false, code: 'OUTPUT_ROOT_DIGEST_MISMATCH' }
+      const relative = binding.relativeSuffix
+      if (!relative || path.isAbsolute(relative) || relative.split(/[\\/]/).some((part) => part === '..')) return { ok: false, code: 'OUTPUT_SUFFIX_INVALID' }
+      const expectedPath = path.resolve(outputRoot, relative)
+      if (!isWithin(outputRoot, expectedPath) || expectedPath === path.normalize(outputRoot) || expectedPath !== path.normalize(binding.path) || path.normalize(binding.ancestor) !== path.normalize(outputRoot)) return { ok: false, code: 'OUTPUT_SUFFIX_INVALID' }
+      continue
+    }
     if (binding.rootsDigest !== digest) return { ok: false, code: 'ROOTS_DIGEST_MISMATCH' }
     if (binding.kind === 'exact') {
       if (!binding.targetReference || typeof binding.targetReference.value !== 'string' || !['basename', 'path'].includes(binding.targetReference.kind)) return { ok: false, code: 'TARGET_REFERENCE_MISSING' }

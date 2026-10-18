@@ -6,7 +6,18 @@ describe('runTaskPreflight', () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: 'report.csv', targetType: 'file' }] })) }
     const result = await runTaskPreflight({ prompt: 'Read report.csv and summarize it', scheduleSummary: 'daily 09:00', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 4 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], entries: [{ path: '/workspace/report.csv', relativePath: 'report.csv', kind: 'file' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) } })
     expect(result).toMatchObject({ report: { status: 'passed', blockers: [] }, bindings: [{ kind: 'exact', path: '/workspace/report.csv', taskRevision: 4 }] })
-    expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Read report.csv and summarize it', roots: ['/workspace'], facts: expect.any(Object), tools: [] }), expect.any(AbortSignal))
+    expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Read report.csv and summarize it', authorizedRoots: ['/workspace'], outputRoot: undefined, facts: expect.any(Object), tools: [] }), expect.any(AbortSignal))
+  })
+
+  it('keeps an output-only task separate from authorized read roots', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'output', path: 'result.txt', expectedType: 'file' }] })) }
+    const result = await runTaskPreflight({ prompt: 'write result.txt', scheduleSummary: 'once', deliverySummary: 'none', roots: [], outputDir: '/results', taskRevision: 2 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: [], outputRoot: '/results', entries: [], coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'output-only' })) }
+    })
+
+    expect(result).toMatchObject({ report: { status: 'passed' }, bindings: [{ kind: 'output', path: '/results/result.txt', ancestor: '/results' }] })
+    expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ authorizedRoots: [], outputRoot: '/results' }), expect.any(AbortSignal))
   })
 
   it('preserves the unclear source phrase and reason when the model cannot identify a target', async () => {

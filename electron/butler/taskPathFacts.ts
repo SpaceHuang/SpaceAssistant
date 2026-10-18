@@ -11,6 +11,8 @@ export type TaskPathFactEntry = {
 
 export type TaskPathFacts = {
   roots: string[]
+  /** Write-only destination root; intentionally excluded from entries and roots. */
+  outputRoot?: string
   entries: TaskPathFactEntry[]
   coverage: { complete: boolean; truncated: boolean; roots: number; visited: number; errors: number }
   digest: string
@@ -31,8 +33,8 @@ export class TaskPathFactsProvider {
 
   constructor(limits: Partial<TaskPathFactsLimits> = {}) { this.limits = { ...DEFAULT_LIMITS, ...limits } }
 
-  async collect(inputRoots: readonly string[]): Promise<TaskPathFacts> {
-    if (!Array.isArray(inputRoots) || inputRoots.length === 0) throw new TaskPathFactsError('NO_ROOTS', '任务工作目录不能为空')
+  async collect(inputRoots: readonly string[], inputOutputRoot?: string): Promise<TaskPathFacts> {
+    if (!Array.isArray(inputRoots) || (inputRoots.length === 0 && !inputOutputRoot)) throw new TaskPathFactsError('NO_ROOTS', '任务工作目录不能为空')
     const roots: string[] = []
     for (const input of inputRoots) {
       if (typeof input !== 'string' || input.trim().length === 0 || !path.isAbsolute(input)) throw new TaskPathFactsError('INVALID_ROOT', '任务工作目录无效')
@@ -41,6 +43,14 @@ export class TaskPathFactsProvider {
       const rootInfo = await lstat(canonical)
       if (!rootInfo.isDirectory()) throw new TaskPathFactsError('INVALID_ROOT', '任务工作目录必须是目录')
       roots.push(canonical)
+    }
+    let outputRoot: string | undefined
+    if (inputOutputRoot !== undefined) {
+      if (typeof inputOutputRoot !== 'string' || inputOutputRoot.trim().length === 0 || !path.isAbsolute(inputOutputRoot)) throw new TaskPathFactsError('INVALID_OUTPUT_ROOT', '结果输出目录无效')
+      outputRoot = await realpath(inputOutputRoot)
+      await access(outputRoot, constants.W_OK | constants.X_OK)
+      const outputInfo = await lstat(outputRoot)
+      if (!outputInfo.isDirectory()) throw new TaskPathFactsError('INVALID_OUTPUT_ROOT', '结果输出目录必须是目录')
     }
     const canonicalRoots = [...new Set(roots)].sort()
     const entries: TaskPathFactEntry[] = canonicalRoots.map((root) => ({ path: root, relativePath: '', kind: 'directory' }))
@@ -80,9 +90,10 @@ export class TaskPathFactsProvider {
     const uniqueEntries = [...new Map(entries.map((entry) => [entry.path, entry])).values()]
     uniqueEntries.sort((a, b) => a.path.localeCompare(b.path, 'en'))
     const complete = !truncated && errors === 0
-    const digestInput = JSON.stringify({ roots: canonicalRoots, entries: uniqueEntries, coverage: { complete, truncated, errors, visited: uniqueEntries.length } })
+    const digestInput = JSON.stringify({ authorizedRoots: canonicalRoots, outputRoot: outputRoot ?? null, entries: uniqueEntries, coverage: { complete, truncated, errors, visited: uniqueEntries.length } })
     return {
       roots: canonicalRoots,
+      ...(outputRoot ? { outputRoot } : {}),
       entries: uniqueEntries,
       coverage: { complete, truncated, roots: canonicalRoots.length, visited: uniqueEntries.length, errors },
       digest: createHash('sha256').update(digestInput).digest('hex')

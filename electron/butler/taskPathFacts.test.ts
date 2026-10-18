@@ -35,4 +35,23 @@ describe('TaskPathFactsProvider', () => {
     const canonicalRoot = await fs.realpath(root)
     expect(facts.entries.every((entry) => entry.path === canonicalRoot || entry.path.startsWith(`${canonicalRoot}${path.sep}`))).toBe(true)
   })
+
+  it('reports the output root separately without scanning its contents and permits no authorized read roots', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-output-facts-'))
+    const authorizedRoot = path.join(root, 'authorized')
+    const outputRoot = path.join(root, 'output')
+    await fs.mkdir(authorizedRoot)
+    await fs.mkdir(outputRoot)
+    await fs.writeFile(path.join(outputRoot, 'private-existing.csv'), 'must not be read as a task input')
+
+    const facts = await new TaskPathFactsProvider().collect([authorizedRoot], outputRoot)
+    expect(facts.roots).toEqual([await fs.realpath(authorizedRoot)])
+    expect(facts.outputRoot).toBe(await fs.realpath(outputRoot))
+    expect(facts.entries.map((entry) => entry.path)).not.toContain(path.join(await fs.realpath(outputRoot), 'private-existing.csv'))
+
+    const outputOnly = await new TaskPathFactsProvider().collect([], outputRoot)
+    expect(outputOnly.roots).toEqual([])
+    expect(outputOnly.outputRoot).toBe(await fs.realpath(outputRoot))
+    expect(outputOnly.entries).toEqual([])
+  })
 })

@@ -254,9 +254,9 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **动作与产物：** 将 direct/daily/hourly 模式映射为输出运行目录；按本机 `scheduledFor` 生成 `yyyymmdd` / `yyyymmdd-HH`。facts provider 只暴露输出根的目录根事实，不扫描其内容。输出 binding 使用相对输出路径，运行重验时重映射到 runOutputDir 并拒绝逃逸。
 - **完成判据：** TDD 先写时区、跨日期边界、直接模式、根 fact 与输出路径逃逸用例；输出目录内容不能成为 exact/collection 输入 facts；输出绑定跨 run 可重映射且不能穿出归档目录。
 - **验证命令：** 执行中登记目标 resolver/path facts/output helper 相关 Vitest 文件集合。
-- **证据：** 待执行。
+- **证据：** RED：归档 helper 缺失、facts 无 outputRoot、output-only task 被 NO_ROOTS 拒绝、模型输入未区分授权 roots 和写入根、绑定路径不能映射到归档目录；分两轮新增用例 8 项失败。GREEN：`npm exec vitest run electron/butler/taskOutputDirectory.test.ts electron/butler/taskPathFacts.test.ts electron/butler/taskTargetResolver.test.ts electron/butler/taskPreflight.test.ts electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskPreflightReviewRegression.test.ts --reporter=dot`：6 files / 34 tests passed。覆盖本机计划日期/小时、空授权目录、输出根不扫描、相对目标和越界、output binding 向 runOutputDir 安全重映射与根重验；旧 v2 输出绑定兼容。`npm run typecheck:shared`、`npm run build:electron:incremental`、`npm exec tsc -- -p tsconfig.electron.json --noEmit --pretty false`、`git diff --check` 通过。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-11c 接入只允许绑定结果路径的自动化写策略
 

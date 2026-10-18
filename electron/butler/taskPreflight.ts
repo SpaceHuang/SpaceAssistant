@@ -7,7 +7,8 @@ export type TaskPreflightAnalysisInput = {
   prompt: string
   scheduleSummary: string
   deliverySummary: string
-  roots: string[]
+  authorizedRoots: string[]
+  outputRoot?: string
   facts: TaskPathFacts
   tools: readonly []
   responseFormat: 'json'
@@ -16,7 +17,7 @@ export type TaskPreflightAnalysisInput = {
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
 export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }> }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
-export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; taskRevision: number }
+export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number }
 export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string }
 export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; factsProvider?: Pick<TaskPathFactsProvider, 'collect'>; timeoutMs?: number; now?: () => number }
 
@@ -58,7 +59,7 @@ async function withTimeout<T>(promise: (signal: AbortSignal) => Promise<T>, time
 
 export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPreflightDependencies): Promise<TaskPreflightResult> {
   let facts: TaskPathFacts
-  try { facts = await (deps.factsProvider ?? new TaskPathFactsProvider()).collect(input.roots) }
+  try { facts = await (deps.factsProvider ?? new TaskPathFactsProvider()).collect(input.roots, input.outputDir) }
   catch { return { report: emptyReport('blocked', [issue('ROOT_FACTS_UNAVAILABLE', 'workDirs')]), bindings: [] } }
   if (!facts.coverage.complete) return { report: emptyReport('blocked', [issue('FACTS_INCOMPLETE')]), bindings: [], factsDigest: facts.digest }
   let analysis: TaskPreflightAnalysisOutput | undefined
@@ -67,7 +68,8 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       prompt: input.prompt,
       scheduleSummary: input.scheduleSummary,
       deliverySummary: input.deliverySummary,
-      roots: facts.roots,
+      authorizedRoots: facts.roots,
+      outputRoot: facts.outputRoot,
       facts,
       tools: [],
       responseFormat: 'json'
@@ -107,7 +109,7 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
   const bindings: TargetBinding[] = []
   const blockers: PreflightIssue[] = [...clarificationIssues]
   for (const target of analysis.targets) {
-    const resolved = resolveTaskTarget({ rawText: input.prompt, target, roots: facts.roots, facts, taskRevision: input.taskRevision })
+      const resolved = resolveTaskTarget({ rawText: input.prompt, target, roots: facts.roots, outputRoot: facts.outputRoot, facts, taskRevision: input.taskRevision })
     if (resolved.ok) bindings.push(resolved.binding)
     else blockers.push(issue(resolved.issue.code, resolved.issue.field, resolved.issue))
   }

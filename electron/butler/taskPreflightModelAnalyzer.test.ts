@@ -21,7 +21,7 @@ describe('createTaskPreflightModelAnalyzer', () => {
     create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[]}' }] })
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
     const controller = new AbortController()
-    await expect(analyzer.analyze({ prompt: 'report', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], facts: {} as never, tools: [], responseFormat: 'json' }, controller.signal)).resolves.toEqual({ targets: [] })
+    await expect(analyzer.analyze({ prompt: 'report', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'], outputRoot: '/results', facts: {} as never, tools: [], responseFormat: 'json' }, controller.signal)).resolves.toEqual({ targets: [] })
     expect(resolveLlmCredentialsForPair).toHaveBeenCalledWith({}, 'model-id', 'service-id')
     expect(createAnthropicClient).toHaveBeenCalledWith('api-key', 'https://model.test')
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ model: 'provider-model', messages: [{ role: 'user', content: expect.stringContaining('"task":"report"') }], system: expect.stringContaining('不读取本地文件') }), { signal: controller.signal })
@@ -31,10 +31,12 @@ describe('createTaskPreflightModelAnalyzer', () => {
   it('asks the model to identify exact unclear prompt fragments and structured reasons', async () => {
     create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[],"clarifications":[{"reference":"帮我处理一下","reasonCode":"scope_unclear"}]}' }] })
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
-    const output = await analyzer.analyze({ prompt: '帮我处理一下', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], facts: {} as never, tools: [], responseFormat: 'json' }, new AbortController().signal)
+    const output = await analyzer.analyze({ prompt: '帮我处理一下', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'], outputRoot: '/results', facts: {} as never, tools: [], responseFormat: 'json' }, new AbortController().signal)
 
     expect(output).toMatchObject({ clarifications: [{ reference: '帮我处理一下', reasonCode: 'scope_unclear' }] })
     expect(create.mock.calls[0]?.[0].system).toContain('clarifications')
+    expect(create.mock.calls[0]?.[0].messages).toMatchObject([{ content: expect.stringContaining('"outputRoot":"/results"') }])
+    expect(create.mock.calls[0]?.[0].messages).toMatchObject([{ content: expect.stringContaining('"authorizedRoots":["/workspace"]') }])
   })
 
   it('rejects missing model selection, provider errors, and malformed JSON', async () => {

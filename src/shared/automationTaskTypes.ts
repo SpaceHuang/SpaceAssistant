@@ -132,7 +132,7 @@ export type AutomationTaskRunConfigSnapshot = {
 export type TargetBinding =
   | { kind: 'exact'; path: string; targetType: 'file' | 'directory'; targetReference: { kind: 'basename' | 'path'; value: string }; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
   | { kind: 'collection'; directory: string; selector: '*.csv' | '*.tsv' | 'all'; sort: 'canonical-path'; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
-  | { kind: 'output'; path: string; ancestor: string; relativeSuffix: string; expectedType: 'file' | 'directory'; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
+  | { kind: 'output'; path: string; ancestor: string; relativeSuffix: string; outputRoot?: string; expectedType: 'file' | 'directory'; rawText: string; resolverVersion: number; rootsDigest: string; taskRevision: number }
 
 export type TargetSelection = TargetBinding
 

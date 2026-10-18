@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import path from 'node:path'
 import { resolveTaskTarget, validatePersistedTargetBindings } from './taskTargetResolver'
 import type { TaskPathFacts } from './taskPathFacts'
 
@@ -11,7 +12,7 @@ describe('resolveTaskTarget', () => {
 
   it('resolves one unambiguous root basename to an exact binding', () => {
     const result = resolveTaskTarget({ rawText: 'read report.csv', target: { kind: 'exact', path: 'report.csv', targetType: 'file' }, roots: [root], facts: facts(root, [{ path: `${root}/report.csv`, relativePath: 'report.csv', kind: 'file' }]), taskRevision: 3 })
-    expect(result).toMatchObject({ ok: true, binding: { kind: 'exact', path: `${root}/report.csv`, targetReference: { kind: 'basename', value: 'report.csv' }, resolverVersion: 2, taskRevision: 3 } })
+    expect(result).toMatchObject({ ok: true, binding: { kind: 'exact', path: `${root}/report.csv`, targetReference: { kind: 'basename', value: 'report.csv' }, resolverVersion: 3, taskRevision: 3 } })
   })
 
   it('blocks basename ambiguity and incomplete coverage', () => {
@@ -27,6 +28,32 @@ describe('resolveTaskTarget', () => {
   it('creates an output binding from the nearest existing authorized ancestor', () => {
     const result = resolveTaskTarget({ rawText: 'write summary.txt', target: { kind: 'output', path: `${root}/out/new/summary.txt`, expectedType: 'file' }, roots: [root], facts: facts(root, [{ path: `${root}/out`, relativePath: 'out', kind: 'directory' }]), taskRevision: 9 })
     expect(result).toMatchObject({ ok: true, binding: { kind: 'output', ancestor: `${root}/out`, relativeSuffix: 'new/summary.txt' } })
+  })
+
+  it('binds relative output paths to a separate output root even when there are no authorized read roots', () => {
+    const outputRoot = '/results'
+    const result = resolveTaskTarget({
+      rawText: 'write summary.txt',
+      target: { kind: 'output', path: 'reports/summary.txt', expectedType: 'file' },
+      roots: [], outputRoot, facts: facts('/unused', [], true), taskRevision: 9,
+    })
+    expect(result).toMatchObject({ ok: true, binding: {
+      kind: 'output', path: path.join(outputRoot, 'reports/summary.txt'), ancestor: outputRoot,
+      relativeSuffix: path.join('reports', 'summary.txt'), resolverVersion: 3,
+    } })
+    if (!result.ok) return
+    const outputFacts = { roots: [], outputRoot, entries: [], coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'output-only' }
+    expect(validatePersistedTargetBindings({ bindings: [result.binding], roots: [], outputRoot, facts: outputFacts, taskRevision: 9 })).toEqual({ ok: true })
+    expect(validatePersistedTargetBindings({ bindings: [result.binding], roots: [], outputRoot: '/elsewhere', facts: outputFacts, taskRevision: 9 })).toEqual({ ok: false, code: 'OUTPUT_ROOT_MISMATCH' })
+  })
+
+  it('rejects output target traversal outside the selected output root', () => {
+    const result = resolveTaskTarget({
+      rawText: 'write outside',
+      target: { kind: 'output', path: '../private.txt', expectedType: 'file' },
+      roots: [], outputRoot: '/results', facts: facts('/unused', []), taskRevision: 1,
+    })
+    expect(result).toMatchObject({ ok: false, issue: { code: 'OUTPUT_PATH_ESCAPE' } })
   })
 
   it('binds a constrained collection selector and blocks unsupported selectors', () => {
