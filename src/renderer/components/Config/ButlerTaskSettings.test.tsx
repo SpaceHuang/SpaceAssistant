@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { App, ConfigProvider } from 'antd'
 import { ButlerTaskSettings } from './ButlerTaskSettings'
 import type { AutomationTask } from '../../../shared/automationTaskTypes'
@@ -120,6 +120,25 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
   })
 
+  it('按任务流程分组表单，并将模型与思维强度放在同一大模型服务区', async () => {
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    await screen.findByLabelText('任务名称')
+
+    expect(screen.getAllByRole('region').map((region) => region.querySelector('h5')?.textContent)).toEqual([
+      '任务内容',
+      '大模型服务',
+      '执行与投递',
+      '结果输出',
+      '资料访问'
+    ])
+
+    const modelServiceSection = screen.getByRole('region', { name: '大模型服务' })
+    expect(within(modelServiceSection).getByRole('combobox', { name: '任务模型与服务' })).toBeTruthy()
+    expect(within(modelServiceSection).getByRole('combobox', { name: '思维强度' })).toBeTruthy()
+  })
+
   it('新建任务：提交后调用 butlerCreateTask 并刷新列表', async () => {
     renderTab()
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
@@ -179,6 +198,8 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '无 Thinking 模型任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '执行检查' } })
+    expect(await screen.findByText('当前模型不支持思维强度设置。')).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: '思维强度' }).closest('.ant-select')?.classList.contains('ant-select-disabled')).toBe(true)
     await chooseOutputDir()
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))

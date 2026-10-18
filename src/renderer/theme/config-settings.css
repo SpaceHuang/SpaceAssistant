@@ -2671,6 +2671,32 @@
   column-gap: var(--sa-config-gap-stack);
 }
 
+.butler-task-editor__section {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.butler-task-editor__section + .butler-task-editor__section {
+  margin-top: var(--sa-config-gap-substack);
+  padding-top: var(--sa-config-gap-substack);
+  border-top: 1px solid var(--sa-border);
+}
+
+.butler-task-editor__section-title.ant-typography {
+  margin: 0 0 var(--sa-config-gap-field);
+  color: var(--sa-text);
+  font-size: var(--sa-config-font-section);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.butler-task-editor__section-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--sa-config-gap-stack);
+  min-width: 0;
+}
+
 .butler-task-editor__wide,
 .butler-preflight-report {
   grid-column: 1 / -1;
@@ -2774,9 +2800,14 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .butler-task-editor__section,
   .butler-task-editor__wide,
   .butler-preflight-report {
     grid-column: auto;
+  }
+
+  .butler-task-editor__section-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .butler-task-card__summary-details {

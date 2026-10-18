@@ -490,95 +490,124 @@ export function ButlerTaskSettings() {
           ) : null}
           {writeError ? <Alert className="butler-preflight-report" type="error" showIcon message={t('butler.form.saveFailedWithError', { error: writeError })} /> : null}
           <div className="butler-task-editor__grid">
-          <Form.Item name="name" label={t('butler.form.name')} rules={[{ required: true, message: t('butler.form.nameRequired') }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="modelPair" label={t('butler.form.model')} rules={!editing ? [{ required: true, message: t('butler.form.modelRequired') }] : []}>
-            <Select options={modelCandidates.map((candidate) => ({ value: `${candidate.modelId}::${candidate.serviceId}`, label: `${candidate.providerModelName} · ${candidate.serviceName}` }))} onChange={(pair: string) => { const candidate = modelCandidates.find((item) => `${item.modelId}::${item.serviceId}` === pair); if (candidate) { form.setFieldsValue({ modelId: candidate.modelId, modelServiceId: candidate.serviceId, modelOverride: candidate.providerModelName }); if (!candidate.supportsThinking) form.setFieldValue('reasoningEffort', 'off') } }} />
-          </Form.Item>
-          <Form.Item name="prompt" className="butler-task-editor__wide" label={t('butler.form.prompt')} rules={[{ required: true, message: t('butler.form.promptRequired') }]}>
-            <Input.TextArea rows={4} />
-          </Form.Item>
-          <Form.Item
-            name="outputDir"
-            className="butler-task-editor__wide"
-            label={t('butler.form.outputDir')}
-            rules={[{ required: true, message: t('butler.form.outputDirRequired') }]}
-            extra={t('butler.form.outputDirectoryHint')}
-          >
-            <Input
-              className="butler-output-dir-picker"
-              readOnly
-              title={outputDir}
-              placeholder={t('butler.form.outputDirPlaceholder')}
-              suffix={<Button type="link" onClick={() => void browseOutputDir()}>{t('butler.form.chooseOutputDir')}</Button>}
-            />
-          </Form.Item>
-          <Form.Item
-            name="outputOrganization"
-            label={t('butler.form.outputOrganization')}
-            rules={[{ required: true, message: t('butler.form.outputOrganizationRequired') }]}
-          >
-            <Select
-              options={[
-                { value: 'direct', label: t('butler.form.outputOrganizationDirect') },
-                { value: 'daily', label: t('butler.form.outputOrganizationDaily') },
-                { value: 'hourly', label: t('butler.form.outputOrganizationHourly') }
-              ]}
-            />
-          </Form.Item>
-          <Form.Item className="butler-task-editor__wide" label={t('butler.form.authorizedDirs')} extra={t('butler.form.authorizedDirsHint')}>
-            <AuthorizedDirList t={t} value={authorizedDirs} onChange={setAuthorizedDirs} />
-          </Form.Item>
-          <Form.Item name="modelServiceId" hidden><Input /></Form.Item>
-          <Form.Item name="modelId" hidden><Input /></Form.Item>
-          <Form.Item name="reasoningEffort" label={t('butler.form.reasoningEffort')}>
-            <Select disabled={selectedCandidate?.supportsThinking === false} options={(['off', 'low', 'medium', 'high', 'max'] as const).map((effort) => ({ value: effort, label: t(`butler.form.reasoning${effort[0]!.toUpperCase()}${effort.slice(1)}` as 'butler.form.reasoningOff') }))} />
-          </Form.Item>
-          <Form.Item name="scheduleKind" label={t('butler.form.scheduleKind')}>
-            <Select
-              options={[
-                { value: 'interval', label: t('butler.form.interval') },
-                { value: 'daily', label: t('butler.form.daily') },
-                { value: 'once', label: t('butler.form.once') }
-              ]}
-            />
-          </Form.Item>
-          {scheduleKind === 'daily' ? (
-            <Form.Item name="dailyTime" label={t('butler.form.time')} rules={[{ required: true }]}>
-              <TimePicker format="HH:mm" />
-            </Form.Item>
-          ) : scheduleKind === 'once' ? (
-            <Form.Item
-              name="onceAt"
-              label={t('butler.form.onceAt')}
-              rules={[
-                { required: true, message: t('butler.form.onceAtRequired') },
-                // 提交兜底：面板禁用挡不住手动键入的过去时间（约束详见 onceAtConstraints.ts）
-                {
-                  validator: (_rule, value: dayjs.Dayjs | undefined) =>
-                    onceAtInFuture(value) ? Promise.resolve() : Promise.reject(new Error(t('butler.form.onceAtPast')))
-                }
-              ]}
-              extra={t('butler.form.onceHint')}
-            >
-              <DatePicker showTime format="YYYY-MM-DD HH:mm" {...onceConstraints} />
-            </Form.Item>
-          ) : (
-            <Form.Item name="intervalMinutes" label={t('butler.form.intervalMinutes')} rules={[{ required: true }]}>
-              <InputNumber min={5} max={10080} style={{ width: '100%' }} />
-            </Form.Item>
-          )}
-          <Form.Item name="deliveryPref" label={t('butler.form.deliveryPref')}>
-            <Select
-              options={[
-                { value: 'desktop', label: t('butler.delivery.desktop') },
-                { value: 'feishu', label: t('butler.delivery.feishu') },
-                { value: 'wechat', label: t('butler.delivery.wechat') },
-                { value: 'none', label: t('butler.delivery.none') }
-              ]}
-            />
-          </Form.Item>
+            <section className="butler-task-editor__section" aria-labelledby="butler-task-section-content">
+              <Typography.Title id="butler-task-section-content" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionTask')}</Typography.Title>
+              <div className="butler-task-editor__section-grid">
+                <Form.Item name="name" label={t('butler.form.name')} rules={[{ required: true, message: t('butler.form.nameRequired') }]}>
+                  <Input />
+                </Form.Item>
+                <Form.Item name="prompt" className="butler-task-editor__wide" label={t('butler.form.prompt')} rules={[{ required: true, message: t('butler.form.promptRequired') }]}>
+                  <Input.TextArea rows={4} />
+                </Form.Item>
+              </div>
+            </section>
+
+            <section className="butler-task-editor__section" aria-labelledby="butler-task-section-model">
+              <Typography.Title id="butler-task-section-model" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionModelService')}</Typography.Title>
+              <div className="butler-task-editor__section-grid">
+                <Form.Item name="modelPair" label={t('butler.form.model')} rules={!editing ? [{ required: true, message: t('butler.form.modelRequired') }] : []}>
+                  <Select options={modelCandidates.map((candidate) => ({ value: `${candidate.modelId}::${candidate.serviceId}`, label: `${candidate.providerModelName} · ${candidate.serviceName}` }))} onChange={(pair: string) => { const candidate = modelCandidates.find((item) => `${item.modelId}::${item.serviceId}` === pair); if (candidate) { form.setFieldsValue({ modelId: candidate.modelId, modelServiceId: candidate.serviceId, modelOverride: candidate.providerModelName }); if (!candidate.supportsThinking) form.setFieldValue('reasoningEffort', 'off') } }} />
+                </Form.Item>
+                <Form.Item name="reasoningEffort" label={t('butler.form.reasoningEffort')} extra={selectedCandidate?.supportsThinking === false ? t('butler.form.reasoningUnsupported') : undefined}>
+                  <Select disabled={selectedCandidate?.supportsThinking === false} options={(['off', 'low', 'medium', 'high', 'max'] as const).map((effort) => ({ value: effort, label: t(`butler.form.reasoning${effort[0]!.toUpperCase()}${effort.slice(1)}` as 'butler.form.reasoningOff') }))} />
+                </Form.Item>
+                <Form.Item name="modelServiceId" hidden><Input /></Form.Item>
+                <Form.Item name="modelId" hidden><Input /></Form.Item>
+              </div>
+            </section>
+
+            <section className="butler-task-editor__section" aria-labelledby="butler-task-section-execution">
+              <Typography.Title id="butler-task-section-execution" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionExecution')}</Typography.Title>
+              <div className="butler-task-editor__section-grid">
+                <Form.Item name="scheduleKind" label={t('butler.form.scheduleKind')}>
+                  <Select
+                    options={[
+                      { value: 'interval', label: t('butler.form.interval') },
+                      { value: 'daily', label: t('butler.form.daily') },
+                      { value: 'once', label: t('butler.form.once') }
+                    ]}
+                  />
+                </Form.Item>
+                {scheduleKind === 'daily' ? (
+                  <Form.Item name="dailyTime" label={t('butler.form.time')} rules={[{ required: true }]}>
+                    <TimePicker format="HH:mm" />
+                  </Form.Item>
+                ) : scheduleKind === 'once' ? (
+                  <Form.Item
+                    name="onceAt"
+                    label={t('butler.form.onceAt')}
+                    rules={[
+                      { required: true, message: t('butler.form.onceAtRequired') },
+                      // 提交兜底：面板禁用挡不住手动键入的过去时间（约束详见 onceAtConstraints.ts）
+                      {
+                        validator: (_rule, value: dayjs.Dayjs | undefined) =>
+                          onceAtInFuture(value) ? Promise.resolve() : Promise.reject(new Error(t('butler.form.onceAtPast')))
+                      }
+                    ]}
+                    extra={t('butler.form.onceHint')}
+                  >
+                    <DatePicker showTime format="YYYY-MM-DD HH:mm" {...onceConstraints} />
+                  </Form.Item>
+                ) : (
+                  <Form.Item name="intervalMinutes" label={t('butler.form.intervalMinutes')} rules={[{ required: true }]}>
+                    <InputNumber min={5} max={10080} style={{ width: '100%' }} />
+                  </Form.Item>
+                )}
+                <Form.Item name="deliveryPref" label={t('butler.form.deliveryPref')}>
+                  <Select
+                    options={[
+                      { value: 'desktop', label: t('butler.delivery.desktop') },
+                      { value: 'feishu', label: t('butler.delivery.feishu') },
+                      { value: 'wechat', label: t('butler.delivery.wechat') },
+                      { value: 'none', label: t('butler.delivery.none') }
+                    ]}
+                  />
+                </Form.Item>
+              </div>
+            </section>
+
+            <section className="butler-task-editor__section" aria-labelledby="butler-task-section-output">
+              <Typography.Title id="butler-task-section-output" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionOutput')}</Typography.Title>
+              <div className="butler-task-editor__section-grid">
+                <Form.Item
+                  name="outputDir"
+                  className="butler-task-editor__wide"
+                  label={t('butler.form.outputDir')}
+                  rules={[{ required: true, message: t('butler.form.outputDirRequired') }]}
+                  extra={t('butler.form.outputDirectoryHint')}
+                >
+                  <Input
+                    className="butler-output-dir-picker"
+                    readOnly
+                    title={outputDir}
+                    placeholder={t('butler.form.outputDirPlaceholder')}
+                    suffix={<Button type="link" onClick={() => void browseOutputDir()}>{t('butler.form.chooseOutputDir')}</Button>}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="outputOrganization"
+                  label={t('butler.form.outputOrganization')}
+                  rules={[{ required: true, message: t('butler.form.outputOrganizationRequired') }]}
+                >
+                  <Select
+                    options={[
+                      { value: 'direct', label: t('butler.form.outputOrganizationDirect') },
+                      { value: 'daily', label: t('butler.form.outputOrganizationDaily') },
+                      { value: 'hourly', label: t('butler.form.outputOrganizationHourly') }
+                    ]}
+                  />
+                </Form.Item>
+              </div>
+            </section>
+
+            <section className="butler-task-editor__section" aria-labelledby="butler-task-section-access">
+              <Typography.Title id="butler-task-section-access" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionAccess')}</Typography.Title>
+              <div className="butler-task-editor__section-grid">
+                <Form.Item className="butler-task-editor__wide" label={t('butler.form.authorizedDirs')} extra={t('butler.form.authorizedDirsHint')}>
+                  <AuthorizedDirList t={t} value={authorizedDirs} onChange={setAuthorizedDirs} />
+                </Form.Item>
+              </div>
+            </section>
           </div>
         </Form>
       </Modal>
