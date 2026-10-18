@@ -13,6 +13,8 @@ export interface WikiFileStore {
   readonly root: string
   read(relativePath: string): Promise<Buffer>
   readText(relativePath: string): Promise<string>
+  identity(relativePath: string): Promise<FileIdentity | null>
+  absolutePath(relativePath: string): string
   write(relativePath: string, body: string | Buffer): Promise<FileIdentity>
   writeImmutable(relativePath: string, body: string | Buffer): Promise<FileIdentity>
   remove(relativePath: string, expectedIdentity?: FileIdentity): Promise<void>
@@ -40,6 +42,7 @@ export function createWikiFileStore(wikiRoot: string): WikiFileStore {
   }
   return {
     get root() { return root },
+    absolutePath(relativePath) { return resolveWikiServicePath(root, relativePath) },
     async read(relativePath) {
       const target = resolveWikiServicePath(await canonicalRootPromise, relativePath)
       const bytes = await readFile(target)
@@ -48,6 +51,11 @@ export function createWikiFileStore(wikiRoot: string): WikiFileStore {
       return bytes
     },
     async readText(relativePath) { return (await this.read(relativePath)).toString('utf8') },
+    async identity(relativePath) {
+      const target = resolveWikiServicePath(await canonicalRootPromise, relativePath)
+      try { return await captureFileIdentity(target) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
+    },
     async write(relativePath, body) {
       const { target, parent } = await parentFor(relativePath)
       let expectedIdentity: FileIdentity | undefined
