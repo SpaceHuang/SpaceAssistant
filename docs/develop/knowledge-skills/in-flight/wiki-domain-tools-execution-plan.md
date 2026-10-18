@@ -145,5 +145,7 @@ D-TP-01 至 D-TP-05 的产品/技术边界已有裁决；E-04 复用现有文件
 | E-13 | `dbe843b2`；bootstrap 预检、WikiPane 审阅、主进程原生确认、hash final-check 与 journal resume 接通 | 8 文件/55 项通过；renderer/Electron 类型检查、i18n 检查通过 |
 | 构建 | E-11 阶段提交 `2d16c458` 前执行 | `npx tsc -p tsconfig.electron.json --noEmit`、`npm run build:electron:incremental` 通过 |
 | E-14 | `f5b27dbd`、`61e320a7`；修复全量验收发现的 Wiki direct registration、工具设置元数据、批量导入命令分类与策略清单缺项 | `npm test`：1108 文件通过、1 跳过；10474 项通过、111 跳过。`npm run build` 通过；renderer/shared/Electron 类型检查、i18n 与 system invariant registry 检查通过。全量构建仅有既有动态导入和大 chunk 警告 |
-| E-15 至 E-17 | 外部环境未接入 | 真实飞书/微信/桌面确认、候选安装包及目标平台文件协调没有可用证据；不得启用 `domain_enabled` |
+| E-15 | 外部会话未接入 | 尚无真实飞书/微信/automation 确认、拒绝、取消及长正文验收证据；详见 `wiki-domain-tools-release-acceptance.md` |
+| E-16 | macOS 包已生成并做静态校验；隔离运行时验收待安全 fixture | x64/arm64 DMG 校验和、架构及 ad-hoc 签名记录见 release acceptance。隔离启动尝试误用了现有 `SpaceAssistant-dev` 资料；候选进程已停止，未执行 Wiki 迁移。操作前无快照，目录内 22 个文件的近时修改无法准确归因或回滚；不再访问该目录。旧版/外部文件变化协调与 userData 权限仍待隔离环境验收 |
+| E-17 | 未执行 | E-15/E-16 尚无完整外部通过证据；不得启用 `domain_enabled` |
 
