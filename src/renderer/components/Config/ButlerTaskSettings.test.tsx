@@ -12,7 +12,10 @@ function task(overrides: Partial<AutomationTask> = {}): AutomationTask {
     schedule: { kind: 'interval', intervalMinutes: 30 },
     prompt: '检查磁盘',
     deliveryPref: 'desktop',
+    authorizedDirs: [],
     workDirs: [],
+    outputDir: null,
+    outputOrganization: null,
     enabled: true,
     createdAt: 1,
     updatedAt: 1,
@@ -29,6 +32,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
   const butlerGetTaskDefaults = vi.fn()
   const butlerGetModelCandidates = vi.fn()
   const butlerChooseWorkDir = vi.fn()
+  const butlerChooseOutputDir = vi.fn()
   const butlerListTaskRuns = vi.fn()
   const appGetTrayEnabled = vi.fn()
 
@@ -44,6 +48,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     butlerGetTaskDefaults.mockResolvedValue({ workDir: '/tmp/active-profile', modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'medium' })
     butlerGetModelCandidates.mockResolvedValue([{ modelId: 'model-1', providerModelName: 'model-name', serviceId: 'service-1', serviceName: 'Service', supportsThinking: true }])
     butlerChooseWorkDir.mockResolvedValue({ cancelled: false, path: '/tmp/chosen' })
+    butlerChooseOutputDir.mockResolvedValue({ cancelled: false, path: '/tmp/output' })
     butlerListTaskRuns.mockResolvedValue([])
     window.api = {
       ...window.api,
@@ -55,6 +60,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       butlerGetTaskDefaults,
       butlerGetModelCandidates,
       butlerChooseWorkDir,
+      butlerChooseOutputDir,
       butlerListTaskRuns,
       appGetTrayEnabled
     } as typeof window.api
@@ -72,6 +78,32 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
         </App>
       </ConfigProvider>
     )
+  }
+
+  async function chooseOutputDir(path = '/tmp/output') {
+    butlerChooseOutputDir.mockResolvedValueOnce({ cancelled: false, path })
+    fireEvent.click(await screen.findByRole('button', { name: '选择结果输出目录' }))
+    await waitFor(() => expect(screen.getByLabelText('结果输出目录')).toHaveProperty('value', path))
+  }
+
+  async function chooseSelectOption(label: string, option: string) {
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: label }))
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll<HTMLElement>('.ant-select-item-option-content'))
+      expect(options.some((item) => item.textContent?.trim() === option)).toBe(true)
+    })
+    const optionContent = Array.from(document.querySelectorAll<HTMLElement>('.ant-select-item-option-content'))
+      .find((item) => item.textContent?.trim() === option)
+    if (!optionContent) throw new Error(`找不到下拉选项：${option}`)
+    fireEvent.click(optionContent)
+  }
+
+  function selectedArchiveValue() {
+    return screen.getByRole('combobox', { name: '结果归档方式' }).closest('.ant-select')?.querySelector('.ant-select-selection-item')?.textContent
+  }
+
+  function selectedTriggerValue() {
+    return screen.getByRole('combobox', { name: '触发方式' }).closest('.ant-select')?.querySelector('.ant-select-selection-item')?.textContent
   }
 
   it('加载并渲染任务列表（名称、触发方式、投递偏好）', async () => {
@@ -95,17 +127,48 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     await waitFor(() => expect(screen.getByLabelText('任务名称')).toBeTruthy())
     fireEvent.change(screen.getByLabelText('任务名称'), { target: { value: '周报汇总' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '汇总本周会话' } })
+    await chooseOutputDir('/tmp/output-root')
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await waitFor(() => expect(screen.getByText('/tmp/chosen-root')).toBeTruthy())
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
-    const payload = butlerCreateTask.mock.calls[0]![0] as { name: string; prompt: string; schedule: unknown; workDirs: string[] }
+    const payload = butlerCreateTask.mock.calls[0]![0] as { name: string; prompt: string; schedule: unknown; authorizedDirs: string[]; outputDir: string; outputOrganization: string }
     expect(payload.name).toBe('周报汇总')
     expect(payload.prompt).toBe('汇总本周会话')
     expect(payload.schedule).toEqual({ kind: 'interval', intervalMinutes: 30 })
-    expect(payload).toMatchObject({ workDirs: ['/tmp/chosen-root'], modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'medium' })
+    expect(payload).toMatchObject({ authorizedDirs: ['/tmp/chosen-root'], outputDir: '/tmp/output-root', outputOrganization: 'hourly', modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'medium' })
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalledTimes(2))
+  })
+
+  it('新建任务必须先选择结果输出目录，授权读写目录可以留空', async () => {
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '只输出任务' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '生成摘要' } })
+    fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
+
+    expect(await screen.findByText('请选择结果输出目录')).toBeTruthy()
+    expect(screen.queryByText('请选择任务工作目录')).toBeNull()
+    expect(butlerCreateTask).not.toHaveBeenCalled()
+  })
+
+  it('归档方式默认跟随触发类型，用户手动更改后不再覆盖', async () => {
+    renderTab()
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    await screen.findByLabelText('任务名称')
+
+    await chooseSelectOption('触发方式', '每天')
+    expect(selectedTriggerValue()).toBe('每天')
+    expect(selectedArchiveValue()).toBe('每次执行写入按日期（YYYYMMDD）创建的子目录')
+
+    await chooseSelectOption('触发方式', '一次性')
+    expect(selectedArchiveValue()).toBe('直接写入该目录')
+
+    await chooseSelectOption('结果归档方式', '每次执行写入按日期（YYYYMMDD）创建的子目录')
+    await chooseSelectOption('触发方式', '固定间隔')
+    expect(selectedArchiveValue()).toBe('每次执行写入按日期（YYYYMMDD）创建的子目录')
   })
 
   it('默认模型不支持 Thinking 时以 off 创建任务', async () => {
@@ -116,6 +179,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '无 Thinking 模型任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '执行检查' } })
+    await chooseOutputDir()
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
@@ -123,13 +187,14 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ reasoningEffort: 'off' })
   })
 
-  it('TARGET_UNCLEAR 时仍创建停用草稿并在表单显示预检问题', async () => {
-    butlerCreateTask.mockResolvedValueOnce({ ok: true, id: 'draft-1', task: task({ id: 'draft-1', enabled: false }), preflightReport: { status: 'blocked', blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear', reference: '帮我处理一下', reasonCode: 'scope_unclear' }], suggestedDirectories: [] } })
+  it('TARGET_UNCLEAR 时不保存任务，并在表单显示可理解的预检问题', async () => {
+    butlerCreateTask.mockResolvedValueOnce({ ok: false, kind: 'preflight-blocked', report: { status: 'blocked', blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear', reference: '帮我处理一下', reasonCode: 'scope_unclear' }], suggestedDirectories: [] } })
     renderTab()
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '待补充目标' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '帮我处理一下' } })
+    await chooseOutputDir()
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await waitFor(() => expect(screen.getByText('/tmp/chosen-root')).toBeTruthy())
@@ -139,6 +204,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(screen.getByText('相关描述：帮我处理一下')).toBeTruthy()
     expect(screen.getByLabelText('任务提示词')).toBeTruthy()
     expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ name: '待补充目标' })
+    expect(butlerListTasks).toHaveBeenCalledTimes(1)
   })
 
   it('旧任务编辑显示未设置目录，加载时不触发保存或自动填值', async () => {
@@ -146,7 +212,34 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     renderTab()
     await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
-    expect(await screen.findByText('旧任务会继续使用兼容配置；如需固定独立目录或模型，可在此选择后保存')).toBeTruthy()
+    expect(await screen.findByText('该旧任务尚未设置结果输出目录；请选择目录后才能保存。')).toBeTruthy()
+    expect(butlerUpdateTask).not.toHaveBeenCalled()
+  })
+
+  it('编辑任务回填已保存的输出路径和归档方式', async () => {
+    butlerListTasks.mockResolvedValue([task({
+      schedule: { kind: 'daily', time: '09:00' },
+      outputDir: '/tmp/saved-results',
+      outputOrganization: 'hourly'
+    })])
+    renderTab()
+    await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
+
+    expect(await screen.findByLabelText('结果输出目录')).toHaveProperty('value', '/tmp/saved-results')
+    expect(selectedArchiveValue()).toBe('每次执行写入按日期和小时（YYYYMMDD-HH）创建的子目录')
+    await chooseSelectOption('触发方式', '固定间隔')
+    expect(selectedArchiveValue()).toBe('每次执行写入按日期和小时（YYYYMMDD-HH）创建的子目录')
+  })
+
+  it('旧任务首次编辑必须补选结果输出目录才可保存', async () => {
+    butlerListTasks.mockResolvedValue([task()])
+    renderTab()
+    await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
+
+    expect(await screen.findByText('请选择结果输出目录')).toBeTruthy()
     expect(butlerUpdateTask).not.toHaveBeenCalled()
   })
 
@@ -157,20 +250,21 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '改名后的任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '改后的提示词' } })
+    await chooseOutputDir('/tmp/output-selected')
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/selected-root' })
     fireEvent.click(screen.getByRole('button', { name: '添加目录' }))
     await screen.findByText('/tmp/selected-root')
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
     await waitFor(() => expect(butlerUpdateTask).toHaveBeenCalledTimes(1))
     const payload = butlerUpdateTask.mock.calls[0]![0] as { patch: Record<string, unknown> }
-    expect(payload.patch).toMatchObject({ name: '改名后的任务', prompt: '改后的提示词', workDirs: ['/tmp/selected-root'] })
+    expect(payload.patch).toMatchObject({ name: '改名后的任务', prompt: '改后的提示词', authorizedDirs: ['/tmp/selected-root'], outputDir: '/tmp/output-selected' })
     expect(payload.patch).not.toHaveProperty('workDir')
     expect(payload.patch).not.toHaveProperty('modelId')
     expect(payload.patch).not.toHaveProperty('modelServiceId')
     expect(payload.patch).not.toHaveProperty('reasoningEffort')
   })
 
-  it('目录选择器提交明确路径，用户取消不写入表单', async () => {
+  it('授权目录选择器提交明确路径，用户取消不写入表单', async () => {
     renderTab()
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
@@ -180,6 +274,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen' })
     fireEvent.click(browse)
     expect(await screen.findByText('/tmp/chosen')).toBeTruthy()
+    await chooseOutputDir('/tmp/output-selected')
   })
 
   it('历史详情读取 run 快照而不采用任务当前配置', async () => {
@@ -249,9 +344,24 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(card).toBeTruthy()
     expect(card!.querySelector('.butler-task-card__title')?.textContent).toBe('每日巡检')
     expect(card!.querySelector('.butler-task-card__summary')?.textContent).toContain('检查磁盘')
+    expect(card!.querySelector('.butler-task-card__output-dir')?.textContent).toContain('未设置（需编辑配置）')
+    expect(card!.querySelector('.butler-task-card__output-organization')?.textContent).toContain('未设置')
     expect(card!.querySelectorAll('.butler-task-card__tag')).toHaveLength(2)
     expect(card!.querySelector('.butler-task-card__header .ant-switch')).toBeTruthy()
     expect(card!.querySelector('.butler-task-card__footer')).toBeTruthy()
+  })
+
+  it('任务卡显示结果目录与归档方式，并给长路径保留完整 title', async () => {
+    const longPath = '/Users/space/Documents/Projects/Quarterly Reports/Exports/Automated Results/October 2026'
+    butlerListTasks.mockResolvedValue([task({ outputDir: longPath, outputOrganization: 'hourly', authorizedDirs: ['/tmp/materials'], workDirs: ['/tmp/materials'] })])
+    renderTab()
+    await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
+
+    const output = document.querySelector('.butler-task-card__output-dir') as HTMLElement
+    expect(output.textContent).toContain(longPath)
+    expect(output.title).toBe(longPath)
+    expect(document.querySelector('.butler-task-card__output-organization')?.textContent).toContain('按日期小时归档')
+    expect(document.querySelector('.butler-task-card__authorized-dirs')?.textContent).toContain('/tmp/materials')
   })
 
   it('停用任务带 disabled 视觉类；编辑图标按钮可打开编辑器', async () => {
@@ -280,6 +390,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     await waitFor(() => expect(screen.getByLabelText('任务名称')).toBeTruthy())
     fireEvent.change(screen.getByLabelText('任务名称'), { target: { value: '会失败的任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: 'x' } })
+    await chooseOutputDir()
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
@@ -296,6 +407,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '预检服务不可用' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '读取 report.csv' } })
+    await chooseOutputDir()
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
@@ -309,6 +421,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '多目录任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '汇总报告' } })
+    await chooseOutputDir()
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/root-a' })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/root-b' })
@@ -319,7 +432,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(screen.queryByText('/tmp/root-a')).toBeNull()
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
-    expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ workDirs: ['/tmp/root-b'] })
+    expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ authorizedDirs: ['/tmp/root-b'] })
   })
 
   it('阻断报告保留表单并列出默认未选候选，勾选后重新提交多根', async () => {
@@ -330,6 +443,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '预检任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '汇总 /tmp/suggested' } })
+    await chooseOutputDir()
     butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/root-a' })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
@@ -342,8 +456,8 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(candidate)
     fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(2))
-    expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ workDirs: ['/tmp/root-a'] })
-    expect(butlerCreateTask.mock.calls[1]![0]).toMatchObject({ workDirs: ['/tmp/root-a', '/tmp/suggested'] })
+    expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ authorizedDirs: ['/tmp/root-a'] })
+    expect(butlerCreateTask.mock.calls[1]![0]).toMatchObject({ authorizedDirs: ['/tmp/root-a', '/tmp/suggested'] })
   })
 
   it('启用预检阻断打开编辑表单展示候选，任务保持停用', async () => {

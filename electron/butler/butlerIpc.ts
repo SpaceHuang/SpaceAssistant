@@ -114,6 +114,16 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     return validated.ok ? { cancelled: false as const, path: validated.workDir } : { cancelled: false as const, error: validated.error }
   })
 
+  ipcMain.handle('butler:choose-outputdir', async () => {
+    const win = BrowserWindow.getFocusedWindow()
+    const result = await (win
+      ? dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
+      : dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] }))
+    if (result.canceled) return { cancelled: true as const }
+    const validated = await validateOutputDir(result.filePaths[0])
+    return validated.ok ? { cancelled: false as const, path: validated.outputDir } : { cancelled: false as const, error: validated.error }
+  })
+
   ipcMain.handle('butler:get-defaults', () => {
     const models = readStoredModels(db)
     const services = readLlmServices(db)

@@ -3,7 +3,7 @@ import { Alert, App, Button, Checkbox, DatePicker, Form, Input, InputNumber, Mod
 import { Pencil, Plus, SquarePlay, Trash2, X } from 'lucide-react'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
-import { getPreflightClarificationReasonMessageKey, getPreflightIssueMessageKey, type AutomationTask, type AutomationDeliveryPref, type AutomationTaskRun, type PreflightReport } from '../../../shared/automationTaskTypes'
+import { getPreflightClarificationReasonMessageKey, getPreflightIssueMessageKey, type AutomationTask, type AutomationDeliveryPref, type AutomationOutputOrganization, type AutomationTaskRun, type PreflightReport } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { buildOnceDisabledConstraints, onceAtInFuture } from './onceAtConstraints'
 
@@ -28,6 +28,19 @@ type TaskActions = {
   running: boolean
 }
 
+function defaultOutputOrganization(scheduleKind: string | undefined): AutomationOutputOrganization {
+  if (scheduleKind === 'daily') return 'daily'
+  if (scheduleKind === 'once') return 'direct'
+  return 'hourly'
+}
+
+function outputOrganizationText(value: AutomationOutputOrganization | null, t: TaskActions['t']): string {
+  if (value === 'daily') return t('butler.form.outputOrganizationDailyShort')
+  if (value === 'direct') return t('butler.form.outputOrganizationDirectShort')
+  if (value === 'hourly') return t('butler.form.outputOrganizationHourlyShort')
+  return t('butler.form.outputOrganizationLegacy')
+}
+
 function scheduleTagText(task: AutomationTask, t: TaskActions['t']): string {
   if (task.schedule.kind === 'interval') return t('butler.schedule.interval', { minutes: task.schedule.intervalMinutes })
   if (task.schedule.kind === 'daily') return t('butler.schedule.daily', { time: task.schedule.time })
@@ -46,7 +59,7 @@ function runStatusText(status: AutomationTaskRun['status'], t: TaskActions['t'])
   return t(key)
 }
 
-function WorkDirList({ value = [], onChange, t }: { value: string[]; onChange: (paths: string[]) => void; t: TaskActions['t'] }) {
+function AuthorizedDirList({ value = [], onChange, t }: { value: string[]; onChange: (paths: string[]) => void; t: TaskActions['t'] }) {
   const pathsRef = useRef(value)
   pathsRef.current = value
   const setPaths = (paths: string[]) => { pathsRef.current = paths; onChange(paths) }
@@ -59,10 +72,10 @@ function WorkDirList({ value = [], onChange, t }: { value: string[]; onChange: (
     }
   }
   return (
-    <div className="butler-workdirs">
+    <div className="butler-authorized-dirs">
       {value.map((workDir) => (
-        <div className="butler-workdirs__row" key={workDir}>
-          <Typography.Text className="butler-workdirs__path" title={workDir}>{workDir}</Typography.Text>
+        <div className="butler-authorized-dirs__row" key={workDir}>
+          <Typography.Text className="butler-authorized-dirs__path" title={workDir}>{workDir}</Typography.Text>
           <Button size="small" type="text" icon={<X size={14} aria-hidden />} aria-label={t('butler.form.removeWorkDirAria', { path: workDir })} onClick={() => {
             const next = value.filter((candidate) => candidate !== workDir)
             setPaths(next)
@@ -79,6 +92,7 @@ function WorkDirList({ value = [], onChange, t }: { value: string[]; onChange: (
 
 function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: TaskActions }) {
   const { t, onRun, onEdit, onDelete, onToggle, running } = actions
+  const authorizedDirs = task.authorizedDirs ?? task.workDirs ?? []
   return (
     <div className={`butler-task-card${task.enabled ? '' : ' butler-task-card--disabled'}`}>
       <div className="butler-task-card__header">
@@ -97,16 +111,22 @@ function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: Task
         </div>
       </div>
       <div className="butler-task-card__summary">
-        <SquarePlay size={13} aria-hidden className="butler-task-card__summary-icon" />
-        <span className="butler-task-card__summary-text" title={task.prompt}>
-          {task.prompt}
-        </span>
-        {task.workDirs?.length ? <span className="butler-task-card__workdir" title={task.workDirs.join('\n')}>{t('butler.form.workDir')}: {task.workDirs.join(', ')}</span> : null}
-        {task.lastRunAt ? (
-          <span className="butler-task-card__summary-meta">
-            {t('butler.lastRun', { time: dayjs(task.lastRunAt).format('YYYY-MM-DD HH:mm') })}
+        <div className="butler-task-card__summary-prompt">
+          <SquarePlay size={13} aria-hidden className="butler-task-card__summary-icon" />
+          <span className="butler-task-card__summary-text" title={task.prompt}>{task.prompt}</span>
+        </div>
+        <div className="butler-task-card__summary-details">
+          <span className="butler-task-card__output-dir" title={task.outputDir ?? undefined}>
+            {t('butler.form.outputDir')}: {task.outputDir || t('butler.form.outputDirLegacyShort')}
           </span>
-        ) : null}
+          <span className="butler-task-card__output-organization">
+            {t('butler.form.outputOrganization')}: {outputOrganizationText(task.outputOrganization, t)}
+          </span>
+          <span className="butler-task-card__authorized-dirs" title={authorizedDirs.join('\n')}>
+            {t('butler.form.authorizedDirs')}: {authorizedDirs.length ? authorizedDirs.join(', ') : t('butler.form.authorizedDirsEmpty')}
+          </span>
+          {task.lastRunAt ? <span className="butler-task-card__summary-meta">{t('butler.lastRun', { time: dayjs(task.lastRunAt).format('YYYY-MM-DD HH:mm') })}</span> : null}
+        </div>
       </div>
       <div className="butler-task-card__footer">
         <Button size="small" type="primary" loading={running} disabled={!task.enabled} onClick={() => onRun(task)}>
@@ -142,15 +162,21 @@ export function ButlerTaskSettings() {
   const [historyRuns, setHistoryRuns] = useState<AutomationTaskRun[]>([])
   const [preflightReport, setPreflightReport] = useState<PreflightReport | null>(null)
   const [writeError, setWriteError] = useState<string | null>(null)
-  const [workDirs, setWorkDirs] = useState<string[]>([])
-  const [workDirError, setWorkDirError] = useState(false)
+  const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([])
+  const outputOrganizationTouched = useRef(false)
   const [form] = Form.useForm()
   const scheduleKind = Form.useWatch('scheduleKind', form)
+  const outputDir = Form.useWatch('outputDir', form) as string | undefined
   const [modelCandidates, setModelCandidates] = useState<Array<{ modelId: string; providerModelName: string; serviceId: string; serviceName: string; supportsThinking: boolean }>>([])
   const selectedModelId = Form.useWatch('modelId', form)
   const selectedServiceId = Form.useWatch('modelServiceId', form)
   const selectedCandidate = modelCandidates.find((candidate) => candidate.modelId === selectedModelId && candidate.serviceId === selectedServiceId)
   const onceConstraints = buildOnceDisabledConstraints()
+
+  useEffect(() => {
+    if (editing || outputOrganizationTouched.current) return
+    form.setFieldValue('outputOrganization', defaultOutputOrganization(scheduleKind))
+  }, [editing, form, scheduleKind])
 
   const refresh = useCallback(async () => {
     try {
@@ -172,9 +198,10 @@ export function ButlerTaskSettings() {
 
   const openCreate = async () => {
     setEditing(null)
+    outputOrganizationTouched.current = false
     const [defaults, candidates] = await Promise.all([window.api.butlerGetTaskDefaults(), window.api.butlerGetModelCandidates()])
     setModelCandidates(candidates)
-    setWorkDirs([])
+    setAuthorizedDirs([])
     form.setFieldsValue({
       name: '',
       prompt: '',
@@ -183,6 +210,8 @@ export function ButlerTaskSettings() {
       dailyTime: dayjs('09:00', 'HH:mm'),
       onceAt: dayjs().add(1, 'hour'),
       deliveryPref: 'desktop',
+      outputDir: undefined,
+      outputOrganization: 'hourly',
       workDirs: [],
       modelId: defaults.modelId,
       modelServiceId: defaults.modelServiceId,
@@ -199,7 +228,9 @@ export function ButlerTaskSettings() {
 
   const openEdit = (task: AutomationTask) => {
     setEditing(task)
-    setWorkDirs(task.workDirs ?? [])
+    outputOrganizationTouched.current = true
+    const roots = task.authorizedDirs ?? task.workDirs ?? []
+    setAuthorizedDirs(roots)
     void window.api.butlerGetModelCandidates().then(setModelCandidates)
     form.setFieldsValue({
       name: task.name,
@@ -209,7 +240,9 @@ export function ButlerTaskSettings() {
       dailyTime: dayjs(task.schedule.kind === 'daily' ? task.schedule.time : '09:00', 'HH:mm'),
       onceAt: dayjs(task.schedule.kind === 'once' ? task.schedule.at : Date.now() + 3_600_000),
       deliveryPref: task.deliveryPref,
-      workDirs: task.workDirs ?? [],
+      outputDir: task.outputDir ?? undefined,
+      outputOrganization: task.outputOrganization ?? defaultOutputOrganization(task.schedule.kind),
+      workDirs: roots,
       modelId: task.modelId,
       modelServiceId: task.modelServiceId,
       modelOverride: task.modelOverride,
@@ -221,13 +254,23 @@ export function ButlerTaskSettings() {
     setEditorOpen(true)
   }
 
+  const browseOutputDir = async () => {
+    try {
+      const result = await window.api.butlerChooseOutputDir()
+      if (!result.cancelled && result.path) {
+        form.setFieldValue('outputDir', result.path)
+        setWriteError(null)
+        void form.validateFields(['outputDir']).catch(() => undefined)
+      } else if (!result.cancelled && result.error) {
+        setWriteError(result.error)
+      }
+    } catch {
+      setWriteError(t('butler.form.outputDirPickFailed'))
+    }
+  }
+
   const submit = async () => {
     if (submitting) return
-    if (workDirs.length === 0) {
-      setWorkDirError(true)
-      return
-    }
-    setWorkDirError(false)
     // 校验失败：antd 已在表单项上展示错误，reject 就地吸收，不产生 unhandled rejection
     const values = await form.validateFields().catch(() => null)
     if (!values) return
@@ -249,7 +292,10 @@ export function ButlerTaskSettings() {
             patch: {
               expectedTaskRevision: editing.taskRevision ?? 0,
               name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref,
-              workDirs,
+              authorizedDirs,
+              workDirs: authorizedDirs,
+              outputDir: values.outputDir,
+              outputOrganization: values.outputOrganization,
               ...(chosen ? {
                 modelId: chosen.modelId, modelServiceId: chosen.serviceId,
                 modelOverride: chosen.providerModelName, reasoningEffort: values.reasoningEffort
@@ -261,7 +307,10 @@ export function ButlerTaskSettings() {
             prompt: values.prompt,
             schedule,
             deliveryPref: values.deliveryPref,
-            workDirs,
+            authorizedDirs,
+            workDirs: authorizedDirs,
+            outputDir: values.outputDir,
+            outputOrganization: values.outputOrganization,
             modelId: values.modelId,
             modelServiceId: values.modelServiceId,
             modelOverride: chosen?.providerModelName,
@@ -280,13 +329,6 @@ export function ButlerTaskSettings() {
         }
         return
       }
-      if (res.preflightReport) {
-        setPreflightReport(res.preflightReport)
-        message.warning(t('butler.form.draftSavedTargetUnclear'))
-        await refresh()
-        return
-      }
-      setPreflightReport(null)
       setPreflightReport(null)
       message.success(editing ? t('butler.updated') : t('butler.created'))
       setEditorOpen(false)
@@ -399,8 +441,15 @@ export function ButlerTaskSettings() {
           </Button>
         ]}
       >
-        <Form form={form} layout="vertical" className="butler-task-editor">
-          {editing && editing.workDirs.length === 0 ? <Alert type="info" showIcon message={t('butler.form.workDirLegacy')} /> : null}
+        <Form
+          form={form}
+          layout="vertical"
+          className="butler-task-editor"
+          onValuesChange={(changedValues) => {
+            if (Object.prototype.hasOwnProperty.call(changedValues, 'outputOrganization')) outputOrganizationTouched.current = true
+          }}
+        >
+          {editing && !editing.outputDir ? <Alert className="butler-task-editor__wide" type="info" showIcon message={t('butler.form.outputDirLegacy')} /> : null}
           {preflightReport ? (
             <Alert className="butler-preflight-report" type={preflightReport.status === 'blocked' ? 'warning' : 'info'} showIcon message={t('butler.form.preflightTitle')} description={(
               <div className="butler-preflight-report__content">
@@ -430,11 +479,11 @@ export function ButlerTaskSettings() {
                   {preflightReport.suggestedDirectories.map((candidate) => (
                     <Checkbox
                       key={candidate.path}
-                      checked={workDirs.includes(candidate.path)}
+                      checked={authorizedDirs.includes(candidate.path)}
                       disabled={candidate.validationStatus !== 'valid'}
                       aria-label={t('butler.form.suggestedDirectoryAria', { path: candidate.path, purpose: candidate.purpose })}
                       onChange={(event) => {
-                        setWorkDirs(event.target.checked ? [...new Set([...workDirs, candidate.path])] : workDirs.filter((root) => root !== candidate.path))
+                        setAuthorizedDirs(event.target.checked ? [...new Set([...authorizedDirs, candidate.path])] : authorizedDirs.filter((root) => root !== candidate.path))
                       }}
                     >
                       <span className="butler-preflight-report__candidate-path">{candidate.path}</span>
@@ -456,8 +505,36 @@ export function ButlerTaskSettings() {
           <Form.Item name="prompt" className="butler-task-editor__wide" label={t('butler.form.prompt')} rules={[{ required: true, message: t('butler.form.promptRequired') }]}>
             <Input.TextArea rows={4} />
           </Form.Item>
-          <Form.Item className="butler-task-editor__wide" label={t('butler.form.workDir')} required validateStatus={workDirError ? 'error' : undefined} help={workDirError ? t('butler.form.workDirRequired') : undefined}>
-            <WorkDirList t={t} value={workDirs} onChange={setWorkDirs} />
+          <Form.Item
+            name="outputDir"
+            className="butler-task-editor__wide"
+            label={t('butler.form.outputDir')}
+            rules={[{ required: true, message: t('butler.form.outputDirRequired') }]}
+            extra={t('butler.form.outputDirectoryHint')}
+          >
+            <Input
+              className="butler-output-dir-picker"
+              readOnly
+              title={outputDir}
+              placeholder={t('butler.form.outputDirPlaceholder')}
+              suffix={<Button type="link" onClick={() => void browseOutputDir()}>{t('butler.form.chooseOutputDir')}</Button>}
+            />
+          </Form.Item>
+          <Form.Item
+            name="outputOrganization"
+            label={t('butler.form.outputOrganization')}
+            rules={[{ required: true, message: t('butler.form.outputOrganizationRequired') }]}
+          >
+            <Select
+              options={[
+                { value: 'direct', label: t('butler.form.outputOrganizationDirect') },
+                { value: 'daily', label: t('butler.form.outputOrganizationDaily') },
+                { value: 'hourly', label: t('butler.form.outputOrganizationHourly') }
+              ]}
+            />
+          </Form.Item>
+          <Form.Item className="butler-task-editor__wide" label={t('butler.form.authorizedDirs')} extra={t('butler.form.authorizedDirsHint')}>
+            <AuthorizedDirList t={t} value={authorizedDirs} onChange={setAuthorizedDirs} />
           </Form.Item>
           <Form.Item name="modelServiceId" hidden><Input /></Form.Item>
           <Form.Item name="modelId" hidden><Input /></Form.Item>

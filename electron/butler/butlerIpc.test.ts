@@ -45,6 +45,15 @@ describe('butler IPC workdir/config fields', () => {
     await expect(map.get('butler:choose-workdir')!()).resolves.toMatchObject({ cancelled: false, path: await realpath(os.tmpdir()) })
   })
 
+  it('result directory picker validates a writable output root separately', async () => {
+    const map = handlers()
+    electronMock.canceled = true
+    await expect(map.get('butler:choose-outputdir')!()).resolves.toEqual({ cancelled: true })
+    electronMock.canceled = false
+    electronMock.filePaths = [os.tmpdir()]
+    await expect(map.get('butler:choose-outputdir')!()).resolves.toMatchObject({ cancelled: false, path: await realpath(os.tmpdir()) })
+  })
+
   it('defaults reasoning effort to off when the configured default model does not support Thinking', async () => {
     const map = handlers()
     setConfigValue(db!, 'config.models', JSON.stringify([{ id: 'model-1', name: 'provider-model', enabled: true, supportsThinking: false }]))

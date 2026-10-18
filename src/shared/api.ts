@@ -197,6 +197,7 @@ export type SpaceAssistantApi = {
   butlerListTasks: () => Promise<import('./automationTaskTypes').AutomationTask[]>
   butlerListTaskRuns: (payload: { taskId: string }) => Promise<import('./automationTaskTypes').AutomationTaskRun[]>
   butlerChooseWorkDir: () => Promise<{ cancelled: true } | { cancelled: false; path?: string; error?: string }>
+  butlerChooseOutputDir: () => Promise<{ cancelled: true } | { cancelled: false; path?: string; error?: string }>
   butlerGetTaskDefaults: () => Promise<Partial<import('./automationTaskTypes').AutomationTaskInput>>
   butlerGetModelCandidates: () => Promise<Array<{ modelId: string; providerModelName: string; serviceId: string; serviceName: string; supportsThinking: boolean }>>
   butlerCreateTask: (payload: Partial<import('./automationTaskTypes').AutomationTaskInput>) => Promise<import('./automationTaskTypes').ButlerTaskWriteResult>

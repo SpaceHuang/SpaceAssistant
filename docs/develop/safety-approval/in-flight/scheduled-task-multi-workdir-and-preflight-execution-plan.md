@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：既有 E-01～E-10 完成；结果目录拆分 E-11a～E-11d 完成，E-11e～E-11f 进行中
+> 状态：既有 E-01～E-10 完成；结果目录拆分 E-11a～E-11e 完成，E-11f 进行中
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
@@ -283,13 +283,13 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 ### E-11e 设置表单、动态默认、摘要与中英文文案
 
 - **依赖：** E-11a、E-11d；界面归属卡已由用户批准，已完成 Impeccable 检查点 A/B。
-- **目标文件：** `src/renderer/components/Config/ButlerTaskSettings.tsx`、对应 styles、`src/renderer/i18n/resources/{zh-CN,en-US}/config.json`、组件 tests。
+- **目标文件：** `src/renderer/components/Config/ButlerTaskSettings.tsx`、`src/renderer/components/Config/ButlerTaskSettings.test.tsx`、`src/renderer/theme/config-settings.css`、`src/renderer/i18n/resources/{zh-CN,en-US}/config.json`、`src/renderer/i18n/types.ts`、`src/shared/api.ts`、`electron/preload.ts`、`electron/butler/butlerIpc.ts`、`electron/butler/butlerIpc.test.ts`。
 - **动作与产物：** 在现有定时任务编辑弹窗新增必选结果输出目录和三种归档模式；保留独立可空授权读写目录列表；说明生成结果写入输出目录，读取/修改资料需另加授权目录。创建时按任务 scheduleKind 动态给默认值，用户手动更改后不覆盖；编辑保留保存值。任务卡摘要展示输出位置和策略，不增加页面。
 - **完成判据：** TDD 覆盖字段校验、三种选择、每天/间隔/一次性默认、用户手选、编辑回填、长路径/窄窗呈现及失败保留；i18n keys 中英文对齐，Ant Design 控件、已有目录选择器和 `--sa-*` 样式一致；Impeccable detector 无新阻断。
 - **验证命令：** 组件定向 Vitest、`npm run i18n:generate-types`、`npm run i18n:check`、`npm run typecheck:renderer`、Impeccable detector。
-- **证据：** 待执行。
+- **证据：** RED：在结果目录控件和校验接入前，新建任务测试因缺少“结果输出目录”必填提示失败。GREEN：`npm exec vitest run src/renderer/components/Config/ButlerTaskSettings.test.tsx electron/butler/butlerIpc.test.ts` 通过，2 个文件 / 45 个用例；覆盖必选输出目录、授权目录可空、间隔/每天/一次性归档默认及手动选择保持、编辑回填、旧任务首次编辑拦截、长路径摘要、TARGET_UNCLEAR 不保存，以及单独输出目录选择 IPC。`npm run i18n:generate-types`、`npm run i18n:check`、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run build:electron:incremental`、`git diff --check` 均通过。`npm run dev` 启动后检查了新建表单、必选/可选字段和系统目录选择器打开/取消；窄窗单列由 720px media query 处理。Impeccable detector 报告 8 个既有 advisory 均位于 `config-settings.css` 的其他样式区（第 406、1156、1157、1634、1635、1726、1817、1884 行），本任务新增样式区域无新阻断。
 - **可执行环境：** 自动化在本机；真实桌面宽/窄窗和键盘验收列 X-06。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-11f 补充阶段集成验收并关闭结果目录拆分
 

@@ -2591,12 +2591,20 @@
 
 .butler-task-card__summary {
   display: flex;
-  align-items: center;
-  gap: var(--sa-config-gap-field);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sa-config-gap-tight);
   padding: 0 var(--sa-config-gap-substack);
   font-size: var(--sa-config-font-sm);
   line-height: var(--sa-config-line);
   color: var(--sa-text-secondary);
+  min-width: 0;
+}
+
+.butler-task-card__summary-prompt {
+  display: flex;
+  align-items: center;
+  gap: var(--sa-config-gap-field);
   min-width: 0;
 }
 
@@ -2620,14 +2628,25 @@
   font-variant-numeric: tabular-nums;
 }
 
-.butler-task-card__workdir {
-  flex: 0 1 36%;
+.butler-task-card__summary-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sa-config-gap-tight) var(--sa-config-gap-stack);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding-left: calc(13px + var(--sa-config-gap-field));
   font-size: var(--sa-config-font-meta);
   color: var(--sa-text-tertiary);
+}
+
+.butler-task-card__output-dir,
+.butler-task-card__output-organization,
+.butler-task-card__authorized-dirs {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.butler-task-card__summary-details .butler-task-card__summary-meta {
+  grid-column: 1 / -1;
 }
 
 .butler-task-card__footer {
@@ -2657,14 +2676,14 @@
   grid-column: 1 / -1;
 }
 
-.butler-workdirs {
+.butler-authorized-dirs {
   display: flex;
   flex-direction: column;
   gap: var(--sa-config-gap-field);
   min-width: 0;
 }
 
-.butler-workdirs__row {
+.butler-authorized-dirs__row {
   display: flex;
   align-items: flex-start;
   gap: var(--sa-config-gap-tight);
@@ -2675,7 +2694,7 @@
   background: var(--sa-bg-elevated);
 }
 
-.butler-workdirs__path {
+.butler-authorized-dirs__path {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -2757,6 +2776,15 @@
 
   .butler-task-editor__wide,
   .butler-preflight-report {
+    grid-column: auto;
+  }
+
+  .butler-task-card__summary-details {
+    grid-template-columns: minmax(0, 1fr);
+    padding-left: 0;
+  }
+
+  .butler-task-card__summary-details .butler-task-card__summary-meta {
     grid-column: auto;
   }
 }
