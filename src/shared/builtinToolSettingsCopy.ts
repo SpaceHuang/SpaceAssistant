@@ -7,6 +7,11 @@ export type BuiltinToolI18nKeys = {
 }
 
 const TOOL_I18N_KEYS: Record<string, BuiltinToolI18nKeys> = {
+  memory: {
+    displayName: 'tools.builtin.memory.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.memory.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.memory.disabledHint' as NamespaceKeyMap['config']
+  },
   read_file: {
     displayName: 'tools.builtin.readFile.displayName' as NamespaceKeyMap['config'],
     summary: 'tools.builtin.readFile.summary' as NamespaceKeyMap['config'],

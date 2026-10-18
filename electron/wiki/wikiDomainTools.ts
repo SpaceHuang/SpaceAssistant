@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { defineDirectTool, type RegisteredTool } from '../tools/plannedToolRegistry'
+import { definePlannedTool, type DirectToolSpec, type RegisteredTool } from '../tools/plannedToolRegistry'
 import type { ToolExecutionContext, ToolExecutorResult } from '../tools/types'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { reconcileExternalWikiChanges } from './wikiReconciliationService'
@@ -22,58 +22,71 @@ const sourceReadServices = new Map<string, ReturnType<typeof createWikiSourceSer
 const schemaProposalServices = new Map<string, ReturnType<typeof createWikiSchemaProposalService>>()
 const historyServices = new Map<string, { schema: WikiDomainSchema; service: ReturnType<typeof createWikiHistoryService> }>()
 
+/** Wiki domain calls still use their own object/revision checks, but must enter the prepared dispatch lane. */
+function defineWikiTool(spec: DirectToolSpec<WikiInput, ToolExecutorResult>): RegisteredTool {
+  return definePlannedTool<WikiInput, { input: WikiInput }, ToolExecutorResult>({
+    name: spec.name,
+    actionClass: spec.actionClass,
+    parseInput: spec.parseInput,
+    plan: async (input) => ({ input: structuredClone(input) }),
+    execute: ({ input }, context) => spec.execute(input, { runtimeContext: context.runtimeContext } as never),
+    facts: () => ({ operation: spec.name }),
+    display: () => ({ operation: spec.name })
+  })
+}
+
 export function createWikiDomainTools(): RegisteredTool[] {
-  return [defineDirectTool<WikiInput, ToolExecutorResult>({
+  return [defineWikiTool({
     name: 'memory.wiki_get_schema',
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (_input, context) => getWikiSchemaForContext(context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_import_source',
     actionClass: 'write',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => importWikiSourceForContext(input, context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_search',
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => searchWikiForContext(input, context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_open_page',
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => openWikiPageForContext(input, context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_read_page',
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => readWikiPageForContext(input, context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_read_source',
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => readWikiSourceForContext(input, context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_list_page_revisions',
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => listWikiPageRevisionsForContext(input, context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_restore_page',
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => prepareWikiRestoreForContext(input, context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_apply_restore',
     actionClass: 'write',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => applyWikiRestoreForContext(input, context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_propose_schema_change',
     actionClass: 'write',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => proposeWikiSchemaChangeForContext(input, context.runtimeContext as ToolExecutionContext)
-  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+  }), defineWikiTool({
     name: 'memory.wiki_update_schema',
     actionClass: 'write',
     parseInput: (input) => requireRecord(input),

@@ -259,6 +259,11 @@
     "listIntro": "When a tool is disabled, the agent cannot call it in chat. Related tasks may fail or fall back to other capabilities.",
     "disabledHintPrefix": "When disabled:",
     "builtin": {
+      "memory": {
+        "displayName": "Wiki knowledge discovery",
+        "summary": "Discover shared Wiki knowledge operations and their parameters on demand.",
+        "disabledHint": "When disabled, the agent cannot discover or call shared Wiki knowledge operations."
+      },
       "readFile": {
         "displayName": "Read file",
         "summary": "Read file contents within the work directory.",

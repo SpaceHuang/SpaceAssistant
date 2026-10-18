@@ -31,7 +31,8 @@ function makeDeps(overrides: Partial<Parameters<typeof classifyOutboundMessageWi
         ok: true,
         rawRelPath: srcRelPath,
         copied: false
-      }))
+      })),
+    wikiImportAllRaw: overrides.wikiImportAllRaw ?? vi.fn().mockResolvedValue({ ok: true, sources: [{ sourceId: 'source-1', sourceRevision: 1, displayName: 'notes.md' }] })
   }
 }
 

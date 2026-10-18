@@ -19,6 +19,7 @@ export type OutboundClassifierDeps = {
   wikiImportRaw: (payload: {
     srcRelPath: string
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
+  wikiImportAllRaw?: () => Promise<{ ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> } | { ok: false; error: string }>
 }
 
 /** 执行中仍可立即处理的出站消息（/skill list 等），其余进入排队 */
@@ -43,7 +44,8 @@ export async function classifyOutboundMessageWithDeps(
   const wikiCmd = await parseWikiCommand(trimmed, ctx.sessionSkillsState, {
     wikiInit: deps.wikiInit,
     wikiStatus: deps.wikiStatus,
-    wikiImportRaw: deps.wikiImportRaw
+    wikiImportRaw: deps.wikiImportRaw,
+    wikiImportAllRaw: deps.wikiImportAllRaw
   })
   if (wikiCmd.type === 'command') return 'immediate-command'
   if (wikiCmd.type === 'run') return 'chat-run'

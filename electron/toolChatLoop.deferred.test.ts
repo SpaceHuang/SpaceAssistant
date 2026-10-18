@@ -83,6 +83,7 @@ import { throwIfChatCancelled } from './chatCancelRegistry'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { createHash } from 'node:crypto'
 import { initWikiStructure } from './wiki/wikiInit'
 import { DEFAULT_WIKI_CONFIG } from '../src/shared/domainTypes'
 import { createWikiFileStore } from './wiki/wikiFileStore'
@@ -287,7 +288,9 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
     try {
       await initWikiStructure(workDir, DEFAULT_WIKI_CONFIG, { userDataPath: userDataDir, installSkill: false })
       const store = createWikiFileStore(path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath))
-      await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: 'p-1', path: 'wiki/private-location.md', revision: 3, title: 'Space Assistant', categoryId: 'topic', summary: 'Assistant architecture' }] })
+      const pageText = `<!-- wiki-page:start -->\n${JSON.stringify({ formatVersion: 1, pageId: 'p-1', categoryId: 'topic', summary: 'Assistant architecture', parentPageId: null, sourceRefs: [], revision: 3 })}\n<!-- wiki-page:end -->\n# Space Assistant\n\nAssistant architecture`
+      await store.write('wiki/private-location.md', pageText)
+      await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: 'p-1', path: 'wiki/private-location.md', revision: 3, contentHash: createHash('sha256').update(pageText, 'utf8').digest('hex'), title: 'Space Assistant', categoryId: 'topic', summary: 'Assistant architecture' }] })
       const { result } = await runWith(baseMaterials({
         providerRouteId: routeId,
         userDataDir,

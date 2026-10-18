@@ -259,6 +259,11 @@
     "listIntro": "关闭某工具后，Agent 在对话中将无法调用它，相关任务可能失败或只能改用其它能力。",
     "disabledHintPrefix": "关闭后：",
     "builtin": {
+      "memory": {
+        "displayName": "Wiki 知识发现",
+        "summary": "按需发现共享 Wiki 的知识操作与参数。",
+        "disabledHint": "关闭后 Agent 无法发现或调用共享 Wiki 知识操作。"
+      },
       "readFile": {
         "displayName": "读取文件",
         "summary": "读取工作目录内的文件内容。",

@@ -11,6 +11,7 @@ import type { ToolActionDescriptor } from './confirmation/types'
  * wechat 出站→low 是计划 §4 的演进目标，留待允许行为变化的阶段统一。
  */
 export const BUILTIN_TOOL_METADATA: Record<string, ToolActionDescriptor> = {
+  memory: { toolName: 'memory', actionClass: 'read', riskLevel: 'low', extractors: [] },
   read_file: { toolName: 'read_file', actionClass: 'read', riskLevel: 'low', extractors: [] },
   grep: { toolName: 'grep', actionClass: 'read', riskLevel: 'low', extractors: [] },
   list_directory: { toolName: 'list_directory', actionClass: 'read', riskLevel: 'low', extractors: [] },

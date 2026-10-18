@@ -7,8 +7,8 @@ const ALL_TOOLS = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
 
 describe('builtin tool metadata（P0 概念收敛）', () => {
   it('每个内置工具都注册了 actionClass / riskLevel / extractors 元数据', () => {
-    // 19 个 P0 内置工具 + tool_search（MCP 延迟加载检索元工具，FR2）
-    expect(ALL_TOOLS).toHaveLength(20)
+    // Wiki discovery is an additional built-in read tool alongside the P0 set and tool_search.
+    expect(ALL_TOOLS).toHaveLength(21)
     for (const name of ALL_TOOLS) {
       const meta = getBuiltinToolMetadata(name)
       expect(meta, `${name} 缺元数据`).toBeDefined()
