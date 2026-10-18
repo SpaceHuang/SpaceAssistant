@@ -6,8 +6,13 @@ import { createWikiFileStore } from './wikiFileStore'
 import { resolveSharedWikiRoot } from './wikiInit'
 import { parseWikiSchema } from './wikiSchema'
 import type { WikiFileStore } from './wikiFileStore'
+import { createWikiDomainReadService, WikiDomainReadError, type WikiReadCaller, type WikiPageReadRecord } from './wikiDomainRead'
+import { createWikiSourceService, WikiSourceError } from './wikiSourceService'
 
 type WikiInput = Record<string, unknown>
+type PageReadService = ReturnType<typeof createWikiDomainReadService>
+const pageReadServices = new Map<string, { pages: WikiPageReadRecord[]; service: PageReadService }>()
+const sourceReadServices = new Map<string, ReturnType<typeof createWikiSourceService>>()
 
 export function createWikiDomainTools(): RegisteredTool[] {
   return [defineDirectTool<WikiInput, ToolExecutorResult>({
@@ -20,6 +25,21 @@ export function createWikiDomainTools(): RegisteredTool[] {
     actionClass: 'read',
     parseInput: (input) => requireRecord(input),
     execute: async (input, context) => searchWikiForContext(input, context.runtimeContext as ToolExecutionContext)
+  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+    name: 'memory.wiki_open_page',
+    actionClass: 'read',
+    parseInput: (input) => requireRecord(input),
+    execute: async (input, context) => openWikiPageForContext(input, context.runtimeContext as ToolExecutionContext)
+  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+    name: 'memory.wiki_read_page',
+    actionClass: 'read',
+    parseInput: (input) => requireRecord(input),
+    execute: async (input, context) => readWikiPageForContext(input, context.runtimeContext as ToolExecutionContext)
+  }), defineDirectTool<WikiInput, ToolExecutorResult>({
+    name: 'memory.wiki_read_source',
+    actionClass: 'read',
+    parseInput: (input) => requireRecord(input),
+    execute: async (input, context) => readWikiSourceForContext(input, context.runtimeContext as ToolExecutionContext)
   })]
 }
 
@@ -53,6 +73,53 @@ export async function searchWikiForContext(input: WikiInput, context: Pick<ToolE
     return { success: true, data: await searchWikiCatalog(await getReadyWikiStore(context), input) }
   } catch (error) {
     return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'wiki_search_unavailable' }
+  }
+}
+
+export async function openWikiPageForContext(input: WikiInput, context: ToolExecutionContext): Promise<ToolExecutorResult> {
+  if (typeof input.pageId !== 'string' || !input.pageId) return { success: false, error: 'wiki-page-unavailable' }
+  if (input.revision !== undefined && (!Number.isSafeInteger(input.revision) || (input.revision as number) < 1)) return { success: false, error: 'wiki-page-unavailable' }
+  try {
+    const store = await getReadyWikiStore(context)
+    const service = await getPageReadService(store)
+    return { success: true, data: await service.openPage(input.pageId, wikiCaller(context), input.revision as number | undefined) }
+  } catch (error) {
+    return { success: false, error: readErrorCode(error, 'wiki-page-unavailable') }
+  }
+}
+
+export async function readWikiPageForContext(input: WikiInput, context: ToolExecutionContext): Promise<ToolExecutorResult> {
+  if (typeof input.readHandle !== 'string' || !input.readHandle) return { success: false, error: 'page_read_handle_expired' }
+  try {
+    const store = await getReadyWikiStore(context)
+    const service = await getPageReadService(store)
+    return { success: true, data: await service.readPage(input.readHandle, wikiCaller(context), {
+      ...(typeof input.cursor === 'string' ? { cursor: input.cursor } : {}),
+      ...(typeof input.startLine === 'number' ? { startLine: input.startLine } : {}),
+      ...(typeof input.maxChars === 'number' ? { maxChars: input.maxChars } : {})
+    }) }
+  } catch (error) {
+    return { success: false, error: readErrorCode(error, 'wiki-page-unavailable') }
+  }
+}
+
+export async function readWikiSourceForContext(input: WikiInput, context: ToolExecutionContext): Promise<ToolExecutorResult> {
+  if (typeof input.sourceId !== 'string' || !input.sourceId) return { success: false, error: 'source_missing' }
+  try {
+    const store = await getReadyWikiStore(context)
+    let service = sourceReadServices.get(store.root)
+    if (!service) {
+      service = createWikiSourceService({ store, resolveSourceRef: () => undefined, validateSource: async () => false, authorize: async () => true })
+      sourceReadServices.set(store.root, service)
+    }
+    const sourceRevision = typeof input.sourceRevision === 'number' ? input.sourceRevision : undefined
+    return { success: true, data: await service.readSource(input.sourceId, wikiCaller(context), {
+      ...(sourceRevision !== undefined ? { sourceRevision } : {}),
+      ...(typeof input.cursor === 'string' ? { cursor: input.cursor } : {}),
+      ...(typeof input.maxChars === 'number' ? { maxChars: input.maxChars } : {})
+    }) }
+  } catch (error) {
+    return { success: false, error: error instanceof WikiSourceError ? error.code : error instanceof WikiDomainToolError ? error.code : 'source_missing' }
   }
 }
 
@@ -95,6 +162,37 @@ async function getReadyWikiStore(context: Pick<ToolExecutionContext, 'wikiConfig
   const lifecycle = await createWikiLifecycleController(root).read()
   if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') throw new WikiDomainToolError('wiki_lifecycle_not_ready')
   return createWikiFileStore(root)
+}
+
+async function getPageReadService(store: WikiFileStore): Promise<PageReadService> {
+  let cached = pageReadServices.get(store.root)
+  if (!cached) {
+    const pages: WikiPageReadRecord[] = []
+    cached = { pages, service: createWikiDomainReadService({
+      store,
+      pages,
+      authorize: async (pageId) => {
+        const lifecycle = await createWikiLifecycleController(store.root).read()
+        if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') return false
+        return (await store.readCatalog())?.pages.some((page) => page.pageId === pageId) ?? false
+      }
+    }) }
+    pageReadServices.set(store.root, cached)
+  }
+  const catalog = await store.readCatalog()
+  cached.pages.splice(0, cached.pages.length, ...(catalog?.pages ?? []).map((page) => ({
+    pageId: page.pageId, path: page.path, title: page.title ?? '', categoryId: page.categoryId ?? '', revision: page.revision ?? 1,
+    summary: page.summary ?? '', parentPageId: page.parentPageId ?? null, sourceRefs: page.sourceRefs ?? []
+  })))
+  return cached.service
+}
+
+function wikiCaller(context: Pick<ToolExecutionContext, 'sessionId' | 'lane' | 'remoteContext'>): WikiReadCaller {
+  return { callerId: `${context.sessionId}:${context.remoteContext?.authOwner ?? 'local'}`, lane: context.lane ?? 'desktop' }
+}
+
+function readErrorCode(error: unknown, fallback: string): string {
+  return error instanceof WikiDomainReadError ? error.code : error instanceof WikiDomainToolError ? error.code : fallback
 }
 
 interface SearchCursor { catalogHash: string; query: string; categoryId?: string; offset: number }
