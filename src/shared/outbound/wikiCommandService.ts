@@ -16,7 +16,7 @@ export type WikiCommandDeps = {
   wikiStatus: () => Promise<WikiStatus>
   wikiImportRaw: (payload: {
     srcRelPath: string
-  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
+  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number } | { ok: false; error: string }>
 }
 
 const WIKI_SKILL = WIKI_VOCABULARY_PREFIX
@@ -94,7 +94,7 @@ export async function parseWikiCommand(
     if (target === '--all') {
       return {
         type: 'run',
-        text: '请对 raw/ 下尚未 ingest 的文件执行 Wiki Ingest 工作流（批量上限见配置）。',
+        text: '请先通过 memory.wiki_search 和 memory.wiki_import_source 逐个导入本次任务明确选中的资料；不要使用通用文件工具读取 Wiki 路径。',
         hint: '[Wiki] Ingest 已开始：--all',
         skillsState,
         wikiModeActive: true
@@ -105,14 +105,15 @@ export async function parseWikiCommand(
     if (!importResult.ok) {
       return { type: 'command', hint: `[Wiki] ${importResult.error}` }
     }
+    if (!importResult.sourceId || !importResult.sourceRevision) return { type: 'command', hint: '[Wiki] 来源绑定未完成，无法启动领域 Ingest；请检查 Wiki 服务状态后重试' }
 
-    const rawPath = importResult.rawRelPath
+    const sourceId = importResult.sourceId
     return {
       type: 'run',
-      text: `请对 raw 文件「${rawPath}」执行 Wiki Ingest 工作流。`,
+      text: `请通过 memory.wiki_read_source 读取并整理来源 sourceId=${sourceId}，再通过 memory.wiki_save_page 保存知识页面。来源版本为 ${importResult.sourceRevision}。`,
       hint: importResult.copied
-        ? `[Wiki] 已导入 raw：${rawPath}，Ingest 已开始`
-        : `[Wiki] Ingest 已开始：${rawPath}`,
+        ? `[Wiki] 已绑定知识来源，Ingest 已开始：${sourceId}`
+        : `[Wiki] 已绑定现有知识来源，Ingest 已开始：${sourceId}`,
       skillsState,
       wikiModeActive: true
     }

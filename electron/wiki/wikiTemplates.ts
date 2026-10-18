@@ -2,6 +2,19 @@ export const DEFAULT_SCHEMA_MD = `# LLM Wiki Schema
 
 > 本文件定义 Wiki 目录约定与 ingest / query / lint 工作流。可与 LLM 协作演化。
 
+<!-- wiki-categories:start -->
+{
+  "formatVersion": 1,
+  "categories": [
+    { "id": "entity", "name": "实体", "description": "人物、组织、产品等实体", "status": "active" },
+    { "id": "concept", "name": "概念", "description": "概念与术语", "status": "active" },
+    { "id": "topic", "name": "主题", "description": "主题综合与综述", "status": "active" },
+    { "id": "source", "name": "来源摘要", "description": "与原始资料对应的摘要页", "status": "active" },
+    { "id": "query", "name": "查询归档", "description": "用户要求归档的查询分析页", "status": "active" }
+  ]
+}
+<!-- wiki-categories:end -->
+
 ## 目录说明
 
 - \`raw/<projectId>/\`：只读原始资料，按来源项目分目录（\`projectId\` 形如 \`p-<hash8>\`；用户/应用写入，LLM **仅 read**）
@@ -98,44 +111,41 @@ author: "SpaceAssistant"
 
 # LLM Wiki Skill
 
-本 Skill 指导你使用 SpaceAssistant 内置文件工具维护 Karpathy 式 LLM Wiki。
+本 Skill 指导你使用 SpaceAssistant Wiki 领域工具维护共享知识。
 
 ## 路径约定
 
-Wiki 是 SpaceAssistant 的**跨项目共享记忆库**：所有工作目录共享同一份。路径仍写作 \`llm-wiki/...\`（应用自动映射到共享存储，无需关心物理位置）。**必须先读取** \`llm-wiki/SCHEMA.md\` 获取完整规范。
+Wiki 是 SpaceAssistant 的**跨项目共享记忆库**：所有工作目录共享同一份。通过 \`memory\` 工具发现 \`memory.wiki_*\` 操作。**不得**向 Agent 暴露或使用 Wiki 物理路径。
 
 ## 共享协作守则
 
-- 写页面前先 \`read_file\` \`llm-wiki/wiki/index.md\` 并用 \`grep\` 查重，**优先更新既有页面**而非新建平行页；
+- 写页面前先调用 \`memory.wiki_search\` 查重，**优先更新既有页面**而非新建平行页；
 - 新建实体/概念页时检查是否与其他项目的知识冲突，冲突时合并并在页内注明差异场景；
-- 归档仅属于单一项目的专属内容时，放置到 \`llm-wiki/wiki/projects/<projectId>/\` 分区（projectId 形如 \`p-<hash8>\`，在 ingest 结果或 wiki:status 中可见）；
-- 日志条目格式：\`## [YYYY-MM-DD HH:mm] [project:<id>] <动作>\`；
-- **不要用 shell / 终端访问 \`llm-wiki/...\` 路径**——shell 工作目录不经过共享库映射，会找不到文件；一律使用内置文件工具。
+- 来源项目只用于来源标注，不是知识访问权限边界；不要在页面中自行猜测 projectId。
+- index 与操作日志由 Wiki 服务维护；Agent 不写索引、日志或 raw 原文。
 
 ## 工具
 
-使用 \`read_file\`、\`write_file\`、\`edit_file\`、\`grep\`、\`list_directory\`。不依赖其他专用工具。
+先调用 \`memory\` 发现需要的操作和 schema，再使用对应 \`memory.wiki_*\` 工具。发现工具只披露 schema，不代替授权。
 
 ## Ingest
 
-1. 读取 SCHEMA.md
-2. \`read_file\` 目标 raw 文件（路径须在 \`raw/\` 下）
-3. 按 SCHEMA 更新 wiki 页面、index.md、log.md
-4. **禁止** 写入 \`raw/\`
+1. 使用应用绑定的 sourceId 导入来源；禁止传入任意路径。
+2. 通过 \`memory.wiki_read_source\` 分段读取来源，并按 SCHEMA 选择 categoryId。
+3. 使用 \`memory.wiki_search\` 查重，使用 \`memory.wiki_save_page\` 保存页面。
+4. **禁止** 使用通用文件工具访问或写入 Wiki；禁止 Agent 写入索引、日志和 raw。
 
 ## Query
 
-1. 读取 SCHEMA.md
-2. **必须** \`read_file(wiki/index.md)\` 作为第一步
-3. \`read_file\` 相关 wiki 页；index 未覆盖时用 \`grep\` 限定 \`wiki/\` 路径
-4. 回答中引用 \`wiki/...\` 路径
+1. 使用 \`memory.wiki_search\` 查找候选页面。
+2. 使用 \`memory.wiki_open_page\` 与 \`memory.wiki_read_page\` 按有界片段读取。
+3. 回答中引用页面标题，不引用物理路径。
 
 ## Lint
 
-1. 读取 SCHEMA.md
-2. 按 SCHEMA checklist 检查全库
-3. 输出结构化报告；修复时走 write_file 确认流
-4. 向 log.md 追加 lint 条目
+1. 使用领域查询读取 SCHEMA 和相关页面。
+2. 输出结构化报告；页面修复使用专属保存操作与现有确认流程。
+3. 不直接编辑 index.md 或 log.md。
 
 ## 语言
 

@@ -15,9 +15,11 @@ import { resolveSharedWikiRoot } from './wikiInit'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { withWikiWriteMutex } from './wikiWriteMutex'
 import type { AppDatabase } from '../database/sqliteStore'
+import { createWikiFileStore } from './wikiFileStore'
+import { randomUUID } from 'node:crypto'
 
 export type WikiImportRawResult =
-  | { ok: true; rawRelPath: string; copied: boolean }
+  | { ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number }
   | { ok: false; error: string }
 
 export function wikiImportFileTreeChange(result: WikiImportRawResult): FileTreeChangeEvent | null {
@@ -134,8 +136,14 @@ async function importRawToSharedRoot(
   }
 
   if (kind === 'raw') {
-    // 已在共享库 raw/ 内的显式路径：返回词汇形态
-    return { ok: true, rawRelPath: normalized, copied: false }
+    const relative = normalized.startsWith(`${WIKI_VOCABULARY_PREFIX}/`) ? normalized.slice(WIKI_VOCABULARY_PREFIX.length + 1) : normalized
+    try {
+      const sourceAbs = resolveSafePath(realBase, relative)
+      const projectId = relative.split('/')[1] || computeProjectId(workDir)
+      const rawRelPath = `${WIKI_VOCABULARY_PREFIX}/${relative}`
+      const source = await registerSourceBinding(realBase, sourceAbs, relative, projectId)
+      return { ok: true, rawRelPath, copied: false, sourceId: source.sourceId, sourceRevision: source.sourceRevision }
+    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
   }
 
   // 项目登记（projectId = workDir 哈希；同目录幂等收敛）
@@ -162,11 +170,23 @@ async function importRawToSharedRoot(
     const finalRel = path.relative(realBase, destAbs).replace(/\\/g, '/')
     // 复审残余（BLK-4 延伸）：词汇前缀恒为常量——rootPath 改名后 my-lib/raw/... 不可挂载
     const rawRelPath = `${WIKI_VOCABULARY_PREFIX}/${finalRel}`
-    return { ok: true, rawRelPath, copied: true }
+    const source = await registerSourceBinding(realBase, destAbs, finalRel, projectId)
+    return { ok: true, rawRelPath, copied: true, sourceId: source.sourceId, sourceRevision: source.sourceRevision }
   } catch (e) {
     if (e instanceof Error && e.message === '无法生成 raw 目标路径') return { ok: false, error: e.message }
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+}
+
+async function registerSourceBinding(root: string, sourcePath: string, relativePath: string, projectId: string): Promise<{ sourceId: string; sourceRevision: number }> {
+  const bytes = await fs.readFile(sourcePath)
+  if (bytes.length > 10 * 1024 * 1024 || bytes.includes(0)) throw new Error('首版仅支持 10 MiB 内的文本资料')
+  const sourceId = randomUUID()
+  const sourceRevision = 1
+  const store = createWikiFileStore(root)
+  await store.writeImmutable(`.wiki-service/source-history/${sourceId}/${sourceRevision}.md`, bytes)
+  await store.write(`.wiki-service/sources/${sourceId}.json`, `${JSON.stringify({ formatVersion: 1, sourceId, sourceRevision, displayName: path.basename(relativePath), projectId, rawPath: relativePath }, null, 2)}\n`)
+  return { sourceId, sourceRevision }
 }
 
 export async function copyFileInWorkDir(

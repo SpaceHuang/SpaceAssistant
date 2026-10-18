@@ -45,8 +45,11 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     const projectId = computeProjectId(workDir)
     expect(res.rawRelPath).toBe(`llm-wiki/raw/${projectId}/notes.md`)
     expect(res.copied).toBe(true)
+    expect(res.sourceId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(res.sourceRevision).toBe(1)
     const realBase = path.join(userData, 'llm-wiki')
     expect(fs.readFileSync(path.join(realBase, 'raw', projectId, 'notes.md'), 'utf8')).toBe('raw content')
+    expect(fs.readFileSync(path.join(realBase, '.wiki-service', 'source-history', res.sourceId!, '1.md'), 'utf8')).toBe('raw content')
     db.close()
   })
 

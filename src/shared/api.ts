@@ -559,7 +559,7 @@ export type SpaceAssistantApi = {
   }) => Promise<{ absPath: string; kind: 'raw' | 'wiki' | 'schema' | 'other'; readOnly?: boolean } | { error: string }>
   wikiImportRaw: (payload: {
     srcRelPath: string
-  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
+  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number } | { ok: false; error: string }>
   wikiMigrationStatus: () => Promise<import('./domainTypes').WikiStatus>
   wikiMigrateLegacy: (payload?: {
     profileIds?: string[]

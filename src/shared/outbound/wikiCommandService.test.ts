@@ -12,9 +12,9 @@ function makeDeps() {
     }),
     wikiImportRaw: vi.fn().mockImplementation(async ({ srcRelPath }: { srcRelPath: string }) => {
       if (srcRelPath.startsWith('llm-wiki/raw/')) {
-        return { ok: true, rawRelPath: srcRelPath, copied: false }
+        return { ok: true, rawRelPath: srcRelPath, copied: false, sourceId: 'source-existing', sourceRevision: 1 }
       }
-      return { ok: true, rawRelPath: `llm-wiki/raw/${srcRelPath.split('/').pop()}`, copied: true }
+      return { ok: true, rawRelPath: `llm-wiki/raw/${srcRelPath.split('/').pop()}`, copied: true, sourceId: 'source-imported', sourceRevision: 1 }
     })
   }
 }
@@ -56,7 +56,7 @@ describe('wikiCommandService', () => {
     expect(r.type).toBe('run')
     if (r.type === 'run') {
       expect(r.skillsState.manualActivated).toContain('llm-wiki')
-      expect(r.text).toContain('llm-wiki/raw/test.md')
+      expect(r.text).toContain('sourceId=source-existing')
       expect(r.hint).toContain('Ingest 已开始')
     }
   })
@@ -71,8 +71,8 @@ describe('wikiCommandService', () => {
     expect(deps.wikiImportRaw).toHaveBeenCalledWith({ srcRelPath: 'docs/note.md' })
     expect(r.type).toBe('run')
     if (r.type === 'run') {
-      expect(r.text).toContain('llm-wiki/raw/note.md')
-      expect(r.hint).toContain('已导入 raw')
+      expect(r.text).toContain('sourceId=source-imported')
+      expect(r.hint).toContain('已绑定知识来源')
     }
   })
 
@@ -84,8 +84,8 @@ describe('wikiCommandService', () => {
     )
     expect(r.type).toBe('run')
     if (r.type === 'run') {
-      expect(r.text).toContain('raw/article.md')
-      expect(r.hint).toContain('raw/article.md')
+      expect(r.text).toContain('sourceId=source-imported')
+      expect(r.hint).toContain('source-imported')
     }
   })
 
