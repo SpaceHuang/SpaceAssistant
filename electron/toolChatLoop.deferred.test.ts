@@ -85,6 +85,7 @@ import os from 'os'
 import path from 'path'
 import { initWikiStructure } from './wiki/wikiInit'
 import { DEFAULT_WIKI_CONFIG } from '../src/shared/domainTypes'
+import { createWikiFileStore } from './wiki/wikiFileStore'
 import type { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
 import type { McpConnectionManager } from './mcp/mcpConnectionManager'
 
@@ -268,6 +269,38 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
       expect(second).toContain('memory_wiki_get_schema')
       expect(third).toContain('memory_wiki_get_schema')
       expect(JSON.stringify(providerCalls[2]!.request.messages.filter((message) => message.role === 'tool'))).toContain('schemaVersion')
+    } finally {
+      fs.rmSync(userDataDir, { recursive: true, force: true })
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('经 memory 发现的 memory.wiki_search 下一轮可执行并且结果不包含物理路径', async () => {
+    const routeId = 'route-wiki-search-roundtrip'
+    const { providerCalls } = registerProvider(routeId, [
+      { calls: [{ toolName: 'memory', input: { query: 'search', limit: 5 } }] },
+      { calls: [{ toolName: 'memory_wiki_search', input: { query: 'assistant', limit: 5 } }] },
+      { calls: [] }
+    ])
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-search-loop-'))
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-search-loop-wd-'))
+    try {
+      await initWikiStructure(workDir, DEFAULT_WIKI_CONFIG, { userDataPath: userDataDir, installSkill: false })
+      const store = createWikiFileStore(path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath))
+      await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: 'p-1', path: 'wiki/private-location.md', revision: 3, title: 'Space Assistant', categoryId: 'topic', summary: 'Assistant architecture' }] })
+      const { result } = await runWith(baseMaterials({
+        providerRouteId: routeId,
+        userDataDir,
+        wikiConfig: DEFAULT_WIKI_CONFIG,
+        toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'always' }
+      }), { snapshot: { entries: new Map(), budgetDropped: [] } })
+      expect(result.ok).toBe(true)
+      expect(providerCalls[0]!.request.tools.map((tool) => tool.name)).not.toContain('memory_wiki_search')
+      expect(providerCalls[1]!.request.tools.map((tool) => tool.name)).toContain('memory_wiki_search')
+      const toolResults = JSON.stringify(providerCalls[2]!.request.messages.filter((message) => message.role === 'tool'))
+      expect(toolResults).toContain('p-1')
+      expect(toolResults).toContain('Space Assistant')
+      expect(toolResults).not.toContain('wiki/private-location.md')
     } finally {
       fs.rmSync(userDataDir, { recursive: true, force: true })
       fs.rmSync(workDir, { recursive: true, force: true })
