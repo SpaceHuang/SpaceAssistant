@@ -11,13 +11,13 @@
 
 | Policy action | 产品策略类别 | Locked rule IDs |
 |---|---|---|
-| `deny` | 原始 Wiki 写入、远程路径边界、媒体目录边界、敏感/未知工作目录切换 | `wiki-raw-write-deny`, `remote-outside-write-deny`, `remote-write-scope-unknown-deny`, `remote-outside-read-deny`, `remote-wechat-media-outside-deny`, `remote-wechat-media-unknown-deny`, `write-target-unsupported-deny`, `feishu-media-boundary-deny`, `feishu-media-boundary-unknown-deny`, `remote-sensitive-workdir-switch-deny`, `remote-unknown-workdir-switch-deny` |
+| `deny` | Wiki 文件工具旁路、无人值守 Wiki 恢复与 Schema 修改、原始 Wiki 写入、远程路径边界、媒体目录边界、敏感/未知工作目录切换 | `wiki-domain-file-bypass-deny`, `wiki-schema-update-automation-deny`, `wiki-page-restore-automation-deny`, `wiki-raw-write-deny`, `remote-outside-write-deny`, `remote-write-scope-unknown-deny`, `remote-outside-read-deny`, `remote-wechat-media-outside-deny`, `remote-wechat-media-unknown-deny`, `write-target-unsupported-deny`, `feishu-media-boundary-deny`, `feishu-media-boundary-unknown-deny`, `remote-sensitive-workdir-switch-deny`, `remote-unknown-workdir-switch-deny` |
 | `deny` | 远程脚本网络、IM 外发限制、浏览器/Shell 禁用、外发预算暂停 | `script-network-deny-remote`, `remote-deny-lark-write-outbound`, `remote-deny-wechat-outbound`, `remote-browser-disabled`, `remote-shell-disabled`, `remote-outbound-budget-pause-wechat`, `remote-outbound-budget-pause-lark`, `im-no-wechat-send` |
 | `deny` | 自动化无真人应答时的脚本、路径、写入与 Shell 限制 | `automation-script-path-unknown-deny`, `automation-unverified-script-language-deny`, `automation-sensitive-path-deny`, `automation-system-dir-deny`, `automation-write-deny`, `automation-shell-deny`, `automation-unsupported-deny` |
 | `deny` | 未授权 MCP 账户的数据范围 | `mcp-account-unauthorized-deny` |
 | `confirm-every-time` | 脚本危险性、分析完整度与路径边界 | `shell-sensitive-path-confirm`, `shell-system-dir-confirm`, `script-sensitive-path-confirm`, `script-system-dir-confirm`, `script-path-unknown-confirm`, `script-path-unclassified-confirm`, `script-dynamic-execution-confirm`, `script-suspicious-path-unknown-confirm`, `script-unverified-language-confirm`, `path-sensitive-read-confirm`, `path-system-dir-ask`, `im-write-sensitive-path-confirm` |
 | `ask` | 未认证脚本、IM 浏览器高危操作、消息接收对象/影响范围不确定、能力变更 | `script-uncertified-ask-remote`, `im-browser-act-danger-human`, `lark-message-group-human`, `lark-message-target-unknown-human`, `lark-high-impact-ask`, `lark-unknown-ask`, `toolkit-act-ask`, `automation-default-confirm` |
-| `ask` / 真人底线 | 三阶段策略矩阵中的显式真人确认规则 | `write-outside-strict-human`, `outbound-sensitive-standard-human`, `outbound-sensitive-strict-human`, `outbound-incomplete-strict-human` |
+| `ask` / 真人底线 | 三阶段策略矩阵中的显式真人确认规则，以及 Wiki 页面恢复和 Schema 修改的真人确认 | `write-outside-strict-human`, `outbound-sensitive-standard-human`, `outbound-sensitive-strict-human`, `outbound-incomplete-strict-human`, `wiki-page-restore-human-confirm`, `wiki-schema-update-human-confirm` |
 
 ## Floor 行为
 
