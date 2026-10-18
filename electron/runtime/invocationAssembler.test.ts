@@ -579,6 +579,39 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     await fs.rm(workDir, { recursive: true, force: true })
   })
 
+  it('passes the frozen task authorization receipt from invocation materials into the Agent approval channel', async () => {
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'task-auth-approval-workdir-'))
+    const taskAuthorizationRecord = {
+      id: 'host-task-authorization', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,
+      approvedAt: 123, taskRevision: 1, permissions: [{ kind: 'local-shell' as const, scopeRoots: [workDir] }]
+    }
+    const { agentSdk } = assembleInvocation({
+      requestId: 'task-auth-approval', sessionId: 'task-auth-session', lane: 'feishu',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir, userDataDir: workDir, getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      taskAccessPermissions: { directories: [workDir], tools: ['run_shell'], authorizationRecord: taskAuthorizationRecord }
+    })
+    const requestSpy = vi.spyOn(AgentChannel.prototype, 'request')
+    const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, { cancel: vi.fn() })
+
+    try {
+      await confirmation({
+        call: { invocationId: 'task-auth-approval', toolCallId: 'task-auth-call', toolName: 'write_file', input: { path: 'result.txt', content: 'result' } },
+        confirmationId: 'task-auth-call', answerer: 'agent', reasonCode: 'test-approval',
+        context: {
+          facts: { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'write' } },
+          decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: 1000, answerer: 'agent' }
+        }
+      })
+      expect(requestSpy).toHaveBeenCalledOnce()
+      const channel = requestSpy.mock.instances[0] as unknown as { deps: { taskAuthorizationRecord?: unknown } }
+      expect(channel.deps.taskAuthorizationRecord).toEqual(taskAuthorizationRecord)
+    } finally {
+      requestSpy.mockRestore()
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
   it('preserves a persisted user ask override from assembler through the real IM gate', async () => {
     const db = createImPolicyTestDb('im-standard-v2-user-ask-override')
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-user-ask-override-'))

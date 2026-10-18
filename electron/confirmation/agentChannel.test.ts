@@ -413,6 +413,17 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
     expect(inv.clue.taskDigestTruncated).toBe(true)
   })
 
+  it('宿主传入的定时任务授权记录进入安全审核线索包', async () => {
+    const taskAuthorizationRecord = {
+      id: 'authorization-1', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,
+      approvedAt: 123, taskRevision: 2, permissions: [{ kind: 'local-shell' as const, scopeRoots: ['/workspace'] }]
+    }
+    const { ch, invokeApproval } = channel({ taskAuthorizationRecord })
+    await ch.request(req())
+    const inv = invokeApproval.mock.calls[0]![0] as ApprovalInvocation
+    expect(inv.clue.taskAuthorizationRecord).toEqual(taskAuthorizationRecord)
+  })
+
   it('缺省（无任务上下文调用方）→ clue.taskDigest undefined', async () => {
     const { ch, invokeApproval } = channel()
     await ch.request(req())

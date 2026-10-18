@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { getPreflightIssueMessageKey, type AutomationTaskAccessPermissions, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
+import { getPreflightIssueMessageKey, type AutomationTaskToolPermission, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider, type TaskPathFacts } from './taskPathFacts'
 import { resolveTaskTarget, type ProposedTaskTarget } from './taskTargetResolver'
 
@@ -8,7 +8,6 @@ export type TaskPreflightAnalysisInput = {
   scheduleSummary: string
   deliverySummary: string
   authorizedRoots: string[]
-  accessPermissions: AutomationTaskAccessPermissions
   outputRoot?: string
   facts: TaskPathFacts
   tools: readonly []
@@ -16,10 +15,10 @@ export type TaskPreflightAnalysisInput = {
 }
 
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
-export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }> }
+export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredTools?: AutomationTaskToolPermission[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }> }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
-export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; accessPermissions?: AutomationTaskAccessPermissions; outputDir?: string; taskRevision: number }
-export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string }
+export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number }
+export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredTools?: AutomationTaskToolPermission[] }
 export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; factsProvider?: Pick<TaskPathFactsProvider, 'collect'>; timeoutMs?: number; now?: () => number }
 
 const issue = (code: string, field = 'prompt', details: Partial<PreflightIssue> = {}): PreflightIssue => ({ code, field, messageKey: getPreflightIssueMessageKey(code), ...details })
@@ -36,6 +35,8 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
     if (record.kind === 'output' && typeof record.path === 'string' && ['file', 'directory'].includes(String(record.expectedType))) continue
     return undefined
   }
+  const requiredTools = (value as { requiredTools?: unknown }).requiredTools
+  if (requiredTools !== undefined && (!Array.isArray(requiredTools) || requiredTools.some((tool) => tool !== 'run_shell'))) return undefined
   const clarifications = (value as { clarifications?: unknown }).clarifications
   const allowedReasons = new Set(['no_target_identified', 'scope_unclear', 'missing_location', 'multiple_matches', 'target_missing', 'capability_not_authorized', 'other'])
   if (clarifications !== undefined && (!Array.isArray(clarifications) || clarifications.some((item) => {
@@ -70,7 +71,6 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       scheduleSummary: input.scheduleSummary,
       deliverySummary: input.deliverySummary,
       authorizedRoots: facts.roots,
-      accessPermissions: { directories: facts.roots, tools: [...(input.accessPermissions?.tools ?? [])] },
       outputRoot: facts.outputRoot,
       facts,
       tools: [],
@@ -80,6 +80,11 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     return { report: emptyReport('unavailable', [issue('ANALYZER_UNAVAILABLE')]), bindings: [], factsDigest: facts.digest }
   }
   if (!analysis) return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
+  const requiredTools = [...new Set(analysis.requiredTools ?? [])]
+  // facts: 本机命令授权必须有用户选择并由主机核验的目录范围；结果输出根不能充当读取/命令范围。
+  if (requiredTools.includes('run_shell') && facts.roots.length === 0) {
+    return { report: emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs')]), bindings: [], factsDigest: facts.digest }
+  }
   const factPaths = new Set(facts.entries.map((entry) => entry.path))
   // Facts/report 阶段只保留可核验的原文片段、原因代码和主机 facts 中的候选路径；模型文本不授予路径，也不改写执行授权。
   const clarificationIssues: PreflightIssue[] = (analysis.clarifications ?? [])
@@ -122,6 +127,7 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
   return {
     report: emptyReport(blockers.length ? 'blocked' : 'passed', blockers, suggestedDirectories),
     bindings: blockers.length ? [] : bindings,
-    factsDigest: facts.digest
+    factsDigest: facts.digest,
+    requiredTools
   }
 }

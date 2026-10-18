@@ -1054,6 +1054,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(materials.deadlineAt !== undefined ? { deadlineAt: materials.deadlineAt } : {}),
         ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
         ...(materials.approvalTaskDigestTruncated ? { taskDigestTruncated: true } : {}),
+        ...(materials.taskAccessPermissions?.authorizationRecord ? { taskAuthorizationRecord: materials.taskAccessPermissions.authorizationRecord } : {}),
         invokeApproval: (invocation) => {
           if (!db) return Promise.resolve({ ok: false as const, cause: 'unavailable' as const })
           return import('../confirmation/approvalAgent').then(({ runApprovalAgent }) => runApprovalAgent({

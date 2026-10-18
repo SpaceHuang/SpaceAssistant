@@ -13,7 +13,29 @@ export type AutomationTaskSchedule =
 export type AutomationDeliveryPref = 'desktop' | 'feishu' | 'wechat' | 'none'
 export type AutomationOutputOrganization = 'direct' | 'daily' | 'hourly'
 export type AutomationTaskToolPermission = 'run_shell'
-export type AutomationTaskAccessPermissions = { directories: string[]; tools: AutomationTaskToolPermission[] }
+export type AutomationTaskPermission =
+  | { kind: 'directory-read-write'; path: string }
+  | { kind: 'result-write'; outputDirectory: string; organization: AutomationOutputOrganization }
+  | { kind: 'local-shell'; scopeRoots: string[] }
+  | { kind: 'deliver-result'; delivery: Exclude<AutomationDeliveryPref, 'none'>; target?: string }
+
+/** Main-process receipt of the user's explicit confirmation of a preflight permission list. */
+export type AutomationTaskAuthorizationRecord = {
+  id: string
+  actor: 'user-confirmation'
+  source: 'task-preflight-confirmation'
+  approvedAt: number
+  taskRevision: number
+  preflightFactsDigest?: string
+  permissions: AutomationTaskPermission[]
+}
+
+export type AutomationTaskAccessPermissions = {
+  directories: string[]
+  /** Compatibility projection. This is derived only from a valid authorizationRecord. */
+  tools: AutomationTaskToolPermission[]
+  authorizationRecord?: AutomationTaskAuthorizationRecord
+}
 
 export function getDefaultAutomationOutputOrganization(schedule: Pick<AutomationTaskSchedule, 'kind'>): AutomationOutputOrganization {
   switch (schedule.kind) {
@@ -66,7 +88,6 @@ export type AutomationTaskInput = {
   deliveryTarget?: string
   /** New IPC payloads use authorizedDirs; workDirs remains during the caller migration. */
   authorizedDirs?: string[]
-  accessPermissions?: AutomationTaskAccessPermissions
   workDirs: string[]
   outputDir?: string
   outputOrganization?: AutomationOutputOrganization
@@ -215,6 +236,7 @@ export type PreflightReport = {
 
 export type ButlerTaskWriteResult =
   | { ok: true; id: string; task?: AutomationTask; preflightReport?: PreflightReport }
+  | { ok: false; kind: 'authorization-review-required'; reviewId: string; permissions: AutomationTaskPermission[]; report: PreflightReport }
   | { ok: false; kind: 'preflight-blocked'; report: PreflightReport; error?: string }
   | { ok: false; kind: 'validation-error' | 'preflight-unavailable'; error: string; field?: string }
 

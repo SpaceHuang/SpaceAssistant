@@ -21,7 +21,7 @@ describe('createTaskPreflightModelAnalyzer', () => {
     create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[]}' }] })
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
     const controller = new AbortController()
-    await expect(analyzer.analyze({ prompt: 'report', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'], outputRoot: '/results', accessPermissions: { directories: ['/workspace'], tools: ['run_shell'] }, facts: {} as never, tools: [], responseFormat: 'json' }, controller.signal)).resolves.toEqual({ targets: [] })
+    await expect(analyzer.analyze({ prompt: 'report', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'], outputRoot: '/results', facts: {} as never, tools: [], responseFormat: 'json' }, controller.signal)).resolves.toEqual({ targets: [] })
     expect(resolveLlmCredentialsForPair).toHaveBeenCalledWith({}, 'model-id', 'service-id')
     expect(createAnthropicClient).toHaveBeenCalledWith('api-key', 'https://model.test')
       expect(create).toHaveBeenCalledWith(expect.objectContaining({ model: 'provider-model', messages: [{ role: 'user', content: expect.stringContaining('"task":"report"') }], system: expect.stringContaining('不读取本地文件') }), { signal: controller.signal })
@@ -31,7 +31,7 @@ describe('createTaskPreflightModelAnalyzer', () => {
   it('asks the model to identify exact unclear prompt fragments and structured reasons', async () => {
     create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[],"clarifications":[{"reference":"帮我处理一下","reasonCode":"scope_unclear"}]}' }] })
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
-    const output = await analyzer.analyze({ prompt: '帮我处理一下', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'], outputRoot: '/results', accessPermissions: { directories: ['/workspace'], tools: [] }, facts: { gitRepositories: ['/workspace'] } as never, tools: [], responseFormat: 'json' }, new AbortController().signal)
+    const output = await analyzer.analyze({ prompt: '帮我处理一下', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'], outputRoot: '/results', facts: { gitRepositories: ['/workspace'] } as never, tools: [], responseFormat: 'json' }, new AbortController().signal)
 
     expect(output).toMatchObject({ clarifications: [{ reference: '帮我处理一下', reasonCode: 'scope_unclear' }] })
     expect(create.mock.calls[0]?.[0].system).toContain('clarifications')
@@ -39,20 +39,21 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(create.mock.calls[0]?.[0].messages).toMatchObject([{ content: expect.stringContaining('"authorizedRoots":["/workspace"]') }])
   })
 
-  it('explicitly gives the analyzer the approved local shell capability and repository facts for Git history requests', async () => {
-    create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[{"kind":"exact","path":"/workspace","targetType":"directory"}]}' }] })
+  it('asks the analyzer to propose Shell access for Git history without implying prior user approval', async () => {
+    create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[{"kind":"exact","path":"/workspace","targetType":"directory"}],"requiredTools":["run_shell"]}' }] })
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
-    await analyzer.analyze({
+    const output = await analyzer.analyze({
       prompt: '总结昨天合并到 main 的提交', scheduleSummary: 'daily', deliverySummary: 'desktop',
       authorizedRoots: ['/workspace'], outputRoot: '/results',
-      accessPermissions: { directories: ['/workspace'], tools: ['run_shell'] },
       facts: { gitRepositories: ['/workspace'] } as never, tools: [], responseFormat: 'json'
     }, new AbortController().signal)
 
+    expect(create.mock.calls[0]?.[0].system).toContain('不得声称用户已经批准')
     expect(create.mock.calls[0]?.[0].system).toContain('Git 历史')
     expect(create.mock.calls[0]?.[0].system).toContain('run_shell')
-    expect(create.mock.calls[0]?.[0].messages[0]?.content).toContain('"tools":["run_shell"]')
+    expect(create.mock.calls[0]?.[0].messages[0]?.content).not.toContain('accessPermissions')
     expect(create.mock.calls[0]?.[0].messages[0]?.content).toContain('"gitRepositories":["/workspace"]')
+    expect(output.requiredTools).toEqual(['run_shell'])
   })
 
   it('rejects missing model selection, provider errors, and malformed JSON', async () => {

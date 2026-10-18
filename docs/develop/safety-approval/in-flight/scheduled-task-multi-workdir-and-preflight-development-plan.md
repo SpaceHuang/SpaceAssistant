@@ -25,7 +25,7 @@
 
 上轮 B-02 数据库回退规格已关闭；本表是各轮修订记录，不代替复审对实现可行性的确认。
 
-**一句话：** 本方案把任务目录改成多个明确授权的绝对路径，并在保存前检查任务目标、目录与字段；只有检查通过才保存，错过时段的跳过写入运行历史但不发送特殊通知。
+**一句话：** 本方案把任务目录改成多个明确授权的绝对路径，并在保存前检查任务目标、目录与字段；只有检查通过且用户确认权限清单后才保存，错过时段的跳过写入运行历史但不发送特殊通知。
 
 **只有 3 分钟的话：** 看 D-1（失败运行通知）、D-2（预检是否调用外部模型）、D-3（会话事件存放位置）、本轮阻断核销、第 1 层的安全与数据边界，以及 INV-01、INV-03、INV-05。目录列表与编辑窗口布局已由需求稿的界面归属卡批准。
 
@@ -86,10 +86,11 @@
 
 ### D-7：任务是否可一次确认本地工具权限？（用户已确认）
 
-- **决定：** 将原授权读写目录配置扩展为任务级“授权访问权限”：保存 canonical 授权目录和用户明确勾选的本地工具权限。当前新增 `run_shell` 选项；用户保存任务即确认该任务可在无人值守时调用本地 Shell。旧任务迁移时工具权限为空，不能自动获得 Shell 授权。
-- **运行边界：** run snapshot 必须冻结这份权限。`run_shell` 仍经过现有危险命令预检和主机路径事实检查；无授权、危险或无法完整分析的命令、敏感/系统路径、授权目录之外的路径仍在 executor 前拒绝。结果文件仍通过 D-6 的预检绑定目标写入；输出目录不因此变成读取授权目录。不得新增专用 Git 工具。
-- **Git 目标预检：** 用户授权本地 Shell 且所选授权目录内发现 Git 仓库时，预检可把仓库目录作为 exact 目标绑定；多个可用仓库必须列出候选并要求用户说明。Git 本机查询能核验本地 refs/提交记录；本地记录没有包含 GitHub 推送事件时，不得声称知道推送时间。
-- **依据与可逆性：** 用户已明确要求把目录清单扩展为访问权限并允许经人工确认的 `run_shell` 无人执行。目录与工具权限可在编辑任务时撤销；变更只影响后续 claim，已运行任务仍使用冻结权限。迁移仅新增空工具权限，保留现有目录值。
+- **决定：** 保存任务前，预检必须生成用户看得懂的权限清单，逐项说明资料目录读写、结果目录写入与归档方式、预检判定需要时的本地 Shell 范围，以及配置的结果投递渠道。用户检查清单并明确确认后，任务才保存。移除独立的 Shell 勾选项，是否需要 Shell 由预检给出并列入同一份待确认清单；旧任务迁移时不产生授权记录。
+- **记录所有权：** 确认后由主进程依据本进程持有的一次性预检确认票据创建并保存授权记录，记录确认者、时间、任务版本、预检事实摘要和用户确认的完整权限项。renderer 与业务 Agent 不能提交、补写或替用户声明该记录。任务配置版本变化后必须重新展示清单并确认；旧版本记录不得作为当前授权事实。
+- **运行边界：** 主进程将授权记录冻结进 run snapshot，并作为宿主事实提供给安全审核 Agent；业务 Agent 的文字声明不能替代记录。该记录证明用户同意任务长期使用列出的权限，不代表具体命令自动通过。后续运行不再额外向用户索取这些任务权限，但 `run_shell` 仍经过现有危险命令预检和主机路径事实检查；危险、无法完整分析、敏感/系统路径、授权目录之外的路径和 unsupported 结构仍在 executor 前拒绝。结果文件仍通过 D-6 的预检绑定目标写入；输出目录不因此变成读取授权目录。不得新增专用 Git 工具。
+- **Git 目标预检：** 选定模型可依据已采集的本地 Git facts 提出所需 Shell 权限并定位仓库目标；多个可用仓库必须列出候选并要求用户说明。Git 本机查询能核验本地 refs/提交记录；本地记录没有包含 GitHub 推送事件时，不得声称知道推送时间。
+- **依据与可逆性：** 用户已明确要求授权目录扩展为一次确认的权限清单，并由运行时保存可供安全审核核对的客观记录。用户可在编辑任务后重做预检并撤销或调整权限；变更只影响后续 claim，已运行任务仍使用冻结记录。目录迁移仍保留原值，但不会推导出旧任务授权记录或 Shell 权限。
 
 **本次修订优先级：** D-4～D-7 与下列新增 INV-14～INV-17 优先于本方案其他章节中将 `workDirs` 同时称为输出/授权目录、将所有自动化写入无条件拒绝、将输出目标约束在授权读根内、或无条件拒绝无人值守 Shell 的早期文字。早期章节仍保留为历史实现基线，其冲突处按本修订执行。
 
@@ -99,7 +100,7 @@
 
 ### 1.1 目标与边界
 
-本次修订后，任务分别保存必选的 `outputDir`/`outputOrganization` 与可空的 `authorizedDirs`。运行开始时冻结两类目录和计划时刻；授权目录供资料读取/修改，输出目录按归档策略提供绑定结果写入。新建、编辑和单独启用操作在主进程执行预检；通过后自动保存/启用，阻断则返回问题和候选目录，renderer 保留表单。定时运行不调用目标清晰度模型；运行时配置无效记 `failed`，错过调度槽位记 `skipped` 并留在运行历史。
+本次修订后，任务分别保存必选的 `outputDir`/`outputOrganization` 与可空的 `authorizedDirs`。运行开始时冻结两类目录和计划时刻；授权目录供资料读取/修改，输出目录按归档策略提供绑定结果写入。新建和编辑时，主进程先预检并生成权限清单，renderer 展示给用户核对；只有用户确认后主进程才保存任务和授权记录。阻断则返回问题和候选目录，renderer 保留表单。定时运行不调用目标清晰度模型；运行时配置无效记 `failed`，错过调度槽位记 `skipped` 并留在运行历史。
 
 ### 1.2 不做
 
@@ -114,15 +115,15 @@
 
 1. 历史 `work_dirs_json` 经 adapter 作为 `authorizedDirs` 读取；v104 新增可空 `output_dir`/`output_organization`。新任务必须保存经校验的输出目录与归档模式；旧任务的原目录只映射到授权目录，未编辑前保持 legacy 行为，编辑时要求显式选择输出目录。
 2. 运行快照分别持久化 `authorizedDirs`、输出目录、归档模式、`scheduledFor`、实际 `runOutputDir` 和目标 bindings。D-3 选 A 时，会话/event 仍写入应用私有 automation session root，不属于上述任一授权集合。授权根用于资料 facts；输出根仅提供受限输出事实。预检将输出目标绑定为相对输出根的路径，运行时依据计划时刻重映射到归档目录。
-3. 任务表单提交由既有 create/update IPC 承担预检及保存，不增加独立预检 IPC：校验字段与目录后运行无工具权限的目标分析；通过同一主进程处理器保存同一份规范化表单快照，否则返回 `PreflightReport`，不写任务表。
-4. 资料读写目录由 `authorizedDirs` 决定，输出目录不得加入读取 facts、审批 Agent 读取授权或工具读取根。任务的 `accessPermissions` 同时冻结授权目录和工具权限；`run_shell` 的放行事实只从 claim 时冻结的工具权限产生。D-6 输出写入由 facts 记录精确 binding 匹配、Policy Engine 稳定规则判定，final-check 对 snapshot 和归档目录复核；执行上下文独立携带授权目录和输出范围。
+3. 任务表单提交先由 create/update IPC 校验字段、目录并运行无工具权限的目标分析；通过时主进程把同一份规范化任务快照与待确认权限清单保存在短时一次性票据中，renderer 只收到票据 ID 与可读清单，不写任务表。用户确认后 renderer 仅提交票据 ID，主进程消费票据、生成授权记录并保存；报告阻断时不产生可确认票据。
+4. 资料读写目录由 `authorizedDirs` 决定，输出目录不得加入读取 facts、审批 Agent 读取授权或工具读取根。访问权限由预检清单生成，用户确认记录由主进程保存；任务记录只有在版本匹配时才可冻结到 run snapshot，并作为宿主事实传给安全审核 Agent。`run_shell` 的放行事实只来自该冻结记录；具体调用仍通过既有策略和 final-check。D-6 输出写入由 facts 记录精确 binding 匹配、Policy Engine 稳定规则判定，final-check 对 snapshot 和归档目录复核；执行上下文独立携带授权目录和输出范围。
 5. 调度器继续使用唯一 `client_id` 抢占运行；启动恢复写 `skipped/missed-window` 的既有实现补上历史展示与稳定文案。跳过不调用 Agent、不投递，不和运行中的工具拒绝混淆；工具策略拒绝属于已启动运行的失败结果。
 
 ### 1.4 主要风险与排除方案
 
 | 选择 | 排除方案 | 原因 |
 |---|---|---|
-| 任务提交 IPC 内执行预检，只有同一快照通过才写库 | renderer 先单独预检，再用第二个请求保存 | 两次请求之间可修改表单或任务配置，容易用旧结果放行新内容；当前需求要求检查通过后自动提交 |
+| 主进程保存待确认快照和一次性权限清单；用户确认后消费票据并提交同一快照 | renderer 自己保存权限声明，或重新提交权限和任务字段 | 授权事实必须来自用户看过的那一份清单，且业务 Agent/renderer 不能自行声称用户已批准 |
 | 授权根作为无序集合贯穿路径 facts、调用策略、审批 Agent 和工具执行 | 仅把数组显示在设置页，运行链仍用一个根 | 会造成 UI 宣称有授权但策略/审批 Agent 按单目录错误拒绝 |
 | D-3 选 A 时使用应用管理的 automation session 存储根保存会话事件；它与 task roots 分离 | 从多目录列表挑一个作为“默认目录”兼做会话根 | 目录排序将影响会话位置与相对路径行为，违反无主目录要求 |
 | 对未在授权列表中的明确目标建议已有父目录，经用户勾选后再保存 | 自动加入路径或扫描用户设备寻找近似目录 | 前者扩大授权；后者超出需求且不可预测 |
@@ -151,7 +152,7 @@
 | INV-02 | 每个根必须是主进程验证过的绝对可访问目录；数组去重且顺序不产生授权优先级。 | 共享目录校验器；task IPC 与 runtime admission 共用。 | 相同 canonical roots 去重；排列变更不改变目录分类集合。 |
 | INV-03 | 工作目录内判定为目标在任一授权根之内；超出所有根才是 outside-workdir。敏感、系统、链接逃逸和未知仍走已有策略边界。 | Path facts 汇总器 + 共享策略。 | 每根分别读取、父子根、链接逃逸、未知路径和敏感目录边界回归。 |
 | INV-04 | 工具 facts、执行链和安全审核 Agent 接收同一个规范化授权根集合；session persistence root 不属于授权根。 | `ResolvedAutomationRunConfig` 为唯一运行输入；assembler 只透传，不从 active Profile 二次解析。 | 对比 run snapshot、facts input、approval invocation 与工具上下文；切换桌面 Profile 不改变它们。 |
-| INV-05 | 新建/编辑/启用只在预检通过且被保存快照等于预检快照时提交；阻断、模型失败、目录无效或过期异步结果不得写库。 | 主进程提交 handler 为唯一门禁和写入者；renderer 只呈现报告与编辑输入。 | mock 延迟返回、并发提交、字段变更、失败编辑不覆盖旧版本。 |
+| INV-05 | 新建/编辑先由主进程预检并生成权限清单；通过时只暂存规范化候选快照与一次性票据，不写任务。用户确认票据后，主进程仅提交票据绑定的同一快照并记录授权；阻断、模型失败、目录无效、过期/重放票据或表单变更均不得写库。 | 主进程 create/update IPC 是候选快照与确认票据的唯一生产者；`butler:confirm-write` 是授权记录和任务写入的唯一提交者；renderer 只呈现报告/清单并回传票据 ID。 | blocker 与 preflight pass 都不直接写入；明确确认恰好写一次；mock 延迟、重复/过期票据、并发 revision、表单变更不保存旧快照。 |
 | INV-06 | 用户明确勾选候选目录前，该路径不进入任务数据或运行授权；候选路径必须在主进程重新规范化和校验。 | renderer checkbox 仅修改未提交表单；task IPC 验证全部 roots。 | 伪造 renderer payload、未勾选、无效目录、重复路径。 |
 | INV-07 | missed-window 记录为 `skipped` 且原因稳定；failed 是准入/运行失败；未到期或已停用不产生 run；跳过不启动 Agent、不调用投递。 | scheduler/taskStore 写入；delivery guard 不接受 skipped。 | 重启恢复、普通 tick、未启用、重复 requestId、delivery invocation spy。 |
 | INV-08 | 工具调用在运行开始后被策略拒绝时，该 run 仍为执行失败/终态失败，不改写成 scheduler skipped。 | run executor/终态 writer。 | 安全策略 deny 的 tool-call 集成测试检查状态、错误分类与无 skipped status。 |
@@ -163,7 +164,7 @@
 | INV-14 | 新任务必须有有效 `outputDir` 和 `outputOrganization`；`authorizedDirs` 可为空且只表示资料读写授权。旧目录只迁移为 `authorizedDirs`，绝不自动充当输出目录；旧任务首次编辑须明确补选输出目录。 | v104 migration、task DTO adapter、主进程 IPC。 | v103→v104 不改旧目录语义；新建缺输出拒绝；空授权目录允许新任务；旧任务未编辑仍可 legacy 运行，编辑未选输出被拒绝。 |
 | INV-15 | 每个新 run 从冻结的 `scheduledFor` 和归档模式确定唯一 `runOutputDir`；预检 binding 的相对输出路径只能解析到该目录内。输出目录不能授权读取。 | 主进程输出目录解析器、taskStore run snapshot、runtime admission 与路径 final-check。 | daily/hourly 使用本机计划时间；direct 使用根目录；路径逃逸、链接越界、binding/run snapshot 不匹配均在 executor 前失败；read/list/grep 对输出目录仍视作未授权。 |
 | INV-16 | 文件工具自动化写入仅在 facts 验证工具目标与本 run 已批准输出 binding 匹配时 allow：文件 binding 要求目标完全相同，目录 binding 只覆盖该目录下的普通文件；目标必须落在 `runOutputDir` 内。 | facts producer、共享 Policy Engine rules、tool final-check；稳定规则 ID `automation-bound-output-write-allow`、`automation-write-deny`；系统不变量 `SYS-AUTOOUTPUT-001`。 | 匹配输出写入进入 executor；未绑定输出、绑定目录之外的目标、其他输出根、资料授权目录文件工具写入均不进入 executor；输出根不能读取；decision trace 标明稳定 rule ID；empty authorizedDirs 不回退至 outputDir；即使管理员停用 locked write deny，final-check 仍拒绝无 binding 的 automation write permit。 |
-| INV-17 | 定时任务的访问权限由用户保存并冻结到 claim snapshot；旧任务默认无工具授权。automation `run_shell` 仅在冻结权限明确包含 `run_shell` 时可达，且现有 Shell 预检、完整度、敏感/系统位置、授权目录外路径与 unsupported 结构边界继续生效。Git 仓库 facts 仅报告所选 roots 中的本机仓库位置，不替策略放行。 | task IPC/store/snapshot、`TaskPathFactsProvider`、preflight model analyzer、`toolCallGate.ts`；稳定 rule IDs `automation-shell-deny`、`automation-authorized-shell-allow`、`automation-shell-analysis-incomplete-deny`、`automation-shell-outside-root-deny`；系统不变量 `SYS-AUTOSHELL-001`。 | 旧任务无 Shell grant；用户授权后本地 Git 查询绑定仓库目录；多仓库歧义列出候选；缺授权、预检危险、unsupported/不完整、敏感/系统或授权根外路径均不进入 executor；修改权限只改变后续 run snapshot；不为 Git 新增专用工具，也不把本机提交时间推断为 GitHub 推送时间。 |
+| INV-17 | 定时任务权限必须先由预检列成用户可理解的清单，经用户明确确认后由主进程创建并保存授权记录；renderer 和业务 Agent 不能提交或伪造该记录。记录版本必须匹配当前任务，并冻结到 claim snapshot 后作为宿主事实提供给安全审核 Agent；旧任务默认无记录。automation `run_shell` 仅在该记录含对应范围时可达，现有 Shell 预检、完整度、敏感/系统位置、授权目录外路径与 unsupported 结构边界继续生效。 | task IPC 一次性确认票据、store revision 校验与 snapshot、`TaskPathFactsProvider`、preflight model analyzer、approval clue、`toolCallGate.ts`；稳定 rule IDs `automation-shell-deny`、`automation-authorized-shell-allow`、`automation-shell-analysis-incomplete-deny`、`automation-shell-outside-root-deny`；系统不变量 `SYS-AUTOSHELL-001`。 | 清单分别展示资料读写、结果目录写入、需要时的 Shell 范围和投递权限；未确认不能保存；伪造 renderer 字段、业务 Agent 声明及过期/版本不符记录均不能授权；每次编辑后的权限变更只影响后续运行，已 claim snapshot 不变；安全审核 Agent 可见记录 ID、任务版本与完整范围；不为 Git 新增专用工具，也不把本机提交时间推断为 GitHub 推送时间。 |
 
 ### 2.3 契约卡
 
@@ -230,9 +231,10 @@
 
 | 状态/数据 | 唯一 writer | 写入/提交点 | 恢复者 | 失败语义 |
 |---|---|---|---|---|
-| task `workDirs` | 主进程 create/update IPC -> `taskStore` | 预检通过后单次 task 写入 | schema migration 仅负责旧列映射；不修改用户之后选择 | 任何一个目录无效则整笔不写 |
+| task `workDirs` | 主进程 create/update IPC -> 一次性确认票据 -> `butler:confirm-write` -> `taskStore` | 用户确认后消费票据并单次保存；目录必须与预检快照及权限清单相同 | schema migration 仅负责旧列映射；不修改用户之后选择 | 预检通过但未确认仍零写入；任何目录无效、票据失效或 revision 冲突均不写 |
 | preflight report | 本次主进程提交调用 | 不持久化；返回 renderer | 用户编辑后重新提交 | 超时/unavailable 阻断；无 stale pass |
 | run `workDirs` snapshot | taskStore queued→running CAS | 唯一消费事务冻结当时 task revision 与 roots/config 到 run；`runButlerTask` 只读取该 snapshot | 不从当前 task 或桌面 Profile 重算；未启动 queued claim 读取 CAS 时最新已保存 revision | 预检失败不写 task；snapshot 无效则当前 run failed，不调用 Agent |
+| task authorization receipt | 主进程 `butler:confirm-write` -> taskStore | 消费未过期的一次性预检票据时，以其中权限项和 task revision 创建记录；用户输入与 Agent 内容不写记录 | 任务配置版本变化时重做预检及确认；claim 仅冻结版本相同的记录 | 票据缺失、过期、已消费、task revision 冲突或记录版本不符时不保存/不向审核 Agent 暴露授权 |
 | v1 target bindings | 主进程 create/update/enable IPC -> taskStore | task fields、roots、prompt/schedule revision、`target_bindings_json`、`preflight_version=1` 同事务提交 | run admission 按 kind 重新求值 | 编辑阻断则整笔不变；动态集合只保存选择器，不保存静态成员清单 |
 | `preflight_version` | migration 或主进程 taskStore | 旧行 migration 写 0；新建及成功编辑/启用写 1 | runtime admission 分派 v0/v1 | renderer 不可指定；无绑定的 v1 数据完整性错误 fail closed |
 | scheduler recovery state | scheduler/taskStore | recovery state 保存 schedule generation、首个未核销 cursor 与带代次的 pending runId/slot；普通配置编辑不改调度状态，改期/启停按 queued/running phase 更新 | 启动恢复器只分派匹配 pending 身份的 queued claim；running 由 interrupted 恢复 | 每个槽位恰好由 run/skipped/pending 一种记录核销；queued 时调度变更冲突，running 时终态按身份清理；transaction rollback 不前进 |
@@ -261,7 +263,7 @@
 | 故障/竞态 | 唯一行为 |
 |---|---|
 | preflight 超时/拒绝/结构化响应解析失败 | 返回 unavailable 或 blocker；任务表不写，用户可以改任务或重试 |
-| renderer 重复点保存 | UI 置 busy；主进程同一调用只保存一次；不可将两个创建请求误当一个，若 IPC 重发则须用 request ID 去重或防止前端并发 |
+| renderer 重复点预检或确认 | UI 置 busy；确认票据只可消费一次且有时限；重复确认不重复保存；新预检生成新票据，清理已过期票据 |
 | renderer 在检查等待中修改表单 | 当前 UI 禁止编辑字段直到响应，或取消旧提交；不得保存与被检查快照不同的内容 |
 | 两个 renderer 调用并发更新同 task | 以请求捕获的 `updatedAt`/版本条件更新；第二个旧快照返回 conflict，不覆盖先完成的新配置 |
 | task roots 中有一个目录被删除/权限撤回 | 整个 run admission failed；不静默用剩下目录执行 |
@@ -291,7 +293,7 @@
 | AC-13 | 宽 Modal 双栏、窄窗单栏、可访问的候选清单 | Butler component tests + macOS 浏览器/真机视觉验收 |
 | AC-15（目录重叠样例） | roots 去重与父子重叠按集合解释 | validation/path fact tests |
 | AC-16 | skipped history 可查、missed-window 本地化，无特殊通知；安全拒绝是 failed | scheduler/history tests、delivery guard tests、history component tests |
-| AC-17（2026-10-18 用户确认的 D-7） | 任务级授权访问目录和 `run_shell` 权限往返持久化并冻结；旧任务不获得 Shell grant；Git 预检识别本地仓库和权限缺口；Shell 放行需匹配任务授权并通过现有安全边界 | task store/migration/IPC、preflight facts/analyzer、automation lane gate、Butler component tests |
+| AC-17（2026-10-18 用户确认的 D-7） | 保存前展示可读的完整权限清单；用户确认后仅由主进程持久化版本匹配的授权记录；后续运行冻结该记录并作为宿主事实交付安全审核 Agent；旧任务无隐式授权；Git 预检识别本地仓库；Shell 仍经过现有安全边界且无需再次向用户索取已确认权限 | task store/IPC/snapshot、preflight facts/analyzer、approval clue、automation lane gate、Butler component tests |
 
 ### 2.9 阶段边界与回退实体
 
@@ -304,7 +306,7 @@
 | P4 类型收紧 | 门禁接通且调用方迁移完成后将 workDirs 收紧为必填 | shared types/callers | 全仓旧入口检索与三端编译通过 | 独立类型收紧 commit |
 | P5 多根运行与历史恢复 | v0/v1 run 分支、approval roots、recovery cursor/claim | invoker、policy facts、scheduler/history | 运行时路径矩阵、退出注入及策略 trace | 安全/恢复分别提交 |
 | P6 UI、i18n、集成关闭 | 宽表单、授权清单、历史标签和最终验收 | renderer/i18n/related integration | renderer tests、i18n、typecheck/build、review matrix | 可按功能提交回退；DB 回退恢复备份 |
-| P7 任务级访问授权与 Git 预检 | `accessPermissions`、权限快照、本地仓库 facts、获批 Shell 策略与任务编辑控件 | shared/store/IPC、preflight/provider、policy/gate/renderer | 旧任务无工具 grant；本地 Git 目标绑定；Shell 授权和拒绝边界、schema v105 migration 回归通过 | 独立权限/预检/policy/UI commits；迁移回退恢复 v104 备份 |
+| P7 任务级访问授权与 Git 预检 | 用户可读权限清单、主进程授权记录、本地仓库 facts、运行快照与安全审核事实、获批 Shell 策略 | shared/store/IPC、preflight/provider、policy/gate/approval clue/renderer | 旧任务无工具授权；确认记录与任务版本匹配并冻结；安全审核 Agent 收到完整宿主记录；本地 Git 目标绑定；Shell 现有拒绝边界及 schema v105 migration 回归通过 | 独立权限/预检/policy/UI commits；迁移回退恢复 v104 备份 |
 
 该阶段表与执行计划 DAG 一致：P2 可独立于预检门禁完成，P3 接通门禁后 P4 才收紧类型；运行安全链依赖 P3 的持久化绑定；UI 集成在门禁与类型契约稳定后进行；P7 扩展已关闭的结果目录拆分，Shell 权限必须沿用户表单到 claim snapshot 冻结后才可放行。
 

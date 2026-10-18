@@ -68,19 +68,51 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     })
   })
 
-  it('persists task access permissions and freezes them into the claimed run snapshot', () => {
+  it('accepts Shell access only from the trusted authorization record and freezes that record into the run snapshot', () => {
     const d = db()
     const task = createAutomationTask(d, taskInput({
       authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'],
       accessPermissions: { directories: ['/ignored/client-copy'], tools: ['run_shell'] }
-    }))
-    const claimed = insertManualTaskClaim(d, task.id, 'shell-grant-snapshot')
-    const started = transitionClaimToRunning(d, claimed.runId!, task.id, 0, claimed.scheduleGeneration!)
+    } as never))
+    expect(task.accessPermissions?.tools).toEqual([])
+    getDbConnection(d).prepare('UPDATE automation_tasks SET access_permissions_json = ? WHERE id = ?')
+      .run(JSON.stringify({ directories: ['/authorized/source'], tools: ['run_shell'] }), task.id)
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.tools).toEqual([])
 
-    expect(task.accessPermissions).toEqual({ directories: ['/authorized/source'], tools: ['run_shell'] })
-    expect(started).toMatchObject({ ok: true, snapshot: { accessPermissions: { directories: ['/authorized/source'], tools: ['run_shell'] } } })
-    updateAutomationTaskConditional(d, task.id, { accessPermissions: { directories: ['/authorized/source'], tools: [] } })
-    expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions).toEqual({ directories: ['/authorized/source'], tools: ['run_shell'] })
+    const authorizedTask = createAutomationTask(d, taskInput({
+      name: 'approved shell task', authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'],
+      accessPermissions: { directories: ['/ignored/client-copy'], tools: [] }, outputDir: '/results', outputOrganization: 'hourly'
+    } as never), {
+      targetBindings: [],
+      authorizationRecord: {
+        id: 'authorization-1', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, preflightFactsDigest: 'facts-digest', permissions: [
+          { kind: 'local-shell', scopeRoots: ['/authorized/source'] },
+          { kind: 'result-write', outputDirectory: '/results', organization: 'hourly' }
+        ]
+      }
+    } as never)
+    const claimed = insertManualTaskClaim(d, authorizedTask.id, 'shell-grant-snapshot')
+    const started = transitionClaimToRunning(d, claimed.runId!, authorizedTask.id, 0, claimed.scheduleGeneration!)
+
+    expect(authorizedTask.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell'], authorizationRecord: { id: 'authorization-1' } })
+    expect(started).toMatchObject({ ok: true, snapshot: { accessPermissions: { directories: ['/authorized/source'], tools: ['run_shell'], authorizationRecord: { id: 'authorization-1' } } } })
+    updateAutomationTaskConditional(d, authorizedTask.id, { accessPermissions: { directories: ['/authorized/source'], tools: [] } } as never)
+    expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell'], authorizationRecord: { id: 'authorization-1' } })
+  })
+
+  it('does not expose a persisted authorization receipt after its task revision becomes stale', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'authorization-stale', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'local-shell', scopeRoots: ['/authorized/source'] }]
+      }
+    })
+    getDbConnection(d).prepare('UPDATE automation_tasks SET task_revision = ? WHERE id = ?').run(2, task.id)
+
+    expect(getAutomationTask(d, task.id)?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: [] })
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
   })
 
   it('持续离线跨过投递 TTL 后自动过期并同步管家 run 状态', async () => {

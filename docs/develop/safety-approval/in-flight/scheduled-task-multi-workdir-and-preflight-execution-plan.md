@@ -1,13 +1,13 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：既有 E-01～E-10、结果目录拆分 E-11a～E-11f、2026-10-18 任务访问授权与 Git 预检 E-12a～E-12d 全部完成
+> 状态：既有 E-01～E-10、结果目录拆分 E-11a～E-11f、任务访问授权与 Git 预检 E-12a～E-12d、用户授权记录修订 E-13a～E-13c 全部完成
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
 
 ## 第 0 层：执行摘要【人必读】
 
-**目标：** 在已完成的多目录预检与结果目录归档上，增加任务级“授权访问权限”，使用户可一次确认目录和本地 `run_shell` 能力；本地 Git 历史查询由选定模型根据仓库 facts 做目标绑定，执行阶段按冻结授权与现有 Shell 安全边界判断。
+**目标：** 预检后向用户展示可理解的完整权限清单，用户确认一次后由主进程保存授权记录；后续运行冻结该记录并作为客观宿主事实交给安全审核 Agent。本地 Git 历史查询根据仓库 facts 和任务模型的权限需求完成目标绑定，执行阶段继续经过现有 Shell 安全边界。
 
 **执行顺序：** 契约/基线 → 数据迁移与目录校验 → 主进程提交门禁 → 多根安全执行链 → 表单和历史 → 启动恢复/兼容集成 → 最终关闭。
 
@@ -46,7 +46,7 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | D-4 目录职责拆分 | 必选结果输出目录 + 可空授权读写目录；旧 workDirs 只迁移为授权目录 | 新任务必须选择结果输出目录；旧任务未编辑保持 legacy 运行，首次编辑须明确选择 |
 | D-5 归档默认 | 每日→日期；间隔定时→日期小时；一次性→直接；用户可改 | 使用本机 `scheduledFor` 确定归档路径；同日/小时运行共享目录 |
 | D-6 无人值守写入 | 文件工具只允许写本次预检绑定且位于本次归档目录的结果 | 新增稳定 Policy Engine rule；输出目录不授权读取；任务级 Shell 权限由 D-7 定义 |
-| D-7 任务级访问授权 | 用户确认后，授权目录和 `run_shell` 能力一起写入任务；旧任务无 Shell grant | E-12a～E-12d 持久化、冻结并完成全量验证；获批 Shell 通过既有安全预检和策略边界；不新增 Git 工具 |
+| D-7 任务级访问授权 | 预检展示资料读写、结果写入、需要时的本地 Shell 范围和投递权限；用户确认后由主进程留存授权事实，任务表单不再单独勾选 Shell | E-12a～E-12d 完成授权与 Git 基础；E-13a～E-13c 补齐清单、一次性确认记录、运行快照和审核 Agent 输入；不新增 Git 工具 |
 
 ### 第四轮阻断核销（2026-10-17）
 
@@ -64,10 +64,10 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 
 | 检查点 | 依赖证据（产出任务） | 通过条件 | 不通过处理 |
 |---|---|---|---|
-| G0 兼容契约冻结 | E-01；D-2～D-7 已裁决 | 既有 v0/v1 契约与补充 outputDir/organization/authorizedDirs/accessPermissions、旧任务迁移、绑定写入和任务 Shell 授权边界均已记录 | 停止补充实现，修订技术方案/此计划 |
+| G0 兼容契约冻结 | E-01；D-2～D-7 已裁决 | 既有 v0/v1 契约与补充 outputDir/organization/authorizedDirs、主进程授权记录、一次性确认和运行期审核事实边界均已记录 | 停止补充实现，修订技术方案/此计划 |
 | G1 存储安全 | E-02、E-03 | v0/v1 binding schema、recovery state 往返通过；高版本库拒绝降级；备份恢复可执行；旧空目录不回退 Profile | 不开始预检 IPC；修正迁移/存储 |
-| G2 提交门禁 | E-02a、E-03、E-04、E-05 | 旧单根和新多根请求均经预检；阻断零写入、通过恰好一次写入、一次性时间语义正确 | 不接 UI save flow |
-| G3 安全根集合、结果写入与 Shell 授权 | E-06、E-07、E-11b～E-11d、E-12a～E-12d | 输出目录仍不进入读取授权；文件工具写入仍要求预检绑定；Shell 仅在冻结访问权限明确包含 `run_shell` 且通过危险/路径/完整度/unsupported 检查后 allow | 不进入 UI 集成；修订 facts、policy 或 final-check |
+| G2 提交门禁 | E-02a、E-03、E-04、E-05 | 旧单根和新多根请求均经预检；阻断与预检通过但未确认均零写入；预检通过只暂存一次性确认票据和权限清单；用户明确确认后恰好一次提交票据绑定快照；一次性时间语义正确 | 不接 UI save flow |
+| G3 安全根集合、结果写入与 Shell 授权 | E-06、E-07、E-11b～E-11d、E-12a～E-12d、E-13a～E-13b | 输出目录仍不进入读取授权；文件工具写入仍要求预检绑定；Shell 仅在版本匹配的主进程用户确认记录冻结到 run snapshot，且通过危险/路径/完整度/unsupported 检查后可达；审核 Agent 收到该宿主事实 | 不进入 UI 集成；修订 facts、policy 或 final-check |
 | G4 可操作界面 | E-08、E-09 | 已批准归属卡下完成宽窗/窄窗、键盘清单、失败保留与历史可查 | 修 UI，不改变已冻结后端契约 |
 | G5 全量源码关闭 | E-10 | 所有本机相关测试、类型、i18n、构建、边界审查完成 | 留在源码关闭前；外部验收另列 |
 
@@ -97,6 +97,9 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | E-12b | 提供本地 Git 仓库 facts 并增强目标预检 | E-12a、E-04 | `taskPathFacts.ts`、preflight/analyzer、local Git prompt and clarification tests | AC-17 | INV-17 |
 | E-12c | 接通授权 Shell 策略与任务设置表单 | E-12a、E-12b | tool gate、invocation assembler、policy rules、invariant registry、Butler UI/i18n/tests | AC-17 | INV-16、17 |
 | E-12d | 集成验证并关闭访问授权扩展 | E-12a～E-12c | related tests、typecheck/i18n/build、system invariant check、review and plan status | AC-17 | INV-16、17 |
+| E-13a | 由主进程生成权限清单并在保存前展示给用户 | E-12b | Butler IPC/preflight、`ButlerTaskSettings`、zh-CN/en-US、IPC/component tests | AC-17 | INV-17 |
+| E-13b | 用户确认后持久化主进程授权记录并传给安全审核 Agent | E-12a、E-13a | preload/API、taskStore、claim snapshot、invocation assembler、AgentChannel/approval prompt tests | AC-17 | INV-17 |
+| E-13c | 核验一次性票据、任务版本失效边界并完成阶段验证 | E-13a、E-13b | IPC/store/security/UI regression、typecheck/i18n/build/invariant checks、方案与执行计划 | AC-17 | INV-17 |
 
 任务范围与依赖一旦变化，先更新本表；不在正文另写第二份 DAG。
 
@@ -279,7 +282,7 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **依赖：** E-11a～E-11c。
 - **目标文件：** `electron/butler/taskStore.ts`、`butlerIpc.ts`、`taskScheduler.ts`、`butlerInvoker.ts`、`electron/runtime/invocationAssembler.ts`、调用方与相应 tests。
 - **动作与产物：** 新 task/run snapshot 分别保存授权目录、输出目录、归档策略、scheduledFor、runOutputDir 和输出 bindings；claim 时冻结完整配置；运行时安全创建归档目录并进行 realpath/链接边界检查。读取 tools 与审批 Agent 只收到 authorizedDirs；写工具收到精确绑定的 runOutputDir。旧任务继续走 v0 legacy 分支。
-- **完成判据：** TDD 覆盖存储往返、迁移旧行、运行 snapshot 冻结、并发 task 编辑、归档目录创建失败、empty authorizedDirs 不授权读取、旧 run 快照兼容；创建/编辑 IPC 对缺少 outputDir 拒绝，预检通过只保存一次。
+- **完成判据：** TDD 覆盖存储往返、迁移旧行、运行 snapshot 冻结、并发 task 编辑、归档目录创建失败、empty authorizedDirs 不授权读取、旧 run 快照兼容；创建/编辑 IPC 对缺少 outputDir 拒绝；依 E-13 修订后的最终契约为预检通过仅暂存确认票据，用户确认后只保存一次。
 - **验证命令：** `npm exec vitest run electron/butler/taskOutputDirectory.test.ts electron/butler/taskStore.test.ts electron/butler/butlerIpc.test.ts electron/butler/butlerInvoker.test.ts electron/butler/taskTargetResolver.test.ts electron/butler/taskPreflight.test.ts electron/runtime/invocationAssembler.test.ts electron/runtime/invocationAssembler.workspace.test.ts`；`npm run build:electron:incremental`；`npm run typecheck:shared`；`git diff --check`。
 - **证据：** RED：新用例确认 run snapshot 不含拆分输出配置且空授权根不能启动；归档安全创建器不存在；IPC 仍允许旧任务无输出目录编辑，并在 `TARGET_UNCLEAR` 时保存禁用草稿。GREEN：8 个测试文件 / 216 个用例通过；覆盖排程槽归档快照、等待期配置更新后冻结最新版本、output-only 任务真实写入日期归档、输出根读取不触达 executor、归档普通文件冲突在建会话前拒绝、归档 helper 拒绝符号链接、创建/编辑缺输出配置拒绝、`TARGET_UNCLEAR` 不保存。主进程增量构建、共享类型检查与 diff 检查通过。输出根只进入写入事实；读取策略始终收到单独的 `authorizedDirs`，包括空数组。
 - **可执行环境：** 本机。
@@ -349,6 +352,43 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **验证命令：** `npm test`；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
 - **证据：** RED/GREEN：E-12a～E-12c 首轮目标用例先失败、实现后 10 个集成测试文件 / 222 项通过。阶段验收先发现 locked-floor 分类文档漏列 4 条 Shell 安全规则、wiki schema 版本断言仍为 104；补全策略分类并更新断言到 v105 后，两处定向回归 2 个文件 / 3 项全过。最终 `npm test` 全量通过：1096 个测试文件通过、1 个跳过；10471 个用例通过、111 个跳过。`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`、`npm run build:electron:incremental` 和 `npm run check:system-invariant-registry` 均通过；不变量登记 7 项、16 个测试引用；`git diff --check` 通过。复核确认 v105 旧任务迁移不授予 Shell，运行授权仅取自冻结 snapshot；危险、分析/路径事实不完整、unsupported、敏感/系统路径及授权根外命令由 locked policy 拒绝；文件工具结果写入仍要求本次 output binding。全量测试运行期间有既有 `MaxListenersExceededWarning`，最终退出码为 0。
 - **可执行环境：** 本机；真实模型稳定性与桌面视觉继续作为外部验收，不阻塞源码关闭。
+- **状态：** - [x]
+
+### 2026-10-18 用户授权记录架构修订（E-13）
+
+E-13 按用户明确要求修正 D-7 的授权所有权与确认交互。E-12 的 Shell 勾选实现由本修订替代：用户看到预检生成的权限清单，确认后才保存；授权记录由主进程创建并传入后续安全审核，不接受业务 Agent 或 renderer 自述。
+
+### E-13a 由主进程生成权限清单并在保存前展示给用户
+
+- **依赖：** E-12b。
+- **目标文件：** `electron/butler/taskPreflight.ts`、`taskPreflightModelAnalyzer.ts`、`butlerIpc.ts`、`ButlerTaskSettings.tsx`、中英文 config 文案与对应测试。
+- **动作与产物：** 主进程从规范化授权目录、结果目录与归档模式、预检所需本地 Shell 能力、投递配置构造权限清单；UI 用人话逐项显示，并提供“预检并查看权限”及“确认授权并保存”两个步骤。移除独立 Shell checkbox。预检未通过不得显示可确认清单，也不得写任务。
+- **完成判据：** 任务保存前用户可读到完整权限范围；renderer 的权限字段不能替代主进程推导；Shell 只有在预检要求时出现在清单中；权限清单确认与任务保存关联同一候选配置。
+- **验证命令：** `npm exec -- vitest run electron/butler/taskPreflight.test.ts electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/butlerIpc.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npm run i18n:check`；`npm run typecheck:renderer`。
+- **证据：** RED/GREEN：renderer 回归断言不再显示独立 Shell 勾选项，主按钮先预检再展示逐项权限；IPC 回归检查权限清单与候选任务绑定且预检不直接写库。10 个相关测试文件 / 350 项通过。`npm run dev` 打开当前 worktree 后，人工检查新建表单可见必填结果输出目录、独立授权读写目录和“保存前先列出所需权限”的说明，主按钮为“预检并查看权限”。
+- **可执行环境：** 本机。
+- **状态：** - [x]
+
+### E-13b 用户确认后持久化主进程授权记录并传给安全审核 Agent
+
+- **依赖：** E-12a、E-13a。
+- **目标文件：** `electron/preload.ts`、`src/shared/api.ts`、`electron/butler/butlerIpc.ts`、`taskStore.ts`、`invocationAssembler.ts`、`agentChannel.ts`、`approvalAgent.ts` 与对应测试。
+- **动作与产物：** 预检通过时主进程保存短时一次性确认票据与待提交任务快照。用户点确认后 renderer 只传票据 ID；主进程消费票据并生成带确认者、时间、任务版本、预检事实摘要和完整权限范围的记录，再事务保存任务。claim 时将记录冻结到运行快照并作为单独的宿主事实传给安全审核 Agent，不能混入业务 Agent 的不可信声明。
+- **完成判据：** 没有确认票据时零写入；票据只能消费一次；renderer 不能提交记录内容或改权限范围；数据库任务和运行快照保留同一授权记录；安全审核 Agent 输入能看到记录 ID、版本和精确权限范围。
+- **验证命令：** `npm exec -- vitest run electron/butler/butlerIpc.test.ts electron/butler/taskStore.test.ts electron/confirmation/agentChannel.test.ts electron/confirmation/approvalAgent.test.ts`。
+- **证据：** RED/GREEN：IPC、store 与审核线索测试先复现直接写库/renderer 声明不应成为权限来源、运行审核线索缺授权记录；实现后同一 10 文件 / 350 项回归通过。`invocationAssembler.test.ts` 新增生产装配路径断言，冻结记录由 invocation materials 到达 AgentChannel；该用例单独通过（1 项）。
+- **可执行环境：** 本机。
+- **状态：** - [x]
+
+### E-13c 核验授权票据与任务版本失效边界并完成阶段验证
+
+- **依赖：** E-13a、E-13b。
+- **目标文件：** E-13 触及模块、`SYS-AUTOSHELL-001` 登记、技术方案和本执行计划。
+- **动作与产物：** 覆盖过期/重放/并发 revision 变化、记录 revision 不匹配、renderer 伪造权限、Agent 自述和旧任务迁移边界；更新系统不变量登记和文档状态；运行 E-13 相关回归、全量测试、类型、i18n、构建、registry 与 diff 门禁。
+- **完成判据：** 只有用户看过且确认的当前版本清单能产生宿主授权记录；旧或失配记录不进入工具能力和审核事实；记录是后续审核的客观事实，但不放宽具体命令的既有策略限制；阶段所有本机验收通过，文档与代码一致。
+- **验证命令：** `npm exec -- vitest run electron/butler/butlerIpc.test.ts electron/butler/taskStore.test.ts electron/confirmation/agentChannel.test.ts electron/confirmation/approvalAgent.test.ts electron/confirmation/automationLane.test.ts electron/confirmation/toolCallGate.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npm test`；`npm run typecheck:renderer`；`npx tsc -p tsconfig.electron.json --noEmit`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
+- **证据：** RED/GREEN：新增 `taskStore.test.ts` 用例将 task revision 从 1 改为 2，初次 RED 观察过期记录仍产生 `run_shell`；按 revision fail closed 后 GREEN。安全复核发现预检在途时表单被编辑会回显旧权限清单，延迟响应 UI 用例先 RED，再由草稿代次校验丢弃所有旧响应后 GREEN；又发现无主进程授权记录的旧 v1 任务启用时会跳过确认，IPC 用例先 RED，再改为仅停用或当前版本已有记录的任务可直通后 GREEN。主干全量 `npm test` 通过：1096 个测试文件通过、1 个跳过；10480 项通过、111 项跳过（891.49 秒）。其后针对最后的启用门禁修正，`butlerIpc.test.ts` 与 `ButlerTaskSettings.test.tsx` 共 51 项通过，`npx tsc -p tsconfig.electron.json --noEmit` 与 `git diff --check` 通过。全量测试之前，`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`（0 source Chinese）、`npm run check:system-invariant-registry`（7 registrations / 19 test references）及 `npm run build:electron:incremental` 通过。运行期间出现既有 `MaxListenersExceededWarning`，全量测试最终退出码为 0。UI detector 仅报告原有 `config-settings.css` 设计系统建议；本次新增样式使用 `--sa-*` tokens。
+- **可执行环境：** 本机；真实模型质量、审核 Agent 的实际决策质量及 macOS/Windows 无障碍视觉继续由 X-01～X-03 验收。
 - **状态：** - [x]
 
 ## 4. 外部验收（不阻塞源码关闭）

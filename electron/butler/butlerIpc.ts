@@ -1,4 +1,5 @@
 import { dialog, BrowserWindow } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { runButlerTask, type ButlerInvokerDeps } from './butlerInvoker'
 import {
   createAutomationTask,
@@ -6,7 +7,6 @@ import {
   getAutomationTask,
   listAutomationTasks,
   listAutomationTaskRuns,
-  updateAutomationTask,
   updateAutomationTaskConditional,
   type AutomationTaskInput,
   type AutomationTaskSchedule
@@ -17,7 +17,7 @@ import { getConfigValue } from '../database'
 import { runTaskPreflight, type TaskPreflightAnalyzer } from './taskPreflight'
 import { createTaskPreflightModelAnalyzer } from './taskPreflightModelAnalyzer'
 import { getPreflightIssueMessageKey, type PreflightReport, type ButlerTaskWriteResult } from '../../src/shared/automationTaskTypes'
-import type { AutomationOutputOrganization, AutomationTaskAccessPermissions } from '../../src/shared/automationTaskTypes'
+import type { AutomationOutputOrganization, AutomationTaskPermission, AutomationTaskAuthorizationRecord } from '../../src/shared/automationTaskTypes'
 
 /**
  * 管家 IPC（P6 任务 CRUD 面 + P4 手动触发）。渲染进程只表达意图：
@@ -77,7 +77,19 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     : validateTaskAuthorizedDirs)
   const validateOutputDir = preflightDeps.validateOutputDir ?? validateTaskOutputDir
 
-  async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; accessPermissions: AutomationTaskAccessPermissions; outputDir: string; modelId?: string; modelServiceId?: string; taskRevision: number; requestReceivedAt: number }) {
+  type PendingAuthorizationReview = {
+    expiresAt: number
+    taskId?: string
+    permissions: AutomationTaskPermission[]
+    report: PreflightReport
+    factsDigest?: string
+    taskRevision: number
+    expectedCurrentTaskRevision?: number
+    commit: (authorizationRecord: AutomationTaskAuthorizationRecord) => ButlerTaskWriteResult
+  }
+  const pendingAuthorizationReviews = new Map<string, PendingAuthorizationReview>()
+
+  async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; outputDir: string; modelId?: string; modelServiceId?: string; taskRevision: number; requestReceivedAt: number }) {
     if (input.schedule.kind === 'once' && input.schedule.at <= input.requestReceivedAt) {
       return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: getPreflightIssueMessageKey('ONCE_AT_NOT_FUTURE') }], suggestedDirectories: [] }, bindings: [] }
     }
@@ -86,7 +98,6 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       scheduleSummary: JSON.stringify(input.schedule),
       deliverySummary: input.deliveryPref,
       roots: input.roots,
-      accessPermissions: { directories: [...input.roots], tools: [...input.accessPermissions.tools] },
       outputDir: input.outputDir,
       taskRevision: input.taskRevision
     }, { analyzer: createAnalyzer({ modelId: input.modelId, modelServiceId: input.modelServiceId }) })
@@ -102,13 +113,52 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     return raw === 'direct' || raw === 'daily' || raw === 'hourly' ? raw : undefined
   }
 
-  function parseAccessPermissions(raw: unknown, directories: string[], fallback?: AutomationTaskAccessPermissions): AutomationTaskAccessPermissions | undefined {
-    if (raw === undefined) return { directories: [...directories], tools: [...(fallback?.tools ?? [])] }
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
-    const value = raw as { tools?: unknown }
-    if (!Array.isArray(value.tools) || value.tools.some((tool) => tool !== 'run_shell')) return undefined
-    return { directories: [...directories], tools: [...new Set(value.tools)] as AutomationTaskAccessPermissions['tools'] }
+  function buildPermissionList(task: { authorizedDirs: string[]; outputDir: string; outputOrganization: AutomationOutputOrganization; deliveryPref: 'desktop' | 'feishu' | 'wechat' | 'none'; deliveryTarget?: string }, requiredTools: readonly string[]): AutomationTaskPermission[] {
+    const permissions: AutomationTaskPermission[] = task.authorizedDirs.map((path) => ({ kind: 'directory-read-write', path }))
+    permissions.push({ kind: 'result-write', outputDirectory: task.outputDir, organization: task.outputOrganization })
+    if (requiredTools.includes('run_shell')) permissions.push({ kind: 'local-shell', scopeRoots: [...task.authorizedDirs] })
+    if (task.deliveryPref !== 'none') permissions.push({ kind: 'deliver-result', delivery: task.deliveryPref, ...(task.deliveryTarget ? { target: task.deliveryTarget } : {}) })
+    return permissions
   }
+
+  function stageAuthorizationReview(args: Omit<PendingAuthorizationReview, 'expiresAt'>): ButlerTaskWriteResult {
+    // policy: 只把主机从预检事实派生的权限范围放入一次性凭据；渲染端提交的 accessPermissions 不参与决策。
+    const issuedAt = now()
+    for (const [reviewId, pending] of pendingAuthorizationReviews) {
+      if (pending.expiresAt <= issuedAt) pendingAuthorizationReviews.delete(reviewId)
+    }
+    const reviewId = randomUUID()
+    pendingAuthorizationReviews.set(reviewId, { ...args, expiresAt: issuedAt + 5 * 60_000 })
+    return { ok: false, kind: 'authorization-review-required', reviewId, permissions: args.permissions, report: args.report }
+  }
+
+  function createAuthorizationRecord(review: PendingAuthorizationReview): AutomationTaskAuthorizationRecord {
+    return {
+      id: randomUUID(),
+      actor: 'user-confirmation',
+      source: 'task-preflight-confirmation',
+      approvedAt: now(),
+      taskRevision: review.taskRevision,
+      ...(review.factsDigest ? { preflightFactsDigest: review.factsDigest } : {}),
+      permissions: structuredClone(review.permissions)
+    }
+  }
+
+  ipcMain.handle('butler:confirm-write', (_e, payload: { reviewId?: string }): ButlerTaskWriteResult => {
+    const reviewId = typeof payload?.reviewId === 'string' ? payload.reviewId : ''
+    const review = reviewId ? pendingAuthorizationReviews.get(reviewId) : undefined
+    if (!review) return { ok: false, kind: 'validation-error', error: '权限确认已失效，请重新预检任务' }
+    pendingAuthorizationReviews.delete(reviewId)
+    if (review.expiresAt <= now()) return { ok: false, kind: 'validation-error', error: '权限确认已过期，请重新预检任务' }
+    if (review.expectedCurrentTaskRevision !== undefined) {
+      const existing = review.taskId ? getAutomationTask(db, review.taskId) : undefined
+      if (!existing || (existing.taskRevision ?? 0) !== review.expectedCurrentTaskRevision) {
+        return { ok: false, kind: 'validation-error', error: 'task-revision-conflict' }
+      }
+    }
+    // final-check: 仅凭本进程保存的一次性 reviewId 消费权限列表；Agent / renderer 均不能提交授权记录内容。
+    return review.commit(createAuthorizationRecord(review))
+  })
 
   ipcMain.handle('butler:list', () => listAutomationTasks(db))
   ipcMain.handle('butler:list-runs', (_e, payload: { taskId: string }) => listAutomationTaskRuns(db, payload.taskId))
@@ -178,8 +228,6 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     const rootsResult = await validateAuthorizedDirs(requestedAuthorizedDirs)
     if (!rootsResult.ok) return { ok: false, kind: 'validation-error', error: rootsResult.error }
     const authorizedDirs = rootsResult.authorizedDirs
-    const accessPermissions = parseAccessPermissions(payload?.accessPermissions, authorizedDirs)
-    if (!accessPermissions) return { ok: false, kind: 'validation-error', error: '任务访问权限无效' }
     const config = await validateModel(db, {
       modelId: payload?.modelId,
       modelServiceId: payload?.modelServiceId,
@@ -187,10 +235,10 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       reasoningEffort: payload?.reasoningEffort
     })
     if (!config.ok) return { ok: false, kind: 'validation-error', error: config.error }
-    const inspection = await inspectTask({ prompt, schedule, deliveryPref, roots: authorizedDirs, accessPermissions, outputDir: outputResult.outputDir, modelId: config.modelId, modelServiceId: config.modelServiceId, taskRevision: 1, requestReceivedAt })
+    const inspection = await inspectTask({ prompt, schedule, deliveryPref, roots: authorizedDirs, outputDir: outputResult.outputDir, modelId: config.modelId, modelServiceId: config.modelServiceId, taskRevision: 1, requestReceivedAt })
     const failure = preflightFailure(inspection)
     if (failure) return failure
-    const task = createAutomationTask(db, {
+    const taskInput: AutomationTaskInput = {
       name,
       prompt,
       schedule,
@@ -198,7 +246,6 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}),
       ...(payload?.modelOverride ? { modelOverride: payload.modelOverride } : {}),
       authorizedDirs,
-      accessPermissions,
       workDirs: authorizedDirs,
       outputDir: outputResult.outputDir,
       outputOrganization,
@@ -206,8 +253,18 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       modelServiceId: config.modelServiceId,
       reasoningEffort: config.reasoningEffort,
       ...(payload?.enabled !== undefined ? { enabled: payload.enabled } : {})
-    }, { targetBindings: inspection.bindings })
-    return { ok: true, id: task.id, task }
+    }
+    const permissions = buildPermissionList({ authorizedDirs, outputDir: outputResult.outputDir, outputOrganization, deliveryPref, ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}) }, inspection.requiredTools ?? [])
+    return stageAuthorizationReview({
+      permissions,
+      report: inspection.report,
+      ...(inspection.factsDigest ? { factsDigest: inspection.factsDigest } : {}),
+      taskRevision: 1,
+      commit: (authorizationRecord) => {
+        const task = createAutomationTask(db, taskInput, { targetBindings: inspection.bindings, authorizationRecord })
+        return { ok: true, id: task.id, task }
+      }
+    })
   })
 
   ipcMain.handle('butler:update', async (_e, payload: { id: string; patch: Record<string, unknown> }): Promise<ButlerTaskWriteResult> => {
@@ -218,6 +275,14 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     const patch = payload?.patch ?? {}
     const expectedTaskRevision = typeof patch.expectedTaskRevision === 'number' ? patch.expectedTaskRevision : (existing.taskRevision ?? 0)
     if (expectedTaskRevision !== (existing.taskRevision ?? 0)) return { ok: false, kind: 'validation-error', error: 'task-revision-conflict' }
+    const changedKeys = Object.keys(patch).filter((key) => key !== 'expectedTaskRevision')
+    const hasCurrentAuthorizationRecord = existing.accessPermissions?.authorizationRecord?.taskRevision === (existing.taskRevision ?? 0)
+    // policy (SYS-AUTOSHELL-001): disabling is always safe; enabling skips review only when this task revision already has a host-issued receipt.
+    if (changedKeys.length === 1 && changedKeys[0] === 'enabled' && typeof patch.enabled === 'boolean'
+      && (patch.enabled === false || (existing.preflightVersion === 1 && hasCurrentAuthorizationRecord))) {
+      const commit = updateAutomationTaskConditional(db, id, { enabled: patch.enabled, expectedTaskRevision })
+      return commit.ok ? { ok: true, id, task: commit.task } : { ok: false, kind: 'validation-error', error: commit.reason }
+    }
     const next: Record<string, unknown> = {}
     if (typeof patch.name === 'string' && patch.name.trim()) next.name = patch.name.trim()
     if (typeof patch.prompt === 'string' && patch.prompt.trim()) next.prompt = patch.prompt.trim()
@@ -244,9 +309,6 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       next.authorizedDirs = rootsResult.authorizedDirs
       next.workDirs = rootsResult.authorizedDirs
     }
-    const accessPermissions = parseAccessPermissions(patch.accessPermissions, rootsResult.authorizedDirs, existing.accessPermissions)
-    if (!accessPermissions) return { ok: false, kind: 'validation-error', error: '任务访问权限无效' }
-    if (Object.prototype.hasOwnProperty.call(patch, 'accessPermissions') || rootsProvided) next.accessPermissions = accessPermissions
     const requestedOutputDir = Object.prototype.hasOwnProperty.call(patch, 'outputDir') ? patch.outputDir : existing.outputDir
     const outputResult = await validateOutputDir(requestedOutputDir)
     if (!outputResult.ok) return { ok: false, kind: 'validation-error', error: outputResult.error }
@@ -272,16 +334,31 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       next.reasoningEffort = config.reasoningEffort
     }
     if (typeof patch.enabled === 'boolean') next.enabled = patch.enabled
-    const candidate = { ...existing, ...next, accessPermissions }
+    const candidate = { ...existing, ...next }
     const candidateRoots: string[] = rootsProvided ? rootsResult.authorizedDirs : existing.authorizedDirs
-    const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, accessPermissions, outputDir: outputResult.outputDir, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
+    const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, outputDir: outputResult.outputDir, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
     const failure = preflightFailure(inspection)
     if (failure) return failure
-    const commit = updateAutomationTaskConditional(db, id, { ...next, expectedTaskRevision }, { targetBindings: inspection.bindings })
-    if (!commit.ok) return commit.reason === 'schedule-pending'
-      ? { ok: false, kind: 'validation-error', error: 'schedule-pending' }
-      : { ok: false, kind: 'validation-error', error: commit.reason }
-    return { ok: true, id, task: commit.task }
+    const permissions = buildPermissionList({
+      authorizedDirs: candidateRoots,
+      outputDir: outputResult.outputDir,
+      outputOrganization,
+      deliveryPref: candidate.deliveryPref,
+      ...(candidate.deliveryTarget ? { deliveryTarget: candidate.deliveryTarget } : {})
+    }, inspection.requiredTools ?? [])
+    return stageAuthorizationReview({
+      taskId: id,
+      expectedCurrentTaskRevision: existing.taskRevision ?? 0,
+      permissions,
+      report: inspection.report,
+      ...(inspection.factsDigest ? { factsDigest: inspection.factsDigest } : {}),
+      taskRevision: (existing.taskRevision ?? 0) + 1,
+      commit: (authorizationRecord) => {
+        const commit = updateAutomationTaskConditional(db, id, { ...next, expectedTaskRevision }, { targetBindings: inspection.bindings, authorizationRecord })
+        if (!commit.ok) return { ok: false, kind: 'validation-error', error: commit.reason }
+        return { ok: true, id, task: commit.task }
+      }
+    })
   })
 
   ipcMain.handle('butler:delete', (_e, payload: { id: string }): { ok: boolean; error?: string } => {

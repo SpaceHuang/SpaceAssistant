@@ -3,7 +3,7 @@ import { Alert, App, Button, Checkbox, DatePicker, Form, Input, InputNumber, Mod
 import { Pencil, Plus, SquarePlay, Trash2, X } from 'lucide-react'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
-import { getDefaultAutomationOutputOrganization, getPreflightClarificationReasonMessageKey, getPreflightIssueMessageKey, type AutomationTask, type AutomationDeliveryPref, type AutomationOutputOrganization, type AutomationTaskRun, type AutomationTaskSchedule, type PreflightReport } from '../../../shared/automationTaskTypes'
+import { getDefaultAutomationOutputOrganization, getPreflightClarificationReasonMessageKey, getPreflightIssueMessageKey, type AutomationTask, type AutomationDeliveryPref, type AutomationOutputOrganization, type AutomationTaskPermission, type AutomationTaskRun, type AutomationTaskSchedule, type PreflightReport } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { buildOnceDisabledConstraints, onceAtInFuture } from './onceAtConstraints'
 
@@ -43,6 +43,17 @@ function scheduleTagText(task: AutomationTask, t: TaskActions['t']): string {
 
 function deliveryText(pref: AutomationDeliveryPref, t: TaskActions['t']): string {
   return t(`butler.delivery.${pref}` as 'butler.delivery.desktop')
+}
+
+function permissionDescription(permission: AutomationTaskPermission, t: TaskActions['t']): string {
+  switch (permission.kind) {
+    case 'directory-read-write': return t('butler.form.permissionDirectoryReadWrite', { path: permission.path })
+    case 'result-write': return t('butler.form.permissionResultWrite', { path: permission.outputDirectory, organization: outputOrganizationText(permission.organization, t) })
+    case 'local-shell': return t('butler.form.permissionLocalShell', { scope: permission.scopeRoots.length ? permission.scopeRoots.join('、') : t('butler.form.permissionNoDirectoryScope') })
+    case 'deliver-result': return permission.target
+      ? t('butler.form.permissionDeliverResultTo', { delivery: deliveryText(permission.delivery, t), target: permission.target })
+      : t('butler.form.permissionDeliverResult', { delivery: deliveryText(permission.delivery, t) })
+  }
 }
 
 function runStatusText(status: AutomationTaskRun['status'], t: TaskActions['t']): string {
@@ -120,7 +131,7 @@ function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: Task
             {t('butler.form.authorizedDirs')}: {authorizedDirs.length ? authorizedDirs.join(', ') : t('butler.form.authorizedDirsEmpty')}
           </span>
           <span className="butler-task-card__access-permissions">
-            {t('butler.form.localShellPermission')}: {task.accessPermissions?.tools.includes('run_shell') ? t('butler.form.permissionEnabled') : t('butler.form.permissionDisabled')}
+            {t('butler.form.permissionCount', { count: task.accessPermissions?.authorizationRecord?.permissions.length ?? 0 })}
           </span>
           {task.lastRunAt ? <span className="butler-task-card__summary-meta">{t('butler.lastRun', { time: dayjs(task.lastRunAt).format('YYYY-MM-DD HH:mm') })}</span> : null}
         </div>
@@ -158,9 +169,11 @@ export function ButlerTaskSettings() {
   const [historyTask, setHistoryTask] = useState<AutomationTask | null>(null)
   const [historyRuns, setHistoryRuns] = useState<AutomationTaskRun[]>([])
   const [preflightReport, setPreflightReport] = useState<PreflightReport | null>(null)
+  const [authorizationReview, setAuthorizationReview] = useState<{ reviewId: string; permissions: AutomationTaskPermission[] } | null>(null)
   const [writeError, setWriteError] = useState<string | null>(null)
   const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([])
   const outputOrganizationTouched = useRef(false)
+  const authorizationDraftRevision = useRef(0)
   const [form] = Form.useForm()
   const scheduleKind = Form.useWatch('scheduleKind', form) as AutomationTaskSchedule['kind'] | undefined
   const outputDir = Form.useWatch('outputDir', form) as string | undefined
@@ -169,6 +182,13 @@ export function ButlerTaskSettings() {
   const selectedServiceId = Form.useWatch('modelServiceId', form)
   const selectedCandidate = modelCandidates.find((candidate) => candidate.modelId === selectedModelId && candidate.serviceId === selectedServiceId)
   const onceConstraints = buildOnceDisabledConstraints()
+
+  const invalidateAuthorizationReview = () => {
+    authorizationDraftRevision.current += 1
+    setAuthorizationReview(null)
+    setPreflightReport(null)
+    setWriteError(null)
+  }
 
   useEffect(() => {
     if (editing || outputOrganizationTouched.current || !scheduleKind) return
@@ -194,6 +214,7 @@ export function ButlerTaskSettings() {
   }, [])
 
   const openCreate = async () => {
+    authorizationDraftRevision.current += 1
     setEditing(null)
     outputOrganizationTouched.current = false
     const [defaults, candidates] = await Promise.all([window.api.butlerGetTaskDefaults(), window.api.butlerGetModelCandidates()])
@@ -210,7 +231,6 @@ export function ButlerTaskSettings() {
       outputDir: undefined,
       outputOrganization: 'hourly',
       workDirs: [],
-      allowRunShell: false,
       modelId: defaults.modelId,
       modelServiceId: defaults.modelServiceId,
       modelOverride: defaults.modelOverride,
@@ -220,11 +240,13 @@ export function ButlerTaskSettings() {
         : defaults.reasoningEffort ?? 'off'
     })
     setPreflightReport(null)
+    setAuthorizationReview(null)
     setWriteError(null)
     setEditorOpen(true)
   }
 
   const openEdit = (task: AutomationTask) => {
+    authorizationDraftRevision.current += 1
     setEditing(task)
     outputOrganizationTouched.current = true
     const roots = task.authorizedDirs ?? task.workDirs ?? []
@@ -241,7 +263,6 @@ export function ButlerTaskSettings() {
       outputDir: task.outputDir ?? undefined,
       outputOrganization: task.outputOrganization ?? getDefaultAutomationOutputOrganization(task.schedule),
       workDirs: roots,
-      allowRunShell: task.accessPermissions?.tools.includes('run_shell') === true,
       modelId: task.modelId,
       modelServiceId: task.modelServiceId,
       modelOverride: task.modelOverride,
@@ -249,6 +270,7 @@ export function ButlerTaskSettings() {
       reasoningEffort: task.reasoningEffort ?? 'off'
     })
     setPreflightReport(null)
+    setAuthorizationReview(null)
     setWriteError(null)
     setEditorOpen(true)
   }
@@ -258,7 +280,7 @@ export function ButlerTaskSettings() {
       const result = await window.api.butlerChooseOutputDir()
       if (!result.cancelled && result.path) {
         form.setFieldValue('outputDir', result.path)
-        setWriteError(null)
+        invalidateAuthorizationReview()
         void form.validateFields(['outputDir']).catch(() => undefined)
       } else if (!result.cancelled && result.error) {
         setWriteError(result.error)
@@ -273,6 +295,7 @@ export function ButlerTaskSettings() {
     // 校验失败：antd 已在表单项上展示错误，reject 就地吸收，不产生 unhandled rejection
     const values = await form.validateFields().catch(() => null)
     if (!values) return
+    const requestDraftRevision = authorizationReview ? undefined : authorizationDraftRevision.current
     setSubmitting(true)
     setWriteError(null)
     try {
@@ -285,14 +308,15 @@ export function ButlerTaskSettings() {
       const chosen = modelCandidates.find((candidate) => candidate.modelId === values.modelId && candidate.serviceId === values.modelServiceId)
       // 评审 P1-2：主进程校验失败返回 {ok:false}（resolve 而非 reject）——不检查会假成功。
       // 失败时保留弹窗与已填内容，展示主进程给出的原因。
-      const res = editing
+      const res = authorizationReview
+        ? await window.api.butlerConfirmTaskAuthorization({ reviewId: authorizationReview.reviewId })
+        : editing
         ? await window.api.butlerUpdateTask({
             id: editing.id,
             patch: {
               expectedTaskRevision: editing.taskRevision ?? 0,
               name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref,
               authorizedDirs,
-              accessPermissions: { directories: authorizedDirs, tools: values.allowRunShell ? ['run_shell'] : [] },
               workDirs: authorizedDirs,
               outputDir: values.outputDir,
               outputOrganization: values.outputOrganization,
@@ -308,7 +332,6 @@ export function ButlerTaskSettings() {
             schedule,
             deliveryPref: values.deliveryPref,
             authorizedDirs,
-            accessPermissions: { directories: authorizedDirs, tools: values.allowRunShell ? ['run_shell'] : [] },
             workDirs: authorizedDirs,
             outputDir: values.outputDir,
             outputOrganization: values.outputOrganization,
@@ -317,11 +340,25 @@ export function ButlerTaskSettings() {
             modelOverride: chosen?.providerModelName,
             reasoningEffort: values.reasoningEffort
           })
+      if (requestDraftRevision !== undefined && requestDraftRevision !== authorizationDraftRevision.current) {
+        setAuthorizationReview(null)
+        setPreflightReport(null)
+        setWriteError(t('butler.form.preflightDraftChanged'))
+        return
+      }
       if (!res.ok) {
+        if (res.kind === 'authorization-review-required') {
+          setPreflightReport(res.report)
+          setAuthorizationReview({ reviewId: res.reviewId, permissions: res.permissions })
+          setWriteError(null)
+          return
+        }
         if (res.kind === 'preflight-blocked') {
           setPreflightReport(res.report)
+          setAuthorizationReview(null)
           setWriteError(null)
         } else {
+          setAuthorizationReview(null)
           const errorMessage = res.kind === 'preflight-unavailable'
             ? t(getPreflightIssueMessageKey(res.error) as Parameters<TaskActions['t']>[0])
             : res.error
@@ -331,6 +368,7 @@ export function ButlerTaskSettings() {
         return
       }
       setPreflightReport(null)
+      setAuthorizationReview(null)
       message.success(editing ? t('butler.updated') : t('butler.created'))
       setEditorOpen(false)
       await refresh()
@@ -345,8 +383,14 @@ export function ButlerTaskSettings() {
     try {
       const result = await window.api.butlerUpdateTask({ id: task.id, patch: { enabled, expectedTaskRevision: task.taskRevision ?? 0 } })
       if (!result.ok) {
+        if (result.kind === 'authorization-review-required') {
+          await openEdit(task)
+          setPreflightReport(result.report)
+          setAuthorizationReview({ reviewId: result.reviewId, permissions: result.permissions })
+          return
+        }
         if (result.kind === 'preflight-blocked') {
-          openEdit(task)
+          await openEdit(task)
           setPreflightReport(result.report)
           return
         }
@@ -438,7 +482,7 @@ export function ButlerTaskSettings() {
             {t('butler.form.cancel')}
           </Button>,
           <Button key="save" type="primary" loading={submitting} onClick={() => void submit()}>
-            {t('butler.form.save')}
+            {authorizationReview ? t('butler.form.permissionReviewConfirm') : t('butler.form.permissionReviewStart')}
           </Button>
         ]}
       >
@@ -448,10 +492,29 @@ export function ButlerTaskSettings() {
           className="butler-task-editor"
           onValuesChange={(changedValues) => {
             if (Object.prototype.hasOwnProperty.call(changedValues, 'outputOrganization')) outputOrganizationTouched.current = true
+            invalidateAuthorizationReview()
           }}
         >
           {editing && !editing.outputDir ? <Alert className="butler-task-editor__wide" type="info" showIcon message={t('butler.form.outputDirLegacy')} /> : null}
-          {preflightReport ? (
+          {authorizationReview ? (
+            <Alert
+              className="butler-permission-review"
+              type="warning"
+              showIcon
+              message={t('butler.form.permissionReviewTitle')}
+              description={(
+                <div>
+                  <Typography.Paragraph>{t('butler.form.permissionReviewIntro')}</Typography.Paragraph>
+                  <ul className="butler-permission-review__list">
+                    {authorizationReview.permissions.map((permission, index) => (
+                      <li key={`${permission.kind}-${index}`}>{permissionDescription(permission, t)}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            />
+          ) : null}
+          {preflightReport && preflightReport.status !== 'passed' ? (
             <Alert className="butler-preflight-report" type={preflightReport.status === 'blocked' ? 'warning' : 'info'} showIcon message={t('butler.form.preflightTitle')} description={(
               <div className="butler-preflight-report__content">
                 {preflightReport.blockers.map((item, index) => {
@@ -485,6 +548,7 @@ export function ButlerTaskSettings() {
                       aria-label={t('butler.form.suggestedDirectoryAria', { path: candidate.path, purpose: candidate.purpose })}
                       onChange={(event) => {
                         setAuthorizedDirs(event.target.checked ? [...new Set([...authorizedDirs, candidate.path])] : authorizedDirs.filter((root) => root !== candidate.path))
+                        invalidateAuthorizationReview()
                       }}
                     >
                       <span className="butler-preflight-report__candidate-path">{candidate.path}</span>
@@ -611,13 +675,10 @@ export function ButlerTaskSettings() {
               <Typography.Title id="butler-task-section-access" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionAccess')}</Typography.Title>
               <div className="butler-task-editor__section-grid">
                 <Form.Item className="butler-task-editor__wide" label={t('butler.form.authorizedDirs')} extra={t('butler.form.authorizedDirsHint')}>
-                  <AuthorizedDirList t={t} value={authorizedDirs} onChange={setAuthorizedDirs} />
-                </Form.Item>
-                <Form.Item name="allowRunShell" valuePropName="checked" className="butler-task-editor__wide">
-                  <Checkbox>{t('butler.form.localShellPermission')}</Checkbox>
+                  <AuthorizedDirList t={t} value={authorizedDirs} onChange={(directories) => { setAuthorizedDirs(directories); invalidateAuthorizationReview() }} />
                 </Form.Item>
                 <Typography.Paragraph className="butler-task-editor__wide" type="secondary">
-                  {t('butler.form.localShellPermissionHint')}
+                  {t('butler.form.permissionReviewHelp')}
                 </Typography.Paragraph>
               </div>
             </section>

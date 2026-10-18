@@ -147,6 +147,16 @@ function renderCluePack(clue: ApprovalCluePack, maxAuthorization: ApprovalAuthor
           clue.taskDigest
         ]
       : []),
+    ...(clue.taskAuthorizationRecord
+      ? [
+          '',
+          '## 主进程记录的任务授权（宿主事实）',
+          `授权记录 ID：${neutralizeFence(clue.taskAuthorizationRecord.id)}`,
+          `确认来源：${clue.taskAuthorizationRecord.source}；确认者：${clue.taskAuthorizationRecord.actor}；任务版本：${clue.taskAuthorizationRecord.taskRevision}`,
+          `授权范围：${neutralizeFence(JSON.stringify(clue.taskAuthorizationRecord.permissions))}`,
+          '该记录证明用户在任务预检后确认了列出的权限范围；它不代表本次具体命令或目标已自动批准，仍须按当前事实、策略与范围独立审核。'
+        ]
+      : []),
     '',
     '请依据裁决标准独立给出三态 JSON 结论（approve / deny / undetermined）；',
     '事实链不完整、无法判定安全性时必须输出 undetermined 并写明缺什么证据——不得在证据不足时猜测 approve。'

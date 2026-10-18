@@ -75,10 +75,10 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
   },
   {
     id: 'SYS-AUTOSHELL-001', owner: 'electron/butler + electron/confirmation', stage: 'final-check', category: 'capability',
-    rationale: 'An unattended Shell grant must come only from the immutable task revision frozen when the run is claimed.',
-    effect: 'validate', scope: 'electron/butler/taskStore.ts:transitionClaimToRunning;electron/confirmation/toolCallGate.ts:automation-shell-permission',
-    audit: 'policy decision records automation-shell-permission status and the matched or missing automation Shell rule',
-    tests: ['electron/butler/taskStore.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/toolCallGate.test.ts'],
+    rationale: 'An unattended Shell grant must come from a main-process authorization receipt created after the user confirms the reviewed preflight list, then frozen with the task run; renderer or business-Agent claims cannot create the receipt.',
+    effect: 'validate', scope: 'electron/butler/butlerIpc.ts:butler:confirm-write;electron/butler/taskStore.ts:transitionClaimToRunning;electron/runtime/invocationAssembler.ts:createConfirmationPort;electron/confirmation/toolCallGate.ts:automation-shell-permission',
+    audit: 'policy decision records automation-shell-permission status; the approval clue includes the host-issued receipt ID, task revision and exact permission scopes from the frozen run snapshot',
+    tests: ['electron/butler/butlerIpc.test.ts', 'electron/butler/taskStore.test.ts', 'electron/confirmation/agentChannel.test.ts', 'electron/confirmation/approvalAgent.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/toolCallGate.test.ts'],
     overrideability: 'none'
   },
   {

@@ -6,7 +6,7 @@ describe('runTaskPreflight', () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: 'report.csv', targetType: 'file' }] })) }
     const result = await runTaskPreflight({ prompt: 'Read report.csv and summarize it', scheduleSummary: 'daily 09:00', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 4 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace/report.csv', relativePath: 'report.csv', kind: 'file' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) } })
     expect(result).toMatchObject({ report: { status: 'passed', blockers: [] }, bindings: [{ kind: 'exact', path: '/workspace/report.csv', taskRevision: 4 }] })
-    expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Read report.csv and summarize it', authorizedRoots: ['/workspace'], outputRoot: undefined, accessPermissions: { directories: ['/workspace'], tools: [] }, facts: expect.any(Object), tools: [] }), expect.any(AbortSignal))
+    expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Read report.csv and summarize it', authorizedRoots: ['/workspace'], outputRoot: undefined, facts: expect.any(Object), tools: [] }), expect.any(AbortSignal))
   })
 
   it('keeps an output-only task separate from authorized read roots', async () => {
@@ -38,30 +38,43 @@ describe('runTaskPreflight', () => {
     })])
   })
 
-  it('binds a Git repository directory for a locally authorized Git history query', async () => {
-    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }] })) }
+  it('returns a Shell permission requirement for a Git history task without treating it as already authorized', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredTools: ['run_shell'] } as never)) }
     const result = await runTaskPreflight({
       prompt: '总结昨天合并进 main 的提交', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'],
-      accessPermissions: { directories: ['/workspace'], tools: ['run_shell'] }, taskRevision: 2
+      taskRevision: 2
     }, { analyzer, factsProvider: { collect: vi.fn(async () => ({
       roots: ['/workspace'], gitRepositories: ['/workspace'], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }],
       coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'git-facts'
     })) } })
 
-    expect(result).toMatchObject({ report: { status: 'passed', blockers: [] }, bindings: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }] })
-    expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ accessPermissions: { directories: ['/workspace'], tools: ['run_shell'] }, facts: expect.objectContaining({ gitRepositories: ['/workspace'] }) }), expect.any(AbortSignal))
+    expect(result).toMatchObject({ report: { status: 'passed', blockers: [] }, bindings: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredTools: ['run_shell'] })
+    expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.objectContaining({ gitRepositories: ['/workspace'] }) }), expect.any(AbortSignal))
   })
 
-  it('explains missing local Shell authorization instead of reporting an unclear file target', async () => {
+  it('returns a Shell permission request for confirmation instead of blocking on missing authorization', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
-      targets: [], clarifications: [{ reference: '昨天合并进 main 的提交', reasonCode: 'capability_not_authorized' }]
-    })) }
+      targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredTools: ['run_shell']
+    } as never)) }
     const result = await runTaskPreflight({ prompt: '总结昨天合并进 main 的提交', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, {
       analyzer,
       factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: ['/workspace'], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'git-facts' })) }
     })
 
-    expect(result.report.blockers).toEqual([expect.objectContaining({ code: 'TOOL_PERMISSION_REQUIRED', messageKey: 'butler.preflight.tool_permission_required', reference: '昨天合并进 main 的提交', reasonCode: 'capability_not_authorized' })])
+    expect(result).toMatchObject({ report: { status: 'passed', blockers: [] }, requiredTools: ['run_shell'] })
+  })
+
+  it('fails closed when a requested Shell permission has no user-selected directory scope', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [{ kind: 'output', path: 'summary.txt', expectedType: 'file' }], requiredTools: ['run_shell']
+    } as never)) }
+    const result = await runTaskPreflight({ prompt: '查询 Git 并生成摘要', scheduleSummary: 'once', deliverySummary: 'none', roots: [], outputDir: '/results', taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: [], outputRoot: '/results', gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'output-only' })) }
+    })
+
+    expect(result.report).toMatchObject({ status: 'blocked', blockers: [{ code: 'TOOL_PERMISSION_REQUIRED', field: 'workDirs' }] })
+    expect(result.bindings).toEqual([])
   })
 
   it('shows the exact reference and every matching path for an ambiguous target', async () => {
@@ -105,6 +118,17 @@ describe('runTaskPreflight', () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'collection', directory: '/workspace', selector: '**/*' }] } as never)) }
     const result = await runTaskPreflight({ prompt: 'enumerate', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) } })
     expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_INVALID_RESPONSE' }] })
+  })
+
+  it('rejects unsupported requested tools instead of displaying or granting them', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredTools: ['run_arbitrary'] } as never)) }
+    const result = await runTaskPreflight({ prompt: 'inspect', scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/workspace'], taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) }
+    })
+
+    expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_INVALID_RESPONSE' }] })
+    expect(result.requiredTools).toBeUndefined()
   })
 
   it('aborts the analyzer on timeout and fails closed', async () => {

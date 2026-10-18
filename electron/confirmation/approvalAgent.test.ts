@@ -1203,6 +1203,25 @@ describe('线索包任务声明（D：可信证据分区）', () => {
     expect(content.indexOf('整理报告目录并汇总周报')).toBeGreaterThan(content.lastIndexOf('```'))
   })
 
+  it('把运行时保存的用户授权记录作为独立宿主事实交给安全审核 Agent', async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const authorizationRecord = {
+      id: 'authorization-1', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+      taskRevision: 4, preflightFactsDigest: 'facts-4', permissions: [
+        { kind: 'local-shell', scopeRoots: ['/workspace/repo'] },
+        { kind: 'result-write', outputDirectory: '/results', organization: 'daily' }
+      ]
+    }
+    const rendered = renderCluePackForTest(clue({ taskAuthorizationRecord: authorizationRecord } as never))
+
+    expect(rendered).toContain('主进程记录的任务授权')
+    expect(rendered).toContain('authorization-1')
+    expect(rendered).toContain('/workspace/repo')
+    expect(rendered).toContain('/results')
+    expect(rendered.indexOf('authorization-1')).toBeGreaterThan(rendered.lastIndexOf('```'))
+    expect(rendered).toContain('不代表本次具体命令或目标已自动批准')
+  })
+
   it('无 taskDigest（P3 桌面等无任务上下文调用方）→ 不渲染任务小节', async () => {
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
