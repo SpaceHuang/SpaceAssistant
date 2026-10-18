@@ -29,6 +29,19 @@ describe('WikiLifecycleController', () => {
     expect(await lifecycle.read()).toMatchObject({ lifecycle: 'domain_ready', preflightHash: 'preflight-hash' })
   })
 
+  it('holds the write barrier during migration and records a durable preflight binding', async () => {
+    const root = await rootFixture()
+    await mkdir(path.join(root, 'wiki'))
+    await writeFile(path.join(root, 'SCHEMA.md'), 'legacy schema')
+    const lifecycle = createWikiLifecycleController(root)
+    await lifecycle.initialize()
+    await lifecycle.beginMigration('preflight-hash', '123e4567-e89b-42d3-a456-426614174000')
+    expect(await lifecycle.read()).toMatchObject({ lifecycle: 'initializing', preflightHash: 'preflight-hash' })
+    await expect(lifecycle.enable()).rejects.toThrow('wiki-lifecycle-invalid-transition')
+    await lifecycle.completeMigration('preflight-hash', '123e4567-e89b-42d3-a456-426614174000')
+    expect(await lifecycle.read()).toMatchObject({ lifecycle: 'domain_ready', preflightHash: 'preflight-hash' })
+  })
+
   it.each(['state-missing', 'seal-missing', 'state-corrupt', 'seal-mismatch'])('fails closed for %s without resetting Wiki files', async mode => {
     const root = await rootFixture()
     const lifecycle = createWikiLifecycleController(root)

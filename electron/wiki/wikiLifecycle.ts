@@ -7,9 +7,9 @@ import { WIKI_BOOTSTRAP_SEAL } from './wikiPaths'
 
 export type WikiLifecycleState = 'initializing' | 'domain_ready' | 'domain_enabled' | 'recovery_required'
 interface RootIdentity { dev: number; ino: number }
-interface BootstrapSeal { formatVersion: 1; bootstrapId: string; rootIdentity: RootIdentity; initialization: 'empty' | 'existing-content'; stage: 'initialized' | 'domain_ready' | 'domain_enabled'; preflightHash?: string }
-interface LifecycleFile { formatVersion: 1; bootstrapId: string; lifecycle: WikiLifecycleState; initialization: BootstrapSeal['initialization']; preflightHash?: string }
-export interface WikiLifecycleSnapshot { lifecycle: WikiLifecycleState; initialization?: BootstrapSeal['initialization']; preflightHash?: string; reason?: string }
+interface BootstrapSeal { formatVersion: 1; bootstrapId: string; rootIdentity: RootIdentity; initialization: 'empty' | 'existing-content'; stage: 'initialized' | 'domain_ready' | 'domain_enabled'; preflightHash?: string; migrationId?: string }
+interface LifecycleFile { formatVersion: 1; bootstrapId: string; lifecycle: WikiLifecycleState; initialization: BootstrapSeal['initialization']; preflightHash?: string; migrationId?: string }
+export interface WikiLifecycleSnapshot { lifecycle: WikiLifecycleState; initialization?: BootstrapSeal['initialization']; preflightHash?: string; migrationId?: string; reason?: string }
 
 export function createWikiLifecycleController(wikiRoot: string) {
   const root = path.resolve(wikiRoot)
@@ -32,6 +32,30 @@ export function createWikiLifecycleController(wikiRoot: string) {
         await store.write('.wiki-service/state.json', json({ formatVersion: 1, bootstrapId: seal.bootstrapId, lifecycle: 'domain_ready', initialization: seal.initialization, preflightHash } satisfies LifecycleFile))
       })
     },
+    beginMigration(preflightHash: string, migrationId: string): Promise<void> {
+      return withWikiWriteMutex(lock, async () => {
+        const snapshot = await readSnapshot()
+        if (snapshot.lifecycle !== 'initializing' || !preflightHash || !/^[0-9a-f-]{36}$/i.test(migrationId)) throw new Error('wiki-lifecycle-invalid-transition')
+        const seal = await readSeal()
+        if (!seal) throw new Error('wiki-lifecycle-recovery-required')
+        seal.preflightHash = preflightHash
+        seal.migrationId = migrationId
+        await writeSeal(seal)
+        await store.write('.wiki-service/state.json', json({ formatVersion: 1, bootstrapId: seal.bootstrapId, lifecycle: 'initializing', initialization: seal.initialization, preflightHash, migrationId } satisfies LifecycleFile))
+      })
+    },
+    completeMigration(preflightHash: string, migrationId: string): Promise<void> {
+      return withWikiWriteMutex(lock, async () => {
+        const snapshot = await readSnapshot()
+        if (snapshot.lifecycle !== 'initializing' || snapshot.preflightHash !== preflightHash || snapshot.migrationId !== migrationId) throw new Error('wiki-lifecycle-invalid-transition')
+        const seal = await readSeal()
+        if (!seal) throw new Error('wiki-lifecycle-recovery-required')
+        seal.stage = 'domain_ready'
+        delete seal.migrationId
+        await writeSeal(seal)
+        await store.write('.wiki-service/state.json', json({ formatVersion: 1, bootstrapId: seal.bootstrapId, lifecycle: 'domain_ready', initialization: seal.initialization, preflightHash } satisfies LifecycleFile))
+      })
+    },
     enable(): Promise<void> {
       return withWikiWriteMutex(lock, async () => {
         const snapshot = await readSnapshot()
@@ -43,11 +67,15 @@ export function createWikiLifecycleController(wikiRoot: string) {
         await store.write('.wiki-service/state.json', json({ formatVersion: 1, bootstrapId: seal.bootstrapId, lifecycle: 'domain_enabled', initialization: seal.initialization, ...(seal.preflightHash ? { preflightHash: seal.preflightHash } : {}) } satisfies LifecycleFile))
       })
     },
-    markRecoveryRequired(): Promise<void> {
-      return withWikiWriteMutex(lock, async () => {
+    markRecoveryRequired(options: { lockHeld?: boolean } = {}): Promise<void> {
+      const mark = async () => {
         const seal = await readSeal()
         if (!seal) throw new Error('wiki-bootstrap-seal-unavailable')
         await store.write('.wiki-service/state.json', json({ formatVersion: 1, bootstrapId: seal.bootstrapId, lifecycle: 'recovery_required', initialization: seal.initialization } satisfies LifecycleFile))
+      }
+      if (options.lockHeld) return mark()
+      return withWikiWriteMutex(lock, async () => {
+        await mark()
       })
     },
   }
@@ -72,10 +100,10 @@ export function createWikiLifecycleController(wikiRoot: string) {
     if (!seal || !state) return { lifecycle: 'recovery_required', reason: 'bootstrap-control-missing-or-invalid' }
     if (state.lifecycle === 'recovery_required') return { lifecycle: 'recovery_required', reason: 'lifecycle-marked-for-recovery' }
     const actualIdentity = await getRootIdentity(root)
-    if (!sameIdentity(actualIdentity, seal.rootIdentity) || seal.bootstrapId !== state.bootstrapId || seal.initialization !== state.initialization || seal.stage !== lifecycleToStage(state.lifecycle) || (seal.preflightHash ?? '') !== (state.preflightHash ?? '')) {
+    if (!sameIdentity(actualIdentity, seal.rootIdentity) || seal.bootstrapId !== state.bootstrapId || seal.initialization !== state.initialization || seal.stage !== lifecycleToStage(state.lifecycle) || (seal.preflightHash ?? '') !== (state.preflightHash ?? '') || (seal.migrationId ?? '') !== (state.migrationId ?? '')) {
       return { lifecycle: 'recovery_required', reason: 'bootstrap-control-mismatch' }
     }
-    return { lifecycle: state.lifecycle, initialization: state.initialization, ...(state.preflightHash ? { preflightHash: state.preflightHash } : {}) }
+    return { lifecycle: state.lifecycle, initialization: state.initialization, ...(state.preflightHash ? { preflightHash: state.preflightHash } : {}), ...(state.migrationId ? { migrationId: state.migrationId } : {}) }
   }
 
   async function readSeal(): Promise<BootstrapSeal | undefined> {

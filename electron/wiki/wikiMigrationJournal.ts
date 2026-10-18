@@ -27,7 +27,7 @@ export class WikiMigrationJournalError extends Error {
   constructor(readonly code: string) { super(code); this.name = 'WikiMigrationJournalError' }
 }
 
-export function createWikiMigrationJournal(options: { store: WikiFileStore; markRecoveryRequired?: () => void | Promise<void> }) {
+export function createWikiMigrationJournal(options: { store: WikiFileStore; markRecoveryRequired?: (lockHeld: boolean) => void | Promise<void> }) {
   const lockPath = `${options.store.root}/.wiki-domain-lock`
 
   return {
@@ -147,7 +147,7 @@ export function createWikiMigrationJournal(options: { store: WikiFileStore; mark
     entry.step = 'conflict'
     manifest.status = 'conflict'
     await writeManifest(options.store, manifest)
-    await options.markRecoveryRequired?.()
+    await options.markRecoveryRequired?.(true)
     throw new WikiMigrationJournalError('wiki-migration-conflict')
   }
 }
