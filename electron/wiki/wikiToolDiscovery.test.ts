@@ -16,6 +16,8 @@ describe('Wiki domain tool discovery', () => {
     const registry = createBuiltinToolRegistry()
     expect(registry.get('memory')).toBeDefined()
     expect(registry.get('memory.wiki_get_schema')).toBeDefined()
+    expect(registry.get('memory.wiki_search')).toBeDefined()
+    expect(registry.get('memory.wiki_read_source')).toBeDefined()
   })
 
   it('returns operation names, use descriptions, and complete schemas for matching tools', () => {
