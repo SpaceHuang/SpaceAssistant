@@ -325,19 +325,23 @@ describe('Wiki schema change confirmation policy', () => {
     await fs.writeFile(path.join(wikiRoot, 'wiki', 'secret.md'), '# Secret')
     const lifecycle = (await import('../wiki/wikiLifecycle')).createWikiLifecycleController(wikiRoot)
     await lifecycle.initialize({ fresh: true })
-    const args = { workDir, userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG }
+    const args = { workDir, userDataDir, wikiConfig: { ...DEFAULT_WIKI_CONFIG, legacyRootAliases: ['old-wiki'] } }
     try {
       const ready = await evaluateToolCallGate(base({ ...args, toolName: 'read_file', toolInput: { path: 'llm-wiki/wiki/secret.md' } }))
       expect(ready.decision.ruleId).not.toBe('wiki-domain-file-bypass-deny')
       await lifecycle.enable()
       for (const [toolName, toolInput] of [
         ['read_file', { path: 'llm-wiki/wiki/secret.md' }],
+        ['read_file', { path: 'LLM-WIKI/wiki/secret.md' }],
+        ['read_file', { path: 'old-wiki/wiki/secret.md' }],
+        ['read_file', { path: 'llm-wiki/wiki/../wiki/secret.md' }],
         ['read_file', { path: path.join(wikiRoot, 'wiki', 'secret.md') }],
         ['list_directory', { path: 'llm-wiki/wiki' }],
         ['grep', { pattern: 'Secret', path: 'llm-wiki/wiki' }],
         ['write_file', { path: 'llm-wiki/wiki/secret.md', content: 'overwrite' }],
         ['edit_file', { path: 'llm-wiki/wiki/secret.md', oldText: 'Secret', newText: 'Other' }],
         ['run_shell', { command: 'cat llm-wiki/wiki/secret.md' }],
+        ['run_shell', { command: 'cat old-wiki/wiki/secret.md' }],
       ] as const) {
         const gate = await evaluateToolCallGate(base({ ...args, toolName, toolInput }))
         expect(gate.facts.signals, toolName).toContainEqual({ kind: 'wiki-managed-target' })
@@ -349,7 +353,8 @@ describe('Wiki schema change confirmation policy', () => {
       if (canCreateSymlinks()) {
         await fs.symlink(outside, path.join(wikiRoot, 'wiki', 'linked.md'))
         const symlinkGate = await evaluateToolCallGate(base({ ...args, toolName: 'read_file', toolInput: { path: 'llm-wiki/wiki/linked.md' } }))
-        expect(symlinkGate.decision.type).toBe('deny')
+        expect(symlinkGate.facts.signals).toContainEqual({ kind: 'wiki-managed-target' })
+        expect(symlinkGate.decision).toMatchObject({ type: 'deny', ruleId: 'wiki-domain-file-bypass-deny' })
       }
       const normalFile = await evaluateToolCallGate(base({ ...args, toolName: 'read_file', toolInput: { path: 'note.txt' } }))
       expect(normalFile.decision.ruleId).not.toBe('wiki-domain-file-bypass-deny')
