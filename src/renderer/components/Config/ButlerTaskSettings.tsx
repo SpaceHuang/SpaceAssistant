@@ -3,7 +3,7 @@ import { Alert, App, Button, Checkbox, DatePicker, Form, Input, InputNumber, Mod
 import { Pencil, Plus, SquarePlay, Trash2, X } from 'lucide-react'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
-import { getPreflightClarificationReasonMessageKey, getPreflightIssueMessageKey, type AutomationTask, type AutomationDeliveryPref, type AutomationOutputOrganization, type AutomationTaskRun, type PreflightReport } from '../../../shared/automationTaskTypes'
+import { getDefaultAutomationOutputOrganization, getPreflightClarificationReasonMessageKey, getPreflightIssueMessageKey, type AutomationTask, type AutomationDeliveryPref, type AutomationOutputOrganization, type AutomationTaskRun, type AutomationTaskSchedule, type PreflightReport } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { buildOnceDisabledConstraints, onceAtInFuture } from './onceAtConstraints'
 
@@ -26,12 +26,6 @@ type TaskActions = {
   onToggle: (task: AutomationTask, enabled: boolean) => void
   onHistory: (task: AutomationTask) => void
   running: boolean
-}
-
-function defaultOutputOrganization(scheduleKind: string | undefined): AutomationOutputOrganization {
-  if (scheduleKind === 'daily') return 'daily'
-  if (scheduleKind === 'once') return 'direct'
-  return 'hourly'
 }
 
 function outputOrganizationText(value: AutomationOutputOrganization | null, t: TaskActions['t']): string {
@@ -165,7 +159,7 @@ export function ButlerTaskSettings() {
   const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([])
   const outputOrganizationTouched = useRef(false)
   const [form] = Form.useForm()
-  const scheduleKind = Form.useWatch('scheduleKind', form)
+  const scheduleKind = Form.useWatch('scheduleKind', form) as AutomationTaskSchedule['kind'] | undefined
   const outputDir = Form.useWatch('outputDir', form) as string | undefined
   const [modelCandidates, setModelCandidates] = useState<Array<{ modelId: string; providerModelName: string; serviceId: string; serviceName: string; supportsThinking: boolean }>>([])
   const selectedModelId = Form.useWatch('modelId', form)
@@ -174,8 +168,8 @@ export function ButlerTaskSettings() {
   const onceConstraints = buildOnceDisabledConstraints()
 
   useEffect(() => {
-    if (editing || outputOrganizationTouched.current) return
-    form.setFieldValue('outputOrganization', defaultOutputOrganization(scheduleKind))
+    if (editing || outputOrganizationTouched.current || !scheduleKind) return
+    form.setFieldValue('outputOrganization', getDefaultAutomationOutputOrganization({ kind: scheduleKind }))
   }, [editing, form, scheduleKind])
 
   const refresh = useCallback(async () => {
@@ -241,7 +235,7 @@ export function ButlerTaskSettings() {
       onceAt: dayjs(task.schedule.kind === 'once' ? task.schedule.at : Date.now() + 3_600_000),
       deliveryPref: task.deliveryPref,
       outputDir: task.outputDir ?? undefined,
-      outputOrganization: task.outputOrganization ?? defaultOutputOrganization(task.schedule.kind),
+      outputOrganization: task.outputOrganization ?? getDefaultAutomationOutputOrganization(task.schedule),
       workDirs: roots,
       modelId: task.modelId,
       modelServiceId: task.modelServiceId,

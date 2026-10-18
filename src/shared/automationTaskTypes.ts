@@ -13,7 +13,7 @@ export type AutomationTaskSchedule =
 export type AutomationDeliveryPref = 'desktop' | 'feishu' | 'wechat' | 'none'
 export type AutomationOutputOrganization = 'direct' | 'daily' | 'hourly'
 
-export function getDefaultAutomationOutputOrganization(schedule: AutomationTaskSchedule): AutomationOutputOrganization {
+export function getDefaultAutomationOutputOrganization(schedule: Pick<AutomationTaskSchedule, 'kind'>): AutomationOutputOrganization {
   switch (schedule.kind) {
     case 'daily': return 'daily'
     case 'interval': return 'hourly'

@@ -55,8 +55,8 @@ describe('getAutomationTaskWorkDirs', () => {
 
 describe('scheduled task output organization defaults', () => {
   it('selects daily folders for daily tasks, hourly folders for interval tasks, and direct output for one-time tasks', () => {
-    expect(getDefaultAutomationOutputOrganization({ kind: 'daily', time: '09:00' })).toBe('daily')
-    expect(getDefaultAutomationOutputOrganization({ kind: 'interval', intervalMinutes: 30 })).toBe('hourly')
-    expect(getDefaultAutomationOutputOrganization({ kind: 'once', at: 1_800_000_000_000 })).toBe('direct')
+    expect(getDefaultAutomationOutputOrganization({ kind: 'daily' })).toBe('daily')
+    expect(getDefaultAutomationOutputOrganization({ kind: 'interval' })).toBe('hourly')
+    expect(getDefaultAutomationOutputOrganization({ kind: 'once' })).toBe('direct')
   })
 })
