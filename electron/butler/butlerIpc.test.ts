@@ -31,7 +31,7 @@ describe('butler IPC workdir/config fields', () => {
     } as never, {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'provider-model', reasoningEffort: 'off' as const })),
       createAnalyzer: () => ({ analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: os.tmpdir(), targetType: 'directory' }] })) }),
-      preflight: vi.fn(async (input) => ({ report: { status: 'passed', blockers: [], suggestedDirectories: [] }, bindings: [{ kind: 'exact', path: input.roots[0]!, targetType: 'directory', targetReference: { kind: 'path' as const, value: input.roots[0]! }, rawText: input.prompt, resolverVersion: 2, rootsDigest: 'test', taskRevision: input.taskRevision }] }))
+      preflight: vi.fn(async (input) => ({ report: { status: 'passed', blockers: [], suggestedDirectories: [] }, bindings: input.roots.length ? [{ kind: 'exact' as const, path: input.roots[0]!, targetType: 'directory' as const, targetReference: { kind: 'path' as const, value: input.roots[0]! }, rawText: input.prompt, resolverVersion: 2, rootsDigest: 'test', taskRevision: input.taskRevision }] : [] }))
     })
     return map
   }
@@ -57,20 +57,43 @@ describe('butler IPC workdir/config fields', () => {
     expect(map.get('butler:get-defaults')!()).not.toHaveProperty('workDir')
   })
 
-  it('legacy single-root update payload is normalized to workDirs', async () => {
+  it('legacy single-root update requires an explicit result directory before the first edit', async () => {
     const map = handlers()
     const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop' })
-    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: os.tmpdir() } }) as { ok: boolean; error?: string }
+    const blocked = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: os.tmpdir() } }) as { ok: boolean; error?: string }
+    expect(blocked).toMatchObject({ ok: false, kind: 'validation-error', error: '结果输出目录不能为空' })
+    expect(getAutomationTask(db!, legacy.id)?.preflightVersion).toBe(0)
+    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: os.tmpdir(), outputDir: os.tmpdir(), outputOrganization: 'hourly' } }) as { ok: boolean; error?: string }
     expect(response).toMatchObject({ ok: true })
     expect(getAutomationTask(db!, legacy.id)?.workDirs).toEqual([await realpath(os.tmpdir())])
   })
 
-  it('cannot create without explicit validated workdir and stable model/service pair', async () => {
+  it('cannot create without an explicit result output directory', async () => {
     const map = handlers()
     const response = await map.get('butler:create')!(null, {
-      name: 'task', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop'
+      name: 'task', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', authorizedDirs: []
     }) as { ok: boolean; error?: string }
-    expect(response).toMatchObject({ ok: false, error: '任务工作目录不能为空' })
+    expect(response).toMatchObject({ ok: false, kind: 'validation-error', error: '结果输出目录不能为空' })
+  })
+
+  it('allows an output-only task and keeps its output root separate from authorized read roots', async () => {
+    db = openDatabase(':memory:')
+    const map = new Map<string, (...args: unknown[]) => unknown>()
+    const preflight = vi.fn(async () => ({ report: { status: 'passed' as const, blockers: [], suggestedDirectories: [] }, bindings: [] }))
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
+      db, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({}) as never
+    } as never, {
+      validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
+      preflight
+    })
+
+    const response = await map.get('butler:create')!(null, {
+      name: 'output only', prompt: '检查并生成摘要', schedule: { kind: 'interval', intervalMinutes: 60 }, deliveryPref: 'none',
+      authorizedDirs: [], outputDir: os.tmpdir(), outputOrganization: 'hourly', modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off'
+    }) as { ok: boolean; task?: { authorizedDirs: string[]; outputDir: string | null; outputOrganization: string | null; preflightVersion?: number } }
+
+    expect(response).toMatchObject({ ok: true, task: { authorizedDirs: [], outputDir: await realpath(os.tmpdir()), outputOrganization: 'hourly', preflightVersion: 1 } })
+    expect(preflight).toHaveBeenCalledWith(expect.objectContaining({ roots: [], outputDir: await realpath(os.tmpdir()) }), expect.any(Object))
   })
 
   it('blocks an ambiguous target with a structured report and writes no task', async () => {
@@ -85,13 +108,13 @@ describe('butler IPC workdir/config fields', () => {
       preflight: blockedPreflight
     })
     const before = mapBlocked.get('butler:list')!() as unknown[]
-    const response = await mapBlocked.get('butler:create')!(null, { name: 'blocked', prompt: 'report.csv', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'provider-model', reasoningEffort: 'off' })
+    const response = await mapBlocked.get('butler:create')!(null, { name: 'blocked', prompt: 'report.csv', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], outputDir: os.tmpdir(), outputOrganization: 'hourly', modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'provider-model', reasoningEffort: 'off' })
     expect(response).toMatchObject({ ok: false, kind: 'preflight-blocked', report: { status: 'blocked', blockers: [{ code: 'TARGET_AMBIGUOUS' }] } })
     expect(mapBlocked.get('butler:list')!()).toEqual(before)
     expect(blockedPreflight).toHaveBeenCalledOnce()
   })
 
-  it('saves TARGET_UNCLEAR as a disabled draft without valid bindings', async () => {
+  it('does not save a TARGET_UNCLEAR task before the user clarifies its target', async () => {
     const d = openDatabase(':memory:')
     db = d
     const map = new Map<string, (...args: unknown[]) => unknown>()
@@ -99,9 +122,28 @@ describe('butler IPC workdir/config fields', () => {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
       preflight: vi.fn(async () => ({ report: { status: 'blocked' as const, blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear' }], suggestedDirectories: [] }, bindings: [] }))
     })
-    const response = await map.get('butler:create')!(null, { name: '草稿', prompt: '帮我处理一下', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' }) as { ok: boolean; task?: { id: string; enabled: boolean; preflightVersion?: number } }
-    expect(response).toMatchObject({ ok: true, task: { enabled: false, preflightVersion: 0 } })
-    expect(getAutomationTask(d, response.task!.id)).toMatchObject({ enabled: false, preflightVersion: 0 })
+    const response = await map.get('butler:create')!(null, { name: '草稿', prompt: '帮我处理一下', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], outputDir: os.tmpdir(), outputOrganization: 'hourly', modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' }) as { ok: boolean; kind?: string; report?: unknown }
+    expect(response).toMatchObject({ ok: false, kind: 'preflight-blocked', report: { blockers: [{ code: 'TARGET_UNCLEAR' }] } })
+    expect(map.get('butler:list')!()).toEqual([])
+  })
+
+  it('keeps an existing task unchanged when update preflight reports TARGET_UNCLEAR', async () => {
+    const d = openDatabase(':memory:')
+    db = d
+    const legacy = createAutomationTask(d, { name: 'unclear update', prompt: 'old prompt', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'none', workDirs: [os.tmpdir()] })
+    const map = new Map<string, (...args: unknown[]) => unknown>()
+    const preflight = vi.fn(async () => ({ report: { status: 'blocked' as const, blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear' }], suggestedDirectories: [] }, bindings: [] }))
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d } as never, {
+      validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
+      preflight
+    })
+    const before = getAutomationTask(d, legacy.id)
+
+    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { prompt: 'clarify report', outputDir: os.tmpdir(), outputOrganization: 'daily' } })
+
+    expect(response).toMatchObject({ ok: false, kind: 'preflight-blocked', report: { blockers: [{ code: 'TARGET_UNCLEAR' }] } })
+    expect(getAutomationTask(d, legacy.id)).toEqual(before)
+    expect(preflight).toHaveBeenCalledOnce()
   })
 
   it('commits passed preflight bindings with the created task', async () => {
@@ -112,7 +154,7 @@ describe('butler IPC workdir/config fields', () => {
     setConfigValue(db!, 'secrets.llmServiceKeys', JSON.stringify({ 'service-1': 'present' }))
     const response = await map.get('butler:create')!(null, {
       name: 'preflighted', prompt: 'report.csv', schedule: { kind: 'interval', intervalMinutes: 30 },
-      deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelId: 'model-1', modelServiceId: 'service-1',
+      deliveryPref: 'desktop', workDirs: [os.tmpdir()], outputDir: os.tmpdir(), outputOrganization: 'hourly', modelId: 'model-1', modelServiceId: 'service-1',
       modelOverride: 'provider-model', reasoningEffort: 'off'
     }) as { ok: boolean; id?: string; task?: { preflightVersion: number; taskRevision: number; targetBindingsJson?: string | null } }
     expect(response).toMatchObject({ ok: true, task: { preflightVersion: 1, taskRevision: 1 } })
@@ -134,9 +176,9 @@ describe('butler IPC workdir/config fields', () => {
       preflight
     })
     const before = map.get('butler:list')!()
-    const payload = { name: 'new', prompt: 'report.csv', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' }
+    const payload = { name: 'new', prompt: 'report.csv', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], outputDir: os.tmpdir(), outputOrganization: 'hourly', modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' }
     expect(await map.get('butler:create')!(null, payload)).toMatchObject({ ok: false, kind: 'preflight-unavailable', error: 'MODEL_UNAVAILABLE' })
-    expect(await map.get('butler:update')!(null, { id: legacy.id, patch: { prompt: 'new.csv' } })).toMatchObject({ ok: false, kind: 'preflight-unavailable' })
+    expect(await map.get('butler:update')!(null, { id: legacy.id, patch: { prompt: 'new.csv', outputDir: os.tmpdir(), outputOrganization: 'hourly' } })).toMatchObject({ ok: false, kind: 'preflight-unavailable' })
     expect(map.get('butler:list')!()).toEqual(before)
     expect(getAutomationTask(d, legacy.id)).toMatchObject({ prompt: 'report.csv', preflightVersion: 0 })
     expect(preflight).toHaveBeenCalledTimes(2)
@@ -153,7 +195,7 @@ describe('butler IPC workdir/config fields', () => {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
       preflight
     })
-    const response = await map.get('butler:create')!(null, { name: 'once', prompt: 'report', schedule: { kind: 'once', at: 50_000 }, deliveryPref: 'desktop', workDirs: ['/workspace'], modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' })
+    const response = await map.get('butler:create')!(null, { name: 'once', prompt: 'report', schedule: { kind: 'once', at: 50_000 }, deliveryPref: 'desktop', workDirs: ['/workspace'], outputDir: os.tmpdir(), outputOrganization: 'direct', modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' })
     expect(response).toMatchObject({ ok: false, kind: 'preflight-blocked', report: { blockers: [{ code: 'ONCE_AT_NOT_FUTURE' }] } })
     expect(preflight).not.toHaveBeenCalled()
     expect(map.get('butler:list')!()).toEqual([])
@@ -170,7 +212,7 @@ describe('butler IPC workdir/config fields', () => {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
       preflight
     })
-    const pending = map.get('butler:update')!(null, { id: legacy.id, patch: { expectedTaskRevision: legacy.taskRevision, name: 'stale write' } }) as Promise<unknown>
+    const pending = map.get('butler:update')!(null, { id: legacy.id, patch: { expectedTaskRevision: legacy.taskRevision, name: 'stale write', outputDir: os.tmpdir(), outputOrganization: 'hourly' } }) as Promise<unknown>
     await vi.waitFor(() => expect(preflight).toHaveBeenCalled())
     updateAutomationTask(d, legacy.id, { prompt: 'concurrent write' })
     release({ report: { status: 'passed', blockers: [], suggestedDirectories: [] }, bindings: [] })
@@ -181,7 +223,7 @@ describe('butler IPC workdir/config fields', () => {
   it('legacy directory-only edit sets its explicit path while leaving legacy model and effort NULL', async () => {
     const map = handlers()
     const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelOverride: 'old-provider-name' })
-    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: os.tmpdir() } }) as { ok: boolean; error?: string }
+    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: os.tmpdir(), outputDir: os.tmpdir(), outputOrganization: 'hourly' } }) as { ok: boolean; error?: string }
     expect(response).toMatchObject({ ok: true })
     expect(getAutomationTask(db!, legacy.id)).toMatchObject({ workDirs: [await realpath(os.tmpdir())], modelOverride: 'old-provider-name' })
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('modelId')
@@ -192,10 +234,10 @@ describe('butler IPC workdir/config fields', () => {
     const map = handlers()
     const task = createAutomationTask(db!, { name: 'scheduled', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], nextRunAt: 100 })
     const claim = claimDueSlotAndAdvance(db!, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'ipc-pending-conflict' })
-    expect(await map.get('butler:update')!(null, { id: task.id, patch: { schedule: { kind: 'daily', time: '10:00' } } })).toMatchObject({ ok: false, kind: 'validation-error', error: 'schedule-pending' })
+    expect(await map.get('butler:update')!(null, { id: task.id, patch: { schedule: { kind: 'daily', time: '10:00' }, outputDir: os.tmpdir(), outputOrganization: 'daily' } })).toMatchObject({ ok: false, kind: 'validation-error', error: 'schedule-pending' })
     expect(await map.get('butler:delete')!(null, { id: task.id })).toEqual({ ok: false, error: 'task-has-active-run' })
     expect(transitionClaimToRunning(db!, claim.runId!, task.id, 100, 0).ok).toBe(true)
-    expect(await map.get('butler:update')!(null, { id: task.id, patch: { schedule: { kind: 'daily', time: '10:00' } } })).toMatchObject({ ok: true })
+    expect(await map.get('butler:update')!(null, { id: task.id, patch: { schedule: { kind: 'daily', time: '10:00' }, outputDir: os.tmpdir(), outputOrganization: 'daily' } })).toMatchObject({ ok: true })
   })
 
   it('updates a task with validated canonical multiple roots', async () => {
@@ -203,7 +245,7 @@ describe('butler IPC workdir/config fields', () => {
     const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()] })
     const child = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(`${os.tmpdir()}/butler-roots-`))
     try {
-      const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDirs: [child, os.tmpdir(), child] } }) as { ok: boolean; error?: string }
+      const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDirs: [child, os.tmpdir(), child], outputDir: os.tmpdir(), outputOrganization: 'hourly' } }) as { ok: boolean; error?: string }
       expect(response).toMatchObject({ ok: true })
       expect(getAutomationTask(db!, legacy.id)?.workDirs).toEqual([await realpath(child), await realpath(os.tmpdir())].sort())
     } finally {
@@ -214,7 +256,7 @@ describe('butler IPC workdir/config fields', () => {
   it('legacy task fields can be edited without submitting new config and keep NULL compatibility columns', async () => {
     const map = handlers()
     const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'old prompt', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], modelOverride: 'old-provider-name' })
-    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { name: 'renamed', prompt: 'new prompt', schedule: { kind: 'interval', intervalMinutes: 45 } } }) as { ok: boolean; error?: string }
+    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { name: 'renamed', prompt: 'new prompt', schedule: { kind: 'interval', intervalMinutes: 45 }, outputDir: os.tmpdir(), outputOrganization: 'hourly' } }) as { ok: boolean; error?: string }
     expect(response).toMatchObject({ ok: true })
     expect(getAutomationTask(db!, legacy.id)).toMatchObject({ name: 'renamed', prompt: 'new prompt', schedule: { kind: 'interval', intervalMinutes: 45 }, modelOverride: 'old-provider-name' })
     expect(getAutomationTask(db!, legacy.id)?.workDirs).toEqual([os.tmpdir()])

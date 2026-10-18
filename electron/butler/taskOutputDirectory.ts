@@ -1,4 +1,6 @@
 import path from 'node:path'
+import { constants } from 'node:fs'
+import { access, lstat, mkdir, realpath } from 'node:fs/promises'
 import type { AutomationOutputOrganization, TargetBinding } from '../../src/shared/automationTaskTypes'
 
 function isWithin(root: string, target: string): boolean {
@@ -23,6 +25,51 @@ export function resolveAutomationRunOutputDir(
   if (organization === 'daily') return path.join(outputDir, dateFolder)
   if (organization === 'hourly') return path.join(outputDir, `${dateFolder}-${String(date.getHours()).padStart(2, '0')}`)
   throw new Error('INVALID_AUTOMATION_OUTPUT_ORGANIZATION')
+}
+
+/** Runtime admission: create the scheduled archive without following links below the user-selected root. */
+export async function ensureAutomationRunOutputDirectory(
+  outputDir: string,
+  organization: AutomationOutputOrganization,
+  scheduledFor: number,
+): Promise<string> {
+  const selectedRoot = path.resolve(outputDir)
+  let rootInfo
+  let canonicalRoot: string
+  try {
+    rootInfo = await lstat(selectedRoot)
+    canonicalRoot = await realpath(selectedRoot)
+  } catch {
+    throw new Error('OUTPUT_DIRECTORY_UNAVAILABLE')
+  }
+  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory() || path.normalize(canonicalRoot) !== path.normalize(selectedRoot)) {
+    throw new Error('OUTPUT_DIRECTORY_ROOT_INVALID')
+  }
+  const runOutputDir = resolveAutomationRunOutputDir(canonicalRoot, organization, scheduledFor)
+  if (!isWithin(canonicalRoot, runOutputDir)) throw new Error('OUTPUT_DIRECTORY_ESCAPE')
+  const relative = path.relative(canonicalRoot, runOutputDir)
+  let current = canonicalRoot
+  for (const component of relative ? relative.split(path.sep) : []) {
+    current = path.join(current, component)
+    let info
+    try {
+      info = await lstat(current)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('OUTPUT_DIRECTORY_UNAVAILABLE')
+      try { await mkdir(current, { mode: 0o700 }) }
+      catch (createError) {
+        if ((createError as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('OUTPUT_DIRECTORY_UNAVAILABLE')
+      }
+      try { info = await lstat(current) } catch { throw new Error('OUTPUT_DIRECTORY_UNAVAILABLE') }
+    }
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('OUTPUT_DIRECTORY_COMPONENT_INVALID')
+    let canonicalComponent: string
+    try { canonicalComponent = await realpath(current) } catch { throw new Error('OUTPUT_DIRECTORY_COMPONENT_INVALID') }
+    if (path.normalize(canonicalComponent) !== path.normalize(current)) throw new Error('OUTPUT_DIRECTORY_COMPONENT_INVALID')
+  }
+  try { await access(runOutputDir, constants.W_OK | constants.X_OK) }
+  catch { throw new Error('OUTPUT_DIRECTORY_UNAVAILABLE') }
+  return runOutputDir
 }
 
 /** Final-check input: remaps a preflight-relative result into this run's archive slot. */

@@ -146,6 +146,9 @@ export interface AgentInvocationMaterials {
   workDir: string
   /** Trusted task root set from the immutable automation run snapshot. */
   taskWorkDirs?: readonly string[]
+  /** Preflight-approved output binding set and archive target for this scheduled run. */
+  taskOutputBindings?: readonly import('../../src/shared/automationTaskTypes').TargetBinding[]
+  taskRunOutputDir?: string
   workDirManager?: import('../workDirManager').WorkDirManager
   resolveWorkDir?: () => string
   userDataDir: string
@@ -797,7 +800,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       toolUseId: binding.toolCallId,
       sessionId: materials.sessionId,
       workDir: materials.resolveWorkDir?.() ?? materials.workDir,
-      ...(materials.taskWorkDirs?.length ? { taskWorkDirs: materials.taskWorkDirs } : {}),
+      ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
+      ...(materials.taskOutputBindings ? { taskOutputBindings: materials.taskOutputBindings } : {}),
+      ...(materials.taskRunOutputDir ? { taskRunOutputDir: materials.taskRunOutputDir } : {}),
       userDataDir: materials.userDataDir,
       lane: materialsLane,
       remoteContext: materials.remoteContext,
@@ -1054,7 +1059,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             ...(materials.historyForSession ? { historyForSession: materials.historyForSession } : {}),
             policyRuleFloor: materials.policyRuleFloor ?? effectiveRules,
             workDir: materials.resolveWorkDir?.() ?? materials.workDir,
-            ...(materials.taskWorkDirs?.length ? { taskWorkDirs: materials.taskWorkDirs } : {}),
+            ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
             userDataDir: materials.userDataDir,
             getToolsConfig: () => materials.toolsConfig,
             ...(materials.shellConfig !== undefined ? { getShellConfig: () => materials.shellConfig ?? null } : {}),
@@ -1706,7 +1711,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           ...(typeof record?.executorEntry === 'string' ? { executorEntry: record.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
           ...(typeof record?.executionErrorCode === 'string' ? { executionErrorCode: record.executionErrorCode } : {}),
           ...(typeof record?.invocationDisposition === 'string' ? { invocationDisposition: record.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
-        }, { workspaceRoot: materials.workDir, ...(materials.taskWorkDirs?.length ? { workspaceRoots: materials.taskWorkDirs } : {}), processTool: isProcessToolName(call.toolName) })
+        }, { workspaceRoot: materials.workDir, ...(materials.taskWorkDirs !== undefined ? { workspaceRoots: materials.taskWorkDirs } : {}), processTool: isProcessToolName(call.toolName) })
         if (projected.success && projected.autoApprovedWrite) {
           logAgentEvent('info', 'file.auto_approve', { requestId: materials.requestId, sessionId: materials.sessionId,
             toolUseId: call.toolCallId, tool: call.toolName, relPath: projected.autoApprovedWrite.path,

@@ -1,6 +1,8 @@
 import path from 'node:path'
+import fs from 'node:fs/promises'
+import os from 'node:os'
 import { describe, expect, it } from 'vitest'
-import { matchesBoundOutputWriteTarget, resolveAutomationRunOutputDir, resolveBoundOutputTarget } from './taskOutputDirectory'
+import { ensureAutomationRunOutputDirectory, matchesBoundOutputWriteTarget, resolveAutomationRunOutputDir, resolveBoundOutputTarget } from './taskOutputDirectory'
 import type { TargetBinding } from '../../src/shared/automationTaskTypes'
 
 describe('resolveAutomationRunOutputDir', () => {
@@ -54,5 +56,48 @@ describe('resolveAutomationRunOutputDir', () => {
       outputRoot: '/results', expectedType: 'file', rawText: 'write file', resolverVersion: 3, rootsDigest: 'output-digest', taskRevision: 8,
     }
     expect(() => resolveBoundOutputTarget(binding, '/results/20261018-07')).toThrow('OUTPUT_PATH_ESCAPE')
+  })
+})
+
+describe('ensureAutomationRunOutputDirectory', () => {
+  it('creates only the date archive below the selected output root', async () => {
+    const outputRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-output-root-')))
+    const scheduledFor = new Date(2026, 9, 18, 7, 0).getTime()
+    try {
+      const runOutputDir = await ensureAutomationRunOutputDirectory(outputRoot, 'daily', scheduledFor)
+      expect(runOutputDir).toBe(path.join(outputRoot, '20261018'))
+      expect((await fs.lstat(runOutputDir)).isDirectory()).toBe(true)
+      expect(await fs.readdir(outputRoot)).toEqual(['20261018'])
+    } finally {
+      await fs.rm(outputRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a non-directory archive path and leaves the selected root intact', async () => {
+    const outputRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-output-root-')))
+    const scheduledFor = new Date(2026, 9, 18, 7, 0).getTime()
+    const archivePath = path.join(outputRoot, '20261018')
+    await fs.writeFile(archivePath, 'occupied')
+    try {
+      await expect(ensureAutomationRunOutputDirectory(outputRoot, 'daily', scheduledFor)).rejects.toThrow('OUTPUT_DIRECTORY_COMPONENT_INVALID')
+      expect(await fs.readFile(archivePath, 'utf8')).toBe('occupied')
+    } finally {
+      await fs.rm(outputRoot, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects an archive symlink that points outside the selected output root', async () => {
+    const outputRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-output-root-')))
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-output-outside-')))
+    const scheduledFor = new Date(2026, 9, 18, 7, 0).getTime()
+    const archivePath = path.join(outputRoot, '20261018')
+    await fs.symlink(outside, archivePath, 'dir')
+    try {
+      await expect(ensureAutomationRunOutputDirectory(outputRoot, 'daily', scheduledFor)).rejects.toThrow('OUTPUT_DIRECTORY_COMPONENT_INVALID')
+      expect(await fs.readdir(outside)).toEqual([])
+    } finally {
+      await fs.rm(outputRoot, { recursive: true, force: true })
+      await fs.rm(outside, { recursive: true, force: true })
+    }
   })
 })

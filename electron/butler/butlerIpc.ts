@@ -11,12 +11,13 @@ import {
   type AutomationTaskInput,
   type AutomationTaskSchedule
 } from './taskStore'
-import { validateTaskModelConfig, validateTaskWorkDir, validateTaskWorkDirs } from './taskConfigValidation'
+import { validateTaskAuthorizedDirs, validateTaskModelConfig, validateTaskOutputDir, validateTaskWorkDir, validateTaskWorkDirs } from './taskConfigValidation'
 import { readActiveLlmServiceIds, readLlmServices, readStoredModels } from '../llmServiceResolver'
 import { getConfigValue } from '../database'
 import { runTaskPreflight, type TaskPreflightAnalyzer } from './taskPreflight'
 import { createTaskPreflightModelAnalyzer } from './taskPreflightModelAnalyzer'
 import { getPreflightIssueMessageKey, type PreflightReport, type ButlerTaskWriteResult } from '../../src/shared/automationTaskTypes'
+import type { AutomationOutputOrganization } from '../../src/shared/automationTaskTypes'
 
 /**
  * 管家 IPC（P6 任务 CRUD 面 + P4 手动触发）。渲染进程只表达意图：
@@ -32,6 +33,8 @@ export type ButlerTaskPreflightDeps = {
   validateModel?: typeof validateTaskModelConfig
   validateWorkDir?: typeof validateTaskWorkDir
   validateWorkDirs?: typeof validateTaskWorkDirs
+  validateAuthorizedDirs?: typeof validateTaskAuthorizedDirs
+  validateOutputDir?: typeof validateTaskOutputDir
 }
 
 function parseSchedule(raw: unknown): AutomationTaskSchedule | undefined {
@@ -65,8 +68,16 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
   const validateModel = preflightDeps.validateModel ?? validateTaskModelConfig
   const validateWorkDir = preflightDeps.validateWorkDir ?? validateTaskWorkDir
   const validateWorkDirs = preflightDeps.validateWorkDirs ?? validateTaskWorkDirs
+  const validateAuthorizedDirs = preflightDeps.validateAuthorizedDirs ?? (preflightDeps.validateWorkDirs
+    ? async (value: unknown) => {
+      if (Array.isArray(value) && value.length === 0) return { ok: true as const, authorizedDirs: [] }
+      const result = await validateWorkDirs(value)
+      return result.ok ? { ok: true as const, authorizedDirs: result.workDirs } : result
+    }
+    : validateTaskAuthorizedDirs)
+  const validateOutputDir = preflightDeps.validateOutputDir ?? validateTaskOutputDir
 
-  async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; modelId?: string; modelServiceId?: string; taskRevision: number; requestReceivedAt: number }) {
+  async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; outputDir: string; modelId?: string; modelServiceId?: string; taskRevision: number; requestReceivedAt: number }) {
     if (input.schedule.kind === 'once' && input.schedule.at <= input.requestReceivedAt) {
       return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: getPreflightIssueMessageKey('ONCE_AT_NOT_FUTURE') }], suggestedDirectories: [] }, bindings: [] }
     }
@@ -75,6 +86,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       scheduleSummary: JSON.stringify(input.schedule),
       deliverySummary: input.deliveryPref,
       roots: input.roots,
+      outputDir: input.outputDir,
       taskRevision: input.taskRevision
     }, { analyzer: createAnalyzer({ modelId: input.modelId, modelServiceId: input.modelServiceId }) })
   }
@@ -85,8 +97,8 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     return { ok: false, kind: 'preflight-blocked', report: result.report }
   }
 
-  function onlyTargetUnclear(result: Awaited<ReturnType<typeof inspectTask>>): boolean {
-    return result.report.status === 'blocked' && result.report.blockers.length > 0 && result.report.blockers.every((blocker) => blocker.code === 'TARGET_UNCLEAR')
+  function parseOutputOrganization(raw: unknown): AutomationOutputOrganization | undefined {
+    return raw === 'direct' || raw === 'daily' || raw === 'hourly' ? raw : undefined
   }
 
   ipcMain.handle('butler:list', () => listAutomationTasks(db))
@@ -133,13 +145,20 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       return { ok: false, kind: 'validation-error', error: '任务参数不完整（名称 / 提示词 / 触发方式 / 投递偏好）' }
     }
     if (!hasRequiredDeliveryTarget(deliveryPref, payload?.deliveryTarget)) return { ok: false, kind: 'validation-error', error: '飞书或微信投递必须填写有效接收对象' }
+    const outputResult = await validateOutputDir(payload?.outputDir)
+    if (!outputResult.ok) return { ok: false, kind: 'validation-error', error: outputResult.error }
+    const outputOrganization = parseOutputOrganization(payload?.outputOrganization)
+    if (!outputOrganization) return { ok: false, kind: 'validation-error', error: '结果归档方式无效' }
     // Runtime compatibility at the IPC boundary only: older renderer builds may still send workDir.
     const legacyPayload = payload as Partial<AutomationTaskInput> & { workDir?: unknown }
-    const rootsResult = Object.prototype.hasOwnProperty.call(payload ?? {}, 'workDirs')
-      ? await validateWorkDirs(payload?.workDirs)
-      : await validateWorkDir(legacyPayload.workDir)
+    const requestedAuthorizedDirs = Object.prototype.hasOwnProperty.call(payload ?? {}, 'authorizedDirs')
+      ? payload?.authorizedDirs
+      : Object.prototype.hasOwnProperty.call(payload ?? {}, 'workDirs')
+        ? payload?.workDirs
+        : legacyPayload.workDir !== undefined ? [legacyPayload.workDir] : []
+    const rootsResult = await validateAuthorizedDirs(requestedAuthorizedDirs)
     if (!rootsResult.ok) return { ok: false, kind: 'validation-error', error: rootsResult.error }
-    const workDirs: string[] = 'workDirs' in rootsResult ? rootsResult.workDirs : [rootsResult.workDir]
+    const authorizedDirs = rootsResult.authorizedDirs
     const config = await validateModel(db, {
       modelId: payload?.modelId,
       modelServiceId: payload?.modelServiceId,
@@ -147,17 +166,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       reasoningEffort: payload?.reasoningEffort
     })
     if (!config.ok) return { ok: false, kind: 'validation-error', error: config.error }
-    const inspection = await inspectTask({ prompt, schedule, deliveryPref, roots: workDirs, modelId: config.modelId, modelServiceId: config.modelServiceId, taskRevision: 1, requestReceivedAt })
-    if (onlyTargetUnclear(inspection)) {
-      const task = createAutomationTask(db, {
-        name, prompt, schedule, deliveryPref,
-        ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}),
-        ...(payload?.modelOverride ? { modelOverride: payload.modelOverride } : {}),
-        workDirs, modelId: config.modelId, modelServiceId: config.modelServiceId,
-        reasoningEffort: config.reasoningEffort, enabled: false
-      })
-      return { ok: true, id: task.id, task, preflightReport: inspection.report }
-    }
+    const inspection = await inspectTask({ prompt, schedule, deliveryPref, roots: authorizedDirs, outputDir: outputResult.outputDir, modelId: config.modelId, modelServiceId: config.modelServiceId, taskRevision: 1, requestReceivedAt })
     const failure = preflightFailure(inspection)
     if (failure) return failure
     const task = createAutomationTask(db, {
@@ -167,7 +176,10 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       deliveryPref,
       ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}),
       ...(payload?.modelOverride ? { modelOverride: payload.modelOverride } : {}),
-      workDirs,
+      authorizedDirs,
+      workDirs: authorizedDirs,
+      outputDir: outputResult.outputDir,
+      outputOrganization,
       modelId: config.modelId,
       modelServiceId: config.modelServiceId,
       reasoningEffort: config.reasoningEffort,
@@ -196,14 +208,29 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       return { ok: false, kind: 'validation-error', error: '飞书或微信投递必须填写有效接收对象' }
     }
     if (typeof patch.modelOverride === 'string') next.modelOverride = patch.modelOverride
-    const rootsProvided = Object.prototype.hasOwnProperty.call(patch, 'workDirs') || Object.prototype.hasOwnProperty.call(patch, 'workDir')
+    const rootsProvided = Object.prototype.hasOwnProperty.call(patch, 'authorizedDirs')
+      || Object.prototype.hasOwnProperty.call(patch, 'workDirs')
+      || Object.prototype.hasOwnProperty.call(patch, 'workDir')
+    const requestedAuthorizedDirs = Object.prototype.hasOwnProperty.call(patch, 'authorizedDirs')
+      ? patch.authorizedDirs
+      : Object.prototype.hasOwnProperty.call(patch, 'workDirs')
+        ? patch.workDirs
+        : Object.prototype.hasOwnProperty.call(patch, 'workDir') ? [patch.workDir] : existing.authorizedDirs
+    const rootsResult = await validateAuthorizedDirs(requestedAuthorizedDirs)
+    if (!rootsResult.ok) return { ok: false, kind: 'validation-error', error: rootsResult.error }
     if (rootsProvided) {
-      const workDirs = Object.prototype.hasOwnProperty.call(patch, 'workDirs')
-        ? await validateWorkDirs(patch.workDirs)
-        : await validateWorkDir(patch.workDir)
-      if (!workDirs.ok) return { ok: false, kind: 'validation-error', error: workDirs.error }
-      next.workDirs = 'workDirs' in workDirs ? workDirs.workDirs : [workDirs.workDir]
+      next.authorizedDirs = rootsResult.authorizedDirs
+      next.workDirs = rootsResult.authorizedDirs
     }
+    const requestedOutputDir = Object.prototype.hasOwnProperty.call(patch, 'outputDir') ? patch.outputDir : existing.outputDir
+    const outputResult = await validateOutputDir(requestedOutputDir)
+    if (!outputResult.ok) return { ok: false, kind: 'validation-error', error: outputResult.error }
+    const outputOrganization = Object.prototype.hasOwnProperty.call(patch, 'outputOrganization')
+      ? parseOutputOrganization(patch.outputOrganization)
+      : existing.outputOrganization ?? undefined
+    if (!outputOrganization) return { ok: false, kind: 'validation-error', error: '结果归档方式无效' }
+    next.outputDir = outputResult.outputDir
+    next.outputOrganization = outputOrganization
     const modelKeys = ['modelId', 'modelServiceId', 'reasoningEffort', 'modelOverride']
     if (modelKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key))) {
       const candidate = { ...existing, ...next, ...patch }
@@ -221,15 +248,8 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     }
     if (typeof patch.enabled === 'boolean') next.enabled = patch.enabled
     const candidate = { ...existing, ...next }
-    const candidateRoots: string[] = Array.isArray(next.workDirs)
-      ? next.workDirs as string[]
-      : existing.workDirs
-    const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
-    if (onlyTargetUnclear(inspection) && patch.enabled !== true) {
-      const saved = updateAutomationTaskConditional(db, id, { ...next, enabled: false, expectedTaskRevision }, { draft: true })
-      if (!saved.ok) return { ok: false, kind: 'validation-error', error: saved.reason }
-      return { ok: true, id, task: saved.task, preflightReport: inspection.report }
-    }
+    const candidateRoots: string[] = rootsProvided ? rootsResult.authorizedDirs : existing.authorizedDirs
+    const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, outputDir: outputResult.outputDir, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
     const failure = preflightFailure(inspection)
     if (failure) return failure
     const commit = updateAutomationTaskConditional(db, id, { ...next, expectedTaskRevision }, { targetBindings: inspection.bindings })

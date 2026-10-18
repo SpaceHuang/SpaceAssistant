@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：既有 E-01～E-10 完成；结果目录拆分 E-11a～E-11c 完成，E-11d～E-11f 进行中
+> 状态：既有 E-01～E-10 完成；结果目录拆分 E-11a～E-11d 完成，E-11e～E-11f 进行中
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
@@ -275,10 +275,10 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 - **目标文件：** `electron/butler/taskStore.ts`、`butlerIpc.ts`、`taskScheduler.ts`、`butlerInvoker.ts`、`electron/runtime/invocationAssembler.ts`、调用方与相应 tests。
 - **动作与产物：** 新 task/run snapshot 分别保存授权目录、输出目录、归档策略、scheduledFor、runOutputDir 和输出 bindings；claim 时冻结完整配置；运行时安全创建归档目录并进行 realpath/链接边界检查。读取 tools 与审批 Agent 只收到 authorizedDirs；写工具收到精确绑定的 runOutputDir。旧任务继续走 v0 legacy 分支。
 - **完成判据：** TDD 覆盖存储往返、迁移旧行、运行 snapshot 冻结、并发 task 编辑、归档目录创建失败、empty authorizedDirs 不授权读取、旧 run 快照兼容；创建/编辑 IPC 对缺少 outputDir 拒绝，预检通过只保存一次。
-- **验证命令：** 执行中登记相关 taskStore、IPC、scheduler、invoker、assembler 定向套件。
-- **证据：** 待执行。
+- **验证命令：** `npm exec vitest run electron/butler/taskOutputDirectory.test.ts electron/butler/taskStore.test.ts electron/butler/butlerIpc.test.ts electron/butler/butlerInvoker.test.ts electron/butler/taskTargetResolver.test.ts electron/butler/taskPreflight.test.ts electron/runtime/invocationAssembler.test.ts electron/runtime/invocationAssembler.workspace.test.ts`；`npm run build:electron:incremental`；`npm run typecheck:shared`；`git diff --check`。
+- **证据：** RED：新用例确认 run snapshot 不含拆分输出配置且空授权根不能启动；归档安全创建器不存在；IPC 仍允许旧任务无输出目录编辑，并在 `TARGET_UNCLEAR` 时保存禁用草稿。GREEN：8 个测试文件 / 216 个用例通过；覆盖排程槽归档快照、等待期配置更新后冻结最新版本、output-only 任务真实写入日期归档、输出根读取不触达 executor、归档普通文件冲突在建会话前拒绝、归档 helper 拒绝符号链接、创建/编辑缺输出配置拒绝、`TARGET_UNCLEAR` 不保存。主进程增量构建、共享类型检查与 diff 检查通过。输出根只进入写入事实；读取策略始终收到单独的 `authorizedDirs`，包括空数组。
 - **可执行环境：** 本机。
-- **状态：** - [ ]
+- **状态：** - [x]
 
 ### E-11e 设置表单、动态默认、摘要与中英文文案
 

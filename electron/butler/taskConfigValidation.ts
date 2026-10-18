@@ -1,5 +1,5 @@
 import { constants } from 'node:fs'
-import { access, realpath, stat } from 'node:fs/promises'
+import { access, lstat, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import type { AgentReasoningEffort } from '../../src/shared/agent/invocation'
 import type { AppDatabase } from '../database'
@@ -29,6 +29,31 @@ export async function validateTaskWorkDirs(value: unknown): Promise<{ ok: true; 
   const workDirs = [...new Set(validated.flatMap((result) => result.ok ? [result.workDir] : []))].sort()
   if (workDirs.length === 0) return { ok: false, error: '任务工作目录不能为空' }
   return { ok: true, workDirs }
+}
+
+/** New task contract: material authorization may be empty; each selected root is still canonicalized. */
+export async function validateTaskAuthorizedDirs(value: unknown): Promise<{ ok: true; authorizedDirs: string[] } | { ok: false; error: string }> {
+  if (!Array.isArray(value)) return { ok: false, error: '授权读写目录列表无效' }
+  if (value.length === 0) return { ok: true, authorizedDirs: [] }
+  const validated = await Promise.all(value.map((root) => validateTaskWorkDir(root)))
+  const invalid = validated.find((result) => !result.ok)
+  if (invalid && !invalid.ok) return invalid
+  return { ok: true, authorizedDirs: [...new Set(validated.flatMap((result) => result.ok ? [result.workDir] : []))].sort() }
+}
+
+export async function validateTaskOutputDir(value: unknown): Promise<{ ok: true; outputDir: string } | { ok: false; error: string }> {
+  if (typeof value !== 'string' || !value.trim()) return { ok: false, error: '结果输出目录不能为空' }
+  if (!isAbsolute(value)) return { ok: false, error: '结果输出目录必须是绝对路径' }
+  try {
+    const requested = resolve(value)
+    const canonical = await realpath(requested)
+    const info = await lstat(canonical)
+    if (info.isSymbolicLink() || !info.isDirectory()) return { ok: false, error: '结果输出目录必须是实际目录' }
+    await access(canonical, constants.W_OK | constants.X_OK)
+    return { ok: true, outputDir: canonical }
+  } catch {
+    return { ok: false, error: '结果输出目录不存在或不可写' }
+  }
 }
 
 export async function validateTaskModelConfig(db: AppDatabase, input: {

@@ -130,7 +130,7 @@ export function validatePersistedTargetBindings(input: {
   taskRevision: number
 }): { ok: true } | { ok: false; code: string } {
   const { bindings, roots, outputRoot, facts, taskRevision } = input
-  if (!roots.length && !(bindings.length > 0 && bindings.every((binding) => binding.kind === 'output'))) return { ok: false, code: 'NO_ROOTS' }
+  if (!roots.length && !outputRoot) return { ok: false, code: 'NO_ROOTS' }
   if (!facts.coverage.complete) return { ok: false, code: 'FACTS_INCOMPLETE' }
   const digest = rootsDigest(roots)
   for (const binding of bindings) {

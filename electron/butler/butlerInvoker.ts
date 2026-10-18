@@ -27,13 +27,14 @@ import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
-import { validateTaskWorkDirs } from './taskConfigValidation'
+import { validateTaskAuthorizedDirs, validateTaskWorkDirs } from './taskConfigValidation'
 import { getAutomationTaskWorkDirs } from '../../src/shared/automationTaskTypes'
 import { resolveGlobalThinkingEffort } from '../../src/shared/thinkingEffort'
 import { getConfigValue as readConfigValue } from '../database'
 import type { AutomationTaskRunConfigSnapshot } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider } from './taskPathFacts'
 import { validatePersistedTargetBindings } from './taskTargetResolver'
+import { ensureAutomationRunOutputDirectory, resolveBoundOutputTarget } from './taskOutputDirectory'
 
 /**
  * 管家执行链（P4）：定时 / 手动触发的 automation 任务 → 准入取票 → 会话创建（ownership=automation、
@@ -45,7 +46,7 @@ import { validatePersistedTargetBindings } from './taskTargetResolver'
 export const BUTLER_SYSTEM_APPENDIX = [
   '你是 SpaceAssistant 的后台管家（automation lane），由定时任务或用户手动触发，无人值守运行。',
   '本回合按任务指令完成检查、总结、提醒、报表等只读 / 汇报型工作。',
-  '安全边界：无法获得人工确认——写文件、执行命令、发送消息等需要确认的操作会被自动拒绝；',
+  '安全边界：无法获得人工确认。只有本次预检绑定的结果目标允许写入；其他本地文件写入和 Shell 均会被拒绝。',
   '请优先使用只读工具完成任务，若被拒绝，请在最终回复中说明原因与已完成的部分。',
   '最终回复即任务结果汇报，请直接给出结论与关键数据，不要反问。'
 ].join('\n')
@@ -97,6 +98,20 @@ export type ButlerRunOutcome =
 type ButlerTurnResult =
   | { ok: true; sessionId: string; summary: string; usageJson?: string }
   | { ok: false; error: string; outcome?: 'commit-uncertain' }
+
+function buildTaskPromptWithOutputScope(prompt: string, snapshot: AutomationTaskRunConfigSnapshot): string {
+  if (snapshot.preflightVersion !== 1 || !snapshot.runOutputDir) return prompt
+  const outputBindings = (snapshot.targetSelections ?? []).filter((binding) => binding.kind === 'output')
+  const targets = outputBindings.map((binding) => resolveBoundOutputTarget(binding, snapshot.runOutputDir!))
+  const lines = [
+    `本次运行结果目录：${snapshot.runOutputDir}`,
+    targets.length
+      ? `本次预检绑定的可写结果目标：\n${targets.map((target) => `- ${target}`).join('\n')}`
+      : '本次没有预检绑定的结果目标，请勿创建或修改本地文件。',
+    '输出目录只用于写入预检绑定的结果；读取或修改资料必须使用用户另行授权的目录。'
+  ]
+  return `${prompt}\n\n${lines.join('\n')}`
+}
 
 function extractTextFromContent(content: unknown[]): string {
   let s = ''
@@ -163,14 +178,30 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
       workDirs: claimSnapshot.workDirs ?? [], modelId: claimSnapshot.modelId, modelServiceId: claimSnapshot.serviceId,
       modelOverride: claimSnapshot.providerModelName, reasoningEffort: claimSnapshot.requestedEffort }
     task = activeTask
-    const workDirsResult = await validateTaskWorkDirs(getAutomationTaskWorkDirs({ workDirs: claimSnapshot.workDirs ?? [] }))
-    if (!workDirsResult.ok) throw new Error(workDirsResult.error)
-    const workDirResult = { ok: true as const, workDir: workDirsResult.workDirs[0]! }
+    const rootsInput = claimSnapshot.authorizedDirs ?? claimSnapshot.workDirs ?? getAutomationTaskWorkDirs({ workDirs: claimSnapshot.workDirs ?? [] })
+    let workDirs: string[]
     if (claimSnapshot.preflightVersion === 1) {
-      const facts = await new TaskPathFactsProvider().collect(workDirsResult.workDirs)
-      const validation = validatePersistedTargetBindings({ bindings: claimSnapshot.targetSelections ?? [], roots: facts.roots, facts, taskRevision: claimSnapshot.taskRevision ?? -1 })
-      if (!validation.ok) throw new Error(`TASK_BINDING_REVALIDATION_FAILED:${validation.code}`)
+      const validated = await validateTaskAuthorizedDirs(rootsInput)
+      if (!validated.ok) throw new Error(validated.error)
+      workDirs = validated.authorizedDirs
+    } else {
+      const validated = await validateTaskWorkDirs(rootsInput)
+      if (!validated.ok) throw new Error(validated.error)
+      workDirs = validated.workDirs
     }
+    let runOutputDir = claimSnapshot.runOutputDir
+    if (claimSnapshot.preflightVersion === 1) {
+      if (!claimSnapshot.outputDir || !claimSnapshot.outputOrganization || !claimSnapshot.runOutputDir || !claimSnapshot.scheduledFor) {
+        throw new Error('TASK_OUTPUT_SNAPSHOT_INVALID')
+      }
+      const facts = await new TaskPathFactsProvider().collect(workDirs, claimSnapshot.outputDir)
+      const validation = validatePersistedTargetBindings({ bindings: claimSnapshot.targetSelections ?? [], roots: facts.roots, outputRoot: facts.outputRoot, facts, taskRevision: claimSnapshot.taskRevision ?? -1 })
+      if (!validation.ok) throw new Error(`TASK_BINDING_REVALIDATION_FAILED:${validation.code}`)
+      const safeRunOutputDir = await ensureAutomationRunOutputDirectory(claimSnapshot.outputDir, claimSnapshot.outputOrganization, claimSnapshot.scheduledFor)
+      if (path.normalize(safeRunOutputDir) !== path.normalize(claimSnapshot.runOutputDir)) throw new Error('TASK_OUTPUT_SNAPSHOT_MISMATCH')
+      runOutputDir = safeRunOutputDir
+    }
+    const workDirResult = { ok: true as const, workDir: workDirs[0] ?? runOutputDir ?? deps.getWorkDir() }
     let modelId = claimSnapshot.modelId
     let serviceId = claimSnapshot.serviceId
     let providerModelName = claimSnapshot.providerModelName
@@ -217,7 +248,8 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
     const effectiveEffort = model.supportsThinking === false ? 'off' : effort
     const configSnapshot: AutomationTaskRunConfigSnapshot = {
       ...claimSnapshot,
-      resolutionStatus: 'resolved', workDir: workDirResult.workDir, workDirs: workDirsResult.workDirs,
+      resolutionStatus: 'resolved', workDir: workDirResult.workDir, authorizedDirs: workDirs, workDirs,
+      ...(runOutputDir ? { runOutputDir } : {}),
       preflightVersion: claimSnapshot.preflightVersion ?? 0, taskRevision: claimSnapshot.taskRevision,
       targetSelections: claimSnapshot.targetSelections ?? [],
       workDirSource: 'task', modelId,
@@ -272,7 +304,7 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
           turnId: prepared.turnId,
           acceptedTurn,
           llmServiceId: executionConfig?.llmServiceId,
-          taskPrompt: activeTask.prompt,
+          taskPrompt: buildTaskPromptWithOutputScope(activeTask.prompt, configSnapshot),
           currentUserMessageId: prepared.userMessage?.id,
           assistantMessageId: prepared.assistantMessage.id,
           runConfig: { ...configSnapshot, model, taskId: activeTask.id }
@@ -437,6 +469,10 @@ async function runButlerModelTurn(
     shellConfig: deps.getShellConfig?.() ?? null,
     workDir,
     taskWorkDirs: args.runConfig.workDirs,
+    ...(args.runConfig.preflightVersion === 1 ? {
+      taskOutputBindings: args.runConfig.targetSelections ?? [],
+      ...(args.runConfig.runOutputDir ? { taskRunOutputDir: args.runConfig.runOutputDir } : {})
+    } : {}),
     workDirManager: deps.workDirManager,
     resolveWorkDir: deps.workDirManager
       ? () => args.runConfig.workDir!

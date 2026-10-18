@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
+import { resolveAutomationRunOutputDir } from './taskOutputDirectory'
 
 /**
  * 管家任务存储（P4）：automation_tasks / automation_task_runs 两表的对外 API。
@@ -523,13 +524,22 @@ export function transitionClaimToRunning(
     if (!taskRow) return { ok: false as const, reason: 'task-not-found' as const }
     const task = rowToTask(taskRow)
     const workDirs = getAutomationTaskWorkDirs({ workDirs: task.workDirs, workDir: taskRow.work_dir ?? undefined })
-    if (workDirs.length === 0) return { ok: false as const, reason: 'invalid-task-config' as const }
+    if (workDirs.length === 0 && task.preflightVersion !== 1) return { ok: false as const, reason: 'invalid-task-config' as const }
     let targetSelections: TargetSelection[] = []
+    let scheduledFor: number
+    try {
+      scheduledFor = run.trigger === 'schedule' ? slot : Date.now()
+    } catch {
+      return { ok: false as const, reason: 'invalid-task-config' as const }
+    }
+    let runOutputDir: string | undefined
     if (task.preflightVersion === 1) {
+      if (!task.outputDir || !task.outputOrganization) return { ok: false as const, reason: 'invalid-task-config' as const }
       try {
         const parsed: unknown = JSON.parse(task.targetBindingsJson ?? 'null')
         if (!Array.isArray(parsed)) return { ok: false as const, reason: 'invalid-task-config' as const }
         targetSelections = parsed as typeof targetSelections
+        runOutputDir = resolveAutomationRunOutputDir(task.outputDir, task.outputOrganization, scheduledFor)
       } catch {
         return { ok: false as const, reason: 'invalid-task-config' as const }
       }
@@ -542,7 +552,14 @@ export function transitionClaimToRunning(
       prompt: task.prompt,
       schedule: task.schedule,
       taskRevision: task.taskRevision,
+      authorizedDirs: workDirs,
       workDirs,
+      ...(task.preflightVersion === 1 ? {
+        outputDir: task.outputDir!,
+        outputOrganization: task.outputOrganization!,
+        scheduledFor,
+        runOutputDir
+      } : {}),
       preflightVersion: task.preflightVersion,
       targetSelections,
       modelId: task.modelId,

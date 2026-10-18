@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import path from 'node:path'
 import { openDatabase } from '../database'
 import type { AppDatabase } from '../database'
 import {
@@ -463,6 +464,33 @@ describe('preflight binding persistence', () => {
 })
 
 describe('queued claim snapshot CAS', () => {
+  it('freezes split directory configuration and resolves the archive from the claimed slot with empty authorized roots', async () => {
+    const d = db()
+    const scheduledFor = new Date(2026, 9, 18, 7, 15).getTime()
+    const targetBindings: TargetBinding[] = [{
+      kind: 'output', path: '/results/reports/summary.txt', ancestor: '/results', relativeSuffix: 'reports/summary.txt', outputRoot: '/results',
+      expectedType: 'file', rawText: 'write summary', resolverVersion: 3, rootsDigest: 'output-digest', taskRevision: 1,
+    }]
+    const task = createAutomationTask(d, taskInput({
+      schedule: { kind: 'interval', intervalMinutes: 60 },
+      workDirs: [], authorizedDirs: [], outputDir: '/results', outputOrganization: 'hourly', nextRunAt: scheduledFor,
+    }), { targetBindings })
+    const { claimDueSlotAndAdvance } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: scheduledFor, nextSlot: scheduledFor + 60 * 60 * 1000, clientId: 'split-output-snapshot' })
+    expect(claim.claimed).toBe(true)
+    const editedBindings: TargetBinding[] = [{
+      ...targetBindings[0]!, path: '/new-results/report.txt', ancestor: '/new-results', relativeSuffix: 'report.txt', outputRoot: '/new-results', taskRevision: 2,
+    }]
+    updateAutomationTask(d, task.id, { authorizedDirs: ['/authorized/new'], outputDir: '/new-results', outputOrganization: 'daily' }, { targetBindings: editedBindings })
+
+    const started = transitionClaimToRunning(d, claim.runId!, task.id, scheduledFor, 0)
+
+    expect(started).toMatchObject({ ok: true, snapshot: {
+      authorizedDirs: ['/authorized/new'], workDirs: ['/authorized/new'], outputDir: '/new-results', outputOrganization: 'daily', scheduledFor,
+      runOutputDir: path.join('/new-results', '20261018'), targetSelections: editedBindings,
+    } })
+  })
+
   it('manual claim freezes task revision exactly once when resumed', () => {
     const d = db()
     const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/one', '/workspace/two'] }))

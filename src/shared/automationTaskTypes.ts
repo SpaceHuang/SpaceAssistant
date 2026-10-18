@@ -114,7 +114,15 @@ export type AutomationTaskRunConfigSnapshot = {
   deliveryPref?: AutomationDeliveryPref
   deliveryTarget?: string
   taskRevision?: number
+  /** Canonical read/write material roots copied from the immutable task revision. */
+  authorizedDirs?: string[]
   workDirs?: string[]
+  outputDir?: string
+  outputOrganization?: AutomationOutputOrganization
+  /** Scheduled slot used to select the local date/hour archive. Manual runs use their claim start time. */
+  scheduledFor?: number
+  /** Host-resolved result directory for this run; never included in read roots. */
+  runOutputDir?: string
   preflightVersion?: 0 | 1
   targetSelections?: TargetSelection[]
   workDir?: string
