@@ -98,7 +98,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: getPreflightIssueMessageKey('ONCE_AT_NOT_FUTURE') }], suggestedDirectories: [] }, bindings: [], factsDigest: undefined, requiredPermissions: [], mcpTools: [] }
     }
     const mcpEntries = [...buildSnapshotFromDb(db, { admission: 'deferred' }).entries.values()]
-    const mcpTools = mcpEntries.flatMap((entry): AutomationTaskMcpToolCandidate[] => {
+    const mcpTools = mcpEntries.flatMap((entry): Array<AutomationTaskMcpToolCandidate & { mappedName: string }> => {
       if (!entry.descriptorHash || !entry.profileHash) return []
       const properties = entry.inputSchema.properties && typeof entry.inputSchema.properties === 'object' && !Array.isArray(entry.inputSchema.properties)
         ? entry.inputSchema.properties as Record<string, unknown>
@@ -117,7 +117,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       })
       return [{
         serverId: entry.serverId, serverName: entry.serverName, toolName: entry.originalName,
-        description: entry.description, parameters,
+        description: entry.description, parameters, mappedName: entry.mappedName,
         descriptorHash: entry.descriptorHash, profileHash: entry.profileHash
       }]
     })

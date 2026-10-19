@@ -33,10 +33,30 @@ describe('task preflight side-effect boundary', () => {
       'mcp_issue_search', 'browser', 'feishu_send'
     ]
     const tools = names.map((name) => ({ name, description: `${name} tool`, inputSchema: { type: 'object' } }))
-    const calls = names.map((name, index) => ({ id: `call-${index}`, name, input: { target: `/workspace/${name}`, arg: index } }))
+    const calls = names.map((name, index) => ({
+      id: `call-${index}`,
+      name,
+      input: name === 'grep' ? { pattern: 'release', path: '/workspace' }
+        : name === 'run_shell' ? { command: 'git status --short' }
+        : name === 'run_script' ? { code: 'print(1)' }
+        : name === 'mcp_issue_search' ? { query: 'recent issues' }
+        : { target: `/workspace/${name}`, arg: index }
+    }))
+    const mcpTools = [{ serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues', parameters: [], mappedName: 'mcp_issue_search' }]
+    const summary = JSON.stringify({
+      targets: [],
+      requiredPermissions: [
+        { tool: 'grep', scopeRoots: ['/workspace'] },
+        { tool: 'run_shell', command: 'git status --short', workingDirectory: '/workspace' },
+        { tool: 'run_script', scopeRoots: ['/workspace'] },
+        { tool: 'mcp', serverId: 'server-1', toolName: 'search_issues', purpose: '查找问题' }
+      ],
+      clarifications: [], suggestedDirectories: []
+    })
     const modelCreate = vi.fn()
       .mockResolvedValueOnce({ content: calls.map((call) => ({ type: 'tool_use', ...call })), stop_reason: 'tool_use', usage: { output_tokens: 50 } })
-      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"targets":[],"requiredPermissions":[],"clarifications":[],"suggestedDirectories":[]}' }], stop_reason: 'end_turn', usage: { output_tokens: 20 } })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'simulation complete' }], stop_reason: 'end_turn', usage: { output_tokens: 4 } })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: summary }], stop_reason: 'end_turn', usage: { output_tokens: 20 } })
     vi.mocked(resolveLlmCredentialsForPair).mockResolvedValue({
       model: { id: 'model-id', name: 'provider-model', enabled: true } as never,
       serviceId: 'service-id', providerModelName: 'provider-model', baseUrl: 'https://model.test', getApiKey: async () => 'api-key'
@@ -48,7 +68,7 @@ describe('task preflight side-effect boundary', () => {
 
     const result = await analyzer.analyze({
       prompt: 'Perform the requested task', scheduleSummary: 'daily', deliverySummary: 'none',
-      authorizedRoots: ['/workspace'], facts: {} as never, tools, responseFormat: 'json'
+      authorizedRoots: ['/workspace'], facts: {} as never, tools, mcpTools, responseFormat: 'json'
     }, new AbortController().signal)
 
     expect(result.mockTrace?.map((entry) => [entry.toolName, entry.dispatch, entry.resultKind]))

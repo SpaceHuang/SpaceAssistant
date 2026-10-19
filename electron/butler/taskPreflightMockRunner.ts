@@ -71,7 +71,7 @@ function incomplete(
   return { status: 'incomplete', reason, trace: trace.map((item) => structuredClone(item)), modelRounds, toolCalls, outputTokens }
 }
 
-async function callModelWithTimeout<T>(
+export async function callModelWithTimeout<T>(
   modelCall: (signal: AbortSignal) => Promise<T>,
   parentSignal: AbortSignal,
   timeoutMs: number

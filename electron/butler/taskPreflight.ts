@@ -14,14 +14,14 @@ export type TaskPreflightAnalysisInput = {
   tools: readonly TaskPreflightMockTool[]
   /** Remaining host deadline after facts collection; caps the model/mock loop. */
   remainingBudgetMs?: number
-  mcpTools?: readonly Pick<AutomationTaskMcpToolCandidate, 'serverId' | 'serverName' | 'toolName' | 'description' | 'parameters'>[]
+  mcpTools?: readonly (Pick<AutomationTaskMcpToolCandidate, 'serverId' | 'serverName' | 'toolName' | 'description' | 'parameters'> & { mappedName?: string })[]
   responseFormat: 'json'
 }
 
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
 export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }>; mockTrace?: TaskPreflightMockTraceItem[]; mockIncomplete?: boolean }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
-export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number; preflightStartedAt?: number; mcpTools?: AutomationTaskMcpToolCandidate[]; tools?: TaskPreflightMockTool[] }
+export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number; preflightStartedAt?: number; mcpTools?: Array<AutomationTaskMcpToolCandidate & { mappedName?: string }>; tools?: TaskPreflightMockTool[] }
 export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[]; mockTrace?: TaskPreflightMockTraceItem[] }
 export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; factsProvider?: Pick<TaskPathFactsProvider, 'collect'>; timeoutMs?: number; now?: () => number }
 
@@ -135,7 +135,7 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       facts,
       tools: input.tools ?? [],
       remainingBudgetMs: Math.max(1, Math.min(DEFAULT_ANALYZER_TIMEOUT_MS, remaining - 10)),
-      mcpTools: (input.mcpTools ?? []).map(({ serverId, serverName, toolName, description, parameters }) => ({ serverId, serverName, toolName, description: description.slice(0, 600), parameters })),
+      mcpTools: (input.mcpTools ?? []).map(({ serverId, serverName, toolName, description, parameters, mappedName }) => ({ serverId, serverName, toolName, description: description.slice(0, 600), parameters, ...(mappedName ? { mappedName } : {}) })),
       responseFormat: 'json'
     }, signal), remaining))
   } catch (error) {
