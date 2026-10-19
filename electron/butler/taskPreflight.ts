@@ -19,7 +19,7 @@ export type TaskPreflightAnalysisInput = {
 }
 
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
-export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }>; mockTrace?: TaskPreflightMockTraceItem[]; mockIncomplete?: boolean }
+export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }>; mockTrace?: TaskPreflightMockTraceItem[]; mockIncomplete?: boolean; mockIncompleteReason?: string }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
 export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number; preflightStartedAt?: number; mcpTools?: Array<AutomationTaskMcpToolCandidate & { mappedName?: string }>; tools?: TaskPreflightMockTool[] }
 export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[]; mockTrace?: TaskPreflightMockTraceItem[] }
@@ -34,10 +34,11 @@ function isWithinRoot(candidate: string, root: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
-function classifyAnalyzerFailure(error: unknown): 'ANALYZER_TIMEOUT' | 'ANALYZER_INVALID_RESPONSE' | 'ANALYZER_UNAVAILABLE' {
+function classifyAnalyzerFailure(error: unknown): 'ANALYZER_TIMEOUT' | 'ANALYZER_INVALID_RESPONSE' | 'ANALYZER_OUTPUT_TRUNCATED' | 'ANALYZER_UNAVAILABLE' {
   const code = error instanceof Error ? error.message : ''
   if (code === 'PREFLIGHT_TIMEOUT') return 'ANALYZER_TIMEOUT'
-  if (code === 'PREFLIGHT_MODEL_EMPTY_RESPONSE' || code === 'PREFLIGHT_MODEL_INVALID_JSON' || code === 'PREFLIGHT_MODEL_INVALID_SCHEMA' || code === 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE') return 'ANALYZER_INVALID_RESPONSE'
+  if (code === 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE') return 'ANALYZER_OUTPUT_TRUNCATED'
+  if (code === 'PREFLIGHT_MODEL_EMPTY_RESPONSE' || code === 'PREFLIGHT_MODEL_INVALID_JSON' || code === 'PREFLIGHT_MODEL_INVALID_SCHEMA') return 'ANALYZER_INVALID_RESPONSE'
   return 'ANALYZER_UNAVAILABLE'
 }
 
@@ -84,6 +85,7 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
       || !('input' in trace)
   }))) return undefined
   if ((value as { mockIncomplete?: unknown }).mockIncomplete !== undefined && typeof (value as { mockIncomplete?: unknown }).mockIncomplete !== 'boolean') return undefined
+  if ((value as { mockIncompleteReason?: unknown }).mockIncompleteReason !== undefined && typeof (value as { mockIncompleteReason?: unknown }).mockIncompleteReason !== 'string') return undefined
   const normalizedPermissions = Array.isArray(requiredPermissions)
     ? requiredPermissions.map((item) => {
       const permission = item as Record<string, unknown>
@@ -146,8 +148,9 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
   }
   if (analysis.mockIncomplete) {
+    const truncated = analysis.mockIncompleteReason === 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE' || analysis.mockIncompleteReason === 'model_output_limit'
     return {
-      report: emptyReport('blocked', [issue('MOCK_PREFLIGHT_INCOMPLETE')]),
+      report: emptyReport(truncated ? 'unavailable' : 'blocked', [issue(truncated ? 'ANALYZER_OUTPUT_TRUNCATED' : 'MOCK_PREFLIGHT_INCOMPLETE')]),
       bindings: [], factsDigest: facts.digest,
       ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
     }

@@ -210,6 +210,7 @@ export const PREFLIGHT_ISSUE_MESSAGE_KEYS = {
   ANALYZER_UNAVAILABLE: 'butler.preflight.analyzer_unavailable',
   ANALYZER_TIMEOUT: 'butler.preflight.analyzer_timeout',
   ANALYZER_INVALID_RESPONSE: 'butler.preflight.analyzer_invalid_response',
+  ANALYZER_OUTPUT_TRUNCATED: 'butler.preflight.analyzer_output_truncated',
   MOCK_PREFLIGHT_INCOMPLETE: 'butler.preflight.mock_preflight_incomplete',
   TARGET_UNCLEAR: 'butler.preflight.target_unclear',
   TARGET_AMBIGUOUS: 'butler.preflight.target_ambiguous',

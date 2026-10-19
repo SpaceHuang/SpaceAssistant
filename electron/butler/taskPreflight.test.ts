@@ -2,6 +2,26 @@ import { describe, expect, it, vi } from 'vitest'
 import { runTaskPreflight, type TaskPreflightAnalyzer } from './taskPreflight'
 
 describe('runTaskPreflight', () => {
+  it('classifies a truncated model response as an incomplete result instead of an unknown schema error', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => { throw new Error('PREFLIGHT_MODEL_TRUNCATED_RESPONSE') }) }
+    const result = await runTaskPreflight({ prompt: 'Read report.csv', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) }
+    })
+
+    expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_OUTPUT_TRUNCATED', messageKey: 'butler.preflight.analyzer_output_truncated' }] })
+  })
+
+  it('explains a truncated first-stage rehearsal with the same output-limit issue', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [], mockIncomplete: true, mockIncompleteReason: 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE' } as never)) }
+    const result = await runTaskPreflight({ prompt: 'Read report.csv', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) }
+    })
+
+    expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_OUTPUT_TRUNCATED', messageKey: 'butler.preflight.analyzer_output_truncated' }] })
+  })
+
   it('passes only with complete facts and an unambiguous structured target', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: 'report.csv', targetType: 'file' }] })) }
     const result = await runTaskPreflight({ prompt: 'Read report.csv and summarize it', scheduleSummary: 'daily 09:00', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 4 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace/report.csv', relativePath: 'report.csv', kind: 'file' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) } })

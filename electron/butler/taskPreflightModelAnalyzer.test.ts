@@ -13,7 +13,7 @@ describe('createTaskPreflightModelAnalyzer', () => {
     create.mockReset()
     create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[],"requiredPermissions":[],"clarifications":[],"suggestedDirectories":[]}' }] })
     vi.mocked(resolveLlmCredentialsForPair).mockResolvedValue({
-      model: { id: 'model-id', name: 'provider-model', enabled: true } as never,
+      model: { id: 'model-id', name: 'provider-model', enabled: true, maxTokens: 16_384 } as never,
       serviceId: 'service-id', providerModelName: 'provider-model', baseUrl: 'https://model.test', getApiKey: async () => 'api-key'
     })
     vi.mocked(createAnthropicClient).mockReturnValue({ messages: { create } } as never)
@@ -27,8 +27,8 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(resolveLlmCredentialsForPair).toHaveBeenCalledWith({}, 'model-id', 'service-id')
     expect(createAnthropicClient).toHaveBeenCalledWith('api-key', 'https://model.test', { maxRetries: 0 })
     expect(create).toHaveBeenCalledTimes(2)
-    expect(create.mock.calls[0]?.[0]).toMatchObject({ model: 'provider-model', system: expect.stringContaining('模拟任务可能采取的步骤'), max_tokens: 2048 })
-    expect(create.mock.calls[1]?.[0]).toMatchObject({ model: 'provider-model', system: expect.stringContaining('第二阶段（独立新会话）'), max_tokens: 2048 })
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ model: 'provider-model', system: expect.stringContaining('模拟任务可能采取的步骤'), max_tokens: 16_384 })
+    expect(create.mock.calls[1]?.[0]).toMatchObject({ model: 'provider-model', system: expect.stringContaining('第二阶段（独立新会话）'), max_tokens: 16_384 })
     expect(create.mock.calls[0]?.[0].messages).toEqual([{ role: 'user', content: expect.stringContaining('"task":"report"') }])
     expect(create.mock.calls[0]?.[1]).toMatchObject({ signal: expect.any(AbortSignal) })
     expect(create.mock.calls[0]?.[1]?.signal).not.toBe(controller.signal)
@@ -61,7 +61,7 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(create).toHaveBeenCalledTimes(3)
     expect(create).toHaveBeenNthCalledWith(1, expect.objectContaining({
       tools: [{ name: 'grep', description: 'Search files', input_schema: tool.inputSchema }],
-      max_tokens: 2048
+      max_tokens: 16_384
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(create.mock.calls[1]?.[0].messages).toEqual([
       { role: 'user', content: expect.stringContaining('Find release notes') },
@@ -101,8 +101,9 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(create.mock.calls[0]?.[0].system).toContain('模拟任务可能采取的步骤')
     expect(create.mock.calls[0]?.[0].system).toContain('你不需要完成用户的真实任务')
     expect(create.mock.calls[0]?.[0].system).toContain('这些是主机停止条件')
-    expect(create.mock.calls[0]?.[0].system).toContain('演练累计最多 8192 输出 token')
-    expect(create.mock.calls[2]?.[0].max_tokens).toBe(2048)
+    expect(create.mock.calls[0]?.[0].system).toContain('单次模型输出上限遵循所选模型配置：16384 token')
+    expect(create.mock.calls[0]?.[0].system).toContain('总结会话使用同一模型配置：16384 token')
+    expect(create.mock.calls[2]?.[0].max_tokens).toBe(16_384)
     expect(create.mock.calls[0]?.[0].system).toContain('通过对应 Mock 工具提交具体调用和参数')
     expect(create.mock.calls[0]?.[0].tools).toHaveLength(1)
     expect(create.mock.calls[1]?.[0].system).toBe(create.mock.calls[0]?.[0].system)
@@ -279,7 +280,7 @@ describe('createTaskPreflightModelAnalyzer', () => {
 
     await expect(analyzer.analyze({ prompt: 'inspect Git history', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'], facts: {} as never, tools: [{ name: 'run_shell', description: 'Run shell', inputSchema: { type: 'object' } }], responseFormat: 'json' }, new AbortController().signal))
       .resolves.toEqual({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredPermissions: [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace' }], clarifications: [], suggestedDirectories: [], mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5' }, dispatch: 'simulated', resultKind: 'synthetic' }] })
-    expect(create.mock.calls[0]?.[0]).toMatchObject({ max_tokens: 2048 })
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ max_tokens: 16_384 })
   })
 
   it('accepts one JSON object surrounded by prose and treats omitted empty summary arrays as empty', async () => {
@@ -314,12 +315,12 @@ describe('createTaskPreflightModelAnalyzer', () => {
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"targets":[],"requiredPermissions":[],"clarifications":[],"suggestedDirectories":[]}' }] })
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
 
-    await expect(analyzer.analyze({} as never, new AbortController().signal)).resolves.toMatchObject({ mockIncomplete: true, mockTrace: [] })
+    await expect(analyzer.analyze({} as never, new AbortController().signal)).resolves.toMatchObject({ mockIncomplete: true, mockIncompleteReason: 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE', mockTrace: [] })
   })
 
-  it('fails closed when a provider omits token usage and the response exceeds the conservative output budget', async () => {
+  it('fails closed when a provider response exceeds the selected model configured output maximum', async () => {
     create
-      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'x'.repeat(3_000) }], stop_reason: 'end_turn' })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'x'.repeat(17_000) }], stop_reason: 'end_turn' })
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"targets":[],"requiredPermissions":[],"clarifications":[],"suggestedDirectories":[]}' }] })
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
 

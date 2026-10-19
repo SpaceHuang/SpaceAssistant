@@ -447,6 +447,17 @@ E-13 按用户明确要求修正 D-7 的授权所有权与确认交互。E-12 �
 - **可执行环境：** 本机 mock LLM、虚拟工具调用和主进程轨迹核验。
 - **状态：** - [x]
 
+### E-15e 移除独立的小额输出 token 截断
+
+- **依赖：** E-15a～E-15d；用户明确指出预检代码额外设置的 2,048 token 输出上限会截断正常汇总。
+- **目标文件：** `taskPreflightMockRunner.ts`、`taskPreflightModelAnalyzer.ts` 及其测试、`tool-confirmation-top-level-design-v2.md` §5.6、开发方案 §2.3。
+- **动作与产物：** 第一阶段和独立总结阶段的 `max_tokens` 都取当前任务所选模型配置的 `maxTokens`；移除预检单轮固定小额和跨阶段累计 token 截断。继续由主机强制最多 5 次模型生成、12 次 Mock 调用、单次模型请求 20 秒、整次预检 60 秒。模型服务明确返回 `max_tokens` 截断时，向用户说明模型回复不完整，不混报为网络、服务不可用或权限校验错误。该任务修订并取代 E-15a/E-15d 中原记录的 token 数值限制，旧记录保留为实现历史。
+- **完成判据：** 两阶段模型请求均按所选模型配置最大输出值发送；累计 token 数不额外截断 Mock 演练；生成次数、Mock 调用数、单请求和总时限边界保持有效；截断分类和用户提示准确。
+- **验证命令：** `npm exec -- vitest run electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskPreflightMockRunner.test.ts electron/butler/taskPreflight.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npx tsc -p tsconfig.electron.json --noEmit`；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run dev`；`git diff --check`。
+- **证据：** RED：模型分析器测试要求使用配置的 16,384 token 时，旧实现实际请求 2,048；随后单纯调高到 4,096 仍未遵循模型配置。runner 回归亦确认累计/每轮输出限制仍收窄请求。GREEN：4 个定向测试文件 **95 项通过**，覆盖两个阶段遵循所选模型输出上限、不设累计 token 停止、首阶段截断与总结截断均准确分类、保留模型轮次/Mock 调用/时限门禁和用户提示。Electron TypeScript 检查、shared/renderer 类型、i18n（0 个源代码硬编码中文）、system invariant registry（10 registrations / 36 test references）及 `git diff --check` 全部通过。随后用 `npm run dev` 完成全量 Electron 构建并加载 renderer，Vite 返回 HTTP 200。
+- **可执行环境：** 本机 mock LLM、runner 边界测试和 Electron 构建。
+- **状态：** - [x]
+
 ## 4. 外部验收（不阻塞源码关闭）
 
 | 编号 | 项目 | 验收人/环境 | 证据 |

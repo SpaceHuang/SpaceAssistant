@@ -1,12 +1,12 @@
 import type { AutomationTaskPreflightTraceItem } from '../../src/shared/automationTaskTypes'
+import { DEFAULT_MODEL_MAX_TOKENS } from '../../src/shared/domainTypes'
 
 export const DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS = {
   maxModelRounds: 5,
   maxToolCalls: 12,
   modelRequestTimeoutMs: 20_000,
   totalTimeoutMs: 60_000,
-  maxOutputTokensPerRound: 2_048,
-  maxTotalOutputTokens: 10_240
+  maxOutputTokensPerRound: DEFAULT_MODEL_MAX_TOKENS
 } as const
 
 export type TaskPreflightMockLimits = {
@@ -15,7 +15,6 @@ export type TaskPreflightMockLimits = {
   modelRequestTimeoutMs: number
   totalTimeoutMs: number
   maxOutputTokensPerRound: number
-  maxTotalOutputTokens: number
 }
 
 export type TaskPreflightMockTool = { name: string; description: string; inputSchema: unknown }
@@ -57,8 +56,6 @@ function validateLimits(limits: TaskPreflightMockLimits): boolean {
     && limits.maxToolCalls <= DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS.maxToolCalls
     && limits.modelRequestTimeoutMs <= DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS.modelRequestTimeoutMs
     && limits.totalTimeoutMs <= DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS.totalTimeoutMs
-    && limits.maxOutputTokensPerRound <= DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS.maxOutputTokensPerRound
-    && limits.maxTotalOutputTokens <= DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS.maxTotalOutputTokens
 }
 
 function incomplete(
@@ -191,7 +188,6 @@ export function createTaskPreflightMockRunner(options: RunnerOptions) {
           if (!isValidModelResponse(response)) return incomplete('invalid_model_response', trace, modelRounds, toolCalls, outputTokens)
           if (response.outputTokens > limits.maxOutputTokensPerRound) return incomplete('model_output_limit', trace, modelRounds, toolCalls, outputTokens)
           outputTokens += response.outputTokens
-          if (outputTokens > limits.maxTotalOutputTokens) return incomplete('total_output_limit', trace, modelRounds, toolCalls, outputTokens)
           if (response.kind === 'final') return { status: 'complete', value: response.value, trace, modelRounds, toolCalls, outputTokens }
 
           messages.push({ role: 'assistant', content: { kind: 'tool_calls', calls: response.calls } })

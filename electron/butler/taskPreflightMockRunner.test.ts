@@ -85,24 +85,28 @@ describe('createTaskPreflightMockRunner', () => {
   })
 
   it('rejects a response that exceeds the per-round output token budget', async () => {
-    const generate = vi.fn().mockResolvedValueOnce({ kind: 'final', outputTokens: 2_049, value: 'too large' })
-    const runner = createTaskPreflightMockRunner({ tools: [], model: { generate }, mockAdapters: {} })
+    const generate = vi.fn().mockResolvedValueOnce({ kind: 'final', outputTokens: 101, value: 'too large' })
+    const runner = createTaskPreflightMockRunner({
+      tools: [], model: { generate }, mockAdapters: {},
+      limits: { ...DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS, maxOutputTokensPerRound: 100 }
+    })
 
     await expect(runner.run({ prompt: 'check' }, new AbortController().signal))
       .resolves.toMatchObject({ status: 'incomplete', reason: 'model_output_limit', modelRounds: 1, outputTokens: 0 })
   })
 
-  it('rejects cumulative output that exceeds the whole-run token budget', async () => {
+  it('uses the selected model output allowance on every round without a separate cumulative token cap', async () => {
     const generate = vi.fn()
-      .mockResolvedValueOnce({ ...toolResponse(1), outputTokens: 900 })
-      .mockResolvedValueOnce({ kind: 'final', outputTokens: 200, value: 'done' })
+      .mockResolvedValueOnce({ ...toolResponse(1), outputTokens: 80 })
+      .mockResolvedValueOnce({ kind: 'final', outputTokens: 90, value: 'done' })
     const runner = createTaskPreflightMockRunner({
       tools, model: { generate }, mockAdapters: { read_file: vi.fn(async () => ({ content: 'synthetic', completeness: 'synthetic' as const })) },
-      limits: { ...DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS, maxTotalOutputTokens: 1_000 }
+      limits: { ...DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS, maxOutputTokensPerRound: 100 }
     })
 
     await expect(runner.run({ prompt: 'check' }, new AbortController().signal))
-      .resolves.toMatchObject({ status: 'incomplete', reason: 'total_output_limit', modelRounds: 2, outputTokens: 1_100 })
+      .resolves.toMatchObject({ status: 'complete', modelRounds: 2, outputTokens: 170 })
+    expect(generate.mock.calls.map(([request]) => request.maxOutputTokens)).toEqual([100, 100])
   })
 
   it('stops and marks coverage incomplete when a mock cannot faithfully model a result', async () => {

@@ -647,6 +647,21 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(screen.queryByText('ANALYZER_INVALID_RESPONSE')).toBeNull()
   })
 
+  it('预检模型回复被截断时向用户说明结果不完整', async () => {
+    butlerCreateTask.mockResolvedValueOnce({ ok: false, kind: 'preflight-unavailable', error: 'ANALYZER_OUTPUT_TRUNCATED' })
+    renderTab()
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '总结输出诊断' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '读取 report.csv' } })
+    await chooseOutputDir()
+    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
+    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
+    await clickTaskSubmit()
+
+    expect(await screen.findByText(/未能在本次请求的输出长度内完整返回结果/)).toBeTruthy()
+    expect(screen.queryByText('ANALYZER_OUTPUT_TRUNCATED')).toBeNull()
+  })
+
   it('目录列表可添加多个根并移除单项', async () => {
     renderTab()
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
