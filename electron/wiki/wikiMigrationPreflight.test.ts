@@ -28,7 +28,7 @@ describe('createWikiMigrationPreflight', () => {
     const before = JSON.stringify({ schema, files })
     const report = buildWikiMigrationPreflight({ schema, files })
     expect(report.categories.map(item => item.categoryId)).toEqual(['entity', 'concept'])
-    expect(report.changes).toHaveLength(3)
+    expect(report.changes).toHaveLength(5)
     expect(report.changes?.find(change => change.relativePath === 'wiki/entities/space.md')).toMatchObject({ objectKind: 'page', oldHash: createHash('sha256').update(files[0].content).digest('hex') })
     expect(report.changes?.find(change => change.relativePath === 'wiki/entities/space.md')?.newBytes).toContain('"categoryId":"entity"')
     expect(report.changes?.find(change => change.relativePath === 'SCHEMA.md')?.newBytes).toContain('"id": "entity"')
@@ -39,18 +39,37 @@ describe('createWikiMigrationPreflight', () => {
   })
 
   it('extracts human index notes, flags unclassified blocks, and records a read-only log archive', () => {
+    const oldIndex = '# Wiki Index\n\n> Generated navigation.\n\n## Entities\n\n（暂无）\n\n## Notes\n\nKeep the old design rationale.\n'
+    const oldLog = '## [old] ingest\nKeep as archive.\n'
     const report = buildWikiMigrationPreflight({
       schema: '# Rules\n\n## 页面类型\n\n| 类型 | 目录 | 说明 |\n|------|------|------|\n| entity | wiki/entities/ | Entities |\n',
       files: [
-        { path: 'wiki/index.md', content: '# Wiki Index\n\n> Generated navigation.\n\n## Entities\n\n（暂无）\n\n## Notes\n\nKeep the old design rationale.\n' },
-        { path: 'wiki/log.md', content: '## [old] ingest\nKeep as archive.\n' },
+        { path: 'wiki/index.md', content: oldIndex },
+        { path: 'wiki/log.md', content: oldLog },
         { path: 'wiki/entities/a.md', content: '# A\n' },
       ]
     })
     expect(report.review.indexNotes).toMatchObject([{ targetTitle: 'Wiki 旧索引说明（Notes）', content: 'Keep the old design rationale.' }])
     expect(report.review.readonlyLogArchives[0]).toMatchObject({ sourcePath: 'wiki/log.md', sha256: createHash('sha256').update('## [old] ingest\nKeep as archive.\n').digest('hex') })
     expect(report.changes?.map(change => change.objectKind)).toContain('index-note')
+    expect(report.changes?.find(change => change.objectKind === 'index-projection')).toMatchObject({ relativePath: 'wiki/index.md', oldHash: createHash('sha256').update(oldIndex).digest('hex') })
+    expect(report.changes?.find(change => change.objectKind === 'index-projection')?.newBytes).toContain('- [A](wiki/entities/a.md)')
+    expect(report.changes?.find(change => change.objectKind === 'index-projection')?.newBytes).toContain('- [Wiki 旧索引说明（Notes）](wiki/migrated-notes/wiki-notes.md)')
+    expect(report.changes?.find(change => change.objectKind === 'log-projection')).toMatchObject({ relativePath: 'wiki/log.md', oldHash: createHash('sha256').update(oldLog).digest('hex') })
+    expect(report.changes?.find(change => change.objectKind === 'log-projection')?.newBytes).toBe('# Wiki Operation Log\n')
     expect(report.diagnostics.map(item => item.code)).not.toContain('wiki-migration-index-content-unclassified')
+  })
+
+  it('blocks a migrated index note when its normalized title already exists at another path', () => {
+    const noteTitle = 'Wiki 旧索引说明（Notes）'
+    const report = buildWikiMigrationPreflight({
+      schema: '# Rules\n\n## 页面类型\n\n| 类型 | 目录 | 说明 |\n|------|------|------|\n| entity | wiki/entities/ | Entities |\n',
+      files: [
+        { path: 'wiki/index.md', content: `# Wiki Index\n\n## Notes\n\nKeep this note.\n` },
+        { path: 'wiki/entities/existing.md', content: `# ${noteTitle}\nAlready present.\n` },
+      ]
+    })
+    expect(report.diagnostics).toContainEqual(expect.objectContaining({ code: 'wiki-migration-title-conflict', paths: expect.arrayContaining(['wiki/entities/existing.md', 'wiki/migrated-notes/wiki-notes.md']) }))
   })
 
   it('creates deterministic category IDs and a content manifest without changing input files', () => {

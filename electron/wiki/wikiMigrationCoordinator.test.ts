@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { createWikiMigrationCoordinator } from './wikiMigrationCoordinator'
@@ -32,6 +33,28 @@ describe('Wiki migration coordinator', () => {
     expect(await readFile(path.join(root, 'SCHEMA.md'), 'utf8')).toContain('wiki-categories:start')
     expect(await readFile(path.join(root, 'wiki/entities/old.md'), 'utf8')).toContain('wiki-page:start')
     expect(await lifecycle.read()).toMatchObject({ lifecycle: 'domain_ready', preflightHash: report.manifestHash })
+  })
+
+  it('rebuilds service projections and preserves exact legacy index and log backups', async () => {
+    const { root, coordinator } = await fixture(true)
+    const oldIndex = '# Human index\n\nKeep rationale here.\n'
+    const oldLog = '## old event\nKeep audit history.\n'
+    await writeFile(path.join(root, 'wiki/index.md'), oldIndex)
+    await writeFile(path.join(root, 'wiki/log.md'), oldLog)
+    const report = await coordinator.preflight()
+    const manifest = await coordinator.migrate({ preflightHash: report.manifestHash, confirmedPreflightHash: report.manifestHash })
+    const index = await readFile(path.join(root, 'wiki/index.md'), 'utf8')
+    const log = await readFile(path.join(root, 'wiki/log.md'), 'utf8')
+    expect(index).toContain('- [Old](wiki/entities/old.md)')
+    expect(index).not.toContain('Keep rationale here')
+    expect(log).toBe('# Wiki Operation Log\n')
+    for (const [relativePath, original] of [['wiki/index.md', oldIndex], ['wiki/log.md', oldLog]]) {
+      const entry = manifest.entries.find(item => item.relativePath === relativePath)
+      expect(entry?.backupPath).toBeTruthy()
+      const backup = await readFile(path.join(root, entry!.backupPath!))
+      expect(backup.toString('utf8')).toBe(original)
+      expect(createHash('sha256').update(backup).digest('hex')).toBe(createHash('sha256').update(original).digest('hex'))
+    }
   })
 
   it('does not start writes when user confirmation is not bound to the preflight report', async () => {

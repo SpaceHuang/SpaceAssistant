@@ -5,6 +5,7 @@ import type { WikiFileStore } from './wikiFileStore'
 import { parseWikiSchema } from './wikiSchema'
 import { parseWikiPageMarker, serializeWikiPageMarker, type WikiPageMarker } from './wikiReconciler'
 import { normalizeWikiRelativePath } from './wikiPaths'
+import { buildWikiIndex, buildWikiLog, type WikiProjectionPage } from './wikiProjection'
 
 export interface LegacyWikiCategory { id?: string; name: string; description?: string; status?: string; parentCategoryId?: string }
 export interface WikiMigrationPreflightInput {
@@ -174,7 +175,37 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
     const key = normalizeTitle(title)
     pageTitles.set(key, [...(pageTitles.get(key) ?? []), normalized])
   }
+  for (const note of review.indexNotes) {
+    const targetPath = `wiki/migrated-notes/${slug(note.targetTitle)}.md`
+    const key = normalizeTitle(note.targetTitle)
+    pageTitles.set(key, [...(pageTitles.get(key) ?? []), targetPath])
+  }
   for (const paths of pageTitles.values()) if (paths.length > 1) diagnostics.push({ code: 'wiki-migration-title-conflict', paths: paths.sort(), message: 'Pages have the same normalized title and require an explicit resolution.' })
+  // Stage service-owned projections in the migration journal so it can back up the
+  // exact legacy bytes and atomically verify the new generated views with other changes.
+  const projectionPages: WikiProjectionPage[] = []
+  const migratedPageByPath = new Map(changes.filter(change => change.objectKind === 'page' || change.objectKind === 'index-note').map(change => [change.relativePath, change.newBytes]))
+  for (const file of input.files) {
+    const normalized = normalizeWikiRelativePath(file.path)
+    if (!/^wiki\/.+\.md$/i.test(normalized) || /^(?:wiki\/)?(?:index|log)\.md$/i.test(normalized)) continue
+    const content = migratedPageByPath.get(normalized) ?? file.content
+    const { marker, body } = parseWikiPageMarker(content)
+    const title = /^#\s+(.+?)\s*#*\s*$/m.exec(body)?.[1]?.trim()
+    if (!marker || !title) continue
+    projectionPages.push({ pageId: marker.pageId, title, categoryId: marker.categoryId, summary: marker.summary, path: normalized, revision: marker.revision, parentPageId: marker.parentPageId })
+  }
+  for (const change of changes.filter(item => item.objectKind === 'index-note')) {
+    const { marker, body } = parseWikiPageMarker(change.newBytes)
+    const title = /^#\s+(.+?)\s*#*\s*$/m.exec(body)?.[1]?.trim()
+    if (marker && title) projectionPages.push({ pageId: marker.pageId, title, categoryId: marker.categoryId, summary: marker.summary, path: change.relativePath, revision: marker.revision, parentPageId: marker.parentPageId })
+  }
+  for (const [relativePath, objectKind, newBytes] of [
+    ['wiki/index.md', 'index-projection', buildWikiIndex(projectionPages)],
+    ['wiki/log.md', 'log-projection', buildWikiLog([])],
+  ] as const) {
+    const existing = input.files.find(file => normalizeWikiRelativePath(file.path) === relativePath)
+    if (existing) changes.push({ objectKind, relativePath, oldHash: sha(existing.content), newBytes })
+  }
   const manifestHash = sha(JSON.stringify({ files: files.map(({ path, sha256 }) => [path, sha256]), changes: changes.map(({ relativePath, oldHash, newBytes }) => [relativePath, oldHash, sha(newBytes)]), review }))
   return { categories, files, diagnostics, manifestHash, writesFiles: false, changes, review }
 }
