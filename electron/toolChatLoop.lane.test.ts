@@ -72,6 +72,7 @@ vi.mock('./toolConfirmRegistry', () => ({
 // 所有业务 lane 使用同一启用/工具白名单快照。
 vi.mock('./mcp/mcpToolRegistry', () => ({
   buildSnapshotFromDb: vi.fn(() => ({ entries: mcpSnapshotEntries, budgetDropped: [] })),
+  hashMcpServerProfile: vi.fn(() => 'test-profile-hash'),
   snapshotEntriesToAnthropicTools: vi.fn((entries: Array<{ mappedName: string; serverName: string; description: string; inputSchema: unknown }>) =>
     entries.map((e) => ({
       name: e.mappedName,

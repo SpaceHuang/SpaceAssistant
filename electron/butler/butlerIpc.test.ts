@@ -6,6 +6,8 @@ import { setConfigValue } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { claimDueSlotAndAdvance, createAutomationTask, getAutomationTask, transitionClaimToRunning, updateAutomationTask } from './taskStore'
 import { registerButlerIpcHandlers } from './butlerIpc'
+import { saveProfiles } from '../mcp/mcpConfigStore'
+import { buildMappedToolDescriptors, cacheTools } from '../mcp/mcpToolRegistry'
 
 const electronMock = vi.hoisted(() => ({
   canceled: false,
@@ -118,13 +120,24 @@ describe('butler IPC workdir/config fields', () => {
     const d = openDatabase(':memory:')
     const permissionRoot = await realpath(os.tmpdir())
     db = d
+    const mcpServerId = '11111111-2222-4333-8444-555555555555'
+    await saveProfiles(d, [{
+      id: mcpServerId, name: 'Issue Tracker', enabled: true, transport: 'streamable-http', timeoutSec: 60,
+      auth: { mode: 'none' }, http: { endpoint: 'https://mcp.example.test' }, enabledToolNames: ['search_issues']
+    }])
+    const mcpTools = buildMappedToolDescriptors(mcpServerId, 'Issue Tracker', [{
+      name: 'search_issues', description: 'Search issues by query',
+      inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }
+    }]).descriptors
+    cacheTools(d, mcpServerId, { tools: mcpTools, protocolVersion: '2025-06-18', discoveredAt: '2026-10-19T00:00:00.000Z' })
     const map = new Map<string, (...args: unknown[]) => unknown>()
     const preflight = vi.fn(async () => ({
       report: { status: 'passed' as const, blockers: [], suggestedDirectories: [] },
       bindings: [], factsDigest: 'facts-digest', requiredPermissions: [
         { tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: permissionRoot, timeout: 45 },
         { tool: 'grep', scopeRoots: [permissionRoot] },
-        { tool: 'run_script', scopeRoots: [permissionRoot] }
+        { tool: 'run_script', scopeRoots: [permissionRoot] },
+        { tool: 'mcp', serverId: mcpServerId, toolName: 'search_issues', purpose: '查找最近更新的问题' }
       ]
     }))
     registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
@@ -145,7 +158,9 @@ describe('butler IPC workdir/config fields', () => {
       expect.objectContaining({ kind: 'result-write', outputDirectory: await realpath(os.tmpdir()), organization: 'daily' }),
       expect.objectContaining({ kind: 'local-shell', scopeRoots: [permissionRoot], commands: [{ command: 'git log --oneline -5', workingDirectory: permissionRoot, timeout: 45 }] }),
       expect.objectContaining({ kind: 'grep', scopeRoots: [permissionRoot] }),
-      expect.objectContaining({ kind: 'run-script', scopeRoots: [permissionRoot], scriptHashBinding: 'per-invocation' })
+      expect.objectContaining({ kind: 'run-script', scopeRoots: [permissionRoot], scriptHashBinding: 'per-invocation' }),
+      expect.objectContaining({ kind: 'mcp-tool', serverId: mcpServerId, serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues by query',
+        purpose: '查找最近更新的问题', parameters: [{ name: 'query', type: 'string', required: true }], descriptorHash: expect.stringMatching(/^[a-f0-9]{64}$/), profileHash: expect.stringMatching(/^[a-f0-9]{64}$/) })
     ]) })
     expect(review.reviewId).toBeTruthy()
     expect(map.get('butler:list')!()).toEqual([])
@@ -155,6 +170,8 @@ describe('butler IPC workdir/config fields', () => {
     expect(committed).toMatchObject({ ok: true, task: { accessPermissions: { tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: {
       actor: 'user-confirmation', source: 'task-preflight-confirmation', permissions: expect.any(Array)
     } } } })
+    expect((committed as { task?: { accessPermissions?: { authorizationRecord?: { permissions: unknown[] } } } }).task?.accessPermissions?.authorizationRecord?.permissions)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'mcp-tool', serverId: mcpServerId, toolName: 'search_issues' })]))
     expect(await map.get('butler:confirm-write')!(null, { reviewId: review.reviewId })).toMatchObject({ ok: false, kind: 'validation-error' })
   })
 

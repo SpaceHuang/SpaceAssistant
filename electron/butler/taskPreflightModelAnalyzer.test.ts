@@ -80,6 +80,21 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(output.requiredPermissions).toEqual([{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace' }])
   })
 
+  it('provides configured MCP tools as data and accepts a task-specific tool requirement', async () => {
+    create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[{"kind":"exact","path":"/workspace","targetType":"directory"}],"requiredPermissions":[{"tool":"mcp","serverId":"server-1","toolName":"search_issues","purpose":"查找最近更新的问题"}],"clarifications":[],"suggestedDirectories":[]}' }] })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+    const mcpTools = [{ serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues', parameters: [{ name: 'query', type: 'string', required: true }] }]
+    const output = await analyzer.analyze({
+      prompt: '查找最近更新的问题', scheduleSummary: 'daily', deliverySummary: 'desktop',
+      authorizedRoots: ['/workspace'], facts: { gitRepositories: [] } as never, tools: [], mcpTools, responseFormat: 'json'
+    }, new AbortController().signal)
+
+    expect(output.requiredPermissions).toEqual([{ tool: 'mcp', serverId: 'server-1', toolName: 'search_issues', purpose: '查找最近更新的问题' }])
+    expect(create.mock.calls[0]?.[0].system).toContain('MCP 工具目录')
+    expect(create.mock.calls[0]?.[0].messages[0]?.content).toContain('"serverName":"Issue Tracker"')
+    expect(create.mock.calls[0]?.[0].messages[0]?.content).not.toContain('descriptorHash')
+  })
+
   it('states the preflight task and delivery standard for every output field', async () => {
     const prompt = '总结一下昨天合并进 main 分支，并推送 GitHub 的所有内容。'
     create.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({

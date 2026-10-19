@@ -42,3 +42,16 @@ export function matchAutomationScriptPermission(access: AutomationTaskAccessPerm
     && isPathWithinAnyRoot(workingDirectory, permission.scopeRoots)
     && observedPaths.every((targetPath) => isPathWithinAnyRoot(targetPath, permission.scopeRoots)))
 }
+
+/** Match an MCP call only to the exact host-approved connection profile and registered tool descriptor. */
+export function matchAutomationMcpPermission(
+  access: AutomationTaskAccessPermissions | undefined,
+  entry: { serverId: string; originalName: string; descriptorHash?: string; profileHash?: string }
+): boolean {
+  if (!entry.serverId || !entry.originalName || !/^[a-f0-9]{64}$/.test(entry.descriptorHash ?? '') || !/^[a-f0-9]{64}$/.test(entry.profileHash ?? '')) return false
+  return permissionRecord(access).some((permission) => permission.kind === 'mcp-tool'
+    && permission.serverId === entry.serverId
+    && permission.toolName === entry.originalName
+    && permission.descriptorHash === entry.descriptorHash
+    && permission.profileHash === entry.profileHash)
+}

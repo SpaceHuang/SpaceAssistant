@@ -1211,6 +1211,8 @@ describe('线索包任务声明（D：可信证据分区）', () => {
         { kind: 'local-shell', scopeRoots: ['/workspace/repo'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/workspace/repo' }] },
         { kind: 'grep', scopeRoots: ['/workspace/repo/src'] },
         { kind: 'run-script', scopeRoots: ['/workspace/repo'], scriptHashBinding: 'per-invocation' },
+        { kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues',
+          purpose: 'Find the latest issues', parameters: [{ name: 'query', required: true }], descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64) },
         { kind: 'result-write', outputDirectory: '/results', organization: 'daily' }
       ]
     }
@@ -1221,6 +1223,8 @@ describe('线索包任务声明（D：可信证据分区）', () => {
     expect(rendered).toContain('/workspace/repo')
     expect(rendered).toContain('git log --oneline -5')
     expect(rendered).toContain('per-invocation')
+    expect(rendered).toContain('Find the latest issues')
+    expect(rendered).toContain('descriptorHash')
     expect(rendered).toContain('/results')
     expect(rendered.indexOf('authorization-1')).toBeGreaterThan(rendered.lastIndexOf('```'))
     expect(rendered).toContain('不代表本次具体命令或目标已自动批准')

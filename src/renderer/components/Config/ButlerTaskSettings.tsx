@@ -130,6 +130,13 @@ function permissionDescription(permission: AutomationTaskPermission, t: TaskActi
     })
     case 'grep': return t('butler.form.permissionGrep', { scope: permission.scopeRoots.join('、') })
     case 'run-script': return t('butler.form.permissionRunScript', { scope: permission.scopeRoots.join('、') })
+    case 'mcp-tool': return t('butler.form.permissionMcpTool', {
+      server: permission.serverName,
+      tool: permission.toolName,
+      description: permission.description || t('butler.form.permissionMcpNoDescription'),
+      purpose: permission.purpose,
+      parameters: permission.parameters.map(({ name, required }) => `${name}${required ? ` (${t('butler.form.permissionMcpRequired')})` : ''}`).join('、') || t('butler.form.permissionMcpNoParameters')
+    })
     case 'deliver-result': return permission.target
       ? t('butler.form.permissionDeliverResultTo', { delivery: deliveryText(permission.delivery, t), target: permission.target })
       : t('butler.form.permissionDeliverResult', { delivery: deliveryText(permission.delivery, t) })

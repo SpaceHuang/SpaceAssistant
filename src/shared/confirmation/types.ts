@@ -142,6 +142,8 @@ export type FactSignal =
   | { kind: 'automation-grep-permission'; status: 'matched' | 'missing' }
   /** facts-stage host observation: script scope is matched; each script is still approved by its exact hash. */
   | { kind: 'automation-script-permission'; status: 'matched' | 'missing' }
+  /** facts-stage host observation: MCP server configuration and exact registered tool descriptor match the user's receipt. */
+  | { kind: 'automation-mcp-permission'; status: 'matched' | 'missing' }
   /** Host-extracted grep arguments included in the security review evidence. */
   | { kind: 'grep-invocation'; path: string; pattern: string; glob?: string; outputMode?: string; ignoreCase?: boolean; includeIgnored?: boolean; multiline?: boolean; context?: number; headLimit?: number; timeoutSeconds?: number }
   | { kind: 'policy-tier'; tier: 'loose' | 'standard' | 'strict' | 'custom' }

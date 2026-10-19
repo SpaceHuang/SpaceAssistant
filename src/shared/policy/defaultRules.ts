@@ -652,6 +652,15 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     reason: 'MCP account is not authorized for the requested data scope'
   },
   {
+    id: 'automation-mcp-permission-missing-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], signals: ['automation-mcp-permission:missing'] },
+    denyClass: 'forbidden',
+    action: 'deny',
+    locked: true,
+    reason: '定时任务未获得当前 MCP 服务和工具版本的用户授权'
+  },
+  {
     id: 'mcp-readonly-allow',
     when: 'invocation',
     match: { lane: ['desktop'], signals: ['mcp-readonly'] },

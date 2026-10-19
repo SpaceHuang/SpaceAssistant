@@ -13,9 +13,21 @@ export type AutomationTaskSchedule =
 export type AutomationDeliveryPref = 'desktop' | 'feishu' | 'wechat' | 'none'
 export type AutomationOutputOrganization = 'direct' | 'daily' | 'hourly'
 export type AutomationTaskToolPermission = 'run_shell' | 'grep' | 'run_script'
+/** A configured MCP capability offered to preflight; fingerprints are host-owned and never model-authored. */
+export type AutomationTaskMcpToolParameter = { name: string; required: boolean; type?: string; description?: string }
+export type AutomationTaskMcpToolCandidate = {
+  serverId: string
+  serverName: string
+  toolName: string
+  description: string
+  parameters: AutomationTaskMcpToolParameter[]
+  descriptorHash: string
+  profileHash: string
+}
 export type AutomationTaskToolRequirement =
   | { tool: 'run_shell'; command: string; workingDirectory: string; timeout?: number }
   | { tool: 'grep' | 'run_script'; scopeRoots: string[] }
+  | { tool: 'mcp'; serverId: string; toolName: string; purpose: string }
 export type AutomationTaskPermission =
   | { kind: 'directory-read-write'; path: string }
   | { kind: 'result-write'; outputDirectory: string; organization: AutomationOutputOrganization }
@@ -24,6 +36,8 @@ export type AutomationTaskPermission =
   | { kind: 'grep'; scopeRoots: string[] }
   /** Each concrete script approval is bound to a host-computed SHA-256 at invocation time. */
   | { kind: 'run-script'; scopeRoots: string[]; scriptHashBinding: 'per-invocation' }
+  /** A task-level MCP grant is bound to one configured server profile and exact descriptor/schema. */
+  | { kind: 'mcp-tool'; serverId: string; serverName: string; toolName: string; description: string; purpose: string; parameters: Array<{ name: string; required: boolean }>; descriptorHash: string; profileHash: string }
   | { kind: 'deliver-result'; delivery: Exclude<AutomationDeliveryPref, 'none'>; target?: string }
 
 /** Main-process receipt of the user's explicit confirmation of a preflight permission list. */

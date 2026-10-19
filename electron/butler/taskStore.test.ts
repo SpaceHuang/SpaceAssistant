@@ -90,6 +90,7 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
           { kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/authorized/source', timeout: 60 }] },
           { kind: 'grep', scopeRoots: ['/authorized/source'] },
           { kind: 'run-script', scopeRoots: ['/authorized/source'], scriptHashBinding: 'per-invocation' },
+          { kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues', purpose: 'Find current issues', parameters: [{ name: 'query', required: true }], descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64) },
           { kind: 'result-write', outputDirectory: '/results', organization: 'hourly' }
         ]
       }
@@ -126,6 +127,19 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
       }
     } as never)
     expect(getAutomationTask(d, task.id)?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: [] })
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
+  })
+
+  it('rejects MCP task grants without valid host fingerprints and parameter metadata', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'bad-mcp-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search',
+          description: 'Search issues', purpose: 'Find issues', parameters: [], descriptorHash: 'invalid', profileHash: 'b'.repeat(64) }]
+      }
+    } as never)
+
     expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
   })
 

@@ -268,7 +268,9 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
         { kind: 'result-write', outputDirectory: '/tmp/output-root', organization: 'hourly' },
         { kind: 'local-shell', scopeRoots: ['/tmp/chosen-root'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/tmp/chosen-root', timeout: 30 }] },
         { kind: 'grep', scopeRoots: ['/tmp/chosen-root/src'] },
-        { kind: 'run-script', scopeRoots: ['/tmp/chosen-root'], scriptHashBinding: 'per-invocation' }
+        { kind: 'run-script', scopeRoots: ['/tmp/chosen-root'], scriptHashBinding: 'per-invocation' },
+        { kind: 'mcp-tool', serverId: 'mcp-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues',
+          purpose: '查找近期问题', parameters: [{ name: 'query', required: true }, { name: 'limit', required: false }], descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64) }
       ]
     })
     renderTab()
@@ -289,6 +291,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(screen.getByText(/超时：30s/)).toBeTruthy()
     expect(screen.getByText('可在以下目录中使用 grep 搜索内容：/tmp/chosen-root/src。')).toBeTruthy()
     expect(screen.getByText('可在以下目录运行经安全审核的脚本：/tmp/chosen-root。每次审核绑定该脚本的 SHA-256，脚本内容变化后必须重新审核。')).toBeTruthy()
+    expect(screen.getByText('可调用 MCP 服务「Issue Tracker」中的工具「search_issues」：Search issues。任务用途：查找近期问题。参数：query (必填)、limit。授权绑定当前服务配置与工具定义；安全审核 Agent 仍会检查每次调用的实际参数。')).toBeTruthy()
     const payload = butlerCreateTask.mock.calls[0]![0] as { name: string; prompt: string; schedule: unknown; authorizedDirs: string[]; outputDir: string; outputOrganization: string }
     expect(payload.name).toBe('周报汇总')
     expect(payload.prompt).toBe('汇总本周会话')

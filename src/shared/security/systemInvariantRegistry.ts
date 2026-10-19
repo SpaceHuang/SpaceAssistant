@@ -83,10 +83,10 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
   },
   {
     id: 'SYS-AUTOTOOLS-001', owner: 'electron/butler + electron/confirmation', stage: 'final-check', category: 'integrity',
-    rationale: 'Scheduled grep, Shell and script calls must match the exact host-issued task receipt scopes; each script approval additionally binds host-computed code, parameter and environment hashes.',
+    rationale: 'Scheduled grep, Shell, script, and MCP calls must match the host-issued task receipt scopes; MCP grants bind the exact service profile and tool descriptor, while each script approval additionally binds host-computed code, parameter and environment hashes.',
     effect: 'validate', scope: 'electron/butler/taskPreflight.ts:requiredPermissions;electron/butler/butlerIpc.ts:buildPermissionList;electron/butler/automationTaskPermissionMatch.ts;electron/confirmation/toolCallGate.ts:automation-tool-permission;electron/confirmation/agentSdkSafetyPolicy.ts:matchesScriptApprovalBinding',
-    audit: 'policy trace records grep, Shell and script scope match status; reviewer evidence contains the exact grep arguments or script digests; final-check invalidates approval when script code, parameters, or environment hashes change',
-    tests: ['electron/butler/taskPreflight.test.ts', 'electron/butler/butlerIpc.test.ts', 'electron/butler/taskStore.test.ts', 'electron/butler/automationTaskPermissionMatch.test.ts', 'electron/butler/butlerInvoker.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/agentChannel.test.ts', 'electron/confirmation/approvalAgent.test.ts', 'electron/confirmation/agentSdkSafetyPolicy.test.ts'],
+    audit: 'policy trace records tool grant match status; reviewer evidence contains MCP service/tool identity and actual call arguments, exact Shell commands, grep arguments, and script digests; final-check rejects changed MCP service configuration or descriptor and changed script code, parameters, or environment hashes',
+    tests: ['electron/butler/taskPreflight.test.ts', 'electron/butler/butlerIpc.test.ts', 'electron/butler/taskStore.test.ts', 'electron/butler/automationTaskPermissionMatch.test.ts', 'electron/butler/butlerInvoker.test.ts', 'electron/mcp/mcpToolRegistry.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/agentChannel.test.ts', 'electron/confirmation/approvalAgent.test.ts', 'electron/confirmation/agentSdkSafetyPolicy.test.ts'],
     overrideability: 'none'
   },
   {

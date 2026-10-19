@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { getPreflightIssueMessageKey, type AutomationTaskToolRequirement, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
+import { getPreflightIssueMessageKey, type AutomationTaskMcpToolCandidate, type AutomationTaskToolRequirement, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider, type TaskPathFacts } from './taskPathFacts'
 import { resolveTaskTarget, type ProposedTaskTarget } from './taskTargetResolver'
 
@@ -11,13 +11,14 @@ export type TaskPreflightAnalysisInput = {
   outputRoot?: string
   facts: TaskPathFacts
   tools: readonly []
+  mcpTools?: readonly Pick<AutomationTaskMcpToolCandidate, 'serverId' | 'serverName' | 'toolName' | 'description' | 'parameters'>[]
   responseFormat: 'json'
 }
 
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
 export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }> }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
-export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number }
+export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number; mcpTools?: AutomationTaskMcpToolCandidate[] }
 export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[] }
 export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; factsProvider?: Pick<TaskPathFactsProvider, 'collect'>; timeoutMs?: number; now?: () => number }
 
@@ -54,6 +55,9 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
     const permission = item as Record<string, unknown>
     if (permission.tool === 'run_shell') return typeof permission.command !== 'string' || !permission.command.trim() || permission.command.length > 4096 || typeof permission.workingDirectory !== 'string' || !permission.workingDirectory.trim()
       || (permission.timeout !== undefined && (typeof permission.timeout !== 'number' || !Number.isInteger(permission.timeout) || permission.timeout < 1 || permission.timeout > 86400))
+    if (permission.tool === 'mcp') return typeof permission.serverId !== 'string' || !permission.serverId.trim() || permission.serverId.length > 128
+      || typeof permission.toolName !== 'string' || !permission.toolName.trim() || permission.toolName.length > 256
+      || typeof permission.purpose !== 'string' || !permission.purpose.trim() || permission.purpose.length > 240
     if (permission.tool === 'grep' || permission.tool === 'run_script') return !Array.isArray(permission.scopeRoots) || permission.scopeRoots.length === 0 || permission.scopeRoots.length > 20 || permission.scopeRoots.some((root) => typeof root !== 'string' || !root.trim())
     return true
   }))) return undefined
@@ -96,6 +100,7 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       outputRoot: facts.outputRoot,
       facts,
       tools: [],
+      mcpTools: (input.mcpTools ?? []).map(({ serverId, serverName, toolName, description, parameters }) => ({ serverId, serverName, toolName, description: description.slice(0, 600), parameters })),
       responseFormat: 'json'
     }, signal), deps.timeoutMs ?? DEFAULT_ANALYZER_TIMEOUT_MS))
   } catch (error) {
@@ -104,10 +109,15 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
   if (!analysis) return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
   const requiredPermissions = analysis.requiredPermissions ?? []
   // facts: 本机工具授权必须落在用户选择并由主机核验的目录范围；结果输出根不能充当读取/命令范围。
-  if (requiredPermissions.length > 0 && facts.roots.length === 0) {
+  const filesystemPermissions = requiredPermissions.filter((permission) => permission.tool !== 'mcp')
+  if (filesystemPermissions.length > 0 && facts.roots.length === 0) {
     return { report: emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs')]), bindings: [], factsDigest: facts.digest }
   }
-  const requirementsInScope = requiredPermissions.every((permission) => permission.tool === 'run_shell'
+  const candidateMcpTools = input.mcpTools ?? []
+  const requirementsInScope = requiredPermissions.every((permission) => permission.tool === 'mcp'
+    ? candidateMcpTools.some((candidate) => candidate.serverId === permission.serverId && candidate.toolName === permission.toolName
+      && /^[a-f0-9]{64}$/.test(candidate.descriptorHash) && /^[a-f0-9]{64}$/.test(candidate.profileHash))
+    : permission.tool === 'run_shell'
     ? facts.roots.includes(permission.workingDirectory)
     : permission.scopeRoots.every((root) => facts.roots.some((authorizedRoot) => isWithinRoot(root, authorizedRoot))
       && facts.entries.some((entry) => entry.path === root && entry.kind === 'directory')))

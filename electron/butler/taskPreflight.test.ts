@@ -9,6 +9,42 @@ describe('runTaskPreflight', () => {
     expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Read report.csv and summarize it', authorizedRoots: ['/workspace'], outputRoot: undefined, facts: expect.any(Object), tools: [] }), expect.any(AbortSignal))
   })
 
+  it('validates MCP requirements against host-provided tool descriptors and passes the catalog to analysis', async () => {
+    const mcpTools = [{
+      serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues',
+      description: 'Search issues', parameters: [{ name: 'query', type: 'string', required: false }],
+      descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64)
+    }]
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
+      requiredPermissions: [{ tool: 'mcp', serverId: 'server-1', toolName: 'search_issues', purpose: '查找最近更新的问题' }]
+    } as never)) }
+    const result = await runTaskPreflight({
+      prompt: '查找最近更新的问题', scheduleSummary: 'daily', deliverySummary: 'desktop',
+      roots: ['/workspace'], taskRevision: 1, mcpTools
+    } as never, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) } })
+
+    expect(result.report.status).toBe('passed')
+    expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({
+      mcpTools: [{ serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues', parameters: [{ name: 'query', type: 'string', required: false }] }]
+    }), expect.any(AbortSignal))
+    expect(result.requiredPermissions).toEqual([{ tool: 'mcp', serverId: 'server-1', toolName: 'search_issues', purpose: '查找最近更新的问题' }])
+  })
+
+  it('rejects a model-invented MCP server or tool instead of creating a task grant', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
+      requiredPermissions: [{ tool: 'mcp', serverId: 'invented-server', toolName: 'delete_everything', purpose: '执行任务' }]
+    } as never)) }
+    const result = await runTaskPreflight({
+      prompt: '完成工作', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1,
+      mcpTools: [{ serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search', parameters: [], descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64) }]
+    } as never, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) } })
+
+    expect(result.report.status).toBe('unavailable')
+    expect(result.requiredPermissions).toBeUndefined()
+  })
+
   it('keeps an output-only task separate from authorized read roots', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'output', path: 'result.txt', expectedType: 'file' }] })) }
     const result = await runTaskPreflight({ prompt: 'write result.txt', scheduleSummary: 'once', deliverySummary: 'none', roots: [], outputDir: '/results', taskRevision: 2 }, {

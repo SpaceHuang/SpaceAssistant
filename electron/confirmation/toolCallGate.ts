@@ -89,7 +89,7 @@ import { analyzeShellCommand } from '../shell/analyzeShellCommand'
 import { classifyShellCommandEffect } from './extractors/shellEffectFacts'
 import { extractScriptPathFacts, type ScriptPathFacts } from './extractors/scriptPathFacts'
 import { getEffectiveSensitivePrefixes } from '../shell/shellSensitivePaths'
-import { matchAutomationGrepPermission, matchAutomationScriptPermission, matchAutomationShellPermission } from '../butler/automationTaskPermissionMatch'
+import { matchAutomationGrepPermission, matchAutomationMcpPermission, matchAutomationScriptPermission, matchAutomationShellPermission } from '../butler/automationTaskPermissionMatch'
 import { evaluateFileToolAutoApproval } from '../tools/writeFileAutoApproval'
 import { extractHostname } from '../browser/urlSecurity'
 import type { ActDangerAssessment } from '../browser/browserActionPolicy'
@@ -583,6 +583,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         }`
       }
     }
+    if (lane === 'automation') facts.signals.push({ kind: 'automation-mcp-permission', status: descriptorHashValid && matchAutomationMcpPermission(args.taskAccessPermissions, args.mcpEntry) ? 'matched' : 'missing' })
     result.mcpEntry = args.mcpEntry
     if (!payloadCheck.ok) {
       audit.record({

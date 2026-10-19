@@ -67,6 +67,35 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
+/** Stable, secret-free fingerprint for the configured connection identity used by host-issued task grants. */
+export function hashMcpServerProfile(profile: McpServerProfile): string {
+  return sha256(canonicalJson({
+    id: profile.id,
+    name: profile.name,
+    enabled: profile.enabled,
+    transport: profile.transport,
+    timeoutSec: profile.timeoutSec,
+    // Token rotation / expiry is runtime state; bind to configured auth identity and explicit per-tool grants.
+    auth: {
+      mode: profile.auth.mode,
+      headerName: profile.auth.headerName,
+      valuePrefix: profile.auth.valuePrefix,
+      oauthClientId: profile.auth.oauthClientId,
+      oauthScopes: profile.auth.oauthScopes
+    },
+    stdio: profile.stdio ? {
+      command: profile.stdio.command,
+      args: profile.stdio.args,
+      cwd: profile.stdio.cwd,
+      env: profile.stdio.env.map(({ key, valuePresent }) => ({ key, valuePresent }))
+    } : undefined,
+    http: profile.http,
+    enabledToolNames: profile.enabledToolNames,
+    publicReadOnlyTools: profile.publicReadOnlyTools,
+    accountAuthorizedTools: profile.accountAuthorizedTools
+  }))
+}
+
 export function hashMcpToolSchema(inputSchema: Record<string, unknown>): string {
   return sha256(canonicalJson(inputSchema))
 }
@@ -284,6 +313,8 @@ export type McpToolSnapshotEntry = {
   inputSchema: Record<string, unknown>
   schemaHash?: string
   descriptorHash?: string
+  /** Host-computed fingerprint for the connection/profile identity at snapshot time. */
+  profileHash?: string
   annotations?: McpToolAnnotations
 }
 
@@ -374,6 +405,7 @@ export function buildSnapshotTools(
       inputSchema: tool.inputSchema,
       ...(tool.schemaHash ? { schemaHash: tool.schemaHash } : {}),
       ...(tool.descriptorHash ? { descriptorHash: tool.descriptorHash } : {}),
+      ...(profile ? { profileHash: hashMcpServerProfile(profile) } : {}),
       ...(tool.annotations ? { annotations: tool.annotations } : {})
     })
   }

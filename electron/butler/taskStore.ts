@@ -94,6 +94,16 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
         && ((command as Record<string, unknown>).timeout === undefined || (typeof (command as Record<string, unknown>).timeout === 'number' && Number.isInteger((command as Record<string, unknown>).timeout) && Number((command as Record<string, unknown>).timeout) >= 1 && Number((command as Record<string, unknown>).timeout) <= 86400)))
     if (permission.kind === 'grep') return Array.isArray(permission.scopeRoots) && permission.scopeRoots.length > 0 && permission.scopeRoots.every((root) => typeof root === 'string')
     if (permission.kind === 'run-script') return Array.isArray(permission.scopeRoots) && permission.scopeRoots.length > 0 && permission.scopeRoots.every((root) => typeof root === 'string') && permission.scriptHashBinding === 'per-invocation'
+    if (permission.kind === 'mcp-tool') return typeof permission.serverId === 'string' && Boolean(permission.serverId)
+      && typeof permission.serverName === 'string' && Boolean(permission.serverName)
+      && typeof permission.toolName === 'string' && Boolean(permission.toolName)
+      && typeof permission.description === 'string' && permission.description.length <= 4000
+      && typeof permission.purpose === 'string' && Boolean(permission.purpose) && permission.purpose.length <= 240
+      && Array.isArray(permission.parameters) && permission.parameters.length <= 100 && permission.parameters.every((parameter) => parameter && typeof parameter === 'object'
+        && typeof (parameter as Record<string, unknown>).name === 'string' && Boolean((parameter as Record<string, unknown>).name)
+        && typeof (parameter as Record<string, unknown>).required === 'boolean')
+      && typeof permission.descriptorHash === 'string' && /^[a-f0-9]{64}$/.test(permission.descriptorHash)
+      && typeof permission.profileHash === 'string' && /^[a-f0-9]{64}$/.test(permission.profileHash)
     if (permission.kind === 'deliver-result') return ['desktop', 'feishu', 'wechat'].includes(String(permission.delivery)) && (permission.target === undefined || typeof permission.target === 'string')
     return false
   })

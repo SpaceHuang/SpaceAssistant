@@ -58,6 +58,10 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`automation-script-permission:${signal.status}`)
         break
+      case 'automation-mcp-permission':
+        tokens.add(signal.kind)
+        tokens.add(`automation-mcp-permission:${signal.status}`)
+        break
       case 'grep-invocation':
         tokens.add(signal.kind)
         break

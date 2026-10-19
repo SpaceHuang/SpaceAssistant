@@ -13,6 +13,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { probeWritePathFact } from './extractors/writePathFacts'
 import { probeReadPathFact } from './extractors/readPathFacts'
+import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 
 const shells: AppDatabase[] = []
 function openDb(): AppDatabase {
@@ -271,6 +272,35 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     }
   })
 
+  it('MCP 调用必须匹配任务收据中的服务配置和工具描述符，匹配后仍交安全审核 Agent', async () => {
+    const inputSchema = { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }
+    const descriptorHash = hashMcpToolDescription({ serverId: 'server-1', originalName: 'search', description: 'Search issues', inputSchema })
+    const profileHash = 'b'.repeat(64)
+    const entry = {
+      serverId: 'server-1', serverName: 'Issue Tracker', originalName: 'search', mappedName: 'mcp__server_1__search',
+      description: 'Search issues', inputSchema, schemaHash: hashMcpToolSchema(inputSchema), descriptorHash, profileHash
+    }
+    const permission = { kind: 'mcp-tool' as const, serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search',
+      description: 'Search issues', purpose: '查找指定问题', parameters: [{ name: 'query', required: true }], descriptorHash, profileHash }
+    const call = (recordPermissions: typeof permission[]) => evaluateToolCallGate(base({
+      lane: 'automation', toolName: entry.mappedName, toolInput: { query: 'latest issue' }, mcpEntry: entry,
+      taskAccessPermissions: { directories: [], tools: [], authorizationRecord: {
+        id: 'mcp-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision: 1,
+        permissions: recordPermissions
+      } }, appDb: openDb()
+    }))
+
+    const allowed = await call([permission])
+    const missing = await call([])
+    const changedDescriptor = await call([{ ...permission, descriptorHash: 'c'.repeat(64) }])
+
+    expect(allowed.facts.signals).toContainEqual({ kind: 'automation-mcp-permission', status: 'matched' })
+    expect(allowed.decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'agent' })
+    expect(missing.facts.signals).toContainEqual({ kind: 'automation-mcp-permission', status: 'missing' })
+    expect(missing.decision).toMatchObject({ type: 'deny', ruleId: 'automation-mcp-permission-missing-deny' })
+    expect(changedDescriptor.decision).toMatchObject({ type: 'deny', ruleId: 'automation-mcp-permission-missing-deny' })
+  })
+
   it('任务授权不会放行触及授权目录以外路径的命令', async () => {
     const authorizedRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-shell-authorized-')))
     const outsideRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-shell-outside-')))
@@ -331,7 +361,7 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     } finally { await fs.rm(workDir, { recursive: true, force: true }) }
   })
 
-  it('MCP 工具（mcp-tool 信号）在 automation lane 下落确认而非放行', async () => {
+  it('MCP 工具没有任务级收据时在 automation lane 下锁定拒绝', async () => {
     const r = await evaluateToolCallGate(
       base({
         lane: 'automation',
@@ -347,8 +377,8 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
         appDb: openDb()
       })
     )
-    // mcp-readonly-allow 仅限 desktop；automation 无 MCP 豁免 → require-confirm
-    expect(r.decision.type).toBe('require-confirm')
+    // Server 只读注解不构成任务级用户授权。
+    expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'automation-mcp-permission-missing-deny' })
   })
 })
 

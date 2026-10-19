@@ -16,8 +16,9 @@ import { readActiveLlmServiceIds, readLlmServices, readStoredModels } from '../l
 import { getConfigValue } from '../database'
 import { runTaskPreflight, type TaskPreflightAnalyzer } from './taskPreflight'
 import { createTaskPreflightModelAnalyzer } from './taskPreflightModelAnalyzer'
+import { buildSnapshotFromDb } from '../mcp/mcpToolRegistry'
 import { getPreflightIssueMessageKey, type PreflightReport, type ButlerTaskWriteResult } from '../../src/shared/automationTaskTypes'
-import type { AutomationOutputOrganization, AutomationTaskPermission, AutomationTaskAuthorizationRecord, AutomationTaskToolRequirement } from '../../src/shared/automationTaskTypes'
+import type { AutomationOutputOrganization, AutomationTaskMcpToolCandidate, AutomationTaskPermission, AutomationTaskAuthorizationRecord, AutomationTaskToolRequirement } from '../../src/shared/automationTaskTypes'
 
 /**
  * 管家 IPC（P6 任务 CRUD 面 + P4 手动触发）。渲染进程只表达意图：
@@ -91,16 +92,41 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
 
   async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; outputDir: string; modelId?: string; modelServiceId?: string; taskRevision: number; requestReceivedAt: number }) {
     if (input.schedule.kind === 'once' && input.schedule.at <= input.requestReceivedAt) {
-      return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: getPreflightIssueMessageKey('ONCE_AT_NOT_FUTURE') }], suggestedDirectories: [] }, bindings: [] }
+      return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: getPreflightIssueMessageKey('ONCE_AT_NOT_FUTURE') }], suggestedDirectories: [] }, bindings: [], factsDigest: undefined, requiredPermissions: [], mcpTools: [] }
     }
-    return preflight({
+    const mcpTools = [...buildSnapshotFromDb(db, { admission: 'deferred' }).entries.values()].flatMap((entry): AutomationTaskMcpToolCandidate[] => {
+      if (!entry.descriptorHash || !entry.profileHash) return []
+      const properties = entry.inputSchema.properties && typeof entry.inputSchema.properties === 'object' && !Array.isArray(entry.inputSchema.properties)
+        ? entry.inputSchema.properties as Record<string, unknown>
+        : {}
+      const required = new Set(Array.isArray(entry.inputSchema.required)
+        ? entry.inputSchema.required.filter((name): name is string => typeof name === 'string')
+        : [])
+      const parameters = Object.entries(properties).slice(0, 50).map(([name, raw]) => {
+        const parameter = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
+        return {
+          name,
+          required: required.has(name),
+          ...(typeof parameter.type === 'string' ? { type: parameter.type.slice(0, 80) } : {}),
+          ...(typeof parameter.description === 'string' ? { description: parameter.description.slice(0, 160) } : {})
+        }
+      })
+      return [{
+        serverId: entry.serverId, serverName: entry.serverName, toolName: entry.originalName,
+        description: entry.description, parameters,
+        descriptorHash: entry.descriptorHash, profileHash: entry.profileHash
+      }]
+    })
+    const result = await preflight({
       prompt: input.prompt,
       scheduleSummary: JSON.stringify(input.schedule),
       deliverySummary: input.deliveryPref,
       roots: input.roots,
       outputDir: input.outputDir,
-      taskRevision: input.taskRevision
+      taskRevision: input.taskRevision,
+      mcpTools
     }, { analyzer: createAnalyzer({ modelId: input.modelId, modelServiceId: input.modelServiceId }) })
+    return { ...result, mcpTools }
   }
 
   function preflightFailure(result: Awaited<ReturnType<typeof inspectTask>>): ButlerTaskWriteResult | undefined {
@@ -113,7 +139,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     return raw === 'direct' || raw === 'daily' || raw === 'hourly' ? raw : undefined
   }
 
-  function buildPermissionList(task: { authorizedDirs: string[]; outputDir: string; outputOrganization: AutomationOutputOrganization; deliveryPref: 'desktop' | 'feishu' | 'wechat' | 'none'; deliveryTarget?: string }, requiredPermissions: readonly AutomationTaskToolRequirement[]): AutomationTaskPermission[] {
+  function buildPermissionList(task: { authorizedDirs: string[]; outputDir: string; outputOrganization: AutomationOutputOrganization; deliveryPref: 'desktop' | 'feishu' | 'wechat' | 'none'; deliveryTarget?: string }, requiredPermissions: readonly AutomationTaskToolRequirement[], mcpTools: readonly AutomationTaskMcpToolCandidate[] = []): AutomationTaskPermission[] {
     const permissions: AutomationTaskPermission[] = task.authorizedDirs.map((path) => ({ kind: 'directory-read-write', path }))
     permissions.push({ kind: 'result-write', outputDirectory: task.outputDir, organization: task.outputOrganization })
     const shellRequirements = requiredPermissions.filter((permission): permission is Extract<AutomationTaskToolRequirement, { tool: 'run_shell' }> => permission.tool === 'run_shell')
@@ -122,6 +148,18 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     if (grepRoots.length) permissions.push({ kind: 'grep', scopeRoots: grepRoots })
     const scriptRoots = [...new Set(requiredPermissions.filter((permission) => permission.tool === 'run_script').flatMap((permission) => permission.tool === 'run_script' ? permission.scopeRoots : []))]
     if (scriptRoots.length) permissions.push({ kind: 'run-script', scopeRoots: scriptRoots, scriptHashBinding: 'per-invocation' })
+    const mcpRequirements = requiredPermissions.filter((permission): permission is Extract<AutomationTaskToolRequirement, { tool: 'mcp' }> => permission.tool === 'mcp')
+    const seenMcp = new Set<string>()
+    for (const requirement of mcpRequirements) {
+      const candidate = mcpTools.find((tool) => tool.serverId === requirement.serverId && tool.toolName === requirement.toolName)
+      if (!candidate || !candidate.descriptorHash || !candidate.profileHash) continue
+      const key = `${candidate.serverId}\0${candidate.toolName}`
+      if (seenMcp.has(key)) continue
+      seenMcp.add(key)
+      permissions.push({ kind: 'mcp-tool', serverId: candidate.serverId, serverName: candidate.serverName, toolName: candidate.toolName,
+        description: candidate.description, purpose: requirement.purpose, parameters: candidate.parameters,
+        descriptorHash: candidate.descriptorHash, profileHash: candidate.profileHash })
+    }
     if (task.deliveryPref !== 'none') permissions.push({ kind: 'deliver-result', delivery: task.deliveryPref, ...(task.deliveryTarget ? { target: task.deliveryTarget } : {}) })
     return permissions
   }
@@ -259,7 +297,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       reasoningEffort: config.reasoningEffort,
       ...(payload?.enabled !== undefined ? { enabled: payload.enabled } : {})
     }
-    const permissions = buildPermissionList({ authorizedDirs, outputDir: outputResult.outputDir, outputOrganization, deliveryPref, ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}) }, inspection.requiredPermissions ?? [])
+    const permissions = buildPermissionList({ authorizedDirs, outputDir: outputResult.outputDir, outputOrganization, deliveryPref, ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}) }, inspection.requiredPermissions ?? [], inspection.mcpTools)
     return stageAuthorizationReview({
       permissions,
       report: inspection.report,
@@ -350,7 +388,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       outputOrganization,
       deliveryPref: candidate.deliveryPref,
       ...(candidate.deliveryTarget ? { deliveryTarget: candidate.deliveryTarget } : {})
-    }, inspection.requiredPermissions ?? [])
+    }, inspection.requiredPermissions ?? [], inspection.mcpTools)
     return stageAuthorizationReview({
       taskId: id,
       expectedCurrentTaskRevision: existing.taskRevision ?? 0,

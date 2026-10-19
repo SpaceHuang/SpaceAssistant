@@ -159,7 +159,9 @@ describe('buildButlerSystemAppendix tool scopes', () => {
       permissions: [
         { kind: 'local-shell', scopeRoots: ['/workspace/repo'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/workspace/repo', timeout: 30 }] },
         { kind: 'grep', scopeRoots: ['/workspace/repo/src'] },
-        { kind: 'run-script', scopeRoots: ['/workspace/repo'], scriptHashBinding: 'per-invocation' }
+        { kind: 'run-script', scopeRoots: ['/workspace/repo'], scriptHashBinding: 'per-invocation' },
+        { kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues',
+          purpose: 'Find recent issues', parameters: [{ name: 'query', required: true }], descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64) }
       ]
     } })
 
@@ -168,6 +170,10 @@ describe('buildButlerSystemAppendix tool scopes', () => {
     expect(appendix).toContain('SHA-256')
     expect(appendix).toContain('完整参数')
     expect(appendix).toContain('超时=30s')
+    expect(appendix).toContain('Issue Tracker/search_issues')
+    expect(appendix).toContain('Find recent issues')
+    expect(appendix).toContain('具体参数仍交由安全审核 Agent')
+    expect(buildButlerSystemAppendix({ directories: ['/workspace/repo'], tools: [] })).toContain('本任务未获批任何 MCP 工具')
     expect(buildButlerSystemAppendix({ directories: ['/workspace/repo'], tools: ['run_shell'] })).toContain('本任务未获批 run_shell')
   })
 })

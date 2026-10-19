@@ -26,7 +26,7 @@ import type { SessionStorage } from '../sessionStorage/contracts'
 import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
-import { buildSnapshotFromDb, getCachedTools, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
+import { buildSnapshotFromDb, getCachedTools, hashMcpServerProfile, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
 import { resolveRequestLocale } from '../llmSystemPrompt'
 import { resolvePublicMcpReadAuthorization } from '../mcp/publicMcpReadTrust'
 import { isPolicyPackage } from '../../src/shared/policy/policyPackages'
@@ -214,25 +214,6 @@ function mergeImOrchestrationFixtureRegistry(
   for (const tool of base.entries()) merged.register(tool)
   for (const tool of fixture.entries()) merged.register(tool)
   return merged
-}
-
-function mcpConnectionFingerprint(profile: import('../../src/shared/mcpTypes').McpServerProfile): string {
-  return createHash('sha256').update(JSON.stringify({
-    id: profile.id, enabled: profile.enabled, transport: profile.transport, timeoutSec: profile.timeoutSec,
-    // Token rotation / expiry is expected runtime state. Bind to the configured auth
-    // identity instead, so OAuth refresh does not revoke later calls in this turn.
-    auth: {
-      mode: profile.auth.mode,
-      headerName: profile.auth.headerName,
-      valuePrefix: profile.auth.valuePrefix,
-      oauthClientId: profile.auth.oauthClientId,
-      oauthScopes: profile.auth.oauthScopes
-    },
-    stdio: profile.stdio ? { command: profile.stdio.command, args: profile.stdio.args, cwd: profile.stdio.cwd,
-      env: profile.stdio.env.map(({ key, valuePresent }) => ({ key, valuePresent })) } : undefined,
-    http: profile.http,
-    enabledToolNames: profile.enabledToolNames
-  })).digest('hex')
 }
 
 /** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
@@ -652,7 +633,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const mcpProbeProfilesById: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile> | undefined = db && mcpSnapshotRaw.entries.size > 0
     ? new Map(listProfiles(db).map((p) => [p.id, p]))
     : undefined
-  const mcpProfileFingerprints = new Map([...(mcpProbeProfilesById?.values() ?? [])].map((profile) => [profile.id, mcpConnectionFingerprint(profile)]))
+  const mcpProfileFingerprints = new Map([...(mcpProbeProfilesById?.values() ?? [])].map((profile) => [profile.id, hashMcpServerProfile(profile)]))
   const mcpResolveExecutor = db
     ? (toolName: string, manager: McpConnectionManager, profilesById?: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile>) => {
         const entry = mcpSnapshotRaw.entries.get(toolName)
@@ -661,7 +642,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         if (!profile) return undefined
         const oauthProvider =
           profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(db, profile) : undefined
-        const expectedProfileFingerprint = mcpProfileFingerprints.get(profile.id) ?? mcpConnectionFingerprint(profile)
+        const expectedProfileFingerprint = mcpProfileFingerprints.get(profile.id) ?? hashMcpServerProfile(profile)
         return createMcpToolExecutor(entry, {
           getSession: (serverId: string) =>
             manager.connect(profile, async (kind) => getSecret(db, serverId, kind), { oauthProvider }),
@@ -669,7 +650,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           expectedProfileFingerprint,
           getCurrentProfileFingerprint: (currentServerId) => {
             const current = listProfiles(db).find((candidate) => candidate.id === currentServerId)
-            return current ? mcpConnectionFingerprint(current) : undefined
+            return current ? hashMcpServerProfile(current) : undefined
           },
           getCurrentTool: (serverId, originalName) => {
             const currentProfile = listProfiles(db).find((candidate) => candidate.id === serverId)
