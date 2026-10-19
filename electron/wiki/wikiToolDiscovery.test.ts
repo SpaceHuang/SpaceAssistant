@@ -20,10 +20,21 @@ describe('Wiki domain tool discovery', () => {
     expect(registry.get('memory.wiki_read_source')).toBeDefined()
     expect(registry.get('memory.wiki_list_page_revisions')).toBeDefined()
     expect(registry.get('memory.wiki_restore_page')).toBeDefined()
+    expect(registry.get('memory.wiki_save_page')).toBeDefined()
+    expect(registry.get('memory.wiki_move_page')).toBeDefined()
+    expect(registry.get('memory.wiki_save_page')?.kind).toBe('planned')
+    expect(registry.get('memory.wiki_move_page')?.kind).toBe('planned')
     expect(registry.get('memory.wiki_apply_restore')).toBeDefined()
     expect(registry.get('memory.wiki_propose_schema_change')).toBeDefined()
     expect(registry.get('memory.wiki_update_schema')).toBeDefined()
     expect(WIKI_DOMAIN_TOOL_DEFINITIONS.find(tool => tool.name === 'memory.wiki_update_schema')?.input_schema).toMatchObject({ required: ['proposalId', 'expectedSchemaVersion', 'proposalDiff'] })
+    expect(WIKI_DOMAIN_TOOL_DEFINITIONS.find(tool => tool.name === 'memory.wiki_move_page')?.input_schema).toMatchObject({ required: ['pageId', 'expectedRevision'] })
+  })
+
+  it('registers every advertised Wiki operation in the runtime registry', () => {
+    const registry = createBuiltinToolRegistry()
+    const missing = WIKI_DOMAIN_TOOL_DEFINITIONS.filter(tool => !registry.get(tool.name)).map(tool => tool.name)
+    expect(missing).toEqual([])
   })
 
   it('returns operation names, use descriptions, and complete schemas for matching tools', () => {

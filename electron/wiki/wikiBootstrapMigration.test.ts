@@ -7,6 +7,7 @@ import { createWikiBootstrapMigrationService } from './wikiBootstrapMigration'
 import { createWikiMigrationCoordinator } from './wikiMigrationCoordinator'
 import { DEFAULT_SCHEMA_MD } from './wikiTemplates'
 import { serializeWikiPageMarker } from './wikiReconciler'
+import { buildWikiIndex, buildWikiLog } from './wikiProjection'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -65,13 +66,13 @@ describe('Wiki bootstrap migration approval service', () => {
     roots.push(root)
     await mkdir(path.join(root, 'wiki', 'topics'), { recursive: true })
     await writeFile(path.join(root, 'SCHEMA.md'), DEFAULT_SCHEMA_MD)
-    await writeFile(path.join(root, 'wiki', 'index.md'), '# Wiki Index\n')
-    await writeFile(path.join(root, 'wiki', 'log.md'), '')
+    await writeFile(path.join(root, 'wiki', 'index.md'), buildWikiIndex([{ pageId: 'known-page', title: 'Known', categoryId: 'topic', path: 'wiki/topics/known.md', revision: 1 }]))
+    await writeFile(path.join(root, 'wiki', 'log.md'), buildWikiLog([]))
     await writeFile(path.join(root, 'wiki', 'topics', 'known.md'), `${serializeWikiPageMarker({ pageId: 'known-page', categoryId: 'topic', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })}\n# Known\n\nBody\n`)
     await createWikiLifecycleController(root).initialize()
     const service = createWikiBootstrapMigrationService(root)
     const preview = await service.preview()
-    expect(preview.changes).toHaveLength(0)
+    expect(preview.changes).toEqual([])
     expect(preview.diagnostics).toEqual([])
     await expect(service.apply(preview.manifestHash)).resolves.toEqual({ status: 'completed' })
     expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'domain_ready' })

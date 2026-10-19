@@ -76,6 +76,8 @@ let clarificationRecoveryTimer: ReturnType<typeof setInterval> | null = null
 let unregisterFeishuTodoInvalidator: (() => void) | null = null
 let unregisterFeishuPendingCancel: (() => void) | null = null
 let unregisterFeishuCacheClearer: (() => void) | null = null
+let unregisterFeishuAuditAppender: (() => void) | null = null
+const pendingFeishuAuditWrites = new Set<Promise<void>>()
 
 function notifyFeishuConfigChanged(cfg: FeishuConfig): void {
   getMainWindow()?.webContents?.send('feishu:config-changed', { feishu: cfg })
@@ -238,8 +240,11 @@ export function createFeishuBundle(deps: {
         ? new SqliteDecisionCache(getDbConnection(deps.db)).clearLane('feishu', 'session')
         : 0
   }, 'feishu-decision-cache')
-  remoteAuthorizationRegistry.registerAuditAppender((event) => {
-    void auditLogger.append(event as { type: string })
+  unregisterFeishuAuditAppender?.()
+  unregisterFeishuAuditAppender = remoteAuthorizationRegistry.registerAuditAppender((event) => {
+    const write = auditLogger.append(event as { type: string })
+    pendingFeishuAuditWrites.add(write)
+    void write.then(() => pendingFeishuAuditWrites.delete(write), () => pendingFeishuAuditWrites.delete(write))
   })
 
   const ownerBind = new FeishuOwnerBindController({
@@ -409,6 +414,9 @@ export async function shutdownFeishuServices(): Promise<void> {
   unregisterFeishuPendingCancel = null
   unregisterFeishuCacheClearer?.()
   unregisterFeishuCacheClearer = null
+  unregisterFeishuAuditAppender?.()
+  unregisterFeishuAuditAppender = null
+  while (pendingFeishuAuditWrites.size) await Promise.allSettled([...pendingFeishuAuditWrites])
   logFeishuCliEvent('info', 'feishu.service.shutdown', {})
   await flushFeishuCliLogger()
 }

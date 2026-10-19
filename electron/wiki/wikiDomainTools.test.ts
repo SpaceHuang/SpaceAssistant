@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
-import { applyWikiRestoreForContext, createWikiDomainTools, importWikiSourceForContext, listWikiPageRevisionsForContext, openWikiPageForContext, prepareWikiRestoreForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, searchWikiCatalog, searchWikiForContext, updateWikiSchemaForContext } from './wikiDomainTools'
+import { applyWikiRestoreForContext, createWikiDomainTools, importWikiSourceForContext, listWikiPageRevisionsForContext, moveWikiPageForContext, openWikiPageForContext, prepareWikiRestoreForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, saveWikiPageForContext, searchWikiCatalog, searchWikiForContext, updateWikiSchemaForContext } from './wikiDomainTools'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { createHash } from 'node:crypto'
@@ -20,6 +20,50 @@ async function storeWrite(root: string, relativePath: string, body: string): Pro
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
 
 describe('Wiki domain search tool', () => {
+  it('saves and moves pages through the domain coordinator, including an omitted root parent', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n')
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-write', lane: 'desktop', requestId: 'request-save', toolUseId: 'tool-save' }
+
+    const created = await saveWikiPageForContext({ title: 'Parent', categoryId: 'topic', summary: 'parent', markdown: 'parent body', schemaVersion: 1 }, context)
+    expect(created).toMatchObject({ success: true, data: { revision: 1 } })
+    const parentPageId = (created as { data: { pageId: string } }).data.pageId
+    const child = await saveWikiPageForContext({ title: 'Child', categoryId: 'topic', summary: 'child', markdown: 'child body', schemaVersion: 1 }, { ...context, requestId: 'request-child', toolUseId: 'tool-child' })
+    const childPageId = (child as { data: { pageId: string } }).data.pageId
+    expect(await saveWikiPageForContext({ pageId: childPageId, expectedRevision: 1, title: 'Child', categoryId: 'topic', summary: 'child', markdown: 'child body', schemaVersion: 1, parentPageId }, { ...context, requestId: 'request-reparent', toolUseId: 'tool-reparent' })).toMatchObject({ success: false, error: 'wiki_page_input_invalid' })
+
+    const moved = await moveWikiPageForContext({ pageId: childPageId, parentPageId, expectedRevision: 1 }, { ...context, requestId: 'request-move', toolUseId: 'tool-move' })
+    expect(moved).toMatchObject({ success: true, data: { pageId: childPageId, revision: 2 } })
+    expect((await store.readCatalog())?.pages.find(page => page.pageId === childPageId)?.parentPageId).toBe(parentPageId)
+    const toRoot = await moveWikiPageForContext({ pageId: childPageId, expectedRevision: 2 }, { ...context, requestId: 'request-root', toolUseId: 'tool-root' })
+    expect(toRoot).toMatchObject({ success: true, data: { pageId: childPageId, revision: 3 } })
+    expect((await store.readCatalog())?.pages.find(page => page.pageId === childPageId)?.parentPageId).toBeNull()
+  })
+
+  it('rejects save calls with unbound source revisions and missing invocation identity', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n')
+    const sourceId = '01234567-89ab-cdef-0123-456789abcdef'
+    await store.write(`.wiki-service/sources/${sourceId}.json`, JSON.stringify({ formatVersion: 1, sourceId, sourceRevision: 2, displayName: 'source.md', rawPath: 'raw/project/source.md' }))
+    await store.writeImmutable(`.wiki-service/source-history/${sourceId}/1.md`, Buffer.from('source revision one'))
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-write', lane: 'desktop', requestId: 'request-invalid', toolUseId: 'tool-invalid' }
+    expect(await saveWikiPageForContext({ title: 'Invalid', categoryId: 'topic', summary: '', markdown: 'body', schemaVersion: 1, sourceRefs: [{ sourceId, sourceRevision: 2 }] }, context)).toMatchObject({ success: false, error: 'source_missing' })
+    const valid = await saveWikiPageForContext({ title: 'Valid', categoryId: 'topic', summary: '', markdown: 'body', schemaVersion: 1, sourceRefs: [{ sourceId, sourceRevision: 1 }] }, { ...context, requestId: 'request-valid', toolUseId: 'tool-valid' })
+    expect(valid).toMatchObject({ success: true, data: { revision: 1 } })
+    expect(await saveWikiPageForContext({ title: 'Invalid', categoryId: 'topic', summary: '', markdown: 'body', schemaVersion: 1 }, { ...context, requestId: '' })).toMatchObject({ success: false, error: 'wiki_invocation_invalid' })
+    const saved = (await store.readCatalog())?.pages[0]
+    expect(saved).toMatchObject({ title: 'Valid', revision: 1 })
+    expect(await store.readText(saved!.path)).toContain(`\"sourceId\":\"${sourceId}\"`)
+  })
+
   it('searches only catalog metadata, returns page IDs and bounded summaries, and never returns paths', async () => {
     const store = createWikiFileStore(tempRoot())
     await store.writeCatalog({ formatVersion: 1, pages: [

@@ -67,6 +67,8 @@ let clarificationRecoveryTimer: ReturnType<typeof setInterval> | null = null
 let unregisterWeChatTodoInvalidator: (() => void) | null = null
 let unregisterWeChatPendingCancel: (() => void) | null = null
 let unregisterWeChatCacheClearer: (() => void) | null = null
+let unregisterWeChatAuditAppender: (() => void) | null = null
+const pendingWeChatAuditWrites = new Set<Promise<void>>()
 
 export function readWeChatConfigFromDb(db: AppDatabase): WeChatConfig {
   ensureRemoteImModelConfigMigrated(db)
@@ -260,8 +262,11 @@ export function createWeChatBundle(deps: {
         ? new SqliteDecisionCache(getDbConnection(deps.db)).clearLane('wechat', 'session')
         : 0
   }, 'wechat-decision-cache')
-  remoteAuthorizationRegistry.registerAuditAppender((event) => {
-    void auditLogger.append(event as { type: string })
+  unregisterWeChatAuditAppender?.()
+  unregisterWeChatAuditAppender = remoteAuthorizationRegistry.registerAuditAppender((event) => {
+    const write = auditLogger.append(event as { type: string })
+    pendingWeChatAuditWrites.add(write)
+    void write.then(() => pendingWeChatAuditWrites.delete(write), () => pendingWeChatAuditWrites.delete(write))
   })
 
   const router = new WeChatCommandRouter({
@@ -400,8 +405,12 @@ export async function shutdownWeChatServices(): Promise<void> {
   unregisterWeChatPendingCancel = null
   unregisterWeChatCacheClearer?.()
   unregisterWeChatCacheClearer = null
+  unregisterWeChatAuditAppender?.()
+  unregisterWeChatAuditAppender = null
+  while (pendingWeChatAuditWrites.size) await Promise.allSettled([...pendingWeChatAuditWrites])
   logWeChatCliEvent('info', 'wechat.service.shutdown', {})
   await flushWeChatCliLogger()
+  bundle = null
 }
 
 export function registerWeChatIpcHandlers(

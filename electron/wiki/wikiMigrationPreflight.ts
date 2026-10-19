@@ -89,6 +89,16 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
   const files: WikiMigrationPreflightReport['files'] = []
   const review: WikiMigrationPreflightReport['review'] = { indexNotes: [], unclassifiedIndexContent: [], readonlyLogArchives: [] }
   const pageIds = new Set<string>()
+  const currentProjectionPages: WikiProjectionPage[] = []
+  let allPagesAreDomainFormatted = true
+  for (const candidate of input.files) {
+    const candidatePath = normalizeWikiRelativePath(candidate.path)
+    if (!/^wiki\/.+\.md$/i.test(candidatePath) || /^(?:wiki\/)?(?:index|log)\.md$/i.test(candidatePath)) continue
+    const parsed = parseWikiPageMarker(candidate.content)
+    const title = /^#\s+(.+?)\s*#*\s*$/m.exec(parsed.body)?.[1]?.trim()
+    if (!parsed.marker || !title) { allPagesAreDomainFormatted = false; continue }
+    currentProjectionPages.push({ pageId: parsed.marker.pageId, title, categoryId: parsed.marker.categoryId, summary: parsed.marker.summary, path: candidatePath, revision: parsed.marker.revision, parentPageId: parsed.marker.parentPageId })
+  }
   for (const file of [...input.files].sort((a, b) => a.path.localeCompare(b.path))) {
     const normalized = normalizeWikiRelativePath(file.path)
     const sha256 = sha(file.content)
@@ -103,6 +113,7 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
     }
     files.push({ path: normalized, sha256, kind })
     if (kind === 'legacy-index') {
+      if (allPagesAreDomainFormatted && file.content === buildWikiIndex(currentProjectionPages)) continue
       const indexReview = reviewLegacyIndex(normalized, file.content)
       review.indexNotes.push(...indexReview.notes)
       review.unclassifiedIndexContent.push(...indexReview.unclassified)
@@ -122,7 +133,7 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
       continue
     }
     if (kind === 'legacy-log') {
-      if (!file.content.trim()) continue
+      if (!file.content.trim() || isGeneratedWikiLog(file.content)) continue
       const archivePath = `.wiki-service/migrations/history/${sha(normalized).slice(0, 12)}-${pathSafeBase(normalized)}`
       review.readonlyLogArchives.push({ sourcePath: normalized, archivePath, sha256 })
       changes.push({ objectKind: 'legacy-log-archive', relativePath: archivePath, oldHash: sha(''), newBytes: file.content })
@@ -204,10 +215,15 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
     ['wiki/log.md', 'log-projection', buildWikiLog([])],
   ] as const) {
     const existing = input.files.find(file => normalizeWikiRelativePath(file.path) === relativePath)
-    if (existing) changes.push({ objectKind, relativePath, oldHash: sha(existing.content), newBytes })
+    if (existing && existing.content !== newBytes) changes.push({ objectKind, relativePath, oldHash: sha(existing.content), newBytes })
   }
   const manifestHash = sha(JSON.stringify({ files: files.map(({ path, sha256 }) => [path, sha256]), changes: changes.map(({ relativePath, oldHash, newBytes }) => [relativePath, oldHash, sha(newBytes)]), review }))
   return { categories, files, diagnostics, manifestHash, writesFiles: false, changes, review }
+}
+
+function isGeneratedWikiLog(content: string): boolean {
+  const lines = content.replace(/\r\n/g, '\n').split('\n')
+  return lines[0] === '# Wiki Operation Log' && lines.slice(1).every(line => !line.trim() || /^- .+ \(revision [1-9]\d*; [0-9a-f]{64}\)$/.test(line))
 }
 
 /** Read-only scan; follows no symlink and accepts no caller-provided absolute paths. */

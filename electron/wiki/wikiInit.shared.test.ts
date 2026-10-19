@@ -15,6 +15,7 @@ import { insertWikiProject, markWikiProjectOrphan } from './wikiProjectStore'
 import { DEFAULT_WIKI_CONFIG, type WikiConfig } from '../../src/shared/domainTypes'
 import { DEFAULT_SCHEMA_MD } from './wikiTemplates'
 import { serializeWikiPageMarker } from './wikiReconciler'
+import { buildWikiIndex, buildWikiLog } from './wikiProjection'
 
 const dirs: string[] = []
 
@@ -101,8 +102,8 @@ describe('initWikiStructure 共享根（T1.12a）', () => {
     const root = path.join(userData, 'llm-wiki')
     fs.mkdirSync(path.join(root, 'wiki', 'topics'), { recursive: true })
     fs.writeFileSync(path.join(root, 'SCHEMA.md'), DEFAULT_SCHEMA_MD)
-    fs.writeFileSync(path.join(root, 'wiki', 'index.md'), '# Wiki Index\n')
-    fs.writeFileSync(path.join(root, 'wiki', 'log.md'), '')
+    fs.writeFileSync(path.join(root, 'wiki', 'index.md'), buildWikiIndex([{ pageId: 'known-page', title: 'Known', categoryId: 'topic', path: 'wiki/topics/known.md', revision: 1 }]))
+    fs.writeFileSync(path.join(root, 'wiki', 'log.md'), buildWikiLog([]))
     fs.writeFileSync(path.join(root, 'wiki', 'topics', 'known.md'), `${serializeWikiPageMarker({ pageId: 'known-page', categoryId: 'topic', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })}\n# Known\n\nBody\n`)
     await initWikiStructure(workDir, wikiConfig(), { userDataPath: userData })
     expect(await createWikiLifecycleController(root).read()).toMatchObject({ lifecycle: 'domain_ready', initialization: 'existing-content' })
