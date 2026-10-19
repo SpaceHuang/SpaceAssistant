@@ -68,6 +68,38 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(createAnthropicClient).toHaveBeenCalledWith('api-key', 'https://model.test', { maxRetries: 0 })
   })
 
+  it('uses Anthropic-safe aliases for runtime tool names with dots and maps calls back to the Mock adapter', async () => {
+    const dottedTool = { name: 'history.read', description: 'Read compressed history', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }
+    create
+      .mockResolvedValueOnce({
+        content: [{ type: 'tool_use', id: 'history-call', name: 'preflight_tool_1', input: { query: 'recent decisions' } }],
+        stop_reason: 'tool_use', usage: { output_tokens: 9 }
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"targets":[],"requiredPermissions":[],"clarifications":[],"suggestedDirectories":[]}' }],
+        stop_reason: 'end_turn', usage: { output_tokens: 18 }
+      })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    const output = await analyzer.analyze({
+      prompt: 'Review recent decisions', scheduleSummary: 'once', deliverySummary: 'none', authorizedRoots: [],
+      facts: {} as never, tools: [dottedTool], responseFormat: 'json'
+    }, new AbortController().signal)
+
+    expect(create.mock.calls[0]?.[0].tools).toEqual([{
+      name: 'preflight_tool_1',
+      description: expect.stringContaining('history.read'),
+      input_schema: dottedTool.inputSchema
+    }])
+    expect(create.mock.calls[1]?.[0].messages[1]).toEqual({
+      role: 'assistant', content: [{ type: 'tool_use', id: 'history-call', name: 'preflight_tool_1', input: { query: 'recent decisions' } }]
+    })
+    expect(output.mockTrace).toEqual([{
+      kind: 'proposed-tool-call', toolName: 'history.read', input: { query: 'recent decisions' },
+      dispatch: 'simulated', resultKind: 'synthetic'
+    }])
+  })
+
   it('simulates filesystem, shell, script, MCP, network, and delivery calls without dispatching real tools', async () => {
     const names = ['read_file', 'write_file', 'grep', 'run_shell', 'run_script', 'mcp_issue_search', 'browser_navigate', 'send_message']
     const tools = names.map((name) => ({ name, description: `${name} tool`, inputSchema: { type: 'object' } }))

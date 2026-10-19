@@ -976,7 +976,7 @@
       "once_at_not_future": "The run time must be in the future. Choose a later time.",
       "root_facts_unavailable": "The selected work directories could not be checked. Confirm they exist and are accessible.",
       "facts_incomplete": "The selected work directories could not be checked completely, so the target cannot be confirmed. Narrow the directory scope and try again.",
-      "analyzer_unavailable": "The task model could not be reached for preflight. Check the model settings and network connection, then try again.",
+      "analyzer_unavailable": "The preflight service could not complete the request, so the task was not saved. Try again later; if it keeps happening, contact the application maintainer.",
       "analyzer_timeout": "The task model did not finish preflight within 60 seconds. The model settings may still be valid. Try again later or narrow the authorized directory scope.",
       "analyzer_invalid_response": "The task model returned a preflight result that could not be understood. Try again; if this continues, check the selected model service.",
       "mock_preflight_incomplete": "The preflight rehearsal reached its time or call limit. The collected calls are simulated records and do not establish the full permission scope; narrow the task and try again.",
