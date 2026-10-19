@@ -656,7 +656,7 @@ export function ButlerTaskSettings() {
                       key={candidate.path}
                       checked={authorizedDirs.includes(candidate.path)}
                       disabled={candidate.validationStatus !== 'valid'}
-                      aria-label={t('butler.form.suggestedDirectoryAria', { path: candidate.path, purpose: candidate.purpose })}
+                      aria-label={t('butler.form.suggestedDirectoryAria', { path: candidate.path, purpose: candidate.purposeKey ? t(candidate.purposeKey as Parameters<TaskActions['t']>[0]) : candidate.purpose ?? '' })}
                       onChange={(event) => {
                         const directories = event.target.checked ? [...new Set([...authorizedDirs, candidate.path])] : authorizedDirs.filter((root) => root !== candidate.path)
                         setAuthorizedDirs(directories)
@@ -665,7 +665,7 @@ export function ButlerTaskSettings() {
                       }}
                     >
                       <span className="butler-preflight-report__candidate-path">{candidate.path}</span>
-                      <span className="butler-preflight-report__candidate-purpose">{candidate.purpose}</span>
+                      <span className="butler-preflight-report__candidate-purpose">{candidate.purposeKey ? t(candidate.purposeKey as Parameters<TaskActions['t']>[0]) : candidate.purpose}</span>
                     </Checkbox>
                   ))}
                 </div> : null}

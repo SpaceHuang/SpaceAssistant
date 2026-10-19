@@ -979,17 +979,19 @@
       "analyzer_unavailable": "The task model could not be reached for preflight. Check the model settings and network connection, then try again.",
       "analyzer_timeout": "The task model did not finish preflight within 60 seconds. The model settings may still be valid. Try again later or narrow the authorized directory scope.",
       "analyzer_invalid_response": "The task model returned a preflight result that could not be understood. Try again; if this continues, check the selected model service.",
+      "mock_preflight_incomplete": "The preflight rehearsal reached its time or call limit. The collected calls are simulated records and do not establish the full permission scope; narrow the task and try again.",
       "target_unclear": "The file, directory, or scope to process could not be identified. Add a specific target to the task prompt.",
       "target_ambiguous": "This description matches multiple locations. Choose one candidate and add its full path to the task prompt.",
       "target_not_found": "This target was not found in the authorized read/write directories. Check its name or add the directory that contains it.",
       "target_outside_roots": "This target is outside the authorized directories. Add its read/write directory or change the target path in the task prompt.",
       "target_unverifiable": "This target could not be verified safely. Use a regular file or directory inside the selected work directories.",
       "target_type_mismatch": "The target found does not match the requested file or directory type. Check the name.",
-      "tool_permission_required": "This task needs local command access, but no material directory is available to scope that access. Add the directory containing the target repository or materials to the authorized read/write list, then run preflight again.",
+      "tool_permission_required": "This task needs local tool access. Review the permission requirements below and add the relevant material directory to the authorized read/write list, then run preflight again.",
       "no_roots": "Add an authorized read/write directory that this task can access.",
       "output_path_escape": "The output location is outside the selected work directories. Move it inside one of the selected directories.",
       "output_ancestor_invalid": "The parent directory for this output could not be verified. Check the output path and choose an existing work directory.",
       "selector_unsupported": "This batch target scope is not supported. Specify a file type or directory in the task prompt.",
+      "output_root_read_candidate_purpose": "Read local history from this Git repository; authorize it separately as a read/write directory",
       "reasons": {
         "no_target_identified": "No specific file, directory, or scope could be identified in the task description.",
         "scope_unclear": "It is unclear which items or scope this description refers to.",
@@ -997,6 +999,7 @@
         "multiple_matches": "This name matches multiple locations, so one must be specified.",
         "target_missing": "The requested target is not in the authorized read/write directories.",
         "git_repository_not_found": "No Git repository was found in the authorized directories. Add the target repository root to the authorized read/write directories, then run preflight again.",
+        "output_root_not_read_authorized": "A Git repository was detected in the selected output directory, but that directory only allows result writes and does not authorize reads. To query its local Git history, add it separately to the authorized read/write directories. If the target is elsewhere, select that directory instead.",
         "capability_not_authorized": "This task needs local Shell access, but it has not been authorized.",
         "other": "This description needs more information to identify the target."
       }

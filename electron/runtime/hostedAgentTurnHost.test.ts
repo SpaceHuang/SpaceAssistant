@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
 import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
@@ -716,11 +717,22 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
         toolsConfig: { scriptTimeout: 10, pythonPath: 'python', scriptInterpreterPaths: {} },
         effectiveRules: [], decisionCache: {}, shellPrecheck: { touchTrustedCommand() {} }
       } as never),
-      evaluateGate: async () => ({
-        decision: { type: 'auto-allow', ruleId: 'run-script-allow', reason: 'test' },
-        facts: { toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'low', signals: [], summary: { text: 'execute script' } },
-        approvedFactIds: []
-      })
+      evaluateGate: async () => {
+        const scriptFacts = {
+          toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'low',
+          signals: [{ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
+            contentDigest: createHash('sha256').update('print("hello")').digest('hex'),
+            parametersDigest: createHash('sha256').update('[]').digest('hex'),
+            environmentDigest: createHash('sha256').update('script-env').digest('hex'),
+            authenticationVersion: 'test-script-certifier-v1' }],
+          summary: { text: 'execute script' }
+        }
+        return {
+          decision: { type: 'auto-allow' as const, ruleId: 'run-script-allow', reason: 'test' },
+          facts: scriptFacts,
+          approvedFactIds: []
+        }
+      }
     })
     deps.capabilities.define(deps.invocationId, ['run_script'])
     Object.assign(deps, {

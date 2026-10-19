@@ -94,6 +94,32 @@ describe('runTaskPreflight', () => {
     })])
   })
 
+  it('offers the selected output Git repository as a separate read authorization candidate', async () => {
+    const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [],
+      clarifications: [
+        { reference: prompt, reasonCode: 'target_missing' },
+        { reference: prompt, reasonCode: 'output_root_not_read_authorized' }
+      ]
+    } as never)) }
+    const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: [], outputDir: '/project', taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({
+        roots: [], outputRoot: '/project', outputRootIsGitRepository: true, gitRepositories: [], entries: [],
+        coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'output-git-candidate'
+      })) }
+    })
+
+    expect(result.report).toMatchObject({
+      status: 'blocked',
+      blockers: [{ code: 'TOOL_PERMISSION_REQUIRED', reference: prompt, reasonCode: 'output_root_not_read_authorized', candidates: ['/project'] }],
+      suggestedDirectories: [{ path: '/project', purposeKey: 'butler.preflight.output_root_read_candidate_purpose', validationStatus: 'valid' }]
+    })
+    expect(result.report.suggestedDirectories[0]?.purposeKey).toBe('butler.preflight.output_root_read_candidate_purpose')
+    expect(result.bindings).toEqual([])
+  })
+
   it('asks the user to add a repository directory when a Git request has no authorized roots', async () => {
     const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
@@ -227,6 +253,22 @@ describe('runTaskPreflight', () => {
     expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ tools: [] }), expect.any(AbortSignal))
   })
 
+  it('blocks task confirmation when the mock exercise reaches a hard limit', async () => {
+    const mockTrace = [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'release', path: '/workspace' }, dispatch: 'simulated', resultKind: 'synthetic' }]
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [], requiredPermissions: [], clarifications: [], suggestedDirectories: [], mockTrace, mockIncomplete: true
+    } as never)) }
+    const result = await runTaskPreflight({ prompt: 'Find release notes', scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/workspace'], taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) }
+    })
+
+    expect(result).toMatchObject({
+      report: { status: 'blocked', blockers: [{ code: 'MOCK_PREFLIGHT_INCOMPLETE' }] },
+      bindings: [], mockTrace
+    })
+  })
+
   it('reports a model response parsing failure separately from a failed model call', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => { throw new Error('PREFLIGHT_MODEL_INVALID_JSON') }) }
     const result = await runTaskPreflight({ prompt: 'read one file', scheduleSummary: 'once', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 1, visited: 0, errors: 0 }, digest: 'facts' })) } })
@@ -247,6 +289,41 @@ describe('runTaskPreflight', () => {
       await vi.advanceTimersByTimeAsync(15_000)
       expect(signal?.aborted).toBe(false)
       await vi.advanceTimersByTimeAsync(44_999)
+      expect(signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(signal?.aborted).toBe(true)
+      await expect(pending).resolves.toMatchObject({ report: { status: 'unavailable', blockers: [{ code: 'ANALYZER_TIMEOUT' }] } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('counts facts collection against the single whole-preflight deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      let analysisInput: { remainingBudgetMs: number } | undefined
+      let signal: AbortSignal | undefined
+      const factsProvider = { collect: vi.fn(() => new Promise<{
+        roots: string[]; gitRepositories: string[]; entries: Array<{ path: string; relativePath: string; kind: 'directory' }>
+        coverage: { complete: boolean; truncated: boolean; roots: number; visited: number; errors: number }; digest: string
+      }>((resolve) => setTimeout(() => resolve({
+        roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' }],
+        coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts'
+      }), 55_000))) }
+      const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn((input, requestSignal) => {
+        analysisInput = input
+        signal = requestSignal
+        return new Promise(() => undefined)
+      }) }
+      const pending = runTaskPreflight({ prompt: 'read one file', scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/workspace'], taskRevision: 1 }, {
+        analyzer, factsProvider, timeoutMs: 60_000
+      })
+
+      await vi.advanceTimersByTimeAsync(55_000)
+      expect(analysisInput?.remainingBudgetMs).toBeLessThanOrEqual(5_000)
+      expect(signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(4_999)
       expect(signal?.aborted).toBe(false)
       await vi.advanceTimersByTimeAsync(1)
 

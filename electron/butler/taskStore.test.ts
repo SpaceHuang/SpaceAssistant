@@ -92,7 +92,8 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
           { kind: 'run-script', scopeRoots: ['/authorized/source'], scriptHashBinding: 'per-invocation' },
           { kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues', purpose: 'Find current issues', parameters: [{ name: 'query', required: true }], descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64) },
           { kind: 'result-write', outputDirectory: '/results', organization: 'hourly' }
-        ]
+        ],
+        preflightTrace: [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'TODO', path: '/authorized/source' }, dispatch: 'simulated', resultKind: 'synthetic' }]
       }
     } as never)
     const claimed = insertManualTaskClaim(d, authorizedTask.id, 'shell-grant-snapshot')
@@ -102,6 +103,9 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     expect(started).toMatchObject({ ok: true, snapshot: { accessPermissions: { directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1' } } } })
     updateAutomationTaskConditional(d, authorizedTask.id, { accessPermissions: { directories: ['/authorized/source'], tools: [] } } as never)
     expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1' } })
+    expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions?.authorizationRecord?.preflightTrace).toEqual([
+      { kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'TODO', path: '/authorized/source' }, dispatch: 'simulated', resultKind: 'synthetic' }
+    ])
   })
 
   it('does not expose a persisted authorization receipt after its task revision becomes stale', () => {
@@ -137,6 +141,21 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
         id: 'bad-mcp-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
         taskRevision: 1, permissions: [{ kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search',
           description: 'Search issues', purpose: 'Find issues', parameters: [], descriptorHash: 'invalid', profileHash: 'b'.repeat(64) }]
+      }
+    } as never)
+
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
+  })
+
+  it('rejects an authorization receipt whose persisted mock trace exceeds its item budget', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'oversized-preflight-trace', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'result-write', outputDirectory: '/results', organization: 'daily' }],
+        preflightTrace: Array.from({ length: 13 }, (_, index) => ({
+          kind: 'proposed-tool-call' as const, toolName: 'grep', input: { pattern: `p-${index}` }, dispatch: 'simulated' as const
+        }))
       }
     } as never)
 

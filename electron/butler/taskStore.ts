@@ -82,6 +82,23 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
   if (typeof record.id !== 'string' || record.actor !== 'user-confirmation' || record.source !== 'task-preflight-confirmation' || !Number.isFinite(record.approvedAt) || !Number.isFinite(record.taskRevision) || record.taskRevision !== taskRevision || !Array.isArray(record.permissions)) return undefined
+  const preflightTrace = record.preflightTrace
+  if (preflightTrace !== undefined) {
+    if (!Array.isArray(preflightTrace) || preflightTrace.length > 12) return undefined
+    let serializedTraceLength = 0
+    for (const rawItem of preflightTrace) {
+      if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) return undefined
+      const item = rawItem as Record<string, unknown>
+      if (item.kind !== 'proposed-tool-call' || typeof item.toolName !== 'string' || !item.toolName || item.toolName.length > 128
+        || !['simulated', 'blocked', 'not-dispatched'].includes(String(item.dispatch))
+        || (item.resultKind !== undefined && !['synthetic', 'unavailable'].includes(String(item.resultKind)))
+        || !Object.prototype.hasOwnProperty.call(item, 'input')) return undefined
+      const serialized = JSON.stringify(item)
+      if (typeof serialized !== 'string' || serialized.length > 16_384) return undefined
+      serializedTraceLength += serialized.length
+      if (serializedTraceLength > 65_536) return undefined
+    }
+  }
   const permissions = record.permissions.filter((item): item is AutomationTaskAuthorizationRecord['permissions'][number] => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return false
     const permission = item as Record<string, unknown>
@@ -117,7 +134,8 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
     approvedAt: Number(record.approvedAt),
     taskRevision: Number(record.taskRevision),
     ...(typeof record.preflightFactsDigest === 'string' ? { preflightFactsDigest: record.preflightFactsDigest } : {}),
-    permissions: normalizedPermissions
+    permissions: normalizedPermissions,
+    ...(preflightTrace !== undefined ? { preflightTrace: preflightTrace as AutomationTaskAuthorizationRecord['preflightTrace'] } : {})
   }
 }
 

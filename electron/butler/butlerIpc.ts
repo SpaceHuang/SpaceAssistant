@@ -17,8 +17,9 @@ import { getConfigValue } from '../database'
 import { runTaskPreflight, type TaskPreflightAnalyzer } from './taskPreflight'
 import { createTaskPreflightModelAnalyzer } from './taskPreflightModelAnalyzer'
 import { buildSnapshotFromDb } from '../mcp/mcpToolRegistry'
+import { filterBuiltinToolsForApi } from '../toolsConfigRuntime'
 import { getPreflightIssueMessageKey, type PreflightReport, type ButlerTaskWriteResult } from '../../src/shared/automationTaskTypes'
-import type { AutomationOutputOrganization, AutomationTaskMcpToolCandidate, AutomationTaskPermission, AutomationTaskAuthorizationRecord, AutomationTaskToolRequirement } from '../../src/shared/automationTaskTypes'
+import type { AutomationOutputOrganization, AutomationTaskMcpToolCandidate, AutomationTaskPermission, AutomationTaskAuthorizationRecord, AutomationTaskPreflightTraceItem, AutomationTaskToolRequirement } from '../../src/shared/automationTaskTypes'
 
 /**
  * 管家 IPC（P6 任务 CRUD 面 + P4 手动触发）。渲染进程只表达意图：
@@ -84,6 +85,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     permissions: AutomationTaskPermission[]
     report: PreflightReport
     factsDigest?: string
+    mockTrace?: AutomationTaskPreflightTraceItem[]
     taskRevision: number
     expectedCurrentTaskRevision?: number
     commit: (authorizationRecord: AutomationTaskAuthorizationRecord) => ButlerTaskWriteResult
@@ -91,10 +93,12 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
   const pendingAuthorizationReviews = new Map<string, PendingAuthorizationReview>()
 
   async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; outputDir: string; modelId?: string; modelServiceId?: string; taskRevision: number; requestReceivedAt: number }) {
+    const preflightStartedAt = Date.now()
     if (input.schedule.kind === 'once' && input.schedule.at <= input.requestReceivedAt) {
       return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: getPreflightIssueMessageKey('ONCE_AT_NOT_FUTURE') }], suggestedDirectories: [] }, bindings: [], factsDigest: undefined, requiredPermissions: [], mcpTools: [] }
     }
-    const mcpTools = [...buildSnapshotFromDb(db, { admission: 'deferred' }).entries.values()].flatMap((entry): AutomationTaskMcpToolCandidate[] => {
+    const mcpEntries = [...buildSnapshotFromDb(db, { admission: 'deferred' }).entries.values()]
+    const mcpTools = mcpEntries.flatMap((entry): AutomationTaskMcpToolCandidate[] => {
       if (!entry.descriptorHash || !entry.profileHash) return []
       const properties = entry.inputSchema.properties && typeof entry.inputSchema.properties === 'object' && !Array.isArray(entry.inputSchema.properties)
         ? entry.inputSchema.properties as Record<string, unknown>
@@ -117,6 +121,14 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
         descriptorHash: entry.descriptorHash, profileHash: entry.profileHash
       }]
     })
+    const builtinTools = filterBuiltinToolsForApi(
+      deps.getToolsConfig(),
+      undefined,
+      deps.getBrowserConfig?.(),
+      null,
+      deps.getShellConfig?.() ?? null
+    ).map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema }))
+    const mcpModelTools = mcpEntries.map((entry) => ({ name: entry.mappedName, description: entry.description, inputSchema: entry.inputSchema }))
     const result = await preflight({
       prompt: input.prompt,
       scheduleSummary: JSON.stringify(input.schedule),
@@ -124,7 +136,9 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       roots: input.roots,
       outputDir: input.outputDir,
       taskRevision: input.taskRevision,
-      mcpTools
+      preflightStartedAt,
+      mcpTools,
+      tools: [...builtinTools, ...mcpModelTools]
     }, { analyzer: createAnalyzer({ modelId: input.modelId, modelServiceId: input.modelServiceId }) })
     return { ...result, mcpTools }
   }
@@ -183,7 +197,8 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       approvedAt: now(),
       taskRevision: review.taskRevision,
       ...(review.factsDigest ? { preflightFactsDigest: review.factsDigest } : {}),
-      permissions: structuredClone(review.permissions)
+      permissions: structuredClone(review.permissions),
+      ...(review.mockTrace ? { preflightTrace: structuredClone(review.mockTrace) } : {})
     }
   }
 
@@ -302,6 +317,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       permissions,
       report: inspection.report,
       ...(inspection.factsDigest ? { factsDigest: inspection.factsDigest } : {}),
+      ...(inspection.mockTrace ? { mockTrace: inspection.mockTrace } : {}),
       taskRevision: 1,
       commit: (authorizationRecord) => {
         const task = createAutomationTask(db, taskInput, { targetBindings: inspection.bindings, authorizationRecord })
@@ -395,6 +411,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       permissions,
       report: inspection.report,
       ...(inspection.factsDigest ? { factsDigest: inspection.factsDigest } : {}),
+      ...(inspection.mockTrace ? { mockTrace: inspection.mockTrace } : {}),
       taskRevision: (existing.taskRevision ?? 0) + 1,
       commit: (authorizationRecord) => {
         const commit = updateAutomationTaskConditional(db, id, { ...next, expectedTaskRevision }, { targetBindings: inspection.bindings, authorizationRecord })

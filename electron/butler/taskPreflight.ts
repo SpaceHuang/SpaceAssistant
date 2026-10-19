@@ -2,6 +2,7 @@ import path from 'node:path'
 import { getPreflightIssueMessageKey, type AutomationTaskMcpToolCandidate, type AutomationTaskToolRequirement, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider, type TaskPathFacts } from './taskPathFacts'
 import { resolveTaskTarget, type ProposedTaskTarget } from './taskTargetResolver'
+import type { TaskPreflightMockTool, TaskPreflightMockTraceItem } from './taskPreflightMockRunner'
 
 export type TaskPreflightAnalysisInput = {
   prompt: string
@@ -10,16 +11,18 @@ export type TaskPreflightAnalysisInput = {
   authorizedRoots: string[]
   outputRoot?: string
   facts: TaskPathFacts
-  tools: readonly []
+  tools: readonly TaskPreflightMockTool[]
+  /** Remaining host deadline after facts collection; caps the model/mock loop. */
+  remainingBudgetMs?: number
   mcpTools?: readonly Pick<AutomationTaskMcpToolCandidate, 'serverId' | 'serverName' | 'toolName' | 'description' | 'parameters'>[]
   responseFormat: 'json'
 }
 
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
-export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }> }
+export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }>; mockTrace?: TaskPreflightMockTraceItem[]; mockIncomplete?: boolean }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
-export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number; mcpTools?: AutomationTaskMcpToolCandidate[] }
-export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[] }
+export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number; preflightStartedAt?: number; mcpTools?: AutomationTaskMcpToolCandidate[]; tools?: TaskPreflightMockTool[] }
+export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[]; mockTrace?: TaskPreflightMockTraceItem[] }
 export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; factsProvider?: Pick<TaskPathFactsProvider, 'collect'>; timeoutMs?: number; now?: () => number }
 
 const issue = (code: string, field = 'prompt', details: Partial<PreflightIssue> = {}): PreflightIssue => ({ code, field, messageKey: getPreflightIssueMessageKey(code), ...details })
@@ -63,7 +66,7 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
   // Old tool-name-only requests have no safe parameter scope and cannot be upgraded into grants.
   if ('requiredTools' in value && Array.isArray((value as { requiredTools?: unknown }).requiredTools) && (value as { requiredTools: unknown[] }).requiredTools.length > 0) return undefined
   const clarifications = (value as { clarifications?: unknown }).clarifications
-  const allowedReasons = new Set(['no_target_identified', 'scope_unclear', 'missing_location', 'multiple_matches', 'target_missing', 'git_repository_not_found', 'capability_not_authorized', 'other'])
+  const allowedReasons = new Set(['no_target_identified', 'scope_unclear', 'missing_location', 'multiple_matches', 'target_missing', 'git_repository_not_found', 'output_root_not_read_authorized', 'capability_not_authorized', 'other'])
   if (clarifications !== undefined && (!Array.isArray(clarifications) || clarifications.some((item) => {
     if (!item || typeof item !== 'object') return true
     const clarification = item as Record<string, unknown>
@@ -71,6 +74,16 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
   }))) return undefined
   const suggestedDirectories = (value as { suggestedDirectories?: unknown }).suggestedDirectories
   if (suggestedDirectories !== undefined && (!Array.isArray(suggestedDirectories) || suggestedDirectories.some((item) => !item || typeof item !== 'object' || typeof (item as Record<string, unknown>).path !== 'string' || typeof (item as Record<string, unknown>).purpose !== 'string' || typeof (item as Record<string, unknown>).source !== 'string'))) return undefined
+  const mockTrace = (value as { mockTrace?: unknown }).mockTrace
+  if (mockTrace !== undefined && (!Array.isArray(mockTrace) || mockTrace.length > 12 || mockTrace.some((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return true
+    const trace = item as Record<string, unknown>
+    return trace.kind !== 'proposed-tool-call' || typeof trace.toolName !== 'string' || !trace.toolName
+      || !['simulated', 'blocked', 'not-dispatched'].includes(String(trace.dispatch))
+      || (trace.resultKind !== undefined && !['synthetic', 'unavailable'].includes(String(trace.resultKind)))
+      || !('input' in trace)
+  }))) return undefined
+  if ((value as { mockIncomplete?: unknown }).mockIncomplete !== undefined && typeof (value as { mockIncomplete?: unknown }).mockIncomplete !== 'boolean') return undefined
   const normalizedPermissions = Array.isArray(requiredPermissions)
     ? requiredPermissions.map((item) => {
       const permission = item as Record<string, unknown>
@@ -80,7 +93,7 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
         : item
     }) as AutomationTaskToolRequirement[]
     : undefined
-  return { ...(value as TaskPreflightAnalysisOutput), ...(normalizedPermissions ? { requiredPermissions: normalizedPermissions } : {}) }
+  return { ...(value as TaskPreflightAnalysisOutput), ...(normalizedPermissions ? { requiredPermissions: normalizedPermissions } : {}), ...(mockTrace ? { mockTrace: mockTrace as TaskPreflightMockTraceItem[] } : {}) }
 }
 
 async function withTimeout<T>(promise: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T> {
@@ -94,10 +107,23 @@ async function withTimeout<T>(promise: (signal: AbortSignal) => Promise<T>, time
 }
 
 export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPreflightDependencies): Promise<TaskPreflightResult> {
+  const totalBudgetMs = deps.timeoutMs ?? DEFAULT_ANALYZER_TIMEOUT_MS
+  const startedAt = input.preflightStartedAt ?? Date.now()
+  const remainingBudgetMs = () => totalBudgetMs - (Date.now() - startedAt)
   let facts: TaskPathFacts
-  try { facts = await (deps.factsProvider ?? new TaskPathFactsProvider()).collect(input.roots, input.outputDir) }
-  catch { return { report: emptyReport('blocked', [issue('ROOT_FACTS_UNAVAILABLE', 'workDirs')]), bindings: [] } }
+  try {
+    facts = await withTimeout(
+      () => (deps.factsProvider ?? new TaskPathFactsProvider()).collect(input.roots, input.outputDir),
+      Math.max(1, remainingBudgetMs())
+    )
+  } catch (error) {
+    return error instanceof Error && error.message === 'PREFLIGHT_TIMEOUT'
+      ? { report: emptyReport('unavailable', [issue('ANALYZER_TIMEOUT')]), bindings: [] }
+      : { report: emptyReport('blocked', [issue('ROOT_FACTS_UNAVAILABLE', 'workDirs')]), bindings: [] }
+  }
   if (!facts.coverage.complete) return { report: emptyReport('blocked', [issue('FACTS_INCOMPLETE')]), bindings: [], factsDigest: facts.digest }
+  const remaining = remainingBudgetMs()
+  if (remaining <= 0) return { report: emptyReport('unavailable', [issue('ANALYZER_TIMEOUT')]), bindings: [], factsDigest: facts.digest }
   let analysis: TaskPreflightAnalysisOutput | undefined
   try {
     analysis = validateAnalysis(await withTimeout((signal) => deps.analyzer.analyze({
@@ -107,14 +133,22 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       authorizedRoots: facts.roots,
       outputRoot: facts.outputRoot,
       facts,
-      tools: [],
+      tools: input.tools ?? [],
+      remainingBudgetMs: Math.max(1, Math.min(DEFAULT_ANALYZER_TIMEOUT_MS, remaining - 10)),
       mcpTools: (input.mcpTools ?? []).map(({ serverId, serverName, toolName, description, parameters }) => ({ serverId, serverName, toolName, description: description.slice(0, 600), parameters })),
       responseFormat: 'json'
-    }, signal), deps.timeoutMs ?? DEFAULT_ANALYZER_TIMEOUT_MS))
+    }, signal), remaining))
   } catch (error) {
     return { report: emptyReport('unavailable', [issue(classifyAnalyzerFailure(error))]), bindings: [], factsDigest: facts.digest }
   }
   if (!analysis) return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
+  if (analysis.mockIncomplete) {
+    return {
+      report: emptyReport('blocked', [issue('MOCK_PREFLIGHT_INCOMPLETE')]),
+      bindings: [], factsDigest: facts.digest,
+      ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
+    }
+  }
   const requiredPermissions = analysis.requiredPermissions ?? []
   // facts: 本机工具授权必须落在用户选择并由主机核验的目录范围；结果输出根不能充当读取/命令范围。
   const filesystemPermissions = requiredPermissions.filter((permission) => permission.tool !== 'mcp')
@@ -132,24 +166,36 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
   if (!requirementsInScope) return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
   const factPaths = new Set(facts.entries.map((entry) => entry.path))
   // Facts/report 阶段只保留可核验的原文片段、原因代码和主机 facts 中的候选路径；模型文本不授予路径，也不改写执行授权。
+  const outputRootGitReferences = new Set((analysis.clarifications ?? [])
+    .filter((clarification) => facts.outputRootIsGitRepository
+      && ['git_repository_not_found', 'output_root_not_read_authorized'].includes(clarification.reasonCode)
+      && input.prompt.includes(clarification.reference))
+    .map((clarification) => clarification.reference))
   const clarificationIssues: PreflightIssue[] = (analysis.clarifications ?? [])
     .filter((clarification) => input.prompt.includes(clarification.reference))
+    .filter((clarification) => !(facts.outputRootIsGitRepository && clarification.reasonCode === 'target_missing' && outputRootGitReferences.has(clarification.reference)))
     .slice(0, 5)
     .map((clarification) => {
+      const outputRootReadAuthorizationNeeded = facts.outputRootIsGitRepository
+        && ['git_repository_not_found', 'output_root_not_read_authorized'].includes(clarification.reasonCode)
+      const effectiveReasonCode = outputRootReadAuthorizationNeeded ? 'output_root_not_read_authorized' : clarification.reasonCode
       const modelCandidates = [...new Set((clarification.candidates ?? []).filter((candidate) => factPaths.has(candidate)))]
       const inferredCandidates = clarification.reasonCode === 'multiple_matches'
         ? facts.entries.filter((entry) => ['file', 'directory'].includes(entry.kind) && clarification.reference.includes(path.basename(entry.path))).map((entry) => entry.path)
         : []
-      const allCandidates = modelCandidates.length > 1 ? modelCandidates : inferredCandidates
+      const allCandidates = outputRootReadAuthorizationNeeded && facts.outputRoot
+        ? [facts.outputRoot]
+        : modelCandidates.length > 1 ? modelCandidates : inferredCandidates
       const candidates = [...new Set(allCandidates)].slice(0, 20)
       const reasonCode = clarification.reasonCode === 'multiple_matches' && candidates.length < 2 ? 'other' : clarification.reasonCode
-      const code = reasonCode === 'multiple_matches' ? 'TARGET_AMBIGUOUS'
-        : reasonCode === 'target_missing' || reasonCode === 'git_repository_not_found' ? 'TARGET_NOT_FOUND'
-          : reasonCode === 'capability_not_authorized' ? 'TOOL_PERMISSION_REQUIRED'
+      const finalReasonCode = outputRootReadAuthorizationNeeded ? effectiveReasonCode : reasonCode
+      const code = finalReasonCode === 'multiple_matches' ? 'TARGET_AMBIGUOUS'
+        : finalReasonCode === 'target_missing' || finalReasonCode === 'git_repository_not_found' ? 'TARGET_NOT_FOUND'
+          : finalReasonCode === 'capability_not_authorized' || finalReasonCode === 'output_root_not_read_authorized' ? 'TOOL_PERMISSION_REQUIRED'
             : 'TARGET_UNCLEAR'
       return issue(code, 'prompt', {
         reference: clarification.reference,
-        reasonCode,
+        reasonCode: finalReasonCode,
         ...(candidates.length ? { candidates, candidateCount: allCandidates.length } : {})
       })
     })
@@ -168,11 +214,23 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     if (resolved.ok) bindings.push(resolved.binding)
     else blockers.push(issue(resolved.issue.code, resolved.issue.field, resolved.issue))
   }
-  const suggestedDirectories = (analysis.suggestedDirectories ?? []).map((suggestion) => ({ ...suggestion, validationStatus: 'unavailable' as const }))
+  const suggestedDirectories: SuggestedDirectory[] = (analysis.suggestedDirectories ?? []).map((suggestion) => ({ ...suggestion, validationStatus: 'unavailable' }))
+  if (outputRootGitReferences.size > 0 && facts.outputRoot) {
+    const existingSuggestionIndex = suggestedDirectories.findIndex((suggestion) => suggestion.path === facts.outputRoot)
+    const outputRootSuggestion: SuggestedDirectory = {
+      path: facts.outputRoot,
+      purposeKey: 'butler.preflight.output_root_read_candidate_purpose',
+      source: [...outputRootGitReferences][0]!,
+      validationStatus: 'valid'
+    }
+    if (existingSuggestionIndex >= 0) suggestedDirectories[existingSuggestionIndex] = outputRootSuggestion
+    else suggestedDirectories.push(outputRootSuggestion)
+  }
   return {
     report: emptyReport(blockers.length ? 'blocked' : 'passed', blockers, suggestedDirectories),
     bindings: blockers.length ? [] : bindings,
     factsDigest: facts.digest,
-    requiredPermissions
+    requiredPermissions,
+    ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
   }
 }

@@ -90,6 +90,14 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
     overrideability: 'none'
   },
   {
+    id: 'SYS-PREFLIGHT-001', owner: 'electron/butler', stage: 'admission', category: 'capability',
+    rationale: 'Task preflight may record proposed tool calls only through synthetic adapters and must stop within host-enforced round, call, token, request-time, and total-time budgets.',
+    effect: 'block', scope: 'electron/butler/taskPreflightModelAnalyzer.ts;electron/butler/taskPreflightMockRunner.ts;electron/butler/taskPreflight.ts',
+    audit: 'preflight trace labels simulated calls and synthetic results; an incomplete trace cannot issue a confirmation review or persist a task; production executors, subprocesses, MCP connections, network calls, and delivery adapters are unreachable',
+    tests: ['electron/butler/taskPreflightMockRunner.test.ts', 'electron/butler/taskPreflightModelAnalyzer.test.ts', 'electron/butler/taskPreflightNoSideEffects.test.ts', 'electron/butler/taskPreflight.test.ts', 'electron/butler/butlerIpc.test.ts'],
+    overrideability: 'none'
+  },
+  {
     id: 'SYS-AUTOROOT-001', owner: 'electron/butler', stage: 'final-check', category: 'integrity',
     rationale: 'An unattended run must preserve the canonical directory identities approved in its immutable task snapshot.',
     effect: 'validate', scope: 'electron/butler/butlerInvoker.ts:executeClaimedRun-before-facts-and-dispatch',

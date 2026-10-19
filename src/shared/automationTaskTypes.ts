@@ -40,6 +40,15 @@ export type AutomationTaskPermission =
   | { kind: 'mcp-tool'; serverId: string; serverName: string; toolName: string; description: string; purpose: string; parameters: Array<{ name: string; required: boolean }>; descriptorHash: string; profileHash: string }
   | { kind: 'deliver-result'; delivery: Exclude<AutomationDeliveryPref, 'none'>; target?: string }
 
+/** A preflight record of an intended call; it is not evidence that a tool actually ran. */
+export type AutomationTaskPreflightTraceItem = {
+  kind: 'proposed-tool-call'
+  toolName: string
+  input: unknown
+  dispatch: 'simulated' | 'blocked' | 'not-dispatched'
+  resultKind?: 'synthetic' | 'unavailable'
+}
+
 /** Main-process receipt of the user's explicit confirmation of a preflight permission list. */
 export type AutomationTaskAuthorizationRecord = {
   id: string
@@ -49,6 +58,8 @@ export type AutomationTaskAuthorizationRecord = {
   taskRevision: number
   preflightFactsDigest?: string
   permissions: AutomationTaskPermission[]
+  /** Mock exercise trace, explicitly distinguished from real runtime access facts. */
+  preflightTrace?: AutomationTaskPreflightTraceItem[]
 }
 
 export type AutomationTaskAccessPermissions = {
@@ -199,6 +210,7 @@ export const PREFLIGHT_ISSUE_MESSAGE_KEYS = {
   ANALYZER_UNAVAILABLE: 'butler.preflight.analyzer_unavailable',
   ANALYZER_TIMEOUT: 'butler.preflight.analyzer_timeout',
   ANALYZER_INVALID_RESPONSE: 'butler.preflight.analyzer_invalid_response',
+  MOCK_PREFLIGHT_INCOMPLETE: 'butler.preflight.mock_preflight_incomplete',
   TARGET_UNCLEAR: 'butler.preflight.target_unclear',
   TARGET_AMBIGUOUS: 'butler.preflight.target_ambiguous',
   TARGET_NOT_FOUND: 'butler.preflight.target_not_found',
@@ -219,6 +231,7 @@ export const PREFLIGHT_CLARIFICATION_REASON_MESSAGE_KEYS = {
   multiple_matches: 'butler.preflight.reasons.multiple_matches',
   target_missing: 'butler.preflight.reasons.target_missing',
   git_repository_not_found: 'butler.preflight.reasons.git_repository_not_found',
+  output_root_not_read_authorized: 'butler.preflight.reasons.output_root_not_read_authorized',
   capability_not_authorized: 'butler.preflight.reasons.capability_not_authorized',
   other: 'butler.preflight.reasons.other'
 } as const
@@ -246,7 +259,8 @@ export type PreflightIssue = {
 
 export type SuggestedDirectory = {
   path: string
-  purpose: string
+  purpose?: string
+  purposeKey?: string
   source: string
   validationStatus: 'valid' | 'invalid' | 'unavailable'
 }

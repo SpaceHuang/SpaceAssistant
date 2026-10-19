@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：既有 E-01～E-10、结果目录拆分 E-11a～E-11f、任务访问授权与 Git 预检 E-12a～E-12d、用户授权记录修订 E-13a～E-13c、run_shell 超时授权边界修订 E-14 全部完成
+> 状态：E-01～E-15c 已完成
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
@@ -401,6 +401,39 @@ E-13 按用户明确要求修正 D-7 的授权所有权与确认交互。E-12 �
 - **验证命令：** `npm exec vitest run electron/butler/automationTaskPermissionMatch.test.ts electron/butler/butlerIpc.test.ts electron/butler/taskPreflight.test.ts electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskStore.test.ts electron/butler/butlerInvoker.test.ts electron/confirmation/automationLane.test.ts electron/confirmation/toolCallGate.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
 - **证据：** RED：实现前的回归测试在权限 matcher、IPC 权限清单、管家指令和 automation lane 共 4 项失败，分别复现超时变化导致拒绝、权限清单仍包含 timeout、运行指令要求固定 timeout。GREEN：上述 9 个测试文件 / 361 项通过，覆盖运行 timeout 变化仍匹配、精确命令和目录范围、预检/模型响应与旧记录均剥离 timeout、UI 不将 timeout 列入授权。`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`（0 个源代码硬编码中文）、`npm run check:system-invariant-registry`（9 registrations / 31 test references）、`npm run build:electron:incremental`、`git diff --check` 均通过。
 - **可执行环境：** 本机。
+- **状态：** - [x]
+
+### E-15a 定义 Mock 演练端口、工具意图轨迹与硬预算
+
+- **依赖：** E-04、E-13a～E-13c、E-14；需求 §5.6「Mock 演练隔离与时长限制」。
+- **目标文件：** `electron/butler/taskPreflight.ts`、新增 Mock runner/类型与测试、开发方案 §2.3。
+- **动作与产物：** 用 RED 测试先固定工具调用只到 Mock dispatcher、轨迹字段/“拟调用”语义、未知工具 fail closed、部分结果状态，以及可注入预算。定义主进程硬上限：5 次模型生成、12 次 Mock 调用、单次模型请求 20 秒、总预检 60 秒、每次最多 2,048 输出 token、累计最多 10,240 输出 token。
+- **完成判据：** 纯逻辑 runner 能在无生产 executor 依赖下记录有序的工具名、完整安全参数和目标；未知/未注册 Mock 工具不能继续；任一预算耗尽后输出不可确认的部分报告且不保留可复用 Mock 状态。SDK 的自动重试边界由 E-15b 验证。
+- **验证命令：** `npm exec vitest run electron/butler/taskPreflightMockRunner.test.ts electron/butler/taskPreflight.test.ts`；`git diff --check`。
+- **证据：** RED：新增 runner 测试先因模块缺失而失败。GREEN：计划中的 runner/preflight 命令通过 **2 files / 35 tests**；包含模型 adapter 契约的 3 文件定向命令通过 **3 files / 48 tests**。覆盖拟调用参数轨迹、目录 adapter fail closed、无法模拟结果、模型轮次/工具数/单次模型超时/总时限、迟到模型响应与超时后续调用的竞态、单轮和累计 token 预算。`npx tsc -p tsconfig.electron.json --noEmit` 与 `git diff --check` 通过。SDK 自动重试和模型集成归 E-15b。
+- **可执行环境：** 本机，固定模型 client 和虚拟时钟。
+- **状态：** - [x]
+
+### E-15b 接入所选模型与全部工具的纯 Mock dispatcher
+
+- **依赖：** E-15a。
+- **目标文件：** `electron/butler/taskPreflightModelAnalyzer.ts`、工具目录/Mock adapter 接口及对应测试。
+- **动作与产物：** 模型收到任务当前可用的工具定义，并可返回普通文本或工具调用；模型调用由预算器循环驱动，关闭 SDK 自动重试以便请求次数和总耗时由主进程预算独占。文件、grep、Shell、脚本、MCP、网络、投递与动态注册工具一律映射到 Mock adapter，不能注入或回退到真实执行器。合并拟调用轨迹与现有 facts/目标分析结果；任何依赖真实工具结果的结论降为覆盖不完整。
+- **完成判据：** 测试用可控模型响应验证多轮工具调用顺序与参数完整性；所有类别只返回合成结果；工具 schema 未映射、adapter 抛错或模拟无法支撑后续判断时 fail closed；没有创建任务会话、运行记录或授权票据。
+- **验证命令：** `npm exec vitest run electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskPreflightMockRunner.test.ts electron/butler/taskPreflight.test.ts electron/butler/butlerIpc.test.ts`。
+- **证据：** RED：多轮 `tool_use` 用例在旧 analyzer 不支持工具调用时失败。GREEN：`npm exec vitest run electron/anthropicClientFactory.test.ts electron/butler/butlerIpc.test.ts electron/butler/taskPreflight.test.ts electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskPreflightMockRunner.test.ts electron/butler/taskPreflightNoSideEffects.test.ts electron/butler/taskStore.test.ts electron/confirmation/approvalAgent.test.ts` 通过 **8 files / 164 tests**。覆盖所选模型多轮工具调用、运行时工具目录与 MCP、零 SDK 自动重试、各类工具只收到合成结果、意图轨迹随用户确认持久化并交付安全审核 Agent。Electron `tsc`、shared/renderer 类型、i18n、system invariant registry（10 registrations / 36 test references）和 `git diff --check` 通过；增量构建归 E-15c。
+- **可执行环境：** 本机 mock LLM、虚拟工具目录和 side-effect spy。
+- **状态：** - [x]
+
+### E-15c 验证零真实副作用、预算终止与确认门禁
+
+- **依赖：** E-15a、E-15b。
+- **目标文件：** E-15 触及模块、执行计划 §5。
+- **动作与产物：** 以所有真实 executor/process/MCP/network/delivery 入口的 spy 验证零调用；覆盖模型轮次、Mock 调用数、单请求耗时、总耗时及 token 预算的边界与竞争；证明预算超限只产生部分、不可确认结果且任务/授权零写入。合并运行 E-15 定向测试、renderer/shared 类型、i18n、系统不变量与增量构建门禁。
+- **完成判据：** 每类工具调用只可到达 Mock；所有预算严格小于等于既定上限；一旦越界无后续 Mock dispatch、无后台请求、无任务/授权保存；完整轨迹清楚标为“拟调用/模拟结果”，不能被审核 Agent 当作实际访问事实。
+- **验证命令：** E-15 相关 Vitest；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
+- **证据：** `taskPreflightNoSideEffects.test.ts` 用 executor/进程/文件读写/MCP/网络/浏览器/投递入口 spy 验证零调用；runner 覆盖迟到模型响应、Mock 忽略 abort 后仍不得派发后续调用、轮次/调用数/单次和总时限/token 上限；IPC 和 preflight 测试证明不完整结果不写任务。8 个预检/授权相关文件 **164 tests**、`hostedAgentTurnHost` 的脚本撤权回归 1 项、Electron/shared/renderer 类型、i18n、系统不变量 registry 和 `git diff --check` 已通过；Electron 增量构建已通过。首次全量 `npm test` 发现 `hostedAgentTurnHost.test.ts` 的 run_script 撤权 fixture 缺少必需脚本哈希事实，补齐 fixture 后定向回归通过。最终全量 `npm test` 退出码 **0**：**1,099 个测试文件通过、1 个跳过；10,545 项通过、111 项跳过**（786.42 秒）。
+- **可执行环境：** 本机；真实模型服务质量仍为外部验收。
 - **状态：** - [x]
 
 ## 4. 外部验收（不阻塞源码关闭）

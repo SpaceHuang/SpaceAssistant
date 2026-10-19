@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检开发方案
 
-> 状态：既有功能与结果目录拆分已实施；2026-10-18 任务级访问授权与 Git 预检修订已完成
+> 状态：既有功能与结果目录拆分已实施；2026-10-18 任务级访问授权与 Git 预检修订已完成；2026-10-19 Mock 演练隔离与预算要求已纳入，执行见 E-15
 > 需求基线：[定时任务多工作目录与预检需求细化（评审稿）](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 复审依据：[第四轮复审](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-development-plan-review-round-4.md)  
 > 核对基线：工作区 `HEAD 7c0edc4176643627fdee85bff017a8d652059f26`；现状以本方案列出的当前文件和复现命令为准。工作区另有未跟踪目录 `llm-wiki.migrated-20261015-135757/`，与本方案无关。
@@ -185,7 +185,7 @@
 #### 预检与保存时序
 
 1. 主进程 handler 入口立即捕获 `requestReceivedAt`，规范化 renderer payload 并对全部必填字段、本地 schedule/交付字段、目录和模型 pair 做校验。
-2. 仅在上述结构检查通过后，调用无工具权限的目标分析器。分析器接收 task prompt、schedule、delivery summary、已选 canonical roots 和允许使用的任务局部路径事实；它不能读任意本机路径、调用工具、改写 prompt 或自动授权。
+2. 仅在上述结构检查通过后，调用目标分析器。E-04 的结构化分析器不暴露工具调用；新增 E-15 Mock 演练后，模型可见当前任务可用的工具定义，但所有调用只能进入隔离的 Mock dispatcher。两阶段都接收 task prompt、schedule、delivery summary、已选 canonical roots 和允许使用的任务局部路径事实；都不能自动授权。
 3. 结构问题、目标歧义、需要授权的目录或分析服务错误形成 report；存在任一 blocker 就不写任务表。候选目录未勾选前总是 blocker。
 4. report 返回 renderer 后，renderer保留表单；勾选只将 canonical path 暂存入表单 `workDirs`。再次提交会重新执行完整校验与目标分析，不复用旧报告。
 5. 没有 blocker 时，主进程将同一 DTO、`preflightVersion=1`、判别类型 `TargetBinding[]`、facts digest 和 revision 一并写入 taskStore；字段、roots、schedule/prompt revision、bindings 在一个 taskStore 事务中更新。编辑失败不覆盖旧配置。renderer 不得提交 preflightVersion，且 create 无 legacy 入口。
@@ -194,6 +194,15 @@
 8. 运行准入按 `preflightVersion` 分支。v1 在任何 Agent 文件 executor 前重算 `exact`/`collection`/`output` 选择并校验绑定规则：basename 新增歧义、selector 越界/不完整、输出祖先越界或失效则 failed；exact 同一逻辑路径上的普通文件替换、collection 成员变化、output 尚不存在均按各自规则允许。v0 旧任务不要求缺失的 bindings，也不自动升级：未编辑、未主动启用期间沿需求稿兼容，只做既有字段、有效 roots、模型和安全策略准入，不让新预检逻辑重写 prompt 目标；缺目录/失效根仍 failed。旧任务 Agent 沿既有路径语义运行并继续受工具策略限制。v0 只来自迁移，不允许新请求选择。预检报告不复用；业务解析在 admission 做，final-check 只核验已批准材料。
 
 目标分析模型使用任务当前显式 model/service pair；若 pair 不可用，作为 preflight unavailable/validation failure 阻断。预检请求不创建会话、不写 run history、不触发 delivery。调用须有超时和可取消的请求生命周期；超时稳定返回 unavailable，不允许沿用上一次通过结果。
+
+#### Mock 演练隔离契约（E-15）
+
+- Mock 演练使用任务提示词和当前运行时工具目录的定义，让所选模型产生真实格式的工具调用请求；调用只记录意图和参数，不派发到生产 executor。文件工具、`grep`、`run_shell`、`run_script`、MCP、网络与外部投递都必须经过 Mock dispatcher；不得启动进程、读取/写入实际文件内容、连接 MCP/网络服务或发送消息。路径事实只复用本次预检已收集的宿主快照。
+- Mock 结果只能是明确标注的合成响应；需要真实文件内容、命令输出、MCP 返回或外部服务结果才能继续判断时，标记覆盖不完整并阻止生成可确认的授权清单。不得用模拟数据冒充事实。未知工具、缺少 Mock adapter 或调用参数无法解析时 fail closed，绝不能回退到生产 executor。
+- 拟调用轨迹须记录工具身份、完整的安全相关参数和声明目标；路径仅代表计划访问目标，不能声称为实际访问证据。宿主将结构化轨迹与 E-04 目标/facts 结果合并，仍按现有主进程校验和授权范围规则生成权限提案。
+- 第一版硬上限：最多 **5 次模型生成**（初始响应计入）、最多 **12 次 Mock 工具调用**、单次模型调用 **20 秒**、整次预检 **60 秒**；每次生成最多 2,048 个输出 token，累计输出最多 10,240 token。所有限制由主进程运行时强制，并覆盖 SDK 自动重试；不是仅靠提示词约束。
+- 达到任一上限立即取消当前模型请求、停止分发后续 Mock 调用并终止预检；允许展示已收集轨迹，但必须标为部分结果/覆盖不完整，不允许用户确认授权或保存任务。不得后台续跑或自动重试。新的预检使用全新 Mock 状态。
+- 预算常量须集中定义并可由边界测试注入缩小；UI 不提供放大安全上限的配置。
 
 #### 多根路径与安全审核
 

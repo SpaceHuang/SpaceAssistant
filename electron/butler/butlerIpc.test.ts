@@ -138,10 +138,11 @@ describe('butler IPC workdir/config fields', () => {
         { tool: 'grep', scopeRoots: [permissionRoot] },
         { tool: 'run_script', scopeRoots: [permissionRoot] },
         { tool: 'mcp', serverId: mcpServerId, toolName: 'search_issues', purpose: '查找最近更新的问题' }
-      ]
+      ],
+      mockTrace: [{ kind: 'proposed-tool-call' as const, toolName: 'grep', input: { pattern: 'release', path: permissionRoot }, dispatch: 'simulated' as const, resultKind: 'synthetic' as const }]
     }))
     registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
-      db: d, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({}) as never
+      db: d, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({ enabled: true, allowedTools: [], deniedTools: [] }) as never
     } as never, {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
       preflight
@@ -165,10 +166,15 @@ describe('butler IPC workdir/config fields', () => {
     expect(review.reviewId).toBeTruthy()
     expect(map.get('butler:list')!()).toEqual([])
     expect(preflight).toHaveBeenCalledWith(expect.not.objectContaining({ accessPermissions: expect.anything() }), expect.any(Object))
+    expect(preflight).toHaveBeenCalledWith(expect.objectContaining({ tools: expect.arrayContaining([
+      expect.objectContaining({ name: 'grep', inputSchema: expect.objectContaining({ properties: expect.any(Object) }) }),
+      expect.objectContaining({ name: mcpTools[0]!.mappedName, inputSchema: expect.objectContaining({ properties: expect.any(Object) }) })
+    ]) }), expect.any(Object))
 
-    const committed = await map.get('butler:confirm-write')!(null, { reviewId: review.reviewId }) as { ok: boolean; task?: { accessPermissions?: { tools: string[]; authorizationRecord?: { actor: string; source: string; permissions: unknown[] } } } }
+    const committed = await map.get('butler:confirm-write')!(null, { reviewId: review.reviewId }) as { ok: boolean; task?: { accessPermissions?: { tools: string[]; authorizationRecord?: { actor: string; source: string; permissions: unknown[]; preflightTrace?: unknown[] } } } }
     expect(committed).toMatchObject({ ok: true, task: { accessPermissions: { tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: {
-      actor: 'user-confirmation', source: 'task-preflight-confirmation', permissions: expect.any(Array)
+      actor: 'user-confirmation', source: 'task-preflight-confirmation', permissions: expect.any(Array),
+      preflightTrace: [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'release', path: permissionRoot }, dispatch: 'simulated', resultKind: 'synthetic' }]
     } } } })
     expect((committed as { task?: { accessPermissions?: { authorizationRecord?: { permissions: unknown[] } } } }).task?.accessPermissions?.authorizationRecord?.permissions)
       .toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'mcp-tool', serverId: mcpServerId, toolName: 'search_issues' })]))
@@ -228,12 +234,36 @@ describe('butler IPC workdir/config fields', () => {
     const d = openDatabase(':memory:')
     db = d
     const map = new Map<string, (...args: unknown[]) => unknown>()
-    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d } as never, {
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d, getToolsConfig: () => ({}) as never } as never, {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
       preflight: vi.fn(async () => ({ report: { status: 'blocked' as const, blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear' }], suggestedDirectories: [] }, bindings: [] }))
     })
     const response = await map.get('butler:create')!(null, { name: '草稿', prompt: '帮我处理一下', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()], outputDir: os.tmpdir(), outputOrganization: 'hourly', modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' }) as { ok: boolean; kind?: string; report?: unknown }
     expect(response).toMatchObject({ ok: false, kind: 'preflight-blocked', report: { blockers: [{ code: 'TARGET_UNCLEAR' }] } })
+    expect(map.get('butler:list')!()).toEqual([])
+  })
+
+  it('does not stage or save a task when the mock tool exercise is incomplete', async () => {
+    const d = openDatabase(':memory:')
+    db = d
+    const map = new Map<string, (...args: unknown[]) => unknown>()
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
+      db: d, getToolsConfig: () => ({}) as never
+    } as never, {
+      validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
+      preflight: vi.fn(async () => ({
+        report: { status: 'blocked' as const, blockers: [{ code: 'MOCK_PREFLIGHT_INCOMPLETE', messageKey: 'butler.preflight.mock_preflight_incomplete' }], suggestedDirectories: [] },
+        bindings: [], mockTrace: [{ kind: 'proposed-tool-call' as const, toolName: 'run_shell', input: { command: 'git log', workingDirectory: '/tmp' }, dispatch: 'simulated' as const, resultKind: 'synthetic' as const }]
+      }))
+    })
+
+    const response = await map.get('butler:create')!(null, {
+      name: '预算超限', prompt: '检查历史记录', schedule: { kind: 'interval', intervalMinutes: 30 },
+      deliveryPref: 'none', authorizedDirs: ['/tmp'], outputDir: os.tmpdir(), outputOrganization: 'hourly',
+      modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off'
+    })
+
+    expect(response).toMatchObject({ ok: false, kind: 'preflight-blocked', report: { status: 'blocked', blockers: [{ code: 'MOCK_PREFLIGHT_INCOMPLETE' }] } })
     expect(map.get('butler:list')!()).toEqual([])
   })
 
@@ -243,7 +273,7 @@ describe('butler IPC workdir/config fields', () => {
     const legacy = createAutomationTask(d, { name: 'unclear update', prompt: 'old prompt', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'none', workDirs: [os.tmpdir()] })
     const map = new Map<string, (...args: unknown[]) => unknown>()
     const preflight = vi.fn(async () => ({ report: { status: 'blocked' as const, blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear' }], suggestedDirectories: [] }, bindings: [] }))
-    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d } as never, {
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d, getToolsConfig: () => ({}) as never } as never, {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
       preflight
     })
@@ -281,7 +311,7 @@ describe('butler IPC workdir/config fields', () => {
     const legacy = createAutomationTask(d, { name: 'legacy', prompt: 'report.csv', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', workDirs: [os.tmpdir()] })
     const map = new Map<string, (...args: unknown[]) => unknown>()
     const preflight = vi.fn(async () => ({ report: { status: 'unavailable' as const, blockers: [{ code: 'MODEL_UNAVAILABLE', messageKey: 'butler.preflight.unavailable' }], suggestedDirectories: [] }, bindings: [] }))
-    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d } as never, {
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d, getToolsConfig: () => ({}) as never } as never, {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
       preflight
     })
@@ -299,7 +329,7 @@ describe('butler IPC workdir/config fields', () => {
     db = d
     const map = new Map<string, (...args: unknown[]) => unknown>()
     const preflight = vi.fn(async () => ({ report: { status: 'passed' as const, blockers: [], suggestedDirectories: [] }, bindings: [] }))
-    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d } as never, {
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d, getToolsConfig: () => ({}) as never } as never, {
       now: () => 50_000,
       validateWorkDirs: vi.fn(async (roots) => ({ ok: true as const, workDirs: roots as string[] })),
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
@@ -318,7 +348,7 @@ describe('butler IPC workdir/config fields', () => {
     const map = new Map<string, (...args: unknown[]) => unknown>()
     let release!: (result: { report: { status: 'passed'; blockers: []; suggestedDirectories: [] }; bindings: [] }) => void
     const preflight = vi.fn(() => new Promise<{ report: { status: 'passed'; blockers: []; suggestedDirectories: [] }; bindings: [] }>((resolve) => { release = resolve }))
-    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d } as never, {
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, { db: d, getToolsConfig: () => ({}) as never } as never, {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
       preflight
     })

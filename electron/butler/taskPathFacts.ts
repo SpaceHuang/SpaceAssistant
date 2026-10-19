@@ -13,6 +13,8 @@ export type TaskPathFacts = {
   roots: string[]
   /** Write-only destination root; intentionally excluded from entries and roots. */
   outputRoot?: string
+  /** Metadata-only signal for offering outputRoot as a separately authorized read candidate; never grants read access. */
+  outputRootIsGitRepository?: boolean
   /** Local repository roots discovered from .git markers; facts only, never a permission decision. */
   gitRepositories: string[]
   entries: TaskPathFactEntry[]
@@ -47,12 +49,21 @@ export class TaskPathFactsProvider {
       roots.push(canonical)
     }
     let outputRoot: string | undefined
+    let outputRootIsGitRepository = false
     if (inputOutputRoot !== undefined) {
       if (typeof inputOutputRoot !== 'string' || inputOutputRoot.trim().length === 0 || !path.isAbsolute(inputOutputRoot)) throw new TaskPathFactsError('INVALID_OUTPUT_ROOT', '结果输出目录无效')
       outputRoot = await realpath(inputOutputRoot)
       await access(outputRoot, constants.W_OK | constants.X_OK)
       const outputInfo = await lstat(outputRoot)
       if (!outputInfo.isDirectory()) throw new TaskPathFactsError('INVALID_OUTPUT_ROOT', '结果输出目录必须是目录')
+      // A known-name marker check can identify a repo candidate without enumerating output contents
+      // or adding the output path to read roots. The user must separately authorize it for reads.
+      try {
+        const marker = await lstat(path.join(outputRoot, '.git'))
+        outputRootIsGitRepository = !marker.isSymbolicLink() && (marker.isDirectory() || marker.isFile())
+      } catch {
+        outputRootIsGitRepository = false
+      }
     }
     const canonicalRoots = [...new Set(roots)].sort()
     const entries: TaskPathFactEntry[] = canonicalRoots.map((root) => ({ path: root, relativePath: '', kind: 'directory' }))
@@ -105,10 +116,11 @@ export class TaskPathFactsProvider {
     uniqueEntries.sort((a, b) => a.path.localeCompare(b.path, 'en'))
     const complete = !truncated && errors === 0
     const sortedGitRepositories = [...gitRepositories].sort((a, b) => a.localeCompare(b, 'en'))
-    const digestInput = JSON.stringify({ authorizedRoots: canonicalRoots, outputRoot: outputRoot ?? null, gitRepositories: sortedGitRepositories, entries: uniqueEntries, coverage: { complete, truncated, errors, visited: uniqueEntries.length } })
+    const digestInput = JSON.stringify({ authorizedRoots: canonicalRoots, outputRoot: outputRoot ?? null, outputRootIsGitRepository, gitRepositories: sortedGitRepositories, entries: uniqueEntries, coverage: { complete, truncated, errors, visited: uniqueEntries.length } })
     return {
       roots: canonicalRoots,
       ...(outputRoot ? { outputRoot } : {}),
+      ...(outputRoot ? { outputRootIsGitRepository } : {}),
       gitRepositories: sortedGitRepositories,
       entries: uniqueEntries,
       coverage: { complete, truncated, roots: canonicalRoots.length, visited: uniqueEntries.length, errors },
