@@ -606,7 +606,7 @@ export function ButlerTaskSettings() {
             persistActiveTaskDraft()
           }}
         >
-          {editing && !editing.outputDir ? <Alert className="butler-task-editor__wide" type="info" showIcon message={t('butler.form.outputDirLegacy')} /> : null}
+          {editing && !outputDir ? <Alert className="butler-task-editor__wide" type="info" showIcon message={t('butler.form.outputDirLegacy')} /> : null}
           {authorizationReview ? (
             <Alert
               className="butler-permission-review"

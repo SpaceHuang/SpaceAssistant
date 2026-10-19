@@ -397,8 +397,12 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     renderTab()
     await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
-    expect(await screen.findByText('该旧任务尚未设置结果输出目录；请选择目录后才能保存。')).toBeTruthy()
+    const legacyNotice = '该旧任务尚未设置结果输出目录；请选择目录后才能保存。'
+    expect(await screen.findByText(legacyNotice)).toBeTruthy()
     expect(butlerUpdateTask).not.toHaveBeenCalled()
+
+    await chooseOutputDir('/tmp/legacy-task-results')
+    expect(screen.queryByText(legacyNotice)).toBeNull()
   })
 
   it('编辑任务回填已保存的输出路径和归档方式', async () => {
