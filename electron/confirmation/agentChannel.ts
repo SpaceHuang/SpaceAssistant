@@ -66,6 +66,27 @@ export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<Approv
   const extras: Partial<ApprovalCluePack> = {}
   for (const s of facts.signals) {
     if (s.kind === 'path-target' && !extras.targetPath) extras.targetPath = s.path
+    if (s.kind === 'script-path-extraction' && s.contentDigest && s.parametersDigest && s.environmentDigest && !extras.scriptApprovalBinding) {
+      extras.scriptApprovalBinding = {
+        sha256: s.contentDigest,
+        parametersSha256: s.parametersDigest,
+        environmentSha256: s.environmentDigest,
+        certifier: s.authenticationVersion ?? 'unknown'
+      }
+    }
+    if (s.kind === 'grep-invocation' && !extras.grepQuery) {
+      const options = [
+        s.glob ? `glob=${s.glob}` : undefined,
+        s.outputMode ? `output_mode=${s.outputMode}` : undefined,
+        s.ignoreCase !== undefined ? `ignore_case=${s.ignoreCase}` : undefined,
+        s.includeIgnored !== undefined ? `include_ignored=${s.includeIgnored}` : undefined,
+        s.multiline !== undefined ? `multiline=${s.multiline}` : undefined,
+        s.context !== undefined ? `context=${s.context}` : undefined,
+        s.headLimit !== undefined ? `head_limit=${s.headLimit}` : undefined,
+        s.timeoutSeconds !== undefined ? `timeout=${s.timeoutSeconds}` : undefined
+      ].filter((value): value is string => Boolean(value))
+      extras.grepQuery = `path=${s.path}; pattern=${s.pattern}${options.length ? `; ${options.join('; ')}` : ''}`
+    }
     if (s.kind === 'command-sequence' && !extras.command && s.commands.length > 0) {
       const rendered = renderCommandSequence(
         s.commands.slice(0, CLUE_COMMAND_MAX).map((cmd) => ({

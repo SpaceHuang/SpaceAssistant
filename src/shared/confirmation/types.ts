@@ -138,6 +138,12 @@ export type FactSignal =
   | { kind: 'automation-output-binding'; status: 'matched' }
   /** facts-stage host observation from the immutable task snapshot; policy decides whether Shell may run. */
   | { kind: 'automation-shell-permission'; status: 'matched' | 'missing' }
+  /** facts-stage host observation: grep scope is matched against the approved task receipt. */
+  | { kind: 'automation-grep-permission'; status: 'matched' | 'missing' }
+  /** facts-stage host observation: script scope is matched; each script is still approved by its exact hash. */
+  | { kind: 'automation-script-permission'; status: 'matched' | 'missing' }
+  /** Host-extracted grep arguments included in the security review evidence. */
+  | { kind: 'grep-invocation'; path: string; pattern: string; glob?: string; outputMode?: string; ignoreCase?: boolean; includeIgnored?: boolean; multiline?: boolean; context?: number; headLimit?: number; timeoutSeconds?: number }
   | { kind: 'policy-tier'; tier: 'loose' | 'standard' | 'strict' | 'custom' }
   | { kind: 'outbound-content'; inspectionCoverage: 'complete' | 'partial' | 'unavailable'; evidenceKinds: readonly string[] }
   | { kind: 'network-egress'; domains: string[] }
@@ -339,6 +345,9 @@ export interface ApprovalCluePack {
   signals: string[]
   targetPath?: string
   command?: string
+  grepQuery?: string
+  /** Host-computed digests binding the exact script and parameters reviewed for this invocation. */
+  scriptApprovalBinding?: { sha256: string; parametersSha256: string; environmentSha256: string; certifier: string }
   /** Provenance of the exact facts reviewed by policy and approval; contains no raw input. */
   factsProvenance?: { factId: string; extractorVersion: string; completeness: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale'; factsRevision: number; policyVersion: string }
   /** Untrusted model-provided explanation attached to this invocation. */

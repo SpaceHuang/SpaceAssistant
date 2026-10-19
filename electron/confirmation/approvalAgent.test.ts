@@ -1208,7 +1208,9 @@ describe('线索包任务声明（D：可信证据分区）', () => {
     const authorizationRecord = {
       id: 'authorization-1', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
       taskRevision: 4, preflightFactsDigest: 'facts-4', permissions: [
-        { kind: 'local-shell', scopeRoots: ['/workspace/repo'] },
+        { kind: 'local-shell', scopeRoots: ['/workspace/repo'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/workspace/repo' }] },
+        { kind: 'grep', scopeRoots: ['/workspace/repo/src'] },
+        { kind: 'run-script', scopeRoots: ['/workspace/repo'], scriptHashBinding: 'per-invocation' },
         { kind: 'result-write', outputDirectory: '/results', organization: 'daily' }
       ]
     }
@@ -1217,9 +1219,26 @@ describe('线索包任务声明（D：可信证据分区）', () => {
     expect(rendered).toContain('主进程记录的任务授权')
     expect(rendered).toContain('authorization-1')
     expect(rendered).toContain('/workspace/repo')
+    expect(rendered).toContain('git log --oneline -5')
+    expect(rendered).toContain('per-invocation')
     expect(rendered).toContain('/results')
     expect(rendered.indexOf('authorization-1')).toBeGreaterThan(rendered.lastIndexOf('```'))
     expect(rendered).toContain('不代表本次具体命令或目标已自动批准')
+  })
+
+  it('把 grep 查询参数和本次 run_script SHA-256 放进不可信调用证据', async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const rendered = renderCluePackForTest(clue({
+      toolName: 'run_script',
+      grepQuery: 'path=/workspace/repo/src; pattern=TODO; glob=*.ts; output_mode=content',
+      scriptApprovalBinding: { sha256: 'a'.repeat(64), parametersSha256: 'b'.repeat(64), environmentSha256: 'c'.repeat(64), certifier: 'script-certifier-v1' }
+    } as never))
+
+    expect(rendered).toContain('grep 搜索参数')
+    expect(rendered).toContain('pattern=TODO')
+    expect(rendered).toContain('run_script SHA-256 审批绑定')
+    expect(rendered).toContain('"sha256":"' + 'a'.repeat(64) + '"')
+    expect(rendered.indexOf('pattern=TODO')).toBeLessThan(rendered.indexOf('```', rendered.indexOf('grep 搜索参数')))
   })
 
   it('无 taskDigest（P3 桌面等无任务上下文调用方）→ 不渲染任务小节', async () => {

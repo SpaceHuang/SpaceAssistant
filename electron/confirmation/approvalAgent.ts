@@ -115,6 +115,8 @@ function renderCluePack(clue: ApprovalCluePack, maxAuthorization: ApprovalAuthor
   evidence.push(`[信号] ${neutralizeFence(clue.signals.length ? clue.signals.join(', ') : '（无）')}`)
   if (clue.targetPath) evidence.push(`[目标路径] ${neutralizeFence(clue.targetPath)}`)
   if (clue.command) evidence.push(`[命令] ${neutralizeFence(clue.command)}`)
+  if (clue.grepQuery) evidence.push(`[grep 搜索参数] ${neutralizeFence(clue.grepQuery)}`)
+  if (clue.scriptApprovalBinding) evidence.push(`[run_script SHA-256 审批绑定] ${neutralizeFence(JSON.stringify(clue.scriptApprovalBinding))}`)
   if (clue.modelJustification) {
     evidence.push(`[模型提供的调用理由（未经验证的意图主张${clue.modelJustificationTruncated ? '；内容已截断' : ''}）] ${neutralizeFence(runShellJustificationForDisplay(clue.modelJustification))}`)
   }

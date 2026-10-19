@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { getPreflightIssueMessageKey, type AutomationTaskToolPermission, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
+import { getPreflightIssueMessageKey, type AutomationTaskToolRequirement, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider, type TaskPathFacts } from './taskPathFacts'
 import { resolveTaskTarget, type ProposedTaskTarget } from './taskTargetResolver'
 
@@ -15,15 +15,20 @@ export type TaskPreflightAnalysisInput = {
 }
 
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
-export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredTools?: AutomationTaskToolPermission[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }> }
+export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }> }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
 export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number }
-export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredTools?: AutomationTaskToolPermission[] }
+export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[] }
 export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; factsProvider?: Pick<TaskPathFactsProvider, 'collect'>; timeoutMs?: number; now?: () => number }
 
 const issue = (code: string, field = 'prompt', details: Partial<PreflightIssue> = {}): PreflightIssue => ({ code, field, messageKey: getPreflightIssueMessageKey(code), ...details })
 const emptyReport = (status: PreflightReport['status'], blockers: PreflightIssue[], suggestedDirectories: SuggestedDirectory[] = []): PreflightReport => ({ status, blockers, suggestedDirectories })
 const DEFAULT_ANALYZER_TIMEOUT_MS = 60_000
+
+function isWithinRoot(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
 
 function classifyAnalyzerFailure(error: unknown): 'ANALYZER_TIMEOUT' | 'ANALYZER_INVALID_RESPONSE' | 'ANALYZER_UNAVAILABLE' {
   const code = error instanceof Error ? error.message : ''
@@ -43,8 +48,17 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
     if (record.kind === 'output' && typeof record.path === 'string' && ['file', 'directory'].includes(String(record.expectedType))) continue
     return undefined
   }
-  const requiredTools = (value as { requiredTools?: unknown }).requiredTools
-  if (requiredTools !== undefined && (!Array.isArray(requiredTools) || requiredTools.some((tool) => tool !== 'run_shell'))) return undefined
+  const requiredPermissions = (value as { requiredPermissions?: unknown }).requiredPermissions
+  if (requiredPermissions !== undefined && (!Array.isArray(requiredPermissions) || requiredPermissions.some((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return true
+    const permission = item as Record<string, unknown>
+    if (permission.tool === 'run_shell') return typeof permission.command !== 'string' || !permission.command.trim() || permission.command.length > 4096 || typeof permission.workingDirectory !== 'string' || !permission.workingDirectory.trim()
+      || (permission.timeout !== undefined && (typeof permission.timeout !== 'number' || !Number.isInteger(permission.timeout) || permission.timeout < 1 || permission.timeout > 86400))
+    if (permission.tool === 'grep' || permission.tool === 'run_script') return !Array.isArray(permission.scopeRoots) || permission.scopeRoots.length === 0 || permission.scopeRoots.length > 20 || permission.scopeRoots.some((root) => typeof root !== 'string' || !root.trim())
+    return true
+  }))) return undefined
+  // Old tool-name-only requests have no safe parameter scope and cannot be upgraded into grants.
+  if ('requiredTools' in value && Array.isArray((value as { requiredTools?: unknown }).requiredTools) && (value as { requiredTools: unknown[] }).requiredTools.length > 0) return undefined
   const clarifications = (value as { clarifications?: unknown }).clarifications
   const allowedReasons = new Set(['no_target_identified', 'scope_unclear', 'missing_location', 'multiple_matches', 'target_missing', 'git_repository_not_found', 'capability_not_authorized', 'other'])
   if (clarifications !== undefined && (!Array.isArray(clarifications) || clarifications.some((item) => {
@@ -88,11 +102,16 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     return { report: emptyReport('unavailable', [issue(classifyAnalyzerFailure(error))]), bindings: [], factsDigest: facts.digest }
   }
   if (!analysis) return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
-  const requiredTools = [...new Set(analysis.requiredTools ?? [])]
-  // facts: 本机命令授权必须有用户选择并由主机核验的目录范围；结果输出根不能充当读取/命令范围。
-  if (requiredTools.includes('run_shell') && facts.roots.length === 0) {
+  const requiredPermissions = analysis.requiredPermissions ?? []
+  // facts: 本机工具授权必须落在用户选择并由主机核验的目录范围；结果输出根不能充当读取/命令范围。
+  if (requiredPermissions.length > 0 && facts.roots.length === 0) {
     return { report: emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs')]), bindings: [], factsDigest: facts.digest }
   }
+  const requirementsInScope = requiredPermissions.every((permission) => permission.tool === 'run_shell'
+    ? facts.roots.includes(permission.workingDirectory)
+    : permission.scopeRoots.every((root) => facts.roots.some((authorizedRoot) => isWithinRoot(root, authorizedRoot))
+      && facts.entries.some((entry) => entry.path === root && entry.kind === 'directory')))
+  if (!requirementsInScope) return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
   const factPaths = new Set(facts.entries.map((entry) => entry.path))
   // Facts/report 阶段只保留可核验的原文片段、原因代码和主机 facts 中的候选路径；模型文本不授予路径，也不改写执行授权。
   const clarificationIssues: PreflightIssue[] = (analysis.clarifications ?? [])
@@ -136,6 +155,6 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     report: emptyReport(blockers.length ? 'blocked' : 'passed', blockers, suggestedDirectories),
     bindings: blockers.length ? [] : bindings,
     factsDigest: facts.digest,
-    requiredTools
+    requiredPermissions
   }
 }

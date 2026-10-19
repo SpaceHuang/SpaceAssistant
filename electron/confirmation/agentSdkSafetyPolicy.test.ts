@@ -88,6 +88,29 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate(staleBinding)).resolves.toEqual({ kind: 'deny', reasonCode: 'STALE_AUTHORIZATION' })
   })
 
+  it('run_script 审批后 SHA-256 或参数绑定变化时不沿用旧 Agent 审批', async () => {
+    const toolInput = { code: 'print(1)', language: 'python', args: ['first'] }
+    const scriptBinding = { ...binding, capabilityId: 'run_script',
+      inputSnapshotHash: createHash('sha256').update('{"args":["first"],"code":"print(1)","language":"python"}').digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'run_script' } }
+    const scriptArgs = { ...baseArgs, toolName: 'run_script', toolInput } as ToolCallGateArgs
+    const makeResult = (sha256: string, parametersSha256: string): ToolCallGateResult => {
+      const scriptFacts: ContentFacts = { toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+        signals: [{ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
+          contentDigest: sha256, parametersDigest: parametersSha256, environmentDigest: 'env-a', authenticationVersion: 'script-certifier-v1' }],
+        summary: { text: 'script review' } }
+      return { decision: { type: 'require-confirm', ruleId: 'automation-script-review', answerer: 'agent', riskLevel: 'high',
+        facts: scriptFacts, memoryTiers: [], timeoutMs: 1000, disposition: 'auto-eligible' }, facts: scriptFacts, approvedFactIds: [] }
+    }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(makeResult('a'.repeat(64), 'b'.repeat(64))).mockResolvedValueOnce(makeResult('c'.repeat(64), 'd'.repeat(64)))
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => scriptArgs, evaluateGate })
+
+    await expect(policy.evaluate(scriptBinding)).resolves.toMatchObject({ kind: 'ask', answerer: 'agent' })
+    markAgentSdkSafetyDecisionConfirmed(policy, scriptBinding, 'agent')
+    await expect(policy.evaluate({ ...scriptBinding, phase: 'recheck', authorizationVersion: 'script-v1' }))
+      .resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'automation-script-review' })
+  })
+
   it('把用户明确选择的记忆键传到确认提交回调，未选择则不写入', async () => {
     const key = { kind: 'script-content' as const, digest: 'a'.repeat(64), sessionId: 'session-1' }
     const scriptFacts: ContentFacts = {

@@ -21,6 +21,7 @@ import { resetRunningRemoteAgentRegistryForTests } from '../remote/remoteAgentRe
 import type { RemoteContext } from '../tools/types'
 import { DEFAULT_SHELL_CONFIG, DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG, type ToolsConfig } from '../../src/shared/domainTypes'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
+import type { AutomationTaskAccessPermissions } from '../../src/shared/automationTaskTypes'
 import { ReadConfirmationRegistry } from './readConfirmationRegistry'
 import { finalizeReadConfirmation } from './readConfirmationFlow'
 import * as readPathFacts from './extractors/readPathFacts'
@@ -89,6 +90,20 @@ const remoteContext = (overrides: Partial<RemoteContext> = {}): RemoteContext =>
 
 function attachmentRegistration(localPath: string, id = 'attachment-1', messageId = 'm1') {
   return { id, messageId, localPath, fileName: path.basename(localPath), mimeType: 'text/plain' }
+}
+
+function automationToolPermission(kind: 'grep' | 'run_script', scopeRoot: string): AutomationTaskAccessPermissions {
+  const permission = kind === 'grep'
+    ? { kind: 'grep' as const, scopeRoots: [scopeRoot] }
+    : { kind: 'run-script' as const, scopeRoots: [scopeRoot], scriptHashBinding: 'per-invocation' as const }
+  return {
+    directories: [scopeRoot],
+    tools: [kind],
+    authorizationRecord: {
+      id: `test-${kind}-receipt`, actor: 'user-confirmation', source: 'task-preflight-confirmation',
+      approvedAt: 1, taskRevision: 1, permissions: [permission]
+    }
+  }
 }
 
 
@@ -890,7 +905,7 @@ describe('evaluateToolCallGate', () => {
     try {
       await fs.writeFile(path.join(root, 'note.txt'), 'needle')
       for (const toolInput of [{ pattern: 'needle', path: '.' }, { pattern: 'needle' }]) {
-        const gate = await evaluateToolCallGate(base({ lane, workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'grep', toolInput }))
+        const gate = await evaluateToolCallGate(base({ lane, workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'grep', toolInput, ...(lane === 'automation' ? { taskAccessPermissions: automationToolPermission('grep', root) } : {}) }))
         expect(gate.readPathFact?.targetKind).toBe('directory')
         expect(gate.decision.type).toBe('auto-allow')
         expect(gate.readExecutionPermit?.targets[0]).toMatchObject({ targetKind: 'directory', scope: 'subtree' })
@@ -1445,7 +1460,7 @@ describe('evaluateToolCallGate', () => {
     expect(desktop.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'javascript', status: 'unverified' })
     expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unverified-language-confirm', answerer: 'user' })
 
-    const unattended = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_script', toolInput }))
+    const unattended = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_script', toolInput, taskAccessPermissions: automationToolPermission('run_script', '/') }))
     expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-unverified-script-language-deny' })
 
     const unsupported = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { language: 'ruby', code: 'puts 1' } }))

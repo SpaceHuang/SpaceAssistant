@@ -17,7 +17,7 @@ import { getConfigValue } from '../database'
 import { runTaskPreflight, type TaskPreflightAnalyzer } from './taskPreflight'
 import { createTaskPreflightModelAnalyzer } from './taskPreflightModelAnalyzer'
 import { getPreflightIssueMessageKey, type PreflightReport, type ButlerTaskWriteResult } from '../../src/shared/automationTaskTypes'
-import type { AutomationOutputOrganization, AutomationTaskPermission, AutomationTaskAuthorizationRecord } from '../../src/shared/automationTaskTypes'
+import type { AutomationOutputOrganization, AutomationTaskPermission, AutomationTaskAuthorizationRecord, AutomationTaskToolRequirement } from '../../src/shared/automationTaskTypes'
 
 /**
  * 管家 IPC（P6 任务 CRUD 面 + P4 手动触发）。渲染进程只表达意图：
@@ -113,10 +113,15 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     return raw === 'direct' || raw === 'daily' || raw === 'hourly' ? raw : undefined
   }
 
-  function buildPermissionList(task: { authorizedDirs: string[]; outputDir: string; outputOrganization: AutomationOutputOrganization; deliveryPref: 'desktop' | 'feishu' | 'wechat' | 'none'; deliveryTarget?: string }, requiredTools: readonly string[]): AutomationTaskPermission[] {
+  function buildPermissionList(task: { authorizedDirs: string[]; outputDir: string; outputOrganization: AutomationOutputOrganization; deliveryPref: 'desktop' | 'feishu' | 'wechat' | 'none'; deliveryTarget?: string }, requiredPermissions: readonly AutomationTaskToolRequirement[]): AutomationTaskPermission[] {
     const permissions: AutomationTaskPermission[] = task.authorizedDirs.map((path) => ({ kind: 'directory-read-write', path }))
     permissions.push({ kind: 'result-write', outputDirectory: task.outputDir, organization: task.outputOrganization })
-    if (requiredTools.includes('run_shell')) permissions.push({ kind: 'local-shell', scopeRoots: [...task.authorizedDirs] })
+    const shellRequirements = requiredPermissions.filter((permission): permission is Extract<AutomationTaskToolRequirement, { tool: 'run_shell' }> => permission.tool === 'run_shell')
+    if (shellRequirements.length) permissions.push({ kind: 'local-shell', scopeRoots: [...task.authorizedDirs], commands: shellRequirements.map(({ command, workingDirectory, timeout }) => ({ command, workingDirectory, ...(timeout !== undefined ? { timeout } : {}) })) })
+    const grepRoots = [...new Set(requiredPermissions.filter((permission) => permission.tool === 'grep').flatMap((permission) => permission.tool === 'grep' ? permission.scopeRoots : []))]
+    if (grepRoots.length) permissions.push({ kind: 'grep', scopeRoots: grepRoots })
+    const scriptRoots = [...new Set(requiredPermissions.filter((permission) => permission.tool === 'run_script').flatMap((permission) => permission.tool === 'run_script' ? permission.scopeRoots : []))]
+    if (scriptRoots.length) permissions.push({ kind: 'run-script', scopeRoots: scriptRoots, scriptHashBinding: 'per-invocation' })
     if (task.deliveryPref !== 'none') permissions.push({ kind: 'deliver-result', delivery: task.deliveryPref, ...(task.deliveryTarget ? { target: task.deliveryTarget } : {}) })
     return permissions
   }
@@ -254,7 +259,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       reasoningEffort: config.reasoningEffort,
       ...(payload?.enabled !== undefined ? { enabled: payload.enabled } : {})
     }
-    const permissions = buildPermissionList({ authorizedDirs, outputDir: outputResult.outputDir, outputOrganization, deliveryPref, ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}) }, inspection.requiredTools ?? [])
+    const permissions = buildPermissionList({ authorizedDirs, outputDir: outputResult.outputDir, outputOrganization, deliveryPref, ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}) }, inspection.requiredPermissions ?? [])
     return stageAuthorizationReview({
       permissions,
       report: inspection.report,
@@ -345,7 +350,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       outputOrganization,
       deliveryPref: candidate.deliveryPref,
       ...(candidate.deliveryTarget ? { deliveryTarget: candidate.deliveryTarget } : {})
-    }, inspection.requiredTools ?? [])
+    }, inspection.requiredPermissions ?? [])
     return stageAuthorizationReview({
       taskId: id,
       expectedCurrentTaskRevision: existing.taskRevision ?? 0,

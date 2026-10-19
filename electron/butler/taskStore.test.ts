@@ -87,7 +87,9 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
       authorizationRecord: {
         id: 'authorization-1', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
         taskRevision: 1, preflightFactsDigest: 'facts-digest', permissions: [
-          { kind: 'local-shell', scopeRoots: ['/authorized/source'] },
+          { kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/authorized/source', timeout: 60 }] },
+          { kind: 'grep', scopeRoots: ['/authorized/source'] },
+          { kind: 'run-script', scopeRoots: ['/authorized/source'], scriptHashBinding: 'per-invocation' },
           { kind: 'result-write', outputDirectory: '/results', organization: 'hourly' }
         ]
       }
@@ -95,10 +97,10 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     const claimed = insertManualTaskClaim(d, authorizedTask.id, 'shell-grant-snapshot')
     const started = transitionClaimToRunning(d, claimed.runId!, authorizedTask.id, 0, claimed.scheduleGeneration!)
 
-    expect(authorizedTask.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell'], authorizationRecord: { id: 'authorization-1' } })
-    expect(started).toMatchObject({ ok: true, snapshot: { accessPermissions: { directories: ['/authorized/source'], tools: ['run_shell'], authorizationRecord: { id: 'authorization-1' } } } })
+    expect(authorizedTask.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1' } })
+    expect(started).toMatchObject({ ok: true, snapshot: { accessPermissions: { directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1' } } } })
     updateAutomationTaskConditional(d, authorizedTask.id, { accessPermissions: { directories: ['/authorized/source'], tools: [] } } as never)
-    expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell'], authorizationRecord: { id: 'authorization-1' } })
+    expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1' } })
   })
 
   it('does not expose a persisted authorization receipt after its task revision becomes stale', () => {
@@ -106,12 +108,37 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
       authorizationRecord: {
         id: 'authorization-stale', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
-        taskRevision: 1, permissions: [{ kind: 'local-shell', scopeRoots: ['/authorized/source'] }]
+        taskRevision: 1, permissions: [{ kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log', workingDirectory: '/authorized/source' }] }]
       }
     })
     getDbConnection(d).prepare('UPDATE automation_tasks SET task_revision = ? WHERE id = ?').run(2, task.id)
 
     expect(getAutomationTask(d, task.id)?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: [] })
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
+  })
+
+  it('does not upgrade historical tool-name or root-only Shell grants into parameter authorization', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'legacy-shell-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'local-shell', scopeRoots: ['/authorized/source'] }]
+      }
+    } as never)
+    expect(getAutomationTask(d, task.id)?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: [] })
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
+  })
+
+  it('drops a Shell receipt whose timeout is outside the supported range', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'invalid-shell-timeout', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log', workingDirectory: '/authorized/source', timeout: 86401 }] }]
+      }
+    } as never)
+
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.tools).toEqual([])
     expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
   })
 

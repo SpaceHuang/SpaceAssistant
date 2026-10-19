@@ -261,6 +261,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'deny', locked: true, reason: '无人值守调用无法确认脚本访问路径'
   },
   {
+    id: 'automation-script-permission-missing-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_script', signals: ['automation-script-permission:missing'] },
+    denyClass: 'forbidden',
+    action: 'deny', locked: true, reason: '定时任务未获得覆盖脚本工作目录和访问路径的 run_script 授权'
+  },
+  {
     id: 'automation-unverified-script-language-deny',
     when: 'invocation',
     match: { lane: ['automation'], toolName: 'run_script', signals: ['script-language-analysis:unverified'] },
@@ -710,6 +717,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['automation'], toolName: ['write_file', 'edit_file'], signals: ['automation-output-binding:matched'] },
     action: 'allow',
     reason: '无人值守写入仅限本次预检绑定的结果输出目标'
+  },
+  {
+    id: 'automation-grep-permission-missing-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'grep', signals: ['automation-grep-permission:missing'] },
+    action: 'deny', locked: true, denyClass: 'forbidden',
+    reason: '定时任务未获得覆盖本次搜索路径的 grep 授权'
   },
   {
     id: 'automation-readonly-allow',

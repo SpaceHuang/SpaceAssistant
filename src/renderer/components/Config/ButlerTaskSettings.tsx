@@ -124,7 +124,12 @@ function permissionDescription(permission: AutomationTaskPermission, t: TaskActi
   switch (permission.kind) {
     case 'directory-read-write': return t('butler.form.permissionDirectoryReadWrite', { path: permission.path })
     case 'result-write': return t('butler.form.permissionResultWrite', { path: permission.outputDirectory, organization: outputOrganizationText(permission.organization, t) })
-    case 'local-shell': return t('butler.form.permissionLocalShell', { scope: permission.scopeRoots.length ? permission.scopeRoots.join('、') : t('butler.form.permissionNoDirectoryScope') })
+    case 'local-shell': return t('butler.form.permissionLocalShell', {
+      scope: permission.scopeRoots.length ? permission.scopeRoots.join('、') : t('butler.form.permissionNoDirectoryScope'),
+      commands: permission.commands.map(({ command, workingDirectory, timeout }) => `${command}（${workingDirectory}；${t('butler.form.permissionShellTimeout', { timeout: timeout === undefined ? t('butler.form.permissionDefaultTimeout') : `${timeout}s` })}）`).join('；')
+    })
+    case 'grep': return t('butler.form.permissionGrep', { scope: permission.scopeRoots.join('、') })
+    case 'run-script': return t('butler.form.permissionRunScript', { scope: permission.scopeRoots.join('、') })
     case 'deliver-result': return permission.target
       ? t('butler.form.permissionDeliverResultTo', { delivery: deliveryText(permission.delivery, t), target: permission.target })
       : t('butler.form.permissionDeliverResult', { delivery: deliveryText(permission.delivery, t) })

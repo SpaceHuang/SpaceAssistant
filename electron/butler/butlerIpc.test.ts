@@ -116,11 +116,16 @@ describe('butler IPC workdir/config fields', () => {
 
   it('requires explicit user confirmation of the host-built permission list before saving and ignores renderer tool grants', async () => {
     const d = openDatabase(':memory:')
+    const permissionRoot = await realpath(os.tmpdir())
     db = d
     const map = new Map<string, (...args: unknown[]) => unknown>()
     const preflight = vi.fn(async () => ({
       report: { status: 'passed' as const, blockers: [], suggestedDirectories: [] },
-      bindings: [], factsDigest: 'facts-digest', requiredTools: ['run_shell']
+      bindings: [], factsDigest: 'facts-digest', requiredPermissions: [
+        { tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: permissionRoot, timeout: 45 },
+        { tool: 'grep', scopeRoots: [permissionRoot] },
+        { tool: 'run_script', scopeRoots: [permissionRoot] }
+      ]
     }))
     registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
       db: d, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({}) as never
@@ -138,14 +143,16 @@ describe('butler IPC workdir/config fields', () => {
     expect(review).toMatchObject({ ok: false, kind: 'authorization-review-required', permissions: expect.arrayContaining([
       expect.objectContaining({ kind: 'directory-read-write', path: await realpath(os.tmpdir()) }),
       expect.objectContaining({ kind: 'result-write', outputDirectory: await realpath(os.tmpdir()), organization: 'daily' }),
-      expect.objectContaining({ kind: 'local-shell', scopeRoots: [await realpath(os.tmpdir())] })
+      expect.objectContaining({ kind: 'local-shell', scopeRoots: [permissionRoot], commands: [{ command: 'git log --oneline -5', workingDirectory: permissionRoot, timeout: 45 }] }),
+      expect.objectContaining({ kind: 'grep', scopeRoots: [permissionRoot] }),
+      expect.objectContaining({ kind: 'run-script', scopeRoots: [permissionRoot], scriptHashBinding: 'per-invocation' })
     ]) })
     expect(review.reviewId).toBeTruthy()
     expect(map.get('butler:list')!()).toEqual([])
     expect(preflight).toHaveBeenCalledWith(expect.not.objectContaining({ accessPermissions: expect.anything() }), expect.any(Object))
 
     const committed = await map.get('butler:confirm-write')!(null, { reviewId: review.reviewId }) as { ok: boolean; task?: { accessPermissions?: { tools: string[]; authorizationRecord?: { actor: string; source: string; permissions: unknown[] } } } }
-    expect(committed).toMatchObject({ ok: true, task: { accessPermissions: { tools: ['run_shell'], authorizationRecord: {
+    expect(committed).toMatchObject({ ok: true, task: { accessPermissions: { tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: {
       actor: 'user-confirmation', source: 'task-preflight-confirmation', permissions: expect.any(Array)
     } } } })
     expect(await map.get('butler:confirm-write')!(null, { reviewId: review.reviewId })).toMatchObject({ ok: false, kind: 'validation-error' })

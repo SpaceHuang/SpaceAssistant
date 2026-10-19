@@ -89,6 +89,7 @@ import { analyzeShellCommand } from '../shell/analyzeShellCommand'
 import { classifyShellCommandEffect } from './extractors/shellEffectFacts'
 import { extractScriptPathFacts, type ScriptPathFacts } from './extractors/scriptPathFacts'
 import { getEffectiveSensitivePrefixes } from '../shell/shellSensitivePaths'
+import { matchAutomationGrepPermission, matchAutomationScriptPermission, matchAutomationShellPermission } from '../butler/automationTaskPermissionMatch'
 import { evaluateFileToolAutoApproval } from '../tools/writeFileAutoApproval'
 import { extractHostname } from '../browser/urlSecurity'
 import type { ActDangerAssessment } from '../browser/browserActionPolicy'
@@ -894,7 +895,31 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
 
   if (args.toolName === 'run_shell' && facts) {
     facts.signals.push(...shellPathSignals)
-    if (lane === 'automation') facts.signals.push({ kind: 'automation-shell-permission', status: args.taskAccessPermissions?.tools.includes('run_shell') ? 'matched' : 'missing' })
+    // facts: report whether the frozen receipt matches the exact command text, arguments and cwd; policy rules decide the outcome.
+    if (lane === 'automation') {
+      const command = typeof args.toolInput.command === 'string' ? args.toolInput.command : ''
+      const timeout = typeof args.toolInput.timeout === 'number' ? args.toolInput.timeout : undefined
+      facts.signals.push({ kind: 'automation-shell-permission', status: matchAutomationShellPermission(args.taskAccessPermissions, command, args.workDir, timeout) ? 'matched' : 'missing' })
+    }
+  }
+  if (args.toolName === 'grep' && facts) {
+    const searchPath = readPathFact?.normalizedPath ?? ''
+    if (lane === 'automation') facts.signals.push({ kind: 'automation-grep-permission', status: matchAutomationGrepPermission(args.taskAccessPermissions, searchPath) ? 'matched' : 'missing' })
+    const pattern = typeof args.toolInput.pattern === 'string' ? args.toolInput.pattern : ''
+    facts.signals.push({ kind: 'grep-invocation', path: searchPath, pattern,
+      ...(typeof args.toolInput.glob === 'string' ? { glob: args.toolInput.glob } : {}),
+      ...(typeof args.toolInput.output_mode === 'string' ? { outputMode: args.toolInput.output_mode } : {}),
+      ...(typeof args.toolInput.ignore_case === 'boolean' ? { ignoreCase: args.toolInput.ignore_case } : {}),
+      ...(typeof args.toolInput.include_ignored === 'boolean' ? { includeIgnored: args.toolInput.include_ignored } : {}),
+      ...(typeof args.toolInput.multiline === 'boolean' ? { multiline: args.toolInput.multiline } : {}),
+      ...(typeof args.toolInput.context === 'number' ? { context: args.toolInput.context } : {}),
+      ...(typeof args.toolInput.head_limit === 'number' ? { headLimit: args.toolInput.head_limit } : {}),
+      ...(typeof args.toolInput.timeout === 'number' ? { timeoutSeconds: args.toolInput.timeout } : {})
+    })
+  }
+  if (args.toolName === 'run_script' && facts && lane === 'automation') {
+    const observedPaths = facts.signals.flatMap((signal) => signal.kind === 'path-target' ? [signal.path] : [])
+    facts.signals.push({ kind: 'automation-script-permission', status: matchAutomationScriptPermission(args.taskAccessPermissions, args.workDir, observedPaths) ? 'matched' : 'missing' })
   }
   // ===== R5：shell unsupported 事实下传（gate 层零特例——不派发 desktop 规则，照常进引擎）=====
   if (args.toolName === 'run_shell' && result.shellPrecheck) {

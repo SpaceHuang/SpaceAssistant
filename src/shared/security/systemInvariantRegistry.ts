@@ -75,10 +75,18 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
   },
   {
     id: 'SYS-AUTOSHELL-001', owner: 'electron/butler + electron/confirmation', stage: 'final-check', category: 'capability',
-    rationale: 'An unattended Shell grant must come from a main-process authorization receipt created after the user confirms the reviewed preflight list, then frozen with the task run; renderer or business-Agent claims cannot create the receipt.',
+    rationale: 'An unattended Shell grant must come from a main-process authorization receipt created after the user confirms exact command arguments, timeout and working directory, then frozen with the task run; renderer or business-Agent claims cannot create the receipt.',
     effect: 'validate', scope: 'electron/butler/butlerIpc.ts:butler:confirm-write;electron/butler/taskStore.ts:transitionClaimToRunning;electron/runtime/invocationAssembler.ts:createConfirmationPort;electron/confirmation/toolCallGate.ts:automation-shell-permission',
-    audit: 'policy decision records automation-shell-permission status; the approval clue includes the host-issued receipt ID, task revision and exact permission scopes from the frozen run snapshot',
+    audit: 'policy decision records whether the frozen receipt matches exact Shell command arguments, timeout and cwd; the approval clue includes the host-issued receipt ID, task revision and exact permission scopes from the frozen run snapshot',
     tests: ['electron/butler/butlerIpc.test.ts', 'electron/butler/taskStore.test.ts', 'electron/confirmation/agentChannel.test.ts', 'electron/confirmation/approvalAgent.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/toolCallGate.test.ts'],
+    overrideability: 'none'
+  },
+  {
+    id: 'SYS-AUTOTOOLS-001', owner: 'electron/butler + electron/confirmation', stage: 'final-check', category: 'integrity',
+    rationale: 'Scheduled grep, Shell and script calls must match the exact host-issued task receipt scopes; each script approval additionally binds host-computed code, parameter and environment hashes.',
+    effect: 'validate', scope: 'electron/butler/taskPreflight.ts:requiredPermissions;electron/butler/butlerIpc.ts:buildPermissionList;electron/butler/automationTaskPermissionMatch.ts;electron/confirmation/toolCallGate.ts:automation-tool-permission;electron/confirmation/agentSdkSafetyPolicy.ts:matchesScriptApprovalBinding',
+    audit: 'policy trace records grep, Shell and script scope match status; reviewer evidence contains the exact grep arguments or script digests; final-check invalidates approval when script code, parameters, or environment hashes change',
+    tests: ['electron/butler/taskPreflight.test.ts', 'electron/butler/butlerIpc.test.ts', 'electron/butler/taskStore.test.ts', 'electron/butler/automationTaskPermissionMatch.test.ts', 'electron/butler/butlerInvoker.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/agentChannel.test.ts', 'electron/confirmation/approvalAgent.test.ts', 'electron/confirmation/agentSdkSafetyPolicy.test.ts'],
     overrideability: 'none'
   },
   {

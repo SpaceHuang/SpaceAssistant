@@ -1117,6 +1117,16 @@ describe('shell signal tokens', () => {
     }]))
     expect(tokens).toContain('shell-connector:&&')
   })
+
+  it('maps host-matched scheduled task tool permissions into policy tokens', () => {
+    const tokens = signalTokenSet(mkFacts('grep', 'read', [
+      { kind: 'automation-grep-permission', status: 'missing' },
+      { kind: 'grep-invocation', path: '/workspace/src', pattern: 'TODO' }
+    ]))
+    expect(tokens).toContain('automation-grep-permission:missing')
+    expect(tokens).toContain('grep-invocation')
+    expect(signalTokenSet(mkFacts('run_script', 'execute', [{ kind: 'automation-script-permission', status: 'matched' }]))).toContain('automation-script-permission:matched')
+  })
 })
 
 describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () => {

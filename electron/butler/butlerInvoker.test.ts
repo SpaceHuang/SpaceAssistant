@@ -3,7 +3,7 @@ import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 const mockCreateAnthropicClient = vi.fn()
 const mockResolveLlmCredentials = vi.fn()
@@ -130,9 +130,10 @@ import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { TurnRuntime } from '../turnRuntime'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
-import { executeClaimedRun, runButlerTask } from './butlerInvoker'
+import { buildButlerSystemAppendix, executeClaimedRun, runButlerTask } from './butlerInvoker'
 import { ButlerTaskScheduler, type SchedulerRunRequest } from './taskScheduler'
 import { claimDueSlotAndAdvance, createAutomationTask, createAutomationTask as createStoredAutomationTask, getLatestRunForTask, getRunById, insertManualTaskClaim, updateAutomationTask } from './taskStore'
+import type { AutomationTaskPermission } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider } from './taskPathFacts'
 import { resolveAutomationRunOutputDir } from './taskOutputDirectory'
 import { getSession } from '../database'
@@ -151,8 +152,64 @@ import { readDisabledPolicyRuleIds, resolveEffectivePolicyRulesWithOrigin, write
 import { registerAppIpcHandlers } from '../appIpc'
 import type { AppIpcContext } from '../appIpc'
 
+describe('buildButlerSystemAppendix tool scopes', () => {
+  it('describes only receipt-backed Shell commands, grep roots and per-script hash review', () => {
+    const appendix = buildButlerSystemAppendix({ directories: ['/workspace/repo'], tools: [], authorizationRecord: {
+      id: 'receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision: 1,
+      permissions: [
+        { kind: 'local-shell', scopeRoots: ['/workspace/repo'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/workspace/repo', timeout: 30 }] },
+        { kind: 'grep', scopeRoots: ['/workspace/repo/src'] },
+        { kind: 'run-script', scopeRoots: ['/workspace/repo'], scriptHashBinding: 'per-invocation' }
+      ]
+    } })
+
+    expect(appendix).toContain('git log --oneline -5')
+    expect(appendix).toContain('/workspace/repo/src')
+    expect(appendix).toContain('SHA-256')
+    expect(appendix).toContain('完整参数')
+    expect(appendix).toContain('超时=30s')
+    expect(buildButlerSystemAppendix({ directories: ['/workspace/repo'], tools: ['run_shell'] })).toContain('本任务未获批 run_shell')
+  })
+})
+
 function automationEventsRoot(taskId: string): string {
   return path.join('/tmp/ud', 'automation-sessions', taskId)
+}
+
+function createAutomationTaskWithToolPermission(
+  db: AppDatabase,
+  input: Parameters<typeof createAutomationTask>[1],
+  permission: AutomationTaskPermission
+) {
+  const canonical = (value: string) => {
+    try { return fsSync.realpathSync(value) } catch { return value }
+  }
+  const workDirs = input.workDirs.map(canonical)
+  const authorizedDirs = input.authorizedDirs?.map(canonical)
+  const canonicalPermission: AutomationTaskPermission = 'scopeRoots' in permission
+    ? {
+        ...permission,
+        scopeRoots: permission.scopeRoots.map(canonical),
+        ...(permission.kind === 'local-shell' ? { commands: permission.commands.map((command) => ({ ...command, workingDirectory: canonical(command.workingDirectory) })) } : {})
+      }
+    : permission
+  return createAutomationTask(db, {
+    ...input,
+    workDirs,
+    ...(authorizedDirs ? { authorizedDirs } : {}),
+    outputDir: canonical(input.outputDir ?? authorizedDirs?.[0] ?? workDirs[0]),
+    outputOrganization: input.outputOrganization ?? 'direct'
+  }, {
+    targetBindings: [],
+    authorizationRecord: {
+      id: `test-receipt-${randomUUID()}`,
+      actor: 'user-confirmation',
+      source: 'task-preflight-confirmation',
+      approvedAt: Date.now(),
+      taskRevision: 1,
+      permissions: [canonicalPermission]
+    }
+  })
 }
 
 function makeRuntime(db: AppDatabase): TurnRuntime {
@@ -1047,10 +1104,13 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         await fs.chmod(fixtureRg, 0o755)
         ripgrepFixture.path = fixtureRg
       }
-      const task = createAutomationTask(db, {
+      const taskInput = {
         name: 'history parity', schedule: { kind: 'interval', intervalMinutes: 30 },
         prompt: 'read note.txt', deliveryPref: 'none', workDirs: [workDir]
-      })
+      }
+      const task = toolName === 'grep'
+        ? createAutomationTaskWithToolPermission(db, taskInput, { kind: 'grep', scopeRoots: [workDir] })
+        : createAutomationTask(db, taskInput)
       let providerCalls = 0
       mockCreateAnthropicClient.mockReturnValue({
         messages: {
@@ -1078,7 +1138,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         resolveWorkDirForSession: () => workDir
       }), task.id, { trigger: 'manual', requestId })
 
-      expect(result).toMatchObject({ ok: true, summary: 'The file says automation canonical read.' })
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, summary: 'The file says automation canonical read.' })
       expect(providerCalls).toBe(2)
       const acceptedTurn = getDbConnection(db).prepare('SELECT turn_id AS turnId FROM turns WHERE request_id = ?').get(requestId) as { turnId: string }
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(acceptedTurn.turnId)
@@ -1479,10 +1539,13 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     'Automation Hosted $toolName does not project a late result after claimed $termination', async ({ toolName, callId, input, termination }) => {
       const requestId = `req-butler-${toolName}-late-${termination}`
       const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `butler-${toolName}-late-${termination}-`))
-      const task = createAutomationTask(db, {
+      const taskInput = {
         name: `${toolName} late result`, schedule: { kind: 'interval', intervalMinutes: 30 },
         prompt: `use ${toolName}`, deliveryPref: 'none', workDirs: [workDir]
-      })
+      }
+      const task = toolName === 'grep'
+        ? createAutomationTaskWithToolPermission(db, taskInput, { kind: 'grep', scopeRoots: [workDir] })
+        : createAutomationTask(db, taskInput)
       let createdSessionId: string | undefined
       const runtime = getDefaultAgentRuntime()
       const executor = toolName === 'list_directory' ? listDirectoryExecutor : grepExecutor
@@ -1656,10 +1719,13 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const requestId = `req-butler-hosted-${toolName}-claim-${termination}`
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `butler-hosted-${toolName}-claim-revoke-`))
     const toolPath = path.join(workDir, toolName === 'list_directory' ? 'reports' : 'note.txt')
-    const task = createAutomationTask(db, {
+    const taskInput = {
       name: `${toolName} claim revocation`, schedule: { kind: 'interval', intervalMinutes: 30 },
       prompt: `${toolName} authorized read`, deliveryPref: 'none', workDirs: [workDir]
-    })
+    }
+    const task = toolName === 'grep'
+      ? createAutomationTaskWithToolPermission(db, taskInput, { kind: 'grep', scopeRoots: [workDir] })
+      : createAutomationTask(db, taskInput)
     const runtime = getDefaultAgentRuntime()
     if (termination === 'authorization-change') {
       writeDisabledPolicyRuleIds(db, ['automation-sensitive-path-deny'])
@@ -1900,10 +1966,10 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
   it('Automation Hosted grep rejects a replaced target after permit preparation', async () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-hosted-grep-target-drift-'))
     const targetPath = path.join(workDir, 'note.txt')
-    const task = createAutomationTask(db, {
+    const task = createAutomationTaskWithToolPermission(db, {
       name: 'grep target drift', schedule: { kind: 'interval', intervalMinutes: 30 },
       prompt: 'search note.txt for status', deliveryPref: 'none', workDirs: [workDir]
-    })
+    }, { kind: 'grep', scopeRoots: [workDir] })
     const runtime = getDefaultAgentRuntime()
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void

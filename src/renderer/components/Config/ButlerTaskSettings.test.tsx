@@ -266,7 +266,9 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       permissions: [
         { kind: 'directory-read-write', path: '/tmp/chosen-root' },
         { kind: 'result-write', outputDirectory: '/tmp/output-root', organization: 'hourly' },
-        { kind: 'local-shell', scopeRoots: ['/tmp/chosen-root'] }
+        { kind: 'local-shell', scopeRoots: ['/tmp/chosen-root'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/tmp/chosen-root', timeout: 30 }] },
+        { kind: 'grep', scopeRoots: ['/tmp/chosen-root/src'] },
+        { kind: 'run-script', scopeRoots: ['/tmp/chosen-root'], scriptHashBinding: 'per-invocation' }
       ]
     })
     renderTab()
@@ -283,7 +285,10 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     await clickTaskSubmit()
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('请检查此定时任务需要的权限')).toBeTruthy()
-    expect(screen.getByText('可在以下授权目录内运行本机命令（包括本地 Git 查询）：/tmp/chosen-root。')).toBeTruthy()
+    expect(screen.getByText('可运行列出的本机命令及完整参数（包括本地 Git 查询）；每条命令后注明工作目录和超时：git log --oneline -5（/tmp/chosen-root；超时：30s）。命令访问范围：/tmp/chosen-root。')).toBeTruthy()
+    expect(screen.getByText(/超时：30s/)).toBeTruthy()
+    expect(screen.getByText('可在以下目录中使用 grep 搜索内容：/tmp/chosen-root/src。')).toBeTruthy()
+    expect(screen.getByText('可在以下目录运行经安全审核的脚本：/tmp/chosen-root。每次审核绑定该脚本的 SHA-256，脚本内容变化后必须重新审核。')).toBeTruthy()
     const payload = butlerCreateTask.mock.calls[0]![0] as { name: string; prompt: string; schedule: unknown; authorizedDirs: string[]; outputDir: string; outputOrganization: string }
     expect(payload.name).toBe('周报汇总')
     expect(payload.prompt).toBe('汇总本周会话')
@@ -576,7 +581,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       kind: 'authorization-review-required',
       reviewId: 'stale-review',
       report: { status: 'passed', blockers: [], suggestedDirectories: [] },
-      permissions: [{ kind: 'local-shell', scopeRoots: ['/tmp/old-root'] }]
+      permissions: [{ kind: 'local-shell', scopeRoots: ['/tmp/old-root'], commands: [{ command: 'git log', workingDirectory: '/tmp/old-root' }] }]
     })
 
     expect(await screen.findByText(/预检期间表单内容已变化/)).toBeTruthy()

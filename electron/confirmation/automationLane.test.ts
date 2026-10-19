@@ -153,6 +153,7 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
   })
 
   it('run_shell 在 automation lane 获得任务级授权后通过策略，并仍执行 Shell 预检', async () => {
+    const root = path.resolve(os.tmpdir())
     const precheck = vi.fn(async () => ({
       ok: true as const,
       analysis: { verdict: 'allow', facts: { analysisCompleteness: 'complete' }, shellSecurityHints: { requiresRiskAck: false, outsideWorkDirRisk: false, warnings: [], scannedPaths: [], violationCodes: [] } } as never,
@@ -162,13 +163,53 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     }))
     const r = await evaluateToolCallGate(base({
       lane: 'automation', toolName: 'run_shell', toolInput: { command: 'git log --oneline -5' },
-      taskAccessPermissions: { directories: [], tools: ['run_shell'] },
-      taskWorkDirs: [os.tmpdir()], runShellPrecheck: precheck, appDb: openDb()
+      taskAccessPermissions: { directories: [root], tools: ['run_shell'], authorizationRecord: {
+        id: 'receipt-shell', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision: 1,
+        permissions: [{ kind: 'local-shell', scopeRoots: [root], commands: [{ command: 'git log --oneline -5', workingDirectory: root }] }]
+      } },
+      taskWorkDirs: [root], workDir: root, runShellPrecheck: precheck, appDb: openDb()
     }))
 
     expect(r.decision).toMatchObject({ type: 'auto-allow', ruleId: 'automation-authorized-shell-allow' })
     expect(precheck).toHaveBeenCalledOnce()
     expect(r.facts.signals).toContainEqual({ kind: 'automation-shell-permission', status: 'matched' })
+  })
+
+  it('Shell grant requires the exact approved arguments and does not inherit authorization by tool name', async () => {
+    const root = path.resolve(os.tmpdir())
+    const permissionRecord = { id: 'receipt-shell', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,
+      approvedAt: 1, taskRevision: 1, permissions: [{ kind: 'local-shell' as const, scopeRoots: [root], commands: [{ command: 'git log --oneline -5', workingDirectory: root }] }] }
+    const r = await evaluateToolCallGate(base({
+      lane: 'automation', toolName: 'run_shell', toolInput: { command: 'git log --oneline -10' },
+      taskAccessPermissions: { directories: [root], tools: ['run_shell'], authorizationRecord: permissionRecord }, taskWorkDirs: [root], workDir: root,
+      appDb: openDb()
+    }))
+
+    expect(r.facts.signals).toContainEqual({ kind: 'automation-shell-permission', status: 'missing' })
+    expect(r.decision).not.toMatchObject({ type: 'auto-allow', ruleId: 'automation-authorized-shell-allow' })
+  })
+
+  it('grep requires an approved root and reports its actual query to review evidence', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-grep-root-')))
+    try {
+      const input = { pattern: 'TODO', path: path.join(root, 'src'), glob: '*.ts' }
+      await fs.mkdir(input.path)
+      const otherPath = path.join(root, 'other')
+      await fs.mkdir(otherPath)
+      const record = { id: 'receipt-grep', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,
+        approvedAt: 1, taskRevision: 1, permissions: [{ kind: 'grep' as const, scopeRoots: [input.path] }] }
+      const allowed = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'grep', toolInput: input,
+        taskAccessPermissions: { directories: [root], tools: ['grep'], authorizationRecord: record }, taskWorkDirs: [root], workDir: root, appDb: openDb() }))
+      const denied = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'grep', toolInput: { ...input, path: otherPath },
+        taskAccessPermissions: { directories: [root], tools: ['grep'], authorizationRecord: record }, taskWorkDirs: [root], workDir: root, appDb: openDb() }))
+
+      expect(allowed.facts.signals).toContainEqual({ kind: 'automation-grep-permission', status: 'matched' })
+      expect(allowed.facts.signals).toContainEqual(expect.objectContaining({ kind: 'grep-invocation', path: input.path, pattern: 'TODO', glob: '*.ts' }))
+      expect(denied.facts.signals).toContainEqual({ kind: 'automation-grep-permission', status: 'missing' })
+      expect(denied.decision).toMatchObject({ type: 'deny', ruleId: 'automation-grep-permission-missing-deny' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 
   it('任务授权不会跳过危险命令预检，也不会写入桌面 Shell 信任缓存', async () => {
@@ -191,9 +232,13 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
   })
 
   it('任务授权不会放行无法解析的 Shell 结构', async () => {
+    const root = path.resolve(os.tmpdir())
     const r = await evaluateToolCallGate(base({
       lane: 'automation', toolName: 'run_shell', toolInput: { command: 'echo hi' },
-      taskAccessPermissions: { directories: [os.tmpdir()], tools: ['run_shell'] }, taskWorkDirs: [os.tmpdir()],
+      taskAccessPermissions: { directories: [root], tools: ['run_shell'], authorizationRecord: {
+        id: 'shell-receipt-unsupported', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision: 1,
+        permissions: [{ kind: 'local-shell', scopeRoots: [root], commands: [{ command: 'echo hi', workingDirectory: root }] }]
+      } }, taskWorkDirs: [root], workDir: root,
       runShellPrecheck: async () => ({
         ok: true, analysis: { verdict: 'unsupported', unsupportedStructures: ['test-structure'], unsupportedReason: 'structure', facts: { analysisCompleteness: 'partial' }, shellSecurityHints: { requiresRiskAck: false, outsideWorkDirRisk: false, warnings: [], scannedPaths: [], violationCodes: [] } } as never,
         legacyAutoAllowEligible: false, legacyPolicy: {} as never, hints: {} as never
@@ -201,6 +246,29 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     }))
 
     expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'automation-unsupported-deny' })
+  })
+
+  it('run_script 必须有任务级目录授权，授权状态会交由 policy 判定', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-script-root-')))
+    try {
+      const call = (authorizationRecord?: unknown) => evaluateToolCallGate(base({
+        lane: 'automation', toolName: 'run_script', toolInput: { language: 'python', code: 'print(1)' },
+        workDir: root, taskWorkDirs: [root], taskAccessPermissions: authorizationRecord
+          ? { directories: [root], tools: ['run_script'], authorizationRecord: authorizationRecord as never }
+          : { directories: [root], tools: ['run_script'] }, appDb: openDb()
+      }))
+      const missing = await call()
+      const authorized = await call({ id: 'script-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision: 1,
+        permissions: [{ kind: 'run-script', scopeRoots: [root], scriptHashBinding: 'per-invocation' }] })
+
+      expect(missing.facts.signals).toContainEqual({ kind: 'automation-script-permission', status: 'missing' })
+      expect(missing.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-permission-missing-deny' })
+      expect(authorized.facts.signals).toContainEqual({ kind: 'automation-script-permission', status: 'matched' })
+      expect(authorized.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', contentDigest: expect.any(String) }))
+      expect(authorized.decision).not.toMatchObject({ type: 'deny', ruleId: 'automation-script-permission-missing-deny' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 
   it('任务授权不会放行触及授权目录以外路径的命令', async () => {
@@ -212,9 +280,13 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
         analysis: { verdict: 'allow', facts: { analysisCompleteness: 'complete' }, shellSecurityHints: { requiresRiskAck: false, outsideWorkDirRisk: false, warnings: [], scannedPaths: [outsideRoot], violationCodes: [] } } as never,
         legacyAutoAllowEligible: false, legacyPolicy: {} as never, hints: {} as never
       })
+      const command = `git -C ${outsideRoot} log --oneline -1`
       const r = await evaluateToolCallGate(base({
-        lane: 'automation', toolName: 'run_shell', toolInput: { command: `git -C ${outsideRoot} log --oneline -1` },
-        taskAccessPermissions: { directories: [authorizedRoot], tools: ['run_shell'] }, taskWorkDirs: [authorizedRoot], workDir: authorizedRoot,
+        lane: 'automation', toolName: 'run_shell', toolInput: { command },
+        taskAccessPermissions: { directories: [authorizedRoot], tools: ['run_shell'], authorizationRecord: {
+          id: 'shell-receipt-outside', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision: 1,
+          permissions: [{ kind: 'local-shell', scopeRoots: [authorizedRoot], commands: [{ command, workingDirectory: authorizedRoot }] }]
+        } }, taskWorkDirs: [authorizedRoot], workDir: authorizedRoot,
         runShellPrecheck: precheck, appDb: openDb()
       }))
 

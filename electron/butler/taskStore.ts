@@ -87,7 +87,13 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
     const permission = item as Record<string, unknown>
     if (permission.kind === 'directory-read-write') return typeof permission.path === 'string'
     if (permission.kind === 'result-write') return typeof permission.outputDirectory === 'string' && ['direct', 'daily', 'hourly'].includes(String(permission.organization))
-    if (permission.kind === 'local-shell') return Array.isArray(permission.scopeRoots) && permission.scopeRoots.every((root) => typeof root === 'string')
+    if (permission.kind === 'local-shell') return Array.isArray(permission.scopeRoots) && permission.scopeRoots.length > 0 && permission.scopeRoots.every((root) => typeof root === 'string')
+      && Array.isArray(permission.commands) && permission.commands.length > 0 && permission.commands.every((command) => command && typeof command === 'object'
+        && typeof (command as Record<string, unknown>).command === 'string' && Boolean((command as Record<string, unknown>).command)
+        && typeof (command as Record<string, unknown>).workingDirectory === 'string' && Boolean((command as Record<string, unknown>).workingDirectory)
+        && ((command as Record<string, unknown>).timeout === undefined || (typeof (command as Record<string, unknown>).timeout === 'number' && Number.isInteger((command as Record<string, unknown>).timeout) && Number((command as Record<string, unknown>).timeout) >= 1 && Number((command as Record<string, unknown>).timeout) <= 86400)))
+    if (permission.kind === 'grep') return Array.isArray(permission.scopeRoots) && permission.scopeRoots.length > 0 && permission.scopeRoots.every((root) => typeof root === 'string')
+    if (permission.kind === 'run-script') return Array.isArray(permission.scopeRoots) && permission.scopeRoots.length > 0 && permission.scopeRoots.every((root) => typeof root === 'string') && permission.scriptHashBinding === 'per-invocation'
     if (permission.kind === 'deliver-result') return ['desktop', 'feishu', 'wechat'].includes(String(permission.delivery)) && (permission.target === undefined || typeof permission.target === 'string')
     return false
   })
@@ -104,7 +110,11 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
 }
 
 function authorizedTools(record?: AutomationTaskAuthorizationRecord): AutomationTaskAccessPermissions['tools'] {
-  return record?.permissions.some((permission) => permission.kind === 'local-shell') ? ['run_shell'] : []
+  const tools: AutomationTaskAccessPermissions['tools'] = []
+  if (record?.permissions.some((permission) => permission.kind === 'local-shell')) tools.push('run_shell')
+  if (record?.permissions.some((permission) => permission.kind === 'grep')) tools.push('grep')
+  if (record?.permissions.some((permission) => permission.kind === 'run-script')) tools.push('run_script')
+  return tools
 }
 
 function parseAccessPermissions(raw: string | null, directories: string[], taskRevision: number): AutomationTaskAccessPermissions {

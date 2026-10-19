@@ -416,12 +416,28 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
   it('宿主传入的定时任务授权记录进入安全审核线索包', async () => {
     const taskAuthorizationRecord = {
       id: 'authorization-1', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,
-      approvedAt: 123, taskRevision: 2, permissions: [{ kind: 'local-shell' as const, scopeRoots: ['/workspace'] }]
+      approvedAt: 123, taskRevision: 2, permissions: [{ kind: 'local-shell' as const, scopeRoots: ['/workspace'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/workspace' }] }]
     }
     const { ch, invokeApproval } = channel({ taskAuthorizationRecord })
     await ch.request(req())
     const inv = invokeApproval.mock.calls[0]![0] as ApprovalInvocation
     expect(inv.clue.taskAuthorizationRecord).toEqual(taskAuthorizationRecord)
+  })
+
+  it('把 grep 查询参数与 run_script 主机计算 hash 放入审批线索', async () => {
+    const { ch, invokeApproval } = channel()
+    await ch.request(req({ facts: {
+      toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+      signals: [
+        { kind: 'grep-invocation', path: '/workspace/src', pattern: 'TODO', glob: '*.ts', outputMode: 'content', ignoreCase: false },
+        { kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
+          contentDigest: 'a'.repeat(64), parametersDigest: 'b'.repeat(64), environmentDigest: 'c'.repeat(64), authenticationVersion: 'script-certifier-v1' }
+      ], summary: { text: 'review tool call' }
+    } }))
+    const inv = invokeApproval.mock.calls[0]![0] as ApprovalInvocation
+
+    expect(inv.clue.grepQuery).toContain('path=/workspace/src; pattern=TODO; glob=*.ts; output_mode=content')
+    expect(inv.clue.scriptApprovalBinding).toEqual({ sha256: 'a'.repeat(64), parametersSha256: 'b'.repeat(64), environmentSha256: 'c'.repeat(64), certifier: 'script-certifier-v1' })
   })
 
   it('缺省（无任务上下文调用方）→ clue.taskDigest undefined', async () => {

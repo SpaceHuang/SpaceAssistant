@@ -12,11 +12,18 @@ export type AutomationTaskSchedule =
 
 export type AutomationDeliveryPref = 'desktop' | 'feishu' | 'wechat' | 'none'
 export type AutomationOutputOrganization = 'direct' | 'daily' | 'hourly'
-export type AutomationTaskToolPermission = 'run_shell'
+export type AutomationTaskToolPermission = 'run_shell' | 'grep' | 'run_script'
+export type AutomationTaskToolRequirement =
+  | { tool: 'run_shell'; command: string; workingDirectory: string; timeout?: number }
+  | { tool: 'grep' | 'run_script'; scopeRoots: string[] }
 export type AutomationTaskPermission =
   | { kind: 'directory-read-write'; path: string }
   | { kind: 'result-write'; outputDirectory: string; organization: AutomationOutputOrganization }
-  | { kind: 'local-shell'; scopeRoots: string[] }
+  /** Shell grants bind the complete command text and cwd; the roots bound paths used by the command. */
+  | { kind: 'local-shell'; scopeRoots: string[]; commands: Array<{ command: string; workingDirectory: string; timeout?: number }> }
+  | { kind: 'grep'; scopeRoots: string[] }
+  /** Each concrete script approval is bound to a host-computed SHA-256 at invocation time. */
+  | { kind: 'run-script'; scopeRoots: string[]; scriptHashBinding: 'per-invocation' }
   | { kind: 'deliver-result'; delivery: Exclude<AutomationDeliveryPref, 'none'>; target?: string }
 
 /** Main-process receipt of the user's explicit confirmation of a preflight permission list. */

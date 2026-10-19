@@ -583,7 +583,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'task-auth-approval-workdir-'))
     const taskAuthorizationRecord = {
       id: 'host-task-authorization', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,
-      approvedAt: 123, taskRevision: 1, permissions: [{ kind: 'local-shell' as const, scopeRoots: [workDir] }]
+      approvedAt: 123, taskRevision: 1, permissions: [{ kind: 'local-shell' as const, scopeRoots: [workDir], commands: [{ command: 'git log', workingDirectory: workDir }] }]
     }
     const { agentSdk } = assembleInvocation({
       requestId: 'task-auth-approval', sessionId: 'task-auth-session', lane: 'feishu',
