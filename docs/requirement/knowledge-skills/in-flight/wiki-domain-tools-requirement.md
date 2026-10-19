@@ -1,7 +1,7 @@
-# LLM Wiki 专属能力接口需求（讨论稿）
+# LLM Wiki 专属能力接口需求
 
-> 状态：草稿（未实施）｜核验：rg -n 'wiki\.(get_schema|search|open_page|read_page|import_source|read_source|save_page|move_page|propose_schema_change|update_schema)' electron src packages 无匹配（2026-10-17）
-> 本稿供需求评审，尚未进入当前生效口径
+> 状态：已批准需求基线（D-01 至 D-06 决策已定；实现进度与阶段验收见执行计划 §7.1）
+> 接口与验收口径以本文件为真源；外部渠道和平台验收状态见执行计划与 release acceptance。
 > 日期：2026-10-17
 > 核对基线：main 7c0edc41（2026-10-17）
 > 主题入口：[knowledge-skills 需求基线](../需求基线.md)｜现行 Wiki 需求原件：[LLM Wiki v1.7](../../archive/knowledge-skills/llm-wiki-requirement.md)

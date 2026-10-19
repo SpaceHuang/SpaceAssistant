@@ -1,6 +1,6 @@
 # Wiki 专属能力接口技术方案
 
-> 状态：技术方案修订稿（D-TP-01 至 D-TP-05 已决定；D-06 界面归属已批准；未实施）
+> 状态：技术方案基线（D-TP-01 至 D-TP-05 已决定；D-06 界面归属已批准）
 > 需求真源：[Wiki 专属能力接口需求](../../../requirement/knowledge-skills/in-flight/wiki-domain-tools-requirement.md)
 > 核对基线：当前工作区 HEAD 28dd3223（2026-10-17）；需求稿事实基线为 main 7c0edc41（2026-10-17）
 > 适用范围：主进程 Wiki 服务、Agent 工具注册与授权、通用文件工具旁路封锁、兼容迁移及页面历史恢复
@@ -157,7 +157,7 @@ Wiki 文件仍能被用户从文件管理器或外部编辑器修改。相关工
 | memory.wiki_import_source | 应用绑定的 sourceRef / sourceId；不接收 Agent 自由路径 | sourceId、sourceRevision、显示名、来源 projectId 标注；拒绝未绑定引用、越界、目录、二进制与 Wiki 挂载源 | import/write |
 | memory.wiki_read_source | sourceId、可选 sourceRevision/cursor/maxChars | 指定版本的有界正文片段、project attribution、nextCursor、hasMore；无权和未知对象返回相同外部错误类 | read |
 | memory.wiki_save_page | pageId?、title、categoryId、summary、markdown、sourceRefs、schemaVersion、expectedRevision?、parentPageId? | pageId、revision、projectionStatus、页面引用；更新不允许在该操作改 parentPageId | write/confirm by current policy |
-| memory.wiki_move_page | pageId、parentPageId 或 null、expectedRevision | 新 revision、原 categoryId/pageId、逻辑面包屑；拒绝环、自父级、不可读父级 | write/confirm by current policy |
+| memory.wiki_move_page | pageId、可选 parentPageId（省略或 null 表示根页面）、expectedRevision | 新 revision、原 categoryId/pageId、逻辑面包屑；拒绝环、自父级、不可读父级 | write/confirm by current policy |
 | memory.wiki_list_page_revisions | pageId | 按时间倒序返回 revision、时间、变更摘要、externalEdit、deleted 状态 | read |
 | memory.wiki_restore_page | pageId、targetRevision、expectedCurrentRevision、可选 title/categoryId/parentPageId overrides | 返回完整冲突集合或 proposal-to-confirm；执行前展示最终标题、类别、摘要、父级、正文、来源版本和差异 | write + mandatory user confirm |
 | memory.wiki_propose_schema_change | complete proposed SCHEMA content、expectedSchemaVersion | proposalId、规范化全文 diff、影响页数、有效期、基线 hash；不写 SCHEMA | write/proposal |
@@ -420,4 +420,11 @@ E 编号 DAG 只由执行计划维护；本表为阶段归属说明：P0=E-00/E-
 - `npm run build`：通过。Vite 输出既有 `INEFFECTIVE_DYNAMIC_IMPORT` 与 chunk size 警告，无构建错误。
 - `npm run typecheck:renderer`、`npm run typecheck:shared`、`npx tsc -p tsconfig.electron.json --noEmit`、`npm run i18n:check`、`npm run check:system-invariant-registry`：通过。
 - E-15/E-16 需要真实 IM/automation 会话与隔离候选安装包验收证据；未据本机源码结果推定通过。E-17 按目标安装范围验收；当前 macOS 目标未通过前仍保持关闭，Windows/其他平台证据属于各自后续发布范围。
+
+### 附录 D：E-14 接口注册与首启预检补充验证（2026-10-20）
+
+- `memory` discovery 原先公布 `memory.wiki_save_page` 与 `memory.wiki_move_page`，运行时 registry 未注册；registry parity 回归先 RED，新增保存/移动调用测试因 handler 缺失 RED。提交 `2703d5e5` 接通 planned write tools 与 domain coordinator，验证绑定来源的不可变历史快照、更新页面不改父级、移动到指定父级以及省略/null 移至根页面；所有写入仍经过现有 planned tool policy/confirmation dispatch。
+- 同轮全量验收发现：服务生成的 Wiki index/log 会被迁移预检误判为 legacy 修改；仅在投影字节不一致时才登记 projection 变更，并跳过与当前 marker 页面完全匹配的 index、符合服务格式的 log。合规 Wiki no-op bootstrap 回归通过。
+- 最终 `npm test`：1108 个文件通过、1 个跳过；10495 项通过、111 项跳过。`npm run build`、renderer/shared 类型检查、i18n 和 system invariant registry 检查通过。构建保留既有动态导入与大 chunk 警告。
+- E-14 本机源码关闭不代替 E-15 真实飞书/微信验收，也不授权 E-17 启用。Windows 与其他平台不作为本次开发门禁。
 
