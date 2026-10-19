@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：E-01～E-15c 已完成
+> 状态：E-01～E-15d 已完成
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
@@ -434,6 +434,17 @@ E-13 按用户明确要求修正 D-7 的授权所有权与确认交互。E-12 �
 - **验证命令：** E-15 相关 Vitest；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
 - **证据：** `taskPreflightNoSideEffects.test.ts` 用 executor/进程/文件读写/MCP/网络/浏览器/投递入口 spy 验证零调用；runner 覆盖迟到模型响应、Mock 忽略 abort 后仍不得派发后续调用、轮次/调用数/单次和总时限/token 上限；IPC 和 preflight 测试证明不完整结果不写任务。8 个预检/授权相关文件 **164 tests**、`hostedAgentTurnHost` 的脚本撤权回归 1 项、Electron/shared/renderer 类型、i18n、系统不变量 registry 和 `git diff --check` 已通过；Electron 增量构建已通过。首次全量 `npm test` 发现 `hostedAgentTurnHost.test.ts` 的 run_script 撤权 fixture 缺少必需脚本哈希事实，补齐 fixture 后定向回归通过。最终全量 `npm test` 退出码 **0**：**1,099 个测试文件通过、1 个跳过；10,545 项通过、111 项跳过**（786.42 秒）。
 - **可执行环境：** 本机；真实模型服务质量仍为外部验收。
+- **状态：** - [x]
+
+### E-15d 分离 Mock 演练与权限总结会话
+
+- **依赖：** E-15a～E-15c；需求 §5.6「双阶段模拟与授权总结（会话补充，2026-10-19）」。
+- **目标文件：** `electron/butler/taskPreflightModelAnalyzer.ts`、`electron/butler/taskPreflight.ts`、`electron/butler/butlerIpc.ts` 及相应测试、需求和开发方案。
+- **动作与产物：** 先以 RED 测试固定模型总结不能新增轨迹外权限、不能漏掉轨迹中已模拟的 Shell 权限，并以 MCP 映射名核对服务和工具身份。第一阶段提示明确“不需完成真实任务”，预算只作为主机停止上限；第二阶段以全新、无工具、无第一阶段历史的模型请求汇总任务配置、轨迹、状态和停止原因。第二阶段从整次预检时限与 10,240 输出 token 总额中分别获得 20 秒和 2,048 token 的独立保留预算，演练阶段累计上限相应为 8,192 token；超限后仍总结部分轨迹，但标为不完整并维持不可确认/不可保存门禁。
+- **完成判据：** 两阶段模型请求上下文互相隔离；第二阶段无工具且可收到完整/部分主机轨迹；主机逐项验证权限提案与已模拟调用的对应关系，任何新增、漏项或身份不匹配均 fail closed；已有“预算不完整不允许确认授权或保存任务”行为保持通过。
+- **验证命令：** `npm exec vitest run electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskPreflightMockRunner.test.ts electron/butler/taskPreflight.test.ts electron/butler/butlerIpc.test.ts electron/butler/taskPreflightNoSideEffects.test.ts`；`npx tsc -p tsconfig.electron.json --noEmit`；`git diff --check`。
+- **证据：** RED：3 个新增轨迹对照测试在旧实现中均失败，分别复现总结会话可编造 Shell 命令、漏掉轨迹中的 Shell 权限、将 MCP 权限指向未模拟的工具。GREEN：5 个定向测试文件 **76 项通过**，覆盖分离新会话、预算耗尽后总结部分 Shell 轨迹、权限与轨迹逐项对应以及零真实副作用；Electron TypeScript 编译检查和 `git diff --check` 通过。
+- **可执行环境：** 本机 mock LLM、虚拟工具调用和主进程轨迹核验。
 - **状态：** - [x]
 
 ## 4. 外部验收（不阻塞源码关闭）
