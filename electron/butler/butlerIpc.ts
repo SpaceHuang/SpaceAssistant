@@ -14,7 +14,7 @@ import {
 import { validateTaskAuthorizedDirs, validateTaskModelConfig, validateTaskOutputDir, validateTaskWorkDir, validateTaskWorkDirs } from './taskConfigValidation'
 import { readActiveLlmServiceIds, readLlmServices, readStoredModels } from '../llmServiceResolver'
 import { getConfigValue } from '../database'
-import { runTaskPreflight, type TaskPreflightAnalyzer } from './taskPreflight'
+import { runTaskPreflight, type TaskPreflightAnalysisOutput, type TaskPreflightAnalyzer } from './taskPreflight'
 import { createTaskPreflightModelAnalyzer } from './taskPreflightModelAnalyzer'
 import { buildSnapshotFromDb } from '../mcp/mcpToolRegistry'
 import { filterBuiltinToolsForApi } from '../toolsConfigRuntime'
@@ -88,11 +88,11 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     mockTrace?: AutomationTaskPreflightTraceItem[]
     taskRevision: number
     expectedCurrentTaskRevision?: number
-    commit: (authorizationRecord: AutomationTaskAuthorizationRecord) => ButlerTaskWriteResult
+    commit: (authorizationRecord: AutomationTaskAuthorizationRecord) => ButlerTaskWriteResult | Promise<ButlerTaskWriteResult>
   }
   const pendingAuthorizationReviews = new Map<string, PendingAuthorizationReview>()
 
-  async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; outputDir: string; modelId?: string; modelServiceId?: string; reasoningEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort; taskRevision: number; requestReceivedAt: number }) {
+  async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; outputDir: string; modelId?: string; modelServiceId?: string; reasoningEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort; taskRevision: number; requestReceivedAt: number; analysisOverride?: TaskPreflightAnalysisOutput }) {
     const preflightStartedAt = Date.now()
     if (input.schedule.kind === 'once' && input.schedule.at <= input.requestReceivedAt) {
       return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: getPreflightIssueMessageKey('ONCE_AT_NOT_FUTURE') }], suggestedDirectories: [] }, bindings: [], factsDigest: undefined, requiredPermissions: [], mcpTools: [] }
@@ -138,7 +138,8 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       taskRevision: input.taskRevision,
       preflightStartedAt,
       mcpTools,
-      tools: [...builtinTools, ...mcpModelTools]
+      tools: [...builtinTools, ...mcpModelTools],
+      ...(input.analysisOverride ? { analysisOverride: input.analysisOverride } : {})
     }, { analyzer: createAnalyzer({ modelId: input.modelId, modelServiceId: input.modelServiceId, reasoningEffort: input.reasoningEffort }) })
     return { ...result, mcpTools }
   }
@@ -178,6 +179,52 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     return permissions
   }
 
+  type TaskInspection = Awaited<ReturnType<typeof inspectTask>>
+  function stageOutputRootAuthorizationReview(args: {
+    inspection: TaskInspection
+    authorizedDirs: string[]
+    task: Parameters<typeof buildPermissionList>[0]
+    taskId?: string
+    expectedCurrentTaskRevision?: number
+    taskRevision: number
+    inspectWithAuthorizedDirs: (authorizedDirs: string[], analysisOverride: TaskPreflightAnalysisOutput) => Promise<TaskInspection>
+    commit: (authorizedDirs: string[], inspection: TaskInspection, authorizationRecord: AutomationTaskAuthorizationRecord) => ButlerTaskWriteResult
+  }): ButlerTaskWriteResult | undefined {
+    const continuation = args.inspection.authorizationContinuation
+    if (!continuation) return undefined
+    const proposedAuthorizedDirs = [...new Set([...args.authorizedDirs, continuation.outputRoot])]
+    const permissions = buildPermissionList({ ...args.task, authorizedDirs: proposedAuthorizedDirs }, args.inspection.requiredPermissions ?? [], args.inspection.mcpTools)
+    return stageAuthorizationReview({
+      ...(args.taskId ? { taskId: args.taskId } : {}),
+      ...(args.expectedCurrentTaskRevision !== undefined ? { expectedCurrentTaskRevision: args.expectedCurrentTaskRevision } : {}),
+      permissions,
+      report: args.inspection.report,
+      ...(args.inspection.factsDigest ? { factsDigest: args.inspection.factsDigest } : {}),
+      ...(args.inspection.mockTrace ? { mockTrace: args.inspection.mockTrace } : {}),
+      taskRevision: args.taskRevision,
+      commit: async (initialRecord) => {
+        // final-check: only after the user approves the complete list do we enumerate the proposed root.
+        const rootsResult = await validateAuthorizedDirs(proposedAuthorizedDirs)
+        if (!rootsResult.ok) return { ok: false, kind: 'validation-error', error: rootsResult.error }
+        const approvedAuthorizedDirs = rootsResult.authorizedDirs
+        if (!approvedAuthorizedDirs.includes(continuation.outputRoot)) {
+          return { ok: false, kind: 'validation-error', error: '授权目录位置在确认后发生变化，请重新预检任务' }
+        }
+        const approvedInspection = await args.inspectWithAuthorizedDirs(approvedAuthorizedDirs, continuation.analysis)
+        const failure = preflightFailure(approvedInspection)
+        if (failure) return failure
+        const approvedPermissions = buildPermissionList({ ...args.task, authorizedDirs: approvedAuthorizedDirs }, approvedInspection.requiredPermissions ?? [], approvedInspection.mcpTools)
+        if (JSON.stringify(approvedPermissions) !== JSON.stringify(permissions)) {
+          return { ok: false, kind: 'validation-error', error: '预检期间权限清单发生变化，请重新预检任务' }
+        }
+        return args.commit(approvedAuthorizedDirs, approvedInspection, {
+          ...initialRecord,
+          ...(approvedInspection.factsDigest ? { preflightFactsDigest: approvedInspection.factsDigest } : {})
+        })
+      }
+    })
+  }
+
   function stageAuthorizationReview(args: Omit<PendingAuthorizationReview, 'expiresAt'>): ButlerTaskWriteResult {
     // policy: 只把主机从预检事实派生的权限范围放入一次性凭据；渲染端提交的 accessPermissions 不参与决策。
     const issuedAt = now()
@@ -196,13 +243,14 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       source: 'task-preflight-confirmation',
       approvedAt: now(),
       taskRevision: review.taskRevision,
+      ...(review.report.preflightCoverage ? { preflightCoverage: review.report.preflightCoverage } : {}),
       ...(review.factsDigest ? { preflightFactsDigest: review.factsDigest } : {}),
       permissions: structuredClone(review.permissions),
       ...(review.mockTrace ? { preflightTrace: structuredClone(review.mockTrace) } : {})
     }
   }
 
-  ipcMain.handle('butler:confirm-write', (_e, payload: { reviewId?: string }): ButlerTaskWriteResult => {
+  ipcMain.handle('butler:confirm-write', async (_e, payload: { reviewId?: string }): Promise<ButlerTaskWriteResult> => {
     const reviewId = typeof payload?.reviewId === 'string' ? payload.reviewId : ''
     const review = reviewId ? pendingAuthorizationReviews.get(reviewId) : undefined
     if (!review) return { ok: false, kind: 'validation-error', error: '权限确认已失效，请重新预检任务' }
@@ -215,7 +263,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       }
     }
     // final-check: 仅凭本进程保存的一次性 reviewId 消费权限列表；Agent / renderer 均不能提交授权记录内容。
-    return review.commit(createAuthorizationRecord(review))
+    return await review.commit(createAuthorizationRecord(review))
   })
 
   ipcMain.handle('butler:list', () => listAutomationTasks(db))
@@ -294,8 +342,6 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     })
     if (!config.ok) return { ok: false, kind: 'validation-error', error: config.error }
     const inspection = await inspectTask({ prompt, schedule, deliveryPref, roots: authorizedDirs, outputDir: outputResult.outputDir, modelId: config.modelId, modelServiceId: config.modelServiceId, reasoningEffort: config.reasoningEffort, taskRevision: 1, requestReceivedAt })
-    const failure = preflightFailure(inspection)
-    if (failure) return failure
     const taskInput: AutomationTaskInput = {
       name,
       prompt,
@@ -312,6 +358,26 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       reasoningEffort: config.reasoningEffort,
       ...(payload?.enabled !== undefined ? { enabled: payload.enabled } : {})
     }
+    if (inspection.authorizationContinuation) {
+      return stageOutputRootAuthorizationReview({
+        inspection,
+        authorizedDirs,
+        task: { authorizedDirs, outputDir: outputResult.outputDir, outputOrganization, deliveryPref, ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}) },
+        taskRevision: 1,
+        inspectWithAuthorizedDirs: (approvedRoots, analysisOverride) => inspectTask({
+          prompt, schedule, deliveryPref, roots: approvedRoots, outputDir: outputResult.outputDir,
+          modelId: config.modelId, modelServiceId: config.modelServiceId, reasoningEffort: config.reasoningEffort,
+          taskRevision: 1, requestReceivedAt: now(), analysisOverride
+        }),
+        commit: (approvedRoots, approvedInspection, authorizationRecord) => {
+          const approvedTaskInput = { ...taskInput, authorizedDirs: approvedRoots, workDirs: approvedRoots }
+          const task = createAutomationTask(db, approvedTaskInput, { targetBindings: approvedInspection.bindings, authorizationRecord })
+          return { ok: true, id: task.id, task }
+        }
+      })!
+    }
+    const failure = preflightFailure(inspection)
+    if (failure) return failure
     const permissions = buildPermissionList({ authorizedDirs, outputDir: outputResult.outputDir, outputOrganization, deliveryPref, ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}) }, inspection.requiredPermissions ?? [], inspection.mcpTools)
     return stageAuthorizationReview({
       permissions,
@@ -396,6 +462,38 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     const candidate = { ...existing, ...next }
     const candidateRoots: string[] = rootsProvided ? rootsResult.authorizedDirs : existing.authorizedDirs
     const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, outputDir: outputResult.outputDir, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, reasoningEffort: candidate.reasoningEffort, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
+    if (inspection.authorizationContinuation) {
+      const taskRevision = (existing.taskRevision ?? 0) + 1
+      return stageOutputRootAuthorizationReview({
+        inspection,
+        authorizedDirs: candidateRoots,
+        task: {
+          authorizedDirs: candidateRoots,
+          outputDir: outputResult.outputDir,
+          outputOrganization,
+          deliveryPref: candidate.deliveryPref,
+          ...(candidate.deliveryTarget ? { deliveryTarget: candidate.deliveryTarget } : {})
+        },
+        taskId: id,
+        expectedCurrentTaskRevision: existing.taskRevision ?? 0,
+        taskRevision,
+        inspectWithAuthorizedDirs: (approvedRoots, analysisOverride) => inspectTask({
+          prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: approvedRoots,
+          outputDir: outputResult.outputDir, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId,
+          reasoningEffort: candidate.reasoningEffort, taskRevision, requestReceivedAt: now(), analysisOverride
+        }),
+        commit: (approvedRoots, approvedInspection, authorizationRecord) => {
+          const commit = updateAutomationTaskConditional(db, id, {
+            ...next,
+            authorizedDirs: approvedRoots,
+            workDirs: approvedRoots,
+            expectedTaskRevision
+          }, { targetBindings: approvedInspection.bindings, authorizationRecord })
+          if (!commit.ok) return { ok: false, kind: 'validation-error', error: commit.reason }
+          return { ok: true, id, task: commit.task }
+        }
+      })!
+    }
     const failure = preflightFailure(inspection)
     if (failure) return failure
     const permissions = buildPermissionList({

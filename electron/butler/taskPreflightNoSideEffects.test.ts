@@ -53,15 +53,16 @@ describe('task preflight side-effect boundary', () => {
       ],
       clarifications: [], suggestedDirectories: []
     })
-    const modelCreate = vi.fn()
+    const modelFinalMessage = vi.fn()
       .mockResolvedValueOnce({ content: calls.map((call) => ({ type: 'tool_use', ...call })), stop_reason: 'tool_use', usage: { output_tokens: 50 } })
       .mockResolvedValueOnce({ content: [{ type: 'text', text: 'simulation complete' }], stop_reason: 'end_turn', usage: { output_tokens: 4 } })
       .mockResolvedValueOnce({ content: [{ type: 'text', text: summary }], stop_reason: 'end_turn', usage: { output_tokens: 20 } })
+    const modelStream = vi.fn(() => ({ finalMessage: modelFinalMessage }))
     vi.mocked(resolveLlmCredentialsForPair).mockResolvedValue({
-      model: { id: 'model-id', name: 'provider-model', enabled: true } as never,
+      model: { id: 'model-id', name: 'provider-model', enabled: true, maxTokens: 16_384 } as never,
       serviceId: 'service-id', providerModelName: 'provider-model', baseUrl: 'https://model.test', getApiKey: async () => 'api-key'
     })
-    vi.mocked(createAnthropicClient).mockReturnValue({ messages: { create: modelCreate } } as never)
+    vi.mocked(createAnthropicClient).mockReturnValue({ messages: { stream: modelStream } } as never)
 
     vi.stubGlobal('fetch', effects.fetch)
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })

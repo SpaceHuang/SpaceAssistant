@@ -56,6 +56,8 @@ export type AutomationTaskAuthorizationRecord = {
   source: 'task-preflight-confirmation'
   approvedAt: number
   taskRevision: number
+  /** Marks that the user reviewed permissions collected before a bounded mock rehearsal stopped. */
+  preflightCoverage?: 'partial'
   preflightFactsDigest?: string
   permissions: AutomationTaskPermission[]
   /** Mock exercise trace, explicitly distinguished from real runtime access facts. */
@@ -271,6 +273,8 @@ export type PreflightReport = {
   status: 'passed' | 'blocked' | 'unavailable'
   blockers: PreflightIssue[]
   suggestedDirectories: SuggestedDirectory[]
+  /** The summary is valid, but the mock rehearsal stopped at a host budget and summarized its recorded trace. */
+  preflightCoverage?: 'partial'
 }
 
 export type ButlerTaskWriteResult =

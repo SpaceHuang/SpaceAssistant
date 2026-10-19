@@ -86,7 +86,7 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
       targetBindings: [],
       authorizationRecord: {
         id: 'authorization-1', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
-        taskRevision: 1, preflightFactsDigest: 'facts-digest', permissions: [
+        taskRevision: 1, preflightCoverage: 'partial', preflightFactsDigest: 'facts-digest', permissions: [
           { kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/authorized/source', timeout: 60 }] },
           { kind: 'grep', scopeRoots: ['/authorized/source'] },
           { kind: 'run-script', scopeRoots: ['/authorized/source'], scriptHashBinding: 'per-invocation' },
@@ -99,8 +99,8 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     const claimed = insertManualTaskClaim(d, authorizedTask.id, 'shell-grant-snapshot')
     const started = transitionClaimToRunning(d, claimed.runId!, authorizedTask.id, 0, claimed.scheduleGeneration!)
 
-    expect(authorizedTask.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1' } })
-    expect(started).toMatchObject({ ok: true, snapshot: { accessPermissions: { directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1' } } } })
+    expect(authorizedTask.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1', preflightCoverage: 'partial' } })
+    expect(started).toMatchObject({ ok: true, snapshot: { accessPermissions: { directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1', preflightCoverage: 'partial' } } } })
     updateAutomationTaskConditional(d, authorizedTask.id, { accessPermissions: { directories: ['/authorized/source'], tools: [] } } as never)
     expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1' } })
     expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions?.authorizationRecord?.preflightTrace).toEqual([
@@ -153,7 +153,7 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
       authorizationRecord: {
         id: 'oversized-preflight-trace', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
         taskRevision: 1, permissions: [{ kind: 'result-write', outputDirectory: '/results', organization: 'daily' }],
-        preflightTrace: Array.from({ length: 13 }, (_, index) => ({
+        preflightTrace: Array.from({ length: 14 }, (_, index) => ({
           kind: 'proposed-tool-call' as const, toolName: 'grep', input: { pattern: `p-${index}` }, dispatch: 'simulated' as const
         }))
       }

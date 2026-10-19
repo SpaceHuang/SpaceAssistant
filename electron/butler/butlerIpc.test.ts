@@ -96,6 +96,60 @@ describe('butler IPC workdir/config fields', () => {
     expect(response).toMatchObject({ ok: false, kind: 'validation-error', error: '结果输出目录不能为空' })
   })
 
+  it('approves the output Git read and exact Shell command as one permission list, then verifies paths without another model pass', async () => {
+    db = openDatabase(':memory:')
+    const outputRoot = await realpath(os.tmpdir())
+    const requiredPermissions = [{ tool: 'run_shell' as const, command: 'git log --oneline -5', workingDirectory: outputRoot }]
+    const mockTrace = [{ kind: 'proposed-tool-call' as const, toolName: 'run_shell', input: { command: requiredPermissions[0]!.command, workingDirectory: outputRoot }, dispatch: 'simulated' as const, resultKind: 'synthetic' as const }]
+    const preflight = vi.fn(async (input) => input.analysisOverride
+      ? {
+          report: { status: 'passed' as const, blockers: [], suggestedDirectories: [] },
+          bindings: [], factsDigest: 'approved-facts', requiredPermissions, mockTrace
+        }
+      : {
+          report: {
+            status: 'blocked' as const,
+            blockers: [{ code: 'TOOL_PERMISSION_REQUIRED', messageKey: 'butler.preflight.tool_permission_required', reasonCode: 'output_root_not_read_authorized' as const, candidates: [outputRoot] }],
+            suggestedDirectories: [{ path: outputRoot, purposeKey: 'butler.preflight.output_root_read_candidate_purpose', source: 'git history', validationStatus: 'valid' as const }]
+          },
+          bindings: [], factsDigest: 'initial-facts', requiredPermissions, mockTrace,
+          authorizationContinuation: { outputRoot, analysis: { targets: [], requiredPermissions, mockTrace } }
+        })
+    const map = new Map<string, (...args: unknown[]) => unknown>()
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
+      db, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({ enabled: true, allowedTools: [], deniedTools: [] }) as never
+    } as never, {
+      validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
+      validateAuthorizedDirs: vi.fn(async (value) => ({ ok: true as const, authorizedDirs: value as string[] })),
+      preflight
+    })
+
+    const review = await map.get('butler:create')!(null, {
+      name: 'Git 汇总', prompt: '总结本机 Git 历史', schedule: { kind: 'daily', time: '09:00' }, deliveryPref: 'none',
+      authorizedDirs: [], outputDir: outputRoot, outputOrganization: 'daily'
+    }) as { ok: boolean; kind?: string; reviewId?: string; permissions?: Array<{ kind: string; path?: string; commands?: Array<{ command: string; workingDirectory: string }> }> }
+
+    expect(review).toMatchObject({ ok: false, kind: 'authorization-review-required', permissions: [
+      { kind: 'directory-read-write', path: outputRoot },
+      { kind: 'result-write', outputDirectory: outputRoot, organization: 'daily' },
+      { kind: 'local-shell', scopeRoots: [outputRoot], commands: [{ command: 'git log --oneline -5', workingDirectory: outputRoot }] }
+    ] })
+    expect(preflight).toHaveBeenCalledTimes(1)
+    expect(map.get('butler:confirm-write')).toBeTruthy()
+
+    const saved = await map.get('butler:confirm-write')!(null, { reviewId: review.reviewId }) as { ok: boolean; task?: { authorizedDirs: string[]; accessPermissions?: { authorizationRecord?: { preflightFactsDigest?: string; permissions: unknown[] } } } }
+    expect(saved.ok).toBe(true)
+    expect(saved.task).toMatchObject({
+      authorizedDirs: [outputRoot],
+      accessPermissions: { authorizationRecord: { preflightFactsDigest: 'approved-facts', permissions: expect.arrayContaining([
+        { kind: 'directory-read-write', path: outputRoot },
+        { kind: 'local-shell', scopeRoots: [outputRoot], commands: [{ command: 'git log --oneline -5', workingDirectory: outputRoot }] }
+      ]) } }
+    })
+    expect(preflight).toHaveBeenCalledTimes(2)
+    expect(preflight.mock.calls[1]?.[0]).toMatchObject({ roots: [outputRoot], analysisOverride: { requiredPermissions } })
+  })
+
   it('passes the validated task reasoning effort to preflight for create and update', async () => {
     db = openDatabase(':memory:')
     const map = new Map<string, (...args: unknown[]) => unknown>()
@@ -155,7 +209,7 @@ describe('butler IPC workdir/config fields', () => {
     cacheTools(d, mcpServerId, { tools: mcpTools, protocolVersion: '2025-06-18', discoveredAt: '2026-10-19T00:00:00.000Z' })
     const map = new Map<string, (...args: unknown[]) => unknown>()
     const preflight = vi.fn(async () => ({
-      report: { status: 'passed' as const, blockers: [], suggestedDirectories: [] },
+      report: { status: 'passed' as const, blockers: [], suggestedDirectories: [], preflightCoverage: 'partial' as const },
       bindings: [], factsDigest: 'facts-digest', requiredPermissions: [
         { tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: permissionRoot, timeout: 45 },
         { tool: 'grep', scopeRoots: [permissionRoot] },
@@ -196,7 +250,7 @@ describe('butler IPC workdir/config fields', () => {
 
     const committed = await map.get('butler:confirm-write')!(null, { reviewId: review.reviewId }) as { ok: boolean; task?: { accessPermissions?: { tools: string[]; authorizationRecord?: { actor: string; source: string; permissions: unknown[]; preflightTrace?: unknown[] } } } }
     expect(committed).toMatchObject({ ok: true, task: { accessPermissions: { tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: {
-      actor: 'user-confirmation', source: 'task-preflight-confirmation', permissions: expect.any(Array),
+      actor: 'user-confirmation', source: 'task-preflight-confirmation', preflightCoverage: 'partial', permissions: expect.any(Array),
       preflightTrace: [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'release', path: permissionRoot }, dispatch: 'simulated', resultKind: 'synthetic' }]
     } } } })
     expect((committed as { task?: { accessPermissions?: { authorizationRecord?: { permissions: unknown[] } } } }).task?.accessPermissions?.authorizationRecord?.permissions)

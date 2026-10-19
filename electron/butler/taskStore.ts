@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { resolveAutomationRunOutputDir } from './taskOutputDirectory'
+import { MAX_TASK_PREFLIGHT_TRACE_ITEMS } from './taskPreflightMockRunner'
 
 /**
  * 管家任务存储（P4）：automation_tasks / automation_task_runs 两表的对外 API。
@@ -82,9 +83,10 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
   if (typeof record.id !== 'string' || record.actor !== 'user-confirmation' || record.source !== 'task-preflight-confirmation' || !Number.isFinite(record.approvedAt) || !Number.isFinite(record.taskRevision) || record.taskRevision !== taskRevision || !Array.isArray(record.permissions)) return undefined
+  if (record.preflightCoverage !== undefined && record.preflightCoverage !== 'partial') return undefined
   const preflightTrace = record.preflightTrace
   if (preflightTrace !== undefined) {
-    if (!Array.isArray(preflightTrace) || preflightTrace.length > 12) return undefined
+    if (!Array.isArray(preflightTrace) || preflightTrace.length > MAX_TASK_PREFLIGHT_TRACE_ITEMS) return undefined
     let serializedTraceLength = 0
     for (const rawItem of preflightTrace) {
       if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) return undefined
@@ -133,6 +135,7 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
     source: 'task-preflight-confirmation',
     approvedAt: Number(record.approvedAt),
     taskRevision: Number(record.taskRevision),
+    ...(record.preflightCoverage === 'partial' ? { preflightCoverage: 'partial' as const } : {}),
     ...(typeof record.preflightFactsDigest === 'string' ? { preflightFactsDigest: record.preflightFactsDigest } : {}),
     permissions: normalizedPermissions,
     ...(preflightTrace !== undefined ? { preflightTrace: preflightTrace as AutomationTaskAuthorizationRecord['preflightTrace'] } : {})

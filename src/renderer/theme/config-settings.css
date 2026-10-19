@@ -2803,6 +2803,12 @@
   line-height: var(--sa-config-line);
 }
 
+.butler-permission-review__approve-all {
+  margin-top: var(--sa-config-gap-field);
+  font-weight: 600;
+  line-height: var(--sa-config-line);
+}
+
 .butler-history-run {
   padding: var(--sa-config-gap-substack) 0;
   border-bottom: 1px solid var(--sa-border);

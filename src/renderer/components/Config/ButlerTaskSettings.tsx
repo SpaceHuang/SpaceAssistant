@@ -256,7 +256,8 @@ export function ButlerTaskSettings() {
   const [historyTask, setHistoryTask] = useState<AutomationTask | null>(null)
   const [historyRuns, setHistoryRuns] = useState<AutomationTaskRun[]>([])
   const [preflightReport, setPreflightReport] = useState<PreflightReport | null>(null)
-  const [authorizationReview, setAuthorizationReview] = useState<{ reviewId: string; permissions: AutomationTaskPermission[] } | null>(null)
+  const [authorizationReview, setAuthorizationReview] = useState<{ reviewId: string; permissions: AutomationTaskPermission[]; preflightCoverage?: 'partial' } | null>(null)
+  const [authorizeAllPermissions, setAuthorizeAllPermissions] = useState(false)
   const [writeError, setWriteError] = useState<string | null>(null)
   const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([])
   const outputOrganizationTouched = useRef(false)
@@ -274,6 +275,7 @@ export function ButlerTaskSettings() {
   const invalidateAuthorizationReview = () => {
     authorizationDraftRevision.current += 1
     setAuthorizationReview(null)
+    setAuthorizeAllPermissions(false)
     setPreflightReport(null)
     setWriteError(null)
   }
@@ -339,6 +341,7 @@ export function ButlerTaskSettings() {
     })
     setPreflightReport(null)
     setAuthorizationReview(null)
+    setAuthorizeAllPermissions(false)
     setWriteError(null)
     setEditorOpen(true)
   }
@@ -373,6 +376,7 @@ export function ButlerTaskSettings() {
     })
     setPreflightReport(null)
     setAuthorizationReview(null)
+    setAuthorizeAllPermissions(false)
     setWriteError(null)
     setEditorOpen(true)
   }
@@ -395,6 +399,7 @@ export function ButlerTaskSettings() {
 
   const submit = async () => {
     if (submitting) return
+    if (authorizationReview && !authorizeAllPermissions) return
     const draftKey = activeTaskDraftKey.current ?? taskDraftStorageKey(editing?.id ?? null)
     activeTaskDraftKey.current = draftKey
     // 点击预检的同步阶段先保存草稿，即使表单校验或后续模型调用失败也不丢用户输入。
@@ -449,6 +454,7 @@ export function ButlerTaskSettings() {
           })
       if (requestDraftRevision !== undefined && requestDraftRevision !== authorizationDraftRevision.current) {
         setAuthorizationReview(null)
+        setAuthorizeAllPermissions(false)
         setPreflightReport(null)
         setWriteError(t('butler.form.preflightDraftChanged'))
         return
@@ -456,16 +462,19 @@ export function ButlerTaskSettings() {
       if (!res.ok) {
         if (res.kind === 'authorization-review-required') {
           setPreflightReport(res.report)
-          setAuthorizationReview({ reviewId: res.reviewId, permissions: res.permissions })
+          setAuthorizationReview({ reviewId: res.reviewId, permissions: res.permissions, ...(res.report.preflightCoverage ? { preflightCoverage: res.report.preflightCoverage } : {}) })
+          setAuthorizeAllPermissions(false)
           setWriteError(null)
           return
         }
         if (res.kind === 'preflight-blocked') {
           setPreflightReport(res.report)
           setAuthorizationReview(null)
+          setAuthorizeAllPermissions(false)
           setWriteError(null)
         } else {
           setAuthorizationReview(null)
+          setAuthorizeAllPermissions(false)
           const errorMessage = res.kind === 'preflight-unavailable'
             ? t(getPreflightIssueMessageKey(res.error) as Parameters<TaskActions['t']>[0])
             : res.error
@@ -476,6 +485,7 @@ export function ButlerTaskSettings() {
       }
       setPreflightReport(null)
       setAuthorizationReview(null)
+      setAuthorizeAllPermissions(false)
       clearTaskDraft(draftKey)
       activeTaskDraftKey.current = null
       message.success(editing ? t('butler.updated') : t('butler.created'))
@@ -495,7 +505,8 @@ export function ButlerTaskSettings() {
         if (result.kind === 'authorization-review-required') {
           await openEdit(task)
           setPreflightReport(result.report)
-          setAuthorizationReview({ reviewId: result.reviewId, permissions: result.permissions })
+          setAuthorizationReview({ reviewId: result.reviewId, permissions: result.permissions, ...(result.report.preflightCoverage ? { preflightCoverage: result.report.preflightCoverage } : {}) })
+          setAuthorizeAllPermissions(false)
           return
         }
         if (result.kind === 'preflight-blocked') {
@@ -591,7 +602,7 @@ export function ButlerTaskSettings() {
           <Button key="cancel" onClick={() => setEditorOpen(false)}>
             {t('butler.form.cancel')}
           </Button>,
-          <Button key="save" type="primary" loading={submitting} onClick={() => void submit()}>
+          <Button key="save" type="primary" loading={submitting} disabled={Boolean(authorizationReview && !authorizeAllPermissions)} onClick={() => void submit()}>
             {authorizationReview ? t('butler.form.permissionReviewConfirm') : t('butler.form.permissionReviewStart')}
           </Button>
         ]}
@@ -616,11 +627,19 @@ export function ButlerTaskSettings() {
               description={(
                 <div>
                   <Typography.Paragraph>{t('butler.form.permissionReviewIntro')}</Typography.Paragraph>
+                  {authorizationReview.preflightCoverage === 'partial' ? <Typography.Paragraph type="warning">{t('butler.form.permissionReviewPartialCoverage')}</Typography.Paragraph> : null}
                   <ul className="butler-permission-review__list">
                     {authorizationReview.permissions.map((permission, index) => (
                       <li key={`${permission.kind}-${index}`}>{permissionDescription(permission, t)}</li>
                     ))}
                   </ul>
+                  <Checkbox
+                    className="butler-permission-review__approve-all"
+                    checked={authorizeAllPermissions}
+                    onChange={(event) => setAuthorizeAllPermissions(event.target.checked)}
+                  >
+                    {t('butler.form.permissionReviewApproveAll')}
+                  </Checkbox>
                 </div>
               )}
             />
@@ -630,11 +649,12 @@ export function ButlerTaskSettings() {
               <div className="butler-preflight-report__content">
                 {preflightReport.blockers.map((item, index) => {
                   const hasTargetIssue = ['TARGET_UNCLEAR', 'TARGET_AMBIGUOUS', 'TARGET_NOT_FOUND', 'TARGET_OUTSIDE_ROOTS'].includes(item.code)
+                  const outputRootAuthorizationIssue = item.code === 'TOOL_PERMISSION_REQUIRED' && item.reasonCode === 'output_root_not_read_authorized'
                   const candidates = item.candidates ?? []
                   return (
                     <div key={`${item.code}-${index}`} className="butler-preflight-report__issue">
-                      <Typography.Text className="butler-preflight-report__blocker">{t(getPreflightIssueMessageKey(item.code) as Parameters<TaskActions['t']>[0], item.messageParams)}</Typography.Text>
-                      {item.reasonCode ? <Typography.Text type="secondary">{t(getPreflightClarificationReasonMessageKey(item.reasonCode) as Parameters<TaskActions['t']>[0])}</Typography.Text> : null}
+                      <Typography.Text className="butler-preflight-report__blocker">{t((outputRootAuthorizationIssue ? getPreflightClarificationReasonMessageKey(item.reasonCode!) : getPreflightIssueMessageKey(item.code)) as Parameters<TaskActions['t']>[0], outputRootAuthorizationIssue ? undefined : item.messageParams)}</Typography.Text>
+                      {item.reasonCode && !outputRootAuthorizationIssue ? <Typography.Text type="secondary">{t(getPreflightClarificationReasonMessageKey(item.reasonCode) as Parameters<TaskActions['t']>[0])}</Typography.Text> : null}
                       {item.reference ? <Typography.Text type="secondary">{t('butler.form.preflightReference', { reference: item.reference })}</Typography.Text> : null}
                       {candidates.length ? (
                         <div className="butler-preflight-report__issue-candidates">
@@ -649,26 +669,6 @@ export function ButlerTaskSettings() {
                     </div>
                   )
                 })}
-                {preflightReport.suggestedDirectories.length ? <div className="butler-preflight-report__candidates">
-                  <Typography.Text strong>{t('butler.form.suggestedDirectories')}</Typography.Text>
-                  {preflightReport.suggestedDirectories.map((candidate) => (
-                    <Checkbox
-                      key={candidate.path}
-                      checked={authorizedDirs.includes(candidate.path)}
-                      disabled={candidate.validationStatus !== 'valid'}
-                      aria-label={t('butler.form.suggestedDirectoryAria', { path: candidate.path, purpose: candidate.purposeKey ? t(candidate.purposeKey as Parameters<TaskActions['t']>[0]) : candidate.purpose ?? '' })}
-                      onChange={(event) => {
-                        const directories = event.target.checked ? [...new Set([...authorizedDirs, candidate.path])] : authorizedDirs.filter((root) => root !== candidate.path)
-                        setAuthorizedDirs(directories)
-                        invalidateAuthorizationReview()
-                        persistActiveTaskDraft(directories)
-                      }}
-                    >
-                      <span className="butler-preflight-report__candidate-path">{candidate.path}</span>
-                      <span className="butler-preflight-report__candidate-purpose">{candidate.purposeKey ? t(candidate.purposeKey as Parameters<TaskActions['t']>[0]) : candidate.purpose}</span>
-                    </Checkbox>
-                  ))}
-                </div> : null}
               </div>
             )} />
           ) : null}

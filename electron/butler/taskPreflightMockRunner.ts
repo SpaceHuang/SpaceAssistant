@@ -8,6 +8,8 @@ export const DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS = {
   totalTimeoutMs: 60_000,
   maxOutputTokensPerRound: DEFAULT_MODEL_MAX_TOKENS
 } as const
+/** Record one over-budget proposal without dispatching it, so its permission need remains reviewable. */
+export const MAX_TASK_PREFLIGHT_TRACE_ITEMS = DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS.maxToolCalls + 1
 
 export type TaskPreflightMockLimits = {
   maxModelRounds: number
@@ -207,7 +209,7 @@ export function createTaskPreflightMockRunner(options: RunnerOptions) {
               traceItem.dispatch = 'blocked'
               return incomplete('mock_adapter_unavailable', trace, modelRounds, toolCalls, outputTokens)
             }
-            if (toolCalls >= limits.maxToolCalls) return incomplete('tool_call_limit', trace.slice(0, -1), modelRounds, toolCalls, outputTokens)
+            if (toolCalls >= limits.maxToolCalls) return incomplete('tool_call_limit', trace, modelRounds, toolCalls, outputTokens)
 
             toolCalls += 1
             traceItem.dispatch = 'simulated'

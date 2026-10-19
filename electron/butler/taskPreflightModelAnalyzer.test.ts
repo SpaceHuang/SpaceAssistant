@@ -225,6 +225,39 @@ describe('createTaskPreflightModelAnalyzer', () => {
     })
   })
 
+  it('includes the call stopped by the Mock call budget in the permission summary', async () => {
+    const shellTool = { name: 'run_shell', description: 'Run a shell command', inputSchema: { type: 'object' } }
+    const calls = Array.from({ length: 13 }, (_, index) => ({
+      type: 'tool_use', id: `call-${index}`, name: 'run_shell',
+      input: { command: index === 12 ? 'git remote -v' : 'git log --oneline -5', workingDirectory: '/workspace' }
+    }))
+    const summary = JSON.stringify({
+      targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
+      requiredPermissions: [
+        { tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace' },
+        { tool: 'run_shell', command: 'git remote -v', workingDirectory: '/workspace' }
+      ], clarifications: [], suggestedDirectories: []
+    })
+    create
+      .mockResolvedValueOnce({ content: calls, stop_reason: 'tool_use', usage: { output_tokens: 26 } })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: summary }], stop_reason: 'end_turn', usage: { output_tokens: 20 } })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    const output = await analyzer.analyze({
+      prompt: 'Summarize Git history', scheduleSummary: 'daily', deliverySummary: 'desktop',
+      authorizedRoots: ['/workspace'], facts: {} as never, tools: [shellTool], responseFormat: 'json'
+    }, new AbortController().signal)
+
+    expect(output).toMatchObject({
+      mockIncomplete: true, mockIncompleteReason: 'tool_call_limit',
+      requiredPermissions: expect.arrayContaining([
+        { tool: 'run_shell', command: 'git remote -v', workingDirectory: '/workspace' }
+      ]),
+      mockTrace: [...Array.from({ length: 12 }, () => ({ toolName: 'run_shell', dispatch: 'simulated' })),
+        { toolName: 'run_shell', input: { command: 'git remote -v', workingDirectory: '/workspace' }, dispatch: 'not-dispatched' }]
+    })
+  })
+
   it('fails closed when the summary invents a Shell permission absent from the recorded calls', async () => {
     const shellTool = { name: 'run_shell', description: 'Run a shell command', inputSchema: { type: 'object' } }
     create

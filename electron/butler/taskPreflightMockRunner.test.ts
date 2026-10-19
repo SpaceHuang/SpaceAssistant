@@ -81,7 +81,10 @@ describe('createTaskPreflightMockRunner', () => {
 
     expect(readFileMock).toHaveBeenCalledTimes(1)
     expect(generate).toHaveBeenCalledTimes(2)
-    expect(result).toMatchObject({ status: 'incomplete', reason: 'tool_call_limit', trace: [{ dispatch: 'simulated' }] })
+    expect(result).toMatchObject({ status: 'incomplete', reason: 'tool_call_limit', toolCalls: 1, trace: [
+      { dispatch: 'simulated', input: { path: '/workspace/report.md' } },
+      { dispatch: 'not-dispatched', input: { path: '/workspace/report.md' } }
+    ] })
   })
 
   it('rejects a response that exceeds the per-round output token budget', async () => {

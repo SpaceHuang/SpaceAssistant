@@ -4,7 +4,7 @@ import type { AppDatabase } from '../database'
 import type { AgentReasoningEffort } from '../../src/shared/agent/invocation'
 import type { AutomationTaskToolRequirement } from '../../src/shared/automationTaskTypes'
 import type { TaskPreflightAnalyzer, TaskPreflightAnalysisInput, TaskPreflightAnalysisOutput } from './taskPreflight'
-import { callModelWithTimeout, createTaskPreflightMockRunner, DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS, type TaskPreflightMockLimits, type TaskPreflightMockMessage, type TaskPreflightMockTool, type TaskPreflightMockToolCall, type TaskPreflightMockTraceItem } from './taskPreflightMockRunner'
+import { callModelWithTimeout, createTaskPreflightMockRunner, DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS, MAX_TASK_PREFLIGHT_TRACE_ITEMS, type TaskPreflightMockLimits, type TaskPreflightMockMessage, type TaskPreflightMockTool, type TaskPreflightMockToolCall, type TaskPreflightMockTraceItem } from './taskPreflightMockRunner'
 import { buildThinkingWireParams } from '../effortFallback'
 
 type PreflightModelResponse = { content: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>; stop_reason?: string | null; usage?: { output_tokens?: number } }
@@ -133,9 +133,9 @@ function logPreflightResultRejection(phase: string, reason: string, details: Rec
 }
 
 const SUMMARY_SYSTEM_PROMPT = [
-  '第二阶段（独立新会话）：只汇总 task、schedule、delivery、facts 和主机记录的 mockTrace；不续跑模拟，不使用工具，不推断轨迹外的调用或权限。每项 requiredPermissions 必须能指向轨迹中的具体工具调用和参数。',
-  '总结只生成待核验的权限提案，不批准权限；主进程校验后才向用户展示，是否授权只能由用户确认。',
-  'mockTrace 是拟调用记录，不代表真实访问成功。status=incomplete 时只可总结已观察部分，不能声称权限完整。',
+  '第二阶段（独立新会话）：总结 task/schedule/delivery/facts/mockTrace；不续跑、不用工具、不推断轨迹外权限；每项权限对应已记录调用及参数。',
+  '只输出待核验权限提案；主机校验后展示，授权由用户明确确认。',
+  'mockTrace 仅代表拟调用，不证明真实访问；status=incomplete 时只总结已有记录、不称完整；not-dispatched 仍须列权限。',
   '只输出一个 JSON 对象，不加前言或结尾说明。targets 必需且为数组；requiredPermissions、clarifications、suggestedDirectories 有内容时输出数组，为空时可省略或输出空数组。',
   'targets：实际读取/处理对象；kind 为 exact(path,targetType=file|directory)、collection(directory,selector=*.csv|*.tsv|all) 或 output(path,expectedType=file|directory)。输入 path 必须来自 facts；仅对明确生成的结果填 output，path 相对 outputRoot。',
   'requiredPermissions：grep/run_script 用 {tool,scopeRoots}；run_shell 用 {tool,command,workingDirectory}（完整命令，目录来自 authorizedRoots）；MCP 用 {tool:"mcp",serverId,toolName,purpose}，服务/工具来自 mcpTools，按 mappedName 对应 mockTrace 的工具身份，purpose 简述必要性；不得请求目录外权限。',
@@ -225,7 +225,7 @@ function assertPermissionsMatchTrace(
   mcpTools: NonNullable<TaskPreflightAnalysisInput['mcpTools']>
 ): void {
   if (permissions.some((permission) => !permission || typeof permission !== 'object')) throw new Error('PREFLIGHT_MODEL_INVALID_SCHEMA')
-  const calls = trace.filter((item) => item.dispatch === 'simulated')
+  const calls = trace.filter((item) => item.dispatch === 'simulated' || item.dispatch === 'not-dispatched')
   const inputOf = (item: TaskPreflightMockTraceItem): Record<string, unknown> =>
     item.input && typeof item.input === 'object' && !Array.isArray(item.input) ? item.input as Record<string, unknown> : {}
   const hasPermissionForCall = (item: TaskPreflightMockTraceItem): boolean => {

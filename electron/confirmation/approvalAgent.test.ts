@@ -1207,7 +1207,7 @@ describe('线索包任务声明（D：可信证据分区）', () => {
     const { renderCluePackForTest } = await import('./approvalAgent')
     const authorizationRecord = {
       id: 'authorization-1', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
-      taskRevision: 4, preflightFactsDigest: 'facts-4', permissions: [
+      taskRevision: 4, preflightCoverage: 'partial', preflightFactsDigest: 'facts-4', permissions: [
         { kind: 'local-shell', scopeRoots: ['/workspace/repo'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/workspace/repo' }] },
         { kind: 'grep', scopeRoots: ['/workspace/repo/src'] },
         { kind: 'run-script', scopeRoots: ['/workspace/repo'], scriptHashBinding: 'per-invocation' },
@@ -1229,6 +1229,9 @@ describe('线索包任务声明（D：可信证据分区）', () => {
     expect(rendered).toContain('/results')
     expect(rendered).toContain('授权范围及预检拟调用轨迹（Mock 模拟，非真实访问事实）')
     expect(rendered).toContain('"pattern":"TODO"')
+    expect(rendered).toContain('"preflightCoverage":"partial"')
+    expect(rendered).toContain('预检覆盖不完整')
+    expect(rendered).toContain('未列入记录的权限不在本次用户确认范围内')
     expect(rendered).toContain('拟调用记录只证明预检模型提出过这些调用，不证明实际访问发生')
     expect(rendered).toContain('不代表本次具体命令或目标已自动批准')
   })

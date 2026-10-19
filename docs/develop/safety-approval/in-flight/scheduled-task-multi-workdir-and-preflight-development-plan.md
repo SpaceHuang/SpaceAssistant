@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检开发方案
 
-> 状态：既有功能与结果目录拆分已实施；2026-10-18 任务级访问授权与 Git 预检修订已完成；2026-10-19 Mock 演练隔离、预算和双阶段会话要求已纳入，执行见 E-15a～E-15d
+> 状态：既有功能与结果目录拆分已实施；2026-10-18 任务级访问授权与 Git 预检修订已完成；2026-10-19 Mock 演练、预算、双阶段总结和部分权限复核要求已纳入，执行见 E-15a～E-15g
 > 需求基线：[定时任务多工作目录与预检需求细化（评审稿）](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 复审依据：[第四轮复审](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-development-plan-review-round-4.md)  
 > 核对基线：工作区 `HEAD 7c0edc4176643627fdee85bff017a8d652059f26`；现状以本方案列出的当前文件和复现命令为准。工作区另有未跟踪目录 `llm-wiki.migrated-20261015-135757/`，与本方案无关。
@@ -87,7 +87,7 @@
 ### D-7：任务是否可一次确认本地工具权限？（用户已确认）
 
 - **决定：** 保存任务前，预检必须生成用户看得懂的权限清单，逐项说明资料目录读写、结果目录写入与归档方式、预检判定需要时的本地 Shell 范围，以及配置的结果投递渠道。Shell 授权绑定完整命令文本（含参数）和工作目录；执行超时是 Agent 可按运行情况调整的执行参数，不属于安全授权。用户检查清单并明确确认后，任务才保存。移除独立的 Shell 勾选项，是否需要 Shell 由预检给出并列入同一份待确认清单；旧任务迁移时不产生授权记录。
-- **记录所有权：** 确认后由主进程依据本进程持有的一次性预检确认票据创建并保存授权记录，记录确认者、时间、任务版本、预检事实摘要和用户确认的完整权限项。renderer 与业务 Agent 不能提交、补写或替用户声明该记录。任务配置版本变化后必须重新展示清单并确认；旧版本记录不得作为当前授权事实。
+- **记录所有权：** 确认后由主进程依据本进程持有的一次性预检确认票据创建并保存授权记录，记录确认者、时间、任务版本、预检事实摘要、覆盖状态和用户确认的权限项。覆盖不完整时，记录须明确标为 partial，并连同模拟轨迹传给安全审核 Agent；清单外权限不能据此视为已批准。renderer 与业务 Agent 不能提交、补写或替用户声明该记录。任务配置版本变化后必须重新展示清单并确认；旧版本记录不得作为当前授权事实。
 - **运行边界：** 主进程将授权记录冻结进 run snapshot，并作为宿主事实提供给安全审核 Agent；业务 Agent 的文字声明不能替代记录。该记录证明用户同意任务长期使用列出的权限，不代表具体命令自动通过。后续运行不再额外向用户索取这些任务权限，但 `run_shell` 仍经过现有危险命令预检和主机路径事实检查；危险、无法完整分析、敏感/系统路径、授权目录之外的路径和 unsupported 结构仍在 executor 前拒绝。结果文件仍通过 D-6 的预检绑定目标写入；输出目录不因此变成读取授权目录。不得新增专用 Git 工具。
 - **Git 目标预检：** 选定模型可依据已采集的本地 Git facts 提出所需 Shell 权限并定位仓库目标；多个可用仓库必须列出候选并要求用户说明。Git 本机查询能核验本地 refs/提交记录；本地记录没有包含 GitHub 推送事件时，不得声称知道推送时间。
 - **依据与可逆性：** 用户已明确要求授权目录扩展为一次确认的权限清单，并由运行时保存可供安全审核核对的客观记录。用户可在编辑任务后重做预检并撤销或调整权限；变更只影响后续 claim，已运行任务仍使用冻结记录。目录迁移仍保留原值，但不会推导出旧任务授权记录或 Shell 权限。
@@ -164,7 +164,7 @@
 | INV-14 | 新任务必须有有效 `outputDir` 和 `outputOrganization`；`authorizedDirs` 可为空且只表示资料读写授权。旧目录只迁移为 `authorizedDirs`，绝不自动充当输出目录；旧任务首次编辑须明确补选输出目录。 | v104 migration、task DTO adapter、主进程 IPC。 | v103→v104 不改旧目录语义；新建缺输出拒绝；空授权目录允许新任务；旧任务未编辑仍可 legacy 运行，编辑未选输出被拒绝。 |
 | INV-15 | 每个新 run 从冻结的 `scheduledFor` 和归档模式确定唯一 `runOutputDir`；预检 binding 的相对输出路径只能解析到该目录内。输出目录不能授权读取。 | 主进程输出目录解析器、taskStore run snapshot、runtime admission 与路径 final-check。 | daily/hourly 使用本机计划时间；direct 使用根目录；路径逃逸、链接越界、binding/run snapshot 不匹配均在 executor 前失败；read/list/grep 对输出目录仍视作未授权。 |
 | INV-16 | 文件工具自动化写入仅在 facts 验证工具目标与本 run 已批准输出 binding 匹配时 allow：文件 binding 要求目标完全相同，目录 binding 只覆盖该目录下的普通文件；目标必须落在 `runOutputDir` 内。 | facts producer、共享 Policy Engine rules、tool final-check；稳定规则 ID `automation-bound-output-write-allow`、`automation-write-deny`；系统不变量 `SYS-AUTOOUTPUT-001`。 | 匹配输出写入进入 executor；未绑定输出、绑定目录之外的目标、其他输出根、资料授权目录文件工具写入均不进入 executor；输出根不能读取；decision trace 标明稳定 rule ID；empty authorizedDirs 不回退至 outputDir；即使管理员停用 locked write deny，final-check 仍拒绝无 binding 的 automation write permit。 |
-| INV-17 | 定时任务权限必须先由预检列成用户可理解的清单，经用户明确确认后由主进程创建并保存授权记录；renderer 和业务 Agent 不能提交或伪造该记录。记录版本必须匹配当前任务，并冻结到 claim snapshot 后作为宿主事实提供给安全审核 Agent；旧任务默认无记录。automation `run_shell` 授权精确绑定完整命令文本（含参数）和工作目录；执行超时由 Agent 按实际情况选择，不属于授权字段或安全校验。现有 Shell 预检、完整度、敏感/系统位置、授权目录外路径与 unsupported 结构边界继续生效。 | task IPC 一次性确认票据、store revision 校验与 snapshot、`TaskPathFactsProvider`、preflight model analyzer、approval clue、`toolCallGate.ts`；稳定 rule IDs `automation-shell-deny`、`automation-authorized-shell-allow`、`automation-shell-analysis-incomplete-deny`、`automation-shell-outside-root-deny`；系统不变量 `SYS-AUTOSHELL-001`。 | 清单分别展示资料读写、结果目录写入、需要时的 Shell 命令与工作目录、投递权限；不显示执行超时；未确认不能保存；伪造 renderer 字段、业务 Agent 声明及过期/版本不符记录均不能授权；每次编辑后的权限变更只影响后续运行，已 claim snapshot 不变；安全审核 Agent 可见记录 ID、任务版本与完整范围；不为 Git 新增专用工具，也不把本机提交时间推断为 GitHub 推送时间。 |
+| INV-17 | 定时任务权限必须先由预检列成用户可理解的清单，经用户明确确认后由主进程创建并保存授权记录；renderer 和业务 Agent 不能提交或伪造该记录。记录版本必须匹配当前任务，并冻结到 claim snapshot 后作为宿主事实提供给安全审核 Agent；旧任务默认无记录。若预算停止导致覆盖不完整，但独立总结与主机核验成功，用户可以确认已列权限；记录必须保留 partial coverage 和拟调用轨迹，清单外权限不因此获批。automation `run_shell` 授权精确绑定完整命令文本（含参数）和工作目录；执行超时由 Agent 按实际情况选择，不属于授权字段或安全校验。现有 Shell 预检、完整度、敏感/系统位置、授权目录外路径与 unsupported 结构边界继续生效。 | task IPC 一次性确认票据、store revision 校验与 snapshot、`TaskPathFactsProvider`、preflight model analyzer、approval clue、`toolCallGate.ts`；稳定 rule IDs `automation-shell-deny`、`automation-authorized-shell-allow`、`automation-shell-analysis-incomplete-deny`、`automation-shell-outside-root-deny`；系统不变量 `SYS-AUTOSHELL-001`。 | 清单分别展示资料读写、结果目录写入、需要时的 Shell 命令与工作目录、投递权限；不显示执行超时；未确认不能保存；伪造 renderer 字段、业务 Agent 声明及过期/版本不符记录均不能授权；每次编辑后的权限变更只影响后续运行，已 claim snapshot 不变；安全审核 Agent 可见记录 ID、任务版本、权限范围与 coverage 状态；不为 Git 新增专用工具，也不把本机提交时间推断为 GitHub 推送时间。 |
 
 ### 2.3 契约卡
 
@@ -185,7 +185,7 @@
 #### 预检与保存时序
 
 1. 主进程 handler 入口立即捕获 `requestReceivedAt`，规范化 renderer payload 并对全部必填字段、本地 schedule/交付字段、目录和模型 pair 做校验。
-2. 仅在上述结构检查通过后，调用目标分析器。E-04 的结构化分析器不暴露工具调用；新增 E-15 Mock 演练后，第一阶段模型可见当前任务可用的工具定义，但所有调用只能进入隔离的 Mock dispatcher。第一阶段只探索可能的执行步骤和权限，不需要完成真实任务；模型轮次、Mock 调用数和演练时限是主机停止上限。演练结束或预算停止后，第二阶段用全新、无工具的模型请求接收任务配置与主机记录轨迹，汇总目标、权限和歧义。主机核对权限提案确有对应轨迹及参数；两阶段都不能自动授权，只有完整演练通过核验后才能进入用户确认。
+2. 仅在上述结构检查通过后，调用目标分析器。E-04 的结构化分析器不暴露工具调用；新增 E-15 Mock 演练后，第一阶段模型可见当前任务可用的工具定义，但所有调用只能进入隔离的 Mock dispatcher。第一阶段只探索可能的执行步骤和权限，不需要完成真实任务；模型轮次、Mock 调用数和演练时限是主机停止上限。演练结束或预算停止后，第二阶段用全新、无工具的模型请求接收任务配置与主机记录轨迹，汇总目标、权限和歧义。主机核对权限提案确有对应轨迹及参数；覆盖不完整但摘要通过核验时可进入用户复核，并明确标注部分覆盖；只有用户确认列出的权限后才能保存。
 3. 结构问题、目标歧义、需要授权的目录或分析服务错误形成 report；存在任一 blocker 就不写任务表。候选目录未勾选前总是 blocker。
 4. report 返回 renderer 后，renderer保留表单；勾选只将 canonical path 暂存入表单 `workDirs`。再次提交会重新执行完整校验与目标分析，不复用旧报告。
 5. 没有 blocker 时，主进程将同一 DTO、`preflightVersion=1`、判别类型 `TargetBinding[]`、facts digest 和 revision 一并写入 taskStore；字段、roots、schedule/prompt revision、bindings 在一个 taskStore 事务中更新。编辑失败不覆盖旧配置。renderer 不得提交 preflightVersion，且 create 无 legacy 入口。
@@ -201,9 +201,9 @@
 - 预检分为两个独立模型上下文：第一阶段用带 Mock 工具的对话模拟任务步骤，收集拟调用；第二阶段另发无工具、无第一阶段对话历史的请求，只基于任务配置和宿主轨迹汇总权限提案。第一阶段预算限制是停止条件，不是要求模型在限制内完成真实任务。两阶段单次请求均使用所选模型配置的最大输出值，不另设固定小额或跨阶段累计 token 截断；运行边界由模型轮次、Mock 调用数、单请求时限和总预检时限控制。时间预算停止后仍尽可能总结部分轨迹。
 - Mock 结果只能是明确标注的合成响应；需要真实文件内容、命令输出、MCP 返回或外部服务结果才能继续判断时，标记覆盖不完整并阻止生成可确认的授权清单。不得用模拟数据冒充事实。未知工具、缺少 Mock adapter 或调用参数无法解析时 fail closed，绝不能回退到生产 executor。
 - 拟调用轨迹须记录工具身份、完整的安全相关参数和声明目标；路径仅代表计划访问目标，不能声称为实际访问证据。宿主将结构化轨迹与 E-04 目标/facts 结果合并，仍按现有主进程校验和授权范围规则生成权限提案。
-- 第二阶段不得引入轨迹外工具或权限。宿主须核对 Shell 命令、grep/脚本能力和 MCP 映射工具均有对应的已模拟调用；缺少或多出权限时 fail closed。预算不完整时第二阶段可总结已观察部分，但结果不得进入用户授权确认或任务保存。
+- 第二阶段不得引入轨迹外工具或权限。宿主须核对 Shell 命令、grep/脚本能力和 MCP 映射工具均有对应的已模拟调用；缺少或多出权限时 fail closed。预算停止后，若第二阶段成功总结且主机核验通过，覆盖不完整的权限清单可进入用户复核；用户只授权清单列出的权限，运行时不得将清单外调用视为已批准。
 - 第一版硬上限：整次预检（含独立总结请求）最多 **60 秒**。第一阶段演练最多 **5 次模型生成**（初始响应计入）、**12 次 Mock 工具调用**、单次模型请求 **20 秒**；第二阶段总结最多 **1 次模型请求**、单次 **20 秒**。两阶段每次请求均使用所选模型配置的最大输出值，不额外设置固定每轮或累计 token 截断额度。第一阶段总时限由主机扣除最多 20 秒总结预留后决定。模型轮次、Mock 调用数和时限由主进程运行时强制，并覆盖 SDK 自动重试；不是仅靠提示词约束。
-- 达到任一上限立即取消当前模型请求、停止分发后续 Mock 调用并终止预检；允许展示已收集轨迹，但必须标为部分结果/覆盖不完整，不允许用户确认授权或保存任务。不得后台续跑或自动重试。新的预检使用全新 Mock 状态。
+- 达到任一上限立即取消当前模型请求、停止分发后续 Mock 调用并终止第一阶段采样；将已有轨迹交给独立总结会话，允许经主机核验的部分覆盖清单进入用户复核。只要用户未明确确认，或总结/轨迹核验失败，就不得保存任务或授权记录。不得后台续跑或自动重试。新的预检使用全新 Mock 状态。
 - 预算常量须集中定义并可由边界测试注入缩小；UI 不提供放大安全上限的配置。
 
 #### 多根路径与安全审核

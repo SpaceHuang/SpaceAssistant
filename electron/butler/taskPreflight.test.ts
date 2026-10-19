@@ -12,14 +12,22 @@ describe('runTaskPreflight', () => {
     expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_OUTPUT_TRUNCATED', messageKey: 'butler.preflight.analyzer_output_truncated' }] })
   })
 
-  it('explains a truncated first-stage rehearsal with the same output-limit issue', async () => {
-    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [], mockIncomplete: true, mockIncompleteReason: 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE' } as never)) }
+  it('summarizes the valid trace collected before a first-stage output limit', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [{ kind: 'exact', path: '/workspace/report.csv', targetType: 'file' }],
+      requiredPermissions: [{ tool: 'grep', scopeRoots: ['/workspace'] }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'report', path: '/workspace' }, dispatch: 'simulated', resultKind: 'synthetic' }],
+      mockIncomplete: true, mockIncompleteReason: 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE'
+    } as never)) }
     const result = await runTaskPreflight({ prompt: 'Read report.csv', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, {
       analyzer,
-      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) }
+      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [
+        { path: '/workspace', relativePath: '', kind: 'directory' as const },
+        { path: '/workspace/report.csv', relativePath: 'report.csv', kind: 'file' as const }
+      ], coverage: { complete: true, truncated: false, roots: 1, visited: 2, errors: 0 }, digest: 'facts' })) }
     })
 
-    expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_OUTPUT_TRUNCATED', messageKey: 'butler.preflight.analyzer_output_truncated' }] })
+    expect(result.report).toMatchObject({ status: 'passed', blockers: [], preflightCoverage: 'partial' })
   })
 
   it('passes only with complete facts and an unambiguous structured target', async () => {
@@ -145,7 +153,8 @@ describe('runTaskPreflight', () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
       targets: [],
       requiredPermissions: [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/project' }],
-      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5', workingDirectory: '/project' }, dispatch: 'simulated', resultKind: 'synthetic' }]
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5', workingDirectory: '/project' }, dispatch: 'simulated', resultKind: 'synthetic' }],
+      mockIncomplete: true, mockIncompleteReason: 'model_round_limit'
     } as never)) }
     const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/daily'], outputDir: '/project', taskRevision: 1 }, {
       analyzer,
@@ -158,11 +167,45 @@ describe('runTaskPreflight', () => {
 
     expect(result.report).toMatchObject({
       status: 'blocked',
+      preflightCoverage: 'partial',
       blockers: [{ code: 'TOOL_PERMISSION_REQUIRED', field: 'workDirs', reference: prompt, reasonCode: 'output_root_not_read_authorized', candidates: ['/project'] }],
       suggestedDirectories: [{ path: '/project', purposeKey: 'butler.preflight.output_root_read_candidate_purpose', validationStatus: 'valid' }]
     })
-    expect(result.requiredPermissions).toBeUndefined()
+    expect(result.requiredPermissions).toEqual([{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/project' }])
+    expect(result.authorizationContinuation).toEqual({
+      outputRoot: '/project',
+      analysis: {
+        targets: [],
+        requiredPermissions: [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/project' }],
+        mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5', workingDirectory: '/project' }, dispatch: 'simulated', resultKind: 'synthetic' }],
+        mockIncomplete: true, mockIncompleteReason: 'model_round_limit'
+      }
+    })
     expect(result.bindings).toEqual([])
+  })
+
+  it('continues approved output-root permissions with fresh host facts and reuses the mock analysis', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => { throw new Error('model must not be called again') }) }
+    const analysisOverride = {
+      targets: [{ kind: 'exact' as const, path: '/project', targetType: 'directory' as const }],
+      requiredPermissions: [{ tool: 'run_shell' as const, command: 'git log --oneline -5', workingDirectory: '/project' }],
+      mockTrace: [{ kind: 'proposed-tool-call' as const, toolName: 'run_shell', input: { command: 'git log --oneline -5', workingDirectory: '/project' }, dispatch: 'simulated' as const, resultKind: 'synthetic' as const }]
+    }
+    const result = await runTaskPreflight({
+      prompt: '总结本机 Git 历史', scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/project'], outputDir: '/project',
+      taskRevision: 1, analysisOverride
+    }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({
+        roots: ['/project'], outputRoot: '/project', outputRootIsGitRepository: true, gitRepositories: ['/project'],
+        entries: [{ path: '/project', relativePath: '', kind: 'directory' as const }],
+        coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'approved-project-facts'
+      })) }
+    })
+
+    expect(result).toMatchObject({ report: { status: 'passed', blockers: [] }, bindings: [{ kind: 'exact', path: '/project' }], factsDigest: 'approved-project-facts' })
+    expect(result.requiredPermissions).toEqual(analysisOverride.requiredPermissions)
+    expect(analyzer.analyze).not.toHaveBeenCalled()
   })
 
   it('asks the user to add a repository directory when a Git request has no authorized roots', async () => {
@@ -298,10 +341,32 @@ describe('runTaskPreflight', () => {
     expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ tools: [] }), expect.any(AbortSignal))
   })
 
-  it('blocks task confirmation when the mock exercise reaches a hard limit', async () => {
+  it('continues to the permission review when the mock budget stops after recording a usable trace', async () => {
     const mockTrace = [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'release', path: '/workspace' }, dispatch: 'simulated', resultKind: 'synthetic' }]
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
-      targets: [], requiredPermissions: [], clarifications: [], suggestedDirectories: [], mockTrace, mockIncomplete: true
+      targets: [{ kind: 'exact', path: '/workspace/release.md', targetType: 'file' }],
+      requiredPermissions: [{ tool: 'grep', scopeRoots: ['/workspace'] }],
+      clarifications: [], suggestedDirectories: [], mockTrace, mockIncomplete: true, mockIncompleteReason: 'model_round_limit'
+    } as never)) }
+    const result = await runTaskPreflight({ prompt: 'Find release notes', scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/workspace'], taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [
+        { path: '/workspace', relativePath: '', kind: 'directory' as const },
+        { path: '/workspace/release.md', relativePath: 'release.md', kind: 'file' as const }
+      ], coverage: { complete: true, truncated: false, roots: 1, visited: 2, errors: 0 }, digest: 'facts' })) }
+    })
+
+    expect(result).toMatchObject({
+      report: { status: 'passed', blockers: [], preflightCoverage: 'partial' },
+      bindings: [{ kind: 'exact', path: '/workspace/release.md', taskRevision: 1 }],
+      requiredPermissions: [{ tool: 'grep', scopeRoots: ['/workspace'] }], mockTrace
+    })
+  })
+
+  it('blocks when the mock environment itself cannot produce a trustworthy permission trace', async () => {
+    const mockTrace = [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'release', path: '/workspace' }, dispatch: 'simulated', resultKind: 'synthetic' }]
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [], requiredPermissions: [], clarifications: [], suggestedDirectories: [], mockTrace, mockIncomplete: true, mockIncompleteReason: 'mock_catalog_incomplete'
     } as never)) }
     const result = await runTaskPreflight({ prompt: 'Find release notes', scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/workspace'], taskRevision: 1 }, {
       analyzer,
@@ -309,7 +374,7 @@ describe('runTaskPreflight', () => {
     })
 
     expect(result).toMatchObject({
-      report: { status: 'blocked', blockers: [{ code: 'MOCK_PREFLIGHT_INCOMPLETE' }] },
+      report: { status: 'blocked', blockers: [{ code: 'MOCK_PREFLIGHT_INCOMPLETE', messageKey: 'butler.preflight.mock_preflight_incomplete' }] },
       bindings: [], mockTrace
     })
   })

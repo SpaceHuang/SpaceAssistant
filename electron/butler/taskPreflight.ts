@@ -2,7 +2,7 @@ import path from 'node:path'
 import { getPreflightIssueMessageKey, type AutomationTaskMcpToolCandidate, type AutomationTaskToolRequirement, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider, type TaskPathFacts } from './taskPathFacts'
 import { resolveTaskTarget, type ProposedTaskTarget } from './taskTargetResolver'
-import type { TaskPreflightMockTool, TaskPreflightMockTraceItem } from './taskPreflightMockRunner'
+import { MAX_TASK_PREFLIGHT_TRACE_ITEMS, type TaskPreflightMockTool, type TaskPreflightMockTraceItem } from './taskPreflightMockRunner'
 
 export type TaskPreflightAnalysisInput = {
   prompt: string
@@ -21,13 +21,27 @@ export type TaskPreflightAnalysisInput = {
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
 export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }>; mockTrace?: TaskPreflightMockTraceItem[]; mockIncomplete?: boolean; mockIncompleteReason?: string }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
-export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number; preflightStartedAt?: number; mcpTools?: Array<AutomationTaskMcpToolCandidate & { mappedName?: string }>; tools?: TaskPreflightMockTool[] }
-export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[]; mockTrace?: TaskPreflightMockTraceItem[] }
+export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number; preflightStartedAt?: number; mcpTools?: Array<AutomationTaskMcpToolCandidate & { mappedName?: string }>; tools?: TaskPreflightMockTool[]; /** Host-only continuation after the user approves a previously displayed permission list. */ analysisOverride?: TaskPreflightAnalysisOutput }
+export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[]; mockTrace?: TaskPreflightMockTraceItem[]; authorizationContinuation?: { outputRoot: string; analysis: TaskPreflightAnalysisOutput } }
 export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; factsProvider?: Pick<TaskPathFactsProvider, 'collect'>; timeoutMs?: number; now?: () => number }
 
 const issue = (code: string, field = 'prompt', details: Partial<PreflightIssue> = {}): PreflightIssue => ({ code, field, messageKey: getPreflightIssueMessageKey(code), ...details })
 const emptyReport = (status: PreflightReport['status'], blockers: PreflightIssue[], suggestedDirectories: SuggestedDirectory[] = []): PreflightReport => ({ status, blockers, suggestedDirectories })
 const DEFAULT_ANALYZER_TIMEOUT_MS = 60_000
+const BUDGET_STOP_REASONS = new Set([
+  'model_round_limit',
+  'tool_call_limit',
+  'total_timeout',
+  'model_request_timeout',
+  'model_output_limit',
+  'PREFLIGHT_MODEL_TRUNCATED_RESPONSE'
+])
+const withAnalysisCoverage = (report: PreflightReport, analysis: TaskPreflightAnalysisOutput): PreflightReport => ({
+  ...report,
+  ...(analysis.mockIncomplete && analysis.mockIncompleteReason && BUDGET_STOP_REASONS.has(analysis.mockIncompleteReason)
+    ? { preflightCoverage: 'partial' as const }
+    : {})
+})
 
 function isWithinRoot(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate)
@@ -87,7 +101,7 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
   const suggestedDirectories = (value as { suggestedDirectories?: unknown }).suggestedDirectories
   if (suggestedDirectories !== undefined && (!Array.isArray(suggestedDirectories) || suggestedDirectories.some((item) => !item || typeof item !== 'object' || typeof (item as Record<string, unknown>).path !== 'string' || typeof (item as Record<string, unknown>).purpose !== 'string' || typeof (item as Record<string, unknown>).source !== 'string'))) return undefined
   const mockTrace = (value as { mockTrace?: unknown }).mockTrace
-  if (mockTrace !== undefined && (!Array.isArray(mockTrace) || mockTrace.length > 12 || mockTrace.some((item) => {
+  if (mockTrace !== undefined && (!Array.isArray(mockTrace) || mockTrace.length > MAX_TASK_PREFLIGHT_TRACE_ITEMS || mockTrace.some((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return true
     const trace = item as Record<string, unknown>
     return trace.kind !== 'proposed-tool-call' || typeof trace.toolName !== 'string' || !trace.toolName
@@ -138,39 +152,55 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
   const remaining = remainingBudgetMs()
   if (remaining <= 0) return { report: emptyReport('unavailable', [issue('ANALYZER_TIMEOUT')]), bindings: [], factsDigest: facts.digest }
   let analysis: TaskPreflightAnalysisOutput | undefined
-  try {
-    analysis = validateAnalysis(await withTimeout((signal) => deps.analyzer.analyze({
-      prompt: input.prompt,
-      scheduleSummary: input.scheduleSummary,
-      deliverySummary: input.deliverySummary,
-      authorizedRoots: facts.roots,
-      outputRoot: facts.outputRoot,
-      facts,
-      tools: input.tools ?? [],
-      remainingBudgetMs: Math.max(1, Math.min(DEFAULT_ANALYZER_TIMEOUT_MS, remaining - 10)),
-      mcpTools: (input.mcpTools ?? []).map(({ serverId, serverName, toolName, description, parameters, mappedName }) => ({ serverId, serverName, toolName, description: description.slice(0, 600), parameters, ...(mappedName ? { mappedName } : {}) })),
-      responseFormat: 'json'
-    }, signal), remaining))
-  } catch (error) {
-    return { report: emptyReport('unavailable', [issue(classifyAnalyzerFailure(error))]), bindings: [], factsDigest: facts.digest }
+  if (input.analysisOverride) {
+    analysis = validateAnalysis(input.analysisOverride)
+  } else {
+    try {
+      analysis = validateAnalysis(await withTimeout((signal) => deps.analyzer.analyze({
+        prompt: input.prompt,
+        scheduleSummary: input.scheduleSummary,
+        deliverySummary: input.deliverySummary,
+        authorizedRoots: facts.roots,
+        outputRoot: facts.outputRoot,
+        facts,
+        tools: input.tools ?? [],
+        remainingBudgetMs: Math.max(1, Math.min(DEFAULT_ANALYZER_TIMEOUT_MS, remaining - 10)),
+        mcpTools: (input.mcpTools ?? []).map(({ serverId, serverName, toolName, description, parameters, mappedName }) => ({ serverId, serverName, toolName, description: description.slice(0, 600), parameters, ...(mappedName ? { mappedName } : {}) })),
+        responseFormat: 'json'
+      }, signal), remaining))
+    } catch (error) {
+      return { report: emptyReport('unavailable', [issue(classifyAnalyzerFailure(error))]), bindings: [], factsDigest: facts.digest }
+    }
   }
   if (!analysis) {
     if (process.env.SPACEASSISTANT_DEV === '1') console.warn('[taskPreflight] result rejected', { phase: 'host-schema-validation', reason: 'invalid-analysis-shape' })
     return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
   }
   if (analysis.mockIncomplete) {
-    const truncated = analysis.mockIncompleteReason === 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE' || analysis.mockIncompleteReason === 'model_output_limit'
-    return {
-      report: emptyReport(truncated ? 'unavailable' : 'blocked', [issue(truncated ? 'ANALYZER_OUTPUT_TRUNCATED' : 'MOCK_PREFLIGHT_INCOMPLETE')]),
-      bindings: [], factsDigest: facts.digest,
-      ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
+    // policy: a host budget stops only the mock sampling stage. A valid independent summary
+    // of its recorded trace can still be reviewed; the partial coverage is carried to UI/audit.
+    // Invalid model output, missing mock adapters, or failed mock results remain fail-closed.
+    if (!analysis.mockIncompleteReason || !BUDGET_STOP_REASONS.has(analysis.mockIncompleteReason)) {
+      if (process.env.SPACEASSISTANT_DEV === '1') {
+        const reason = analysis.mockIncompleteReason
+        console.warn('[taskPreflight] mock rehearsal rejected', {
+          phase: 'mock-runner-validation',
+          reason: reason && /^[A-Za-z0-9_.-]{1,80}$/.test(reason) ? reason : 'unknown',
+          traceItems: analysis.mockTrace?.length ?? 0
+        })
+      }
+      return {
+        report: emptyReport('blocked', [issue('MOCK_PREFLIGHT_INCOMPLETE')]),
+        bindings: [], factsDigest: facts.digest,
+        ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
+      }
     }
   }
   const requiredPermissions = analysis.requiredPermissions ?? []
   // facts: 本机工具授权必须落在用户选择并由主机核验的目录范围；结果输出根不能充当读取/命令范围。
   const filesystemPermissions = requiredPermissions.filter((permission) => permission.tool !== 'mcp')
   if (filesystemPermissions.length > 0 && facts.roots.length === 0) {
-    return { report: emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs')]), bindings: [], factsDigest: facts.digest }
+    return { report: withAnalysisCoverage(emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs')]), analysis), bindings: [], factsDigest: facts.digest }
   }
   const candidateMcpTools = input.mcpTools ?? []
   const requirementsInScope = requiredPermissions.every((permission) => permission.tool === 'mcp'
@@ -192,7 +222,7 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     if (outputRootReadRequested && facts.outputRoot) {
       const reference = input.prompt.trim().slice(0, 240)
       return {
-        report: emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs', {
+        report: withAnalysisCoverage(emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs', {
           reference,
           reasonCode: 'output_root_not_read_authorized',
           candidates: [facts.outputRoot],
@@ -202,9 +232,11 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
           purposeKey: 'butler.preflight.output_root_read_candidate_purpose',
           source: reference,
           validationStatus: 'valid'
-        }]),
+        }]), analysis),
         bindings: [],
         factsDigest: facts.digest,
+        requiredPermissions,
+        authorizationContinuation: { outputRoot: facts.outputRoot, analysis },
         ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
       }
     }
@@ -245,10 +277,10 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
         ...(candidates.length ? { candidates, candidateCount: allCandidates.length } : {})
       })
     })
-  if (analysis.targets.length === 0 && clarificationIssues.length === 0) {
+  if (analysis.targets.length === 0 && clarificationIssues.length === 0 && requiredPermissions.length === 0) {
     const reference = input.prompt.trim().slice(0, 240)
     return {
-      report: emptyReport('blocked', [issue('TARGET_UNCLEAR', 'prompt', { reference, reasonCode: 'no_target_identified' })]),
+      report: withAnalysisCoverage(emptyReport('blocked', [issue('TARGET_UNCLEAR', 'prompt', { reference, reasonCode: 'no_target_identified' })]), analysis),
       bindings: [],
       factsDigest: facts.digest
     }
@@ -273,7 +305,7 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     else suggestedDirectories.push(outputRootSuggestion)
   }
   return {
-    report: emptyReport(blockers.length ? 'blocked' : 'passed', blockers, suggestedDirectories),
+    report: withAnalysisCoverage(emptyReport(blockers.length ? 'blocked' : 'passed', blockers, suggestedDirectories), analysis),
     bindings: blockers.length ? [] : bindings,
     factsDigest: facts.digest,
     requiredPermissions,
