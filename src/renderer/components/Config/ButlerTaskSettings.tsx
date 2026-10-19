@@ -126,7 +126,7 @@ function permissionDescription(permission: AutomationTaskPermission, t: TaskActi
     case 'result-write': return t('butler.form.permissionResultWrite', { path: permission.outputDirectory, organization: outputOrganizationText(permission.organization, t) })
     case 'local-shell': return t('butler.form.permissionLocalShell', {
       scope: permission.scopeRoots.length ? permission.scopeRoots.join('、') : t('butler.form.permissionNoDirectoryScope'),
-      commands: permission.commands.map(({ command, workingDirectory, timeout }) => `${command}（${workingDirectory}；${t('butler.form.permissionShellTimeout', { timeout: timeout === undefined ? t('butler.form.permissionDefaultTimeout') : `${timeout}s` })}）`).join('；')
+      commands: permission.commands.map(({ command, workingDirectory }) => `${command}（${workingDirectory}）`).join('；')
     })
     case 'grep': return t('butler.form.permissionGrep', { scope: permission.scopeRoots.join('、') })
     case 'run-script': return t('butler.form.permissionRunScript', { scope: permission.scopeRoots.join('、') })

@@ -176,6 +176,21 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     expect(r.facts.signals).toContainEqual({ kind: 'automation-shell-permission', status: 'matched' })
   })
 
+  it('run_shell 的运行时超时可以变化而不影响任务授权匹配', async () => {
+    const root = path.resolve(os.tmpdir())
+    const permissionRecord = { id: 'receipt-shell', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,
+      approvedAt: 1, taskRevision: 1, permissions: [{ kind: 'local-shell' as const, scopeRoots: [root], commands: [{ command: 'git log --oneline -5', workingDirectory: root }] }] }
+    const decisions = await Promise.all([5, 180].map((timeout) => evaluateToolCallGate(base({
+      lane: 'automation', toolName: 'run_shell', toolInput: { command: 'git log --oneline -5', timeout },
+      taskAccessPermissions: { directories: [root], tools: ['run_shell'], authorizationRecord: permissionRecord }, taskWorkDirs: [root], workDir: root,
+      runShellPrecheck: async () => ({ ok: true as const, analysis: {} as never, legacyAutoAllowEligible: false, legacyPolicy: {} as never, hints: {} as never }),
+      appDb: openDb()
+    }))))
+
+    expect(decisions.map((result) => result.facts.signals.find((signal) => signal.kind === 'automation-shell-permission')))
+      .toEqual([{ kind: 'automation-shell-permission', status: 'matched' }, { kind: 'automation-shell-permission', status: 'matched' }])
+  })
+
   it('Shell grant requires the exact approved arguments and does not inherit authorization by tool name', async () => {
     const root = path.resolve(os.tmpdir())
     const permissionRecord = { id: 'receipt-shell', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,

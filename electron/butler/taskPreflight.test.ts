@@ -123,7 +123,8 @@ describe('runTaskPreflight', () => {
       coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'git-facts'
     })) } })
 
-    expect(result).toMatchObject({ report: { status: 'passed', blockers: [] }, bindings: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredPermissions })
+    expect(result).toMatchObject({ report: { status: 'passed', blockers: [] }, bindings: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }] })
+    expect(result.requiredPermissions).toEqual([{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace' }])
     expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.objectContaining({ gitRepositories: ['/workspace'] }) }), expect.any(AbortSignal))
   })
 

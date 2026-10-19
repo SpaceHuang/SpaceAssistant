@@ -157,7 +157,7 @@ describe('buildButlerSystemAppendix tool scopes', () => {
     const appendix = buildButlerSystemAppendix({ directories: ['/workspace/repo'], tools: [], authorizationRecord: {
       id: 'receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision: 1,
       permissions: [
-        { kind: 'local-shell', scopeRoots: ['/workspace/repo'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/workspace/repo', timeout: 30 }] },
+        { kind: 'local-shell', scopeRoots: ['/workspace/repo'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/workspace/repo' }] },
         { kind: 'grep', scopeRoots: ['/workspace/repo/src'] },
         { kind: 'run-script', scopeRoots: ['/workspace/repo'], scriptHashBinding: 'per-invocation' },
         { kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues',
@@ -168,8 +168,9 @@ describe('buildButlerSystemAppendix tool scopes', () => {
     expect(appendix).toContain('git log --oneline -5')
     expect(appendix).toContain('/workspace/repo/src')
     expect(appendix).toContain('SHA-256')
-    expect(appendix).toContain('完整参数')
-    expect(appendix).toContain('超时=30s')
+    expect(appendix).toContain('命令文本、参数和工作目录不变')
+    expect(appendix).not.toContain('超时=30s')
+    expect(appendix).toContain('执行时自行选择合适的超时')
     expect(appendix).toContain('Issue Tracker/search_issues')
     expect(appendix).toContain('Find recent issues')
     expect(appendix).toContain('具体参数仍交由安全审核 Agent')

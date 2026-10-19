@@ -6,7 +6,7 @@ const root = '/workspace/repo'
 const record: AutomationTaskAuthorizationRecord = {
   id: 'receipt-1', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision: 3,
   permissions: [
-    { kind: 'local-shell', scopeRoots: [root], commands: [{ command: 'git log --oneline -5', workingDirectory: root, timeout: 60 }] },
+    { kind: 'local-shell', scopeRoots: [root], commands: [{ command: 'git log --oneline -5', workingDirectory: root }] },
     { kind: 'grep', scopeRoots: [root] },
     { kind: 'run-script', scopeRoots: [root], scriptHashBinding: 'per-invocation' },
     { kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues', purpose: 'Search recently updated issues', parameters: [{ name: 'query', required: true }], descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64) }
@@ -16,11 +16,9 @@ const permissions: AutomationTaskAccessPermissions = { directories: [root], tool
 
 describe('scheduled task tool permission matching', () => {
   it('matches run_shell by the full approved command parameters and working directory', () => {
-    expect(matchAutomationShellPermission(permissions, 'git log --oneline -5', root, 60)).toBe(true)
+    expect(matchAutomationShellPermission(permissions, 'git log --oneline -5', root)).toBe(true)
     expect(matchAutomationShellPermission(permissions, 'git log --oneline -10', root)).toBe(false)
-    expect(matchAutomationShellPermission(permissions, 'git log --oneline -5', root, 120)).toBe(false)
-    expect(matchAutomationShellPermission(permissions, 'git log --oneline -5', root)).toBe(false)
-    expect(matchAutomationShellPermission(permissions, 'git log --oneline -5', '/workspace/other', 60)).toBe(false)
+    expect(matchAutomationShellPermission(permissions, 'git log --oneline -5', '/workspace/other')).toBe(false)
   })
 
   it('matches grep only when the normalized search path is inside its approved roots', () => {

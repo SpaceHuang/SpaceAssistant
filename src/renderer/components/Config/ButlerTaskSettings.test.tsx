@@ -266,7 +266,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       permissions: [
         { kind: 'directory-read-write', path: '/tmp/chosen-root' },
         { kind: 'result-write', outputDirectory: '/tmp/output-root', organization: 'hourly' },
-        { kind: 'local-shell', scopeRoots: ['/tmp/chosen-root'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/tmp/chosen-root', timeout: 30 }] },
+        { kind: 'local-shell', scopeRoots: ['/tmp/chosen-root'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/tmp/chosen-root' }] },
         { kind: 'grep', scopeRoots: ['/tmp/chosen-root/src'] },
         { kind: 'run-script', scopeRoots: ['/tmp/chosen-root'], scriptHashBinding: 'per-invocation' },
         { kind: 'mcp-tool', serverId: 'mcp-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues',
@@ -287,8 +287,8 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     await clickTaskSubmit()
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('请检查此定时任务需要的权限')).toBeTruthy()
-    expect(screen.getByText('可运行列出的本机命令及完整参数（包括本地 Git 查询）；每条命令后注明工作目录和超时：git log --oneline -5（/tmp/chosen-root；超时：30s）。命令访问范围：/tmp/chosen-root。')).toBeTruthy()
-    expect(screen.getByText(/超时：30s/)).toBeTruthy()
+    expect(screen.getByText('可运行列出的本机命令及完整参数（包括本地 Git 查询）；每条命令注明工作目录：git log --oneline -5（/tmp/chosen-root）。执行超时由 Agent 按实际情况选择，不属于授权范围。命令访问范围：/tmp/chosen-root。')).toBeTruthy()
+    expect(screen.queryByText(/超时：30s/)).toBeNull()
     expect(screen.getByText('可在以下目录中使用 grep 搜索内容：/tmp/chosen-root/src。')).toBeTruthy()
     expect(screen.getByText('可在以下目录运行经安全审核的脚本：/tmp/chosen-root。每次审核绑定该脚本的 SHA-256，脚本内容变化后必须重新审核。')).toBeTruthy()
     expect(screen.getByText('可调用 MCP 服务「Issue Tracker」中的工具「search_issues」：Search issues。任务用途：查找近期问题。参数：query (必填)、limit。授权绑定当前服务配置与工具定义；安全审核 Agent 仍会检查每次调用的实际参数。')).toBeTruthy()

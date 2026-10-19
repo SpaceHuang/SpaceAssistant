@@ -899,8 +899,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     // facts: report whether the frozen receipt matches the exact command text, arguments and cwd; policy rules decide the outcome.
     if (lane === 'automation') {
       const command = typeof args.toolInput.command === 'string' ? args.toolInput.command : ''
-      const timeout = typeof args.toolInput.timeout === 'number' ? args.toolInput.timeout : undefined
-      facts.signals.push({ kind: 'automation-shell-permission', status: matchAutomationShellPermission(args.taskAccessPermissions, command, args.workDir, timeout) ? 'matched' : 'missing' })
+      facts.signals.push({ kind: 'automation-shell-permission', status: matchAutomationShellPermission(args.taskAccessPermissions, command, args.workDir) ? 'matched' : 'missing' })
     }
   }
   if (args.toolName === 'grep' && facts) {

@@ -25,14 +25,14 @@ export type AutomationTaskMcpToolCandidate = {
   profileHash: string
 }
 export type AutomationTaskToolRequirement =
-  | { tool: 'run_shell'; command: string; workingDirectory: string; timeout?: number }
+  | { tool: 'run_shell'; command: string; workingDirectory: string }
   | { tool: 'grep' | 'run_script'; scopeRoots: string[] }
   | { tool: 'mcp'; serverId: string; toolName: string; purpose: string }
 export type AutomationTaskPermission =
   | { kind: 'directory-read-write'; path: string }
   | { kind: 'result-write'; outputDirectory: string; organization: AutomationOutputOrganization }
   /** Shell grants bind the complete command text and cwd; the roots bound paths used by the command. */
-  | { kind: 'local-shell'; scopeRoots: string[]; commands: Array<{ command: string; workingDirectory: string; timeout?: number }> }
+  | { kind: 'local-shell'; scopeRoots: string[]; commands: Array<{ command: string; workingDirectory: string }> }
   | { kind: 'grep'; scopeRoots: string[] }
   /** Each concrete script approval is bound to a host-computed SHA-256 at invocation time. */
   | { kind: 'run-script'; scopeRoots: string[]; scriptHashBinding: 'per-invocation' }

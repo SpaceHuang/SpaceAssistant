@@ -86,7 +86,7 @@
 
 ### D-7：任务是否可一次确认本地工具权限？（用户已确认）
 
-- **决定：** 保存任务前，预检必须生成用户看得懂的权限清单，逐项说明资料目录读写、结果目录写入与归档方式、预检判定需要时的本地 Shell 范围，以及配置的结果投递渠道。用户检查清单并明确确认后，任务才保存。移除独立的 Shell 勾选项，是否需要 Shell 由预检给出并列入同一份待确认清单；旧任务迁移时不产生授权记录。
+- **决定：** 保存任务前，预检必须生成用户看得懂的权限清单，逐项说明资料目录读写、结果目录写入与归档方式、预检判定需要时的本地 Shell 范围，以及配置的结果投递渠道。Shell 授权绑定完整命令文本（含参数）和工作目录；执行超时是 Agent 可按运行情况调整的执行参数，不属于安全授权。用户检查清单并明确确认后，任务才保存。移除独立的 Shell 勾选项，是否需要 Shell 由预检给出并列入同一份待确认清单；旧任务迁移时不产生授权记录。
 - **记录所有权：** 确认后由主进程依据本进程持有的一次性预检确认票据创建并保存授权记录，记录确认者、时间、任务版本、预检事实摘要和用户确认的完整权限项。renderer 与业务 Agent 不能提交、补写或替用户声明该记录。任务配置版本变化后必须重新展示清单并确认；旧版本记录不得作为当前授权事实。
 - **运行边界：** 主进程将授权记录冻结进 run snapshot，并作为宿主事实提供给安全审核 Agent；业务 Agent 的文字声明不能替代记录。该记录证明用户同意任务长期使用列出的权限，不代表具体命令自动通过。后续运行不再额外向用户索取这些任务权限，但 `run_shell` 仍经过现有危险命令预检和主机路径事实检查；危险、无法完整分析、敏感/系统路径、授权目录之外的路径和 unsupported 结构仍在 executor 前拒绝。结果文件仍通过 D-6 的预检绑定目标写入；输出目录不因此变成读取授权目录。不得新增专用 Git 工具。
 - **Git 目标预检：** 选定模型可依据已采集的本地 Git facts 提出所需 Shell 权限并定位仓库目标；多个可用仓库必须列出候选并要求用户说明。Git 本机查询能核验本地 refs/提交记录；本地记录没有包含 GitHub 推送事件时，不得声称知道推送时间。
@@ -164,7 +164,7 @@
 | INV-14 | 新任务必须有有效 `outputDir` 和 `outputOrganization`；`authorizedDirs` 可为空且只表示资料读写授权。旧目录只迁移为 `authorizedDirs`，绝不自动充当输出目录；旧任务首次编辑须明确补选输出目录。 | v104 migration、task DTO adapter、主进程 IPC。 | v103→v104 不改旧目录语义；新建缺输出拒绝；空授权目录允许新任务；旧任务未编辑仍可 legacy 运行，编辑未选输出被拒绝。 |
 | INV-15 | 每个新 run 从冻结的 `scheduledFor` 和归档模式确定唯一 `runOutputDir`；预检 binding 的相对输出路径只能解析到该目录内。输出目录不能授权读取。 | 主进程输出目录解析器、taskStore run snapshot、runtime admission 与路径 final-check。 | daily/hourly 使用本机计划时间；direct 使用根目录；路径逃逸、链接越界、binding/run snapshot 不匹配均在 executor 前失败；read/list/grep 对输出目录仍视作未授权。 |
 | INV-16 | 文件工具自动化写入仅在 facts 验证工具目标与本 run 已批准输出 binding 匹配时 allow：文件 binding 要求目标完全相同，目录 binding 只覆盖该目录下的普通文件；目标必须落在 `runOutputDir` 内。 | facts producer、共享 Policy Engine rules、tool final-check；稳定规则 ID `automation-bound-output-write-allow`、`automation-write-deny`；系统不变量 `SYS-AUTOOUTPUT-001`。 | 匹配输出写入进入 executor；未绑定输出、绑定目录之外的目标、其他输出根、资料授权目录文件工具写入均不进入 executor；输出根不能读取；decision trace 标明稳定 rule ID；empty authorizedDirs 不回退至 outputDir；即使管理员停用 locked write deny，final-check 仍拒绝无 binding 的 automation write permit。 |
-| INV-17 | 定时任务权限必须先由预检列成用户可理解的清单，经用户明确确认后由主进程创建并保存授权记录；renderer 和业务 Agent 不能提交或伪造该记录。记录版本必须匹配当前任务，并冻结到 claim snapshot 后作为宿主事实提供给安全审核 Agent；旧任务默认无记录。automation `run_shell` 仅在该记录含对应范围时可达，现有 Shell 预检、完整度、敏感/系统位置、授权目录外路径与 unsupported 结构边界继续生效。 | task IPC 一次性确认票据、store revision 校验与 snapshot、`TaskPathFactsProvider`、preflight model analyzer、approval clue、`toolCallGate.ts`；稳定 rule IDs `automation-shell-deny`、`automation-authorized-shell-allow`、`automation-shell-analysis-incomplete-deny`、`automation-shell-outside-root-deny`；系统不变量 `SYS-AUTOSHELL-001`。 | 清单分别展示资料读写、结果目录写入、需要时的 Shell 范围和投递权限；未确认不能保存；伪造 renderer 字段、业务 Agent 声明及过期/版本不符记录均不能授权；每次编辑后的权限变更只影响后续运行，已 claim snapshot 不变；安全审核 Agent 可见记录 ID、任务版本与完整范围；不为 Git 新增专用工具，也不把本机提交时间推断为 GitHub 推送时间。 |
+| INV-17 | 定时任务权限必须先由预检列成用户可理解的清单，经用户明确确认后由主进程创建并保存授权记录；renderer 和业务 Agent 不能提交或伪造该记录。记录版本必须匹配当前任务，并冻结到 claim snapshot 后作为宿主事实提供给安全审核 Agent；旧任务默认无记录。automation `run_shell` 授权精确绑定完整命令文本（含参数）和工作目录；执行超时由 Agent 按实际情况选择，不属于授权字段或安全校验。现有 Shell 预检、完整度、敏感/系统位置、授权目录外路径与 unsupported 结构边界继续生效。 | task IPC 一次性确认票据、store revision 校验与 snapshot、`TaskPathFactsProvider`、preflight model analyzer、approval clue、`toolCallGate.ts`；稳定 rule IDs `automation-shell-deny`、`automation-authorized-shell-allow`、`automation-shell-analysis-incomplete-deny`、`automation-shell-outside-root-deny`；系统不变量 `SYS-AUTOSHELL-001`。 | 清单分别展示资料读写、结果目录写入、需要时的 Shell 命令与工作目录、投递权限；不显示执行超时；未确认不能保存；伪造 renderer 字段、业务 Agent 声明及过期/版本不符记录均不能授权；每次编辑后的权限变更只影响后续运行，已 claim snapshot 不变；安全审核 Agent 可见记录 ID、任务版本与完整范围；不为 Git 新增专用工具，也不把本机提交时间推断为 GitHub 推送时间。 |
 
 ### 2.3 契约卡
 
@@ -293,7 +293,7 @@
 | AC-13 | 宽 Modal 双栏、窄窗单栏、可访问的候选清单 | Butler component tests + macOS 浏览器/真机视觉验收 |
 | AC-15（目录重叠样例） | roots 去重与父子重叠按集合解释 | validation/path fact tests |
 | AC-16 | skipped history 可查、missed-window 本地化，无特殊通知；安全拒绝是 failed | scheduler/history tests、delivery guard tests、history component tests |
-| AC-17（2026-10-18 用户确认的 D-7） | 保存前展示可读的完整权限清单；用户确认后仅由主进程持久化版本匹配的授权记录；后续运行冻结该记录并作为宿主事实交付安全审核 Agent；旧任务无隐式授权；Git 预检识别本地仓库；Shell 仍经过现有安全边界且无需再次向用户索取已确认权限 | task store/IPC/snapshot、preflight facts/analyzer、approval clue、automation lane gate、Butler component tests |
+| AC-17（2026-10-18 用户确认的 D-7） | 保存前展示可读的完整权限清单；Shell 清单只列命令与工作目录，执行超时由运行 Agent 灵活选择且不进入授权校验；用户确认后仅由主进程持久化版本匹配的授权记录；后续运行冻结该记录并作为宿主事实交付安全审核 Agent；旧任务无隐式授权；Git 预检识别本地仓库；Shell 仍经过现有安全边界且无需再次向用户索取已确认权限 | task store/IPC/snapshot、preflight facts/analyzer、approval clue、automation lane gate、Butler component tests |
 
 ### 2.9 阶段边界与回退实体
 

@@ -54,7 +54,6 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
     if (!item || typeof item !== 'object' || Array.isArray(item)) return true
     const permission = item as Record<string, unknown>
     if (permission.tool === 'run_shell') return typeof permission.command !== 'string' || !permission.command.trim() || permission.command.length > 4096 || typeof permission.workingDirectory !== 'string' || !permission.workingDirectory.trim()
-      || (permission.timeout !== undefined && (typeof permission.timeout !== 'number' || !Number.isInteger(permission.timeout) || permission.timeout < 1 || permission.timeout > 86400))
     if (permission.tool === 'mcp') return typeof permission.serverId !== 'string' || !permission.serverId.trim() || permission.serverId.length > 128
       || typeof permission.toolName !== 'string' || !permission.toolName.trim() || permission.toolName.length > 256
       || typeof permission.purpose !== 'string' || !permission.purpose.trim() || permission.purpose.length > 240
@@ -72,7 +71,16 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
   }))) return undefined
   const suggestedDirectories = (value as { suggestedDirectories?: unknown }).suggestedDirectories
   if (suggestedDirectories !== undefined && (!Array.isArray(suggestedDirectories) || suggestedDirectories.some((item) => !item || typeof item !== 'object' || typeof (item as Record<string, unknown>).path !== 'string' || typeof (item as Record<string, unknown>).purpose !== 'string' || typeof (item as Record<string, unknown>).source !== 'string'))) return undefined
-  return value as TaskPreflightAnalysisOutput
+  const normalizedPermissions = Array.isArray(requiredPermissions)
+    ? requiredPermissions.map((item) => {
+      const permission = item as Record<string, unknown>
+      // Old model responses may still include timeout; it is an execution option, never a user grant.
+      return permission.tool === 'run_shell'
+        ? { tool: 'run_shell' as const, command: permission.command as string, workingDirectory: permission.workingDirectory as string }
+        : item
+    }) as AutomationTaskToolRequirement[]
+    : undefined
+  return { ...(value as TaskPreflightAnalysisOutput), ...(normalizedPermissions ? { requiredPermissions: normalizedPermissions } : {}) }
 }
 
 async function withTimeout<T>(promise: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T> {

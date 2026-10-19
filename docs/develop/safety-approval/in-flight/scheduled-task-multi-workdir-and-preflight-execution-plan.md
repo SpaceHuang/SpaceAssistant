@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：既有 E-01～E-10、结果目录拆分 E-11a～E-11f、任务访问授权与 Git 预检 E-12a～E-12d、用户授权记录修订 E-13a～E-13c 全部完成
+> 状态：既有 E-01～E-10、结果目录拆分 E-11a～E-11f、任务访问授权与 Git 预检 E-12a～E-12d、用户授权记录修订 E-13a～E-13c、run_shell 超时授权边界修订 E-14 全部完成
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
@@ -46,7 +46,7 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | D-4 目录职责拆分 | 必选结果输出目录 + 可空授权读写目录；旧 workDirs 只迁移为授权目录 | 新任务必须选择结果输出目录；旧任务未编辑保持 legacy 运行，首次编辑须明确选择 |
 | D-5 归档默认 | 每日→日期；间隔定时→日期小时；一次性→直接；用户可改 | 使用本机 `scheduledFor` 确定归档路径；同日/小时运行共享目录 |
 | D-6 无人值守写入 | 文件工具只允许写本次预检绑定且位于本次归档目录的结果 | 新增稳定 Policy Engine rule；输出目录不授权读取；任务级 Shell 权限由 D-7 定义 |
-| D-7 任务级访问授权 | 预检展示资料读写、结果写入、需要时的本地 Shell 范围和投递权限；用户确认后由主进程留存授权事实，任务表单不再单独勾选 Shell | E-12a～E-12d 完成授权与 Git 基础；E-13a～E-13c 补齐清单、一次性确认记录、运行快照和审核 Agent 输入；不新增 Git 工具 |
+| D-7 任务级访问授权 | 预检展示资料读写、结果写入、需要时的 Shell 完整命令与工作目录、投递权限；执行超时不进入清单或授权校验，由 Agent 按运行情况选择；用户确认后由主进程留存授权事实，任务表单不再单独勾选 Shell | E-12a～E-12d 完成授权与 Git 基础；E-13a～E-13c 补齐清单、一次性确认记录、运行快照和审核 Agent 输入；E-14 将执行超时从授权边界剥离；不新增 Git 工具 |
 
 ### 第四轮阻断核销（2026-10-17）
 
@@ -67,7 +67,7 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | G0 兼容契约冻结 | E-01；D-2～D-7 已裁决 | 既有 v0/v1 契约与补充 outputDir/organization/authorizedDirs、主进程授权记录、一次性确认和运行期审核事实边界均已记录 | 停止补充实现，修订技术方案/此计划 |
 | G1 存储安全 | E-02、E-03 | v0/v1 binding schema、recovery state 往返通过；高版本库拒绝降级；备份恢复可执行；旧空目录不回退 Profile | 不开始预检 IPC；修正迁移/存储 |
 | G2 提交门禁 | E-02a、E-03、E-04、E-05 | 旧单根和新多根请求均经预检；阻断与预检通过但未确认均零写入；预检通过只暂存一次性确认票据和权限清单；用户明确确认后恰好一次提交票据绑定快照；一次性时间语义正确 | 不接 UI save flow |
-| G3 安全根集合、结果写入与 Shell 授权 | E-06、E-07、E-11b～E-11d、E-12a～E-12d、E-13a～E-13b | 输出目录仍不进入读取授权；文件工具写入仍要求预检绑定；Shell 仅在版本匹配的主进程用户确认记录冻结到 run snapshot，且通过危险/路径/完整度/unsupported 检查后可达；审核 Agent 收到该宿主事实 | 不进入 UI 集成；修订 facts、policy 或 final-check |
+| G3 安全根集合、结果写入与 Shell 授权 | E-06、E-07、E-11b～E-11d、E-12a～E-12d、E-13a～E-13b、E-14 | 输出目录仍不进入读取授权；文件工具写入仍要求预检绑定；Shell 仅在版本匹配的主进程用户确认记录冻结到 run snapshot，且通过危险/路径/完整度/unsupported 检查后可达；授权精确匹配命令与工作目录，timeout 不参与授权判断；审核 Agent 收到宿主事实 | 不进入 UI 集成；修订 facts、policy 或 final-check |
 | G4 可操作界面 | E-08、E-09 | 已批准归属卡下完成宽窗/窄窗、键盘清单、失败保留与历史可查 | 修 UI，不改变已冻结后端契约 |
 | G5 全量源码关闭 | E-10 | 所有本机相关测试、类型、i18n、构建、边界审查完成 | 留在源码关闭前；外部验收另列 |
 
@@ -100,6 +100,7 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | E-13a | 由主进程生成权限清单并在保存前展示给用户 | E-12b | Butler IPC/preflight、`ButlerTaskSettings`、zh-CN/en-US、IPC/component tests | AC-17 | INV-17 |
 | E-13b | 用户确认后持久化主进程授权记录并传给安全审核 Agent | E-12a、E-13a | preload/API、taskStore、claim snapshot、invocation assembler、AgentChannel/approval prompt tests | AC-17 | INV-17 |
 | E-13c | 核验一次性票据、任务版本失效边界并完成阶段验证 | E-13a、E-13b | IPC/store/security/UI regression、typecheck/i18n/build/invariant checks、方案与执行计划 | AC-17 | INV-17 |
+| E-14 | 将 run_shell 执行超时从任务授权中剥离 | E-13a～E-13c | preflight、授权记录/parser/matcher、automation gate、Butler UI/i18n、system invariant 与对应测试、方案/计划 | AC-17 | INV-17 |
 
 任务范围与依赖一旦变化，先更新本表；不在正文另写第二份 DAG。
 
@@ -389,6 +390,17 @@ E-13 按用户明确要求修正 D-7 的授权所有权与确认交互。E-12 �
 - **验证命令：** `npm exec -- vitest run electron/butler/butlerIpc.test.ts electron/butler/taskStore.test.ts electron/confirmation/agentChannel.test.ts electron/confirmation/approvalAgent.test.ts electron/confirmation/automationLane.test.ts electron/confirmation/toolCallGate.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npm test`；`npm run typecheck:renderer`；`npx tsc -p tsconfig.electron.json --noEmit`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
 - **证据：** RED/GREEN：新增 `taskStore.test.ts` 用例将 task revision 从 1 改为 2，初次 RED 观察过期记录仍产生 `run_shell`；按 revision fail closed 后 GREEN。安全复核发现预检在途时表单被编辑会回显旧权限清单，延迟响应 UI 用例先 RED，再由草稿代次校验丢弃所有旧响应后 GREEN；又发现无主进程授权记录的旧 v1 任务启用时会跳过确认，IPC 用例先 RED，再改为仅停用或当前版本已有记录的任务可直通后 GREEN。主干全量 `npm test` 通过：1096 个测试文件通过、1 个跳过；10480 项通过、111 项跳过（891.49 秒）。其后针对最后的启用门禁修正，`butlerIpc.test.ts` 与 `ButlerTaskSettings.test.tsx` 共 51 项通过，`npx tsc -p tsconfig.electron.json --noEmit` 与 `git diff --check` 通过。全量测试之前，`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`（0 source Chinese）、`npm run check:system-invariant-registry`（7 registrations / 19 test references）及 `npm run build:electron:incremental` 通过。运行期间出现既有 `MaxListenersExceededWarning`，全量测试最终退出码为 0。UI detector 仅报告原有 `config-settings.css` 设计系统建议；本次新增样式使用 `--sa-*` tokens。
 - **可执行环境：** 本机；真实模型质量、审核 Agent 的实际决策质量及 macOS/Windows 无障碍视觉继续由 X-01～X-03 验收。
+- **状态：** - [x]
+
+### E-14 将 run_shell 执行超时从任务授权中剥离
+
+- **依赖：** E-13a～E-13c；用户明确要求执行超时按运行实际情况调整，不作为安全授权项。
+- **目标文件：** `automationTaskTypes.ts`、`taskPreflightModelAnalyzer.ts`、`taskPreflight.ts`、`butlerIpc.ts`、`taskStore.ts`、`automationTaskPermissionMatch.ts`、`toolCallGate.ts`、Butler 设置界面/中英文资源、`SYS-AUTOSHELL-001` 及对应测试、技术方案和本执行计划。
+- **动作与产物：** 授权契约、预检输出、用户权限清单与持久化记录只保留完整 Shell 命令文本（含参数）和工作目录；权限匹配不读取调用 timeout。兼容模型输出和旧授权记录中附带的 timeout 时忽略并剥离它。运行时仍按工具自身约束接收 Agent 选择的 timeout，并继续执行既有 Shell 安全预检。
+- **完成判据：** 同一命令和工作目录用不同运行 timeout 时授权仍匹配；更改命令参数或工作目录仍不匹配；预检含 timeout 仍通过但产出权限不包含 timeout；权限确认卡与新授权记录不展示/持久化 timeout；旧记录附带任意 timeout 不使有效授权失效且读取后不再回显该字段。
+- **验证命令：** `npm exec vitest run electron/butler/automationTaskPermissionMatch.test.ts electron/butler/butlerIpc.test.ts electron/butler/taskPreflight.test.ts electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskStore.test.ts electron/butler/butlerInvoker.test.ts electron/confirmation/automationLane.test.ts electron/confirmation/toolCallGate.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
+- **证据：** RED：实现前的回归测试在权限 matcher、IPC 权限清单、管家指令和 automation lane 共 4 项失败，分别复现超时变化导致拒绝、权限清单仍包含 timeout、运行指令要求固定 timeout。GREEN：上述 9 个测试文件 / 361 项通过，覆盖运行 timeout 变化仍匹配、精确命令和目录范围、预检/模型响应与旧记录均剥离 timeout、UI 不将 timeout 列入授权。`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`（0 个源代码硬编码中文）、`npm run check:system-invariant-registry`（9 registrations / 31 test references）、`npm run build:electron:incremental`、`git diff --check` 均通过。
+- **可执行环境：** 本机。
 - **状态：** - [x]
 
 ## 4. 外部验收（不阻塞源码关闭）

@@ -156,7 +156,7 @@ describe('butler IPC workdir/config fields', () => {
     expect(review).toMatchObject({ ok: false, kind: 'authorization-review-required', permissions: expect.arrayContaining([
       expect.objectContaining({ kind: 'directory-read-write', path: await realpath(os.tmpdir()) }),
       expect.objectContaining({ kind: 'result-write', outputDirectory: await realpath(os.tmpdir()), organization: 'daily' }),
-      expect.objectContaining({ kind: 'local-shell', scopeRoots: [permissionRoot], commands: [{ command: 'git log --oneline -5', workingDirectory: permissionRoot, timeout: 45 }] }),
+      expect.objectContaining({ kind: 'local-shell', scopeRoots: [permissionRoot], commands: [{ command: 'git log --oneline -5', workingDirectory: permissionRoot }] }),
       expect.objectContaining({ kind: 'grep', scopeRoots: [permissionRoot] }),
       expect.objectContaining({ kind: 'run-script', scopeRoots: [permissionRoot], scriptHashBinding: 'per-invocation' }),
       expect.objectContaining({ kind: 'mcp-tool', serverId: mcpServerId, serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues by query',
@@ -172,6 +172,8 @@ describe('butler IPC workdir/config fields', () => {
     } } } })
     expect((committed as { task?: { accessPermissions?: { authorizationRecord?: { permissions: unknown[] } } } }).task?.accessPermissions?.authorizationRecord?.permissions)
       .toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'mcp-tool', serverId: mcpServerId, toolName: 'search_issues' })]))
+    expect((committed as { task?: { accessPermissions?: { authorizationRecord?: { permissions: Array<{ kind: string; commands?: Array<Record<string, unknown>> }> } } } }).task?.accessPermissions?.authorizationRecord?.permissions
+      .find((permission) => permission.kind === 'local-shell')?.commands?.[0]).not.toHaveProperty('timeout')
     expect(await map.get('butler:confirm-write')!(null, { reviewId: review.reviewId })).toMatchObject({ ok: false, kind: 'validation-error' })
   })
 

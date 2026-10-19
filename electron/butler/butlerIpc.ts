@@ -143,7 +143,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     const permissions: AutomationTaskPermission[] = task.authorizedDirs.map((path) => ({ kind: 'directory-read-write', path }))
     permissions.push({ kind: 'result-write', outputDirectory: task.outputDir, organization: task.outputOrganization })
     const shellRequirements = requiredPermissions.filter((permission): permission is Extract<AutomationTaskToolRequirement, { tool: 'run_shell' }> => permission.tool === 'run_shell')
-    if (shellRequirements.length) permissions.push({ kind: 'local-shell', scopeRoots: [...task.authorizedDirs], commands: shellRequirements.map(({ command, workingDirectory, timeout }) => ({ command, workingDirectory, ...(timeout !== undefined ? { timeout } : {}) })) })
+    if (shellRequirements.length) permissions.push({ kind: 'local-shell', scopeRoots: [...task.authorizedDirs], commands: shellRequirements.map(({ command, workingDirectory }) => ({ command, workingDirectory })) })
     const grepRoots = [...new Set(requiredPermissions.filter((permission) => permission.tool === 'grep').flatMap((permission) => permission.tool === 'grep' ? permission.scopeRoots : []))]
     if (grepRoots.length) permissions.push({ kind: 'grep', scopeRoots: grepRoots })
     const scriptRoots = [...new Set(requiredPermissions.filter((permission) => permission.tool === 'run_script').flatMap((permission) => permission.tool === 'run_script' ? permission.scopeRoots : []))]

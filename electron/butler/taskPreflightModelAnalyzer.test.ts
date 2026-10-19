@@ -33,7 +33,7 @@ describe('createTaskPreflightModelAnalyzer', () => {
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
 
     await expect(analyzer.analyze({ prompt: 'inspect Git history', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'], facts: {} as never, tools: [], responseFormat: 'json' }, new AbortController().signal))
-      .resolves.toEqual({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredPermissions: [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace', timeout: 60 }], clarifications: [], suggestedDirectories: [] })
+      .resolves.toEqual({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredPermissions: [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace' }], clarifications: [], suggestedDirectories: [] })
     expect(create.mock.calls[0]?.[0]).toMatchObject({ max_tokens: 2048 })
   })
 
@@ -72,7 +72,7 @@ describe('createTaskPreflightModelAnalyzer', () => {
     }, new AbortController().signal)
 
     expect(create.mock.calls[0]?.[0].system).toContain('只分析、不执行、不授权')
-    expect(create.mock.calls[0]?.[0].system).toContain('timeout')
+    expect(create.mock.calls[0]?.[0].system).toContain('超时是运行时参数，不纳入权限清单或授权校验')
     expect(create.mock.calls[0]?.[0].system).toContain('本机事实源')
     expect(create.mock.calls[0]?.[0].system).toContain('run_shell')
     expect(create.mock.calls[0]?.[0].messages[0]?.content).not.toContain('accessPermissions')
@@ -117,7 +117,8 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(system).toContain('输出一个 JSON 对象')
     expect(system).toContain('targets：实际处理对象')
     expect(system).toContain('requiredPermissions：最小工具权限需求')
-    expect(system).toContain('Shell 命令的完整 command 文本、参数、timeout')
+    expect(system).toContain('Shell 授权只绑定完整 command 文本（含参数）与工作目录')
+    expect(system).toContain('超时是运行时参数，不纳入权限清单或授权校验')
     expect(system).toContain('clarifications：仅报必需目标缺失/歧义')
     expect(system).toContain('suggestedDirectories：需用户补授权目录才填写')
     expect(system).toContain('例：读表格→目标+权限。')

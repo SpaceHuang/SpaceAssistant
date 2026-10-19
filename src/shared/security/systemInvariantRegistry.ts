@@ -75,9 +75,9 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
   },
   {
     id: 'SYS-AUTOSHELL-001', owner: 'electron/butler + electron/confirmation', stage: 'final-check', category: 'capability',
-    rationale: 'An unattended Shell grant must come from a main-process authorization receipt created after the user confirms exact command arguments, timeout and working directory, then frozen with the task run; renderer or business-Agent claims cannot create the receipt.',
+    rationale: 'An unattended Shell grant must come from a main-process authorization receipt created after the user confirms exact command arguments and working directory, then frozen with the task run; execution timeout remains an agent-selected runtime option and is not part of the grant.',
     effect: 'validate', scope: 'electron/butler/butlerIpc.ts:butler:confirm-write;electron/butler/taskStore.ts:transitionClaimToRunning;electron/runtime/invocationAssembler.ts:createConfirmationPort;electron/confirmation/toolCallGate.ts:automation-shell-permission',
-    audit: 'policy decision records whether the frozen receipt matches exact Shell command arguments, timeout and cwd; the approval clue includes the host-issued receipt ID, task revision and exact permission scopes from the frozen run snapshot',
+    audit: 'policy decision records whether the frozen receipt matches exact Shell command arguments and cwd; execution timeout does not affect the match; the approval clue includes the host-issued receipt ID, task revision and exact permission scopes from the frozen run snapshot',
     tests: ['electron/butler/butlerIpc.test.ts', 'electron/butler/taskStore.test.ts', 'electron/confirmation/agentChannel.test.ts', 'electron/confirmation/approvalAgent.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/toolCallGate.test.ts'],
     overrideability: 'none'
   },

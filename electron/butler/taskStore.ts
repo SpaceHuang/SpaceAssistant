@@ -90,8 +90,7 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
     if (permission.kind === 'local-shell') return Array.isArray(permission.scopeRoots) && permission.scopeRoots.length > 0 && permission.scopeRoots.every((root) => typeof root === 'string')
       && Array.isArray(permission.commands) && permission.commands.length > 0 && permission.commands.every((command) => command && typeof command === 'object'
         && typeof (command as Record<string, unknown>).command === 'string' && Boolean((command as Record<string, unknown>).command)
-        && typeof (command as Record<string, unknown>).workingDirectory === 'string' && Boolean((command as Record<string, unknown>).workingDirectory)
-        && ((command as Record<string, unknown>).timeout === undefined || (typeof (command as Record<string, unknown>).timeout === 'number' && Number.isInteger((command as Record<string, unknown>).timeout) && Number((command as Record<string, unknown>).timeout) >= 1 && Number((command as Record<string, unknown>).timeout) <= 86400)))
+        && typeof (command as Record<string, unknown>).workingDirectory === 'string' && Boolean((command as Record<string, unknown>).workingDirectory))
     if (permission.kind === 'grep') return Array.isArray(permission.scopeRoots) && permission.scopeRoots.length > 0 && permission.scopeRoots.every((root) => typeof root === 'string')
     if (permission.kind === 'run-script') return Array.isArray(permission.scopeRoots) && permission.scopeRoots.length > 0 && permission.scopeRoots.every((root) => typeof root === 'string') && permission.scriptHashBinding === 'per-invocation'
     if (permission.kind === 'mcp-tool') return typeof permission.serverId === 'string' && Boolean(permission.serverId)
@@ -108,6 +107,9 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
     return false
   })
   if (permissions.length !== record.permissions.length) return undefined
+  const normalizedPermissions = permissions.map((permission): AutomationTaskAuthorizationRecord['permissions'][number] => permission.kind === 'local-shell'
+    ? { ...permission, commands: permission.commands.map(({ command, workingDirectory }) => ({ command, workingDirectory })) }
+    : permission)
   return {
     id: record.id,
     actor: 'user-confirmation',
@@ -115,7 +117,7 @@ function parseAuthorizationRecord(value: unknown, taskRevision: number): Automat
     approvedAt: Number(record.approvedAt),
     taskRevision: Number(record.taskRevision),
     ...(typeof record.preflightFactsDigest === 'string' ? { preflightFactsDigest: record.preflightFactsDigest } : {}),
-    permissions
+    permissions: normalizedPermissions
   }
 }
 

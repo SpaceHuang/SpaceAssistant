@@ -143,7 +143,7 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
   })
 
-  it('drops a Shell receipt whose timeout is outside the supported range', () => {
+  it('ignores legacy Shell timeout metadata when loading an authorization receipt', () => {
     const d = db()
     const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
       authorizationRecord: {
@@ -152,8 +152,10 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
       }
     } as never)
 
-    expect(getAutomationTask(d, task.id)?.accessPermissions?.tools).toEqual([])
-    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.tools).toEqual(['run_shell'])
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord?.permissions).toEqual([
+      { kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log', workingDirectory: '/authorized/source' }] }
+    ])
   })
 
   it('持续离线跨过投递 TTL 后自动过期并同步管家 run 状态', async () => {

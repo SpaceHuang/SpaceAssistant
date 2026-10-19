@@ -46,7 +46,7 @@ import { ensureAutomationRunOutputDirectory, resolveBoundOutputTarget } from './
 export const BUTLER_SYSTEM_APPENDIX = [
   '你是 SpaceAssistant 的后台管家（automation lane），由定时任务或用户手动触发，无人值守运行。',
   '本回合按任务指令完成查询、处理、总结、提醒、报表等工作。',
-  '安全边界：无法获得人工确认。文件工具只能写入本次预检绑定的结果目标；run_shell、grep、run_script、MCP 工具仅在主进程任务授权记录列出时可用，且只能在记录的参数或范围内使用。Shell 仍经过安全预检；危险、敏感或无法完整分析的命令会被拒绝。',
+  '安全边界：无法获得人工确认。文件工具只能写入本次预检绑定的结果目标；run_shell、grep、run_script、MCP 工具仅在主进程任务授权记录列出时可用，且只能在记录的命令参数或范围内使用。run_shell 的执行超时由你按任务实际需要选择，不属于授权范围。Shell 仍经过安全预检；危险、敏感或无法完整分析的命令会被拒绝。',
   '请优先使用只读工具完成任务，若被拒绝，请在最终回复中说明原因与已完成的部分。',
   '最终回复即任务结果汇报，请直接给出结论与关键数据，不要反问。'
 ].join('\n')
@@ -60,7 +60,7 @@ export function buildButlerSystemAppendix(accessPermissions?: import('../../src/
   return [
     BUTLER_SYSTEM_APPENDIX,
     shellGrant?.kind === 'local-shell'
-      ? `本任务获批的 run_shell 命令（包括完整参数、超时和工作目录）仅限：${shellGrant.commands.map(({ command, workingDirectory, timeout }) => `${command}（${workingDirectory}；超时=${timeout === undefined ? '默认' : `${timeout}s`}）`).join('；')}。不得改动命令、参数或超时；Shell 预检仍可拒绝。`
+      ? `本任务获批的 run_shell 命令及工作目录仅限：${shellGrant.commands.map(({ command, workingDirectory }) => `${command}（${workingDirectory}）`).join('；')}。必须保持命令文本、参数和工作目录不变；执行时自行选择合适的超时，超时不属于授权范围。Shell 预检仍可拒绝。`
       : '本任务未获批 run_shell。遇到本地命令需求时说明缺少授权，不要用其他工具绕过权限。',
     grepGrant?.kind === 'grep'
       ? `本任务获批使用 grep 搜索的目录：${grepGrant.scopeRoots.join('、')}。搜索路径必须落在这些目录内。`

@@ -24,11 +24,11 @@ function isPathWithinAnyRoot(targetPath: string, roots: readonly string[]): bool
   })
 }
 
-export function matchAutomationShellPermission(access: AutomationTaskAccessPermissions | undefined, command: string, workingDirectory: string, timeout?: number): boolean {
+export function matchAutomationShellPermission(access: AutomationTaskAccessPermissions | undefined, command: string, workingDirectory: string): boolean {
   if (!command || !workingDirectory) return false
   return permissionRecord(access).some((permission) => permission.kind === 'local-shell'
     && Array.isArray(permission.commands)
-    && permission.commands.some((approved) => approved.command === command && approved.timeout === timeout && pathApi(approved.workingDirectory, workingDirectory).resolve(approved.workingDirectory) === pathApi(approved.workingDirectory, workingDirectory).resolve(workingDirectory))
+    && permission.commands.some((approved) => approved.command === command && pathApi(approved.workingDirectory, workingDirectory).resolve(approved.workingDirectory) === pathApi(approved.workingDirectory, workingDirectory).resolve(workingDirectory))
     && isPathWithinAnyRoot(workingDirectory, permission.scopeRoots))
 }
 
