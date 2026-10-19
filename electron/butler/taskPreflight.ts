@@ -34,9 +34,20 @@ function isWithinRoot(candidate: string, root: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
-function classifyAnalyzerFailure(error: unknown): 'ANALYZER_TIMEOUT' | 'ANALYZER_INVALID_RESPONSE' | 'ANALYZER_OUTPUT_TRUNCATED' | 'ANALYZER_UNAVAILABLE' {
+function requestsReadAccessToOutputGitRepository(
+  permissions: readonly AutomationTaskToolRequirement[],
+  facts: TaskPathFacts
+): boolean {
+  if (!facts.outputRoot || !facts.outputRootIsGitRepository) return false
+  return permissions.some((permission) => permission.tool === 'run_shell'
+    ? permission.workingDirectory === facts.outputRoot
+    : (permission.tool === 'grep' || permission.tool === 'run_script') && permission.scopeRoots.includes(facts.outputRoot!))
+}
+
+function classifyAnalyzerFailure(error: unknown): 'ANALYZER_TIMEOUT' | 'ANALYZER_SUMMARY_TIMEOUT' | 'ANALYZER_INVALID_RESPONSE' | 'ANALYZER_OUTPUT_TRUNCATED' | 'ANALYZER_UNAVAILABLE' {
   const code = error instanceof Error ? error.message : ''
   if (code === 'PREFLIGHT_TIMEOUT') return 'ANALYZER_TIMEOUT'
+  if (code === 'PREFLIGHT_MODEL_SUMMARY_TIMEOUT') return 'ANALYZER_SUMMARY_TIMEOUT'
   if (code === 'PREFLIGHT_MODEL_TRUNCATED_RESPONSE') return 'ANALYZER_OUTPUT_TRUNCATED'
   if (code === 'PREFLIGHT_MODEL_EMPTY_RESPONSE' || code === 'PREFLIGHT_MODEL_INVALID_JSON' || code === 'PREFLIGHT_MODEL_INVALID_SCHEMA') return 'ANALYZER_INVALID_RESPONSE'
   return 'ANALYZER_UNAVAILABLE'
@@ -170,12 +181,32 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     : permission.scopeRoots.every((root) => facts.roots.some((authorizedRoot) => isWithinRoot(root, authorizedRoot))
       && facts.entries.some((entry) => entry.path === root && entry.kind === 'directory')))
   if (!requirementsInScope) {
+    const outputRootReadRequested = requestsReadAccessToOutputGitRepository(requiredPermissions, facts)
     if (process.env.SPACEASSISTANT_DEV === '1') {
       console.warn('[taskPreflight] result rejected', {
         phase: 'host-scope-validation',
-        reason: 'permission-out-of-scope',
+        reason: outputRootReadRequested ? 'output-root-read-request' : 'permission-out-of-scope',
         permissionTools: [...new Set(requiredPermissions.map((permission) => permission.tool))].slice(0, 8)
       })
+    }
+    if (outputRootReadRequested && facts.outputRoot) {
+      const reference = input.prompt.trim().slice(0, 240)
+      return {
+        report: emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs', {
+          reference,
+          reasonCode: 'output_root_not_read_authorized',
+          candidates: [facts.outputRoot],
+          candidateCount: 1
+        })], [{
+          path: facts.outputRoot,
+          purposeKey: 'butler.preflight.output_root_read_candidate_purpose',
+          source: reference,
+          validationStatus: 'valid'
+        }]),
+        bindings: [],
+        factsDigest: facts.digest,
+        ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
+      }
     }
     return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
   }

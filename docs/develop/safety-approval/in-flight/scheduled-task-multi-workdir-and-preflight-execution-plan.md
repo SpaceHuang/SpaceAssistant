@@ -1,6 +1,6 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：E-01～E-15d 已完成
+> 状态：E-01～E-15f 已完成
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
@@ -456,6 +456,17 @@ E-13 按用户明确要求修正 D-7 的授权所有权与确认交互。E-12 �
 - **验证命令：** `npm exec -- vitest run electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskPreflightMockRunner.test.ts electron/butler/taskPreflight.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npx tsc -p tsconfig.electron.json --noEmit`；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run dev`；`git diff --check`。
 - **证据：** RED：模型分析器测试要求使用配置的 16,384 token 时，旧实现实际请求 2,048；随后单纯调高到 4,096 仍未遵循模型配置。runner 回归亦确认累计/每轮输出限制仍收窄请求。GREEN：4 个定向测试文件 **95 项通过**，覆盖两个阶段遵循所选模型输出上限、不设累计 token 停止、首阶段截断与总结截断均准确分类、保留模型轮次/Mock 调用/时限门禁和用户提示。Electron TypeScript 检查、shared/renderer 类型、i18n（0 个源代码硬编码中文）、system invariant registry（10 registrations / 36 test references）及 `git diff --check` 全部通过。随后用 `npm run dev` 完成全量 Electron 构建并加载 renderer，Vite 返回 HTTP 200。
 - **可执行环境：** 本机 mock LLM、runner 边界测试和 Electron 构建。
+- **状态：** - [x]
+
+### E-15f 定位并修复预检模型请求失败
+
+- **依赖：** E-15e；用户报告输出上限调整后，保存失败转为“预检服务暂时无法完成请求”。
+- **目标文件：** `electron/butler/taskPreflightModelAnalyzer.ts`、`electron/butler/taskPreflight.ts`、`electron/butler/butlerIpc.ts`、对应测试、`src/shared/automationTaskTypes.ts`、中英文 `config.json` 与生成的 i18n 类型。
+- **动作与产物：** 以安全诊断日志定位请求阶段，日志只记错误类别、阶段、所选模型、输出上限和计数，不记任务内容、路径、凭据、完整服务地址或原始异常正文。大输出请求改用 SDK 流式接口；任务思维强度传给 Mock 演练，独立轨迹总结仍调用同一所选模型但关闭额外思考。提示词明确演练是采样，不必穷尽工具或权限；预算耗尽后仍把已有轨迹交给总结。将总结请求的单次超时与整次 60 秒超时分开分类，替换不准确的“缩小授权目录”建议。主机检测到模型请求读取输出 Git 仓库但该目录未获读取授权时，返回待用户确认的目录建议；不会自动扩大权限或保存授权。
+- **完成判据：** 旧流式协议失败、总结超时分类错误、输出目录读请求被泛化为结果校验错误均有 RED 回归；真实开发界面将最后一种情形显示为具体读取授权说明和默认未选的路径建议；模型失败日志不泄漏敏感输入；工具目录与授权边界、用户选定模型输出上限及既有轮次/调用/时间预算约束保持有效。
+- **验证命令：** `npm exec vitest run electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskPreflightMockRunner.test.ts electron/butler/taskPreflight.test.ts electron/butler/butlerIpc.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npx tsc -p tsconfig.electron.json --noEmit`；`npm run typecheck:renderer`；`npm run typecheck:shared`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run dev`；`git diff --check`。
+- **证据：** RED：384,000 输出配置经非流式请求触发服务端“需要流式请求”拒绝；摘要请求用 20 秒单请求超时被误映射成整次 60 秒超时；Shell 在输出 Git 仓库根目录的请求被主机拒绝后被误报为模型权限范围格式错误。相关测试先分别失败。GREEN：两模型阶段都改用流式请求；第一阶段任务强度按配置发送，独立摘要使用零思考强度；摘要超时显示为真实阶段及可操作建议。真实任务重试中，安全日志确认摘要阶段已返回，主机识别 `run_shell` 目录未授权并保持拒绝；界面显示“输出目录只用于写入”的说明及默认未选的项目根目录授权建议，没有保存任务或扩大权限。定向 **5 个测试文件 / 124 项通过**；Electron、renderer、shared 类型检查、i18n、系统不变量登记检查、`git diff --check` 通过；`npm run dev` 完成 Electron 构建并启动应用。
+- **可执行环境：** 本机开发实例及 mock LLM；真实模型请求使用用户配置的 `deepseek-flash`，完整权限授权仍由用户在界面自行选择。
 - **状态：** - [x]
 
 ## 4. 外部验收（不阻塞源码关闭）

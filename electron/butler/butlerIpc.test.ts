@@ -96,6 +96,29 @@ describe('butler IPC workdir/config fields', () => {
     expect(response).toMatchObject({ ok: false, kind: 'validation-error', error: '结果输出目录不能为空' })
   })
 
+  it('passes the validated task reasoning effort to preflight for create and update', async () => {
+    db = openDatabase(':memory:')
+    const map = new Map<string, (...args: unknown[]) => unknown>()
+    const createAnalyzer = vi.fn(() => ({ analyze: vi.fn(async () => ({ targets: [] })) }))
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
+      db, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({}) as never
+    } as never, {
+      validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'provider-model', reasoningEffort: 'medium' as const })),
+      createAnalyzer,
+      preflight: vi.fn(async () => ({ report: { status: 'passed' as const, blockers: [], suggestedDirectories: [] }, bindings: [] }))
+    })
+
+    const created = await writeAndConfirm(map, 'butler:create', {
+      name: 'reasoning', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'none',
+      authorizedDirs: [], outputDir: os.tmpdir(), outputOrganization: 'hourly', modelId: 'm', modelServiceId: 's', reasoningEffort: 'medium'
+    }) as { ok: boolean; id?: string }
+    expect(created.ok).toBe(true)
+    expect(createAnalyzer).toHaveBeenNthCalledWith(1, { modelId: 'm', modelServiceId: 's', reasoningEffort: 'medium' })
+
+    await writeAndConfirm(map, 'butler:update', { id: created.id, patch: { prompt: 'updated report' } })
+    expect(createAnalyzer).toHaveBeenNthCalledWith(2, { modelId: 'm', modelServiceId: 's', reasoningEffort: 'medium' })
+  })
+
   it('allows an output-only task and keeps its output root separate from authorized read roots', async () => {
     db = openDatabase(':memory:')
     const map = new Map<string, (...args: unknown[]) => unknown>()

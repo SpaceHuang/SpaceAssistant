@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTaskPreflightModelAnalyzer } from './taskPreflightModelAnalyzer'
 import { resolveLlmCredentialsForPair } from '../llmServiceResolver'
 import { createAnthropicClient } from '../anthropicClientFactory'
@@ -8,15 +8,22 @@ vi.mock('../anthropicClientFactory', () => ({ createAnthropicClient: vi.fn() }))
 
 describe('createTaskPreflightModelAnalyzer', () => {
   const create = vi.fn()
+  const stream = vi.fn()
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     create.mockReset()
+    stream.mockReset()
     create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[],"requiredPermissions":[],"clarifications":[],"suggestedDirectories":[]}' }] })
+    stream.mockImplementation((input, options) => ({ finalMessage: () => create({ ...input, stream: true }, options) }))
     vi.mocked(resolveLlmCredentialsForPair).mockResolvedValue({
       model: { id: 'model-id', name: 'provider-model', enabled: true, maxTokens: 16_384 } as never,
       serviceId: 'service-id', providerModelName: 'provider-model', baseUrl: 'https://model.test', getApiKey: async () => 'api-key'
     })
-    vi.mocked(createAnthropicClient).mockReturnValue({ messages: { create } } as never)
+    vi.mocked(createAnthropicClient).mockReturnValue({ messages: { create, stream } } as never)
   })
 
   it('calls only the task selected model with structured analysis input and no tools', async () => {
@@ -33,6 +40,75 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(create.mock.calls[0]?.[1]).toMatchObject({ signal: expect.any(AbortSignal) })
     expect(create.mock.calls[0]?.[1]?.signal).not.toBe(controller.signal)
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty('tools')
+  })
+
+  it('uses the SDK streaming API for large configured output limits', async () => {
+    const nonStreamingCreate = vi.fn().mockRejectedValue(new Error('Streaming is required for operations that may take longer than 10 minutes'))
+    const finalMessage = vi.fn()
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'simulation complete' }], stop_reason: 'end_turn' })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"targets":[]}' }], stop_reason: 'end_turn' })
+    const streamRequest = vi.fn(() => ({ finalMessage }))
+    const clientFactory = vi.fn(() => ({ messages: { create: nonStreamingCreate, stream: streamRequest } }))
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' }, clientFactory as never)
+
+    await expect(analyzer.analyze({
+      prompt: 'report', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'],
+      facts: {} as never, tools: [], responseFormat: 'json'
+    }, new AbortController().signal)).resolves.toMatchObject({ targets: [] })
+
+    expect(streamRequest).toHaveBeenCalledTimes(2)
+    expect(streamRequest.mock.calls[0]?.[0]).toMatchObject({ model: 'provider-model', max_tokens: 16_384 })
+    expect(nonStreamingCreate).not.toHaveBeenCalled()
+  })
+
+  it('uses task-selected reasoning for rehearsal and disables extra reasoning for trace summarization', async () => {
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, {
+      modelId: 'model-id', modelServiceId: 'service-id', reasoningEffort: 'low'
+    } as never)
+
+    await expect(analyzer.analyze({
+      prompt: 'report', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'],
+      facts: {} as never, tools: [], responseFormat: 'json'
+    }, new AbortController().signal)).resolves.toMatchObject({ targets: [] })
+
+    expect(stream).toHaveBeenCalledTimes(2)
+    expect(stream.mock.calls[0]?.[0]).toMatchObject({ thinking: { type: 'adaptive' }, output_config: { effort: 'low' } })
+    expect(stream.mock.calls[1]?.[0]).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(stream.mock.calls[1]?.[0]).not.toHaveProperty('output_config')
+  })
+
+  it('states that rehearsal need not discover every possible tool before the host stops it', async () => {
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    await analyzer.analyze({
+      prompt: 'report', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'],
+      facts: {} as never, tools: [], responseFormat: 'json'
+    }, new AbortController().signal)
+
+    const rehearsalSystem = stream.mock.calls[0]?.[0].system as string
+    expect(rehearsalSystem).toContain('无需穷尽所有可能步骤、工具或权限')
+    expect(rehearsalSystem).toContain('一旦达到任一预算上限，立即停止并把已有轨迹交给第二阶段')
+  })
+
+  it('classifies a summary request timeout separately from the whole-preflight deadline', async () => {
+    vi.stubEnv('SPACEASSISTANT_DEV', '1')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    create
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'simulation complete' }], stop_reason: 'end_turn' })
+      .mockRejectedValueOnce(new Error('PREFLIGHT_MODEL_REQUEST_TIMEOUT'))
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    await expect(analyzer.analyze({
+      prompt: 'report', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'],
+      facts: {} as never, tools: [], responseFormat: 'json'
+    }, new AbortController().signal)).rejects.toThrow('PREFLIGHT_MODEL_SUMMARY_TIMEOUT')
+
+    const failure = warn.mock.calls.find(([message]) => message === '[taskPreflight] model request failed')
+    expect(failure?.[1]).toMatchObject({
+      phase: 'summary-request', failureKind: 'timeout', rehearsalStatus: 'complete',
+      rehearsalModelRounds: 1, rehearsalToolCalls: 0, summaryTimeoutMs: 20_000, factsEntryCount: 0
+    })
+    expect(failure?.[1]).toHaveProperty('summaryContextChars', expect.any(Number))
   })
 
   it('replays a task-specific tool call through the mock loop and sends only a synthetic tool result back to the model', async () => {
@@ -468,5 +544,33 @@ describe('createTaskPreflightModelAnalyzer', () => {
       .mockResolvedValueOnce({ content: [{ type: 'text', text: 'not json' }] })
     const malformed = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
     await expect(malformed.analyze({} as never, new AbortController().signal)).rejects.toThrow('PREFLIGHT_MODEL_INVALID_JSON')
+  })
+
+  it('logs a safe provider failure category and request output limit without logging the raw error', async () => {
+    vi.stubEnv('SPACEASSISTANT_DEV', '1')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    create
+      .mockRejectedValueOnce(new Error('max_tokens 16384 exceeds provider limit; api_key=secret-value; task=private-task-word'))
+      .mockRejectedValueOnce(new Error('max_tokens 16384 exceeds provider limit; api_key=secret-value; task=private-task-word'))
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    await expect(analyzer.analyze({
+      prompt: 'private-task-word', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'],
+      facts: {} as never, tools: [], responseFormat: 'json'
+    }, new AbortController().signal)).rejects.toThrow('PREFLIGHT_MODEL_UNAVAILABLE')
+
+    const failures = warn.mock.calls.filter(([message]) => message === '[taskPreflight] model request failed')
+    const rehearsalFailure = failures.find(([, details]) => (details as Record<string, unknown>)?.phase === 'provider-request')
+    const summaryFailure = failures.find(([, details]) => (details as Record<string, unknown>)?.phase === 'summary-request')
+    expect(rehearsalFailure?.[1]).toMatchObject({
+      phase: 'provider-request', failureKind: 'provider-rejected', modelName: 'provider-model', requestedOutputTokens: 16_384, serviceHost: 'model.test',
+      errorHint: expect.stringContaining('max_tokens 16384 exceeds provider limit')
+    })
+    expect(summaryFailure?.[1]).toMatchObject({
+      phase: 'summary-request', failureKind: 'provider-rejected', modelName: 'provider-model', requestedOutputTokens: 16_384, serviceHost: 'model.test',
+      errorHint: expect.stringContaining('max_tokens 16384 exceeds provider limit')
+    })
+    expect(JSON.stringify(failures)).not.toContain('secret-value')
+    expect(JSON.stringify(failures)).not.toContain('private-task-word')
   })
 })

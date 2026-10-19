@@ -140,6 +140,31 @@ describe('runTaskPreflight', () => {
     expect(result.bindings).toEqual([])
   })
 
+  it('turns a Shell request targeting the output Git repository into an explicit read-authorization clarification', async () => {
+    const prompt = '总结一下本地 Git 历史'
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [],
+      requiredPermissions: [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/project' }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5', workingDirectory: '/project' }, dispatch: 'simulated', resultKind: 'synthetic' }]
+    } as never)) }
+    const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/daily'], outputDir: '/project', taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({
+        roots: ['/daily'], outputRoot: '/project', outputRootIsGitRepository: true, gitRepositories: [],
+        entries: [{ path: '/daily', relativePath: '', kind: 'directory' as const }],
+        coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'output-git-read-not-authorized'
+      })) }
+    })
+
+    expect(result.report).toMatchObject({
+      status: 'blocked',
+      blockers: [{ code: 'TOOL_PERMISSION_REQUIRED', field: 'workDirs', reference: prompt, reasonCode: 'output_root_not_read_authorized', candidates: ['/project'] }],
+      suggestedDirectories: [{ path: '/project', purposeKey: 'butler.preflight.output_root_read_candidate_purpose', validationStatus: 'valid' }]
+    })
+    expect(result.requiredPermissions).toBeUndefined()
+    expect(result.bindings).toEqual([])
+  })
+
   it('asks the user to add a repository directory when a Git request has no authorized roots', async () => {
     const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
@@ -294,6 +319,13 @@ describe('runTaskPreflight', () => {
     const result = await runTaskPreflight({ prompt: 'read one file', scheduleSummary: 'once', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 1, visited: 0, errors: 0 }, digest: 'facts' })) } })
 
     expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_INVALID_RESPONSE' }] })
+  })
+
+  it('reports a summary request timeout separately from the whole-preflight timeout', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => { throw new Error('PREFLIGHT_MODEL_SUMMARY_TIMEOUT') }) }
+    const result = await runTaskPreflight({ prompt: 'read one file', scheduleSummary: 'once', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 1, visited: 0, errors: 0 }, digest: 'facts' })) } })
+
+    expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_SUMMARY_TIMEOUT' }] })
   })
 
   it('allows up to 60 seconds for the selected model to finish preflight', async () => {

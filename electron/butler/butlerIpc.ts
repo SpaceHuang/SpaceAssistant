@@ -30,7 +30,7 @@ export type ButlerIpcDeps = ButlerInvokerDeps
 
 export type ButlerTaskPreflightDeps = {
   now?: () => number
-  createAnalyzer?: (task: { modelId?: string; modelServiceId?: string }) => TaskPreflightAnalyzer
+  createAnalyzer?: (task: { modelId?: string; modelServiceId?: string; reasoningEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort }) => TaskPreflightAnalyzer
   preflight?: typeof runTaskPreflight
   validateModel?: typeof validateTaskModelConfig
   validateWorkDir?: typeof validateTaskWorkDir
@@ -92,7 +92,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
   }
   const pendingAuthorizationReviews = new Map<string, PendingAuthorizationReview>()
 
-  async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; outputDir: string; modelId?: string; modelServiceId?: string; taskRevision: number; requestReceivedAt: number }) {
+  async function inspectTask(input: { prompt: string; schedule: AutomationTaskSchedule; deliveryPref: string; roots: string[]; outputDir: string; modelId?: string; modelServiceId?: string; reasoningEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort; taskRevision: number; requestReceivedAt: number }) {
     const preflightStartedAt = Date.now()
     if (input.schedule.kind === 'once' && input.schedule.at <= input.requestReceivedAt) {
       return { report: { status: 'blocked' as const, blockers: [{ code: 'ONCE_AT_NOT_FUTURE', field: 'schedule', messageKey: getPreflightIssueMessageKey('ONCE_AT_NOT_FUTURE') }], suggestedDirectories: [] }, bindings: [], factsDigest: undefined, requiredPermissions: [], mcpTools: [] }
@@ -139,7 +139,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       preflightStartedAt,
       mcpTools,
       tools: [...builtinTools, ...mcpModelTools]
-    }, { analyzer: createAnalyzer({ modelId: input.modelId, modelServiceId: input.modelServiceId }) })
+    }, { analyzer: createAnalyzer({ modelId: input.modelId, modelServiceId: input.modelServiceId, reasoningEffort: input.reasoningEffort }) })
     return { ...result, mcpTools }
   }
 
@@ -293,7 +293,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       reasoningEffort: payload?.reasoningEffort
     })
     if (!config.ok) return { ok: false, kind: 'validation-error', error: config.error }
-    const inspection = await inspectTask({ prompt, schedule, deliveryPref, roots: authorizedDirs, outputDir: outputResult.outputDir, modelId: config.modelId, modelServiceId: config.modelServiceId, taskRevision: 1, requestReceivedAt })
+    const inspection = await inspectTask({ prompt, schedule, deliveryPref, roots: authorizedDirs, outputDir: outputResult.outputDir, modelId: config.modelId, modelServiceId: config.modelServiceId, reasoningEffort: config.reasoningEffort, taskRevision: 1, requestReceivedAt })
     const failure = preflightFailure(inspection)
     if (failure) return failure
     const taskInput: AutomationTaskInput = {
@@ -395,7 +395,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     if (typeof patch.enabled === 'boolean') next.enabled = patch.enabled
     const candidate = { ...existing, ...next }
     const candidateRoots: string[] = rootsProvided ? rootsResult.authorizedDirs : existing.authorizedDirs
-    const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, outputDir: outputResult.outputDir, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
+    const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, outputDir: outputResult.outputDir, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, reasoningEffort: candidate.reasoningEffort, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
     const failure = preflightFailure(inspection)
     if (failure) return failure
     const permissions = buildPermissionList({
