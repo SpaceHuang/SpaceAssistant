@@ -628,8 +628,23 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await clickTaskSubmit()
 
-    expect(await screen.findByText(/暂时无法调用任务模型完成预检/)).toBeTruthy()
+    expect(await screen.findByText(/预检服务暂时无法完成请求，任务尚未保存/)).toBeTruthy()
     expect(screen.queryByText('ANALYZER_UNAVAILABLE')).toBeNull()
+  })
+
+  it('预检结果未通过格式或权限范围校验时说明本机拒绝原因，不提示检查模型服务', async () => {
+    butlerCreateTask.mockResolvedValueOnce({ ok: false, kind: 'preflight-unavailable', error: 'ANALYZER_INVALID_RESPONSE' })
+    renderTab()
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '权限校验诊断' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '读取 report.csv' } })
+    await chooseOutputDir()
+    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
+    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
+    await clickTaskSubmit()
+
+    expect(await screen.findByText(/预检结果未通过格式或权限范围校验，任务尚未保存/)).toBeTruthy()
+    expect(screen.queryByText('ANALYZER_INVALID_RESPONSE')).toBeNull()
   })
 
   it('目录列表可添加多个根并移除单项', async () => {

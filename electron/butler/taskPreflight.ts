@@ -141,7 +141,10 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
   } catch (error) {
     return { report: emptyReport('unavailable', [issue(classifyAnalyzerFailure(error))]), bindings: [], factsDigest: facts.digest }
   }
-  if (!analysis) return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
+  if (!analysis) {
+    if (process.env.SPACEASSISTANT_DEV === '1') console.warn('[taskPreflight] result rejected', { phase: 'host-schema-validation', reason: 'invalid-analysis-shape' })
+    return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
+  }
   if (analysis.mockIncomplete) {
     return {
       report: emptyReport('blocked', [issue('MOCK_PREFLIGHT_INCOMPLETE')]),
@@ -163,7 +166,16 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     ? facts.roots.includes(permission.workingDirectory)
     : permission.scopeRoots.every((root) => facts.roots.some((authorizedRoot) => isWithinRoot(root, authorizedRoot))
       && facts.entries.some((entry) => entry.path === root && entry.kind === 'directory')))
-  if (!requirementsInScope) return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
+  if (!requirementsInScope) {
+    if (process.env.SPACEASSISTANT_DEV === '1') {
+      console.warn('[taskPreflight] result rejected', {
+        phase: 'host-scope-validation',
+        reason: 'permission-out-of-scope',
+        permissionTools: [...new Set(requiredPermissions.map((permission) => permission.tool))].slice(0, 8)
+      })
+    }
+    return { report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]), bindings: [], factsDigest: facts.digest }
+  }
   const factPaths = new Set(facts.entries.map((entry) => entry.path))
   // Facts/report 阶段只保留可核验的原文片段、原因代码和主机 facts 中的候选路径；模型文本不授予路径，也不改写执行授权。
   const outputRootGitReferences = new Set((analysis.clarifications ?? [])

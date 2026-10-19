@@ -282,6 +282,32 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(create.mock.calls[0]?.[0]).toMatchObject({ max_tokens: 2048 })
   })
 
+  it('accepts one JSON object surrounded by prose and treats omitted empty summary arrays as empty', async () => {
+    create
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'simulation complete' }], stop_reason: 'end_turn' })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '预检汇总如下：\n```json\n{"targets":[]}\n```\n以上是本次结果。' }], stop_reason: 'end_turn' })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    await expect(analyzer.analyze({
+      prompt: 'Read a file', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'],
+      facts: {} as never, tools: [], responseFormat: 'json'
+    }, new AbortController().signal)).resolves.toEqual({
+      targets: [], requiredPermissions: [], clarifications: [], suggestedDirectories: [], mockTrace: []
+    })
+  })
+
+  it('rejects multiple JSON objects in a summary instead of choosing one', async () => {
+    create
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'simulation complete' }], stop_reason: 'end_turn' })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Summary: {"targets":[]} {"targets":[{"kind":"exact","path":"/workspace","targetType":"directory"}]}' }], stop_reason: 'end_turn' })
+    const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
+
+    await expect(analyzer.analyze({
+      prompt: 'Read a file', scheduleSummary: 'daily', deliverySummary: 'desktop', authorizedRoots: ['/workspace'],
+      facts: {} as never, tools: [], responseFormat: 'json'
+    }, new AbortController().signal)).rejects.toThrow('PREFLIGHT_MODEL_INVALID_JSON')
+  })
+
   it('marks a response truncated by the provider token limit as incomplete', async () => {
     create
       .mockResolvedValueOnce({ content: [{ type: 'text', text: 'partial' }], stop_reason: 'max_tokens' })
@@ -304,8 +330,8 @@ describe('createTaskPreflightModelAnalyzer', () => {
     expect(create).toHaveBeenCalledTimes(2)
   })
 
-  it('rejects model output that omits a required delivery field', async () => {
-    create.mockResolvedValue({ content: [{ type: 'text', text: '{"targets":[],"requiredPermissions":[],"clarifications":[]}' }] })
+  it('rejects model output that omits the required target field', async () => {
+    create.mockResolvedValue({ content: [{ type: 'text', text: '{"requiredPermissions":[],"clarifications":[],"suggestedDirectories":[]}' }] })
     const analyzer = createTaskPreflightModelAnalyzer({} as never, { modelId: 'model-id', modelServiceId: 'service-id' })
 
     await expect(analyzer.analyze({} as never, new AbortController().signal)).rejects.toThrow('PREFLIGHT_MODEL_INVALID_SCHEMA')

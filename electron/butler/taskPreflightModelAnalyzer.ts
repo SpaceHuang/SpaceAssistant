@@ -23,11 +23,17 @@ function logPreflightModelFailure(phase: string, error: unknown): void {
   })
 }
 
+function logPreflightResultRejection(phase: string, reason: string): void {
+  if (process.env.SPACEASSISTANT_DEV !== '1') return
+  const safeReason = /^[A-Za-z0-9_.-]{1,80}$/.test(reason) ? reason : 'unknown'
+  console.warn('[taskPreflight] model result rejected', { phase, reason: safeReason })
+}
+
 const SUMMARY_SYSTEM_PROMPT = [
   '第二阶段（独立新会话）：只汇总 task、schedule、delivery、facts 和主机记录的 mockTrace；不续跑模拟，不使用工具，不推断轨迹外的调用或权限。每项 requiredPermissions 必须能指向轨迹中的具体工具调用和参数。',
   '总结只生成待核验的权限提案，不批准权限；主进程校验后才向用户展示，是否授权只能由用户确认。',
   'mockTrace 是拟调用记录，不代表真实访问成功。status=incomplete 时只可总结已观察部分，不能声称权限完整。',
-  '输出一个 JSON 对象；targets、requiredPermissions、clarifications、suggestedDirectories 均必需且为数组。',
+  '只输出一个 JSON 对象，不加前言或结尾说明。targets 必需且为数组；requiredPermissions、clarifications、suggestedDirectories 有内容时输出数组，为空时可省略或输出空数组。',
   'targets：实际读取/处理对象；kind 为 exact(path,targetType=file|directory)、collection(directory,selector=*.csv|*.tsv|all) 或 output(path,expectedType=file|directory)。输入 path 必须来自 facts；仅对明确生成的结果填 output，path 相对 outputRoot。',
   'requiredPermissions：grep/run_script 用 {tool,scopeRoots}；run_shell 用 {tool,command,workingDirectory}（完整命令，目录来自 authorizedRoots）；MCP 用 {tool:"mcp",serverId,toolName,purpose}，服务/工具来自 mcpTools，按 mappedName 对应 mockTrace 的工具身份，purpose 简述必要性；不得请求目录外权限。',
   'grep scopeRoots 是搜索目录；run_script scopeRoots 是脚本可访问目录。脚本由安全审核 Agent 检查，审批凭据绑定本次脚本 SHA-256。',
@@ -56,11 +62,50 @@ function parseTargets(content: string): TaskPreflightAnalysisOutput {
   let parsed: unknown
   const trimmed = content.trim()
   const fencedJson = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1]
-  try { parsed = JSON.parse(fencedJson ?? trimmed) } catch { throw new Error('PREFLIGHT_MODEL_INVALID_JSON') }
+  const source = fencedJson ?? trimmed
+  try {
+    parsed = JSON.parse(source)
+  } catch {
+    // Tolerate one JSON object surrounded by a short preamble/postscript. The object still passes
+    // the same strict shape, trace, and authorization checks below; multiple objects remain invalid.
+    const objects: string[] = []
+    let start = -1
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let index = 0; index < source.length; index += 1) {
+      const character = source[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (character === '\\') escaped = true
+        else if (character === '"') inString = false
+        continue
+      }
+      if (character === '"') {
+        inString = true
+        continue
+      }
+      if (character === '{') {
+        if (depth === 0) start = index
+        depth += 1
+      } else if (character === '}' && depth > 0) {
+        depth -= 1
+        if (depth === 0) objects.push(source.slice(start, index + 1))
+      }
+    }
+    if (objects.length !== 1 || depth !== 0 || inString) throw new Error('PREFLIGHT_MODEL_INVALID_JSON')
+    try { parsed = JSON.parse(objects[0]!) } catch { throw new Error('PREFLIGHT_MODEL_INVALID_JSON') }
+  }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('PREFLIGHT_MODEL_INVALID_SCHEMA')
   const record = parsed as Record<string, unknown>
-  if (!Array.isArray(record.targets) || !Array.isArray(record.requiredPermissions) || !Array.isArray(record.clarifications) || !Array.isArray(record.suggestedDirectories)) throw new Error('PREFLIGHT_MODEL_INVALID_SCHEMA')
-  const requiredPermissions = record.requiredPermissions.map((item) => {
+  if (!Array.isArray(record.targets)) throw new Error('PREFLIGHT_MODEL_INVALID_SCHEMA')
+  for (const field of ['requiredPermissions', 'clarifications', 'suggestedDirectories'] as const) {
+    if (record[field] === undefined) record[field] = []
+    else if (!Array.isArray(record[field])) throw new Error('PREFLIGHT_MODEL_INVALID_SCHEMA')
+  }
+  const rawRequiredPermissions = record.requiredPermissions
+  if (!Array.isArray(rawRequiredPermissions)) throw new Error('PREFLIGHT_MODEL_INVALID_SCHEMA')
+  const requiredPermissions = rawRequiredPermissions.map((item: unknown) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return item
     const permission = item as Record<string, unknown>
     return permission.tool === 'run_shell'
@@ -310,14 +355,35 @@ export function createTaskPreflightModelAnalyzer(db: AppDatabase, task: { modelI
         if (error instanceof Error && error.message === 'PREFLIGHT_MODEL_REQUEST_TIMEOUT') throw new Error('PREFLIGHT_TIMEOUT')
         throw new Error('PREFLIGHT_MODEL_UNAVAILABLE')
       }
-      if (summaryResponse.stop_reason === 'max_tokens') throw new Error('PREFLIGHT_MODEL_TRUNCATED_RESPONSE')
+      if (summaryResponse.stop_reason === 'max_tokens') {
+        logPreflightResultRejection('summary-response', 'truncated')
+        throw new Error('PREFLIGHT_MODEL_TRUNCATED_RESPONSE')
+      }
       const summaryOutputTokens = estimateOutputTokens(summaryResponse)
-      if (summaryOutputTokens > DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS.maxOutputTokensPerRound) throw new Error('PREFLIGHT_MODEL_TRUNCATED_RESPONSE')
-      if (summaryResponse.content.some((block) => block.type === 'tool_use')) throw new Error('PREFLIGHT_MODEL_INVALID_SCHEMA')
+      if (summaryOutputTokens > DEFAULT_TASK_PREFLIGHT_MOCK_LIMITS.maxOutputTokensPerRound) {
+        logPreflightResultRejection('summary-response', 'output-limit')
+        throw new Error('PREFLIGHT_MODEL_TRUNCATED_RESPONSE')
+      }
+      if (summaryResponse.content.some((block) => block.type === 'tool_use')) {
+        logPreflightResultRejection('summary-response', 'unexpected-tool-call')
+        throw new Error('PREFLIGHT_MODEL_INVALID_SCHEMA')
+      }
       const summaryText = summaryResponse.content.find((block) => block.type === 'text')?.text
-      if (typeof summaryText !== 'string') throw new Error('PREFLIGHT_MODEL_EMPTY_RESPONSE')
-      const summary = parseTargets(summaryText)
-      assertPermissionsMatchTrace(summary.requiredPermissions ?? [], rehearsal.trace, input.mcpTools ?? [])
+      if (typeof summaryText !== 'string') {
+        logPreflightResultRejection('summary-response', 'missing-text')
+        throw new Error('PREFLIGHT_MODEL_EMPTY_RESPONSE')
+      }
+      let summary: TaskPreflightAnalysisOutput
+      try {
+        summary = parseTargets(summaryText)
+        assertPermissionsMatchTrace(summary.requiredPermissions ?? [], rehearsal.trace, input.mcpTools ?? [])
+      } catch (error) {
+        logPreflightResultRejection(
+          'summary-validation',
+          error instanceof Error && /^PREFLIGHT_MODEL_[A-Z0-9_]{1,64}$/.test(error.message) ? error.message : 'validation-failed'
+        )
+        throw error
+      }
       return {
         ...summary,
         mockTrace: rehearsal.trace,
