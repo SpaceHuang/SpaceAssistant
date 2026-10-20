@@ -77,6 +77,37 @@ describe('Wiki domain search tool', () => {
     expect(JSON.stringify(result)).not.toContain('wiki/secrets.md')
   })
 
+  it('runs a read-only search without scanning and reconciling every Wiki file', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(path.join(wikiRoot, 'wiki', 'topics'), { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const schema = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    await store.write('SCHEMA.md', schema)
+    await store.write('.wiki-service/catalog.json', JSON.stringify({ formatVersion: 1, pages: [
+      { pageId: 'p-catalog', path: 'wiki/topics/page.md', revision: 2, title: 'Runtime', categoryId: 'topic', summary: 'indexed summary', contentHash: 'indexed-hash' }
+    ] }))
+    const unchangedPage = `${serializeWikiPageMarker({ pageId: 'p-catalog', categoryId: 'topic', summary: 'indexed summary', parentPageId: null, sourceRefs: [], revision: 2 })}\n# Runtime\n\nindexed body\n`
+    await store.write('wiki/topics/page.md', unchangedPage)
+    const storedPage = (await store.readCatalog())!.pages[0]!
+    const hash = createHash('sha256').update(unchangedPage).digest('hex')
+    await store.write('.wiki-service/catalog.json', JSON.stringify({ formatVersion: 1, pages: [{ ...storedPage, contentHash: hash }] }))
+    await store.write('.wiki-service/schema-state.json', JSON.stringify({ formatVersion: 1, schemaVersion: 1, contentHash: createHash('sha256').update(schema).digest('hex') }))
+
+    const result = await searchWikiForContext({ query: 'runtime' }, { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG })
+
+    expect(result).toMatchObject({ success: true, data: { matches: [{ pageId: 'p-catalog', title: 'Runtime', revision: 2 }] } })
+    expect(await store.readText('wiki/topics/page.md')).toBe(unchangedPage)
+    expect((await store.readCatalog())?.pages[0]).toMatchObject({ pageId: 'p-catalog', revision: 2, contentHash: hash })
+  })
+
+  it('reports Wiki lifecycle unavailable from search when Wiki config is absent', async () => {
+    const userDataDir = tempRoot()
+    const result = await searchWikiForContext({ query: 'runtime' }, { userDataDir })
+    expect(result).toMatchObject({ success: false, error: 'wiki_lifecycle_unavailable' })
+  })
+
   it('binds cursors to the catalog snapshot and rejects stale or malformed cursors', async () => {
     const store = createWikiFileStore(tempRoot())
     await store.writeCatalog({ formatVersion: 1, pages: [
@@ -130,7 +161,7 @@ describe('Wiki domain search tool', () => {
     expect(await store.identity('.wiki-service/page-history/p-external/2.md')).not.toBeNull()
   })
 
-  it('reconciles schema and raw external edits before a domain search and rebuilds index/log projections', async () => {
+  it('keeps read-only search on the catalog snapshot and leaves external files untouched', async () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(path.join(wikiRoot, 'wiki', 'topics'), { recursive: true })
@@ -150,16 +181,15 @@ describe('Wiki domain search tool', () => {
 
     const result = await searchWikiForContext({ query: '' }, { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG })
 
-    expect(result).toMatchObject({ success: true, data: { matches: [{ pageId: 'p-reconcile', title: 'External Page', revision: 2 }] } })
+    expect(result).toMatchObject({ success: true, data: { matches: [{ pageId: 'p-reconcile', title: 'External Page', revision: 1 }] } })
     expect((await store.readText('SCHEMA.md')).trim()).toBe(schema.trim())
     expect(await store.readText('wiki/topics/external.md')).toContain('written outside the app')
     expect(await store.readText('raw/e16-fixture/source.md')).toContain('external raw source')
-    expect(await store.readCatalog()).toMatchObject({ pages: [{ pageId: 'p-reconcile', path: 'wiki/topics/external.md', revision: 2 }] })
-    expect(await store.readText('wiki/index.md')).toContain('External Page')
-    expect(await store.readText('wiki/log.md')).toMatch(/^# Wiki Operation Log/m)
-    expect(await store.identity('.wiki-service/schema-state.json')).not.toBeNull()
-    expect(await store.readText('.wiki-service/schema-state.json')).toContain('"schemaVersion": 2')
-    expect(await store.identity('.wiki-service/page-history/p-reconcile/2.md')).not.toBeNull()
+    expect(await store.readCatalog()).toMatchObject({ pages: [{ pageId: 'p-reconcile', path: 'wiki/topics/external.md', revision: 1 }] })
+    expect(await store.identity('wiki/index.md')).toBeNull()
+    expect(await store.identity('wiki/log.md')).toBeNull()
+    expect(JSON.parse(await store.readText('.wiki-service/schema-state.json'))).toMatchObject({ schemaVersion: 1 })
+    expect(await store.identity('.wiki-service/page-history/p-reconcile/2.md')).toBeNull()
   })
 
   it('reads only a bound source snapshot and binds continuation cursors to caller and lane', async () => {

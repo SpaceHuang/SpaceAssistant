@@ -15,9 +15,10 @@ import { createWikiDomainCoordinator, type WikiDomainSchema } from './wikiDomain
 import { createWikiHistoryService } from './wikiHistoryService'
 import { parseWikiPageMarker } from './wikiReconciler'
 import { normalizeWikiRelativePath } from './wikiPaths'
+import { readWikiConfig } from './wikiConfigReader'
 
 type WikiInput = Record<string, unknown>
-type WikiDomainContext = Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'sessionId' | 'lane' | 'remoteContext' | 'requestId' | 'toolUseId' | 'toolUserConfirmed' | 'userConfirmationAnswerer'>
+type WikiDomainContext = Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'appDatabase' | 'sessionId' | 'lane' | 'remoteContext' | 'requestId' | 'toolUseId' | 'toolUserConfirmed' | 'userConfirmationAnswerer'>
 type PageReadService = ReturnType<typeof createWikiDomainReadService>
 const pageReadServices = new Map<string, { pages: WikiPageReadRecord[]; service: PageReadService }>()
 const sourceReadServices = new Map<string, ReturnType<typeof createWikiSourceService>>()
@@ -189,7 +190,7 @@ async function validateSourceRefs(store: WikiFileStore, refs?: Array<{ sourceId:
   return true
 }
 
-export async function getWikiSchemaForContext(context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir'>): Promise<ToolExecutorResult> {
+export async function getWikiSchemaForContext(context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'appDatabase'>): Promise<ToolExecutorResult> {
   let store: WikiFileStore
   try { store = await getReadyWikiStore(context) }
   catch (error) { return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'wiki_schema_unavailable' } }
@@ -234,9 +235,9 @@ export async function importWikiSourceForContext(
   }
 }
 
-export async function searchWikiForContext(input: WikiInput, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir'>): Promise<ToolExecutorResult> {
+export async function searchWikiForContext(input: WikiInput, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'appDatabase'>): Promise<ToolExecutorResult> {
   try {
-    return { success: true, data: await searchWikiCatalog(await getReadyWikiStore(context), input) }
+    return { success: true, data: await searchWikiCatalog(await getReadyWikiStore(context, { reconcileExternalChanges: false }), input) }
   } catch (error) {
     return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'wiki_search_unavailable' }
   }
@@ -397,13 +398,17 @@ export async function searchWikiCatalog(store: WikiFileStore, input: WikiInput) 
   }
 }
 
-async function getReadyWikiStore(context: Pick<WikiDomainContext, 'wikiConfig' | 'userDataDir'>): Promise<WikiFileStore> {
-  if (!context.wikiConfig) throw new WikiDomainToolError('wiki_lifecycle_unavailable')
-  const root = resolveSharedWikiRoot(context.userDataDir, context.wikiConfig)
+async function getReadyWikiStore(
+  context: Pick<WikiDomainContext, 'wikiConfig' | 'userDataDir' | 'appDatabase'>,
+  options: { reconcileExternalChanges?: boolean } = {}
+): Promise<WikiFileStore> {
+  const wikiConfig = context.wikiConfig ?? (context.appDatabase ? readWikiConfig(context.appDatabase) : undefined)
+  if (!wikiConfig) throw new WikiDomainToolError('wiki_lifecycle_unavailable')
+  const root = resolveSharedWikiRoot(context.userDataDir, wikiConfig)
   const lifecycle = await createWikiLifecycleController(root).read()
   if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') throw new WikiDomainToolError('wiki_lifecycle_not_ready')
   const store = createWikiFileStore(root)
-  if (await store.identity('SCHEMA.md') && await store.readCatalog()) {
+  if (options.reconcileExternalChanges !== false && await store.identity('SCHEMA.md') && await store.readCatalog()) {
     const reconciliation = await reconcileExternalWikiChanges(store)
     if (reconciliation.diagnostics.length) throw new WikiDomainToolError('wiki_external_change_conflict')
   }

@@ -3,6 +3,7 @@ import type { ToolExecutionContext, ToolExecutorResult } from '../tools/types'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { resolveSharedWikiRoot } from './wikiInit'
+import { readWikiConfig } from './wikiConfigReader'
 
 export interface WikiDiscoveredTool { name: string; description: string; input_schema: { type: 'object'; properties: Record<string, unknown>; required?: string[]; additionalProperties?: boolean } }
 export interface WikiToolDiscoveryResult { matches: WikiDiscoveredTool[]; totalMatches: number; truncated: boolean; usage: string }
@@ -44,9 +45,10 @@ export const wikiDiscoveryTool = createSnapshotReadRegisteredTool('memory', asyn
   return executeWikiDiscovery(input, context, new Set(available))
 })
 
-export async function executeWikiDiscovery(input: Record<string, unknown>, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir'>, availableToolNames: ReadonlySet<string> = new Set(WIKI_DOMAIN_TOOL_DEFINITIONS.map((tool) => tool.name))): Promise<ToolExecutorResult> {
-  if (!context.wikiConfig) return { success: false, error: 'wiki_lifecycle_unavailable' }
-  const root = resolveSharedWikiRoot(context.userDataDir, context.wikiConfig)
+export async function executeWikiDiscovery(input: Record<string, unknown>, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'appDatabase'>, availableToolNames: ReadonlySet<string> = new Set(WIKI_DOMAIN_TOOL_DEFINITIONS.map((tool) => tool.name))): Promise<ToolExecutorResult> {
+  const wikiConfig = context.wikiConfig ?? (context.appDatabase ? readWikiConfig(context.appDatabase) : undefined)
+  if (!wikiConfig) return { success: false, error: 'wiki_config_missing' }
+  const root = resolveSharedWikiRoot(context.userDataDir, wikiConfig)
   const lifecycle = await createWikiLifecycleController(root).read()
   if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') {
     return { success: false, error: 'wiki_lifecycle_not_ready' }

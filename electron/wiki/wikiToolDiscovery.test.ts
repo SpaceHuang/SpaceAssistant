@@ -7,6 +7,7 @@ import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
 import { isBuiltinToolName } from '../toolsConfigRuntime'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
+import { openDatabase, setConfigValue } from '../database'
 
 describe('Wiki domain tool discovery', () => {
   it('registers memory as a real lightweight discovery tool', () => {
@@ -70,7 +71,22 @@ describe('Wiki domain tool discovery', () => {
     expect((await executeWikiDiscovery({}, context)).success).toBe(true)
     await controller.markRecoveryRequired()
     expect(await executeWikiDiscovery({}, context)).toMatchObject({ success: false, error: 'wiki_lifecycle_not_ready' })
-    expect(await executeWikiDiscovery({}, { userDataDir })).toMatchObject({ success: false, error: 'wiki_lifecycle_unavailable' })
+    expect(await executeWikiDiscovery({}, { userDataDir })).toMatchObject({ success: false, error: 'wiki_config_missing' })
     fs.rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  it('从当前应用数据库恢复缺失的调用上下文 Wiki 配置', async () => {
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-discovery-db-config-'))
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const db = openDatabase(':memory:')
+    setConfigValue(db, 'config.wiki', JSON.stringify(DEFAULT_WIKI_CONFIG))
+    try {
+      expect(await executeWikiDiscovery({}, { userDataDir, appDatabase: db })).toMatchObject({ success: true })
+    } finally {
+      db.close()
+      fs.rmSync(userDataDir, { recursive: true, force: true })
+    }
   })
 })
