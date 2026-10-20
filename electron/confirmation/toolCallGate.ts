@@ -157,6 +157,8 @@ export interface ToolCallGateArgs {
   /** Host-resolved permission for the configured MCP account and referenced data scope. */
   mcpAccountAuthorization?: 'authorized' | 'unauthorized' | 'unknown'
   wikiConfig?: WikiConfig
+  /** Action class from the host's registered tool contract for dynamically discovered tools. */
+  registeredActionClass?: import('../../src/shared/confirmation/types').ActionClass
   /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退内置默认规则）。 */
   effectiveRules: PolicyRule[]
   /** Trusted disabled locked-deny IDs loaded from persisted security settings. */
@@ -847,6 +849,14 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         facts = runExtractors(descriptor, args.toolInput, env, {
           ...(lane === 'feishu' && args.remoteContext?.authOwner ? { trustedFeishuActorOpenId: args.remoteContext.authOwner } : {})
         })
+      }
+    } else if (args.registeredActionClass) {
+      facts = {
+        toolName: args.toolName,
+        actionClass: args.registeredActionClass,
+        baseRiskLevel: args.registeredActionClass === 'read' ? 'low' : args.registeredActionClass === 'write' ? 'medium' : 'high',
+        signals: [],
+        summary: { text: `${args.toolName} 已由注册契约声明为 ${args.registeredActionClass}` }
       }
     } else {
       // 未注册工具：信息不足，默认表兜底（execute/write → ask）

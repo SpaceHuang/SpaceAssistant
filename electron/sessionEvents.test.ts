@@ -215,6 +215,26 @@ describe('session events', () => {
     }
   })
 
+  it('preserves execution outcome metadata when replaying a canonical tool result projection', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-result-outcome-'))
+    const sink = getSessionEventSink(root, 'tool-result-outcome', 1000)
+    const original = {
+      toolUseId: 'tool-outcome', stepId: 'step-1', turnId: 'turn-1', requestId: 'request-1', invocationRequestId: 'invocation-1', lane: 'wechat',
+      result: { success: false, data: 'not dispatched' }, executionOutcome: 'not-dispatched', executorEntry: 'not-entered'
+    }
+    try {
+      await sink.appendCritical({ type: 'tool_result', payload: original })
+
+      await expect(ensureToolResultEvent(sink, {
+        toolUseId: 'tool-outcome', stepId: 'step-1', turnId: 'turn-1', requestId: 'request-1', invocationRequestId: 'invocation-1', lane: 'wechat',
+        result: { success: false, data: 'not dispatched' }, executionOutcome: 'not-dispatched', executorEntry: 'not-entered'
+      })).resolves.toMatchObject({ type: 'tool_result', payload: original })
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects duplicate tool result identities even when the first projection matches canonical History', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-result-duplicate-'))
     const sink = getSessionEventSink(root, 'tool-result-duplicate', 1000)

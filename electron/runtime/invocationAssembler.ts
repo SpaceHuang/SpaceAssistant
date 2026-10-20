@@ -750,6 +750,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     if (!call) throw new Error('AGENT_SDK_GATE_PREPARED_CALL_REQUIRED')
     if (call.invocationId !== binding.invocationId || call.toolCallId !== binding.toolCallId) throw new Error('AGENT_SDK_GATE_CALL_BINDING_MISMATCH')
     const toolName = resolveAgentSdkToolName(call.toolName)
+    const registeredTool = getDefaultAgentRuntime().builtinRegistry.get(toolName)
     const current = resolveCurrentAuthorization()
     const currentBrowserConfig = binding.phase === 'recheck' ? materials.resolveBrowserConfig?.() ?? materials.browserConfig : materials.browserConfig
     const browserFacts = await resolveHostedBrowserGateFacts({
@@ -833,6 +834,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         }, profiles)
         return [{ kind: 'workdir-profile-target', status: status ?? 'unknown' }]
       } } : {}),
+      ...(registeredTool && (registeredTool as { actionClass?: string }).actionClass
+        ? { registeredActionClass: (registeredTool as { actionClass: 'read' | 'write' | 'execute' | 'outbound' }).actionClass }
+        : {}),
       ...(supplement ?? {})
     }
   }

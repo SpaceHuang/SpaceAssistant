@@ -853,6 +853,27 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     expect(supplement).toHaveBeenCalledWith({ binding, toolName: 'probe-tool', toolInput: { value: 7 } })
   })
 
+  it('passes the registered action class for a discovered Wiki tool into the security gate', async () => {
+    setDefaultAgentRuntime(createDesktopAgentRuntime())
+    const { agentSdk } = assembleInvocation({
+      requestId: 'req-wiki-read-gate', sessionId: 'session-wiki-read-gate', turnId: 'turn-wiki-read-gate',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const binding = {
+      requestId: 'req-wiki-read-gate', turnId: 'turn-wiki-read-gate', invocationId: 'req-wiki-read-gate', toolCallId: 'tool-wiki-read-gate',
+      capabilityId: 'memory.wiki_search', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const
+    }
+    const args = await agentSdk.resolveGateArgs(binding, {
+      invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+      toolName: 'memory.wiki_search', input: { query: 'runtime' }
+    })
+
+    expect(args.registeredActionClass).toBe('read')
+  })
+
   it('binds Hosted confirmation approval back to the exact SafetyPolicy tool call', async () => {
     const { agentSdk } = assembleInvocation({
       requestId: 'req-confirm-bind', sessionId: 'session-confirm-bind', turnId: 'turn-confirm-bind',

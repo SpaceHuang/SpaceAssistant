@@ -55,6 +55,28 @@ describe('buildToolCallGateArgs', () => {
   })
 })
 
+describe('registered dynamic tool policy facts', () => {
+  it('uses registered Wiki read action class to avoid treating the call as an unknown execute tool', async () => {
+    const gate = await evaluateToolCallGate(base({
+      lane: 'wechat', remoteContext: remoteContext({ source: 'wechat' }),
+      toolName: 'memory.wiki_search', toolInput: { query: 'runtime' }, registeredActionClass: 'read'
+    }))
+    expect(gate.facts).toMatchObject({ toolName: 'memory.wiki_search', actionClass: 'read' })
+    expect(gate.facts.signals).not.toContainEqual(expect.objectContaining({ kind: 'extraction-failed' }))
+    expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'default-read-outbound-allow' })
+  })
+
+  it('keeps registered Wiki write actions on the default confirmation path', async () => {
+    const gate = await evaluateToolCallGate(base({
+      lane: 'wechat', remoteContext: remoteContext({ source: 'wechat' }),
+      toolName: 'memory.wiki_save_page', toolInput: {}, registeredActionClass: 'write'
+    }))
+    expect(gate.facts).toMatchObject({ toolName: 'memory.wiki_save_page', actionClass: 'write' })
+    expect(gate.facts.signals).not.toContainEqual(expect.objectContaining({ kind: 'extraction-failed' }))
+    expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
+  })
+})
+
 let nextGateTestId = 0
 function openDb(): AppDatabase {
   const db = openSqliteDatabase(':memory:')

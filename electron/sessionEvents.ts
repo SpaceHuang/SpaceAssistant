@@ -116,7 +116,11 @@ export async function ensureCompactionTransaction(
 /** Idempotently repairs a tool result projection using its canonical History envelope. */
 export async function ensureToolResultEvent(
   sink: SessionEventSink,
-  input: { toolUseId: string; stepId: string; result: Record<string, unknown>; turnId?: string; requestId?: string; invocationRequestId?: string; lane?: string }
+  input: {
+    toolUseId: string; stepId: string; result: Record<string, unknown>; turnId?: string; requestId?: string; invocationRequestId?: string; lane?: string
+    executionOutcome?: import('../src/shared/domainTypes').ToolCallResultPersisted['executionOutcome']
+    executorEntry?: import('../src/shared/domainTypes').ToolCallResultPersisted['executorEntry']
+  }
 ): Promise<CommittedEvent | undefined> {
   if (!input.toolUseId || !input.stepId || !input.result || typeof input.result !== 'object' || Array.isArray(input.result)) {
     throw new Error('tool result ledger identity is invalid')
@@ -130,7 +134,9 @@ export async function ensureToolResultEvent(
   const payload = {
     toolUseId: input.toolUseId, ...(input.turnId ? { turnId: input.turnId } : {}), stepId: input.stepId,
     ...(input.requestId ? { requestId: input.requestId } : {}), ...(input.invocationRequestId ? { invocationRequestId: input.invocationRequestId } : {}),
-    ...(input.lane ? { lane: input.lane } : {}), result: input.result
+    ...(input.lane ? { lane: input.lane } : {}), result: input.result,
+    ...(input.executionOutcome ? { executionOutcome: input.executionOutcome } : {}),
+    ...(input.executorEntry ? { executorEntry: input.executorEntry } : {})
   }
   if (existing) {
     const existingPayload = { ...existing.payload }

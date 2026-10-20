@@ -37,7 +37,7 @@ export function buildCanonicalToolResultProjectionTargets(conn: DatabaseSync, ev
   const targets: CanonicalLedgerProjectionTarget[] = []
   for (const event of events) {
     if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) continue
-    const payload = event.payload as { toolCallId?: unknown; sessionLedger?: unknown }
+    const payload = event.payload as { toolCallId?: unknown; sessionLedger?: unknown; executionOutcome?: unknown; executorEntry?: unknown }
     const ledger = payload.sessionLedger
     if (!ledger || typeof ledger !== 'object' || Array.isArray(ledger)) continue
     const sidecar = ledger as Record<string, unknown>
@@ -57,14 +57,20 @@ export function buildCanonicalToolResultProjectionTargets(conn: DatabaseSync, ev
         if (!rawCall || typeof rawCall !== 'object' || Array.isArray(rawCall)) continue
         const call = rawCall as Record<string, unknown>
         if (typeof call.toolUseId !== 'string' || typeof call.name !== 'string' || !call.args || typeof call.args !== 'object' || Array.isArray(call.args)) continue
-        const projection = { toolUseId: call.toolUseId, stepId: sidecar.stepId, name: call.name, args: call.args, turnId: event.turnId }
+        const projection: Record<string, unknown> = { toolUseId: call.toolUseId, stepId: sidecar.stepId, name: call.name, args: call.args, turnId: event.turnId }
+        for (const key of ['requestId', 'invocationRequestId', 'lane'] as const) {
+          if (typeof call[key] === 'string') projection[key] = call[key]
+        }
         add(`tool-call:${call.toolUseId}`, [{ type: 'tool_call', payload: projection }], [`tool_call:${call.toolUseId}`])
       }
     }
     if (event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') {
       if (typeof payload.toolCallId === 'string' && typeof sidecar.stepId === 'string' && sidecar.stepId && sidecar.result &&
         typeof sidecar.result === 'object' && !Array.isArray(sidecar.result)) {
-        const projection: Record<string, unknown> = { toolUseId: payload.toolCallId, stepId: sidecar.stepId, result: sidecar.result }
+        const result = { ...(sidecar.result as Record<string, unknown>) }
+        if (payload.executionOutcome !== 'succeeded' && typeof payload.executionOutcome === 'string') result.executionOutcome = payload.executionOutcome
+        if (payload.executorEntry !== 'entered' && typeof payload.executorEntry === 'string') result.executorEntry = payload.executorEntry
+        const projection: Record<string, unknown> = { toolUseId: payload.toolCallId, stepId: sidecar.stepId, result, turnId: event.turnId }
         for (const key of ['turnId', 'requestId', 'invocationRequestId', 'lane'] as const) {
           if (typeof sidecar[key] === 'string') projection[key] = sidecar[key]
         }
@@ -183,6 +189,47 @@ export function listPendingCanonicalLedgerProjectionTargets(conn: DatabaseSync, 
     }>
 }
 
+/** Refreshes unacked obligations from their canonical History source when projection schemas evolve. */
+function refreshPendingCanonicalLedgerProjectionTargets(conn: DatabaseSync, ledgerLocationKey: string, now: number): void {
+  const owner = conn.prepare(`SELECT session_id,session_generation FROM session_ledger_projection_state WHERE ledger_location_key=?`)
+    .get(ledgerLocationKey) as { session_id: string; session_generation: string } | undefined
+  if (!owner) return
+  const events = conn.prepare(`SELECT events.invocation_id,events.sequence,events.event_id,events.idempotency_key,events.turn_id,
+      events.schema_version,events.kind,events.payload_json FROM agent_history_events events
+    JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
+    WHERE streams.session_id=? ORDER BY events.session_seq,events.commit_order`).all(owner.session_id).map((raw) => {
+      const row = raw as { invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string;
+        schema_version: number; kind: HistoryEvent['kind']; payload_json: string }
+      return { invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id, idempotencyKey: row.idempotency_key,
+        turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind, payload: JSON.parse(row.payload_json) }
+    })
+  const canonicalTargets = buildCanonicalToolResultProjectionTargets(conn, events, owner.session_id, owner.session_generation, now)
+  if (!canonicalTargets.length) return
+  const pending = conn.prepare(`SELECT target_id,payload_sha256 FROM session_ledger_projection_outbox
+    WHERE ledger_location_key=? AND status='pending'`).all(ledgerLocationKey) as Array<{ target_id: string; payload_sha256: string }>
+  if (!pending.length) return
+  const pendingIds = new Set(pending.map((row) => row.target_id))
+  const sequenceByEventId = new Map((conn.prepare(`SELECT event_id,session_seq FROM agent_history_events WHERE session_id=?`)
+    .all(owner.session_id) as Array<{ event_id: string; session_seq: number }>).map((row) => [row.event_id, row.session_seq]))
+  runInTransaction(conn, () => {
+    for (const target of canonicalTargets) {
+      const targetId = canonicalLedgerProjectionTargetId(target)
+      if (!pendingIds.has(targetId)) continue
+      const eventsJson = stableJson(target.expectedEvents)
+      const eventIdsJson = stableJson(target.expectedEventIds)
+      const digest = createHash('sha256').update(`${eventsJson}\0${eventIdsJson}`).digest('hex')
+      const existing = pending.find((row) => row.target_id === targetId)
+      if (!existing || existing.payload_sha256 === digest) continue
+      conn.prepare(`UPDATE session_ledger_projection_outbox SET canonical_sequence=?,projection_order=?,
+          expected_events_json=?,expected_event_ids_json=?,payload_sha256=?
+        WHERE target_id=? AND ledger_location_key=? AND session_id=? AND session_generation=? AND canonical_event_id=?
+          AND status='pending' AND payload_sha256=?`)
+        .run(sequenceByEventId.get(target.canonicalEventId) ?? 0, target.projectionOrder ?? 0, eventsJson, eventIdsJson, digest,
+          targetId, ledgerLocationKey, owner.session_id, owner.session_generation, target.canonicalEventId, existing.payload_sha256)
+    }
+  })
+}
+
 /** Acknowledges only after the sink confirms the complete expected event identity set. */
 export function acknowledgeCanonicalLedgerProjectionTarget(conn: DatabaseSync, targetId: string,
   observed: { eventIds: readonly string[]; events: readonly SessionEventInput[] }, now = Date.now()): boolean {
@@ -224,6 +271,7 @@ export async function drainCanonicalLedgerProjectionOutbox(
   apply: (target: CanonicalLedgerProjectionTarget & { targetId: string }) => Promise<{ eventIds: readonly string[]; events: readonly SessionEventInput[] }>,
   now = Date.now()
 ): Promise<{ projected: number; failedTargetId?: string }> {
+  refreshPendingCanonicalLedgerProjectionTargets(conn, ledgerLocationKey, now)
   let projected = 0
   for (const row of listPendingCanonicalLedgerProjectionTargets(conn, ledgerLocationKey)) {
     const target = {
