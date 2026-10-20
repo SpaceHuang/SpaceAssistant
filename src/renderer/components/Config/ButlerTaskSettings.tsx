@@ -895,26 +895,21 @@ export function ButlerTaskSettings() {
             </div>
           ) : null}
           {wizardStep === 1 && preflightReport && preflightReport.status !== 'passed' && !authorizationReview ? (
-            <div ref={preflightReportRef} className="butler-task-editor__result-focus" role="region" aria-label={t('butler.form.preflightTitle')} tabIndex={-1}>
-              <Alert
-                className="butler-preflight-report"
-                type={preflightReport.status === 'blocked' ? 'warning' : 'info'}
-                showIcon
-                message={t('butler.form.preflightTitle')}
-                description={(
-                  <div className="butler-preflight-report__content">
-                    {renderPreflightIssues(preflightReport)}
-                    {preflightReport.permissionNeeds?.length ? (
-                      <div className="butler-preflight-report__permissions">
-                        <Typography.Text strong>{t('butler.form.preflightPermissionNeedsTitle')}</Typography.Text>
-                        <PermissionReviewTable permissions={preflightReport.permissionNeeds} t={t} />
-                        <Typography.Text type="secondary">{t('butler.form.preflightPermissionNeedsNote')}</Typography.Text>
-                      </div>
-                    ) : null}
+            <section ref={preflightReportRef} className="butler-task-editor__result-focus butler-preflight-result" role="region" aria-labelledby="butler-preflight-result-title" tabIndex={-1}>
+              <Typography.Title id="butler-preflight-result-title" className="butler-preflight-result__title" level={4}>
+                {t('butler.form.preflightTitle')}
+              </Typography.Title>
+              <div className="butler-preflight-report__content">
+                {renderPreflightIssues(preflightReport)}
+                {preflightReport.permissionNeeds?.length ? (
+                  <div className="butler-preflight-report__permissions">
+                    <Typography.Text strong>{t('butler.form.preflightPermissionNeedsTitle')}</Typography.Text>
+                    <PermissionReviewTable permissions={preflightReport.permissionNeeds} t={t} />
+                    <Typography.Text type="secondary">{t('butler.form.preflightPermissionNeedsNote')}</Typography.Text>
                   </div>
-                )}
-              />
-            </div>
+                ) : null}
+              </div>
+            </section>
           ) : null}
           {wizardStep === 1 && writeError ? <div ref={writeErrorRef} className="butler-task-editor__result-focus" role="region" aria-label={t('butler.form.saveFailedWithError', { error: writeError })} tabIndex={-1}><Alert className="butler-preflight-report" type="error" showIcon message={t('butler.form.saveFailedWithError', { error: writeError })} /></div> : null}
           {wizardStep === 0 ? <div className="butler-task-editor__grid">
