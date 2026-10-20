@@ -930,7 +930,7 @@ export function ButlerTaskSettings() {
               </div>
             </section>
 
-            <section className="butler-task-editor__section" aria-labelledby="butler-task-section-execution">
+            <section className="butler-task-editor__section butler-task-editor__section--execution" aria-labelledby="butler-task-section-execution">
               <Typography.Title id="butler-task-section-execution" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionExecution')}</Typography.Title>
               <div className="butler-task-editor__section-grid">
                 <Form.Item name="scheduleKind" label={t('butler.form.scheduleKind')}>

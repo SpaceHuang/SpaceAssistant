@@ -2793,6 +2793,10 @@
   min-width: 0;
 }
 
+.butler-task-editor__section--execution .butler-task-editor__section-grid {
+  padding-bottom: var(--sa-config-gap-substack);
+}
+
 .butler-task-editor__section-grid > .ant-form-item {
   margin-bottom: 0;
 }
