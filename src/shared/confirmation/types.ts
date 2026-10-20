@@ -134,7 +134,7 @@ export type FactSignal =
   | { kind: 'write-target-new' }
   | { kind: 'write-target-existing' }
   | { kind: 'write-target-scope'; scope: 'inside-workdir' | 'outside-workdir' | 'unknown' }
-  /** facts-stage host observation: the write target matches this run's file or directory output binding scope. */
+  /** facts-stage host observation: a current user receipt authorizes this target under the run's result-output directory. */
   | { kind: 'automation-output-binding'; status: 'matched' }
   /** facts-stage host observation from the immutable task snapshot; policy decides whether Shell may run. */
   | { kind: 'automation-shell-permission'; status: 'matched' | 'missing' }

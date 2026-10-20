@@ -2,7 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import { describe, expect, it } from 'vitest'
-import { ensureAutomationRunOutputDirectory, matchesBoundOutputWriteTarget, resolveAutomationRunOutputDir, resolveBoundOutputTarget } from './taskOutputDirectory'
+import { ensureAutomationRunOutputDirectory, isValidAutomationRunOutputScope, matchesAutomationRunOutputWriteTarget, matchesBoundOutputWriteTarget, resolveAutomationRunOutputDir, resolveBoundOutputTarget } from './taskOutputDirectory'
 import type { TargetBinding } from '../../src/shared/automationTaskTypes'
 
 describe('resolveAutomationRunOutputDir', () => {
@@ -99,5 +99,37 @@ describe('ensureAutomationRunOutputDirectory', () => {
       await fs.rm(outputRoot, { recursive: true, force: true })
       await fs.rm(outside, { recursive: true, force: true })
     }
+  })
+})
+
+describe('automation run output scope', () => {
+  const scheduledFor = new Date(2026, 9, 18, 7, 0).getTime()
+  const scope = {
+    outputDirectory: '/results', organization: 'daily' as const, scheduledFor,
+    runOutputDir: '/results/20261018', taskRevision: 4
+  }
+
+  it('validates the archive directory derived from the approved root and strategy', () => {
+    expect(isValidAutomationRunOutputScope(scope)).toBe(true)
+    expect(isValidAutomationRunOutputScope({ ...scope, runOutputDir: '/results/other' })).toBe(false)
+    expect(isValidAutomationRunOutputScope({ ...scope, outputDirectory: '/other' })).toBe(false)
+  })
+
+  it('allows file targets only under the validated run directory and rejects escapes or aliased parents', () => {
+    expect(matchesAutomationRunOutputWriteTarget(scope, {
+      normalizedPath: '/results/20261018/report.md', parentReal: '/results/20261018', targetKind: 'missing', zone: 'outside-workdir'
+    } as never)).toBe(true)
+    expect(matchesAutomationRunOutputWriteTarget(scope, {
+      normalizedPath: '/results/20261018/nested/report.md', parentReal: '/results/20261018/nested', targetKind: 'file', zone: 'outside-workdir'
+    } as never)).toBe(true)
+    expect(matchesAutomationRunOutputWriteTarget(scope, {
+      normalizedPath: '/results/other/report.md', parentReal: '/results/other', targetKind: 'missing', zone: 'outside-workdir'
+    } as never)).toBe(false)
+    expect(matchesAutomationRunOutputWriteTarget(scope, {
+      normalizedPath: '/private/report.md', parentReal: '/private', targetKind: 'missing', zone: 'outside-workdir'
+    } as never)).toBe(false)
+    expect(matchesAutomationRunOutputWriteTarget(scope, {
+      normalizedPath: '/results/20261018', parentReal: '/results', targetKind: 'directory', zone: 'outside-workdir'
+    } as never)).toBe(false)
   })
 })

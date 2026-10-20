@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AutomationTaskAccessPermissions, AutomationTaskAuthorizationRecord } from '../../src/shared/automationTaskTypes'
-import { matchAutomationGrepPermission, matchAutomationMcpPermission, matchAutomationScriptPermission, matchAutomationShellPermission } from './automationTaskPermissionMatch'
+import { matchAutomationGrepPermission, matchAutomationMcpPermission, matchAutomationResultWritePermission, matchAutomationScriptPermission, matchAutomationShellPermission } from './automationTaskPermissionMatch'
 
 const root = '/workspace/repo'
 const record: AutomationTaskAuthorizationRecord = {
@@ -15,6 +15,27 @@ const record: AutomationTaskAuthorizationRecord = {
 const permissions: AutomationTaskAccessPermissions = { directories: [root], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: record }
 
 describe('scheduled task tool permission matching', () => {
+  it('matches result writes to the user-approved output root, archive strategy, schedule slot, and task revision', () => {
+    const scheduledFor = new Date(2026, 9, 18, 10).getTime()
+    const outputRoot = '/workspace/results'
+    const runOutputDir = `${outputRoot}/20261018`
+    const outputPermissions: AutomationTaskAccessPermissions = {
+      directories: [], tools: [],
+      authorizationRecord: {
+        ...record,
+        permissions: [{ kind: 'result-write', outputDirectory: outputRoot, organization: 'daily' }]
+      }
+    }
+    const scope = { outputDirectory: outputRoot, organization: 'daily' as const, scheduledFor, runOutputDir, taskRevision: 3 }
+
+    expect(matchAutomationResultWritePermission(outputPermissions, scope)).toBe(true)
+    expect(matchAutomationResultWritePermission(outputPermissions, { ...scope, runOutputDir: `${outputRoot}/other` })).toBe(false)
+    expect(matchAutomationResultWritePermission(outputPermissions, { ...scope, organization: 'hourly' })).toBe(false)
+    expect(matchAutomationResultWritePermission(outputPermissions, { ...scope, taskRevision: 4 })).toBe(false)
+    expect(matchAutomationResultWritePermission({ ...outputPermissions, tools: ['run_shell'] }, scope)).toBe(true)
+    expect(matchAutomationResultWritePermission({ directories: [outputRoot], tools: [] }, scope)).toBe(false)
+  })
+
   it('matches run_shell by the full approved command parameters and working directory', () => {
     expect(matchAutomationShellPermission(permissions, 'git log --oneline -5', root)).toBe(true)
     expect(matchAutomationShellPermission(permissions, 'git log --oneline -10', root)).toBe(false)

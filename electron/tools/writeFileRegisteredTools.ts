@@ -5,7 +5,7 @@ import { recordPolicyExecutionVeto } from '../confirmation/audit'
 import { SYSTEM_INVARIANT_ID_BY_GATE_RULE } from '../../src/shared/security/systemInvariantIds'
 
 type WriteToolName = 'write_file' | 'edit_file'
-type PermitSnapshot = Pick<WriteExecutionPermit, 'requestId' | 'invocationId' | 'toolUseId' | 'toolName' | 'inputDigest' | 'decisionId' | 'policyDependencyFingerprint' | 'subjectDigest' | 'schemaVersion' | 'decisionRuleId' | 'approval' | 'automationOutputBinding' | 'lane'> & {
+type PermitSnapshot = Pick<WriteExecutionPermit, 'requestId' | 'invocationId' | 'toolUseId' | 'toolName' | 'inputDigest' | 'decisionId' | 'policyDependencyFingerprint' | 'subjectDigest' | 'schemaVersion' | 'decisionRuleId' | 'approval' | 'automationOutputBinding' | 'automationOutputScope' | 'lane'> & {
   target: WriteExecutionPermit['target']
 }
 type PreparedWrite = Readonly<{
@@ -44,7 +44,8 @@ function snapshotPermit(permit: WriteExecutionPermit | undefined): PermitSnapsho
     approval: permit.approval,
     lane: permit.lane,
     target: permit.target,
-    ...(permit.automationOutputBinding ? { automationOutputBinding: permit.automationOutputBinding } : {})
+    ...(permit.automationOutputBinding ? { automationOutputBinding: permit.automationOutputBinding } : {}),
+    ...(permit.automationOutputScope ? { automationOutputScope: permit.automationOutputScope } : {})
   })
 }
 

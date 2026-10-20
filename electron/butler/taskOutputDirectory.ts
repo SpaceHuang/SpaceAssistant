@@ -1,11 +1,28 @@
 import path from 'node:path'
 import { constants } from 'node:fs'
 import { access, lstat, mkdir, realpath } from 'node:fs/promises'
-import type { AutomationOutputOrganization, TargetBinding } from '../../src/shared/automationTaskTypes'
+import type { AutomationOutputOrganization, AutomationRunOutputScope, TargetBinding } from '../../src/shared/automationTaskTypes'
 
 function isWithin(root: string, target: string): boolean {
   const relative = path.relative(root, target)
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+}
+
+function pathApi(...values: string[]): typeof path.posix {
+  return values.some((value) => path.win32.isAbsolute(value) || /^[a-z]:[\\/]/i.test(value)) ? path.win32 : path.posix
+}
+
+function samePath(left: string, right: string): boolean {
+  const api = pathApi(left, right)
+  const a = api.normalize(left)
+  const b = api.normalize(right)
+  return api === path.win32 ? a.toLocaleLowerCase('en-US') === b.toLocaleLowerCase('en-US') : a === b
+}
+
+function isWithinPath(root: string, target: string): boolean {
+  const api = pathApi(root, target)
+  const relative = api.relative(api.resolve(root), api.resolve(target))
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative))
 }
 
 /** Policy phase: resolves a deterministic archive directory from the frozen schedule slot. */
@@ -25,6 +42,33 @@ export function resolveAutomationRunOutputDir(
   if (organization === 'daily') return path.join(outputDir, dateFolder)
   if (organization === 'hourly') return path.join(outputDir, `${dateFolder}-${String(date.getHours()).padStart(2, '0')}`)
   throw new Error('INVALID_AUTOMATION_OUTPUT_ORGANIZATION')
+}
+
+/** Facts/final-check: the frozen per-run path must be exactly the archive derived from the user-approved output settings. */
+export function isValidAutomationRunOutputScope(scope: AutomationRunOutputScope): boolean {
+  if (!scope.outputDirectory || !path.isAbsolute(scope.outputDirectory) || !scope.runOutputDir || !path.isAbsolute(scope.runOutputDir)
+    || !Number.isFinite(scope.scheduledFor) || !Number.isInteger(scope.taskRevision) || scope.taskRevision < 0) return false
+  try {
+    return samePath(resolveAutomationRunOutputDir(scope.outputDirectory, scope.organization, scope.scheduledFor), scope.runOutputDir)
+  } catch {
+    return false
+  }
+}
+
+/** Facts/final-check: result-write covers files below this run's archive, never reads or arbitrary authorized roots. */
+export function matchesAutomationRunOutputWriteTarget(
+  scope: AutomationRunOutputScope,
+  target: { normalizedPath: string; parentReal: string; targetKind: string; zone?: string },
+): boolean {
+  if (!isValidAutomationRunOutputScope(scope)
+    || (target.targetKind !== 'file' && target.targetKind !== 'missing')
+    || target.zone === 'sensitive-file' || target.zone === 'system-dir') return false
+  const api = pathApi(scope.runOutputDir, target.normalizedPath, target.parentReal)
+  if (!api.isAbsolute(target.normalizedPath) || !api.isAbsolute(target.parentReal)) return false
+  const root = api.resolve(scope.runOutputDir)
+  const candidate = api.resolve(target.normalizedPath)
+  const parent = api.resolve(target.parentReal)
+  return !samePath(root, candidate) && isWithinPath(root, candidate) && isWithinPath(root, parent)
 }
 
 /** Runtime admission: create the scheduled archive without following links below the user-selected root. */

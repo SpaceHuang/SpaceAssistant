@@ -31,10 +31,11 @@ import { taskAuthorizedRootSetMatchesSnapshot, validateTaskAuthorizedDirsForRun,
 import { getAutomationTaskWorkDirs } from '../../src/shared/automationTaskTypes'
 import { resolveGlobalThinkingEffort } from '../../src/shared/thinkingEffort'
 import { getConfigValue as readConfigValue } from '../database'
-import type { AutomationTaskRunConfigSnapshot } from '../../src/shared/automationTaskTypes'
+import type { AutomationRunOutputScope, AutomationTaskRunConfigSnapshot } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider } from './taskPathFacts'
 import { validatePersistedTargetBindings } from './taskTargetResolver'
-import { ensureAutomationRunOutputDirectory, resolveBoundOutputTarget } from './taskOutputDirectory'
+import { ensureAutomationRunOutputDirectory, isValidAutomationRunOutputScope, resolveBoundOutputTarget } from './taskOutputDirectory'
+import { matchAutomationResultWritePermission } from './automationTaskPermissionMatch'
 
 /**
  * 管家执行链（P4）：定时 / 手动触发的 automation 任务 → 准入取票 → 会话创建（ownership=automation、
@@ -46,19 +47,51 @@ import { ensureAutomationRunOutputDirectory, resolveBoundOutputTarget } from './
 export const BUTLER_SYSTEM_APPENDIX = [
   '你是 SpaceAssistant 的后台管家（automation lane），由定时任务或用户手动触发，无人值守运行。',
   '本回合按任务指令完成查询、处理、总结、提醒、报表等工作。',
-  '安全边界：无法获得人工确认。文件工具只能写入本次预检绑定的结果目标；run_shell、grep、run_script、MCP 工具仅在主进程任务授权记录列出时可用，且只能在记录的命令参数或范围内使用。run_shell 的执行超时由你按任务实际需要选择，不属于授权范围。Shell 仍经过安全预检；危险、敏感或无法完整分析的命令会被拒绝。',
+  '安全边界：无法获得人工确认。结果目录授权只覆盖本次运行归档目录及其子目录的写入，不授权读取，也不允许写出该目录；run_shell、grep、run_script、MCP 工具仅在主进程任务授权记录列出时可用，且只能在记录的命令参数或范围内使用。run_shell 的执行超时由你按任务实际需要选择，不属于授权范围。Shell 仍经过安全预检；危险、敏感或无法完整分析的命令会被拒绝。',
   '请优先使用只读工具完成任务，若被拒绝，请在最终回复中说明原因与已完成的部分。',
   '最终回复即任务结果汇报，请直接给出结论与关键数据，不要反问。'
 ].join('\n')
 
-export function buildButlerSystemAppendix(accessPermissions?: import('../../src/shared/automationTaskTypes').AutomationTaskAccessPermissions): string {
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+function receiptShellWorkingDirectory(snapshot: AutomationTaskRunConfigSnapshot): string | undefined {
+  const paths = new Set((snapshot.accessPermissions?.authorizationRecord?.permissions ?? [])
+    .filter((permission) => permission.kind === 'local-shell')
+    .flatMap((permission) => permission.commands.map((command) => command.workingDirectory)))
+  if (paths.size > 1) throw new Error('TASK_SHELL_WORKING_DIRECTORY_AMBIGUOUS')
+  return paths.values().next().value
+}
+
+function runOutputScopeFromSnapshot(snapshot: AutomationTaskRunConfigSnapshot): AutomationRunOutputScope | undefined {
+  if (snapshot.preflightVersion !== 1 || !snapshot.outputDir || !snapshot.outputOrganization || !snapshot.runOutputDir || snapshot.scheduledFor === undefined) return undefined
+  const scope: AutomationRunOutputScope = {
+    outputDirectory: snapshot.outputDir,
+    organization: snapshot.outputOrganization,
+    scheduledFor: snapshot.scheduledFor,
+    runOutputDir: snapshot.runOutputDir,
+    taskRevision: snapshot.taskRevision ?? -1
+  }
+  return isValidAutomationRunOutputScope(scope) ? scope : undefined
+}
+
+export function buildButlerSystemAppendix(
+  accessPermissions?: import('../../src/shared/automationTaskTypes').AutomationTaskAccessPermissions,
+  outputScope?: AutomationRunOutputScope
+): string {
   const permissions = accessPermissions?.authorizationRecord?.permissions ?? []
+  const resultWriteAuthorized = outputScope && matchAutomationResultWritePermission(accessPermissions, outputScope)
   const shellGrant = permissions.find((permission) => permission.kind === 'local-shell')
   const grepGrant = permissions.find((permission) => permission.kind === 'grep')
   const scriptGrant = permissions.find((permission) => permission.kind === 'run-script')
   const mcpGrants = permissions.filter((permission) => permission.kind === 'mcp-tool')
   return [
     BUTLER_SYSTEM_APPENDIX,
+    resultWriteAuthorized
+      ? `本次运行结果目录已获用户授权写入：${outputScope.runOutputDir}。报告、总结等文档结果应保存到此目录；目录只允许写入，不允许读取。`
+      : '本任务没有有效的结果目录写入授权；不得创建或修改本地文件。',
     shellGrant?.kind === 'local-shell'
       ? `本任务获批的 run_shell 命令及工作目录仅限：${shellGrant.commands.map(({ command, workingDirectory }) => `${command}（${workingDirectory}）`).join('；')}。必须保持命令文本、参数和工作目录不变；执行时自行选择合适的超时，超时不属于授权范围。Shell 预检仍可拒绝。`
       : '本任务未获批 run_shell。遇到本地命令需求时说明缺少授权，不要用其他工具绕过权限。',
@@ -122,16 +155,24 @@ type ButlerTurnResult =
   | { ok: true; sessionId: string; summary: string; usageJson?: string }
   | { ok: false; error: string; outcome?: 'commit-uncertain' }
 
-function buildTaskPromptWithOutputScope(prompt: string, snapshot: AutomationTaskRunConfigSnapshot): string {
-  if (snapshot.preflightVersion !== 1 || !snapshot.runOutputDir) return prompt
+export function buildTaskPromptWithOutputScope(prompt: string, snapshot: AutomationTaskRunConfigSnapshot): string {
+  const outputScope = runOutputScopeFromSnapshot(snapshot)
+  if (!outputScope) return prompt
+  const resultWriteAuthorized = matchAutomationResultWritePermission(snapshot.accessPermissions, outputScope)
   const outputBindings = (snapshot.targetSelections ?? []).filter((binding) => binding.kind === 'output')
-  const targets = outputBindings.map((binding) => resolveBoundOutputTarget(binding, snapshot.runOutputDir!))
+  const targets = outputBindings.map((binding) => resolveBoundOutputTarget(binding, outputScope.runOutputDir))
+  const executionTime = new Date(outputScope.scheduledFor)
+  const timestamp = `${String(executionTime.getFullYear()).padStart(4, '0')}${String(executionTime.getMonth() + 1).padStart(2, '0')}${String(executionTime.getDate()).padStart(2, '0')}-${String(executionTime.getHours()).padStart(2, '0')}${String(executionTime.getMinutes()).padStart(2, '0')}${String(executionTime.getSeconds()).padStart(2, '0')}-${String(executionTime.getMilliseconds()).padStart(3, '0')}`
+  const defaultResultPath = path.join(outputScope.runOutputDir, `result-${timestamp}.md`)
   const lines = [
-    `本次运行结果目录：${snapshot.runOutputDir}`,
+    `本次运行结果目录：${outputScope.runOutputDir}`,
+    resultWriteAuthorized
+      ? '用户已授权在此目录及其子目录中写入本次生成的结果。报告、总结等文档结果请保存到这里；只能写入，不能读取此目录中的既有内容，也不能写到目录之外。'
+      : '本次运行没有有效的结果目录写入授权，请勿创建或修改本地文件。',
     targets.length
-      ? `本次预检绑定的可写结果目标：\n${targets.map((target) => `- ${target}`).join('\n')}`
-      : '本次没有预检绑定的结果目标，请勿创建或修改本地文件。',
-    '输出目录只用于写入预检绑定的结果；读取或修改资料必须使用用户另行授权的目录。'
+      ? `任务指定的结果文件目标：\n${targets.map((target) => `- ${target}`).join('\n')}`
+      : resultWriteAuthorized ? `未指定固定文件名时，建议保存到：${defaultResultPath}` : '本次没有可写的结果文件目标。',
+    '读取或修改资料必须使用用户另行授权的目录。'
   ]
   return `${prompt}\n\n${lines.join('\n')}`
 }
@@ -215,21 +256,31 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
       workDirs = validated.workDirs
     }
     let runOutputDir = claimSnapshot.runOutputDir
+    let approvedShellWorkingDirectory: string | undefined
     if (claimSnapshot.preflightVersion === 1) {
       if (!claimSnapshot.outputDir || !claimSnapshot.outputOrganization || !claimSnapshot.runOutputDir || !claimSnapshot.scheduledFor) {
         throw new Error('TASK_OUTPUT_SNAPSHOT_INVALID')
       }
-      const facts = await new TaskPathFactsProvider().collect(workDirs, claimSnapshot.outputDir)
+      const pathFactsProvider = new TaskPathFactsProvider()
+      const facts = await pathFactsProvider.collect(workDirs, claimSnapshot.outputDir)
       if (!taskAuthorizedRootSetMatchesSnapshot(facts.roots, rootsInput)) throw new Error('TASK_AUTHORIZED_ROOT_DRIFT')
       const rootsAfterFacts = await validateTaskAuthorizedDirsForRun(rootsInput, rootsInput)
       if (!rootsAfterFacts.ok) throw new Error(rootsAfterFacts.error)
       const validation = validatePersistedTargetBindings({ bindings: claimSnapshot.targetSelections ?? [], roots: facts.roots, outputRoot: facts.outputRoot, facts, taskRevision: claimSnapshot.taskRevision ?? -1 })
       if (!validation.ok) throw new Error(`TASK_BINDING_REVALIDATION_FAILED:${validation.code}`)
+      // final-check: the session cwd must match the user-approved Shell receipt and remain under
+      // an unchanged authorized root; verify before creating a session or dispatching the model.
+      approvedShellWorkingDirectory = receiptShellWorkingDirectory(claimSnapshot)
+      if (approvedShellWorkingDirectory) {
+        if (!workDirs.some((root) => isPathWithin(root, approvedShellWorkingDirectory!))) throw new Error('TASK_SHELL_WORKING_DIRECTORY_NOT_AUTHORIZED')
+        const [candidate] = await pathFactsProvider.inspectPaths([approvedShellWorkingDirectory])
+        if (candidate?.path !== approvedShellWorkingDirectory || candidate.kind !== 'directory') throw new Error('TASK_SHELL_WORKING_DIRECTORY_CHANGED')
+      }
       const safeRunOutputDir = await ensureAutomationRunOutputDirectory(claimSnapshot.outputDir, claimSnapshot.outputOrganization, claimSnapshot.scheduledFor)
       if (path.normalize(safeRunOutputDir) !== path.normalize(claimSnapshot.runOutputDir)) throw new Error('TASK_OUTPUT_SNAPSHOT_MISMATCH')
       runOutputDir = safeRunOutputDir
     }
-    const workDirResult = { ok: true as const, workDir: workDirs[0] ?? runOutputDir ?? deps.getWorkDir() }
+    const workDirResult = { ok: true as const, workDir: approvedShellWorkingDirectory ?? workDirs[0] ?? runOutputDir ?? deps.getWorkDir() }
     let modelId = claimSnapshot.modelId
     let serviceId = claimSnapshot.serviceId
     let providerModelName = claimSnapshot.providerModelName
@@ -449,7 +500,7 @@ async function runButlerModelTurn(
   }, getDefaultAgentRuntime().modelProviders)
 
   const system = buildFinalSystemPrompt({
-    system: buildButlerSystemAppendix(args.runConfig.accessPermissions),
+    system: buildButlerSystemAppendix(args.runConfig.accessPermissions, runOutputScopeFromSnapshot(args.runConfig)),
     memoryContent: null,
     memoryEnabled: false,
     locale: readAppLocale(db)
@@ -504,7 +555,16 @@ async function runButlerModelTurn(
     taskAccessPermissions: args.runConfig.accessPermissions,
     ...(args.runConfig.preflightVersion === 1 ? {
       taskOutputBindings: args.runConfig.targetSelections ?? [],
-      ...(args.runConfig.runOutputDir ? { taskRunOutputDir: args.runConfig.runOutputDir } : {})
+      ...(args.runConfig.runOutputDir ? { taskRunOutputDir: args.runConfig.runOutputDir } : {}),
+      ...(args.runConfig.outputDir && args.runConfig.outputOrganization && args.runConfig.scheduledFor && args.runConfig.runOutputDir ? {
+        taskRunOutputScope: {
+          outputDirectory: args.runConfig.outputDir,
+          organization: args.runConfig.outputOrganization,
+          scheduledFor: args.runConfig.scheduledFor,
+          runOutputDir: args.runConfig.runOutputDir,
+          taskRevision: args.runConfig.taskRevision ?? -1
+        }
+      } : {})
     } : {}),
     workDirManager: deps.workDirManager,
     resolveWorkDir: deps.workDirManager

@@ -719,13 +719,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
 
   // ===== automation lane（偏差 21/22：无人值守链路的显式规则集，§P2-4）=====
   // 无人类应答者：规则显式写出，兜底 fail-closed；automation 不继承任何 desktop 专属豁免。
-  // Policy phase: only a host-produced validated output-binding fact can reach this narrow write allow.
+  // Policy phase: only a host-produced match between the current result-write receipt and this run's archive can reach this write allow.
   {
     id: 'automation-bound-output-write-allow',
     when: 'invocation',
     match: { lane: ['automation'], toolName: ['write_file', 'edit_file'], signals: ['automation-output-binding:matched'] },
     action: 'allow',
-    reason: '无人值守写入仅限本次预检绑定的结果输出目标'
+    reason: '无人值守写入仅限用户授权的本次运行结果输出目录'
   },
   {
     id: 'automation-grep-permission-missing-deny',

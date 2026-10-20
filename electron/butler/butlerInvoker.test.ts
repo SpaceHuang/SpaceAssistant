@@ -130,10 +130,10 @@ import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { TurnRuntime } from '../turnRuntime'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
-import { buildButlerSystemAppendix, executeClaimedRun, runButlerTask } from './butlerInvoker'
+import { buildButlerSystemAppendix, buildTaskPromptWithOutputScope, executeClaimedRun, runButlerTask } from './butlerInvoker'
 import { ButlerTaskScheduler, type SchedulerRunRequest } from './taskScheduler'
 import { claimDueSlotAndAdvance, createAutomationTask, createAutomationTask as createStoredAutomationTask, getLatestRunForTask, getRunById, insertManualTaskClaim, updateAutomationTask } from './taskStore'
-import type { AutomationTaskPermission } from '../../src/shared/automationTaskTypes'
+import type { AutomationTaskPermission, AutomationTaskRunConfigSnapshot } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider } from './taskPathFacts'
 import { resolveAutomationRunOutputDir } from './taskOutputDirectory'
 import { getSession } from '../database'
@@ -176,6 +176,40 @@ describe('buildButlerSystemAppendix tool scopes', () => {
     expect(appendix).toContain('具体参数仍交由安全审核 Agent')
     expect(buildButlerSystemAppendix({ directories: ['/workspace/repo'], tools: [] })).toContain('本任务未获批任何 MCP 工具')
     expect(buildButlerSystemAppendix({ directories: ['/workspace/repo'], tools: ['run_shell'] })).toContain('本任务未获批 run_shell')
+  })
+
+  it('tells the model that the confirmed result directory is writable without requiring a file binding', () => {
+    const scheduledFor = new Date(2026, 9, 18, 7, 0).getTime()
+    const snapshot = {
+      preflightVersion: 1,
+      outputDir: '/results',
+      outputOrganization: 'daily',
+      scheduledFor,
+      runOutputDir: '/results/20261018',
+      taskRevision: 1,
+      targetSelections: [],
+      accessPermissions: {
+        directories: [], tools: [],
+        authorizationRecord: {
+          id: 'result-write-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision: 1,
+          permissions: [{ kind: 'result-write', outputDirectory: '/results', organization: 'daily' }]
+        }
+      }
+    } as unknown as AutomationTaskRunConfigSnapshot
+    const prompt = buildTaskPromptWithOutputScope('总结本周进展', snapshot)
+    const appendix = buildButlerSystemAppendix(snapshot.accessPermissions, {
+      outputDirectory: '/results', organization: 'daily', scheduledFor, runOutputDir: '/results/20261018', taskRevision: 1
+    })
+
+    expect(prompt).toContain('用户已授权在此目录及其子目录中写入本次生成的结果')
+    expect(prompt).toContain('只能写入，不能读取此目录中的既有内容')
+    expect(prompt).toMatch(/未指定固定文件名时，建议保存到：\/results\/20261018\/result-/)
+    expect(prompt).not.toContain('本次没有预检绑定的结果目标，请勿创建或修改本地文件')
+    expect(appendix).toContain('/results/20261018')
+    expect(appendix).toContain('报告、总结等文档结果应保存到此目录')
+    expect(buildButlerSystemAppendix(snapshot.accessPermissions, {
+      outputDirectory: '/other', organization: 'daily', scheduledFor, runOutputDir: '/other/20261018', taskRevision: 1
+    })).toContain('本任务没有有效的结果目录写入授权')
   })
 })
 
@@ -309,18 +343,40 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     await fs.rm(workDir, { recursive: true, force: true })
   })
 
+  it('uses the receipt-bound Shell working directory even when another authorized root sorts first', async () => {
+    const firstRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-shell-cwd-first-'))
+    const shellRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-shell-cwd-selected-'))
+    const shellRootCanonical = await fs.realpath(shellRoot)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {},
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }))
+    })) } })
+    const task = createAutomationTaskWithToolPermission(db, {
+      name: 'receipt-bound shell cwd', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none',
+      workDirs: [firstRoot, shellRoot]
+    }, {
+      kind: 'local-shell', scopeRoots: [firstRoot, shellRoot],
+      commands: [{ command: 'git log --oneline -5', workingDirectory: shellRoot }]
+    })
+
+    try {
+      const result = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-shell-cwd-receipt' })
+
+      expect(result.ok, JSON.stringify(result)).toBe(true)
+      expect(getLatestRunForTask(db, task.id)?.configSnapshot).toMatchObject({ workDir: shellRootCanonical })
+      expect(getSession(db, getLatestRunForTask(db, task.id)!.sessionId!)?.fixedWorkDir).toBe(shellRootCanonical)
+    } finally {
+      await fs.rm(firstRoot, { recursive: true, force: true })
+      await fs.rm(shellRoot, { recursive: true, force: true })
+    }
+  })
+
   it('writes an output-only automation task into its scheduled archive without adding output root to read roots', async () => {
     const outputDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'butler-output-only-')))
     const scheduledFor = Date.now() - 1_000
     const runOutputDir = resolveAutomationRunOutputDir(outputDir, 'daily', scheduledFor)
-    const targetPath = path.join(outputDir, 'summary.txt')
     const outputOnlyReadPath = path.join(outputDir, 'private-existing.txt')
     await fs.writeFile(outputOnlyReadPath, 'output root is not read-authorized')
-    const binding = {
-      kind: 'output' as const, path: targetPath, ancestor: outputDir, relativeSuffix: 'summary.txt', outputRoot: outputDir,
-      expectedType: 'file' as const, rawText: 'write summary.txt', resolverVersion: 3,
-      rootsDigest: createHash('sha256').update(JSON.stringify({ outputRoot: path.normalize(outputDir) })).digest('hex'), taskRevision: 1
-    }
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
     setConfigValue(db, 'config.models', JSON.stringify([model]))
@@ -331,14 +387,20 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       finalMessage: vi.fn(async () => {
         providerCalls += 1
         if (providerCalls === 1) return { content: [{ type: 'tool_use', id: 'butler-output-root-read', name: 'read_file', input: { path: outputOnlyReadPath } }], stop_reason: 'tool_use', usage: { input_tokens: 8, output_tokens: 2 } }
-        if (providerCalls === 2) return { content: [{ type: 'tool_use', id: 'butler-bound-output-write', name: 'write_file', input: { path: path.join(runOutputDir, 'summary.txt'), content: 'scheduled output' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 3 } }
+        if (providerCalls === 2) return { content: [{ type: 'tool_use', id: 'butler-output-scope-write', name: 'write_file', input: { path: path.join(runOutputDir, 'summary.md'), content: 'scheduled output' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 3 } }
         return { content: [{ type: 'text', text: 'summary saved' }], stop_reason: 'end_turn', usage: { input_tokens: 12, output_tokens: 3 } }
       })
     })) } })
     const task = createAutomationTask(db, {
       name: 'output only', schedule: { kind: 'interval', intervalMinutes: 60 }, prompt: 'write summary.txt', deliveryPref: 'none',
       authorizedDirs: [], workDirs: [], outputDir, outputOrganization: 'daily', modelId, modelServiceId: 'svc-pinned', modelOverride: model.name, reasoningEffort: 'off', nextRunAt: scheduledFor
-    }, { targetBindings: [binding] })
+    }, {
+      targetBindings: [],
+      authorizationRecord: {
+        id: 'result-write-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: Date.now(), taskRevision: 1,
+        permissions: [{ kind: 'result-write', outputDirectory: outputDir, organization: 'daily' }]
+      }
+    })
     const claim = claimDueSlotAndAdvance(db, { taskId: task.id, slot: scheduledFor, nextSlot: scheduledFor + 60 * 60 * 1000, clientId: 'butler-output-only-claim' })
 
     try {
@@ -347,11 +409,11 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(result.ok, JSON.stringify(result)).toBe(true)
       expect(readSpy).not.toHaveBeenCalled()
       expect(await fs.readFile(outputOnlyReadPath, 'utf8')).toBe('output root is not read-authorized')
-      expect(await fs.readFile(path.join(runOutputDir, 'summary.txt'), 'utf8')).toBe('scheduled output')
-      expect(await fs.access(targetPath).then(() => true, () => false)).toBe(false)
+      expect(await fs.readFile(path.join(runOutputDir, 'summary.md'), 'utf8')).toBe('scheduled output')
       expect(getLatestRunForTask(db, task.id)?.configSnapshot).toMatchObject({
         authorizedDirs: [], workDirs: [], outputDir, outputOrganization: 'daily', scheduledFor, runOutputDir,
-        targetSelections: [binding]
+        targetSelections: [],
+        accessPermissions: { authorizationRecord: { permissions: [{ kind: 'result-write', outputDirectory: outputDir, organization: 'daily' }] } }
       })
     } finally {
       readSpy.mockRestore()

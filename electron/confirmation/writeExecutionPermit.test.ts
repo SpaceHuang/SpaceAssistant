@@ -104,4 +104,30 @@ describe('write execution permit', () => {
     } as never)
     expect(validateWriteExecutionPermit(permit, expected)).toEqual({ ok: true })
   })
+
+  it('结果目录授权可签发覆盖本次归档目录的写许可，无需逐文件绑定', () => {
+    const outputScope = {
+      outputDirectory: '/results', organization: 'hourly' as const,
+      scheduledFor: new Date(2026, 9, 18, 7, 0).getTime(),
+      runOutputDir: '/results/20261018-07', taskRevision: 8
+    }
+    const target = {
+      ...outputTarget,
+      rawPath: '/results/20261018-07/reports/summary.md',
+      normalizedPath: '/results/20261018-07/reports/summary.md',
+      parentReal: '/results/20261018-07/reports'
+    }
+    const expected = { requestId: 'r-output-scope', toolUseId: 'u-output-scope', toolName: 'write_file' as const, input: { path: target.rawPath, content: 'result' } }
+    const permit = buildWriteExecutionPermit({
+      ...expected, lane: 'automation', target, decisionRuleId: 'automation-bound-output-write-allow', approval: 'auto-allow',
+      automationOutputScope: outputScope
+    })
+    expect(validateWriteExecutionPermit(permit, expected)).toEqual({ ok: true })
+
+    const escaped = buildWriteExecutionPermit({
+      ...expected, target: { ...target, normalizedPath: '/private/summary.md', parentReal: '/private' },
+      lane: 'automation', decisionRuleId: 'automation-bound-output-write-allow', approval: 'auto-allow', automationOutputScope: outputScope
+    })
+    expect(validateWriteExecutionPermit(escaped, expected)).toMatchObject({ ok: false, caseId: 'automation-output-scope-mismatch' })
+  })
 })

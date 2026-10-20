@@ -2804,3 +2804,44 @@ describe('fileAutoApproved 显式结果字段（H2：自动批准审计不再依
     expect(r.fileAutoApproved).toBe(false)
   })
 })
+
+describe('automation result directory write permission', () => {
+  it('user-confirmed result-write grants writes across the run archive without exact file bindings', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-output-scope-')))
+    const scheduledFor = new Date(2026, 9, 18, 7, 0).getTime()
+    const runOutputDir = path.join(root, '20261018')
+    await fs.mkdir(runOutputDir)
+    const taskRevision = 4
+    const taskRunOutputScope = { outputDirectory: root, organization: 'daily' as const, scheduledFor, runOutputDir, taskRevision }
+    const taskAccessPermissions: AutomationTaskAccessPermissions = {
+      directories: [], tools: [],
+      authorizationRecord: {
+        id: 'result-write-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 1, taskRevision,
+        permissions: [{ kind: 'result-write', outputDirectory: root, organization: 'daily' }]
+      }
+    }
+    try {
+      const allowed = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: runOutputDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [], taskAccessPermissions,
+        taskRunOutputScope, toolName: 'write_file', toolInput: { path: path.join(runOutputDir, 'summary.md'), content: '# Summary' }
+      } as never))
+      expect(allowed.decision, JSON.stringify({ decision: allowed.decision, facts: allowed.facts, outputScope: allowed.automationOutputScope })).toMatchObject({ type: 'auto-allow', ruleId: 'automation-bound-output-write-allow' })
+      expect(allowed.facts.signals).toContainEqual({ kind: 'automation-output-binding', status: 'matched' })
+      expect(allowed).toMatchObject({ automationOutputScope: taskRunOutputScope })
+
+      const escaped = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: runOutputDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [], taskAccessPermissions,
+        taskRunOutputScope, toolName: 'write_file', toolInput: { path: path.join(root, 'outside.md'), content: 'outside' }
+      } as never))
+      expect(escaped.decision).toMatchObject({ type: 'deny', ruleId: 'automation-write-deny' })
+
+      const missingReceipt = await evaluateToolCallGate(base({
+        lane: 'automation', workDir: runOutputDir, userDataDir: path.join(root, 'userdata'), taskWorkDirs: [],
+        taskRunOutputScope, toolName: 'write_file', toolInput: { path: path.join(runOutputDir, 'no-grant.md'), content: 'outside' }
+      } as never))
+      expect(missingReceipt.decision).toMatchObject({ type: 'deny', ruleId: 'automation-write-deny' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+})

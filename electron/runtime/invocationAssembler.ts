@@ -151,6 +151,8 @@ export interface AgentInvocationMaterials {
   /** Preflight-approved output binding set and archive target for this scheduled run. */
   taskOutputBindings?: readonly import('../../src/shared/automationTaskTypes').TargetBinding[]
   taskRunOutputDir?: string
+  /** Full host-derived output scope, paired with the immutable user authorization receipt. */
+  taskRunOutputScope?: import('../../src/shared/automationTaskTypes').AutomationRunOutputScope
   workDirManager?: import('../workDirManager').WorkDirManager
   resolveWorkDir?: () => string
   userDataDir: string
@@ -787,6 +789,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
       ...(materials.taskOutputBindings ? { taskOutputBindings: materials.taskOutputBindings } : {}),
       ...(materials.taskRunOutputDir ? { taskRunOutputDir: materials.taskRunOutputDir } : {}),
+      ...(materials.taskRunOutputScope ? { taskRunOutputScope: materials.taskRunOutputScope } : {}),
       userDataDir: materials.userDataDir,
       lane: materialsLane,
       remoteContext: materials.remoteContext,

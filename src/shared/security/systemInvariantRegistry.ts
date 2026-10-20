@@ -67,9 +67,9 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
   },
   {
     id: 'SYS-AUTOOUTPUT-001', owner: 'electron/confirmation', stage: 'final-check', category: 'integrity',
-    rationale: 'An unattended write must carry the exact output binding approved for its scheduled run.',
+    rationale: 'An unattended result write must carry a current user-confirmed result-write receipt and target a file below the archive directory derived for that run.',
     effect: 'block', scope: 'electron/confirmation/writeExecutionPermit.ts:validateWriteExecutionPermit',
-    audit: 'policy.execution-veto with automation-output-binding-* case ID and decision rule linkage',
+    audit: 'policy.execution-veto with automation-output-binding-* or automation-output-scope-* case ID and decision rule linkage',
     tests: ['electron/confirmation/writeExecutionPermit.test.ts', 'electron/confirmation/toolCallGate.test.ts', 'electron/confirmation/agentSdkSafetyPolicy.test.ts', 'electron/tools/registeredAgentTurnTools.test.ts'],
     overrideability: 'none'
   },

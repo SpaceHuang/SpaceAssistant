@@ -1,5 +1,6 @@
 import path from 'node:path'
-import type { AutomationTaskAccessPermissions, AutomationTaskPermission } from '../../src/shared/automationTaskTypes'
+import type { AutomationRunOutputScope, AutomationTaskAccessPermissions, AutomationTaskPermission } from '../../src/shared/automationTaskTypes'
+import { isValidAutomationRunOutputScope } from './taskOutputDirectory'
 
 // facts: read only the frozen main-process receipt; the compatibility `tools` projection is never an authority source.
 function permissionRecord(access: AutomationTaskAccessPermissions | undefined): readonly AutomationTaskPermission[] {
@@ -34,6 +35,24 @@ export function matchAutomationShellPermission(access: AutomationTaskAccessPermi
 
 export function matchAutomationGrepPermission(access: AutomationTaskAccessPermissions | undefined, targetPath: string): boolean {
   return permissionRecord(access).some((permission) => permission.kind === 'grep' && isPathWithinAnyRoot(targetPath, permission.scopeRoots))
+}
+
+/** Facts phase: only a current user-confirmed result-write receipt matching the frozen archive scope grants output writes. */
+export function matchAutomationResultWritePermission(access: AutomationTaskAccessPermissions | undefined, scope: AutomationRunOutputScope): boolean {
+  const record = access?.authorizationRecord
+  if (!record || !record.id || record.actor !== 'user-confirmation' || record.source !== 'task-preflight-confirmation'
+    || !Number.isFinite(record.approvedAt)
+    || record.taskRevision !== scope.taskRevision || !Array.isArray(record.permissions)
+    || !isValidAutomationRunOutputScope(scope)) return false
+  return record.permissions.some((permission) => {
+    if (permission.kind !== 'result-write' || permission.organization !== scope.organization) return false
+    const api = pathApi(permission.outputDirectory, scope.outputDirectory)
+    const approved = api.resolve(permission.outputDirectory)
+    const requested = api.resolve(scope.outputDirectory)
+    return api === path.win32
+      ? approved.toLocaleLowerCase('en-US') === requested.toLocaleLowerCase('en-US')
+      : approved === requested
+  })
 }
 
 export function matchAutomationScriptPermission(access: AutomationTaskAccessPermissions | undefined, workingDirectory: string, observedPaths: readonly string[]): boolean {

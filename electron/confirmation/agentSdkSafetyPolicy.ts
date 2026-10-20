@@ -194,6 +194,7 @@ export function createAgentSdkStructuralPermitHandoff(input: {
           approval: result.decision.ruleId === 'automation-bound-output-write-allow' || result.fileAutoApproved ? 'auto-allow' : 'confirmed',
           lane: result.lane,
           ...(result.automationOutputBinding ? { automationOutputBinding: result.automationOutputBinding } : {}),
+          ...(result.automationOutputScope ? { automationOutputScope: result.automationOutputScope } : {}),
           ...(result.policyDecision ? { decisionId: result.policyDecision.decisionId, policyDependencyFingerprint: result.policyDecision.dependencyFingerprint } : {})
         })
         input.updateExecutionContext({ invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }, (context) => {
@@ -227,6 +228,7 @@ export function createAgentSdkStructuralPermitHandoff(input: {
           approval: result.decision.ruleId === 'automation-bound-output-write-allow' || result.fileAutoApproved ? 'auto-allow' : 'confirmed',
           lane: result.lane,
           ...(result.automationOutputBinding ? { automationOutputBinding: result.automationOutputBinding } : {}),
+          ...(result.automationOutputScope ? { automationOutputScope: result.automationOutputScope } : {}),
           ...(result.policyDecision ? { decisionId: result.policyDecision.decisionId, policyDependencyFingerprint: result.policyDecision.dependencyFingerprint } : {})
         })
         input.updateExecutionContext(call, (context) => { context.writeExecutionPermit = writePermit })

@@ -44,8 +44,9 @@ import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirect
 import { matchSessionDirectoryGrant } from './sessionDirectoryGrantMatcher'
 import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmationTimeout'
 import { SYSTEM_INVARIANT_ID_BY_GATE_RULE } from '../../src/shared/security/systemInvariantIds'
-import type { TargetBinding } from '../../src/shared/automationTaskTypes'
-import { matchesBoundOutputWriteTarget } from '../butler/taskOutputDirectory'
+import type { AutomationRunOutputScope, TargetBinding } from '../../src/shared/automationTaskTypes'
+import { matchesAutomationRunOutputWriteTarget, matchesBoundOutputWriteTarget } from '../butler/taskOutputDirectory'
+import { matchAutomationResultWritePermission } from '../butler/automationTaskPermissionMatch'
 
 /**
  * T1.2/T1.3：以 resolveWikiMount 为本次路径入参构造探测锚点与敏感根豁免。
@@ -147,6 +148,8 @@ export interface ToolCallGateArgs {
   taskOutputBindings?: readonly TargetBinding[]
   /** Archive directory resolved from the run's frozen scheduledFor slot. */
   taskRunOutputDir?: string
+  /** Full host-derived archive scope matched against the task's immutable result-write receipt. */
+  taskRunOutputScope?: AutomationRunOutputScope
   userDataDir: string
   /** R1/R2：装配期解析的工作目录快照（诊断 basis 的权威来源；缺省用 workDir 字符串兜底） */
   workspace?: WorkspaceSnapshot
@@ -250,6 +253,8 @@ export interface ToolCallGateResult {
   writePathFact?: WritePathFact
   /** Host-issued output binding attestation; consumed by the execution permit final-check. */
   automationOutputBinding?: { binding: Extract<TargetBinding, { kind: 'output' }>; runOutputDir: string }
+  /** Host-issued result-directory grant attestation; consumed by the execution permit final-check. */
+  automationOutputScope?: AutomationRunOutputScope
   writeExecutionPermit?: WriteExecutionPermit
   /** run_shell 预检通过时的结构化结果（供日志/确认卡片 hints）。 */
   shellPrecheck?: { analysis: ShellAnalysisResult; legacyAutoAllowEligible: boolean; legacyPolicy: import('../shell/legacyShellPolicyAdapter').LegacyShellPolicyInput; hints: ShellSecurityHints }
@@ -509,6 +514,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   let readPathProbeFailure: ReadPathProbeError | undefined
   let writePathFact: WritePathFact | undefined
   let automationOutputBinding: ToolCallGateResult['automationOutputBinding']
+  let automationOutputScope: ToolCallGateResult['automationOutputScope']
   let writePathProbeFailure: WritePathProbeError | undefined
   let wikiRawTargetFailure = false
   let writePathInputFailure = false
@@ -702,20 +708,27 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         } catch {
           writeScope = 'unknown'
         }
-        // Facts phase: only host-owned run bindings may attest an exact ordinary output file.
-        if (lane === 'automation' && args.taskRunOutputDir
+        // Facts phase: the user-confirmed result-write receipt authorizes ordinary files under this run's archive.
+        if (lane === 'automation' && (args.taskRunOutputScope || args.taskRunOutputDir)
           && writePathFact.zone !== 'sensitive-file' && writePathFact.zone !== 'system-dir'
           && (writePathFact.targetKind === 'file' || writePathFact.targetKind === 'missing')
           && (args.toolName !== 'edit_file' || writePathFact.targetKind === 'file')) {
-          for (const binding of args.taskOutputBindings ?? []) {
-            if (binding.kind !== 'output' || binding.resolverVersion !== 3) continue
-            try {
-              if (matchesBoundOutputWriteTarget(binding, args.taskRunOutputDir, writePathFact.normalizedPath)) {
-                automationOutputBinding = { binding, runOutputDir: args.taskRunOutputDir }
-                break
+          if (args.taskRunOutputScope
+            && matchAutomationResultWritePermission(args.taskAccessPermissions, args.taskRunOutputScope)
+            && matchesAutomationRunOutputWriteTarget(args.taskRunOutputScope, writePathFact)) {
+            automationOutputScope = args.taskRunOutputScope
+          } else {
+            // Compatibility: older task snapshots with an exact user-confirmed preflight binding remain valid.
+            for (const binding of args.taskOutputBindings ?? []) {
+              if (binding.kind !== 'output' || binding.resolverVersion !== 3) continue
+              try {
+                if (args.taskRunOutputDir && matchesBoundOutputWriteTarget(binding, args.taskRunOutputDir, writePathFact.normalizedPath)) {
+                  automationOutputBinding = { binding, runOutputDir: args.taskRunOutputDir }
+                  break
+                }
+              } catch {
+                // Invalid/out-of-archive bindings are facts that fail to match; policy remains deny.
               }
-            } catch {
-              // Invalid/out-of-archive bindings are facts that fail to match; policy remains deny.
             }
           }
         }
@@ -730,7 +743,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           ],
           summary: { text: `${args.toolName} 写入目标已检查` }
         }
-        if (automationOutputBinding) facts.signals.push({ kind: 'automation-output-binding', status: 'matched' })
+        if (automationOutputBinding || automationOutputScope) facts.signals.push({ kind: 'automation-output-binding', status: 'matched' })
         if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
           && args.toolName === 'write_file' && writePathFact.targetKind === 'missing' && writePathFact.zone === 'workdir-normal'
           && writeScope === 'inside-workdir') facts.signals.push({ kind: 'write-target-new' })
@@ -1381,5 +1394,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   result.feishuMediaFact = feishuMediaFact
   result.writePathFact = writePathFact
   result.automationOutputBinding = automationOutputBinding
+  result.automationOutputScope = automationOutputScope
   return result
 }
