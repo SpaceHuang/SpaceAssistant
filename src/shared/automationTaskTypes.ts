@@ -12,6 +12,14 @@ export type AutomationTaskSchedule =
 
 export type AutomationDeliveryPref = 'desktop' | 'feishu' | 'wechat' | 'none'
 export type AutomationOutputOrganization = 'direct' | 'daily' | 'hourly'
+/** Host-derived write scope for one task run; the user-approved result-write root never grants read access. */
+export type AutomationRunOutputScope = {
+  outputDirectory: string
+  organization: AutomationOutputOrganization
+  scheduledFor: number
+  runOutputDir: string
+  taskRevision: number
+}
 export type AutomationTaskToolPermission = 'run_shell' | 'grep' | 'run_script'
 /** A configured MCP capability offered to preflight; fingerprints are host-owned and never model-authored. */
 export type AutomationTaskMcpToolParameter = { name: string; required: boolean; type?: string; description?: string }
@@ -215,6 +223,7 @@ export const PREFLIGHT_ISSUE_MESSAGE_KEYS = {
   ANALYZER_INVALID_RESPONSE: 'butler.preflight.analyzer_invalid_response',
   ANALYZER_OUTPUT_TRUNCATED: 'butler.preflight.analyzer_output_truncated',
   MOCK_PREFLIGHT_INCOMPLETE: 'butler.preflight.mock_preflight_incomplete',
+  MOCK_TOOL_UNAVAILABLE: 'butler.preflight.mock_tool_unavailable',
   TARGET_UNCLEAR: 'butler.preflight.target_unclear',
   TARGET_AMBIGUOUS: 'butler.preflight.target_ambiguous',
   TARGET_NOT_FOUND: 'butler.preflight.target_not_found',
@@ -223,6 +232,8 @@ export const PREFLIGHT_ISSUE_MESSAGE_KEYS = {
   TARGET_TYPE_MISMATCH: 'butler.preflight.target_type_mismatch',
   TOOL_PERMISSION_REQUIRED: 'butler.preflight.tool_permission_required',
   TOOL_PERMISSION_DETAILS_MISSING: 'butler.preflight.tool_permission_details_missing',
+  TOOL_PERMISSION_UNSUPPORTED: 'butler.preflight.tool_permission_unsupported',
+  TOOL_PERMISSION_SCOPE_UNVERIFIED: 'butler.preflight.tool_permission_scope_unverified',
   NO_ROOTS: 'butler.preflight.no_roots',
   OUTPUT_PATH_ESCAPE: 'butler.preflight.output_path_escape',
   OUTPUT_ANCESTOR_INVALID: 'butler.preflight.output_ancestor_invalid',

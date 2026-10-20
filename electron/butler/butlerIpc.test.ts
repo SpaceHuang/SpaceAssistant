@@ -23,7 +23,7 @@ describe('butler IPC workdir/config fields', () => {
   let db: AppDatabase | undefined
   afterEach(() => { db?.close(); db = undefined })
 
-  function handlers() {
+  function handlers(options: { now?: () => number } = {}) {
     db = openDatabase(':memory:')
     const map = new Map<string, (...args: unknown[]) => unknown>()
     registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
@@ -33,6 +33,7 @@ describe('butler IPC workdir/config fields', () => {
       getToolsConfig: () => ({}) as never
     } as never, {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'provider-model', reasoningEffort: 'off' as const })),
+      ...(options.now ? { now: options.now } : {}),
       createAnalyzer: () => ({ analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: os.tmpdir(), targetType: 'directory' }] })) }),
       preflight: vi.fn(async (input) => ({ report: { status: 'passed', blockers: [], suggestedDirectories: [] }, bindings: input.roots.length ? [{ kind: 'exact' as const, path: input.roots[0]!, targetType: 'directory' as const, targetReference: { kind: 'path' as const, value: input.roots[0]! }, rawText: input.prompt, resolverVersion: 2, rootsDigest: 'test', taskRevision: input.taskRevision }] : [] }))
     })
@@ -75,6 +76,18 @@ describe('butler IPC workdir/config fields', () => {
     setConfigValue(db!, 'secrets.llmServiceKeys', JSON.stringify({ 'service-1': 'present' }))
     expect(map.get('butler:get-defaults')!()).toMatchObject({ modelId: 'model-1', modelServiceId: 'service-1', reasoningEffort: 'off' })
     expect(map.get('butler:get-defaults')!()).not.toHaveProperty('workDir')
+  })
+
+  it('defaults new scheduled tasks to off even when the global chat effort is medium', async () => {
+    const map = handlers()
+    setConfigValue(db!, 'config.models', JSON.stringify([{ id: 'model-1', name: 'provider-model', enabled: true, supportsThinking: true }]))
+    setConfigValue(db!, 'config.defaultModel', 'provider-model')
+    setConfigValue(db!, 'config.thinkingEffort', 'medium')
+    setConfigValue(db!, 'config.llmServices', JSON.stringify([{ id: 'service-1', name: 'Service', provider: 'openai', supportedModelIds: ['model-1'] }]))
+    setConfigValue(db!, 'config.activeLlmServiceIds', JSON.stringify(['service-1']))
+    setConfigValue(db!, 'secrets.llmServiceKeys', JSON.stringify({ 'service-1': 'present' }))
+
+    expect(map.get('butler:get-defaults')!()).toMatchObject({ modelId: 'model-1', modelServiceId: 'service-1', reasoningEffort: 'off' })
   })
 
   it('legacy single-root update requires an explicit result directory before the first edit', async () => {
@@ -189,6 +202,74 @@ describe('butler IPC workdir/config fields', () => {
     expect(preflight.mock.calls[1]?.[0]).toMatchObject({ roots: [permissionRoot], analysisOverride: analysis })
   })
 
+  it('final authorization recheck can return preflight-blocked without persisting a task', async () => {
+    db = openDatabase(':memory:')
+    const permissionRoot = await realpath(os.tmpdir())
+    const outputRoot = await realpath(os.tmpdir())
+    const requiredPermissions = [{ tool: 'grep' as const, scopeRoots: [permissionRoot] }]
+    const analysis = { targets: [{ kind: 'exact' as const, path: permissionRoot, targetType: 'directory' as const }], requiredPermissions }
+    const preflight = vi.fn(async (input) => input.analysisOverride
+      ? {
+          report: { status: 'blocked' as const, blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear', reference: 'the requested target' }], suggestedDirectories: [] },
+          bindings: [], factsDigest: 'blocked-recheck-facts', requiredPermissions
+        }
+      : {
+          report: { status: 'blocked' as const, blockers: [{ code: 'TOOL_PERMISSION_REQUIRED', messageKey: 'butler.preflight.tool_permission_required' }], suggestedDirectories: [] },
+          bindings: [], factsDigest: 'initial-facts', requiredPermissions,
+          authorizationContinuation: { authorizedRoots: [permissionRoot], analysis }
+        })
+    const map = new Map<string, (...args: unknown[]) => unknown>()
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
+      db, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({}) as never
+    } as never, {
+      validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
+      validateAuthorizedDirs: vi.fn(async (value) => ({ ok: true as const, authorizedDirs: value as string[] })),
+      preflight
+    })
+
+    const review = await map.get('butler:create')!(null, {
+      name: 'Blocked after confirmation', prompt: 'Find the correct directory', schedule: { kind: 'daily', time: '09:00' }, deliveryPref: 'none',
+      authorizedDirs: [], outputDir: outputRoot, outputOrganization: 'daily'
+    }) as { ok: boolean; kind?: string; reviewId?: string }
+    expect(review).toMatchObject({ ok: false, kind: 'authorization-review-required' })
+
+    const confirmed = await map.get('butler:confirm-write')!(null, { reviewId: review.reviewId }) as { ok: boolean; kind?: string; report?: { blockers: Array<{ code: string }> } }
+    expect(confirmed).toMatchObject({ ok: false, kind: 'preflight-blocked', report: { blockers: [{ code: 'TARGET_UNCLEAR' }] } })
+    expect(map.get('butler:list')!()).toEqual([])
+    expect(preflight).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not expose a permission ticket when the same preflight still has target blockers', async () => {
+    db = openDatabase(':memory:')
+    const permissionRoot = await realpath(os.tmpdir())
+    const outputRoot = await realpath(os.tmpdir())
+    const requiredPermissions = [{ tool: 'run_shell' as const, command: 'git log --oneline -5', workingDirectory: permissionRoot }]
+    const analysis = { targets: [], requiredPermissions, mockTrace: [{ kind: 'proposed-tool-call' as const, toolName: 'run_shell', input: { command: requiredPermissions[0]!.command }, dispatch: 'simulated' as const, resultKind: 'synthetic' as const }] }
+    const preflight = vi.fn(async () => ({
+      report: { status: 'blocked' as const, blockers: [
+        { code: 'TOOL_PERMISSION_REQUIRED', messageKey: 'butler.preflight.tool_permission_required' },
+        { code: 'TARGET_NOT_FOUND', messageKey: 'butler.preflight.target_not_found', reasonCode: 'git_repository_not_found' as const }
+      ], suggestedDirectories: [] },
+      bindings: [], requiredPermissions, authorizationContinuation: { authorizedRoots: [permissionRoot], analysis }
+    }))
+    const map = new Map<string, (...args: unknown[]) => unknown>()
+    registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
+      db, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({}) as never
+    } as never, {
+      validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
+      validateAuthorizedDirs: vi.fn(async (value) => ({ ok: true as const, authorizedDirs: value as string[] })),
+      preflight
+    })
+
+    const result = await map.get('butler:create')!(null, {
+      name: 'Git summary', prompt: 'Summarize Git history', schedule: { kind: 'daily', time: '09:00' }, deliveryPref: 'none',
+      authorizedDirs: [], outputDir: outputRoot, outputOrganization: 'daily'
+    }) as { ok: boolean; kind?: string; report?: { blockers: Array<{ code: string; reasonCode?: string }> } }
+
+    expect(result).toMatchObject({ ok: false, kind: 'preflight-blocked', report: { blockers: [{ code: 'TARGET_NOT_FOUND', reasonCode: 'git_repository_not_found' }] } })
+    expect(map.get('butler:list')!()).toEqual([])
+  })
+
   it('rejects a proposed directory when host canonicalization changes its identity after confirmation', async () => {
     db = openDatabase(':memory:')
     const proposedRoot = '/workspace/linked-project'
@@ -294,7 +375,8 @@ describe('butler IPC workdir/config fields', () => {
       mockTrace: [{ kind: 'proposed-tool-call' as const, toolName: 'grep', input: { pattern: 'release', path: permissionRoot }, dispatch: 'simulated' as const, resultKind: 'synthetic' as const }]
     }))
     registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
-      db: d, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({ enabled: true, allowedTools: [], deniedTools: [] }) as never
+      db: d, getWorkDir: () => os.tmpdir(), getUserDataPath: () => os.tmpdir(), getToolsConfig: () => ({ enabled: true, allowedTools: [], deniedTools: [] }) as never,
+      getShellConfig: () => ({ enabled: true }) as never
     } as never, {
       validateModel: vi.fn(async () => ({ ok: true as const, modelId: 'm', modelServiceId: 's', modelOverride: 'm', reasoningEffort: 'off' as const })),
       preflight
@@ -319,6 +401,10 @@ describe('butler IPC workdir/config fields', () => {
     expect(map.get('butler:list')!()).toEqual([])
     expect(preflight).toHaveBeenCalledWith(expect.not.objectContaining({ accessPermissions: expect.anything() }), expect.any(Object))
     expect(preflight).toHaveBeenCalledWith(expect.objectContaining({ tools: expect.arrayContaining([
+      expect.objectContaining({ name: 'run_shell', inputSchema: expect.objectContaining({
+        required: expect.arrayContaining(['workingDirectory']),
+        properties: expect.objectContaining({ workingDirectory: expect.any(Object) })
+      }) }),
       expect.objectContaining({ name: 'grep', inputSchema: expect.objectContaining({ properties: expect.any(Object) }) }),
       expect.objectContaining({ name: mcpTools[0]!.mappedName, inputSchema: expect.objectContaining({ properties: expect.any(Object) }) })
     ]) }), expect.any(Object))
@@ -338,11 +424,35 @@ describe('butler IPC workdir/config fields', () => {
     const taskRevision = committed.task?.taskRevision
     const enable = await map.get('butler:update')!(null, { id: committed.id, patch: { enabled: true, expectedTaskRevision: taskRevision } }) as { ok: boolean; task?: { enabled: boolean; taskRevision?: number; accessPermissions?: { authorizationRecord?: { taskRevision: number } } } }
     expect(enable).toMatchObject({ ok: true, task: { enabled: true, taskRevision, accessPermissions: { authorizationRecord: { taskRevision: receiptRevision } } } })
+    expect(map.get('butler:list')!()).toMatchObject([{ id: committed.id, enabled: true }])
     const disable = await map.get('butler:update')!(null, { id: committed.id, patch: { enabled: false, expectedTaskRevision: taskRevision } }) as { ok: boolean; task?: { enabled: boolean; taskRevision?: number; accessPermissions?: { authorizationRecord?: { taskRevision: number } } } }
     expect(disable).toMatchObject({ ok: true, task: { enabled: false, taskRevision, accessPermissions: { authorizationRecord: { taskRevision: receiptRevision } } } })
     const resume = await map.get('butler:update')!(null, { id: committed.id, patch: { enabled: true, expectedTaskRevision: taskRevision } }) as { ok: boolean; task?: { enabled: boolean; taskRevision?: number; accessPermissions?: { authorizationRecord?: { taskRevision: number } } } }
     expect(resume).toMatchObject({ ok: true, task: { enabled: true, taskRevision, accessPermissions: { authorizationRecord: { taskRevision: receiptRevision } } } })
     expect(preflight).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the permission review ticket valid for 30 minutes so the full list can be reviewed', async () => {
+    let currentTime = 10_000
+    const map = handlers({ now: () => currentTime })
+    const create = () => map.get('butler:create')!(null, {
+      name: 'review window', prompt: 'Generate a report', schedule: { kind: 'daily', time: '09:00' },
+      deliveryPref: 'none', authorizedDirs: [], outputDir: os.tmpdir(), outputOrganization: 'direct'
+    }) as Promise<{ ok: boolean; kind?: string; reviewId?: string }>
+
+    const firstReview = await create()
+    expect(firstReview).toMatchObject({ ok: false, kind: 'authorization-review-required' })
+    currentTime += 30 * 60_000 - 1
+    await expect(map.get('butler:confirm-write')!(null, { reviewId: firstReview.reviewId })).resolves.toMatchObject({ ok: true })
+
+    const secondReview = await create()
+    expect(secondReview).toMatchObject({ ok: false, kind: 'authorization-review-required' })
+    currentTime += 30 * 60_000
+    await expect(map.get('butler:confirm-write')!(null, { reviewId: secondReview.reviewId })).resolves.toMatchObject({
+      ok: false,
+      kind: 'validation-error',
+      error: '权限确认已过期，请重新预检任务'
+    })
   })
 
   it('ignores renderer-supplied access capability claims and only saves the host-confirmed manifest', async () => {

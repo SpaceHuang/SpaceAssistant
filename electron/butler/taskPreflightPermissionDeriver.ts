@@ -14,8 +14,32 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
-function initialWorkingDirectory(facts: TaskPathFacts): string {
-  const workingDirectory = facts.roots[0] ?? facts.outputRoot
+function knownDirectory(value: string, facts: TaskPathFacts): boolean {
+  return facts.roots.includes(value)
+    || facts.outputRoot === value
+    || facts.entries.some((entry) => entry.path === value && entry.kind === 'directory')
+    || facts.proposedPathCandidates?.some((candidate) => candidate.path === value && candidate.kind === 'directory') === true
+}
+
+function preferredWorkingDirectory(facts: TaskPathFacts, trace: readonly TaskPreflightMockTraceItem[]): string | undefined {
+  const knownDirectories = new Set([
+    ...facts.roots,
+    ...(facts.outputRoot ? [facts.outputRoot] : []),
+    ...(facts.proposedPathCandidates ?? []).filter((candidate) => candidate.kind === 'directory').map((candidate) => candidate.path)
+  ])
+  const requestedWorkingDirectories = [...new Set(trace.flatMap((call) => {
+    if (call.toolName !== 'run_shell') return []
+    const value = asRecord(call.input).workingDirectory
+    return typeof value === 'string' && value.trim() ? [value] : []
+  }))]
+  if (requestedWorkingDirectories.length === 1 && knownDirectories.has(requestedWorkingDirectories[0]!)) return requestedWorkingDirectories[0]
+  const proposedDirectories = (facts.proposedPathCandidates ?? []).filter((candidate) => candidate.kind === 'directory')
+  return proposedDirectories.length === 1 ? proposedDirectories[0]!.path : undefined
+}
+
+function initialWorkingDirectory(facts: TaskPathFacts, trace: readonly TaskPreflightMockTraceItem[]): string {
+  const workingDirectory = preferredWorkingDirectory(facts, trace)
+    ?? facts.roots[0]
   if (!workingDirectory || !path.isAbsolute(workingDirectory) || path.normalize(workingDirectory) !== workingDirectory) {
     throw new Error('PREFLIGHT_TRACE_WORKING_DIRECTORY_UNAVAILABLE')
   }
@@ -44,6 +68,7 @@ function directoryRootForTracePath(rawPath: unknown, workingDirectory: string, f
   const resolved = resolveTracePath(rawPath, workingDirectory)
   if (resolved === workingDirectory) return workingDirectory
   const known = facts.entries.find((entry) => entry.path === resolved)
+    ?? facts.proposedPathCandidates?.find((candidate) => candidate.path === resolved)
   if (known?.kind === 'directory') return resolved
   if (known?.kind === 'file') return path.dirname(resolved)
   if (known && (known.kind === 'symlink' || known.kind === 'special')) throw new Error('PREFLIGHT_TRACE_PATH_UNSAFE')
@@ -56,7 +81,6 @@ export function deriveTaskPreflightPermissions(input: TaskPreflightPermissionDer
     || call.toolName === 'run_script' || call.toolName.startsWith('mcp_'))
   if (permissionCalls.length === 0) return []
 
-  const shellCommands: string[] = []
   const grepPaths: unknown[] = []
   const scriptPaths: string[] = []
   let hasScriptCall = false
@@ -66,7 +90,11 @@ export function deriveTaskPreflightPermissions(input: TaskPreflightPermissionDer
       if (typeof args.command !== 'string' || args.command.trim().length === 0 || args.command.length > 4096) {
         throw new Error('PREFLIGHT_TRACE_SHELL_COMMAND_INVALID')
       }
-      shellCommands.push(args.command)
+      if (args.workingDirectory !== undefined && (typeof args.workingDirectory !== 'string'
+        || !path.isAbsolute(args.workingDirectory) || path.normalize(args.workingDirectory) !== args.workingDirectory
+        || !knownDirectory(args.workingDirectory, input.facts))) {
+        throw new Error('PREFLIGHT_TRACE_WORKING_DIRECTORY_UNVERIFIED')
+      }
     } else if (call.toolName === 'grep') {
       grepPaths.push(args.path)
     } else if (call.toolName === 'run_script') {
@@ -86,7 +114,8 @@ export function deriveTaskPreflightPermissions(input: TaskPreflightPermissionDer
   }
 
   const requiresWorkingDirectory = permissionCalls.some((call) => call.toolName === 'run_shell' || call.toolName === 'grep' || call.toolName === 'run_script')
-  let workingDirectory = requiresWorkingDirectory ? initialWorkingDirectory(input.facts) : undefined
+  const preferred = preferredWorkingDirectory(input.facts, input.trace)
+  let workingDirectory = requiresWorkingDirectory ? initialWorkingDirectory(input.facts, input.trace) : undefined
   let grepRoots = new Set<string>()
   let scriptRoots = new Set<string>()
   if (workingDirectory) {
@@ -99,7 +128,8 @@ export function deriveTaskPreflightPermissions(input: TaskPreflightPermissionDer
       // Authorized roots are sorted before they become the unattended session's workDir.
       // Include newly proposed tool roots when binding Shell cwd so confirmation and execution
       // use the same host-selected directory after the user approves the whole list.
-      const nextWorkingDirectory = [...new Set([...input.facts.roots, ...grepRoots, ...scriptRoots])].sort()[0]
+      const nextWorkingDirectory = preferred
+        ?? [...new Set([...input.facts.roots, ...grepRoots, ...scriptRoots])].sort()[0]
         ?? input.facts.outputRoot
       if (!nextWorkingDirectory) throw new Error('PREFLIGHT_TRACE_WORKING_DIRECTORY_UNAVAILABLE')
       if (nextWorkingDirectory === workingDirectory) { converged = true; break }
@@ -114,7 +144,10 @@ export function deriveTaskPreflightPermissions(input: TaskPreflightPermissionDer
   for (const call of calls) {
     const args = asRecord(call.input)
     if (call.toolName === 'run_shell') {
-      const requirement = { tool: 'run_shell' as const, command: args.command as string, workingDirectory: workingDirectory! }
+      const command = args.command as string
+      const callWorkingDirectory = typeof args.workingDirectory === 'string' ? args.workingDirectory : workingDirectory
+      if (!callWorkingDirectory) throw new Error('PREFLIGHT_TRACE_WORKING_DIRECTORY_UNAVAILABLE')
+      const requirement = { tool: 'run_shell' as const, command, workingDirectory: callWorkingDirectory }
       shells.set(`${requirement.command}\0${requirement.workingDirectory}`, requirement)
     } else if (call.toolName.startsWith('mcp_')) {
       const candidate = input.mcpTools?.find((tool) => tool.mappedName === call.toolName)

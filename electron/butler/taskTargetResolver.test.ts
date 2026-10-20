@@ -25,6 +25,30 @@ describe('resolveTaskTarget', () => {
     expect(incomplete).toMatchObject({ ok: false, issue: { code: 'FACTS_INCOMPLETE' } })
   })
 
+  it('resolves an explicit root target from its direct fact when unrelated descendants are truncated', () => {
+    const partialFacts = facts(root, [{ path: root, relativePath: '', kind: 'directory' }], false)
+    const resolved = resolveTaskTarget({
+      rawText: root,
+      target: { kind: 'exact', path: root, targetType: 'directory' },
+      roots: [root], facts: partialFacts, taskRevision: 3
+    })
+    expect(resolved).toMatchObject({ ok: true, binding: { kind: 'exact', path: root, targetReference: { kind: 'path', value: root } } })
+    if (!resolved.ok) return
+    expect(validatePersistedTargetBindings({ bindings: [resolved.binding], roots: [root], facts: partialFacts, taskRevision: 3 })).toEqual({ ok: true })
+  })
+
+  it('binds a directly verified collection directory on partial facts', () => {
+    const partialFacts = facts(root, [{ path: root, relativePath: '', kind: 'directory' }], false)
+    const resolved = resolveTaskTarget({
+      rawText: 'process all CSV files in the repository',
+      target: { kind: 'collection', directory: root, selector: '*.csv' },
+      roots: [root], facts: partialFacts, taskRevision: 3
+    })
+    expect(resolved).toMatchObject({ ok: true, binding: { kind: 'collection', directory: root, selector: '*.csv' } })
+    if (!resolved.ok) return
+    expect(validatePersistedTargetBindings({ bindings: [resolved.binding], roots: [root], facts: partialFacts, taskRevision: 3 })).toEqual({ ok: true })
+  })
+
   it('creates an output binding from the nearest existing authorized ancestor', () => {
     const result = resolveTaskTarget({ rawText: 'write summary.txt', target: { kind: 'output', path: `${root}/out/new/summary.txt`, expectedType: 'file' }, roots: [root], facts: facts(root, [{ path: `${root}/out`, relativePath: 'out', kind: 'directory' }]), taskRevision: 9 })
     expect(result).toMatchObject({ ok: true, binding: { kind: 'output', ancestor: `${root}/out`, relativeSuffix: 'new/summary.txt' } })
@@ -45,6 +69,26 @@ describe('resolveTaskTarget', () => {
     const outputFacts = { roots: [], outputRoot, gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'output-only' }
     expect(validatePersistedTargetBindings({ bindings: [result.binding], roots: [], outputRoot, facts: outputFacts, taskRevision: 9 })).toEqual({ ok: true })
     expect(validatePersistedTargetBindings({ bindings: [result.binding], roots: [], outputRoot: '/elsewhere', facts: outputFacts, taskRevision: 9 })).toEqual({ ok: false, code: 'OUTPUT_ROOT_MISMATCH' })
+  })
+
+  it('revalidates an output-root binding without requiring unrelated read-root enumeration to be complete', () => {
+    const outputRoot = '/results'
+    const partialFacts = {
+      roots: [root], outputRoot, gitRepositories: [],
+      entries: [{ path: root, relativePath: '', kind: 'directory' as const }],
+      coverage: { complete: false, truncated: true, roots: 1, visited: 1, errors: 0 }, digest: 'partial-read-tree'
+    }
+    const resolved = resolveTaskTarget({
+      rawText: 'write summary',
+      target: { kind: 'output', path: 'summary.md', expectedType: 'file' },
+      roots: [root], outputRoot, facts: partialFacts, taskRevision: 9
+    })
+    expect(resolved.ok).toBe(true)
+    if (!resolved.ok) return
+
+    expect(validatePersistedTargetBindings({
+      bindings: [resolved.binding], roots: [root], outputRoot, facts: partialFacts, taskRevision: 9
+    })).toEqual({ ok: true })
   })
 
   it('rejects output target traversal outside the selected output root', () => {

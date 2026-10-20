@@ -75,20 +75,23 @@ export function resolveTaskTarget(input: ResolveTaskTargetInput): TaskTargetReso
     } }
   }
   if (roots.length === 0) return issue('NO_ROOTS')
-  if (!facts.coverage.complete) return issue('FACTS_INCOMPLETE', { reference: target.kind === 'collection' ? target.directory : target.path })
   const digest = rootsDigest(roots)
   if (target.kind === 'exact') {
     let resolvedPath = target.path
     if (!path.isAbsolute(resolvedPath)) {
       const isRelativePath = resolvedPath.includes('/') || resolvedPath.includes('\\')
+      if (!isRelativePath && !facts.coverage.complete) return issue('FACTS_INCOMPLETE', { reference: target.path })
+      if (isRelativePath && !facts.coverage.complete && roots.length !== 1) return issue('FACTS_INCOMPLETE', { reference: target.path })
       const normalizedRelative = path.posix.normalize(resolvedPath.replace(/\\/g, '/'))
       const matches = facts.entries.filter((entry) => (isRelativePath
         ? entry.relativePath === normalizedRelative
         : path.basename(entry.path) === resolvedPath) && entry.kind === target.targetType)
+      if (matches.length === 0 && !facts.coverage.complete) return issue('FACTS_INCOMPLETE', { reference: target.path })
       if (matches.length === 0) return issue('TARGET_NOT_FOUND', { reference: target.path })
       if (matches.length > 1) return issue('TARGET_AMBIGUOUS', { reference: target.path, candidates: matches.slice(0, 20).map((entry) => entry.path), candidateCount: matches.length })
       resolvedPath = matches[0]!.path
     }
+    if (!facts.coverage.complete && path.isAbsolute(resolvedPath) && !findFact(facts, resolvedPath)) return issue('FACTS_INCOMPLETE', { reference: target.path })
     const exactIssue = resolveExistingPath(resolvedPath, roots, facts, target.targetType)
     if (exactIssue) return issue(exactIssue, { reference: target.path })
     const referenceIsPath = path.isAbsolute(target.path) || target.path.includes('/') || target.path.includes('\\')
@@ -106,6 +109,7 @@ export function resolveTaskTarget(input: ResolveTaskTargetInput): TaskTargetReso
     if (!fact || fact.kind !== 'directory') return issue(fact?.kind === 'symlink' ? 'TARGET_UNVERIFIABLE' : 'TARGET_NOT_FOUND', { reference: target.directory })
     return { ok: true, binding: { kind: 'collection', directory, selector: target.selector, sort: 'canonical-path', rawText, resolverVersion: RESOLVER_VERSION, rootsDigest: digest, taskRevision } }
   }
+  if (!facts.coverage.complete) return issue('FACTS_INCOMPLETE', { reference: target.path })
   const outputPath = path.resolve(target.path)
   const root = findRoot(roots, outputPath)
   if (!root) return issue('OUTPUT_PATH_ESCAPE', { reference: target.path })
@@ -131,7 +135,8 @@ export function validatePersistedTargetBindings(input: {
 }): { ok: true } | { ok: false; code: string } {
   const { bindings, roots, outputRoot, facts, taskRevision } = input
   if (!roots.length && !outputRoot) return { ok: false, code: 'NO_ROOTS' }
-  if (!facts.coverage.complete) return { ok: false, code: 'FACTS_INCOMPLETE' }
+  // final-check: recursive completeness is required only for bindings that rely on discovery;
+  // no-target and output-root bindings can be verified from their directly approved identities.
   const digest = rootsDigest(roots)
   for (const binding of bindings) {
     if (binding.resolverVersion !== RESOLVER_VERSION && binding.resolverVersion !== 2 && !(binding.resolverVersion === 1 && binding.kind !== 'exact')) return { ok: false, code: 'RESOLVER_VERSION_UNSUPPORTED' }
@@ -155,6 +160,7 @@ export function validatePersistedTargetBindings(input: {
           : roots.some((root) => path.resolve(root, binding.targetReference.value) === path.normalize(binding.path))
       if (!referenceMatchesPath) return { ok: false, code: 'TARGET_REFERENCE_MISMATCH' }
       if (!findRoot(roots, binding.path)) return { ok: false, code: 'TARGET_OUTSIDE_ROOTS' }
+      if (!facts.coverage.complete && binding.targetReference.kind === 'basename') return { ok: false, code: 'FACTS_INCOMPLETE' }
       const fact = findFact(facts, binding.path)
       if (!fact || fact.kind !== binding.targetType) return { ok: false, code: 'TARGET_UNVERIFIABLE' }
       // Recheck the exact reference extracted at preflight. Never infer reference mode from the full prompt.
@@ -170,6 +176,7 @@ export function validatePersistedTargetBindings(input: {
       if (findFact(facts, binding.directory)?.kind !== 'directory') return { ok: false, code: 'COLLECTION_DIRECTORY_INVALID' }
       continue
     }
+    if (!facts.coverage.complete) return { ok: false, code: 'FACTS_INCOMPLETE' }
     const root = findRoot(roots, binding.ancestor)
     if (!root || !isWithin(root, binding.path) || !isWithin(root, binding.ancestor)) return { ok: false, code: 'OUTPUT_PATH_ESCAPE' }
     const ancestor = findFact(facts, binding.ancestor)

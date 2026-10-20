@@ -83,4 +83,39 @@ describe('TaskPathFactsProvider', () => {
     expect(outputOnly.outputRootIsGitRepository).toBe(true)
     expect(outputOnly.entries).toEqual([])
   })
+
+  it('validates exact paths proposed by mock tool calls without adding them to authorized roots or entries', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-prompt-path-facts-'))
+    const authorizedRoot = path.join(root, 'authorized')
+    const promptRepo = path.join(root, 'project')
+    const linkedRepo = path.join(root, 'linked-project')
+    await fs.mkdir(authorizedRoot)
+    await fs.mkdir(promptRepo)
+    await fs.mkdir(path.join(promptRepo, '.git'))
+    await fs.symlink(promptRepo, linkedRepo)
+
+    const provider = new TaskPathFactsProvider()
+    const facts = await provider.collect([authorizedRoot])
+    const candidates = await provider.inspectPaths([await fs.realpath(promptRepo), linkedRepo])
+
+    expect(candidates).toEqual([
+      { path: await fs.realpath(promptRepo), kind: 'directory', isGitRepository: true },
+      { path: linkedRepo, kind: 'symlink', isGitRepository: false }
+    ])
+    expect(facts.roots).toEqual([await fs.realpath(authorizedRoot)])
+    expect(facts.entries.map((entry) => entry.path)).not.toContain(await fs.realpath(promptRepo))
+    expect(facts.coverage.complete).toBe(true)
+  })
+
+  it('does not follow a proposed path through a symlink or report it as an authorized root', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-proposed-path-'))
+    const secret = path.join(root, 'secret')
+    const link = path.join(root, 'link')
+    await fs.mkdir(secret)
+    await fs.symlink(secret, link)
+
+    const candidates = await new TaskPathFactsProvider().inspectPaths([link])
+
+    expect(candidates).toEqual([{ path: link, kind: 'symlink', isGitRepository: false }])
+  })
 })

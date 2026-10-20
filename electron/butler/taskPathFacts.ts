@@ -9,12 +9,20 @@ export type TaskPathFactEntry = {
   relativePath: string
 }
 
+export type TaskPathCandidate = {
+  path: string
+  kind: 'file' | 'directory' | 'symlink' | 'special' | 'missing' | 'unavailable'
+  isGitRepository: boolean
+}
+
 export type TaskPathFacts = {
   roots: string[]
   /** Write-only destination root; intentionally excluded from entries and roots. */
   outputRoot?: string
   /** Metadata-only signal for offering outputRoot as a separately authorized read candidate; never grants read access. */
   outputRootIsGitRepository?: boolean
+  /** Exact paths proposed by Mock tool calls and checked by the host; candidates never grant access. */
+  proposedPathCandidates?: TaskPathCandidate[]
   /** Local repository roots discovered from .git markers; facts only, never a permission decision. */
   gitRepositories: string[]
   entries: TaskPathFactEntry[]
@@ -36,6 +44,43 @@ export class TaskPathFactsProvider {
   private readonly limits: TaskPathFactsLimits
 
   constructor(limits: Partial<TaskPathFactsLimits> = {}) { this.limits = { ...DEFAULT_LIMITS, ...limits } }
+
+  /** facts: checks only exact paths proposed in the Mock trace; does not read contents, enumerate, or authorize them. */
+  async inspectPaths(inputPaths: readonly string[]): Promise<TaskPathCandidate[]> {
+    const candidates: TaskPathCandidate[] = []
+    for (const rawPath of [...new Set(inputPaths)].slice(0, 32)) {
+      if (typeof rawPath !== 'string' || rawPath.trim().length === 0 || !path.isAbsolute(rawPath) || path.normalize(rawPath) !== rawPath) continue
+      try {
+        const info = await lstat(rawPath)
+        if (info.isSymbolicLink()) {
+          candidates.push({ path: rawPath, kind: 'symlink', isGitRepository: false })
+          continue
+        }
+        const canonical = await realpath(rawPath)
+        if (canonical !== rawPath) {
+          // A path that crosses a symlink is observable but is not a safe permission candidate.
+          candidates.push({ path: rawPath, kind: 'symlink', isGitRepository: false })
+          continue
+        }
+        const kind: TaskPathCandidate['kind'] = info.isDirectory() ? 'directory' : info.isFile() ? 'file' : 'special'
+        let isGitRepository = false
+        if (kind === 'directory') {
+          try {
+            const marker = await lstat(path.join(rawPath, '.git'))
+            isGitRepository = !marker.isSymbolicLink() && (marker.isDirectory() || marker.isFile())
+          } catch { isGitRepository = false }
+        }
+        candidates.push({ path: rawPath, kind, isGitRepository })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') {
+          candidates.push({ path: rawPath, kind: 'missing', isGitRepository: false })
+        } else {
+          candidates.push({ path: rawPath, kind: 'unavailable', isGitRepository: false })
+        }
+      }
+    }
+    return candidates
+  }
 
   async collect(inputRoots: readonly string[], inputOutputRoot?: string): Promise<TaskPathFacts> {
     if (!Array.isArray(inputRoots) || (inputRoots.length === 0 && !inputOutputRoot)) throw new TaskPathFactsError('NO_ROOTS', '任务工作目录不能为空')

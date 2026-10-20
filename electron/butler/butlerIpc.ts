@@ -28,6 +28,10 @@ import type { AutomationOutputOrganization, AutomationTaskMcpToolCandidate, Auto
 
 export type ButlerIpcDeps = ButlerInvokerDeps
 
+// policy/final-check: the permission manifest is bound to this one-time ticket and task revision;
+// allow time to read a long manifest while keeping stale reviews bounded.
+const AUTHORIZATION_REVIEW_TTL_MS = 30 * 60_000
+
 export type ButlerTaskPreflightDeps = {
   now?: () => number
   createAnalyzer?: (task: { modelId?: string; modelServiceId?: string; reasoningEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort }) => TaskPreflightAnalyzer
@@ -127,7 +131,24 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       deps.getBrowserConfig?.(),
       null,
       deps.getShellConfig?.() ?? null
-    ).map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema }))
+    ).map((tool) => {
+      if (tool.name !== 'run_shell') return { name: tool.name, description: tool.description, inputSchema: tool.input_schema }
+      const schema = tool.input_schema as { type: 'object'; properties: Record<string, unknown>; required?: string[]; [key: string]: unknown }
+      // policy: Shell authorization binds both command and working directory, so the Mock call schema requires both;
+      // taskPreflight rechecks that directory against host facts before showing the permission for approval.
+      return {
+        name: tool.name,
+        description: `${tool.description}\n预检专用：workingDirectory 用于记录拟执行目录，只接受绝对路径；Mock 不会执行命令。`,
+        inputSchema: {
+          ...schema,
+          required: [...new Set([...(schema.required ?? []), 'workingDirectory'])],
+          properties: {
+            ...schema.properties,
+            workingDirectory: { type: 'string', description: '必须填写本次拟执行命令的现有绝对工作目录，依据任务目标或 facts 中的目录事实选择；仅用于权限确认，Mock 不会在此目录执行命令。' }
+          }
+        }
+      }
+    })
     const mcpModelTools = mcpEntries.map((entry) => ({ name: entry.mappedName, description: entry.description, inputSchema: entry.inputSchema }))
     const result = await preflight({
       prompt: input.prompt,
@@ -192,6 +213,12 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
   }): ButlerTaskWriteResult | undefined {
     const continuation = args.inspection.authorizationContinuation
     if (!continuation) return undefined
+    // final-check boundary: only a permission-only preflight may become a user authorization ticket.
+    // Never let unresolved target/scope blockers advance to the final confirmation step.
+    const unresolvedTaskBlockers = args.inspection.report.blockers.filter((blocker) => blocker.code !== 'TOOL_PERMISSION_REQUIRED')
+    if (unresolvedTaskBlockers.length) {
+      return { ok: false, kind: 'preflight-blocked', report: { ...args.inspection.report, blockers: unresolvedTaskBlockers } }
+    }
     const proposedAuthorizedDirs = [...new Set([...args.authorizedDirs, ...continuation.authorizedRoots])].sort()
     const permissions = buildPermissionList({ ...args.task, authorizedDirs: proposedAuthorizedDirs }, args.inspection.requiredPermissions ?? [], args.inspection.mcpTools)
     return stageAuthorizationReview({
@@ -232,7 +259,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       if (pending.expiresAt <= issuedAt) pendingAuthorizationReviews.delete(reviewId)
     }
     const reviewId = randomUUID()
-    pendingAuthorizationReviews.set(reviewId, { ...args, expiresAt: issuedAt + 5 * 60_000 })
+    pendingAuthorizationReviews.set(reviewId, { ...args, expiresAt: issuedAt + AUTHORIZATION_REVIEW_TTL_MS })
     return { ok: false, kind: 'authorization-review-required', reviewId, permissions: args.permissions, report: args.report }
   }
 
@@ -296,8 +323,8 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     const currentModel = getConfigValue(db, 'config.defaultModel') ?? getConfigValue(db, 'config.model')
     const model = models.find((entry) => entry.id === currentModel || entry.name === currentModel)
     const service = model && services.find((entry) => activeIds.includes(entry.id) && (entry.supportedModelIds ?? []).includes(model.id) && entry.apiKeyPresent)
-    const configuredEffort = getConfigValue(db, 'config.thinkingEffort') ?? 'off'
-    const reasoningEffort = model?.supportsThinking === false ? 'off' : configuredEffort
+    // New scheduled tasks default to no extra reasoning, independently of the chat-wide setting.
+    const reasoningEffort = 'off' as const
     return { ...(model && service ? { modelId: model.id, modelOverride: model.name, modelServiceId: service.id } : {}), reasoningEffort }
   })
 

@@ -29,7 +29,7 @@ describe('deriveTaskPreflightPermissions', () => {
     const requirements = deriveTaskPreflightPermissions({
       facts: facts(),
       trace: [
-        call('run_shell', { command: 'git log --oneline -5', workingDirectory: '/model-cwd', timeout: 1 }),
+        call('run_shell', { command: 'git log --oneline -5', workingDirectory: '/workspace', timeout: 1 }),
         call('grep', { pattern: 'release', path: 'src/input.csv' }),
         call('run_script', { code: 'open("src/input.csv", "r").read()' }),
         call(mcpName, { query: 'recent' })
@@ -45,16 +45,15 @@ describe('deriveTaskPreflightPermissions', () => {
     ])
   })
 
-  it('includes the over-budget not-dispatched call, ignores blocked calls, and uses output root as the actual cwd fallback', () => {
-    const requirements = deriveTaskPreflightPermissions({
+  it('does not treat a write-only output root as an implicit Shell working directory', () => {
+    expect(() => deriveTaskPreflightPermissions({
       facts: facts({ roots: [], entries: [], outputRoot: '/results' }),
       trace: [
         call('run_shell', { command: 'git status --short' }, 'not-dispatched'),
         call('grep', { pattern: 'x', path: '/unavailable/secret' }, 'blocked')
       ]
-    })
+    })).toThrow('PREFLIGHT_TRACE_WORKING_DIRECTORY_UNAVAILABLE')
 
-    expect(requirements).toEqual([{ tool: 'run_shell', command: 'git status --short', workingDirectory: '/results' }])
   })
 
   it('fails closed when a recorded MCP call cannot be mapped to the host MCP snapshot', () => {
@@ -75,5 +74,23 @@ describe('deriveTaskPreflightPermissions', () => {
   it('fails closed when a permission-gated call lacks its security-critical parameter', () => {
     expect(() => deriveTaskPreflightPermissions({ facts: facts(), trace: [call('run_shell', { command: '   ' })] }))
       .toThrow('PREFLIGHT_TRACE_SHELL_COMMAND_INVALID')
+  })
+
+  it('binds Shell approval to the verified working directory proposed in the Mock call', () => {
+    const requirements = deriveTaskPreflightPermissions({
+      facts: facts({
+        roots: [], outputRoot: '/results', entries: [],
+        proposedPathCandidates: [{ path: '/project', kind: 'directory', isGitRepository: true }]
+      }),
+      trace: [call('run_shell', { command: 'git log --oneline -5', workingDirectory: '/project' })]
+    })
+
+    expect(requirements).toEqual([{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/project' }])
+  })
+
+  it('does not silently replace an unverified Shell working directory with another root', () => {
+    expect(() => deriveTaskPreflightPermissions({
+      facts: facts(), trace: [call('run_shell', { command: 'git log --oneline -5', workingDirectory: '/outside' })]
+    })).toThrow('PREFLIGHT_TRACE_WORKING_DIRECTORY_UNVERIFIED')
   })
 })
