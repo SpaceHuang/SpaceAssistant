@@ -501,6 +501,50 @@ export async function establishExistingSessionEventLedgerBaseline(workDir: strin
   }
 }
 
+/** Creates an empty, path-validated ledger directory exclusively for a caller that will immediately replay canonical projections. */
+export async function createEmptySessionEventLedgerForCanonicalRebuild(workDir: string, sessionId: string, createdAt: number): Promise<void> {
+  const paths = eventPaths(workDir, sessionId, createdAt)
+  const locationKey = sessionLedgerLocationIdentity({ workDir, sessionId, createdAt }).key
+  let directoryExists = false
+  try {
+    const stat = await fs.lstat(paths.directory)
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('SESSION_LEDGER_REBUILD_TARGET_INVALID')
+    directoryExists = true
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  await ensureDirectoryWithoutSymlink(paths.sessionsRoot, path.dirname(paths.sessionsRoot))
+  await ensureDirectoryWithoutSymlink(paths.directory, paths.sessionsRoot)
+  const realRoot = await fs.realpath(paths.sessionsRoot)
+  const realDirectory = await fs.realpath(paths.directory)
+  if (!isPathInside(realRoot, realDirectory)) throw new Error('SESSION_LEDGER_REBUILD_PATH_OUTSIDE_ROOT')
+  const markerPath = path.resolve(realDirectory, 'events.rebuild.json')
+  if (!isPathInside(realDirectory, markerPath)) throw new Error('SESSION_LEDGER_REBUILD_MARKER_OUTSIDE_ROOT')
+  const marker = JSON.stringify({ formatVersion: 1, ledgerLocationKey: locationKey })
+  if (!directoryExists) {
+    const markerFile = await fs.open(markerPath, 'wx', 0o600)
+    try { await markerFile.writeFile(marker); await markerFile.sync() }
+    finally { await markerFile.close() }
+  } else {
+    let persisted: { formatVersion?: number; ledgerLocationKey?: string }
+    try { persisted = JSON.parse(await fs.readFile(markerPath, 'utf8')) as typeof persisted }
+    catch { throw new Error('SESSION_LEDGER_REBUILD_TARGET_EXISTS') }
+    if (persisted.formatVersion !== 1 || persisted.ledgerLocationKey !== locationKey) throw new Error('SESSION_LEDGER_REBUILD_MARKER_MISMATCH')
+  }
+  for (const [filePath, content] of [[paths.eventsPath, ''], [paths.indexPath, JSON.stringify({ formatVersion: 2, seq: 0, eventCount: 0, bytes: 0, lastAt: 0 })]] as const) {
+    try {
+      const file = await fs.open(filePath, 'wx', 0o600)
+      try { await file.writeFile(content); await file.sync() }
+      finally { await file.close() }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      const stat = await fs.lstat(filePath)
+      const existingContent = stat.isFile() ? await fs.readFile(filePath, 'utf8') : undefined
+      if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1 || existingContent !== content) {
+        throw new Error('SESSION_LEDGER_REBUILD_FILE_MISMATCH')
+      }
+    }
+  }
+}
+
 /** Reconciles only one fenced old-owner ledger. Callers must hold its lifecycle lock and complete canonical projection first. */
 export async function reconcileInterruptedSessionEventLedger(input: {
   workDir: string
@@ -931,7 +975,12 @@ export class SessionEventWriter implements SessionEventSink {
       const prefix = lineState.bytes > 0 && !lineState.terminated ? '\n' : ''
       await fs.appendFile(this.eventsPath, prefix + data, 'utf8')
     } catch (error) {
-      throw errorWithJsonlState(error, false)
+      const originalCode = (error as NodeJS.ErrnoException)?.code
+      const wrapped = errorWithJsonlState(error, false) as Error & { pathDiagnostics?: Record<string, unknown> }
+      if (originalCode === 'ENOENT') {
+        wrapped.pathDiagnostics = await this.collectAppendPathDiagnostics()
+      }
+      throw wrapped
     }
 
     // JSONL 是权威提交边界；索引只是可重建的派生数据，不能把索引故障
@@ -960,6 +1009,23 @@ export class SessionEventWriter implements SessionEventSink {
     if (this.initialized) return
     if (!this.initializing) this.initializing = this.initialize().catch((error) => { this.initializing = undefined; throw error })
     await this.initializing
+  }
+
+  private async collectAppendPathDiagnostics(): Promise<Record<string, unknown>> {
+    const paths = [path.dirname(this.location.workDir), this.location.workDir, this.sessionsRoot, this.directory, this.eventsPath]
+    const components = await Promise.all(paths.map(async (target) => {
+      try {
+        const stat = await fs.lstat(target)
+        return { path: target, exists: true, kind: stat.isSymbolicLink() ? 'symlink' : stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other' }
+      } catch (error) {
+        return { path: target, exists: false, errorCode: (error as NodeJS.ErrnoException)?.code ?? 'UNKNOWN' }
+      }
+    }))
+    return {
+      phase: 'jsonl-append', pid: process.pid, ppid: process.ppid, cwd: process.cwd(),
+      locationKey: this.lifecycleLocationKey, sessionId: this.location.sessionId, createdAt: this.location.createdAt,
+      writerInitialized: this.initialized, lifecycleLockHeld: isSessionLedgerLifecycleLockHeld(this.lifecycleLocationKey), components
+    }
   }
 
   private async initialize(): Promise<void> {

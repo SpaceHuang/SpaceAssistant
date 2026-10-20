@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { createSession, setConfigValue } from '../database/operations'
@@ -214,6 +214,92 @@ describe('production session ledger lifecycle', () => {
       { toolUseId: 'legacy-tool', stepId: 'legacy-step', name: 'read_file', args: { path: 'a.txt' }, turnId: 'legacy-turn' }
     ])
     expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id='legacy-model-response'").get()).toEqual({ status: 'acked' })
+  })
+
+  it('rebuilds only a blocked legacy session ledger from canonical History when its entire directory is missing', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-missing-rebuild-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'missing-ledger-rebuild', workDirProfileId: 'profile' })
+    const otherSession = createSession(db, { name: 'unrelated-session', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const identity = sessionLedgerLocationIdentity(location)
+    conn.prepare(`UPDATE session_ledger_projection_state SET origin='legacy',bootstrap_id=NULL,state='blocked',retry_scope='baseline',
+      failure_class='ledger_missing',canonical_watermark=NULL,proof_file_identity=NULL,proof_file_bytes=NULL,proof_tail_frame=NULL,
+      proof_index_seq=NULL,proof_index_event_count=NULL,proof_index_bytes=NULL,proof_index_last_at=NULL WHERE ledger_location_key=?`)
+      .run(identity.key)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'rebuild-invocation', turnId: 'rebuild-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'rebuild-model-response', idempotencyKey: 'rebuild-model-response', kind: 'model-response-committed',
+      payload: { modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'rebuild-tool', name: 'read_file', input: { path: 'canonical.txt' } }] },
+        sessionLedger: { location, stepId: 'rebuild-step', toolCalls: [{ toolUseId: 'rebuild-tool', name: 'read_file', args: { path: 'canonical.txt' } }],
+          requestUsage: { requestId: 'rebuild-request', usage: { inputTokens: 10, outputTokens: 2 } } } }
+    }], 0)
+
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    const firstRecovery = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
+      retryBlocked: true, dependencies })
+    expect(firstRecovery).toMatchObject({ status: 'ready' })
+    expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id='rebuild-model-response'").get())
+      .toEqual({ status: 'acked' })
+    const simulateWholeLedgerLoss = async () => {
+      await fs.rm(resolveSessionEventPaths(root, session.id, session.createdAt).directory, { recursive: true, force: true })
+      conn.prepare(`UPDATE session_ledger_projection_state SET state='blocked',retry_scope='baseline',failure_class='ledger_missing',
+        canonical_watermark=NULL,proof_file_identity=NULL,proof_file_bytes=NULL,proof_tail_frame=NULL,proof_index_seq=NULL,
+        proof_index_event_count=NULL,proof_index_bytes=NULL,proof_index_last_at=NULL WHERE ledger_location_key=?`).run(identity.key)
+    }
+    await simulateWholeLedgerLoss()
+
+    const result = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
+      retryBlocked: true, dependencies })
+
+    expect(result).toMatchObject({ status: 'ready', readiness: { state: 'ready', failureClass: null } })
+    const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    const events = await readSessionEvents(paths.eventsPath)
+    expect(events.map((event) => event.type)).toContain('tool_call')
+    expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({
+      toolUseId: 'rebuild-tool', name: 'read_file', args: { path: 'canonical.txt' }, turnId: 'rebuild-turn'
+    })
+    expect(events.map(({ type }) => type)).toContain('request_usage')
+    expect(await fs.stat(resolveSessionEventPaths(root, otherSession.id, otherSession.createdAt).eventsPath).catch(() => undefined)).toBeUndefined()
+    expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id='rebuild-model-response'").get())
+      .toEqual({ status: 'acked' })
+
+    await simulateWholeLedgerLoss()
+    conn.prepare("UPDATE session_ledger_projection_outbox SET status='pending',acked_at=NULL WHERE ledger_location_key=? AND projection_kind='request-usage'")
+      .run(identity.key)
+    const mixedRetry = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
+      retryBlocked: true, dependencies })
+    expect(mixedRetry.status).toBe('ready')
+    const mixedEvents = await readSessionEvents(paths.eventsPath)
+    expect(mixedEvents.filter(({ type }) => type === 'tool_call')).toHaveLength(1)
+    expect(mixedEvents.filter(({ type }) => type === 'request_usage')).toHaveLength(1)
+
+    await simulateWholeLedgerLoss()
+    const originalAppendFile = fs.appendFile.bind(fs)
+    let appendCount = 0
+    const appendSpy = vi.spyOn(fs, 'appendFile').mockImplementation(async (filePath, data, ...options) => {
+      appendCount += 1
+      if (appendCount === 2) throw new Error('injected rebuild projection interruption')
+      return originalAppendFile(filePath, data, ...options)
+    })
+    try {
+      const interrupted = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
+        retryBlocked: true, dependencies })
+      expect(interrupted).toMatchObject({ status: 'blocked', readiness: { state: 'blocked', failureClass: 'baseline_failed' } })
+    } finally { appendSpy.mockRestore() }
+    const resumed = await ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation, processGeneration: 1,
+      retryBlocked: true, dependencies })
+    expect(resumed.status).toBe('ready')
+    const resumedEvents = await readSessionEvents(paths.eventsPath)
+    expect(resumedEvents.filter(({ type }) => type === 'tool_call')).toHaveLength(1)
+    expect(resumedEvents.filter(({ type }) => type === 'request_usage')).toHaveLength(1)
+    expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE ledger_location_key=? AND status<>'acked'").all(identity.key))
+      .toEqual([])
   })
 
   it('bootstraps a new location from its creation credential before the first ledger-dependent turn', async () => {

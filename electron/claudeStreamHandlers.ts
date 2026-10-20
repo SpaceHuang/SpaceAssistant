@@ -248,6 +248,7 @@ type EventPersistenceFailure = {
   eventsPath?: string
   dataLossPossible?: boolean
   cause?: { name: string; message: string }
+  pathDiagnostics?: Record<string, unknown>
 }
 
 type FinalizeResult =
@@ -260,12 +261,13 @@ type FinalizeResult =
     }
 
 function toEventPersistenceFailure(error: unknown): EventPersistenceFailure {
-  const candidate = error as { code?: unknown; eventsPath?: unknown; jsonlCommitted?: unknown }
+  const candidate = error as { code?: unknown; eventsPath?: unknown; jsonlCommitted?: unknown; pathDiagnostics?: unknown }
   return {
     code: typeof candidate.code === 'string' ? candidate.code : 'EVENT_PERSISTENCE_FAILED',
     message: error instanceof Error ? error.message : String(error),
     ...(typeof candidate.eventsPath === 'string' ? { eventsPath: candidate.eventsPath } : {}),
     ...(typeof candidate.jsonlCommitted === 'boolean' ? { dataLossPossible: !candidate.jsonlCommitted } : {}),
+    ...(candidate.pathDiagnostics && typeof candidate.pathDiagnostics === 'object' ? { pathDiagnostics: candidate.pathDiagnostics as Record<string, unknown> } : {}),
     ...(error instanceof Error ? { cause: { name: error.name, message: error.message } } : {})
   }
 }

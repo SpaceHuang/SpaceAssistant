@@ -5,12 +5,13 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import {
   bootstrapEmptySessionEventLedger,
+  createEmptySessionEventLedgerForCanonicalRebuild,
   establishExistingSessionEventLedgerBaseline,
   getSessionEventSink,
   resolveSessionEventPaths
 } from '../sessionEvents'
 import { runInTransaction } from '../database/transaction'
-import { buildCanonicalToolResultProjectionTargets, enqueueCanonicalLedgerProjectionTargetInTransaction } from '../sessionLedgerOutbox'
+import { buildCanonicalToolResultProjectionTargets, canonicalLedgerProjectionTargetId, enqueueCanonicalLedgerProjectionTargetInTransaction } from '../sessionLedgerOutbox'
 import type { SessionLedgerLifecycleDependencies } from '../sessionLedgerLifecycle'
 import { sessionLedgerLocationIdentity, type SessionLedgerLocationInput } from '../sessionLedgerIdentity'
 import { readSessionLedgerReadiness, type SessionLedgerReadyProof } from '../sessionLedgerReadiness'
@@ -199,6 +200,49 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
       const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, (target) => project(location, target))
       if (drained.failedTargetId) throw new Error('SESSION_LEDGER_BASELINE_PROJECTION_FAILED')
       return await proof(location) ?? Promise.reject(new Error('SESSION_LEDGER_BASELINE_PROOF_MISSING'))
+    },
+    rebuildMissingLegacyLedger: async (location) => {
+      // This recovery path is only authorized for an entirely absent ledger. A partial
+      // directory or either surviving ledger artifact is evidence that must be reviewed.
+      const events = readCanonicalSessionHistory(conn, location.sessionId).filter((event) => {
+        const ledgerLocation = (event.payload as { sessionLedger?: { location?: unknown } }).sessionLedger?.location as
+          Partial<SessionLedgerLocationInput> | undefined
+        return ledgerLocation?.workDir === location.workDir && ledgerLocation.sessionId === location.sessionId && ledgerLocation.createdAt === location.createdAt
+      })
+      if (!events.length) throw new Error('SESSION_LEDGER_REBUILD_CANONICAL_HISTORY_MISSING')
+      const identity = sessionLedgerLocationIdentity(location)
+      const generation = (conn.prepare('SELECT generation FROM sessions WHERE id=?').get(location.sessionId) as { generation: string } | undefined)?.generation
+      if (!generation) throw new Error('SESSION_LEDGER_SESSION_MISSING')
+      const targets = buildCanonicalToolResultProjectionTargets(conn, events, location.sessionId, generation)
+        .filter((target) => target.ledgerLocationKey === identity.key)
+      // Reset acknowledgements before creating any replacement artifact. If the process stops at any later
+      // boundary, the ordinary baseline retry still sees pending canonical obligations and completes replay.
+      runInTransaction(conn, () => {
+        for (const target of targets) enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target)
+        // The previous ack proves projection into the old file. A newly created file has no such contents,
+        // so every durable obligation must be replayed against this rebuild before a ready proof is minted.
+        conn.prepare(`UPDATE session_ledger_projection_outbox SET status='pending',acked_at=NULL WHERE ledger_location_key=?`)
+          .run(identity.key)
+      })
+      await createEmptySessionEventLedgerForCanonicalRebuild(location.workDir, location.sessionId, location.createdAt)
+      const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+      try {
+        await sink.flush()
+        const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, (target) => project(location, target))
+        if (drained.failedTargetId) throw new Error('SESSION_LEDGER_REBUILD_PROJECTION_FAILED')
+        const persistedTargets = conn.prepare(`SELECT target_id,status FROM session_ledger_projection_outbox WHERE ledger_location_key=?`)
+          .all(identity.key) as Array<{ target_id: string; status: string }>
+        const expectedTargetIds = new Set(targets.map(canonicalLedgerProjectionTargetId))
+        if (persistedTargets.length !== expectedTargetIds.size || persistedTargets.some(({ target_id, status }) =>
+          status !== 'acked' || !expectedTargetIds.has(target_id))) {
+          throw new Error('SESSION_LEDGER_REBUILD_PROJECTION_SET_INCOMPLETE')
+        }
+      } catch (error) {
+        await sink.close().catch(() => undefined)
+        throw error
+      }
+      await sink.close()
+      return await proof(location) ?? Promise.reject(new Error('SESSION_LEDGER_REBUILD_PROOF_MISSING'))
     },
     applyTarget: project,
     reconcilePreviousOwner: async (location) => {

@@ -24,6 +24,7 @@ import {
 import { drainCanonicalLedgerProjectionOutbox, type CanonicalLedgerProjectionTarget } from './sessionLedgerOutbox'
 import type { SessionLedgerLocationInput } from './sessionLedgerIdentity'
 import { withSessionEventWriterDrain } from './sessionEvents'
+import { withSessionLedgerProcessLock } from './sessionLedgerProcessLock'
 
 type LockEntry = { tail: Promise<void>; users: number }
 
@@ -49,7 +50,9 @@ export async function withSessionLedgerLifecycleLock<T>(locationKey: string, ope
   try {
     const held = new Set(heldLocationLocks.getStore() ?? [])
     held.add(locationKey)
-    return await heldLocationLocks.run(held, operation)
+    return await heldLocationLocks.run(held, () => /^[a-f0-9]{64}$/.test(locationKey)
+      ? withSessionLedgerProcessLock(locationKey, operation)
+      : operation())
   } finally {
     release()
     entry.users -= 1
@@ -72,6 +75,8 @@ export type SessionLedgerLifecycleDependencies = {
   migrateLegacyReadyProof?(location: SessionLedgerLocationInput, readiness: SessionLedgerReadiness): Promise<SessionLedgerReadyProof | undefined>
   bootstrap(location: SessionLedgerLocationInput, bootstrapId: string): Promise<SessionLedgerReadyProof>
   baseline(location: SessionLedgerLocationInput): Promise<SessionLedgerReadyProof>
+  /** Recreates a wholly missing legacy ledger from canonical history, never a damaged existing file. */
+  rebuildMissingLegacyLedger?(location: SessionLedgerLocationInput): Promise<SessionLedgerReadyProof>
   applyTarget(location: SessionLedgerLocationInput, target: CanonicalLedgerProjectionTarget & { targetId: string }): Promise<{
     eventIds: readonly string[]; events: readonly SessionEventInput[]
   }>
@@ -149,8 +154,10 @@ export async function ensureSessionLedgerReady(input: {
       advanceSessionLedgerOwnerReconciliation(input.conn, current.ledgerLocationKey, input.processGeneration, now())
       current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
     }
+    const canRebuildMissingLegacyLedger = input.retryBlocked && current.origin === 'legacy' &&
+      current.state === 'blocked' && current.failureClass === 'ledger_missing' && Boolean(input.dependencies.rebuildMissingLegacyLedger)
     if (!resumeCredentialedBootstrap && current.ownerReconciledProcessGeneration < input.processGeneration) {
-      if (input.dependencies.reconcilePreviousOwner && (current.ownerReconciledProcessGeneration > 0 || current.origin === 'legacy')) {
+      if (!canRebuildMissingLegacyLedger && input.dependencies.reconcilePreviousOwner && (current.ownerReconciledProcessGeneration > 0 || current.origin === 'legacy')) {
         try {
           await input.dependencies.reconcilePreviousOwner(input.location, current.ownerReconciledProcessGeneration, input.processGeneration)
         } catch (error) {
@@ -214,7 +221,8 @@ export async function ensureSessionLedgerReady(input: {
       } else if (decision.kind === 'check-baseline' || decision.kind === 'recover-check') {
         operation = 'baseline'
         baselineScanCount += 1
-        if (current.origin === 'legacy' && !(await input.dependencies.fileExists(input.location))) {
+        const ledgerExists = await input.dependencies.fileExists(input.location)
+        if (current.origin === 'legacy' && !ledgerExists && !input.dependencies.rebuildMissingLegacyLedger) {
           markMissingLegacyLedgerBlocked(input.conn, current.ledgerLocationKey, now())
           current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
           return { status: 'blocked', readiness: current }
@@ -222,7 +230,9 @@ export async function ensureSessionLedgerReady(input: {
         const token = beginSessionLedgerCheck(input.conn, current.ledgerLocationKey, now())
         if (!token) return { status: 'blocked', readiness: readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)! }
         try {
-          const proof = await input.dependencies.baseline(input.location)
+          const proof = current.origin === 'legacy' && !ledgerExists
+            ? await input.dependencies.rebuildMissingLegacyLedger!(input.location)
+            : await input.dependencies.baseline(input.location)
           const afterBaseline = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
           const currentToken = afterBaseline.state === 'unknown'
             ? beginSessionLedgerCheck(input.conn, current.ledgerLocationKey, now())
