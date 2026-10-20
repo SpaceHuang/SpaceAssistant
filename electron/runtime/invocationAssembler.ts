@@ -1548,9 +1548,12 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       })
       const executeDeferred = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string) => {
         const capability = resolveToolName(call.toolName)
-        if (!registry.get(capability) || !input.authorizedToolNames.has(capability)) throw new Error('DEFERRED_TOOL_NOT_AUTHORIZED')
+        const authorized = [...input.authorizedToolNames].some((name) => resolveToolName(name) === capability)
+        if (!registry.get(capability) || !authorized) throw new Error('DEFERRED_TOOL_NOT_AUTHORIZED')
         const capabilities = new CapabilityRegistry()
-        capabilities.define(call.invocationId, [capability])
+        // Deferred envelopes preserve the API-visible tool name (e.g. memory_wiki_save_page),
+        // while RegisteredTool and authorization sets use the canonical dotted name.
+        capabilities.define(call.invocationId, [...new Set([capability, call.toolName])])
         const safetyGate = new SafetyGate({ capabilities, permitStore: runtime.safetyPermits, policy })
         const resourceKeys = registeredTools.toolResourceKeys(call) ?? [`unknown:${call.invocationId}:${call.toolCallId}`]
         const resourceLease = await (materials.resourceLocks ?? runtime.resourceLocks).acquire(resourceKeys)

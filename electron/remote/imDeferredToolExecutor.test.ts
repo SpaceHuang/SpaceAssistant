@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
+import { DEFAULT_TOOLS_CONFIG, DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { createSession } from '../database/operations'
+import { setConfigValue } from '../database'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
@@ -15,6 +16,7 @@ describe('IM deferred tool executor', () => {
 
   it('用持久调用身份经实时 SafetyGate 直接执行原 RegisteredTool，不请求模型', async () => {
     const db = createMemoryAppDb()
+    setConfigValue(db, 'config.wiki', JSON.stringify({ ...DEFAULT_WIKI_CONFIG, rootPath: 'deferred-wiki-fixture' }))
     commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-v1.6', snapshot: {}, updatedAt: Date.now(), eventId: 'deferred-executor' })
     const session = createSession(db, { name: 'deferred-executor-session' })
     const storage = createSqliteSessionStorage(db)
@@ -25,14 +27,19 @@ describe('IM deferred tool executor', () => {
     })
     setDefaultAgentRuntime(runtime)
     const execute = vi.fn(async () => ({ success: true, data: 'done' }))
+    let executionWikiConfig: Record<string, unknown> | undefined
     const registry = new TypedToolRegistry()
-    registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write',
-      parseInput: (raw) => raw as { path: string; content: string }, plan: async (input) => input, execute }))
+    registry.register(definePlannedTool({ name: 'memory.wiki_save_page', actionClass: 'write',
+      parseInput: (raw) => raw as { title: string },
+      plan: async (input, context) => {
+        executionWikiConfig = context.executionContext?.wikiConfig as Record<string, unknown> | undefined
+        return input
+      }, execute }))
 
     await expect(executeDeferredImTool({
       db, sessionStorage: storage, sessionId: session.id, requestId: 'persisted-request', turnId: 'persisted-turn',
-      invocationId: 'persisted-invocation', toolCallId: 'persisted-tool-call', toolName: 'write_file',
-      input: { path: 'approved.txt', content: 'original' }, confirmationReceipt: 'approval:reply-1',
+      invocationId: 'persisted-invocation', toolCallId: 'persisted-tool-call', toolName: 'memory_wiki_save_page',
+      input: { title: 'approved page' }, confirmationReceipt: 'approval:reply-1',
       lane: 'feishu', remoteContext: { source: 'feishu', messageId: 'original-platform-message', confirmPolicy: 'always',
         authOwner: 'owner-1', chatId: 'chat-1', originSessionId: session.id },
       model: 'model', providerRouteId: 'deferred-executor-model', toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
@@ -42,6 +49,7 @@ describe('IM deferred tool executor', () => {
     })).resolves.toMatchObject({ output: { success: true, data: 'done' }, isError: false })
 
     expect(execute).toHaveBeenCalledOnce()
+    expect(executionWikiConfig).toMatchObject({ rootPath: 'deferred-wiki-fixture' })
     expect(providerStream).not.toHaveBeenCalled()
     db.close()
   })

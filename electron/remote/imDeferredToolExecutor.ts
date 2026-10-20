@@ -5,6 +5,7 @@ import type { TypedToolRegistry } from '../tools/plannedToolRegistry'
 import { assembleInvocation } from '../runtime/invocationAssembler'
 import type { WorkDirManager } from '../workDirManager'
 import type { ToolsConfig, BrowserConfig, ShellConfig, WikiConfig } from '../../src/shared/domainTypes'
+import { readWikiConfig } from '../wiki/wikiConfigReader'
 
 /** Rebuild the current IM tool host and dispatch only the immutable persisted call; never starts a model turn. */
 export async function executeDeferredImTool(input: {
@@ -38,6 +39,7 @@ export async function executeDeferredImTool(input: {
     input.remoteContext.authOwner?.trim() === '' || !input.remoteContext.authOwner) {
     throw new Error('DEFERRED_IM_EXECUTION_SCOPE_INVALID')
   }
+  const getWikiConfig = input.getWikiConfig ?? (() => readWikiConfig(input.db))
   const { agentSdk } = assembleInvocation({
     requestId: input.requestId,
     sessionId: input.sessionId,
@@ -50,7 +52,8 @@ export async function executeDeferredImTool(input: {
     resolveToolsConfig: () => input.toolsConfig,
     ...(input.getBrowserConfig ? { browserConfig: input.getBrowserConfig(), resolveBrowserConfig: input.getBrowserConfig } : {}),
     ...(input.getShellConfig ? { shellConfig: input.getShellConfig(), resolveShellConfig: input.getShellConfig } : {}),
-    ...(input.getWikiConfig ? { wikiConfig: input.getWikiConfig(), resolveWikiConfig: input.getWikiConfig } : {}),
+    wikiConfig: getWikiConfig(),
+    resolveWikiConfig: getWikiConfig,
     workDir: input.workDir,
     workDirManager: input.workDirManager,
     resolveWorkDir: () => input.workDir,
