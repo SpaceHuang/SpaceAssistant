@@ -27,6 +27,12 @@ describe('sendFeishuTextToTarget', () => {
 })
 
 describe('sendFeishuApprovalTextToTarget', () => {
+  it('accepts the lark-cli success envelope and returns the nested platform message ID', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"ok":true,"identity":"bot","data":{"message_id":"approval-cli-1"}}', stderr: '', timedOut: false }))
+    await expect(sendFeishuApprovalTextToTarget({ run } as never, 'ou_123', 'approval notice'))
+      .resolves.toEqual({ messageId: 'approval-cli-1' })
+  })
+
   it('returns the platform message id needed to bind a reply to the delivered notification', async () => {
     const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0,"data":{"message_id":"approval-message-1"}}', stderr: '', timedOut: false }))
     await expect(sendFeishuApprovalTextToTarget({ run } as never, 'ou_123', 'approval notice'))
@@ -41,6 +47,18 @@ describe('sendFeishuApprovalTextToTarget', () => {
 })
 
 describe('replyFeishuTextRawWithId', () => {
+  it('accepts the lark-cli success envelope returned by the current API command', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"ok":true,"identity":"bot","data":{"message_id":"confirm-cli-1"}}', stderr: '', timedOut: false }))
+    await expect(replyFeishuTextRawWithId({ run } as never, 'inbound-1', 'confirmation prompt'))
+      .resolves.toEqual({ messageId: 'confirm-cli-1' })
+  })
+
+  it('rejects a failed lark-cli envelope', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"ok":false,"error":{"message":"denied"}}', stderr: '', timedOut: false }))
+    await expect(replyFeishuTextRawWithId({ run } as never, 'inbound-1', 'confirmation prompt'))
+      .rejects.toThrow('FEISHU_REPLY_REJECTED')
+  })
+
   it('returns the reply message ID needed by synchronous confirmation binding', async () => {
     const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0,"data":{"message_id":"confirm-prompt-1"}}', stderr: '', timedOut: false }))
     await expect(replyFeishuTextRawWithId({ run } as never, 'inbound-1', 'confirmation prompt'))
@@ -60,6 +78,12 @@ describe('replyFeishuTextRawWithId', () => {
 })
 
 describe('replyFeishuTextRaw optional ID', () => {
+  it('accepts a successful lark-cli envelope even when ordinary replies do not need an ID', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"ok":true,"identity":"bot","data":{"message_id":"ordinary-cli-1"}}', stderr: '', timedOut: false }))
+    await expect(replyFeishuTextRaw({ run } as never, 'inbound-1', 'ordinary reply'))
+      .resolves.toEqual({ messageId: 'ordinary-cli-1' })
+  })
+
   it('returns a platform message ID when the reply API provides one', async () => {
     const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0,"data":{"message_id":"ordinary-reply-1"}}', stderr: '', timedOut: false }))
     await expect(replyFeishuTextRaw({ run } as never, 'inbound-1', 'ordinary reply'))

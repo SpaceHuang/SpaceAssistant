@@ -25,4 +25,13 @@ describe('feishuCliLogFields', () => {
     expect(s.contentLen).toBe(11)
     expect(s.contentHash).toMatch(/^[0-9a-f]{8}$/)
   })
+
+  it('records only the reply parent id needed to diagnose approval binding', () => {
+    const msg: FeishuInboundMessage = {
+      messageId: 'reply-1', replyToMessageId: 'approval-1', chatId: 'c1', chatType: 'p2p',
+      senderOpenId: 'ou_xxx', content: '批准 01', createTime: '1', mentionsBot: false
+    }
+    expect(inboundSummaryForLog(msg)).toMatchObject({ messageId: 'reply-1', replyToMessageId: 'approval-1' })
+    expect(inboundSummaryForLog(msg).content).toBeUndefined()
+  })
 })

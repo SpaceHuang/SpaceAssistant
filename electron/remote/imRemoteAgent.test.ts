@@ -10,6 +10,7 @@ import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import { reconcileStartupSessionTranscripts } from '../sessionStorage/recovery'
 import { ensureImTurnTaskControl, getTaskControlRecord, putTaskControlRecord, commitDeferredTaskCheckpoint } from '../database/taskControl'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
+import { toCanonicalModelMessages } from '../runtime/canonicalHistory'
 
 const mockRunToolChatSession = vi.fn()
 const mockResolveLlmCredentialsForModel = vi.fn()
@@ -449,8 +450,9 @@ describe('runImRemoteAgent', () => {
     const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, args.requestId, 'deferred-continuation-turn')
     await runImRemoteAgent({ ...args, turnId: acceptedTurn.turnId, acceptedTurn })
     const materials = invocationMaterialsCapture.last as { messages: Array<{ role: string; toolCallId?: string; content?: unknown; toolCalls?: Array<{ id: string }> }> } | null
-    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: [expect.objectContaining({ id: 'tool-1', name: 'send_message' })] }))
-    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'tool-1', isError: false, content: expect.stringContaining('TOOL_RESULT_4321') }))
+    const canonical = toCanonicalModelMessages(materials?.messages as never)
+    expect(canonical).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: [expect.objectContaining({ id: 'tool-1', name: 'send_message' })] }))
+    expect(canonical).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'tool-1', isError: false, content: expect.stringContaining('TOOL_RESULT_4321') }))
     expect(JSON.stringify(materials?.messages)).toContain('TOOL_RESULT_4321')
     db.close()
   })

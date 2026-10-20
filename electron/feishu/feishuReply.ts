@@ -2,6 +2,26 @@ import type { LarkCliRunner } from './larkCliRunner'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import { sendFeishuRemoteOutbound, sendFeishuRemoteOutboundWithId } from './feishuRemoteOutbound'
 
+function parseApiData(stdout: string, responseUnknownCode: string, rejectedCode: string): unknown {
+  let response: unknown
+  try { response = JSON.parse(stdout) as unknown }
+  catch { throw new Error(responseUnknownCode) }
+  if (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error(rejectedCode)
+  const envelope = response as { ok?: unknown; code?: unknown; data?: unknown }
+  if ('ok' in envelope) {
+    if (envelope.ok !== true) throw new Error(rejectedCode)
+    return envelope.data
+  }
+  if (envelope.code !== 0) throw new Error(rejectedCode)
+  return envelope.data
+}
+
+function getMessageId(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined
+  const messageId = (data as { message_id?: unknown }).message_id
+  return typeof messageId === 'string' && messageId.trim() ? messageId : undefined
+}
+
 /** Send a scheduled result to a stable recipient through the bot identity. */
 export async function sendFeishuTextToTarget(runner: LarkCliRunner, rawTarget: string, text: string): Promise<void> {
   const target = rawTarget.trim()
@@ -14,12 +34,7 @@ export async function sendFeishuTextToTarget(runner: LarkCliRunner, rawTarget: s
     timeoutSec: 30
   })
   if (result.timedOut || result.exitCode !== 0) throw new Error(`FEISHU_DELIVERY_FAILED:${result.timedOut ? 'timeout' : result.exitCode}`)
-  let response: unknown
-  try { response = JSON.parse(result.stdout) as unknown }
-  catch { throw new Error('FEISHU_DELIVERY_RESPONSE_UNKNOWN') }
-  if (!response || typeof response !== 'object' || Array.isArray(response) || (response as { code?: unknown }).code !== 0) {
-    throw new Error('FEISHU_DELIVERY_REJECTED')
-  }
+  parseApiData(result.stdout, 'FEISHU_DELIVERY_RESPONSE_UNKNOWN', 'FEISHU_DELIVERY_REJECTED')
 }
 
 /** Send an approval notification and return the platform message ID required for reply-to binding. */
@@ -34,13 +49,10 @@ export async function sendFeishuApprovalTextToTarget(runner: LarkCliRunner, rawT
     timeoutSec: 30
   })
   if (result.timedOut || result.exitCode !== 0) throw new Error(`FEISHU_DELIVERY_FAILED:${result.timedOut ? 'timeout' : result.exitCode}`)
-  let response: unknown
-  try { response = JSON.parse(result.stdout) as unknown } catch { throw new Error('FEISHU_DELIVERY_RESPONSE_UNKNOWN') }
-  if (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error('FEISHU_DELIVERY_REJECTED')
-  const apiResult = response as { code?: unknown; data?: { message_id?: unknown } }
-  if (apiResult.code !== 0) throw new Error('FEISHU_DELIVERY_REJECTED')
-  if (typeof apiResult.data?.message_id !== 'string' || !apiResult.data.message_id.trim()) throw new Error('FEISHU_DELIVERY_MESSAGE_ID_MISSING')
-  return { messageId: apiResult.data.message_id }
+  const data = parseApiData(result.stdout, 'FEISHU_DELIVERY_RESPONSE_UNKNOWN', 'FEISHU_DELIVERY_REJECTED')
+  const messageId = getMessageId(data)
+  if (!messageId) throw new Error('FEISHU_DELIVERY_MESSAGE_ID_MISSING')
+  return { messageId }
 }
 
 async function replyFeishuTextRawInternal(
@@ -55,14 +67,8 @@ async function replyFeishuTextRawInternal(
     timeoutSec: 30
   })
   if (r.timedOut || r.exitCode !== 0) throw new Error(`FEISHU_REPLY_FAILED:${r.timedOut ? 'timeout' : r.exitCode}`)
-  let response: unknown
-  try { response = JSON.parse(r.stdout) as unknown } catch { throw new Error('FEISHU_REPLY_RESPONSE_UNKNOWN') }
-  if (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error('FEISHU_REPLY_REJECTED')
-  const apiResult = response as { code?: unknown; data?: { message_id?: unknown } }
-  if (apiResult.code !== 0) throw new Error('FEISHU_REPLY_REJECTED')
-  const sentMessageId = typeof apiResult.data?.message_id === 'string' && apiResult.data.message_id.trim()
-    ? apiResult.data.message_id
-    : undefined
+  const data = parseApiData(r.stdout, 'FEISHU_REPLY_RESPONSE_UNKNOWN', 'FEISHU_REPLY_REJECTED')
+  const sentMessageId = getMessageId(data)
   if (requireMessageId && !sentMessageId) throw new Error('FEISHU_DELIVERY_MESSAGE_ID_MISSING')
   logFeishuCliEvent('info', 'feishu.reply.send', {
     messageId,
