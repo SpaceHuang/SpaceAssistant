@@ -2697,12 +2697,10 @@
 }
 
 .butler-task-editor__final-review {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: var(--sa-config-gap-block);
-  border: 1px solid var(--sa-border);
-  border-radius: var(--sa-radius-md);
-  background: var(--sa-bg-subtle);
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0 var(--sa-config-gap-tight);
 }
 
 .butler-task-editor__final-review > .ant-typography:first-child {
@@ -2716,8 +2714,9 @@
 
 .butler-task-editor__summary-list {
   display: grid;
-  gap: var(--sa-config-gap-substack);
+  gap: 0;
   margin: 0;
+  border-top: 1px solid var(--sa-border);
 }
 
 .butler-task-editor__summary-list > div {
@@ -2725,6 +2724,12 @@
   grid-template-columns: minmax(140px, 0.32fr) minmax(0, 1fr);
   gap: var(--sa-config-gap-field);
   align-items: start;
+  padding: var(--sa-config-gap-substack) 0;
+  border-bottom: 1px solid var(--sa-border);
+}
+
+.butler-task-editor__summary-list > div:last-child {
+  border-bottom: 0;
 }
 
 .butler-task-editor__summary-list dt {
@@ -2743,10 +2748,8 @@
   justify-content: space-between;
   gap: var(--sa-config-gap-stack);
   margin-top: var(--sa-config-gap-section);
-  padding: var(--sa-config-gap-substack) var(--sa-config-gap-stack);
-  border: 1px solid var(--sa-border);
-  border-radius: var(--sa-radius-sm);
-  background: var(--sa-bg-elevated);
+  padding: var(--sa-config-gap-section) 0 0;
+  border-top: 1px solid var(--sa-border);
 }
 
 .butler-task-editor__activation-copy {
@@ -3042,6 +3045,40 @@
   border-bottom: 0;
 }
 
+.butler-permission-table__command-preview {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: var(--sa-radius-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.butler-permission-table__command-preview:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 2px;
+}
+
+.butler-permission-table__command-preview .butler-permission-table__code {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.butler-permission-table__command-tooltip {
+  display: block;
+  max-width: min(560px, 70vw);
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-chat-font-mono);
+  line-height: var(--sa-chat-line-mono);
+}
+
 .butler-permission-table__code {
   display: inline-block;
   max-width: 100%;
@@ -3081,7 +3118,6 @@
     font-size: var(--sa-config-font-sm);
   }
 
-  .butler-task-editor__final-review,
   .butler-permission-review {
     padding: var(--sa-config-gap-stack);
   }

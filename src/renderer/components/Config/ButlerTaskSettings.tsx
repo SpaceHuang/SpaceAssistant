@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Alert, App, Button, Checkbox, Collapse, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Steps, Switch, Table, Tag, TimePicker, Typography } from 'antd'
+import { Alert, App, Button, Checkbox, Collapse, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Steps, Switch, Table, Tag, TimePicker, Tooltip, Typography } from 'antd'
 import { Pencil, Plus, SquarePlay, Trash2 } from 'lucide-react'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
@@ -124,6 +124,22 @@ function deliveryText(pref: AutomationDeliveryPref, t: TaskActions['t']): string
 type PermissionTableDetail = { label: string; value: ReactNode }
 type PermissionTableRow = { key: string; permissionType: string; object: ReactNode; details: PermissionTableDetail[] }
 
+function shellCommandPreview(command: string): string {
+  const withoutInitialCd = command.replace(/^\s*cd\s+(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)\s*&&\s*/, '')
+  const segments = withoutInitialCd.split(/\s*(?:&&|\|\||;|\|)\s*/).map((segment) => segment.trim()).filter(Boolean)
+  const primarySegment = segments.reduce((primary, segment) =>
+    segment.split(/\s+/).length > primary.split(/\s+/).length ? segment : primary,
+    segments[0] ?? command.trim())
+  const maxLength = 88
+  if (primarySegment.length > maxLength) {
+    const prefix = primarySegment.slice(0, maxLength - 1)
+    const wordBoundary = prefix.lastIndexOf(' ')
+    const shortened = wordBoundary > 24 ? prefix.slice(0, wordBoundary) : prefix
+    return `${shortened.trimEnd()} …`
+  }
+  return segments.length > 1 ? `${primarySegment} …` : primarySegment
+}
+
 function permissionTableRows(permissions: AutomationTaskPermission[], t: TaskActions['t']): PermissionTableRow[] {
   const code = (value: string) => <Typography.Text code className="butler-permission-table__code">{value}</Typography.Text>
   const pathList = (paths: string[]) => paths.length
@@ -157,7 +173,20 @@ function permissionTableRows(permissions: AutomationTaskPermission[], t: TaskAct
                 <div className="butler-permission-table__command" key={`${commandIndex}-${command.workingDirectory}`}>
                   <div className="butler-permission-table__detail-line">
                     <span className="butler-permission-table__detail-label">{t('butler.form.permissionDetailCommand')}</span>
-                    {code(command.command)}
+                    <Tooltip
+                      title={<code className="butler-permission-table__command-tooltip">{command.command}</code>}
+                      placement="topLeft"
+                      mouseEnterDelay={0.35}
+                      styles={{ root: { maxWidth: 560 } }}
+                    >
+                      <span
+                        className="butler-permission-table__command-preview"
+                        tabIndex={0}
+                        aria-label={`${t('butler.form.permissionDetailCommand')}: ${shellCommandPreview(command.command)}`}
+                      >
+                        {code(shellCommandPreview(command.command))}
+                      </span>
+                    </Tooltip>
                   </div>
                   <div className="butler-permission-table__detail-line">
                     <span className="butler-permission-table__detail-label">{t('butler.form.permissionDetailWorkingDirectory')}</span>
@@ -376,16 +405,18 @@ export function ButlerTaskSettings() {
   useEffect(() => {
     const target = authorizationReview
       ? authorizationReviewRef.current
-      : preflightReport && preflightReport.status !== 'passed'
-        ? preflightReportRef.current
-        : writeError
-          ? writeErrorRef.current
-          : null
+      : wizardStep === 0 && writeError
+        ? writeErrorRef.current
+        : preflightReport && preflightReport.status !== 'passed'
+          ? preflightReportRef.current
+          : writeError
+            ? writeErrorRef.current
+            : null
     if (!target) return
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
     target.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
     target.focus({ preventScroll: true })
-  }, [authorizationReview, preflightReport, writeError])
+  }, [authorizationReview, preflightReport, writeError, wizardStep])
 
   const invalidateAuthorizationReview = () => {
     authorizationDraftRevision.current += 1
@@ -564,6 +595,7 @@ export function ButlerTaskSettings() {
         return null
       })
     if (!values) return
+    const submittedFromStep = wizardStep
     const requestDraftRevision = authorizationReview ? undefined : authorizationDraftRevision.current
     setSubmitting(true)
     setWriteError(null)
@@ -617,7 +649,7 @@ export function ButlerTaskSettings() {
         setAuthorizeAllPermissions(false)
         setPreflightReport(null)
         setWriteError(t('butler.form.preflightDraftChanged'))
-        setWizardStep(1)
+        setWizardStep(0)
         return
       }
       if (!res.ok) {
@@ -633,25 +665,35 @@ export function ButlerTaskSettings() {
           setPreflightReport(res.report)
           setAuthorizationReview(null)
           setAuthorizeAllPermissions(false)
-          setWriteError(null)
-          setWizardStep(1)
+          const finalReviewFailed = submittedFromStep === 2
+          setWriteError(finalReviewFailed ? t('butler.form.finalPreflightBlocked') : null)
+          // The confirmation ticket is consumed even when its host-side recheck fails.
+          // Return to editable task content so the user can fix the target and preflight again.
+          setWizardStep(finalReviewFailed ? 0 : 1)
         } else {
           setAuthorizationReview(null)
           setAuthorizeAllPermissions(false)
+          setPreflightReport(null)
           const errorMessage = res.kind === 'preflight-unavailable'
             ? t(getPreflightIssueMessageKey(res.error) as Parameters<TaskActions['t']>[0])
-            : res.error
+            : res.error === 'task-revision-conflict'
+              ? t('butler.form.taskRevisionConflict')
+              : res.error
           setWriteError(errorMessage)
-          setWizardStep(1)
+          // Step 0 can repair the task and rerun preflight. Step 1 without a live review ticket
+          // has no permission list to approve and would strand the user with no Next action.
+          setWizardStep(0)
           message.error(t('butler.form.saveFailedWithError', { error: errorMessage }))
         }
         return
       }
-      const taskId = res.id
-      const committedEnabled = res.task?.enabled ?? editing?.enabled ?? false
-      let activationUpdateFailed = false
-      if (committedEnabled !== enableOnSave) {
-        try {
+      const taskId = res.id ?? editing?.id
+      let activationUpdateFailed = !taskId
+      try {
+        // The confirmation response only commits task settings and the authorization receipt.
+        // Always persist the separate final-step activation choice explicitly; do not infer it
+        // from the task snapshot returned by the authorization commit.
+        if (taskId) {
           const statusResult = await window.api.butlerUpdateTask({
             id: taskId,
             patch: {
@@ -659,10 +701,12 @@ export function ButlerTaskSettings() {
               ...(res.task?.taskRevision !== undefined ? { expectedTaskRevision: res.task.taskRevision } : {})
             }
           })
-          activationUpdateFailed = !statusResult.ok
-        } catch {
-          activationUpdateFailed = true
+          activationUpdateFailed = !statusResult.ok || (
+            statusResult.ok && statusResult.task?.enabled !== undefined && statusResult.task.enabled !== enableOnSave
+          )
         }
+      } catch {
+        activationUpdateFailed = true
       }
       setPreflightReport(null)
       setAuthorizationReview(null)
@@ -676,7 +720,9 @@ export function ButlerTaskSettings() {
       setEditorOpen(false)
       await refresh()
     } catch {
-      message.error(t('butler.saveFailed'))
+      const errorMessage = t('butler.saveFailed')
+      setWriteError(errorMessage)
+      message.error(errorMessage)
     } finally {
       setSubmitting(false)
     }
@@ -755,7 +801,7 @@ export function ButlerTaskSettings() {
     running: false
   }
 
-  const renderPreflightIssues = (report: PreflightReport, insidePermissionReview = false) => report.blockers.map((item, index) => {
+  const renderPreflightIssues = (report: PreflightReport, insidePermissionReview = false, onTaskContentStep = false) => report.blockers.map((item, index) => {
     const hasTargetIssue = ['TARGET_UNCLEAR', 'TARGET_AMBIGUOUS', 'TARGET_NOT_FOUND', 'TARGET_OUTSIDE_ROOTS'].includes(item.code)
     const outputRootAuthorizationIssue = item.code === 'TOOL_PERMISSION_REQUIRED' && item.reasonCode === 'output_root_not_read_authorized'
     const candidates = item.candidates ?? []
@@ -773,7 +819,7 @@ export function ButlerTaskSettings() {
             {typeof item.candidateCount === 'number' && item.candidateCount > candidates.length ? <Typography.Text type="secondary">{t('butler.form.preflightCandidateOverflow', { total: item.candidateCount, shown: candidates.length })}</Typography.Text> : null}
           </div>
         ) : null}
-        {hasTargetIssue ? <Typography.Text type="secondary">{t('butler.form.preflightClarifyHint')}</Typography.Text> : null}
+        {hasTargetIssue ? <Typography.Text type="secondary">{t(onTaskContentStep ? 'butler.form.preflightClarifyOnTaskStep' : 'butler.form.preflightClarifyHint')}</Typography.Text> : null}
       </div>
     )
   })
@@ -876,6 +922,19 @@ export function ButlerTaskSettings() {
               { title: t('butler.form.wizardStepFinal') }
             ]}
           />
+          {wizardStep === 0 && writeError ? (
+            <div ref={writeErrorRef} className="butler-task-editor__result-focus" role="region" aria-label={t('butler.form.saveFailedWithError', { error: writeError })} tabIndex={-1}>
+              <Alert
+                className="butler-preflight-report"
+                type="error"
+                showIcon
+                message={t('butler.form.saveFailedWithError', { error: writeError })}
+                description={preflightReport?.status === 'blocked' ? (
+                  <div className="butler-preflight-report__content">{renderPreflightIssues(preflightReport, false, true)}</div>
+                ) : undefined}
+              />
+            </div>
+          ) : null}
           {wizardStep === 1 && authorizationReview ? (
             <div ref={authorizationReviewRef} className="butler-task-editor__result-focus" role="region" aria-label={t('butler.form.permissionReviewTitle')} tabIndex={-1}>
               <div className="butler-permission-review" aria-labelledby="butler-permission-review-title">
@@ -966,18 +1025,22 @@ export function ButlerTaskSettings() {
             </section>
 
             <section className="butler-task-editor__section" aria-labelledby="butler-task-section-output">
-              <Typography.Title id="butler-task-section-output" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionOutput')}</Typography.Title>
+              <Typography.Title id="butler-task-section-output" className="butler-task-editor__section-title" level={5}>
+                {t('butler.form.outputDirSectionTitle')}
+                <Typography.Text type="danger" aria-hidden="true"> *</Typography.Text>
+              </Typography.Title>
               <div className="butler-task-editor__section-grid">
                 <Form.Item
                   name="outputDir"
                   className="butler-task-editor__wide"
-                  label={t('butler.form.outputDir')}
+                  label={null}
                   rules={[{ required: true, message: t('butler.form.outputDirRequired') }]}
-                  extra={t('butler.form.outputDirectoryHint')}
                 >
                   <Input
                     className="butler-output-dir-picker"
                     readOnly
+                    aria-labelledby="butler-task-section-output"
+                    aria-required="true"
                     title={outputDir}
                     placeholder={t('butler.form.outputDirPlaceholder')}
                     suffix={<Button type="link" onClick={() => void browseOutputDir()}>{t('butler.form.chooseOutputDir')}</Button>}
@@ -1060,6 +1123,7 @@ export function ButlerTaskSettings() {
           </div> : null}
           {wizardStep === 2 && authorizationReview ? (
             <section className="butler-task-editor__final-review" aria-labelledby="butler-task-final-review-title">
+              {writeError ? <Alert className="butler-preflight-report" type="error" showIcon message={t('butler.form.saveFailedWithError', { error: writeError })} /> : null}
               <Typography.Title id="butler-task-final-review-title" level={4}>{t('butler.form.wizardFinalTitle')}</Typography.Title>
               <Typography.Paragraph type="secondary">{t('butler.form.wizardFinalIntro')}</Typography.Paragraph>
               <dl className="butler-task-editor__summary-list">
