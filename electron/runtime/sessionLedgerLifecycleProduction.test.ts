@@ -51,6 +51,105 @@ describe('production session ledger lifecycle', () => {
     expect(traces).toMatchObject([{ baselineScanCount: 0 }])
   })
 
+  it('migrates a healthy legacy ready proof to a full-prefix proof in place', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-legacy-proof-upgrade-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'legacy-proof-upgrade', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    const ready = () => ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })
+    expect((await ready()).status).toBe('ready')
+    conn.prepare("UPDATE session_ledger_projection_state SET proof_tail_frame=substr(proof_tail_frame,6) WHERE session_id=?")
+      .run(session.id)
+
+    const upgraded = await ready()
+
+    expect(upgraded.status).toBe('ready')
+    expect(upgraded.readiness.proofTailFrame).toMatch(/^full:/)
+    expect(upgraded.readiness.failureClass).toBeNull()
+  })
+
+  it('continues a healthy legacy dirty proof after verifying its previous boundary', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-legacy-dirty-upgrade-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'legacy-dirty-upgrade', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    const ready = () => ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })
+    expect((await ready()).status).toBe('ready')
+    conn.prepare("UPDATE session_ledger_projection_state SET proof_tail_frame=substr(proof_tail_frame,6) WHERE session_id=?")
+      .run(session.id)
+
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'legacy-invocation', turnId: 'legacy-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'legacy-event', idempotencyKey: 'legacy-event', kind: 'model-response-committed',
+      payload: { modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'legacy-tool', name: 'read_file', input: { path: 'a' } }] },
+        sessionLedger: { location, stepId: 'legacy-step', toolCalls: [{ toolUseId: 'legacy-tool', name: 'read_file', args: { path: 'a' } }] } }
+    }], 0)
+
+    const upgraded = await ready()
+
+    expect(upgraded).toMatchObject({ status: 'ready', readiness: { state: 'ready', proofTailFrame: expect.stringMatching(/^full:/) } })
+    expect((await readSessionEvents(resolveSessionEventPaths(root, session.id, session.createdAt).eventsPath))
+      .map(({ payload }) => payload.toolUseId)).toContain('legacy-tool')
+  })
+
+  it('blocks incremental projection when previously proved ledger bytes were truncated and the writer regrows the file', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-truncated-proof-'))
+    roots.push(root)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'truncated-proof', workDirProfileId: 'profile' })
+    const location = { workDir: root, sessionId: session.id, createdAt: session.createdAt }
+    const conn = getDbConnection(db)
+    const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+    const ready = () => ensureSessionLedgerReady({ conn, location, sessionGeneration: session.generation,
+      processGeneration: 1, dependencies })
+    expect((await ready()).status).toBe('ready')
+
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    const append = (sequence: number) => history.appendBatch([{
+      invocationId: 'invocation', turnId: 'turn', sequence, schemaVersion: 1,
+      eventId: `event-${sequence}`, idempotencyKey: `event-${sequence}`, kind: 'model-response-committed',
+      payload: { modelTurn: sequence, message: { role: 'assistant', toolCalls: [{ id: `tool-${sequence}`, name: 'read_file', input: { path: 'a' } }] },
+        sessionLedger: { location, stepId: `step-${sequence}`, toolCalls: [{ toolUseId: `tool-${sequence}`, name: 'read_file', args: { path: 'a' } }] } }
+    }], sequence - 1)
+    await append(1)
+    expect((await ready()).status).toBe('ready')
+    conn.prepare("UPDATE session_ledger_projection_state SET proof_tail_frame=substr(proof_tail_frame,6) WHERE session_id=?")
+      .run(session.id)
+
+    await getSessionEventSink(root, session.id, session.createdAt).close()
+    const paths = resolveSessionEventPaths(root, session.id, session.createdAt)
+    await fs.truncate(paths.eventsPath, 0)
+    await append(2)
+    const writer = getSessionEventSink(root, session.id, session.createdAt)
+    await writer.appendCritical({ type: 'assistant_chunk', payload: { turnId: 'turn', content: 'x'.repeat(2048) } })
+    await writer.appendCritical({ type: 'assistant_chunk', payload: { turnId: 'turn', content: 'y'.repeat(2048) } })
+    await writer.close()
+
+    const result = await ready()
+    expect(result).toMatchObject({ status: 'blocked', readiness: {
+      state: 'blocked', retryScope: 'baseline', failureClass: 'physical_proof_mismatch'
+    } })
+    expect((await readSessionEvents(paths.eventsPath)).map((event) => event.payload.toolUseId)).not.toContain('tool-1')
+    expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id='event-2'").get())
+      .toEqual({ status: 'pending' })
+    expect((await ready()).status).toBe('blocked')
+  })
+
   it('keeps a resumable session ledger through retention and allows the session to reopen', async () => {
     const db = createMemoryAppDb()
     databases.push(db)

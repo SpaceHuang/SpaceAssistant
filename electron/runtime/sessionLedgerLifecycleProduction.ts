@@ -63,20 +63,39 @@ export async function readSessionLedgerReadyProof(conn: DatabaseSync, location: 
     throw new Error('SESSION_LEDGER_INDEX_PROOF_INVALID')
   }
   const handle = await fs.open(paths.eventsPath, 'r')
-  let tail = Buffer.alloc(0)
+  const hash = createHash('sha256')
   try {
-    const length = Math.min(fileStat.size, 4096)
-    tail = Buffer.alloc(length)
-    if (length) await handle.read(tail, 0, length, fileStat.size - length)
+    const buffer = Buffer.alloc(64 * 1024)
+    let offset = 0
+    while (offset < fileStat.size) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, fileStat.size - offset), offset)
+      if (!bytesRead) throw new Error('SESSION_LEDGER_PROOF_FILE_CHANGED')
+      hash.update(buffer.subarray(0, bytesRead))
+      offset += bytesRead
+    }
   } finally { await handle.close() }
   return {
     canonicalWatermark: canonicalWatermark(conn, location),
     ledgerGeneration: readiness.ledgerGeneration,
     fileIdentity: `${fileStat.dev}:${fileStat.ino}:${fileStat.mtimeMs}`,
     fileBytes: fileStat.size,
-    tailFrame: createHash('sha256').update(tail).digest('hex'),
+    // The version tag distinguishes complete prefix digests from legacy tail hashes.
+    tailFrame: `full:${hash.digest('hex')}`,
     indexSeq: index.seq!, indexEventCount: index.eventCount!, indexBytes: index.bytes!, indexLastAt: index.lastAt!
   }
+}
+
+async function legacyTailDigest(eventsPath: string, fileBytes: number): Promise<string> {
+  const length = Math.min(fileBytes, 4096)
+  const handle = await fs.open(eventsPath, 'r')
+  const tail = Buffer.alloc(length)
+  try {
+    if (length) {
+      const { bytesRead } = await handle.read(tail, 0, length, fileBytes - length)
+      if (bytesRead !== length) throw new Error('SESSION_LEDGER_PROOF_FILE_CHANGED')
+    }
+  } finally { await handle.close() }
+  return createHash('sha256').update(tail).digest('hex')
 }
 
 function readCanonicalSessionHistory(conn: DatabaseSync, sessionId: string): HistoryEvent[] {
@@ -93,6 +112,48 @@ function readCanonicalSessionHistory(conn: DatabaseSync, sessionId: string): His
 
 export function createProductionSessionLedgerLifecycleDependencies(conn: DatabaseSync): SessionLedgerLifecycleDependencies {
   const proof = (location: SessionLedgerLocationInput) => readSessionLedgerReadyProof(conn, location)
+  const verifyPhysicalContinuity: NonNullable<SessionLedgerLifecycleDependencies['verifyPhysicalContinuity']> = async (location, readiness) => {
+    if (!readiness.proofFileIdentity || readiness.proofFileBytes === null || !readiness.proofTailFrame) return false
+    const paths = resolveSessionEventPaths(location.workDir, location.sessionId, location.createdAt)
+    const stat = await fs.lstat(paths.eventsPath)
+    const identity = `${stat.dev}:${stat.ino}`
+    if (stat.isSymbolicLink() || !stat.isFile() || identity !== readiness.proofFileIdentity.split(':').slice(0, 2).join(':') ||
+      stat.size < readiness.proofFileBytes) return false
+    const legacyProof = !readiness.proofTailFrame.startsWith('full:')
+    const handle = await fs.open(paths.eventsPath, 'r')
+    const hash = createHash('sha256')
+    try {
+      const buffer = Buffer.alloc(64 * 1024)
+      if (legacyProof) {
+        const length = Math.min(readiness.proofFileBytes, 4096)
+        const { bytesRead } = await handle.read(buffer, 0, length, readiness.proofFileBytes - length)
+        if (bytesRead !== length) return false
+        hash.update(buffer.subarray(0, bytesRead))
+      } else {
+        let offset = 0
+        while (offset < readiness.proofFileBytes) {
+          const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, readiness.proofFileBytes - offset), offset)
+          if (!bytesRead) return false
+          hash.update(buffer.subarray(0, bytesRead))
+          offset += bytesRead
+        }
+      }
+    } finally { await handle.close() }
+    return (legacyProof ? hash.digest('hex') : `full:${hash.digest('hex')}`) === readiness.proofTailFrame
+  }
+  const migrateLegacyReadyProof: NonNullable<SessionLedgerLifecycleDependencies['migrateLegacyReadyProof']> = async (location, readiness) => {
+    if (!readiness.proofTailFrame || readiness.proofTailFrame.startsWith('full:')) return undefined
+    const upgraded = await proof(location)
+    if (!upgraded) return undefined
+    const oldStyleProof = { ...upgraded, tailFrame: await legacyTailDigest(
+      resolveSessionEventPaths(location.workDir, location.sessionId, location.createdAt).eventsPath, upgraded.fileBytes) }
+    const matches = readiness.canonicalWatermark === oldStyleProof.canonicalWatermark &&
+      readiness.ledgerGeneration === oldStyleProof.ledgerGeneration && readiness.proofFileIdentity === oldStyleProof.fileIdentity &&
+      readiness.proofFileBytes === oldStyleProof.fileBytes && readiness.proofTailFrame === oldStyleProof.tailFrame &&
+      readiness.proofIndexSeq === oldStyleProof.indexSeq && readiness.proofIndexEventCount === oldStyleProof.indexEventCount &&
+      readiness.proofIndexBytes === oldStyleProof.indexBytes && readiness.proofIndexLastAt === oldStyleProof.indexLastAt
+    return matches ? upgraded : undefined
+  }
   const project = async (location: SessionLedgerLocationInput, target: Parameters<typeof projectCanonicalSessionLedgerTarget>[1]) => {
     const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
     return projectCanonicalSessionLedgerTarget(sink, target)
@@ -110,6 +171,8 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
       }
     },
     readProof: proof,
+    verifyPhysicalContinuity,
+    migrateLegacyReadyProof,
     bootstrap: async (location, bootstrapId) => {
       await bootstrapEmptySessionEventLedger(location.workDir, location.sessionId, location.createdAt, bootstrapId)
       const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
