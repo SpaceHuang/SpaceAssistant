@@ -1,8 +1,9 @@
 import path from 'node:path'
-import { getPreflightIssueMessageKey, type AutomationTaskMcpToolCandidate, type AutomationTaskToolRequirement, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
+import { getPreflightIssueMessageKey, type AutomationTaskMcpToolCandidate, type AutomationTaskPermission, type AutomationTaskToolRequirement, type PreflightClarificationReasonCode, type PreflightIssue, type PreflightReport, type SuggestedDirectory, type TargetBinding } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider, type TaskPathFacts } from './taskPathFacts'
 import { resolveTaskTarget, type ProposedTaskTarget } from './taskTargetResolver'
 import { MAX_TASK_PREFLIGHT_TRACE_ITEMS, type TaskPreflightMockTool, type TaskPreflightMockTraceItem } from './taskPreflightMockRunner'
+import { deriveTaskPreflightPermissions } from './taskPreflightPermissionDeriver'
 
 export type TaskPreflightAnalysisInput = {
   prompt: string
@@ -19,10 +20,10 @@ export type TaskPreflightAnalysisInput = {
 }
 
 export type TaskPreflightClarification = { reference: string; reasonCode: PreflightClarificationReasonCode; candidates?: string[] }
-export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }>; mockTrace?: TaskPreflightMockTraceItem[]; mockIncomplete?: boolean; mockIncompleteReason?: string }
+export type TaskPreflightAnalysisOutput = { targets: ProposedTaskTarget[]; /** Main-process projection derived from mockTrace; model-authored values are ignored. */ requiredPermissions?: AutomationTaskToolRequirement[]; clarifications?: TaskPreflightClarification[]; suggestedDirectories?: Array<{ path: string; purpose: string; source: string }>; mockTrace?: TaskPreflightMockTraceItem[]; mockIncomplete?: boolean; mockIncompleteReason?: string }
 export type TaskPreflightAnalyzer = { analyze(input: TaskPreflightAnalysisInput, signal: AbortSignal): Promise<TaskPreflightAnalysisOutput> }
 export type TaskPreflightInput = { prompt: string; scheduleSummary: string; deliverySummary: string; roots: string[]; outputDir?: string; taskRevision: number; preflightStartedAt?: number; mcpTools?: Array<AutomationTaskMcpToolCandidate & { mappedName?: string }>; tools?: TaskPreflightMockTool[]; /** Host-only continuation after the user approves a previously displayed permission list. */ analysisOverride?: TaskPreflightAnalysisOutput }
-export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[]; mockTrace?: TaskPreflightMockTraceItem[]; authorizationContinuation?: { outputRoot: string; analysis: TaskPreflightAnalysisOutput } }
+export type TaskPreflightResult = { report: PreflightReport; bindings: TargetBinding[]; factsDigest?: string; requiredPermissions?: AutomationTaskToolRequirement[]; mockTrace?: TaskPreflightMockTraceItem[]; authorizationContinuation?: { authorizedRoots: string[]; analysis: TaskPreflightAnalysisOutput } }
 export type TaskPreflightDependencies = { analyzer: TaskPreflightAnalyzer; factsProvider?: Pick<TaskPathFactsProvider, 'collect'>; timeoutMs?: number; now?: () => number }
 
 const issue = (code: string, field = 'prompt', details: Partial<PreflightIssue> = {}): PreflightIssue => ({ code, field, messageKey: getPreflightIssueMessageKey(code), ...details })
@@ -43,9 +44,66 @@ const withAnalysisCoverage = (report: PreflightReport, analysis: TaskPreflightAn
     : {})
 })
 
+function withPermissionNeeds(
+  report: PreflightReport,
+  requirements: readonly AutomationTaskToolRequirement[],
+  mcpTools: readonly AutomationTaskMcpToolCandidate[] = []
+): PreflightReport {
+  if (report.status !== 'blocked' || requirements.length === 0) return report
+
+  const needs: AutomationTaskPermission[] = []
+  const directoryPaths = [...new Set(requirements.flatMap((permission) => permission.tool === 'run_shell'
+    ? [permission.workingDirectory]
+    : permission.tool === 'grep' || permission.tool === 'run_script' ? permission.scopeRoots : []))]
+  needs.push(...directoryPaths.map((directory) => ({ kind: 'directory-read-write' as const, path: directory })))
+
+  const shellRequirements = requirements.filter((permission): permission is Extract<AutomationTaskToolRequirement, { tool: 'run_shell' }> => permission.tool === 'run_shell')
+  if (shellRequirements.length) needs.push({
+    kind: 'local-shell',
+    scopeRoots: [...new Set(shellRequirements.map((permission) => permission.workingDirectory))],
+    commands: shellRequirements.map(({ command, workingDirectory }) => ({ command, workingDirectory }))
+  })
+
+  const grepRoots = [...new Set(requirements.flatMap((permission) => permission.tool === 'grep' ? permission.scopeRoots : []))]
+  if (grepRoots.length) needs.push({ kind: 'grep', scopeRoots: grepRoots })
+
+  const scriptRoots = [...new Set(requirements.flatMap((permission) => permission.tool === 'run_script' ? permission.scopeRoots : []))]
+  if (scriptRoots.length) needs.push({ kind: 'run-script', scopeRoots: scriptRoots, scriptHashBinding: 'per-invocation' })
+
+  const seenMcp = new Set<string>()
+  for (const requirement of requirements) {
+    if (requirement.tool !== 'mcp') continue
+    const candidate = mcpTools.find((tool) => tool.serverId === requirement.serverId && tool.toolName === requirement.toolName
+      && /^[a-f0-9]{64}$/.test(tool.descriptorHash) && /^[a-f0-9]{64}$/.test(tool.profileHash))
+    if (!candidate) continue
+    const key = `${candidate.serverId}\0${candidate.toolName}`
+    if (seenMcp.has(key)) continue
+    seenMcp.add(key)
+    needs.push({ kind: 'mcp-tool', serverId: candidate.serverId, serverName: candidate.serverName, toolName: candidate.toolName,
+      description: candidate.description, purpose: requirement.purpose, parameters: candidate.parameters,
+      descriptorHash: candidate.descriptorHash, profileHash: candidate.profileHash })
+  }
+
+  return needs.length ? { ...report, permissionNeeds: needs } : report
+}
+
 function isWithinRoot(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate)
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+function isCanonicalAbsolutePath(value: string): boolean {
+  return path.isAbsolute(value) && path.normalize(value) === value
+}
+
+function permissionRoots(requirements: readonly AutomationTaskToolRequirement[]): string[] {
+  return [...new Set(requirements.flatMap((permission) => permission.tool === 'run_shell'
+    ? [permission.workingDirectory]
+    : permission.tool === 'grep' || permission.tool === 'run_script' ? permission.scopeRoots : []))].sort()
+}
+
+function rootsNeedingAuthorization(requirements: readonly AutomationTaskToolRequirement[], facts: TaskPathFacts): string[] {
+  return permissionRoots(requirements).filter((requestedRoot) => !facts.roots.some((authorizedRoot) => isWithinRoot(requestedRoot, authorizedRoot)))
 }
 
 function requestsReadAccessToOutputGitRepository(
@@ -78,17 +136,6 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
     if (record.kind === 'output' && typeof record.path === 'string' && ['file', 'directory'].includes(String(record.expectedType))) continue
     return undefined
   }
-  const requiredPermissions = (value as { requiredPermissions?: unknown }).requiredPermissions
-  if (requiredPermissions !== undefined && (!Array.isArray(requiredPermissions) || requiredPermissions.some((item) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return true
-    const permission = item as Record<string, unknown>
-    if (permission.tool === 'run_shell') return typeof permission.command !== 'string' || !permission.command.trim() || permission.command.length > 4096 || typeof permission.workingDirectory !== 'string' || !permission.workingDirectory.trim()
-    if (permission.tool === 'mcp') return typeof permission.serverId !== 'string' || !permission.serverId.trim() || permission.serverId.length > 128
-      || typeof permission.toolName !== 'string' || !permission.toolName.trim() || permission.toolName.length > 256
-      || typeof permission.purpose !== 'string' || !permission.purpose.trim() || permission.purpose.length > 240
-    if (permission.tool === 'grep' || permission.tool === 'run_script') return !Array.isArray(permission.scopeRoots) || permission.scopeRoots.length === 0 || permission.scopeRoots.length > 20 || permission.scopeRoots.some((root) => typeof root !== 'string' || !root.trim())
-    return true
-  }))) return undefined
   // Old tool-name-only requests have no safe parameter scope and cannot be upgraded into grants.
   if ('requiredTools' in value && Array.isArray((value as { requiredTools?: unknown }).requiredTools) && (value as { requiredTools: unknown[] }).requiredTools.length > 0) return undefined
   const clarifications = (value as { clarifications?: unknown }).clarifications
@@ -111,16 +158,11 @@ function validateAnalysis(value: unknown): TaskPreflightAnalysisOutput | undefin
   }))) return undefined
   if ((value as { mockIncomplete?: unknown }).mockIncomplete !== undefined && typeof (value as { mockIncomplete?: unknown }).mockIncomplete !== 'boolean') return undefined
   if ((value as { mockIncompleteReason?: unknown }).mockIncompleteReason !== undefined && typeof (value as { mockIncompleteReason?: unknown }).mockIncompleteReason !== 'string') return undefined
-  const normalizedPermissions = Array.isArray(requiredPermissions)
-    ? requiredPermissions.map((item) => {
-      const permission = item as Record<string, unknown>
-      // Old model responses may still include timeout; it is an execution option, never a user grant.
-      return permission.tool === 'run_shell'
-        ? { tool: 'run_shell' as const, command: permission.command as string, workingDirectory: permission.workingDirectory as string }
-        : item
-    }) as AutomationTaskToolRequirement[]
-    : undefined
-  return { ...(value as TaskPreflightAnalysisOutput), ...(normalizedPermissions ? { requiredPermissions: normalizedPermissions } : {}), ...(mockTrace ? { mockTrace: mockTrace as TaskPreflightMockTraceItem[] } : {}) }
+  const normalized = { ...(value as TaskPreflightAnalysisOutput) }
+  // final-check: requiredPermissions is a host projection, never accepted from a model or IPC override.
+  delete normalized.requiredPermissions
+  if (mockTrace) normalized.mockTrace = mockTrace as TaskPreflightMockTraceItem[]
+  return normalized
 }
 
 async function withTimeout<T>(promise: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T> {
@@ -196,22 +238,71 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       }
     }
   }
-  const requiredPermissions = analysis.requiredPermissions ?? []
+  let requiredPermissions: AutomationTaskToolRequirement[]
+  try {
+    requiredPermissions = deriveTaskPreflightPermissions({
+      trace: analysis.mockTrace ?? [], facts, mcpTools: input.mcpTools ?? []
+    })
+    analysis = { ...analysis, requiredPermissions }
+  } catch (error) {
+    if (process.env.SPACEASSISTANT_DEV === '1') {
+      const reason = error instanceof Error && /^PREFLIGHT_TRACE_[A-Z0-9_]{1,64}$/.test(error.message) ? error.message : 'permission-derivation-failed'
+      console.warn('[taskPreflight] trace permission derivation rejected', { reason, traceItems: analysis.mockTrace?.length ?? 0 })
+    }
+    return {
+      report: emptyReport('unavailable', [issue('ANALYZER_INVALID_RESPONSE')]),
+      bindings: [], factsDigest: facts.digest,
+      ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
+    }
+  }
   // facts: 本机工具授权必须落在用户选择并由主机核验的目录范围；结果输出根不能充当读取/命令范围。
   const filesystemPermissions = requiredPermissions.filter((permission) => permission.tool !== 'mcp')
+  const outputRootReadRequested = requestsReadAccessToOutputGitRepository(requiredPermissions, facts)
+  const outputRootAlreadyReadAuthorized = Boolean(facts.outputRoot && facts.roots.some((root) => isWithinRoot(facts.outputRoot!, root)))
+  if (filesystemPermissions.length > 0 && outputRootReadRequested && facts.outputRoot && !outputRootAlreadyReadAuthorized) {
+    const reference = input.prompt.trim().slice(0, 240)
+    return {
+      report: withAnalysisCoverage(emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs', {
+        reference,
+        reasonCode: 'output_root_not_read_authorized',
+        candidates: [facts.outputRoot],
+        candidateCount: 1
+      })], [{
+        path: facts.outputRoot,
+        purposeKey: 'butler.preflight.output_root_read_candidate_purpose',
+        source: reference,
+        validationStatus: 'valid'
+      }]), analysis),
+      bindings: [],
+      factsDigest: facts.digest,
+      requiredPermissions,
+      authorizationContinuation: {
+        authorizedRoots: [...new Set([...facts.roots, facts.outputRoot, ...rootsNeedingAuthorization(filesystemPermissions, facts)])].sort(),
+        analysis
+      },
+      ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
+    }
+  }
   if (filesystemPermissions.length > 0 && facts.roots.length === 0) {
-    return { report: withAnalysisCoverage(emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs')]), analysis), bindings: [], factsDigest: facts.digest }
+    const report = withAnalysisCoverage(emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs')]), analysis)
+    const requestedRoots = permissionRoots(filesystemPermissions)
+    return {
+      report: withPermissionNeeds(report, requiredPermissions, input.mcpTools), bindings: [], factsDigest: facts.digest, requiredPermissions,
+      ...(requestedRoots.length && requestedRoots.every(isCanonicalAbsolutePath)
+        ? { authorizationContinuation: { authorizedRoots: requestedRoots, analysis } }
+        : {}),
+      ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
+    }
   }
   const candidateMcpTools = input.mcpTools ?? []
   const requirementsInScope = requiredPermissions.every((permission) => permission.tool === 'mcp'
     ? candidateMcpTools.some((candidate) => candidate.serverId === permission.serverId && candidate.toolName === permission.toolName
       && /^[a-f0-9]{64}$/.test(candidate.descriptorHash) && /^[a-f0-9]{64}$/.test(candidate.profileHash))
     : permission.tool === 'run_shell'
-    ? facts.roots.includes(permission.workingDirectory)
+    ? facts.roots.some((root) => isWithinRoot(permission.workingDirectory, root)) && facts.entries.some((entry) => entry.path === permission.workingDirectory && entry.kind === 'directory')
     : permission.scopeRoots.every((root) => facts.roots.some((authorizedRoot) => isWithinRoot(root, authorizedRoot))
       && facts.entries.some((entry) => entry.path === root && entry.kind === 'directory')))
   if (!requirementsInScope) {
-    const outputRootReadRequested = requestsReadAccessToOutputGitRepository(requiredPermissions, facts)
     if (process.env.SPACEASSISTANT_DEV === '1') {
       console.warn('[taskPreflight] result rejected', {
         phase: 'host-scope-validation',
@@ -236,7 +327,23 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
         bindings: [],
         factsDigest: facts.digest,
         requiredPermissions,
-        authorizationContinuation: { outputRoot: facts.outputRoot, analysis },
+        authorizationContinuation: {
+          authorizedRoots: [...new Set([...facts.roots, facts.outputRoot, ...rootsNeedingAuthorization(filesystemPermissions, facts)])].sort(),
+          analysis
+        },
+        ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
+      }
+    }
+    const requestedRoots = rootsNeedingAuthorization(filesystemPermissions, facts)
+    const requestedRootSet = new Set(requestedRoots)
+    const invalidInScopeRoots = permissionRoots(filesystemPermissions).filter((requestedRoot) => !requestedRootSet.has(requestedRoot)
+      && !facts.entries.some((entry) => entry.path === requestedRoot && entry.kind === 'directory'))
+    if (requestedRoots.length > 0 && invalidInScopeRoots.length === 0 && requestedRoots.every(isCanonicalAbsolutePath)) {
+      const report = withAnalysisCoverage(emptyReport('blocked', [issue('TOOL_PERMISSION_REQUIRED', 'workDirs')]), analysis)
+      return {
+        report: withPermissionNeeds(report, requiredPermissions, input.mcpTools),
+        bindings: [], factsDigest: facts.digest, requiredPermissions,
+        authorizationContinuation: { authorizedRoots: [...new Set([...facts.roots, ...requestedRoots])].sort(), analysis },
         ...(analysis.mockTrace ? { mockTrace: analysis.mockTrace } : {})
       }
     }
@@ -252,6 +359,10 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
   const clarificationIssues: PreflightIssue[] = (analysis.clarifications ?? [])
     .filter((clarification) => input.prompt.includes(clarification.reference))
     .filter((clarification) => !(facts.outputRootIsGitRepository && clarification.reasonCode === 'target_missing' && outputRootGitReferences.has(clarification.reference)))
+    // policy: after host scope validation, concrete permission requirements enter the explicit
+    // user-review stage; the model's "capability_not_authorized" note describes that request
+    // and must not block the same permission from reaching the review ticket.
+    .filter((clarification) => !(clarification.reasonCode === 'capability_not_authorized' && requiredPermissions.length > 0))
     .slice(0, 5)
     .map((clarification) => {
       const outputRootReadAuthorizationNeeded = facts.outputRootIsGitRepository
@@ -269,7 +380,8 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
       const finalReasonCode = outputRootReadAuthorizationNeeded ? effectiveReasonCode : reasonCode
       const code = finalReasonCode === 'multiple_matches' ? 'TARGET_AMBIGUOUS'
         : finalReasonCode === 'target_missing' || finalReasonCode === 'git_repository_not_found' ? 'TARGET_NOT_FOUND'
-          : finalReasonCode === 'capability_not_authorized' || finalReasonCode === 'output_root_not_read_authorized' ? 'TOOL_PERMISSION_REQUIRED'
+          : finalReasonCode === 'capability_not_authorized' ? 'TOOL_PERMISSION_DETAILS_MISSING'
+          : finalReasonCode === 'output_root_not_read_authorized' ? (requiredPermissions.length ? 'TOOL_PERMISSION_REQUIRED' : 'TOOL_PERMISSION_DETAILS_MISSING')
             : 'TARGET_UNCLEAR'
       return issue(code, 'prompt', {
         reference: clarification.reference,
@@ -305,7 +417,7 @@ export async function runTaskPreflight(input: TaskPreflightInput, deps: TaskPref
     else suggestedDirectories.push(outputRootSuggestion)
   }
   return {
-    report: withAnalysisCoverage(emptyReport(blockers.length ? 'blocked' : 'passed', blockers, suggestedDirectories), analysis),
+    report: withPermissionNeeds(withAnalysisCoverage(emptyReport(blockers.length ? 'blocked' : 'passed', blockers, suggestedDirectories), analysis), requiredPermissions, input.mcpTools),
     bindings: blockers.length ? [] : bindings,
     factsDigest: facts.digest,
     requiredPermissions,

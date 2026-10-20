@@ -38,14 +38,18 @@ describe('runTaskPreflight', () => {
   })
 
   it('validates MCP requirements against host-provided tool descriptors and passes the catalog to analysis', async () => {
+    const mappedName = 'mcp_issue_search'
     const mcpTools = [{
       serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues',
       description: 'Search issues', parameters: [{ name: 'query', type: 'string', required: false }],
-      descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64)
+      descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64), mappedName
     }]
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
       targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
-      requiredPermissions: [{ tool: 'mcp', serverId: 'server-1', toolName: 'search_issues', purpose: '查找最近更新的问题' }]
+      // A stale or incorrect model-authored permission is ignored. Only this host-recorded call
+      // can produce an MCP grant, and the host supplies its stable purpose text.
+      requiredPermissions: [{ tool: 'mcp', serverId: 'wrong-server', toolName: 'delete_everything', purpose: '错误' }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: mappedName, input: { query: 'recent' }, dispatch: 'simulated', resultKind: 'synthetic' }]
     } as never)) }
     const result = await runTaskPreflight({
       prompt: '查找最近更新的问题', scheduleSummary: 'daily', deliverySummary: 'desktop',
@@ -54,15 +58,16 @@ describe('runTaskPreflight', () => {
 
     expect(result.report.status).toBe('passed')
     expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({
-      mcpTools: [{ serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues', parameters: [{ name: 'query', type: 'string', required: false }] }]
+      mcpTools: [{ serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues', parameters: [{ name: 'query', type: 'string', required: false }], mappedName }]
     }), expect.any(AbortSignal))
-    expect(result.requiredPermissions).toEqual([{ tool: 'mcp', serverId: 'server-1', toolName: 'search_issues', purpose: '查找最近更新的问题' }])
+    expect(result.requiredPermissions).toEqual([{ tool: 'mcp', serverId: 'server-1', toolName: 'search_issues', purpose: '按任务调用此 MCP 工具' }])
   })
 
   it('rejects a model-invented MCP server or tool instead of creating a task grant', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
       targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
-      requiredPermissions: [{ tool: 'mcp', serverId: 'invented-server', toolName: 'delete_everything', purpose: '执行任务' }]
+      requiredPermissions: [{ tool: 'mcp', serverId: 'server-1', toolName: 'search_issues', purpose: '执行任务' }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'mcp_invented_delete', input: {}, dispatch: 'simulated', resultKind: 'synthetic' }]
     } as never)) }
     const result = await runTaskPreflight({
       prompt: '完成工作', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1,
@@ -141,7 +146,7 @@ describe('runTaskPreflight', () => {
 
     expect(result.report).toMatchObject({
       status: 'blocked',
-      blockers: [{ code: 'TOOL_PERMISSION_REQUIRED', reference: prompt, reasonCode: 'output_root_not_read_authorized', candidates: ['/project'] }],
+      blockers: [{ code: 'TOOL_PERMISSION_DETAILS_MISSING', reference: prompt, reasonCode: 'output_root_not_read_authorized', candidates: ['/project'] }],
       suggestedDirectories: [{ path: '/project', purposeKey: 'butler.preflight.output_root_read_candidate_purpose', validationStatus: 'valid' }]
     })
     expect(result.report.suggestedDirectories[0]?.purposeKey).toBe('butler.preflight.output_root_read_candidate_purpose')
@@ -156,12 +161,11 @@ describe('runTaskPreflight', () => {
       mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5', workingDirectory: '/project' }, dispatch: 'simulated', resultKind: 'synthetic' }],
       mockIncomplete: true, mockIncompleteReason: 'model_round_limit'
     } as never)) }
-    const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/daily'], outputDir: '/project', taskRevision: 1 }, {
+    const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: [], outputDir: '/project', taskRevision: 1 }, {
       analyzer,
       factsProvider: { collect: vi.fn(async () => ({
-        roots: ['/daily'], outputRoot: '/project', outputRootIsGitRepository: true, gitRepositories: [],
-        entries: [{ path: '/daily', relativePath: '', kind: 'directory' as const }],
-        coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'output-git-read-not-authorized'
+        roots: [], outputRoot: '/project', outputRootIsGitRepository: true, gitRepositories: [], entries: [],
+        coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'output-git-read-not-authorized'
       })) }
     })
 
@@ -173,7 +177,7 @@ describe('runTaskPreflight', () => {
     })
     expect(result.requiredPermissions).toEqual([{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/project' }])
     expect(result.authorizationContinuation).toEqual({
-      outputRoot: '/project',
+      authorizedRoots: ['/project'],
       analysis: {
         targets: [],
         requiredPermissions: [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/project' }],
@@ -212,7 +216,8 @@ describe('runTaskPreflight', () => {
     const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
       targets: [],
-      clarifications: [{ reference: prompt, reasonCode: 'capability_not_authorized' }]
+      requiredPermissions: [{ tool: 'run_shell', command: 'wrong command', workingDirectory: '/wrong' }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5' }, dispatch: 'simulated', resultKind: 'synthetic' }]
     } as never)) }
     const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: [], outputDir: '/results', taskRevision: 1 }, {
       analyzer,
@@ -221,14 +226,35 @@ describe('runTaskPreflight', () => {
 
     expect(result.report.blockers).toEqual([expect.objectContaining({
       code: 'TOOL_PERMISSION_REQUIRED',
-      reference: prompt,
-      reasonCode: 'capability_not_authorized'
+      field: 'workDirs'
     })])
+    expect(result.requiredPermissions).toEqual([{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/results' }])
+    expect(result.report.permissionNeeds).toEqual([
+      { kind: 'directory-read-write', path: '/results' },
+      { kind: 'local-shell', scopeRoots: ['/results'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/results' }] }
+    ])
+  })
+
+  it('does not claim a tool permission list exists when the model gives no concrete tool call', async () => {
+    const prompt = '总结本机项目的近期改动'
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [],
+      clarifications: [{ reference: prompt, reasonCode: 'capability_not_authorized' }]
+    } as never)) }
+    const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: [], outputDir: '/results', taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: [], outputRoot: '/results', gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'no-authorized-roots' })) }
+    })
+
+    expect(result.report.blockers).toEqual([expect.objectContaining({ code: 'TOOL_PERMISSION_DETAILS_MISSING', messageKey: 'butler.preflight.tool_permission_details_missing', reference: prompt })])
   })
 
   it('returns a Shell permission requirement for a Git history task without treating it as already authorized', async () => {
-    const requiredPermissions = [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace', timeout: 60 }]
-    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredPermissions } as never)) }
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
+      requiredPermissions: [{ tool: 'run_shell', command: 'wrong command', workingDirectory: '/wrong' }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5', timeout: 60, workingDirectory: '/model-cwd' }, dispatch: 'simulated', resultKind: 'synthetic' }]
+    } as never)) }
     const result = await runTaskPreflight({
       prompt: '总结昨天合并进 main 的提交', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'],
       taskRevision: 2
@@ -243,11 +269,14 @@ describe('runTaskPreflight', () => {
   })
 
   it('returns a Shell permission request for confirmation instead of blocking on missing authorization', async () => {
+    const prompt = '总结昨天合并进 main 的提交'
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
       targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
-      requiredPermissions: [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace' }]
+      requiredPermissions: [{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace' }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5' }, dispatch: 'simulated', resultKind: 'synthetic' }],
+      clarifications: [{ reference: prompt, reasonCode: 'capability_not_authorized' }]
     } as never)) }
-    const result = await runTaskPreflight({ prompt: '总结昨天合并进 main 的提交', scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, {
+    const result = await runTaskPreflight({ prompt, scheduleSummary: 'daily', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, {
       analyzer,
       factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: ['/workspace'], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'git-facts' })) }
     })
@@ -256,12 +285,13 @@ describe('runTaskPreflight', () => {
   })
 
   it('supports explicitly scoped grep and per-script hash review requirements', async () => {
-    const requiredPermissions = [
-      { tool: 'grep', scopeRoots: ['/workspace/src'] },
-      { tool: 'run_script', scopeRoots: ['/workspace'] }
-    ]
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
-      targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredPermissions
+      targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
+      requiredPermissions: [],
+      mockTrace: [
+        { kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'release', path: '/workspace/src' }, dispatch: 'simulated', resultKind: 'synthetic' },
+        { kind: 'proposed-tool-call', toolName: 'run_script', input: { code: 'print(1)' }, dispatch: 'simulated', resultKind: 'synthetic' }
+      ]
     } as never)) }
     const result = await runTaskPreflight({ prompt: '搜索并整理代码', scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/workspace'], taskRevision: 3 }, {
       analyzer,
@@ -271,13 +301,17 @@ describe('runTaskPreflight', () => {
       ], coverage: { complete: true, truncated: false, roots: 1, visited: 2, errors: 0 }, digest: 'facts' })) }
     })
 
-    expect(result).toMatchObject({ report: { status: 'passed' }, requiredPermissions })
+    expect(result).toMatchObject({ report: { status: 'passed' }, requiredPermissions: [
+      { tool: 'grep', scopeRoots: ['/workspace/src'] },
+      { tool: 'run_script', scopeRoots: ['/workspace'] }
+    ] })
   })
 
-  it('rejects Shell argument scopes whose working directory is outside host facts', async () => {
+  it('derives an explicitly requested grep directory outside current host facts for authorization', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
       targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
-      requiredPermissions: [{ tool: 'run_shell', command: 'git log', workingDirectory: '/outside' }]
+      requiredPermissions: [{ tool: 'grep', scopeRoots: ['/wrong'] }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'x', path: '/outside/report.csv' }, dispatch: 'simulated', resultKind: 'synthetic' }]
     } as never)) }
     const result = await runTaskPreflight({ prompt: '查看提交', scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/workspace'], taskRevision: 1 }, {
       analyzer,
@@ -286,14 +320,18 @@ describe('runTaskPreflight', () => {
       ], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) }
     })
 
-    expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_INVALID_RESPONSE' }] })
-    expect(result.requiredPermissions).toBeUndefined()
+    expect(result).toMatchObject({
+      report: { status: 'blocked', blockers: [{ code: 'TOOL_PERMISSION_REQUIRED' }] },
+      requiredPermissions: [{ tool: 'grep', scopeRoots: ['/outside'] }],
+      authorizationContinuation: { authorizedRoots: ['/outside', '/workspace'] }
+    })
   })
 
   it('fails closed when a requested Shell permission has no user-selected directory scope', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
       targets: [{ kind: 'output', path: 'summary.txt', expectedType: 'file' }],
-      requiredPermissions: [{ tool: 'run_shell', command: 'git log', workingDirectory: '/results' }]
+      requiredPermissions: [{ tool: 'run_shell', command: 'git push --force', workingDirectory: '/wrong' }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log' }, dispatch: 'simulated', resultKind: 'synthetic' }]
     } as never)) }
     const result = await runTaskPreflight({ prompt: '查询 Git 并生成摘要', scheduleSummary: 'once', deliverySummary: 'none', roots: [], outputDir: '/results', taskRevision: 1 }, {
       analyzer,
@@ -301,6 +339,36 @@ describe('runTaskPreflight', () => {
     })
 
     expect(result.report).toMatchObject({ status: 'blocked', blockers: [{ code: 'TOOL_PERMISSION_REQUIRED', field: 'workDirs' }] })
+    expect(result.bindings).toEqual([])
+  })
+
+  it('offers concrete new directory scopes for explicit authorization instead of trapping the wizard on step two', async () => {
+    const permissionRoot = '/workspace/project'
+    const analysis = {
+      targets: [{ kind: 'output' as const, path: 'summary.md', expectedType: 'file' as const }],
+      requiredPermissions: [],
+      mockTrace: [
+        { kind: 'proposed-tool-call' as const, toolName: 'run_shell', input: { command: 'git log --oneline -5' }, dispatch: 'simulated' as const, resultKind: 'synthetic' as const },
+        { kind: 'proposed-tool-call' as const, toolName: 'grep', input: { pattern: 'summary', path: `${permissionRoot}/report.csv` }, dispatch: 'simulated' as const, resultKind: 'synthetic' as const }
+      ]
+    }
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => analysis) }
+    const result = await runTaskPreflight({ prompt: 'Summarize the repository history', scheduleSummary: 'daily', deliverySummary: 'none', roots: [], outputDir: '/results', taskRevision: 1 }, {
+      analyzer,
+      factsProvider: { collect: vi.fn(async () => ({ roots: [], outputRoot: '/results', gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 0, visited: 0, errors: 0 }, digest: 'output-only' })) }
+    })
+
+    expect(result).toMatchObject({
+      report: { status: 'blocked', blockers: [{ code: 'TOOL_PERMISSION_REQUIRED' }], permissionNeeds: expect.arrayContaining([
+        { kind: 'directory-read-write', path: permissionRoot },
+        { kind: 'local-shell', scopeRoots: [permissionRoot], commands: [{ command: 'git log --oneline -5', workingDirectory: permissionRoot }] },
+        { kind: 'grep', scopeRoots: [permissionRoot] }
+      ]) },
+      authorizationContinuation: { authorizedRoots: [permissionRoot], analysis: { ...analysis, requiredPermissions: [
+        { tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: permissionRoot },
+        { tool: 'grep', scopeRoots: [permissionRoot] }
+      ] } }
+    })
     expect(result.bindings).toEqual([])
   })
 
@@ -386,6 +454,18 @@ describe('runTaskPreflight', () => {
     expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_INVALID_RESPONSE' }] })
   })
 
+  it('derives the approved Shell command from trace even when the separate summary invents another one', async () => {
+    const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({
+      targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }],
+      requiredPermissions: [{ tool: 'run_shell', command: 'git push --force', workingDirectory: '/wrong' }],
+      mockTrace: [{ kind: 'proposed-tool-call', toolName: 'run_shell', input: { command: 'git log --oneline -5' }, dispatch: 'simulated', resultKind: 'synthetic' }]
+    } as never)) }
+    const result = await runTaskPreflight({ prompt: 'inspect Git history', scheduleSummary: 'once', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) } })
+
+    expect(result.report).toMatchObject({ status: 'passed', blockers: [] })
+    expect(result.requiredPermissions).toEqual([{ tool: 'run_shell', command: 'git log --oneline -5', workingDirectory: '/workspace' }])
+  })
+
   it('reports a summary request timeout separately from the whole-preflight timeout', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => { throw new Error('PREFLIGHT_MODEL_SUMMARY_TIMEOUT') }) }
     const result = await runTaskPreflight({ prompt: 'read one file', scheduleSummary: 'once', deliverySummary: 'desktop', roots: ['/workspace'], taskRevision: 1 }, { analyzer, factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [], coverage: { complete: true, truncated: false, roots: 1, visited: 0, errors: 0 }, digest: 'facts' })) } })
@@ -457,15 +537,15 @@ describe('runTaskPreflight', () => {
     expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_INVALID_RESPONSE' }] })
   })
 
-  it('rejects unsupported requested tools instead of displaying or granting them', async () => {
+  it('ignores malformed model-authored permission fields when no permission call was recorded', async () => {
     const analyzer: TaskPreflightAnalyzer = { analyze: vi.fn(async () => ({ targets: [{ kind: 'exact', path: '/workspace', targetType: 'directory' }], requiredPermissions: [{ tool: 'run_arbitrary' }] } as never)) }
     const result = await runTaskPreflight({ prompt: 'inspect', scheduleSummary: 'daily', deliverySummary: 'none', roots: ['/workspace'], taskRevision: 1 }, {
       analyzer,
       factsProvider: { collect: vi.fn(async () => ({ roots: ['/workspace'], gitRepositories: [], entries: [{ path: '/workspace', relativePath: '', kind: 'directory' as const }], coverage: { complete: true, truncated: false, roots: 1, visited: 1, errors: 0 }, digest: 'facts' })) }
     })
 
-    expect(result.report).toMatchObject({ status: 'unavailable', blockers: [{ code: 'ANALYZER_INVALID_RESPONSE' }] })
-    expect(result.requiredPermissions).toBeUndefined()
+    expect(result.report).toMatchObject({ status: 'passed', blockers: [] })
+    expect(result.requiredPermissions).toEqual([])
   })
 
   it('aborts the analyzer on timeout and fails closed', async () => {

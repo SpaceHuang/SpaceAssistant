@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, App, Button, Checkbox, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Tag, TimePicker, Space, Typography } from 'antd'
-import { Pencil, Plus, SquarePlay, Trash2, X } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { Alert, App, Button, Checkbox, Collapse, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Steps, Switch, Table, Tag, TimePicker, Typography } from 'antd'
+import { Pencil, Plus, SquarePlay, Trash2 } from 'lucide-react'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
 import { getDefaultAutomationOutputOrganization, getPreflightClarificationReasonMessageKey, getPreflightIssueMessageKey, type AutomationTask, type AutomationDeliveryPref, type AutomationOutputOrganization, type AutomationTaskPermission, type AutomationTaskRun, type AutomationTaskSchedule, type PreflightReport } from '../../../shared/automationTaskTypes'
@@ -120,27 +121,149 @@ function deliveryText(pref: AutomationDeliveryPref, t: TaskActions['t']): string
   return t(`butler.delivery.${pref}` as 'butler.delivery.desktop')
 }
 
-function permissionDescription(permission: AutomationTaskPermission, t: TaskActions['t']): string {
-  switch (permission.kind) {
-    case 'directory-read-write': return t('butler.form.permissionDirectoryReadWrite', { path: permission.path })
-    case 'result-write': return t('butler.form.permissionResultWrite', { path: permission.outputDirectory, organization: outputOrganizationText(permission.organization, t) })
-    case 'local-shell': return t('butler.form.permissionLocalShell', {
-      scope: permission.scopeRoots.length ? permission.scopeRoots.join('、') : t('butler.form.permissionNoDirectoryScope'),
-      commands: permission.commands.map(({ command, workingDirectory }) => `${command}（${workingDirectory}）`).join('；')
-    })
-    case 'grep': return t('butler.form.permissionGrep', { scope: permission.scopeRoots.join('、') })
-    case 'run-script': return t('butler.form.permissionRunScript', { scope: permission.scopeRoots.join('、') })
-    case 'mcp-tool': return t('butler.form.permissionMcpTool', {
-      server: permission.serverName,
-      tool: permission.toolName,
-      description: permission.description || t('butler.form.permissionMcpNoDescription'),
-      purpose: permission.purpose,
-      parameters: permission.parameters.map(({ name, required }) => `${name}${required ? ` (${t('butler.form.permissionMcpRequired')})` : ''}`).join('、') || t('butler.form.permissionMcpNoParameters')
-    })
-    case 'deliver-result': return permission.target
-      ? t('butler.form.permissionDeliverResultTo', { delivery: deliveryText(permission.delivery, t), target: permission.target })
-      : t('butler.form.permissionDeliverResult', { delivery: deliveryText(permission.delivery, t) })
-  }
+type PermissionTableDetail = { label: string; value: ReactNode }
+type PermissionTableRow = { key: string; permissionType: string; object: ReactNode; details: PermissionTableDetail[] }
+
+function permissionTableRows(permissions: AutomationTaskPermission[], t: TaskActions['t']): PermissionTableRow[] {
+  const code = (value: string) => <Typography.Text code className="butler-permission-table__code">{value}</Typography.Text>
+  const pathList = (paths: string[]) => paths.length
+    ? <div className="butler-permission-table__path-list">{paths.map((path, index) => <Typography.Text key={`${index}-${path}`} code className="butler-permission-table__code">{path}</Typography.Text>)}</div>
+    : <Typography.Text type="secondary">{t('butler.form.permissionNoDirectoryScope')}</Typography.Text>
+  const detail = (label: string, value: ReactNode): PermissionTableDetail => ({ label, value })
+
+  return permissions.map((permission, index) => {
+    switch (permission.kind) {
+      case 'directory-read-write':
+        return {
+          key: `${index}-directory-read-write`,
+          permissionType: t('butler.form.permissionTypeDirectoryReadWrite'),
+          object: code(permission.path),
+          details: [detail(t('butler.form.permissionDetailAccess'), t('butler.form.permissionDetailReadWrite'))]
+        }
+      case 'result-write':
+        return {
+          key: `${index}-result-write`,
+          permissionType: t('butler.form.permissionTypeResultWrite'),
+          object: code(permission.outputDirectory),
+          details: [detail(t('butler.form.permissionDetailArchive'), outputOrganizationText(permission.organization, t))]
+        }
+      case 'local-shell':
+        return {
+          key: `${index}-local-shell`,
+          permissionType: t('butler.form.permissionTypeLocalShell'),
+          object: (
+            <div className="butler-permission-table__command-list">
+              {permission.commands.map((command, commandIndex) => (
+                <div className="butler-permission-table__command" key={`${commandIndex}-${command.workingDirectory}`}>
+                  <div className="butler-permission-table__detail-line">
+                    <span className="butler-permission-table__detail-label">{t('butler.form.permissionDetailCommand')}</span>
+                    {code(command.command)}
+                  </div>
+                  <div className="butler-permission-table__detail-line">
+                    <span className="butler-permission-table__detail-label">{t('butler.form.permissionDetailWorkingDirectory')}</span>
+                    {code(command.workingDirectory)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ),
+          details: [
+            detail(t('butler.form.permissionDetailPathScope'), pathList(permission.scopeRoots)),
+            detail(t('butler.form.permissionDetailTimeout'), t('butler.form.permissionDetailTimeoutValue'))
+          ]
+        }
+      case 'grep':
+        return {
+          key: `${index}-grep`,
+          permissionType: t('butler.form.permissionTypeGrep'),
+          object: pathList(permission.scopeRoots),
+          details: [detail(t('butler.form.permissionDetailAccess'), t('butler.form.permissionDetailGrep'))]
+        }
+      case 'run-script':
+        return {
+          key: `${index}-run-script`,
+          permissionType: t('butler.form.permissionTypeRunScript'),
+          object: pathList(permission.scopeRoots),
+          details: [detail(t('butler.form.permissionDetailScriptReview'), t('butler.form.permissionDetailScriptHash'))]
+        }
+      case 'mcp-tool':
+        return {
+          key: `${index}-mcp-tool`,
+          permissionType: t('butler.form.permissionTypeMcpTool'),
+          object: (
+            <div className="butler-permission-table__mcp-object">
+              {code(permission.serverName)}
+              <span aria-hidden="true">/</span>
+              {code(permission.toolName)}
+            </div>
+          ),
+          details: [
+            detail(t('butler.form.permissionDetailToolDescription'), permission.description || t('butler.form.permissionMcpNoDescription')),
+            detail(t('butler.form.permissionDetailPurpose'), permission.purpose),
+            detail(t('butler.form.permissionDetailParameters'), permission.parameters.length
+              ? <div className="butler-permission-table__parameters">{permission.parameters.map(({ name, required }) => <span key={name}>{code(name)}{required ? `（${t('butler.form.permissionMcpRequired')}）` : `（${t('butler.form.permissionMcpOptional')}）`}</span>)}</div>
+              : t('butler.form.permissionMcpNoParameters')),
+            detail(t('butler.form.permissionDetailBinding'), t('butler.form.permissionDetailMcpBinding'))
+          ]
+        }
+      case 'deliver-result':
+        return {
+          key: `${index}-deliver-result`,
+          permissionType: t('butler.form.permissionTypeDeliverResult'),
+          object: (
+            <div className="butler-permission-table__delivery-object">
+              <Typography.Text strong>{deliveryText(permission.delivery, t)}</Typography.Text>
+              {permission.target ? <Typography.Text>{permission.target}</Typography.Text> : null}
+            </div>
+          ),
+          details: [detail(t('butler.form.permissionDetailAccess'), t('butler.form.permissionDetailDeliverResult'))]
+        }
+    }
+  })
+}
+
+function PermissionReviewTable({ permissions, t }: { permissions: AutomationTaskPermission[]; t: TaskActions['t'] }) {
+  const rows = permissionTableRows(permissions, t)
+  return (
+    <Table<PermissionTableRow>
+      className="butler-permission-review__table"
+      size="small"
+      pagination={false}
+      rowKey="key"
+      dataSource={rows}
+      scroll={{ x: 720 }}
+      columns={[
+        {
+          title: t('butler.form.permissionTableType'),
+          dataIndex: 'permissionType',
+          key: 'permissionType',
+          width: 132,
+          render: (value: string) => <Typography.Text strong>{value}</Typography.Text>
+        },
+        {
+          title: t('butler.form.permissionTableObject'),
+          dataIndex: 'object',
+          key: 'object',
+          width: 300
+        },
+        {
+          title: t('butler.form.permissionTableDetails'),
+          dataIndex: 'details',
+          key: 'details',
+          render: (details: PermissionTableDetail[]) => (
+            <div className="butler-permission-table__details">
+              {details.map(({ label, value }, index) => (
+                <div className="butler-permission-table__detail-line" key={`${label}-${index}`}>
+                  <span className="butler-permission-table__detail-label">{label}</span>
+                  <div className="butler-permission-table__detail-value">{value}</div>
+                </div>
+              ))}
+            </div>
+          )
+        }
+      ]}
+    />
+  )
 }
 
 function runStatusText(status: AutomationTaskRun['status'], t: TaskActions['t']): string {
@@ -149,37 +272,6 @@ function runStatusText(status: AutomationTaskRun['status'], t: TaskActions['t'])
     failed: 'butler.runStatus.failed', skipped: 'butler.runStatus.skipped', interrupted: 'butler.runStatus.interrupted'
   }[status] as 'butler.runStatus.queued'
   return t(key)
-}
-
-function AuthorizedDirList({ value = [], onChange, t }: { value: string[]; onChange: (paths: string[]) => void; t: TaskActions['t'] }) {
-  const pathsRef = useRef(value)
-  pathsRef.current = value
-  const setPaths = (paths: string[]) => { pathsRef.current = paths; onChange(paths) }
-  const browse = async () => {
-    const result = await window.api.butlerChooseWorkDir()
-    const current = pathsRef.current
-    if (!result.cancelled && result.path && !current.includes(result.path)) {
-      const next = [...current, result.path]
-      setPaths(next)
-    }
-  }
-  return (
-    <div className="butler-authorized-dirs">
-      {value.map((workDir) => (
-        <div className="butler-authorized-dirs__row" key={workDir}>
-          <Typography.Text className="butler-authorized-dirs__path" title={workDir}>{workDir}</Typography.Text>
-          <Button size="small" type="text" icon={<X size={14} aria-hidden />} aria-label={t('butler.form.removeWorkDirAria', { path: workDir })} onClick={() => {
-            const next = value.filter((candidate) => candidate !== workDir)
-            setPaths(next)
-          }} />
-        </div>
-      ))}
-      <Space wrap>
-        <Button onClick={() => void browse()}>{t('butler.form.addWorkDir')}</Button>
-        <Button type="link" onClick={() => void browse()}>{t('butler.form.browseWorkDir')}</Button>
-      </Space>
-    </div>
-  )
 }
 
 function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: TaskActions }) {
@@ -193,6 +285,7 @@ function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: Task
         </span>
         <Tag className="butler-task-card__tag">{scheduleTagText(task, t)}</Tag>
         <Tag className="butler-task-card__tag butler-task-card__tag--delivery">{deliveryText(task.deliveryPref, t)}</Tag>
+        {!task.enabled ? <Tag className="butler-task-card__tag butler-task-card__tag--disabled">{t('butler.form.taskDisabled')}</Tag> : null}
         <div className="butler-task-card__header-actions">
           <Switch
             size="small"
@@ -259,6 +352,12 @@ export function ButlerTaskSettings() {
   const [authorizationReview, setAuthorizationReview] = useState<{ reviewId: string; permissions: AutomationTaskPermission[]; preflightCoverage?: 'partial' } | null>(null)
   const [authorizeAllPermissions, setAuthorizeAllPermissions] = useState(false)
   const [writeError, setWriteError] = useState<string | null>(null)
+  const [wizardStep, setWizardStep] = useState<0 | 1 | 2>(0)
+  const [enableOnSave, setEnableOnSave] = useState(false)
+  const [advancedSettingsExpanded, setAdvancedSettingsExpanded] = useState(false)
+  const authorizationReviewRef = useRef<HTMLDivElement>(null)
+  const preflightReportRef = useRef<HTMLDivElement>(null)
+  const writeErrorRef = useRef<HTMLDivElement>(null)
   const [authorizedDirs, setAuthorizedDirs] = useState<string[]>([])
   const outputOrganizationTouched = useRef(false)
   const activeTaskDraftKey = useRef<string | null>(null)
@@ -266,11 +365,27 @@ export function ButlerTaskSettings() {
   const [form] = Form.useForm()
   const scheduleKind = Form.useWatch('scheduleKind', form) as AutomationTaskSchedule['kind'] | undefined
   const outputDir = Form.useWatch('outputDir', form) as string | undefined
+  const outputOrganization = Form.useWatch('outputOrganization', form) as AutomationOutputOrganization | undefined
+  const deliveryPref = Form.useWatch('deliveryPref', form) as AutomationDeliveryPref | undefined
   const [modelCandidates, setModelCandidates] = useState<Array<{ modelId: string; providerModelName: string; serviceId: string; serviceName: string; supportsThinking: boolean }>>([])
   const selectedModelId = Form.useWatch('modelId', form)
   const selectedServiceId = Form.useWatch('modelServiceId', form)
   const selectedCandidate = modelCandidates.find((candidate) => candidate.modelId === selectedModelId && candidate.serviceId === selectedServiceId)
   const onceConstraints = buildOnceDisabledConstraints()
+
+  useEffect(() => {
+    const target = authorizationReview
+      ? authorizationReviewRef.current
+      : preflightReport && preflightReport.status !== 'passed'
+        ? preflightReportRef.current
+        : writeError
+          ? writeErrorRef.current
+          : null
+    if (!target) return
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    target.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
+    target.focus({ preventScroll: true })
+  }, [authorizationReview, preflightReport, writeError])
 
   const invalidateAuthorizationReview = () => {
     authorizationDraftRevision.current += 1
@@ -312,6 +427,9 @@ export function ButlerTaskSettings() {
   const openCreate = async () => {
     authorizationDraftRevision.current += 1
     setEditing(null)
+    setWizardStep(0)
+    setEnableOnSave(true)
+    setAdvancedSettingsExpanded(false)
     const draftKey = taskDraftStorageKey(null)
     const savedDraft = readTaskDraft(draftKey)
     activeTaskDraftKey.current = savedDraft ? draftKey : null
@@ -349,6 +467,9 @@ export function ButlerTaskSettings() {
   const openEdit = (task: AutomationTask) => {
     authorizationDraftRevision.current += 1
     setEditing(task)
+    setWizardStep(0)
+    setEnableOnSave(task.enabled)
+    setAdvancedSettingsExpanded(false)
     const draftKey = taskDraftStorageKey(task.id)
     const savedDraft = readTaskDraft(draftKey)
     activeTaskDraftKey.current = savedDraft ? draftKey : null
@@ -399,13 +520,49 @@ export function ButlerTaskSettings() {
 
   const submit = async () => {
     if (submitting) return
-    if (authorizationReview && !authorizeAllPermissions) return
+    if (wizardStep === 1) {
+      if (!authorizationReview) return
+      // 点击“同意全部权限并继续”是对整张权限清单的明示授权；最终保存时才提交授权票据。
+      setAuthorizeAllPermissions(true)
+      setWriteError(null)
+      setWizardStep(2)
+      return
+    }
+    if (wizardStep === 0 && authorizationReview) {
+      setWizardStep(1)
+      return
+    }
+    if (wizardStep === 2 && !authorizationReview) return
+    if (wizardStep === 2 && !authorizeAllPermissions) return
     const draftKey = activeTaskDraftKey.current ?? taskDraftStorageKey(editing?.id ?? null)
     activeTaskDraftKey.current = draftKey
-    // 点击预检的同步阶段先保存草稿，即使表单校验或后续模型调用失败也不丢用户输入。
-    persistTaskDraft(draftKey, form.getFieldsValue(true), authorizedDirs, outputOrganizationTouched.current)
-    // 校验失败：antd 已在表单项上展示错误，reject 就地吸收，不产生 unhandled rejection
-    const values = await form.validateFields().catch(() => null)
+    if (wizardStep === 0) {
+      // 点击预检的同步阶段先保存草稿，即使表单校验或后续模型调用失败也不丢用户输入。
+      persistTaskDraft(draftKey, form.getFieldsValue(true), authorizedDirs, outputOrganizationTouched.current)
+    }
+    // 第三步只确认已经审核的权限票据，不再重跑表单校验或预检。
+    const values = wizardStep === 2
+      ? form.getFieldsValue(true)
+      // 校验失败：antd 已在表单项上展示错误，reject 就地吸收，不产生 unhandled rejection
+      : await form.validateFields().catch((error: { errorFields?: Array<{ name?: unknown }> }) => {
+        const firstInvalidField = error.errorFields?.[0]?.name
+        if (Array.isArray(firstInvalidField)) {
+          const advancedSettingsInvalid = error.errorFields?.some((field) => {
+            const fieldName = Array.isArray(field.name) ? field.name[0] : undefined
+            return fieldName === 'modelPair' || fieldName === 'reasoningEffort' || fieldName === 'outputOrganization'
+          })
+          if (advancedSettingsInvalid) setAdvancedSettingsExpanded(true)
+          const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+          const scrollToInvalidField = () => form.scrollToField(firstInvalidField as (string | number)[], {
+            block: 'center',
+            behavior: reduceMotion ? 'auto' : 'smooth',
+            focus: true
+          })
+          if (advancedSettingsInvalid) window.setTimeout(scrollToInvalidField, 0)
+          else scrollToInvalidField()
+        }
+        return null
+      })
     if (!values) return
     const requestDraftRevision = authorizationReview ? undefined : authorizationDraftRevision.current
     setSubmitting(true)
@@ -447,6 +604,9 @@ export function ButlerTaskSettings() {
             workDirs: authorizedDirs,
             outputDir: values.outputDir,
             outputOrganization: values.outputOrganization,
+            // Permission review commits a paused task. The final activation choice is applied
+            // afterward through the independent task-state update path.
+            enabled: false,
             modelId: values.modelId,
             modelServiceId: values.modelServiceId,
             modelOverride: chosen?.providerModelName,
@@ -457,6 +617,7 @@ export function ButlerTaskSettings() {
         setAuthorizeAllPermissions(false)
         setPreflightReport(null)
         setWriteError(t('butler.form.preflightDraftChanged'))
+        setWizardStep(1)
         return
       }
       if (!res.ok) {
@@ -465,6 +626,7 @@ export function ButlerTaskSettings() {
           setAuthorizationReview({ reviewId: res.reviewId, permissions: res.permissions, ...(res.report.preflightCoverage ? { preflightCoverage: res.report.preflightCoverage } : {}) })
           setAuthorizeAllPermissions(false)
           setWriteError(null)
+          setWizardStep(1)
           return
         }
         if (res.kind === 'preflight-blocked') {
@@ -472,6 +634,7 @@ export function ButlerTaskSettings() {
           setAuthorizationReview(null)
           setAuthorizeAllPermissions(false)
           setWriteError(null)
+          setWizardStep(1)
         } else {
           setAuthorizationReview(null)
           setAuthorizeAllPermissions(false)
@@ -479,16 +642,37 @@ export function ButlerTaskSettings() {
             ? t(getPreflightIssueMessageKey(res.error) as Parameters<TaskActions['t']>[0])
             : res.error
           setWriteError(errorMessage)
+          setWizardStep(1)
           message.error(t('butler.form.saveFailedWithError', { error: errorMessage }))
         }
         return
       }
+      const taskId = res.id
+      const committedEnabled = res.task?.enabled ?? editing?.enabled ?? false
+      let activationUpdateFailed = false
+      if (committedEnabled !== enableOnSave) {
+        try {
+          const statusResult = await window.api.butlerUpdateTask({
+            id: taskId,
+            patch: {
+              enabled: enableOnSave,
+              ...(res.task?.taskRevision !== undefined ? { expectedTaskRevision: res.task.taskRevision } : {})
+            }
+          })
+          activationUpdateFailed = !statusResult.ok
+        } catch {
+          activationUpdateFailed = true
+        }
+      }
       setPreflightReport(null)
       setAuthorizationReview(null)
       setAuthorizeAllPermissions(false)
+      setWizardStep(0)
+      setEnableOnSave(false)
       clearTaskDraft(draftKey)
       activeTaskDraftKey.current = null
-      message.success(editing ? t('butler.updated') : t('butler.created'))
+      if (activationUpdateFailed) message.warning(t('butler.form.savedButActivationFailed'))
+      else message.success(editing ? t('butler.updated') : t('butler.created'))
       setEditorOpen(false)
       await refresh()
     } catch {
@@ -507,11 +691,15 @@ export function ButlerTaskSettings() {
           setPreflightReport(result.report)
           setAuthorizationReview({ reviewId: result.reviewId, permissions: result.permissions, ...(result.report.preflightCoverage ? { preflightCoverage: result.report.preflightCoverage } : {}) })
           setAuthorizeAllPermissions(false)
+          setEnableOnSave(enabled)
+          setWizardStep(1)
           return
         }
         if (result.kind === 'preflight-blocked') {
           await openEdit(task)
           setPreflightReport(result.report)
+          setEnableOnSave(enabled)
+          setWizardStep(1)
           return
         }
         message.error(t('butler.form.saveFailedWithError', { error: result.error }))
@@ -567,6 +755,48 @@ export function ButlerTaskSettings() {
     running: false
   }
 
+  const renderPreflightIssues = (report: PreflightReport, insidePermissionReview = false) => report.blockers.map((item, index) => {
+    const hasTargetIssue = ['TARGET_UNCLEAR', 'TARGET_AMBIGUOUS', 'TARGET_NOT_FOUND', 'TARGET_OUTSIDE_ROOTS'].includes(item.code)
+    const outputRootAuthorizationIssue = item.code === 'TOOL_PERMISSION_REQUIRED' && item.reasonCode === 'output_root_not_read_authorized'
+    const candidates = item.candidates ?? []
+    return (
+      <div key={`${item.code}-${index}`} className="butler-preflight-report__issue">
+        <Typography.Text className="butler-preflight-report__blocker">{t((outputRootAuthorizationIssue ? getPreflightClarificationReasonMessageKey(item.reasonCode!) : getPreflightIssueMessageKey(item.code)) as Parameters<TaskActions['t']>[0], outputRootAuthorizationIssue ? undefined : item.messageParams)}</Typography.Text>
+        {item.reasonCode && !outputRootAuthorizationIssue && item.code !== 'TOOL_PERMISSION_DETAILS_MISSING' ? <Typography.Text type="secondary">{t(getPreflightClarificationReasonMessageKey(item.reasonCode) as Parameters<TaskActions['t']>[0])}</Typography.Text> : null}
+        {item.reference && !(insidePermissionReview && outputRootAuthorizationIssue) ? <Typography.Text type="secondary">{t('butler.form.preflightReference', { reference: item.reference })}</Typography.Text> : null}
+        {candidates.length && !(insidePermissionReview && outputRootAuthorizationIssue) ? (
+          <div className="butler-preflight-report__issue-candidates">
+            <Typography.Text strong>{t('butler.form.preflightCandidates')}</Typography.Text>
+            <ul>
+              {candidates.map((candidate) => <li key={candidate}><Typography.Text code>{candidate}</Typography.Text></li>)}
+            </ul>
+            {typeof item.candidateCount === 'number' && item.candidateCount > candidates.length ? <Typography.Text type="secondary">{t('butler.form.preflightCandidateOverflow', { total: item.candidateCount, shown: candidates.length })}</Typography.Text> : null}
+          </div>
+        ) : null}
+        {hasTargetIssue ? <Typography.Text type="secondary">{t('butler.form.preflightClarifyHint')}</Typography.Text> : null}
+      </div>
+    )
+  })
+
+  const wizardValues = form.getFieldsValue(true) as {
+    name?: string
+    scheduleKind?: AutomationTaskSchedule['kind']
+    dailyTime?: dayjs.Dayjs
+    onceAt?: dayjs.Dayjs
+    intervalMinutes?: number
+    outputDir?: string
+    outputOrganization?: AutomationOutputOrganization
+  }
+  const finalActionKey = enableOnSave
+    ? editing?.enabled ? 'butler.form.wizardSaveChanges' : 'butler.form.wizardSaveAndEnable'
+    : 'butler.form.wizardSaveKeepDisabled'
+  const summaryScheduleKind = wizardValues.scheduleKind ?? 'interval'
+  const summarySchedule = summaryScheduleKind === 'daily'
+    ? t('butler.schedule.daily', { time: wizardValues.dailyTime?.format('HH:mm') ?? '' })
+    : summaryScheduleKind === 'once'
+      ? t('butler.schedule.once', { time: wizardValues.onceAt?.format('YYYY-MM-DD HH:mm') ?? '' })
+      : t('butler.schedule.interval', { minutes: wizardValues.intervalMinutes ?? 0 })
+
   return (
     <div className="butler-settings-tab">
       {!trayEnabled ? <Alert type="warning" role="alert" showIcon message={t('butler.trayHint')} className="config-alert-block--loose" /> : null}
@@ -594,6 +824,7 @@ export function ButlerTaskSettings() {
       )}
       <Modal
         className="butler-editor-modal"
+        style={{ top: 32 }}
         width="min(920px, calc(100vw - 32px))"
         title={editing ? t('butler.form.editTitle') : t('butler.form.createTitle')}
         open={editorOpen}
@@ -602,9 +833,26 @@ export function ButlerTaskSettings() {
           <Button key="cancel" onClick={() => setEditorOpen(false)}>
             {t('butler.form.cancel')}
           </Button>,
-          <Button key="save" type="primary" loading={submitting} disabled={Boolean(authorizationReview && !authorizeAllPermissions)} onClick={() => void submit()}>
-            {authorizationReview ? t('butler.form.permissionReviewConfirm') : t('butler.form.permissionReviewStart')}
-          </Button>
+          wizardStep > 0 ? (
+            <Button key="back" onClick={() => { setWriteError(null); setWizardStep(wizardStep === 2 ? 1 : 0) }}>
+              {wizardStep === 2 ? t('butler.form.wizardBackToPermissions') : t('butler.form.wizardBackToTask')}
+            </Button>
+          ) : null,
+          wizardStep === 0 ? (
+            <Button key="preflight" type="primary" loading={submitting} onClick={() => void submit()}>
+              {authorizationReview ? t('butler.form.wizardReturnToPermissions') : t('butler.form.permissionReviewStart')}
+            </Button>
+          ) : wizardStep === 1 ? (
+            authorizationReview ? (
+              <Button key="next" type="primary" onClick={() => void submit()}>
+                {t('butler.form.wizardNextToSave')}
+              </Button>
+            ) : null
+          ) : (
+            <Button key="save" type="primary" loading={submitting} disabled={!authorizationReview || !authorizeAllPermissions} onClick={() => void submit()}>
+              {t(finalActionKey)}
+            </Button>
+          )
         ]}
       >
         <Form
@@ -617,63 +865,59 @@ export function ButlerTaskSettings() {
             persistActiveTaskDraft()
           }}
         >
-          {editing && !outputDir ? <Alert className="butler-task-editor__wide" type="info" showIcon message={t('butler.form.outputDirLegacy')} /> : null}
-          {authorizationReview ? (
-            <Alert
-              className="butler-permission-review"
-              type="warning"
-              showIcon
-              message={t('butler.form.permissionReviewTitle')}
-              description={(
-                <div>
-                  <Typography.Paragraph>{t('butler.form.permissionReviewIntro')}</Typography.Paragraph>
-                  {authorizationReview.preflightCoverage === 'partial' ? <Typography.Paragraph type="warning">{t('butler.form.permissionReviewPartialCoverage')}</Typography.Paragraph> : null}
-                  <ul className="butler-permission-review__list">
-                    {authorizationReview.permissions.map((permission, index) => (
-                      <li key={`${permission.kind}-${index}`}>{permissionDescription(permission, t)}</li>
-                    ))}
-                  </ul>
-                  <Checkbox
-                    className="butler-permission-review__approve-all"
-                    checked={authorizeAllPermissions}
-                    onChange={(event) => setAuthorizeAllPermissions(event.target.checked)}
-                  >
-                    {t('butler.form.permissionReviewApproveAll')}
-                  </Checkbox>
-                </div>
-              )}
-            />
-          ) : null}
-          {preflightReport && preflightReport.status !== 'passed' ? (
-            <Alert className="butler-preflight-report" type={preflightReport.status === 'blocked' ? 'warning' : 'info'} showIcon message={t('butler.form.preflightTitle')} description={(
-              <div className="butler-preflight-report__content">
-                {preflightReport.blockers.map((item, index) => {
-                  const hasTargetIssue = ['TARGET_UNCLEAR', 'TARGET_AMBIGUOUS', 'TARGET_NOT_FOUND', 'TARGET_OUTSIDE_ROOTS'].includes(item.code)
-                  const outputRootAuthorizationIssue = item.code === 'TOOL_PERMISSION_REQUIRED' && item.reasonCode === 'output_root_not_read_authorized'
-                  const candidates = item.candidates ?? []
-                  return (
-                    <div key={`${item.code}-${index}`} className="butler-preflight-report__issue">
-                      <Typography.Text className="butler-preflight-report__blocker">{t((outputRootAuthorizationIssue ? getPreflightClarificationReasonMessageKey(item.reasonCode!) : getPreflightIssueMessageKey(item.code)) as Parameters<TaskActions['t']>[0], outputRootAuthorizationIssue ? undefined : item.messageParams)}</Typography.Text>
-                      {item.reasonCode && !outputRootAuthorizationIssue ? <Typography.Text type="secondary">{t(getPreflightClarificationReasonMessageKey(item.reasonCode) as Parameters<TaskActions['t']>[0])}</Typography.Text> : null}
-                      {item.reference ? <Typography.Text type="secondary">{t('butler.form.preflightReference', { reference: item.reference })}</Typography.Text> : null}
-                      {candidates.length ? (
-                        <div className="butler-preflight-report__issue-candidates">
-                          <Typography.Text strong>{t('butler.form.preflightCandidates')}</Typography.Text>
-                          <ul>
-                            {candidates.map((candidate) => <li key={candidate}><Typography.Text code>{candidate}</Typography.Text></li>)}
-                          </ul>
-                          {typeof item.candidateCount === 'number' && item.candidateCount > candidates.length ? <Typography.Text type="secondary">{t('butler.form.preflightCandidateOverflow', { total: item.candidateCount, shown: candidates.length })}</Typography.Text> : null}
-                        </div>
-                      ) : null}
-                      {hasTargetIssue ? <Typography.Text type="secondary">{t('butler.form.preflightClarifyHint')}</Typography.Text> : null}
-                    </div>
-                  )
-                })}
+          {wizardStep === 0 && editing && !outputDir ? <Alert className="butler-task-editor__wide" type="info" showIcon message={t('butler.form.outputDirLegacy')} /> : null}
+          <Steps
+            className="butler-task-editor__steps"
+            size="small"
+            current={wizardStep}
+            items={[
+              { title: t('butler.form.wizardStepTask') },
+              { title: t('butler.form.wizardStepPermissions') },
+              { title: t('butler.form.wizardStepFinal') }
+            ]}
+          />
+          {wizardStep === 1 && authorizationReview ? (
+            <div ref={authorizationReviewRef} className="butler-task-editor__result-focus" role="region" aria-label={t('butler.form.permissionReviewTitle')} tabIndex={-1}>
+              <div className="butler-permission-review" aria-labelledby="butler-permission-review-title">
+                <Typography.Title id="butler-permission-review-title" className="butler-permission-review__title" level={4}>
+                  {t('butler.form.permissionReviewTitle')}
+                </Typography.Title>
+                {preflightReport && preflightReport.status !== 'passed' ? (
+                  <div className="butler-permission-review__preflight-context">
+                    <Typography.Text strong>{t('butler.form.permissionReviewPreflightTitle')}</Typography.Text>
+                    <div className="butler-preflight-report__content">{renderPreflightIssues(preflightReport, true)}</div>
+                  </div>
+                ) : null}
+                <PermissionReviewTable permissions={authorizationReview.permissions} t={t} />
+                <Typography.Paragraph>{t('butler.form.permissionReviewIntro')}</Typography.Paragraph>
+                {authorizationReview.preflightCoverage === 'partial' ? <Typography.Paragraph type="secondary">{t('butler.form.permissionReviewPartialCoverage')}</Typography.Paragraph> : null}
               </div>
-            )} />
+            </div>
           ) : null}
-          {writeError ? <Alert className="butler-preflight-report" type="error" showIcon message={t('butler.form.saveFailedWithError', { error: writeError })} /> : null}
-          <div className="butler-task-editor__grid">
+          {wizardStep === 1 && preflightReport && preflightReport.status !== 'passed' && !authorizationReview ? (
+            <div ref={preflightReportRef} className="butler-task-editor__result-focus" role="region" aria-label={t('butler.form.preflightTitle')} tabIndex={-1}>
+              <Alert
+                className="butler-preflight-report"
+                type={preflightReport.status === 'blocked' ? 'warning' : 'info'}
+                showIcon
+                message={t('butler.form.preflightTitle')}
+                description={(
+                  <div className="butler-preflight-report__content">
+                    {renderPreflightIssues(preflightReport)}
+                    {preflightReport.permissionNeeds?.length ? (
+                      <div className="butler-preflight-report__permissions">
+                        <Typography.Text strong>{t('butler.form.preflightPermissionNeedsTitle')}</Typography.Text>
+                        <PermissionReviewTable permissions={preflightReport.permissionNeeds} t={t} />
+                        <Typography.Text type="secondary">{t('butler.form.preflightPermissionNeedsNote')}</Typography.Text>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              />
+            </div>
+          ) : null}
+          {wizardStep === 1 && writeError ? <div ref={writeErrorRef} className="butler-task-editor__result-focus" role="region" aria-label={t('butler.form.saveFailedWithError', { error: writeError })} tabIndex={-1}><Alert className="butler-preflight-report" type="error" showIcon message={t('butler.form.saveFailedWithError', { error: writeError })} /></div> : null}
+          {wizardStep === 0 ? <div className="butler-task-editor__grid">
             <section className="butler-task-editor__section" aria-labelledby="butler-task-section-content">
               <Typography.Title id="butler-task-section-content" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionTask')}</Typography.Title>
               <div className="butler-task-editor__section-grid">
@@ -683,20 +927,6 @@ export function ButlerTaskSettings() {
                 <Form.Item name="prompt" className="butler-task-editor__wide" label={t('butler.form.prompt')} rules={[{ required: true, message: t('butler.form.promptRequired') }]}>
                   <Input.TextArea rows={4} />
                 </Form.Item>
-              </div>
-            </section>
-
-            <section className="butler-task-editor__section" aria-labelledby="butler-task-section-model">
-              <Typography.Title id="butler-task-section-model" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionModelService')}</Typography.Title>
-              <div className="butler-task-editor__section-grid">
-                <Form.Item name="modelPair" label={t('butler.form.model')} rules={!editing ? [{ required: true, message: t('butler.form.modelRequired') }] : []}>
-                  <Select options={modelCandidates.map((candidate) => ({ value: `${candidate.modelId}::${candidate.serviceId}`, label: `${candidate.providerModelName} · ${candidate.serviceName}` }))} onChange={(pair: string) => { const candidate = modelCandidates.find((item) => `${item.modelId}::${item.serviceId}` === pair); if (candidate) { form.setFieldsValue({ modelId: candidate.modelId, modelServiceId: candidate.serviceId, modelOverride: candidate.providerModelName }); if (!candidate.supportsThinking) form.setFieldValue('reasoningEffort', 'off') } }} />
-                </Form.Item>
-                <Form.Item name="reasoningEffort" label={t('butler.form.reasoningEffort')} extra={selectedCandidate?.supportsThinking === false ? t('butler.form.reasoningUnsupported') : undefined}>
-                  <Select disabled={selectedCandidate?.supportsThinking === false} options={(['off', 'low', 'medium', 'high', 'max'] as const).map((effort) => ({ value: effort, label: t(`butler.form.reasoning${effort[0]!.toUpperCase()}${effort.slice(1)}` as 'butler.form.reasoningOff') }))} />
-                </Form.Item>
-                <Form.Item name="modelServiceId" hidden><Input /></Form.Item>
-                <Form.Item name="modelId" hidden><Input /></Form.Item>
               </div>
             </section>
 
@@ -737,16 +967,6 @@ export function ButlerTaskSettings() {
                     <InputNumber min={5} max={10080} style={{ width: '100%' }} />
                   </Form.Item>
                 )}
-                <Form.Item name="deliveryPref" label={t('butler.form.deliveryPref')}>
-                  <Select
-                    options={[
-                      { value: 'desktop', label: t('butler.delivery.desktop') },
-                      { value: 'feishu', label: t('butler.delivery.feishu') },
-                      { value: 'wechat', label: t('butler.delivery.wechat') },
-                      { value: 'none', label: t('butler.delivery.none') }
-                    ]}
-                  />
-                </Form.Item>
               </div>
             </section>
 
@@ -768,34 +988,117 @@ export function ButlerTaskSettings() {
                     suffix={<Button type="link" onClick={() => void browseOutputDir()}>{t('butler.form.chooseOutputDir')}</Button>}
                   />
                 </Form.Item>
-                <Form.Item
-                  name="outputOrganization"
-                  label={t('butler.form.outputOrganization')}
-                  rules={[{ required: true, message: t('butler.form.outputOrganizationRequired') }]}
-                >
-                  <Select
-                    options={[
-                      { value: 'direct', label: t('butler.form.outputOrganizationDirect') },
-                      { value: 'daily', label: t('butler.form.outputOrganizationDaily') },
-                      { value: 'hourly', label: t('butler.form.outputOrganizationHourly') }
-                    ]}
-                  />
-                </Form.Item>
               </div>
             </section>
 
-            <section className="butler-task-editor__section" aria-labelledby="butler-task-section-access">
-              <Typography.Title id="butler-task-section-access" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionAccess')}</Typography.Title>
-              <div className="butler-task-editor__section-grid">
-                <Form.Item className="butler-task-editor__wide" label={t('butler.form.authorizedDirs')} extra={t('butler.form.authorizedDirsHint')}>
-                  <AuthorizedDirList t={t} value={authorizedDirs} onChange={(directories) => { setAuthorizedDirs(directories); invalidateAuthorizationReview(); persistActiveTaskDraft(directories) }} />
-                </Form.Item>
-                <Typography.Paragraph className="butler-task-editor__wide" type="secondary">
-                  {t('butler.form.permissionReviewHelp')}
-                </Typography.Paragraph>
+            <Collapse
+              className="butler-task-editor__advanced butler-task-editor__wide"
+              bordered={false}
+              activeKey={advancedSettingsExpanded ? ['advanced-settings'] : []}
+              onChange={(keys) => setAdvancedSettingsExpanded(Array.isArray(keys) ? keys.includes('advanced-settings') : keys === 'advanced-settings')}
+              items={[{
+                key: 'advanced-settings',
+                label: (
+                  <span className="butler-task-editor__advanced-label">
+                    <span>{t('butler.form.advancedSettings')}</span>
+                    <Typography.Text type="secondary">{t('butler.form.advancedSettingsSummary', {
+                      model: selectedCandidate ? `${selectedCandidate.providerModelName} · ${selectedCandidate.serviceName}` : t('butler.form.modelRequired'),
+                      delivery: deliveryText(deliveryPref ?? 'desktop', t),
+                      archive: outputOrganizationText(outputOrganization ?? null, t)
+                    })}</Typography.Text>
+                  </span>
+                ),
+                forceRender: true,
+                children: (
+                  <>
+                    <section className="butler-task-editor__section" aria-labelledby="butler-task-section-model">
+                      <Typography.Title id="butler-task-section-model" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionModelService')}</Typography.Title>
+                      <div className="butler-task-editor__section-grid">
+                        <Form.Item name="modelPair" label={t('butler.form.model')} rules={!editing ? [{ required: true, message: t('butler.form.modelRequired') }] : []}>
+                          <Select options={modelCandidates.map((candidate) => ({ value: `${candidate.modelId}::${candidate.serviceId}`, label: `${candidate.providerModelName} · ${candidate.serviceName}` }))} onChange={(pair: string) => { const candidate = modelCandidates.find((item) => `${item.modelId}::${item.serviceId}` === pair); if (candidate) { form.setFieldsValue({ modelId: candidate.modelId, modelServiceId: candidate.serviceId, modelOverride: candidate.providerModelName }); if (!candidate.supportsThinking) form.setFieldValue('reasoningEffort', 'off') } }} />
+                        </Form.Item>
+                        <Form.Item name="reasoningEffort" label={t('butler.form.reasoningEffort')} extra={selectedCandidate?.supportsThinking === false ? t('butler.form.reasoningUnsupported') : undefined}>
+                          <Select disabled={selectedCandidate?.supportsThinking === false} options={(['off', 'low', 'medium', 'high', 'max'] as const).map((effort) => ({ value: effort, label: t(`butler.form.reasoning${effort[0]!.toUpperCase()}${effort.slice(1)}` as 'butler.form.reasoningOff') }))} />
+                        </Form.Item>
+                        <Form.Item name="modelServiceId" hidden><Input /></Form.Item>
+                        <Form.Item name="modelId" hidden><Input /></Form.Item>
+                      </div>
+                    </section>
+                    <section className="butler-task-editor__section" aria-labelledby="butler-task-section-delivery">
+                      <Typography.Title id="butler-task-section-delivery" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionDelivery')}</Typography.Title>
+                      <div className="butler-task-editor__section-grid">
+                        <Form.Item name="deliveryPref" label={t('butler.form.deliveryPref')}>
+                          <Select
+                            options={[
+                              { value: 'desktop', label: t('butler.delivery.desktop') },
+                              { value: 'feishu', label: t('butler.delivery.feishu') },
+                              { value: 'wechat', label: t('butler.delivery.wechat') },
+                              { value: 'none', label: t('butler.delivery.none') }
+                            ]}
+                          />
+                        </Form.Item>
+                      </div>
+                    </section>
+                    <section className="butler-task-editor__section" aria-labelledby="butler-task-section-archive">
+                      <Typography.Title id="butler-task-section-archive" className="butler-task-editor__section-title" level={5}>{t('butler.form.sectionArchive')}</Typography.Title>
+                      <div className="butler-task-editor__section-grid">
+                        <Form.Item
+                          name="outputOrganization"
+                          label={t('butler.form.outputOrganization')}
+                          rules={[{ required: true, message: t('butler.form.outputOrganizationRequired') }]}
+                        >
+                          <Select
+                            options={[
+                              { value: 'direct', label: t('butler.form.outputOrganizationDirect') },
+                              { value: 'daily', label: t('butler.form.outputOrganizationDaily') },
+                              { value: 'hourly', label: t('butler.form.outputOrganizationHourly') }
+                            ]}
+                          />
+                        </Form.Item>
+                      </div>
+                    </section>
+                  </>
+                )
+              }]}
+            />
+
+          </div> : null}
+          {wizardStep === 2 && authorizationReview ? (
+            <section className="butler-task-editor__final-review" aria-labelledby="butler-task-final-review-title">
+              <Typography.Title id="butler-task-final-review-title" level={4}>{t('butler.form.wizardFinalTitle')}</Typography.Title>
+              <Typography.Paragraph type="secondary">{t('butler.form.wizardFinalIntro')}</Typography.Paragraph>
+              <dl className="butler-task-editor__summary-list">
+                <div>
+                  <dt>{t('butler.form.name')}</dt>
+                  <dd>{wizardValues.name}</dd>
+                </div>
+                <div>
+                  <dt>{t('butler.form.scheduleKind')}</dt>
+                  <dd>{summarySchedule}</dd>
+                </div>
+                <div>
+                  <dt>{t('butler.form.outputDir')}</dt>
+                  <dd><Typography.Text code>{wizardValues.outputDir}</Typography.Text><Typography.Text type="secondary"> · {outputOrganizationText(wizardValues.outputOrganization ?? null, t)}</Typography.Text></dd>
+                </div>
+                <div>
+                  <dt>{t('butler.form.permissionReviewTitle')}</dt>
+                  <dd>{t('butler.form.permissionCount', { count: authorizationReview.permissions.length })}</dd>
+                </div>
+              </dl>
+              <div className="butler-task-editor__activation-choice">
+                <div className="butler-task-editor__activation-copy">
+                  <Typography.Text id="butler-task-enable-label" strong>{t('butler.form.wizardEnableLabel')}</Typography.Text>
+                  <Typography.Text id="butler-task-enable-hint" type="secondary">{t('butler.form.wizardEnableHint')}</Typography.Text>
+                </div>
+                <Switch
+                  checked={enableOnSave}
+                  onChange={setEnableOnSave}
+                  aria-labelledby="butler-task-enable-label"
+                  aria-describedby="butler-task-enable-hint"
+                />
               </div>
             </section>
-          </div>
+          ) : null}
         </Form>
       </Modal>
       <Modal title={t('butler.historyTitle')} open={Boolean(historyTask)} onCancel={() => setHistoryTask(null)} footer={null}>

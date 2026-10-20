@@ -180,7 +180,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
   }
 
   type TaskInspection = Awaited<ReturnType<typeof inspectTask>>
-  function stageOutputRootAuthorizationReview(args: {
+  function stageAuthorizationScopeReview(args: {
     inspection: TaskInspection
     authorizedDirs: string[]
     task: Parameters<typeof buildPermissionList>[0]
@@ -192,7 +192,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
   }): ButlerTaskWriteResult | undefined {
     const continuation = args.inspection.authorizationContinuation
     if (!continuation) return undefined
-    const proposedAuthorizedDirs = [...new Set([...args.authorizedDirs, continuation.outputRoot])]
+    const proposedAuthorizedDirs = [...new Set([...args.authorizedDirs, ...continuation.authorizedRoots])].sort()
     const permissions = buildPermissionList({ ...args.task, authorizedDirs: proposedAuthorizedDirs }, args.inspection.requiredPermissions ?? [], args.inspection.mcpTools)
     return stageAuthorizationReview({
       ...(args.taskId ? { taskId: args.taskId } : {}),
@@ -207,7 +207,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
         const rootsResult = await validateAuthorizedDirs(proposedAuthorizedDirs)
         if (!rootsResult.ok) return { ok: false, kind: 'validation-error', error: rootsResult.error }
         const approvedAuthorizedDirs = rootsResult.authorizedDirs
-        if (!approvedAuthorizedDirs.includes(continuation.outputRoot)) {
+        if (proposedAuthorizedDirs.some((root) => !approvedAuthorizedDirs.includes(root))) {
           return { ok: false, kind: 'validation-error', error: '授权目录位置在确认后发生变化，请重新预检任务' }
         }
         const approvedInspection = await args.inspectWithAuthorizedDirs(approvedAuthorizedDirs, continuation.analysis)
@@ -262,7 +262,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
         return { ok: false, kind: 'validation-error', error: 'task-revision-conflict' }
       }
     }
-    // final-check: 仅凭本进程保存的一次性 reviewId 消费权限列表；Agent / renderer 均不能提交授权记录内容。
+    // final-check: reviewId 只确认主机生成的权限记录，不携带任务启停状态；启停由独立的 butler:update 状态写入处理。
     return await review.commit(createAuthorizationRecord(review))
   })
 
@@ -356,10 +356,12 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       modelId: config.modelId,
       modelServiceId: config.modelServiceId,
       reasoningEffort: config.reasoningEffort,
-      ...(payload?.enabled !== undefined ? { enabled: payload.enabled } : {})
+      // Permission review only stores the task and its authorization receipt. New tasks stay paused
+      // until the renderer applies the user's separate final-page activation choice.
+      enabled: false
     }
     if (inspection.authorizationContinuation) {
-      return stageOutputRootAuthorizationReview({
+      return stageAuthorizationScopeReview({
         inspection,
         authorizedDirs,
         task: { authorizedDirs, outputDir: outputResult.outputDir, outputOrganization, deliveryPref, ...(payload?.deliveryTarget ? { deliveryTarget: payload.deliveryTarget } : {}) },
@@ -458,13 +460,12 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
       next.modelOverride = config.modelOverride
       next.reasoningEffort = config.reasoningEffort
     }
-    if (typeof patch.enabled === 'boolean') next.enabled = patch.enabled
     const candidate = { ...existing, ...next }
     const candidateRoots: string[] = rootsProvided ? rootsResult.authorizedDirs : existing.authorizedDirs
     const inspection = await inspectTask({ prompt: candidate.prompt, schedule: candidate.schedule, deliveryPref: candidate.deliveryPref, roots: candidateRoots, outputDir: outputResult.outputDir, modelId: candidate.modelId, modelServiceId: candidate.modelServiceId, reasoningEffort: candidate.reasoningEffort, taskRevision: (existing.taskRevision ?? 0) + 1, requestReceivedAt })
     if (inspection.authorizationContinuation) {
       const taskRevision = (existing.taskRevision ?? 0) + 1
-      return stageOutputRootAuthorizationReview({
+      return stageAuthorizationScopeReview({
         inspection,
         authorizedDirs: candidateRoots,
         task: {

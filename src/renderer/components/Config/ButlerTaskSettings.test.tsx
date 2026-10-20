@@ -94,9 +94,13 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
   }
 
   async function clickTaskSubmit() {
-    const authorizeAll = screen.queryByRole('checkbox', { name: '我同意授权以上全部权限并保存此任务' })
-    if (authorizeAll && !(authorizeAll as HTMLInputElement).checked) fireEvent.click(authorizeAll)
-    fireEvent.click(await screen.findByRole('button', { name: /预检并查看权限|确认授权并保存任务/ }))
+    const permissionStep = screen.queryByRole('button', { name: '下一步' })
+    if (permissionStep) {
+      fireEvent.click(permissionStep)
+      fireEvent.click(await screen.findByRole('button', { name: /保存并启用|保存更改|保存并保持停用/ }))
+      return
+    }
+    fireEvent.click(await screen.findByRole('button', { name: /预检并查看权限/ }))
   }
 
   async function chooseSelectOption(label: string, option: string) {
@@ -146,11 +150,9 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '草稿巡检' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '读取资料并生成结果' } })
     await chooseSelectOption('触发方式', '每天')
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
     await chooseSelectOption('结果归档方式', '直接写入该目录')
     await chooseOutputDir('/tmp/draft-results')
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/materials' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
-    await waitFor(() => expect(screen.getByText('/tmp/materials')).toBeTruthy())
 
     await clickTaskSubmit()
     expect(await screen.findByText('请检查此定时任务需要的权限')).toBeTruthy()
@@ -165,8 +167,9 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(screen.getByLabelText('任务提示词')).toHaveProperty('value', '读取资料并生成结果')
     expect(screen.getByLabelText('结果输出目录')).toHaveProperty('value', '/tmp/draft-results')
     expect(selectedTriggerValue()).toBe('每天')
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
     expect(selectedArchiveValue()).toBe('直接写入该目录')
-    expect(screen.getByText('/tmp/materials')).toBeTruthy()
+    expect(screen.queryByText('/tmp/materials')).toBeNull()
     expect(screen.queryByText('请检查此定时任务需要的权限')).toBeNull()
     expect(screen.getByRole('button', { name: '预检并查看权限' })).toBeTruthy()
 
@@ -176,7 +179,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       name: '草稿巡检',
       prompt: '读取资料并生成结果',
       schedule: { kind: 'daily', time: '09:00' },
-      authorizedDirs: ['/tmp/materials'],
+      authorizedDirs: [],
       outputDir: '/tmp/draft-results',
       outputOrganization: 'direct'
     })
@@ -232,8 +235,9 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
 
     expect(await screen.findByLabelText('任务名称')).toHaveProperty('value', '编辑中的草稿')
     expect(screen.getByLabelText('结果输出目录')).toHaveProperty('value', '/tmp/task-results')
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
     expect(selectedArchiveValue()).toBe('每次执行写入按日期（YYYYMMDD）创建的子目录')
-    expect(screen.getByText('/tmp/task-materials')).toBeTruthy()
+    expect(screen.queryByText('/tmp/task-materials')).toBeNull()
     expect(screen.queryByText('请检查此定时任务需要的权限')).toBeNull()
   })
 
@@ -243,7 +247,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
   })
 
-  it('按任务流程分组表单，并将模型与思维强度放在同一大模型服务区', async () => {
+  it('将完整大模型服务收进高级设置，并在折叠标题显示当前模型', async () => {
     renderTab()
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
@@ -251,15 +255,77 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
 
     expect(screen.getAllByRole('region').map((region) => region.querySelector('h5')?.textContent)).toEqual([
       '任务内容',
-      '大模型服务',
-      '执行与投递',
-      '结果输出',
-      '资料与本机访问权限'
+      '执行计划',
+      '结果输出'
     ])
 
+    const advancedSettings = screen.getByRole('button', { name: /高级设置/ })
+    const outputSection = screen.getByRole('region', { name: '结果输出' })
+    expect(Boolean(outputSection.compareDocumentPosition(advancedSettings) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+    expect(screen.queryByRole('region', { name: '资料与本机访问权限' })).toBeNull()
+    expect(advancedSettings.textContent).toContain('model-name · Service')
+    expect(advancedSettings.textContent).toContain('归档：按日期小时归档')
+    expect(screen.queryByRole('region', { name: '大模型服务' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: '结果归档方式' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: '投递偏好' })).toBeNull()
+    fireEvent.click(advancedSettings)
+    expect(screen.getByRole('combobox', { name: '结果归档方式' })).toBeTruthy()
     const modelServiceSection = screen.getByRole('region', { name: '大模型服务' })
     expect(within(modelServiceSection).getByRole('combobox', { name: '任务模型与服务' })).toBeTruthy()
     expect(within(modelServiceSection).getByRole('combobox', { name: '思维强度' })).toBeTruthy()
+    const deliverySection = screen.getByRole('region', { name: '结果投递' })
+    expect(within(deliverySection).getByRole('combobox', { name: '投递偏好' })).toBeTruthy()
+  })
+
+  it('未选择任务模型时提交会自动展开高级设置并定位校验错误', async () => {
+    butlerGetTaskDefaults.mockResolvedValueOnce({ workDir: '/tmp/active-profile' })
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    await screen.findByLabelText('任务名称')
+
+    fireEvent.change(screen.getByLabelText('任务名称'), { target: { value: '测试任务' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '生成测试结果' } })
+    await chooseOutputDir('/tmp/output')
+    fireEvent.click(screen.getByRole('button', { name: /预检并查看权限/ }))
+
+    const modelServiceSection = await screen.findByRole('region', { name: '大模型服务' })
+    expect(within(modelServiceSection).getByRole('combobox', { name: '任务模型与服务' }).getAttribute('aria-invalid')).toBe('true')
+    expect(butlerCreateTask).not.toHaveBeenCalled()
+  })
+
+  it('预检结果出现后聚焦权限清单，用户无需回到表单顶部寻找', async () => {
+    butlerCreateTask.mockResolvedValueOnce({
+      ok: false,
+      kind: 'authorization-review-required',
+      reviewId: 'review-focus',
+      report: { status: 'passed', blockers: [], suggestedDirectories: [] },
+      permissions: [
+        { kind: 'local-shell', scopeRoots: ['/tmp/project'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/tmp/project' }] }
+      ]
+    })
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '权限检查任务' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '总结 Git 提交' } })
+    await chooseOutputDir()
+    await clickTaskSubmit()
+
+    const review = await screen.findByRole('region', { name: '请检查此定时任务需要的权限' })
+    await waitFor(() => expect(document.activeElement).toBe(review))
+    expect(within(review).getByText(/git log --oneline -5/)).toBeTruthy()
+  })
+
+  it('表单校验失败后聚焦第一个必填项', async () => {
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    const nameInput = await screen.findByLabelText('任务名称')
+    await clickTaskSubmit()
+
+    await waitFor(() => expect(document.activeElement).toBe(nameInput))
+    expect(butlerCreateTask).not.toHaveBeenCalled()
   })
 
   it('新建任务：提交后调用 butlerCreateTask 并刷新列表', async () => {
@@ -286,32 +352,47 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.change(screen.getByLabelText('任务名称'), { target: { value: '周报汇总' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '汇总本周会话' } })
     await chooseOutputDir('/tmp/output-root')
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
-    await waitFor(() => expect(screen.getByText('/tmp/chosen-root')).toBeTruthy())
     expect(screen.queryByRole('checkbox', { name: '允许本地 Shell 命令' })).toBeNull()
     await clickTaskSubmit()
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('请检查此定时任务需要的权限')).toBeTruthy()
-    expect(screen.getByText('已选结果输出目录中检测到 Git 仓库。任务需要读取该仓库；请检查上方完整权限清单。确认后系统会在授权范围内继续核验任务目标，核验通过后才保存。')).toBeTruthy()
+    const permissionReview = screen.getByRole('region', { name: '请检查此定时任务需要的权限' })
+    expect(within(permissionReview).getByText('预检发现')).toBeTruthy()
+    expect(within(permissionReview).getByText('任务需要读取所选结果输出目录中的 Git 仓库；这项访问权限与结果写入分开列出。')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: '预检结果' })).toBeNull()
     expect(screen.queryByText('这项任务需要本机工具权限。请查看下方权限需求，并将相关资料目录加入授权读写列表后重新预检。')).toBeNull()
-    expect(screen.getByText('可运行列出的本机命令及完整参数（包括本地 Git 查询）；每条命令注明工作目录：git log --oneline -5（/tmp/chosen-root）。执行超时由 Agent 按实际情况选择，不属于授权范围。命令访问范围：/tmp/chosen-root。')).toBeTruthy()
+    const permissionsTable = screen.getByRole('table')
+    expect(within(permissionsTable).getByRole('columnheader', { name: '权限类型' })).toBeTruthy()
+    expect(within(permissionsTable).getByRole('columnheader', { name: '授权对象' })).toBeTruthy()
+    expect(within(permissionsTable).getByRole('columnheader', { name: '范围与限制' })).toBeTruthy()
+    expect(within(permissionsTable).getByText('本机 Shell')).toBeTruthy()
+    expect(within(permissionsTable).getByText('git log --oneline -5')).toBeTruthy()
+    expect(within(permissionsTable).getByText('工作目录')).toBeTruthy()
+    expect(within(permissionsTable).getByText('执行超时')).toBeTruthy()
     expect(screen.queryByText(/超时：30s/)).toBeNull()
-    expect(screen.getByText('可在以下目录中使用 grep 搜索内容：/tmp/chosen-root/src。')).toBeTruthy()
-    expect(screen.getByText('可在以下目录运行经安全审核的脚本：/tmp/chosen-root。每次审核绑定该脚本的 SHA-256，脚本内容变化后必须重新审核。')).toBeTruthy()
-    expect(screen.getByText('可调用 MCP 服务「Issue Tracker」中的工具「search_issues」：Search issues。任务用途：查找近期问题。参数：query (必填)、limit。授权绑定当前服务配置与工具定义；安全审核 Agent 仍会检查每次调用的实际参数。')).toBeTruthy()
-    const authorizeAll = screen.getByRole('checkbox', { name: '我同意授权以上全部权限并保存此任务' })
-    expect(authorizeAll).toHaveProperty('checked', false)
-    expect(screen.getByRole('button', { name: '确认授权并保存任务' })).toHaveProperty('disabled', true)
-    expect(screen.getAllByRole('checkbox')).toHaveLength(1)
-    const payload = butlerCreateTask.mock.calls[0]![0] as { name: string; prompt: string; schedule: unknown; authorizedDirs: string[]; outputDir: string; outputOrganization: string }
+    expect(within(permissionsTable).getByText('grep 搜索')).toBeTruthy()
+    expect(within(permissionsTable).getByText('/tmp/chosen-root/src')).toBeTruthy()
+    expect(within(permissionsTable).getByText('脚本运行')).toBeTruthy()
+    expect(within(permissionsTable).getByText(/SHA-256/)).toBeTruthy()
+    expect(within(permissionsTable).getByText('MCP 工具')).toBeTruthy()
+    expect(within(permissionsTable).getByText('Issue Tracker')).toBeTruthy()
+    expect(within(permissionsTable).getByText('search_issues')).toBeTruthy()
+    expect(within(permissionsTable).getByText('查找近期问题')).toBeTruthy()
+    expect(within(permissionsTable).getByText('query')).toBeTruthy()
+    expect(within(permissionsTable).getByText(/服务配置与工具定义/)).toBeTruthy()
+    expect(screen.queryByRole('checkbox', { name: '我同意授权以上全部权限' })).toBeNull()
+    expect(within(screen.getByRole('region', { name: '请检查此定时任务需要的权限' })).queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: '下一步' })).toHaveProperty('disabled', false)
+    expect(butlerConfirmTaskAuthorization).not.toHaveBeenCalled()
+    const payload = butlerCreateTask.mock.calls[0]![0] as { name: string; prompt: string; schedule: unknown; authorizedDirs: string[]; outputDir: string; outputOrganization: string; enabled: boolean }
     expect(payload.name).toBe('周报汇总')
     expect(payload.prompt).toBe('汇总本周会话')
     expect(payload.schedule).toEqual({ kind: 'interval', intervalMinutes: 30 })
-    expect(payload).toMatchObject({ authorizedDirs: ['/tmp/chosen-root'], outputDir: '/tmp/output-root', outputOrganization: 'hourly', modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'medium' })
+    expect(payload).toMatchObject({ authorizedDirs: [], outputDir: '/tmp/output-root', outputOrganization: 'hourly', enabled: false, modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'medium' })
     expect(payload).not.toHaveProperty('accessPermissions')
     await clickTaskSubmit()
     await waitFor(() => expect(butlerConfirmTaskAuthorization).toHaveBeenCalledWith({ reviewId: 'review-1' }))
+    await waitFor(() => expect(butlerUpdateTask).toHaveBeenCalledWith({ id: 'new-1', patch: { enabled: true } }))
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalledTimes(2))
   })
 
@@ -338,21 +419,99 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     await chooseOutputDir('/tmp/project')
     await clickTaskSubmit()
 
-    expect(await screen.findByText(/已选结果输出目录中检测到 Git 仓库/)).toBeTruthy()
-    expect(screen.getByText(/git log --oneline -5（\/tmp\/project）/)).toBeTruthy()
-    expect(screen.getByText(/可读取或修改以下目录中的现有资料：\/tmp\/project/)).toBeTruthy()
-    expect(screen.getAllByRole('checkbox')).toHaveLength(1)
-    const authorizeAll = screen.getByRole('checkbox', { name: '我同意授权以上全部权限并保存此任务' })
-    expect(authorizeAll).toHaveProperty('checked', false)
-    expect(screen.getByRole('button', { name: '确认授权并保存任务' })).toHaveProperty('disabled', true)
+    expect(await screen.findByText(/任务需要读取所选结果输出目录中的 Git 仓库/)).toBeTruthy()
+    expect(screen.queryByRole('region', { name: '预检结果' })).toBeNull()
+    const permissionsTable = screen.getByRole('table')
+    expect(within(permissionsTable).getByText('git log --oneline -5')).toBeTruthy()
+    expect(within(permissionsTable).getAllByText('/tmp/project').length).toBeGreaterThanOrEqual(2)
+    expect(within(permissionsTable).getByText('资料目录读写')).toBeTruthy()
+    expect(screen.queryByRole('checkbox', { name: '我同意授权以上全部权限' })).toBeNull()
+    expect(within(screen.getByRole('region', { name: '请检查此定时任务需要的权限' })).queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: '下一步' })).toHaveProperty('disabled', false)
     expect(butlerConfirmTaskAuthorization).not.toHaveBeenCalled()
 
-    fireEvent.click(authorizeAll)
-    fireEvent.click(screen.getByRole('button', { name: '确认授权并保存任务' }))
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }))
+    expect(document.querySelector('.butler-task-editor__steps .ant-steps-item-process .ant-steps-item-title')?.textContent).toBe('最终确认')
+    expect(screen.getByText('确认任务设置')).toBeTruthy()
+    expect(butlerConfirmTaskAuthorization).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '保存并启用' }))
     await waitFor(() => expect(butlerConfirmTaskAuthorization).toHaveBeenCalledWith({ reviewId: 'output-git-review' }))
   })
 
-  it('新建任务必须先选择结果输出目录，授权读写目录可以留空', async () => {
+  it('用三步向导分开展示任务填写、权限确认和最终启用', async () => {
+    butlerCreateTask.mockResolvedValueOnce({
+      ok: false,
+      kind: 'authorization-review-required',
+      reviewId: 'wizard-review',
+      report: { status: 'passed', blockers: [], suggestedDirectories: [] },
+      permissions: [{ kind: 'result-write', outputDirectory: '/tmp/wizard-results', organization: 'direct' }]
+    })
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '向导测试任务' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '整理资料并生成摘要' } })
+    await chooseOutputDir('/tmp/wizard-results')
+
+    expect(screen.getByText('填写任务内容')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '预检并查看权限' }))
+
+    const permissionReview = await screen.findByRole('region', { name: '请检查此定时任务需要的权限' })
+    expect(screen.queryByLabelText('任务名称')).toBeNull()
+    expect(within(permissionReview).getByRole('table')).toBeTruthy()
+    expect(screen.queryByRole('checkbox', { name: '我同意授权以上全部权限' })).toBeNull()
+    expect(within(permissionReview).queryByRole('alert')).toBeNull()
+    expect(butlerConfirmTaskAuthorization).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }))
+    expect(screen.getByText('确认任务设置')).toBeTruthy()
+    expect(screen.getByText('向导测试任务')).toBeTruthy()
+    expect(screen.getByText('/tmp/wizard-results')).toBeTruthy()
+    const enableTask = screen.getByRole('switch', { name: '保存后启用任务' })
+    expect(enableTask.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(enableTask)
+    expect(screen.getByRole('button', { name: '保存并保持停用' })).toBeTruthy()
+    expect(butlerConfirmTaskAuthorization).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '保存并保持停用' }))
+    await waitFor(() => expect(butlerConfirmTaskAuthorization).toHaveBeenCalledWith({ reviewId: 'wizard-review' }))
+    expect(butlerUpdateTask).not.toHaveBeenCalled()
+  })
+
+  it('编辑停用任务可在最终确认步骤选择启用', async () => {
+    const existing = task({ enabled: false, outputDir: '/tmp/disabled-results', outputOrganization: 'direct' })
+    butlerListTasks.mockResolvedValue([existing])
+    butlerConfirmTaskAuthorization.mockResolvedValueOnce({ ok: true, id: existing.id, task: { ...existing, taskRevision: 1 } })
+    butlerUpdateTask.mockResolvedValueOnce({
+      ok: false,
+      kind: 'authorization-review-required',
+      reviewId: 'disabled-edit-review',
+      report: { status: 'passed', blockers: [], suggestedDirectories: [] },
+      permissions: [{ kind: 'result-write', outputDirectory: '/tmp/disabled-results', organization: 'direct' }]
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: /编辑/ }))
+    await screen.findByLabelText('任务名称')
+    await clickTaskSubmit()
+
+    expect(await screen.findByText('请检查此定时任务需要的权限')).toBeTruthy()
+    expect(screen.queryByRole('checkbox', { name: '我同意授权以上全部权限' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }))
+    expect(document.querySelector('.butler-task-editor__steps .ant-steps-item-process .ant-steps-item-title')?.textContent).toBe('最终确认')
+    const enableTask = screen.getByRole('switch', { name: '保存后启用任务' })
+    expect(enableTask.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(enableTask)
+    expect(screen.getByRole('button', { name: '保存并启用' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '保存并启用' }))
+
+    await waitFor(() => expect(butlerConfirmTaskAuthorization).toHaveBeenCalledWith({ reviewId: 'disabled-edit-review' }))
+    await waitFor(() => expect(butlerUpdateTask).toHaveBeenCalledTimes(2))
+    expect(butlerUpdateTask.mock.calls[1]![0]).toMatchObject({ id: 'task-1', patch: { enabled: true } })
+    const initialPatch = butlerUpdateTask.mock.calls[0]![0].patch as Record<string, unknown>
+    expect(initialPatch).not.toHaveProperty('enabled')
+  })
+
+  it('新建任务必须选择结果输出目录，访问范围由预检决定', async () => {
     renderTab()
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
@@ -365,6 +524,16 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(butlerCreateTask).not.toHaveBeenCalled()
   })
 
+  it('第一步不展示资料与本机访问权限输入项，权限由预检阶段统一列出', async () => {
+    renderTab()
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+
+    expect(await screen.findByLabelText('任务名称')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '资料与本机访问权限' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '添加授权目录' })).toBeNull()
+    expect(screen.queryByText('读取或修改资料时添加对应目录；留空表示不访问其他目录。')).toBeNull()
+  })
+
   it('归档方式默认跟随触发类型，用户手动更改后不再覆盖', async () => {
     renderTab()
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
@@ -372,6 +541,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
 
     await chooseSelectOption('触发方式', '每天')
     expect(selectedTriggerValue()).toBe('每天')
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
     expect(selectedArchiveValue()).toBe('每次执行写入按日期（YYYYMMDD）创建的子目录')
 
     await chooseSelectOption('触发方式', '一次性')
@@ -390,17 +560,16 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '无 Thinking 模型任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '执行检查' } })
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
     expect(await screen.findByText('当前模型不支持思维强度设置。')).toBeTruthy()
     expect(screen.getByRole('combobox', { name: '思维强度' }).closest('.ant-select')?.classList.contains('ant-select-disabled')).toBe(true)
     await chooseOutputDir()
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await clickTaskSubmit()
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
     expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ reasoningEffort: 'off' })
   })
 
-  it('TARGET_UNCLEAR 时不保存任务，并在表单显示可理解的预检问题', async () => {
+  it('TARGET_UNCLEAR 时停留在预检步骤，并可返回修改任务内容', async () => {
     butlerCreateTask.mockResolvedValueOnce({ ok: false, kind: 'preflight-blocked', report: { status: 'blocked', blockers: [{ code: 'TARGET_UNCLEAR', messageKey: 'butler.preflight.target_unclear', reference: '帮我处理一下', reasonCode: 'scope_unclear' }], suggestedDirectories: [] } })
     renderTab()
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
@@ -408,19 +577,18 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '待补充目标' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '帮我处理一下' } })
     await chooseOutputDir()
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
-    await waitFor(() => expect(screen.getByText('/tmp/chosen-root')).toBeTruthy())
     await clickTaskSubmit()
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('无法确定要处理的文件、目录或范围，请在任务提示词中补充具体目标。')).toBeTruthy()
     expect(screen.getByText('相关描述：帮我处理一下')).toBeTruthy()
-    expect(screen.getByLabelText('任务提示词')).toBeTruthy()
+    expect(screen.queryByLabelText('任务提示词')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '上一步：填写任务内容' }))
+    expect(screen.getByLabelText('任务提示词')).toHaveProperty('value', '帮我处理一下')
     expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ name: '待补充目标' })
     expect(butlerListTasks).toHaveBeenCalledTimes(1)
   })
 
-  it('Git 查询缺少授权仓库时说明要添加仓库目录', async () => {
+  it('Git 查询缺少仓库位置时提示用户补充目标位置', async () => {
     const prompt = '总结一下昨天合并进main分支，并推送github的所有内容。'
     butlerCreateTask.mockResolvedValueOnce({ ok: false, kind: 'preflight-blocked', report: {
       status: 'blocked', blockers: [{ code: 'TARGET_NOT_FOUND', messageKey: 'butler.preflight.target_not_found', reference: prompt, reasonCode: 'git_repository_not_found' }], suggestedDirectories: []
@@ -430,15 +598,77 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: 'Git 提交汇总' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: prompt } })
     await chooseOutputDir()
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/materials' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await clickTaskSubmit()
 
-    expect(await screen.findByText('在已授权的读写目录中没有找到这个目标。请检查名称或把目标所在目录加入授权读写目录。')).toBeTruthy()
-    expect(screen.getByText('已授权目录中没有发现 Git 仓库。请把目标仓库根目录加入授权读写目录，再重新预检。')).toBeTruthy()
+    expect(await screen.findByText('在当前可访问范围内没有找到这个目标。请检查名称，并在任务提示词中说明目标位置。')).toBeTruthy()
+    expect(screen.getByText('没有识别到目标 Git 仓库。请在任务提示词中说明仓库位置，或把结果输出目录设为仓库所在目录后重新预检。')).toBeTruthy()
     expect(screen.getByText(`相关描述：${prompt}`)).toBeTruthy()
-    expect(screen.getByText('按上方说明补充任务提示词或调整授权读写目录，然后再次预检。')).toBeTruthy()
+    expect(screen.getByText('返回上一步补充任务提示词或调整结果输出目录，再重新预检。')).toBeTruthy()
     expect(butlerCreateTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('权限预检被阻断时展示已检测到但尚未授权的工具需求', async () => {
+    butlerCreateTask.mockResolvedValueOnce({
+      ok: false,
+      kind: 'preflight-blocked',
+      report: {
+        status: 'blocked',
+        blockers: [{ code: 'TOOL_PERMISSION_REQUIRED', messageKey: 'butler.preflight.tool_permission_required' }],
+        suggestedDirectories: [],
+        permissionNeeds: [
+          { kind: 'directory-read-write', path: '/tmp/project/daily' },
+          { kind: 'local-shell', scopeRoots: ['/tmp/project/daily'], commands: [{ command: 'git log origin/main --merges --since="yesterday 00:00" --until="today 00:00" --date=iso --pretty=format:"%h%x09%ad%x09%an%x09%s"', workingDirectory: '/tmp/project/daily' }] },
+          { kind: 'grep', scopeRoots: ['/tmp/project/daily/docs'] },
+          { kind: 'run-script', scopeRoots: ['/tmp/project/daily'], scriptHashBinding: 'per-invocation' }
+        ]
+      }
+    } as never)
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: 'Git 汇总' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '总结本机 Git 历史' } })
+    await chooseOutputDir('/tmp/results')
+    await clickTaskSubmit()
+
+    expect(await screen.findByText('预检识别到的工具需求（尚未授权）')).toBeTruthy()
+    const permissionTable = screen.getByRole('table')
+    expect(within(permissionTable).getByRole('columnheader', { name: '权限类型' })).toBeTruthy()
+    expect(within(permissionTable).getByRole('columnheader', { name: '授权对象' })).toBeTruthy()
+    expect(within(permissionTable).getByRole('columnheader', { name: '范围与限制' })).toBeTruthy()
+    expect(within(permissionTable).getAllByText('/tmp/project/daily').length).toBeGreaterThan(0)
+    expect(within(permissionTable).getByText('本机 Shell')).toBeTruthy()
+    expect(within(permissionTable).getByText('工作目录')).toBeTruthy()
+    expect(within(permissionTable).getByText('git log origin/main --merges --since="yesterday 00:00" --until="today 00:00" --date=iso --pretty=format:"%h%x09%ad%x09%an%x09%s"')).toBeTruthy()
+    expect(within(permissionTable).getByText('grep 搜索')).toBeTruthy()
+    expect(within(permissionTable).getByText('脚本运行')).toBeTruthy()
+    expect(within(permissionTable).getByText(/SHA-256/)).toBeTruthy()
+    expect(screen.queryByText(/可运行列出的本机命令及完整参数/)).toBeNull()
+    expect(screen.getByText('这些需求来自模拟演练，尚未授权。请核对完整范围后继续确认；运行时仍会逐次校验工具调用及参数。')).toBeTruthy()
+    expect(screen.queryByRole('checkbox', { name: '我同意授权以上全部权限' })).toBeNull()
+    expect(butlerConfirmTaskAuthorization).not.toHaveBeenCalled()
+  })
+
+  it('模型没有返回具体工具范围时不承诺显示权限清单', async () => {
+    butlerCreateTask.mockResolvedValueOnce({
+      ok: false,
+      kind: 'preflight-blocked',
+      report: {
+        status: 'blocked',
+        blockers: [{ code: 'TOOL_PERMISSION_DETAILS_MISSING', messageKey: 'butler.preflight.tool_permission_details_missing', reasonCode: 'capability_not_authorized' }],
+        suggestedDirectories: []
+      }
+    } as never)
+    renderTab()
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '工具需求缺少范围' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '总结本机项目的近期改动' } })
+    await chooseOutputDir('/tmp/results')
+    await clickTaskSubmit()
+
+    expect(await screen.findByText('预检判断任务可能需要本机工具，但没有返回具体的工具调用和参数，无法形成待确认的权限清单。请重新预检，或在任务提示词中补充要访问的位置和操作。')).toBeTruthy()
+    expect(screen.queryByText('任务需要本地 Shell 命令权限，但当前尚未授权。')).toBeNull()
+    expect(screen.queryByText('预检识别到的工具需求（尚未授权）')).toBeNull()
   })
 
   it('旧任务编辑显示未设置目录，加载时不触发保存或自动填值', async () => {
@@ -465,6 +695,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
 
     expect(await screen.findByLabelText('结果输出目录')).toHaveProperty('value', '/tmp/saved-results')
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }))
     expect(selectedArchiveValue()).toBe('每次执行写入按日期和小时（YYYYMMDD-HH）创建的子目录')
     await chooseSelectOption('触发方式', '固定间隔')
     expect(selectedArchiveValue()).toBe('每次执行写入按日期和小时（YYYYMMDD-HH）创建的子目录')
@@ -489,30 +720,14 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '改名后的任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '改后的提示词' } })
     await chooseOutputDir('/tmp/output-selected')
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/selected-root' })
-    fireEvent.click(screen.getByRole('button', { name: '添加目录' }))
-    await screen.findByText('/tmp/selected-root')
     await clickTaskSubmit()
     await waitFor(() => expect(butlerUpdateTask).toHaveBeenCalledTimes(1))
     const payload = butlerUpdateTask.mock.calls[0]![0] as { patch: Record<string, unknown> }
-    expect(payload.patch).toMatchObject({ name: '改名后的任务', prompt: '改后的提示词', authorizedDirs: ['/tmp/selected-root'], outputDir: '/tmp/output-selected' })
+    expect(payload.patch).toMatchObject({ name: '改名后的任务', prompt: '改后的提示词', authorizedDirs: [], outputDir: '/tmp/output-selected' })
     expect(payload.patch).not.toHaveProperty('workDir')
     expect(payload.patch).not.toHaveProperty('modelId')
     expect(payload.patch).not.toHaveProperty('modelServiceId')
     expect(payload.patch).not.toHaveProperty('reasoningEffort')
-  })
-
-  it('授权目录选择器提交明确路径，用户取消不写入表单', async () => {
-    renderTab()
-    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
-    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
-    const browse = await screen.findByRole('button', { name: '浏览目录' })
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: true })
-    fireEvent.click(browse)
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen' })
-    fireEvent.click(browse)
-    expect(await screen.findByText('/tmp/chosen')).toBeTruthy()
-    await chooseOutputDir('/tmp/output-selected')
   })
 
   it('历史详情读取 run 快照而不采用任务当前配置', async () => {
@@ -602,11 +817,14 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(document.querySelector('.butler-task-card__authorized-dirs')?.textContent).toContain('/tmp/materials')
   })
 
-  it('停用任务带 disabled 视觉类；编辑图标按钮可打开编辑器', async () => {
+  it('停用任务明确标记状态且仅禁用立即运行；仍可编辑', async () => {
     butlerListTasks.mockResolvedValue([task({ enabled: false })])
     renderTab()
     await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
     expect(document.querySelector('.butler-task-card--disabled')).toBeTruthy()
+    expect(screen.getByText('已停用')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '立即运行' })).toHaveProperty('disabled', true)
+    expect(screen.getByRole('button', { name: '运行历史' })).toHaveProperty('disabled', false)
     fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
     await waitFor(() => expect(screen.getByText('编辑定时任务')).toBeTruthy())
   })
@@ -643,7 +861,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(await screen.findByText(/预检期间表单内容已变化/)).toBeTruthy()
     expect(screen.queryByText('请检查此定时任务需要的权限')).toBeNull()
     expect(screen.queryByText('/tmp/old-root')).toBeNull()
-    expect(screen.getByRole('button', { name: '预检并查看权限' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '上一步：填写任务内容' })).toBeTruthy()
     expect(butlerConfirmTaskAuthorization).not.toHaveBeenCalled()
   })
 
@@ -656,8 +874,6 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.change(screen.getByLabelText('任务名称'), { target: { value: '会失败的任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: 'x' } })
     await chooseOutputDir()
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await clickTaskSubmit()
     await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
     // 失败分支：不关弹窗、不刷新（成功分支会刷新 → 第 2 次 list 调用）
@@ -673,26 +889,22 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '预检服务不可用' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '读取 report.csv' } })
     await chooseOutputDir()
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await clickTaskSubmit()
 
     expect(await screen.findByText(/预检服务暂时无法完成请求，任务尚未保存/)).toBeTruthy()
     expect(screen.queryByText('ANALYZER_UNAVAILABLE')).toBeNull()
   })
 
-  it('预检结果未通过格式或权限范围校验时说明本机拒绝原因，不提示检查模型服务', async () => {
+  it('预检无法确认目标和权限范围时给出用户可理解的说明，不暴露内部原因码', async () => {
     butlerCreateTask.mockResolvedValueOnce({ ok: false, kind: 'preflight-unavailable', error: 'ANALYZER_INVALID_RESPONSE' })
     renderTab()
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '权限校验诊断' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '读取 report.csv' } })
     await chooseOutputDir()
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await clickTaskSubmit()
 
-    expect(await screen.findByText(/预检结果未通过格式或权限范围校验，任务尚未保存/)).toBeTruthy()
+    expect(await screen.findByText(/预检无法可靠确认任务目标和所需访问范围，任务尚未保存/)).toBeTruthy()
     expect(screen.queryByText('ANALYZER_INVALID_RESPONSE')).toBeNull()
   })
 
@@ -703,52 +915,31 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '总结输出诊断' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '读取 report.csv' } })
     await chooseOutputDir()
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen-root' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await clickTaskSubmit()
 
     expect(await screen.findByText(/未能在本次请求的输出长度内完整返回结果/)).toBeTruthy()
     expect(screen.queryByText('ANALYZER_OUTPUT_TRUNCATED')).toBeNull()
   })
 
-  it('目录列表可添加多个根并移除单项', async () => {
-    renderTab()
-    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
-    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '多目录任务' } })
-    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '汇总报告' } })
-    await chooseOutputDir()
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/root-a' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/root-b' })
-    fireEvent.click(screen.getByRole('button', { name: '添加目录' }))
-    await waitFor(() => expect(screen.getByText('/tmp/root-b')).toBeTruthy())
-    expect(screen.getByText('/tmp/root-a')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '移除目录 /tmp/root-a' }))
-    expect(screen.queryByText('/tmp/root-a')).toBeNull()
-    await clickTaskSubmit()
-    await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
-    expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ authorizedDirs: ['/tmp/root-b'] })
-  })
-
-  it('阻断报告保留表单并列出歧义路径，不允许逐个勾选建议目录', async () => {
+  it('阻断报告在预检步骤列出歧义路径，不允许逐个勾选建议目录', async () => {
     butlerCreateTask.mockResolvedValueOnce({ ok: false, kind: 'preflight-blocked', report: { status: 'blocked', blockers: [{ code: 'TARGET_AMBIGUOUS', messageKey: 'butler.preflight.target_ambiguous', reference: 'report.csv', candidates: ['/tmp/root-a/a/report.csv', '/tmp/root-a/b/report.csv'] }], suggestedDirectories: [{ path: '/tmp/suggested', purpose: '报告输入', source: 'prompt', validationStatus: 'valid' }] } })
     renderTab()
     fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '预检任务' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '汇总 /tmp/suggested' } })
     await chooseOutputDir()
-    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/root-a' })
-    fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await clickTaskSubmit()
     expect(await screen.findByText('相关描述：report.csv')).toBeTruthy()
     expect(screen.getByText('/tmp/root-a/a/report.csv')).toBeTruthy()
     expect(screen.getByText('/tmp/root-a/b/report.csv')).toBeTruthy()
+    expect(screen.queryByLabelText('任务名称')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '上一步：填写任务内容' }))
     expect(screen.getByLabelText('任务名称')).toHaveProperty('value', '预检任务')
     expect(screen.queryByRole('checkbox', { name: /\/tmp\/suggested/ })).toBeNull()
     expect(screen.queryByText('/tmp/suggested')).toBeNull()
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
     expect(butlerCreateTask).toHaveBeenCalledTimes(1)
-    expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ authorizedDirs: ['/tmp/root-a'] })
+    expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ authorizedDirs: [] })
   })
 
   it('启用预检阻断打开编辑表单展示候选，任务保持停用', async () => {
@@ -777,8 +968,13 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
 
     await screen.findByText('编辑定时任务')
     expect(await screen.findByText('请检查此定时任务需要的权限')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '确认授权并保存任务' })).toBeTruthy()
-    expect(screen.getByText(/可读取或修改以下目录/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '下一步' })).toBeTruthy()
+    const permissionsTable = screen.getByRole('table')
+    expect(within(permissionsTable).getByText('资料目录读写')).toBeTruthy()
+    expect(within(permissionsTable).getByText('/tmp/root-a')).toBeTruthy()
+    expect(within(permissionsTable).getByText('结果目录写入')).toBeTruthy()
+    expect(within(permissionsTable).getByText('/tmp/results')).toBeTruthy()
+    expect(within(permissionsTable).getByText('按日期小时归档')).toBeTruthy()
   })
 
   it('历史用本地化状态标签展示 skipped 原因', async () => {

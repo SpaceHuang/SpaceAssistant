@@ -222,6 +222,7 @@ export const PREFLIGHT_ISSUE_MESSAGE_KEYS = {
   TARGET_UNVERIFIABLE: 'butler.preflight.target_unverifiable',
   TARGET_TYPE_MISMATCH: 'butler.preflight.target_type_mismatch',
   TOOL_PERMISSION_REQUIRED: 'butler.preflight.tool_permission_required',
+  TOOL_PERMISSION_DETAILS_MISSING: 'butler.preflight.tool_permission_details_missing',
   NO_ROOTS: 'butler.preflight.no_roots',
   OUTPUT_PATH_ESCAPE: 'butler.preflight.output_path_escape',
   OUTPUT_ANCESTOR_INVALID: 'butler.preflight.output_ancestor_invalid',
@@ -273,6 +274,8 @@ export type PreflightReport = {
   status: 'passed' | 'blocked' | 'unavailable'
   blockers: PreflightIssue[]
   suggestedDirectories: SuggestedDirectory[]
+  /** Display-only permission needs inferred from the bounded preflight; these do not grant access. */
+  permissionNeeds?: AutomationTaskPermission[]
   /** The summary is valid, but the mock rehearsal stopped at a host budget and summarized its recorded trace. */
   preflightCoverage?: 'partial'
 }

@@ -1,13 +1,13 @@
 # 定时任务多工作目录与预检执行计划
 
-> 状态：E-01～E-15g 已完成
+> 状态：E-01～E-15h 已完成
 > 技术规格：[定时任务多工作目录与预检开发方案](./scheduled-task-multi-workdir-and-preflight-development-plan.md)  
 > 需求与 AC 真源：[需求评审稿](../../../review/2026-10-17-scheduled-task-multi-workdir-and-preflight-requirement-review.md)  
 > 计划规则：验收与不变量只引用技术方案中的 `INV-*` 和需求中的 `AC-*`；本文件只维护任务、依赖、证据与进度。
 
 ## 第 0 层：执行摘要【人必读】
 
-**目标：** 预检后向用户展示可理解的权限清单和覆盖状态；若预算停止但独立总结与主机校验成功，用户仍可确认已列权限，主进程保存授权记录并把部分覆盖事实一并交给安全审核 Agent。后续运行冻结该记录；清单外权限不因此获批。本地 Git 历史查询根据仓库 facts 和任务模型的权限需求完成目标绑定，执行阶段继续经过现有 Shell 安全边界。
+**目标：** 预检后向用户展示可理解的权限清单和覆盖状态；权限清单由主进程从 Mock 调用轨迹派生，模型只总结目标与歧义。若预算停止但目标摘要通过结构校验，用户仍可确认已从部分轨迹推导的权限；主进程保存授权记录并把覆盖事实一并交给安全审核 Agent。后续运行冻结该记录；清单外权限不因此获批。本地 Git 历史查询根据仓库 facts 与演练轨迹完成目标绑定，执行阶段继续经过现有 Shell 安全边界。
 
 **执行顺序：** 契约/基线 → 数据迁移与目录校验 → 主进程提交门禁 → 多根安全执行链 → 表单和历史 → 启动恢复/兼容集成 → 最终关闭。
 
@@ -69,7 +69,7 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | G2 提交门禁 | E-02a、E-03、E-04、E-05 | 旧单根和新多根请求均经预检；阻断与预检通过但未确认均零写入；预检通过只暂存一次性确认票据和权限清单；用户明确确认后恰好一次提交票据绑定快照；一次性时间语义正确 | 不接 UI save flow |
 | G3 安全根集合、结果写入与 Shell 授权 | E-06、E-07、E-11b～E-11d、E-12a～E-12d、E-13a～E-13b、E-14 | 输出目录仍不进入读取授权；文件工具写入仍要求预检绑定；Shell 仅在版本匹配的主进程用户确认记录冻结到 run snapshot，且通过危险/路径/完整度/unsupported 检查后可达；授权精确匹配命令与工作目录，timeout 不参与授权判断；审核 Agent 收到宿主事实 | 不进入 UI 集成；修订 facts、policy 或 final-check |
 | G4 可操作界面 | E-08、E-09 | 已批准归属卡下完成宽窗/窄窗、键盘清单、失败保留与历史可查 | 修 UI，不改变已冻结后端契约 |
-| G5 全量源码关闭 | E-10、E-11f、E-12d、E-13c、E-15c、E-15g | 所有本机相关测试、类型、i18n、构建、边界审查完成 | 留在源码关闭前；外部验收另列 |
+| G5 全量源码关闭 | E-10、E-11f、E-12d、E-13c、E-15c、E-15g、E-15h | 所有本机相关测试、类型、i18n、构建、边界审查完成 | 留在源码关闭前；外部验收另列 |
 
 ## 2. 依赖 DAG（唯一真源）
 
@@ -108,6 +108,7 @@ E-09 的 mock/port 证据不宣称真实 invoker 已续接；跨层真实执行�
 | E-15e | 移除独立的小额输出 token 截断 | E-15a～E-15d | Mock runner/analyzer、模型配置和截断提示 tests | AC-17 | INV-17 |
 | E-15f | 定位并修复预检模型请求失败 | E-15e | analyzer/IPC/preflight/UI 与日志分类 tests | AC-17 | INV-17 |
 | E-15g | 让预算停止后的部分清单进入用户复核并传递覆盖事实 | E-15d、E-15f | preflight、授权记录/store snapshot、approval Agent、UI、边界 tests、需求/方案/计划 | AC-17 | INV-17 |
+| E-15h | 从 Mock 轨迹确定性生成权限清单，移除模型重复转写与不匹配错误 | E-15d、E-15g | permission deriver、analyzer/preflight、权限轨迹测试、错误文案、`SYS-PREFLIGHT-001`、技术方案/计划 | AC-17 | INV-17 |
 
 任务范围与依赖一旦变化，先更新本表；不在正文另写第二份 DAG。
 
@@ -485,6 +486,17 @@ E-13 按用户明确要求修正 D-7 的授权所有权与确认交互。E-12 �
 - **验证命令：** `npm exec vitest run electron/confirmation/approvalAgent.test.ts electron/butler/butlerIpc.test.ts electron/butler/taskPreflight.test.ts electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskPreflightMockRunner.test.ts electron/butler/taskStore.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
 - **证据：** RED：安全审核 Agent 线索包用例在记录带有 `preflightCoverage=partial` 时，未向审核 Agent 传递状态或说明未列权限不在确认范围内而失败。GREEN：7 个定向测试文件 **220 项通过**，覆盖部分预算结果可进入权限复核、确认后记录与 run snapshot 保留 coverage/trace、超过 Mock 调用上限的未派发调用仍进入权限核对，以及审核 Agent 收到 partial 状态并明确只确认列出权限。`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`（0 个源代码硬编码中文）、`npm run check:system-invariant-registry`（10 个登记 / 36 个测试引用）、`npm run build:electron:incremental` 和 `git diff --check` 均通过。最终 `npm test` 退出码 0：**1,099 个测试文件通过、1 个跳过；10,570 项通过、111 项跳过**（785.43 秒）。全量运行中曾有一次因系统临时目录空间不足失败；清理无占用的生成缓存后，受影响的 `butlerInvoker.test.ts` 57 项通过，随后全量测试通过。
 - **可执行环境：** 本机 mock LLM、Mock 工具目录、任务 store 和审批线索包。
+- **状态：** - [x]
+
+### E-15h 从 Mock 轨迹确定性生成权限清单，移除模型重复转写与不匹配错误
+
+- **依赖：** E-15d、E-15g；用户报告“总结格式错误或权限清单与演练轨迹不一致”，要求检查逻辑，而不是依赖重试。
+- **目标文件：** `electron/butler/taskPreflightPermissionDeriver.ts` 及测试、`taskPreflightModelAnalyzer.ts`、`taskPreflight.ts` 及测试、共享问题码与中英文文案、`SYS-PREFLIGHT-001` 登记、`ButlerTaskSettings.test.tsx`、本执行计划和开发方案 §“Mock 演练隔离契约”。
+- **动作与产物：** 第二阶段模型只返回目标、澄清和目录建议，不返回权限清单。主进程从 host-recorded Mock trace 生成权限：Shell 采用轨迹中的完整命令和主机确定的工作目录，不含 timeout；grep 与脚本按实际参数、facts 和静态脚本路径提取范围；MCP 运行时名唯一解析到主机快照的服务/工具身份。用户授权新增目录后，主进程再次从同一轨迹派生，并确认工作目录和权限范围稳定。删除权限清单比较/修复错误码；模型给出的错误、缺失或格式错误权限字段均忽略。关键调用参数缺失、路径不安全或 MCP 身份无法唯一映射时 fail closed。另修复无授权目录且输出目录是 Git 仓库时，输出仓库读取授权请求被通用分支吞掉的问题。
+- **完成判据：** 模型权限字段故意填错时，权限仍精确等于 trace 派生结果且不触发总结修复；模型未提供权限字段时，trace 中 Shell、grep、run_script、MCP 调用仍全部进入用户清单；轨迹外权限不产生；timeout 不进入授权；MCP 不能错映射或歧义映射；授权继续检查后的 Shell 工作目录与用户确认的目录集合一致；缺参数、非法路径或未知 MCP 身份 fail closed；错误文案不再称“模型权限清单与轨迹不匹配”。
+- **验证命令：** `npm exec vitest run electron/butler/taskPreflight.test.ts electron/butler/taskPreflightModelAnalyzer.test.ts electron/butler/taskPreflightPermissionDeriver.test.ts electron/butler/taskPreflightNoSideEffects.test.ts electron/butler/butlerIpc.test.ts src/renderer/components/Config/ButlerTaskSettings.test.tsx`；`npm run typecheck:shared`；`npm run typecheck:renderer`；`npm run i18n:check`；`npm run check:system-invariant-registry`；`npm run build:electron:incremental`；`git diff --check`。
+- **证据：** RED：集成回归在模型总结把 `git log` 改成 `git push --force` 时，旧逻辑以 `PREFLIGHT_MODEL_PERMISSION_TRACE_MISMATCH` 拒绝本可正常审阅的轨迹；同一逻辑还要求模型另行转写 Shell、grep、脚本、MCP 权限。GREEN：6 个定向测试文件 **135 项通过**。覆盖模型字段错写/缺失、Shell 参数与 timeout、grep/脚本范围、MCP 正常/缺失/歧义映射、授权继续、输出 Git 仓库候选、用户文案与失败关闭。`npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run i18n:check`（0 个源代码硬编码中文）、`npm run check:system-invariant-registry`（10 registrations / 37 test references）、`npm run build:electron:incremental`、`git diff --check` 均通过。
+- **可执行环境：** 本机 Mock LLM、Mock 工具目录和受控 facts；无真实 executor/MCP/network 调用。
 - **状态：** - [x]
 
 ## 4. 外部验收（不阻塞源码关闭）

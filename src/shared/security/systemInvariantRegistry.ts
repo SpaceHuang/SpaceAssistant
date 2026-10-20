@@ -91,10 +91,10 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
   },
   {
     id: 'SYS-PREFLIGHT-001', owner: 'electron/butler', stage: 'admission', category: 'capability',
-    rationale: 'Task preflight may record proposed tool calls only through synthetic adapters and must stop within host-enforced round, call, token, request-time, and total-time budgets.',
-    effect: 'block', scope: 'electron/butler/taskPreflightModelAnalyzer.ts;electron/butler/taskPreflightMockRunner.ts;electron/butler/taskPreflight.ts',
-    audit: 'preflight trace labels simulated calls and synthetic results; an incomplete trace cannot issue a confirmation review or persist a task; production executors, subprocesses, MCP connections, network calls, and delivery adapters are unreachable',
-    tests: ['electron/butler/taskPreflightMockRunner.test.ts', 'electron/butler/taskPreflightModelAnalyzer.test.ts', 'electron/butler/taskPreflightNoSideEffects.test.ts', 'electron/butler/taskPreflight.test.ts', 'electron/butler/butlerIpc.test.ts'],
+    rationale: 'Task preflight records proposed calls only through synthetic adapters, enforces host-owned budgets, and derives permissions from the host trace so a model summary cannot add, omit, or alter an authorization.',
+    effect: 'block', scope: 'electron/butler/taskPreflightModelAnalyzer.ts;electron/butler/taskPreflightMockRunner.ts;electron/butler/taskPreflightPermissionDeriver.ts;electron/butler/taskPreflight.ts',
+    audit: 'preflight trace labels simulated calls and synthetic results; the permission review is a host projection of recorded tool identity and parameters; budget-limited traces are explicitly partial, while untrustworthy traces cannot issue a review or persist a task; production executors, subprocesses, MCP connections, network calls, and delivery adapters are unreachable',
+    tests: ['electron/butler/taskPreflightMockRunner.test.ts', 'electron/butler/taskPreflightModelAnalyzer.test.ts', 'electron/butler/taskPreflightPermissionDeriver.test.ts', 'electron/butler/taskPreflightNoSideEffects.test.ts', 'electron/butler/taskPreflight.test.ts', 'electron/butler/butlerIpc.test.ts'],
     overrideability: 'none'
   },
   {
