@@ -62,6 +62,7 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
       const parent = catalog.pages.find(page => page.pageId === parentPageId)
       if (!category.allowedParentCategoryIds.includes(parent?.categoryId ?? '')) throw codedError('parent_invalid')
     }
+    if (parentPageId && existingPage?.pageId === parentPageId) throw codedError('parent_invalid')
     if (parentPageId && isDescendant(catalog.pages, parentPageId, existingPage?.pageId ?? '')) throw codedError('parent_invalid')
     const titleKey = normalizeTitle(input.title)
     if (catalog.pages.some(page => page.pageId !== existingPage?.pageId && page.categoryId === input.categoryId && (page.parentPageId ?? null) === parentPageId && normalizeTitle(page.title ?? '') === titleKey)) throw codedError('title_conflict')
@@ -107,13 +108,37 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     const staged = await options.store.read(journal.stagingPath)
     const decoded = parsePage(staged.toString('utf8'))
     const existing = catalog.pages.find(page => page.pageId === journal.result.pageId)
-    const page = { pageId: journal.result.pageId, path: journal.targetPath, revision: journal.result.revision, contentHash: journal.newHash, title: decoded.title, categoryId: decoded.categoryId, summary: decoded.summary, parentPageId: decoded.parentPageId }
-    const nextCatalog = { formatVersion: 1 as const, pages: [...catalog.pages.filter(item => item.pageId !== page.pageId), page], tombstones: (catalog.tombstones ?? []).filter(item => item.pageId !== page.pageId) }
-    await options.store.writeCatalog(nextCatalog)
-    await writeSnapshotIfMissing(options.store, `.wiki-service/page-history/${page.pageId}/${page.revision}.md`, staged)
+    const hasInvalidParent = decoded.parentPageId === journal.result.pageId || Boolean(decoded.parentPageId &&
+      (existing?.revision ?? 0) <= journal.result.revision && isDescendant(catalog.pages, decoded.parentPageId, journal.result.pageId))
+    if (hasInvalidParent && existing) {
+      const current = await options.store.read(journal.targetPath)
+      if (sha(current) === journal.newHash) {
+        const previous = await options.store.read(`.wiki-service/page-history/${existing.pageId}/${existing.revision ?? 1}.md`)
+        const identity = await options.store.identity(journal.targetPath)
+        if (!identity) throw codedError('external_change_conflict')
+        await writeService.write(journal.targetPath, previous, identity)
+      }
+      journal.status = 'conflict'
+      journal.errorCode = 'parent_invalid'
+      await options.store.write(operationPath, json(journal))
+      throw codedError('parent_invalid')
+    }
+    if (existing && (existing.revision ?? 1) > journal.result.revision) {
+      const current = await options.store.read(existing.path)
+      if (sha(current) !== existing.contentHash) throw codedError('external_change_conflict')
+    } else {
+      const target = await options.store.read(journal.targetPath)
+      if (sha(target) !== journal.newHash) throw codedError('external_change_conflict')
+      if (existing && (existing.revision ?? 1) === journal.result.revision && existing.contentHash !== journal.newHash) throw codedError('external_change_conflict')
+      const page = { pageId: journal.result.pageId, path: journal.targetPath, revision: journal.result.revision, contentHash: journal.newHash, title: decoded.title, categoryId: decoded.categoryId, summary: decoded.summary, parentPageId: decoded.parentPageId }
+      const nextCatalog = { formatVersion: 1 as const, pages: [...catalog.pages.filter(item => item.pageId !== page.pageId), page], tombstones: (catalog.tombstones ?? []).filter(item => item.pageId !== page.pageId) }
+      await options.store.writeCatalog(nextCatalog)
+    }
+    await writeSnapshotIfMissing(options.store, `.wiki-service/page-history/${journal.result.pageId}/${journal.result.revision}.md`, staged)
+    const projectionCatalog = await options.store.readCatalog() ?? catalog
     const ops = await listOperations(options.store)
     const events = ops.filter(op => op.status === 'domain_committed' || op.status === 'completed').flatMap(op => op.successEvent ? [op.successEvent] : [])
-    const index = buildWikiIndex(nextCatalog.pages.filter(item => item.title && item.categoryId) as WikiProjectionPage[])
+    const index = buildWikiIndex(projectionCatalog.pages.filter(item => item.title && item.categoryId) as WikiProjectionPage[])
     const log = buildWikiLog(events)
     try {
       await options.beforeProjection?.('index')
@@ -169,6 +194,7 @@ function parsePage(text: string) {
 function normalizeTitle(value: string): string { return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US') }
 function isDescendant(pages: Array<{ pageId: string; parentPageId?: string | null }>, candidateId: string, ancestorId: string): boolean {
   if (!ancestorId) return false
+  if (candidateId === ancestorId) return true
   let current = pages.find(page => page.pageId === candidateId)
   const visited = new Set<string>()
   while (current?.parentPageId) {

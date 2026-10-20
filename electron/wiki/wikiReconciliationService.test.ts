@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
 import { serializeWikiPageMarker, parseWikiPageMarker } from './wikiReconciler'
 import { reconcileExternalWikiChanges } from './wikiReconciliationService'
+import { createWikiDomainCoordinator } from './wikiDomainCoordinator'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -24,7 +25,7 @@ function sha(value: string) { return createHash('sha256').update(value).digest('
 
 describe('reconcileExternalWikiChanges', () => {
   it('snapshots external edits, advances marker and catalog revisions, and records deletions as tombstones', async () => {
-    const { root, store } = await fixture()
+    const { store } = await fixture()
     const previous = page('page-a', 1, 'A', 'before')
     const edited = page('page-a', 1, 'A', 'after')
     await store.write('wiki/topics/a.md', edited)
@@ -135,5 +136,36 @@ describe('reconcileExternalWikiChanges', () => {
     expect(await store.readText('wiki/topics/b.md')).toBe(introduced)
     expect(await store.readText('.wiki-service/catalog.json')).toBe(originalCatalog)
     expect(await store.readText('.wiki-service/schema-state.json').catch(() => undefined)).toBe(originalSchemaState)
+  })
+
+  it('serializes a reconciliation scan with a domain save so neither publishes a stale catalog', async () => {
+    const { store } = await fixture()
+    const coordinator = createWikiDomainCoordinator({ store, schema: () => ({ schemaVersion: 1, categories: [{ id: 'topic', name: 'Topic', status: 'active' }] }) })
+    const created = await coordinator.savePage({ requestId: 'r1', toolUseId: 't1', callerId: 'local', lane: 'desktop', title: 'A', categoryId: 'topic', summary: '', markdown: 'v1', schemaVersion: 1 })
+    let reached!: () => void
+    let release!: () => void
+    const paused = new Promise<void>(resolve => { reached = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let pauseOnce = true
+    const readingStore = { ...store, readCatalog: async () => {
+      const snapshot = await store.readCatalog()
+      if (pauseOnce) { pauseOnce = false; reached(); await gate }
+      return snapshot
+    } }
+    const reconcilePromise = reconcileExternalWikiChanges(readingStore)
+    await paused
+    let saveFinished = false
+    const savePromise = coordinator.savePage({ requestId: 'r2', toolUseId: 't2', callerId: 'local', lane: 'desktop', pageId: created.pageId,
+      expectedRevision: 1, title: 'A', categoryId: 'topic', summary: '', markdown: 'v2', schemaVersion: 1 }).then(result => { saveFinished = true; return result })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(saveFinished).toBe(false)
+    release()
+    const [reconciled, saved] = await Promise.all([reconcilePromise, savePromise])
+    expect(reconciled.diagnostics).toEqual([])
+    expect(saved.revision).toBe(2)
+    const catalog = await store.readCatalog()
+    expect(catalog?.pages[0]?.revision).toBe(2)
+    expect(await store.readText(catalog!.pages[0]!.path)).toContain('v2')
+    expect(await store.readText('wiki/index.md')).toContain('A')
   })
 })

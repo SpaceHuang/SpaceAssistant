@@ -1,9 +1,11 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
 import { createWikiDomainCoordinator } from './wikiDomainCoordinator'
+import { serializeWikiPageMarker } from './wikiReconciler'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -75,6 +77,68 @@ describe('WikiDomainCoordinator', () => {
     expect((await coordinator.savePage(base)).revision).toBe(1)
   })
 
+  it('does not let an old projection retry roll the catalog back over a newer revision', async () => {
+    const { store } = await fixture()
+    let fail = false
+    const coordinator = createWikiDomainCoordinator({ store, schema: () => ({ schemaVersion: 1, categories: [{ id: 'topic', name: 'Topic', status: 'active' }] }), beforeProjection: projection => { if (projection === 'log' && fail) { fail = false; throw new Error('projection unavailable') } } })
+    const created = await coordinator.savePage(base)
+    const oldUpdate = { ...base, requestId: 'req-old', toolUseId: 'tool-old', pageId: created.pageId, expectedRevision: 1, markdown: 'revision two' }
+    fail = true
+    await expect(coordinator.savePage(oldUpdate)).rejects.toMatchObject({ code: 'projection_pending' })
+    await coordinator.savePage({ ...base, requestId: 'req-new', toolUseId: 'tool-new', pageId: created.pageId, expectedRevision: 2, markdown: 'revision three' })
+
+    await coordinator.savePage(oldUpdate)
+
+    const catalog = await store.readCatalog()
+    expect(catalog?.pages[0]?.revision).toBe(3)
+    expect(catalog?.pages[0]?.contentHash).toBeTruthy()
+    expect(await store.readText(catalog!.pages[0]!.path)).toContain('revision three')
+    expect(await store.readText('wiki/index.md')).toContain('Alpha')
+  })
+
+  it('rejects moving a page under itself without changing its persisted revision', async () => {
+    const { store, coordinator } = await fixture()
+    const created = await coordinator.savePage(base)
+
+    await expect(coordinator.movePage({ ...base, requestId: 'req-self-parent', toolUseId: 'tool-self-parent', pageId: created.pageId,
+      expectedRevision: 1, parentPageId: created.pageId })).rejects.toMatchObject({ code: 'parent_invalid' })
+
+    expect((await store.readCatalog())?.pages[0]).toMatchObject({ pageId: created.pageId, revision: 1, parentPageId: null })
+    expect(parseParent(await store.readText((await store.readCatalog())!.pages[0]!.path))).toBeNull()
+    expect(await store.readText('wiki/log.md')).not.toContain('moved Alpha')
+  })
+
+  it('restores the prior body when recovering a legacy self-parent move journal', async () => {
+    const { store, coordinator } = await fixture()
+    const created = await coordinator.savePage(base)
+    const catalog = await store.readCatalog()
+    const page = catalog!.pages[0]!
+    const oldBody = await store.read(page.path)
+    const input = { ...base, requestId: 'legacy-self-parent', toolUseId: 'legacy-self-parent-tool', pageId: created.pageId,
+      expectedRevision: 1, parentPageId: created.pageId, operationKind: 'moved' as const }
+    const operationId = createHash('sha256').update(`${input.requestId}\0${input.toolUseId}`).digest('hex')
+    const operationPath = `.wiki-service/operations/${operationId}.json`
+    const stagingPath = `.wiki-service/staging/${operationId}.payload`
+    const staged = Buffer.from(`${serializeWikiPageMarker({ pageId: created.pageId, categoryId: 'topic', summary: 'A', parentPageId: created.pageId, sourceRefs: [], revision: 2 })}\n# Alpha\n\nBody\n`)
+    const hash = (value: Buffer | string) => createHash('sha256').update(value).digest('hex')
+    const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+      ? Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : value
+    const fingerprint = hash(JSON.stringify(canonical({ ...input, crashAt: undefined })))
+    await store.write(stagingPath, staged)
+    await store.write(page.path, staged)
+    await store.write(operationPath, JSON.stringify({ formatVersion: 1, operationId, inputFingerprint: fingerprint, callerId: input.callerId, lane: input.lane,
+      status: 'prepared', targetPath: page.path, oldHash: hash(oldBody), newHash: hash(staged), stagingPath,
+      result: { pageId: created.pageId, revision: 2, projectionStatus: 'complete', operationId },
+      eventMaterial: { operationId, type: 'moved', title: 'Alpha', revision: 2, committedAt: new Date().toISOString() } }))
+
+    await expect(coordinator.movePage(input)).rejects.toMatchObject({ code: 'parent_invalid' })
+
+    expect(await store.read(page.path)).toEqual(oldBody)
+    expect((await store.readCatalog())?.pages[0]).toMatchObject({ pageId: created.pageId, revision: 1, parentPageId: null })
+    expect(await store.read('.wiki-service/page-history/' + created.pageId + '/1.md')).toEqual(oldBody)
+    expect(await store.readText('wiki/log.md')).not.toContain('moved Alpha')
+  })
+
   it('preserves tree, title, and schema invariants through a seeded operation sequence', async () => {
     const { root, coordinator } = await fixture()
     let seed = 0x51a7
@@ -135,3 +199,8 @@ describe('WikiDomainCoordinator', () => {
     await expect(coordinator.movePage({ ...base, requestId: 'move', toolUseId: 'move', pageId: parent.pageId, expectedRevision: 1, parentPageId: child.pageId })).rejects.toMatchObject({ code: 'parent_invalid' })
   })
 })
+
+function parseParent(text: string): string | null {
+  const marker = /<!-- wiki-page:start -->\n(.*?)\n<!-- wiki-page:end -->/s.exec(text)
+  return marker ? (JSON.parse(marker[1]!) as { parentPageId: string | null }).parentPageId : null
+}
