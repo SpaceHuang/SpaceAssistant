@@ -200,6 +200,17 @@ export function createDeferredApprovalNotificationDelivery(input: {
     },
 
     list,
+    /**
+     * Routing fact only: confirms whether a platform reply target was previously delivered
+     * as a deferred-approval notice in this exact channel/identity/owner scope. The ingress
+     * still performs the final short-code, version, epoch, expiry, and todo checks.
+     */
+    isTrustedReplyTarget(request: { channel: Scope['channel']; identityKey: string; ownerId: string; messageId: string }): boolean {
+      if (![request.identityKey, request.ownerId, request.messageId].every((value) => value.trim())) return false
+      return Boolean(liveConn().prepare(`SELECT 1 FROM deferred_approval_notifications
+        WHERE channel=? AND identity_key=? AND owner_id=? AND trusted_message_id=? LIMIT 1`)
+        .get(request.channel, request.identityKey, request.ownerId, request.messageId))
+    },
     resolveCurrent(request: Scope & { shortCode: string; now?: number }) {
       const now = request.now ?? Date.now()
       const row = liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications WHERE channel=? AND identity_key=? AND owner_id=?

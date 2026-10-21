@@ -60,7 +60,7 @@ import { buildClarificationPrompt } from '../remote/clarificationPrompt'
 import { canResumePreparedRemoteTurn, inspectRemoteTrackWorkRecovery, isRemoteTrackWorkSettled, settleRemoteTrackWorkFromTurn } from '../remote/remoteTrackWorkRecovery'
 import type { WakeEventLoopInput } from '../remote/wakeEventDispatcher'
 import { buildImQueueScope } from '../../src/shared/queueScope'
-import { isDeferredApprovalReplyCandidate } from '../remote/deferredApprovalIngress'
+import { isDeferredApprovalReplyCandidate, parseDeferredApprovalReply } from '../remote/deferredApprovalIngress'
 import type { WakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { readDeferredCompletionWake, markDeferredCompletionWakeDelivered } from '../remote/deferredCompletionWake'
 import { decideDeferredCompletionWakeRecovery, deliverInterruptedDeferredCompletionNotice } from '../remote/deferredCompletionWakeRecovery'
@@ -133,6 +133,7 @@ export type RemoteCommandRouterDeps = {
   isRemoteAsyncApprovalEnabled?: () => boolean
   retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>
   handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string; replyToMessageId?: string }) => Promise<void>
+  isDeferredApprovalReplyTarget?: (input: { identityKey: string; ownerId: string; messageId: string }) => boolean
   handleClarificationReply?: (input: ClarificationResolverInput) => Promise<ClarificationResolverResult>
   createDeferredConfirmationAdapter?: (remoteContext: import('../tools/types').RemoteContext) => NonNullable<Parameters<typeof runFeishuRemoteAgent>[0]['confirmationAdapter']>
   resolveAgentSdkGateSupplement?: import('../runtime/invocationAssembler').AgentInvocationMaterials['resolveAgentSdkGateSupplement']
@@ -672,7 +673,15 @@ export class RemoteCommandRouter {
       })
     }
 
-    if (isDeferredApprovalReplyCandidate(userContent) && this.deps.isRemoteAsyncApprovalEnabled?.() === true) {
+    const approvalReplyCandidate = isDeferredApprovalReplyCandidate(userContent)
+    const trustedApprovalQuote = Boolean(approvalReplyCandidate && msg.replyToMessageId && this.deps.isDeferredApprovalReplyTarget?.({
+      identityKey: msg.chatId, ownerId: msg.senderOpenId, messageId: msg.replyToMessageId
+    }))
+    // Policy/routing boundary: reserve exact commands, unquoted malformed controls, and
+    // malformed controls replying to trusted approval notices. Ordinary quoted discussion
+    // flows to the model; deferredApprovalIngress remains the final authorization check.
+    const mustReserveForApprovalIngress = approvalReplyCandidate && (parseDeferredApprovalReply(userContent) !== null || !msg.replyToMessageId || trustedApprovalQuote)
+    if (mustReserveForApprovalIngress && this.deps.isRemoteAsyncApprovalEnabled?.() === true) {
       try {
         await this.deps.handleDeferredApprovalReply?.({ message: msg, text: userContent, replyToMessageId: msg.replyToMessageId })
       } catch (error) {
