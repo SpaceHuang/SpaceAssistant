@@ -64,7 +64,8 @@ import { isDeferredApprovalReplyCandidate, parseDeferredApprovalReply } from '..
 import { resolveFeishuQuotedReplyContext } from './feishuQuotedReplyContext'
 import type { WakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { readDeferredCompletionWake, markDeferredCompletionWakeDelivered } from '../remote/deferredCompletionWake'
-import { decideDeferredCompletionWakeRecovery, deliverInterruptedDeferredCompletionNotice } from '../remote/deferredCompletionWakeRecovery'
+import { decideDeferredCompletionWakeRecovery, deliverDeferredApprovalRejectionNotice, deliverInterruptedDeferredCompletionNotice,
+  isRejectedDeferredCompletionResult } from '../remote/deferredCompletionWakeRecovery'
 import type { ImTaskSafetyPort } from '../remote/imTaskControlCoordinator'
 import type { RemoteTrackContext, TrackModelInputViewRef } from '../../src/shared/remoteTrack'
 import { observeRemoteMessageAttribution, readDurableRemoteTrackEpoch, readRemoteTrackContextForInbound } from '../remote/remoteTrackAttributionService'
@@ -212,6 +213,13 @@ export class RemoteCommandRouter {
         if (!completion || completion.todo.channel !== 'feishu' || completion.todo.origin_session_id !== input.sessionId ||
           completion.todo.identity_key !== metadata.feishuChatId || completion.todo.owner_id !== metadata.feishuSenderOpenId) {
           throw new Error('FEISHU_COMPLETION_WAKE_BINDING_INVALID')
+        }
+        if (isRejectedDeferredCompletionResult(completion.execution.result)) {
+          const ownerId = metadata.feishuSenderOpenId as string
+          await deliverDeferredApprovalRejectionNotice(this.deps.db, { todoId: event.payloadRef.approvalId, sessionId: input.sessionId,
+            channel: 'feishu', identityKey: metadata.feishuChatId as string, ownerId, recipient: ownerId,
+            send: (text) => sendFeishuTextToTarget(this.deps.runner, ownerId, formatRemoteOutboundMessage(text, input.sessionId)) })
+          continue
         }
         const context = completion.envelope.executionContext
         const userMessageId = context.currentUserMessageId

@@ -7,7 +7,7 @@ import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSession } from '../database/operations'
 import { attributeAndPersistRemoteMessage } from './remoteTrackAttributionService'
 import { appendImInboxMessageWithWakeEvent } from '../database/imInbox'
-import { decideDeferredCompletionWakeRecovery, deliverInterruptedDeferredCompletionNotice } from './deferredCompletionWakeRecovery'
+import { decideDeferredCompletionWakeRecovery, deliverDeferredApprovalRejectionNotice, deliverInterruptedDeferredCompletionNotice } from './deferredCompletionWakeRecovery'
 import { readDeferredCompletionWake } from './deferredCompletionWake'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 
@@ -80,6 +80,32 @@ describe('deferred completion wake recovery', () => {
       expect(results.getByTodo('todo-1')?.state).toBe('delivered')
       expect(results.listCompletionOutbox('todo-1')).toMatchObject([{ state: 'delivered' }])
       expect(getDbConnection(db).prepare("SELECT state,stage FROM im_lifecycle_outbox WHERE event_id='deferred-completion-interrupted:todo-1'").get())
+        .toEqual({ state: 'delivered', stage: 'failed' })
+    } finally { db.close() }
+  })
+
+  it('delivers a deterministic rejection receipt without resuming the rejected agent task', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const results = createDeferredExecutionResultStore(db)
+      const todoStore = createDeferredTodoStore(db)
+      const session = createSession(db, { name: 'deferred-rejection' })
+      const todo = todoStore.create({ todoId: 'todo-rejected', invocationId: 'invocation-rejected', channel: 'wechat',
+        identityKey: 'owner', ownerId: 'owner', authorizationEpoch: 1, rule: { ruleId: 'write', factsHash: 'a'.repeat(64) },
+        workflowId: 'workflow', taskId: 'task', stepId: 'write', planRevision: 1, originSessionId: session.id,
+        createdAt: 1, expiresAt: 100 }).todo
+      todoStore.invalidate(todo.todoId, 2)
+      results.commitRejection({ todoId: todo.todoId, invocationId: todo.invocationId, dispatchKey: 'reject:todo-rejected', now: 3 })
+      const send = vi.fn(async () => undefined)
+
+      await deliverDeferredApprovalRejectionNotice(db, { todoId: todo.todoId, sessionId: session.id, now: 4,
+        channel: 'wechat', identityKey: 'owner', ownerId: 'owner', recipient: 'owner', send })
+
+      expect(send).toHaveBeenCalledWith(expect.stringContaining('已拒绝'))
+      expect(send).toHaveBeenCalledWith(expect.stringContaining('没有执行'))
+      expect(results.getByTodo(todo.todoId)?.state).toBe('delivered')
+      expect(results.listCompletionOutbox(todo.todoId)).toMatchObject([{ state: 'delivered' }])
+      expect(getDbConnection(db).prepare("SELECT state,stage FROM im_lifecycle_outbox WHERE event_id=?").get(`deferred-approval-rejected:${todo.todoId}`))
         .toEqual({ state: 'delivered', stage: 'failed' })
     } finally { db.close() }
   })

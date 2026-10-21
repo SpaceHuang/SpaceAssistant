@@ -473,6 +473,38 @@ describe('WeChatCommandRouter', () => {
     await dispatcher.dispose()
   })
 
+  it('delivers a fixed rejection receipt and never resumes the rejected request', async () => {
+    const session = getSession(db, sessionId)!
+    const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'reject-context' } }
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const scope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const persisted = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope: scope,
+      channelMessageId: 'wechat-rejected-source', contextToken: 'reject-context', content: '请执行一项写入' })
+    const todo = createDeferredTodoStore(db).create({ todoId: 'wechat-rejected-todo', invocationId: 'wechat-rejected-invocation',
+      channel: 'wechat', identityKey: 'wx-user@test', ownerId: 'wx-user@test', authorizationEpoch: 1,
+      rule: { ruleId: 'write', factsHash: 'b'.repeat(64) }, workflowId: 'workflow', taskId: 'task', stepId: 'write',
+      planRevision: 1, originSessionId: sessionId, createdAt: Date.now(), expiresAt: Date.now() + 60_000 }).todo
+    createDeferredEnvelopeStore(db).put({ invocationId: todo.invocationId, requestId: 'wechat-rejected-source-request', turnId: 'source-turn',
+      toolCallId: 'source-call', toolName: 'memory_wiki_save_page', canonicalArgs: {}, contentVersions: {}, executionContext: {
+        currentUserMessageId: persisted.messageId, messageId: 'wechat-rejected-source', contextToken: 'reject-context'
+      } })
+    const resultStore = createDeferredExecutionResultStore(db)
+    resultStore.commitRejection({ todoId: todo.todoId, invocationId: todo.invocationId, dispatchKey: 'reject:wechat-rejected-todo' })
+    getDbConnection(db).prepare("UPDATE wake_events SET status='acked' WHERE event_id=?").run(persisted.eventId)
+    const send = vi.fn(async () => undefined)
+    ;(router as unknown as { deps: { botService: { getRawBot: () => { send: typeof send } } } }).deps.botService.getRawBot = () => ({ send })
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(sessionId)
+
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledWith('wx-user@test', expect.stringContaining('已拒绝'))
+    expect(send).toHaveBeenCalledWith('wx-user@test', expect.stringContaining('没有执行'))
+    expect(resultStore.getByTodo(todo.todoId)?.state).toBe('delivered')
+    expect(listWakeEvents(db, sessionId).every(({ status }) => status === 'acked')).toBe(true)
+    await dispatcher.dispose()
+  })
+
   it('routes approval replies to the safety ingress before Inbox or the Skill', async () => {
     const handleDeferredApprovalReply = vi.fn(async () => undefined)
     const retryDeferredApprovalNotifications = vi.fn(async () => [])

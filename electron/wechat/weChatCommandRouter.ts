@@ -48,7 +48,8 @@ import { readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 import type { WakeEventLoopInput } from '../remote/wakeEventDispatcher'
 import { readDeferredCompletionWake, markDeferredCompletionWakeDelivered } from '../remote/deferredCompletionWake'
-import { decideDeferredCompletionWakeRecovery, deliverInterruptedDeferredCompletionNotice } from '../remote/deferredCompletionWakeRecovery'
+import { decideDeferredCompletionWakeRecovery, deliverDeferredApprovalRejectionNotice, deliverInterruptedDeferredCompletionNotice,
+  isRejectedDeferredCompletionResult } from '../remote/deferredCompletionWakeRecovery'
 import type { ImTaskSafetyPort } from '../remote/imTaskControlCoordinator'
 import type { RemoteTrackContext } from '../../src/shared/remoteTrack'
 import { observeRemoteMessageAttribution, readDurableRemoteTrackEpoch, readRemoteTrackContextForInbound } from '../remote/remoteTrackAttributionService'
@@ -201,6 +202,15 @@ export class WeChatCommandRouter {
         if (!completion || completion.todo.channel !== 'wechat' || completion.todo.origin_session_id !== input.sessionId ||
           completion.todo.identity_key !== metadata.wechatMeta.userId || completion.todo.owner_id !== metadata.wechatMeta.userId) {
           throw new Error('WECHAT_COMPLETION_WAKE_BINDING_INVALID')
+        }
+        if (isRejectedDeferredCompletionResult(completion.execution.result)) {
+          const ownerId = metadata.wechatMeta.userId as string
+          const bot = this.deps.botService.getRawBot()
+          if (!bot) throw new Error('WECHAT_REJECTION_NOTICE_BOT_UNAVAILABLE')
+          await deliverDeferredApprovalRejectionNotice(this.deps.db, { todoId: event.payloadRef.approvalId, sessionId: input.sessionId,
+            channel: 'wechat', identityKey: ownerId, ownerId, recipient: ownerId,
+            send: (text) => bot.send(ownerId, formatRemoteOutboundMessage(text, input.sessionId)) })
+          continue
         }
         const context = completion.envelope.executionContext
         const userMessageId = context.currentUserMessageId
