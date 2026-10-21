@@ -1,7 +1,7 @@
 import type { SecurityAuditEvent, SecurityAuditEventKind } from '../../src/shared/confirmation/types'
 
 export function buildDeferredApprovalAuditEvent(input: {
-  kind: 'pending' | 'approved' | 'dispatch' | 'notification' | 'result'
+  kind: 'pending' | 'approved' | 'rejected' | 'dispatch' | 'notification' | 'result'
   lane: 'wechat' | 'feishu'
   sessionId: string
   todoId: string
@@ -21,10 +21,11 @@ export function buildDeferredApprovalAuditEvent(input: {
     throw new TypeError('DEFERRED_APPROVAL_AUDIT_CAUSAL_ID_REQUIRED')
   }
   const eventByKind: Record<typeof input.kind, SecurityAuditEventKind> = {
-    pending: 'deferred-approval.pending', approved: 'deferred-approval.approved',
+    pending: 'deferred-approval.pending', approved: 'deferred-approval.approved', rejected: 'deferred-approval.rejected',
     dispatch: 'deferred-approval.dispatch', notification: 'deferred-approval.notification', result: 'deferred-approval.result'
   }
-  const actor = input.kind === 'approved' ? 'user' : input.kind === 'pending' || input.kind === 'dispatch' || input.kind === 'result' ? 'agent' : 'system'
+  const actor = input.kind === 'approved' || input.kind === 'rejected' ? 'user'
+    : input.kind === 'pending' || input.kind === 'dispatch' || input.kind === 'result' ? 'agent' : 'system'
   const executionState = input.kind === 'dispatch'
     ? input.consumed ? 'consumed' : 'dispatching'
     : input.kind === 'result' ? input.executionState : undefined

@@ -574,6 +574,7 @@ export interface SecurityAuditEvent {
 export type SecurityAuditEventKind =
   | 'deferred-approval.pending'
   | 'deferred-approval.approved'
+  | 'deferred-approval.rejected'
   | 'deferred-approval.dispatch'
   | 'deferred-approval.notification'
   | 'deferred-approval.result'

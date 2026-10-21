@@ -291,14 +291,14 @@ describe('RemoteCommandRouter workdir binding', () => {
     )
   })
 
-  it('routes approval replies to the safety ingress before Inbox or the Skill', async () => {
+  it.each(['批准 07', '拒绝 07'])('routes deferred approval controls to the safety ingress before Inbox or the Skill: %s', async (text) => {
     const { db, manager } = setupDbAndManager()
-    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '批准 07' })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: text })
     const handleDeferredApprovalReply = vi.fn(async () => undefined)
     const retryDeferredApprovalNotifications = vi.fn(async () => [])
     const { router, processedStore } = makeRouter(db, manager, { handleDeferredApprovalReply, retryDeferredApprovalNotifications })
-    await router.handleInbound(makeInbound({ messageId: 'feishu-approval-reply', replyToMessageId: 'trusted-notice', content: '批准 07' }))
-    expect(handleDeferredApprovalReply).toHaveBeenCalledWith(expect.objectContaining({ text: '批准 07', replyToMessageId: 'trusted-notice' }))
+    await router.handleInbound(makeInbound({ messageId: 'feishu-approval-reply', replyToMessageId: 'trusted-notice', content: text }))
+    expect(handleDeferredApprovalReply).toHaveBeenCalledWith(expect.objectContaining({ text, replyToMessageId: 'trusted-notice' }))
     expect(retryDeferredApprovalNotifications).toHaveBeenCalledWith({ identityKey: 'chat-1', ownerId: 'user-1' })
     expect(mockResolveFeishuSession).not.toHaveBeenCalled()
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
