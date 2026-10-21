@@ -132,4 +132,24 @@ describe('automation run output scope', () => {
       normalizedPath: '/results/20261018', parentReal: '/results', targetKind: 'directory', zone: 'outside-workdir'
     } as never)).toBe(false)
   })
+
+  it.skipIf(process.platform === 'win32')('uses case-sensitive POSIX path boundaries for output write authorization', () => {
+    const posixScope = {
+      outputDirectory: '/data/Reports', organization: 'direct' as const, scheduledFor,
+      runOutputDir: '/data/Reports', taskRevision: 4
+    }
+    expect(matchesAutomationRunOutputWriteTarget(posixScope, {
+      normalizedPath: '/data/reports/result.md', parentReal: '/data/reports', targetKind: 'missing', zone: 'outside-workdir'
+    } as never)).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('treats backslashes as literal characters in POSIX paths', () => {
+    const posixScope = {
+      outputDirectory: '/data/Reports\\private', organization: 'direct' as const, scheduledFor,
+      runOutputDir: '/data/Reports\\private', taskRevision: 4
+    }
+    expect(matchesAutomationRunOutputWriteTarget(posixScope, {
+      normalizedPath: '/data/Reports/private/result.md', parentReal: '/data/Reports/private', targetKind: 'missing', zone: 'outside-workdir'
+    } as never)).toBe(false)
+  })
 })

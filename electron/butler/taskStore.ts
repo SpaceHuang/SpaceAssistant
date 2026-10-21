@@ -570,6 +570,68 @@ export function claimDueSlotAndAdvance(db: AppDatabase, input: ClaimDueSlotInput
 export type RecordSkippedSlotInput = { taskId: string; slot: number; nextSlot: number; clientId: string }
 export type RecordSkippedSlotResult = { recorded: true; runId: string } | { recorded: false; reason: 'task-not-found' | 'generation-changed' | 'pending-claim' | 'slot-already-claimed' }
 
+export type AdvanceMissedSlotsInput = {
+  taskId: string
+  expectedCursor: number
+  catchUpSlot: number
+  skippedSlots: number[]
+}
+export type AdvanceMissedSlotsResult =
+  | { advanced: true; skippedCount: number }
+  | { advanced: false; reason: 'task-not-found' | 'generation-changed' | 'pending-claim' | 'slot-already-claimed' | 'invalid-slots' }
+
+/** Atomically fast-forwards a stale schedule cursor while retaining only the bounded skipped-slot history selected by recovery. */
+export function advanceMissedSlotsToCatchUp(db: AppDatabase, input: AdvanceMissedSlotsInput): AdvanceMissedSlotsResult {
+  const conn = getDbConnection(db)
+  const result = runInTransaction(conn, () => {
+    const task = conn.prepare('SELECT enabled,next_run_at,schedule_generation FROM automation_tasks WHERE id=?')
+      .get(input.taskId) as { enabled: number; next_run_at: number | null; schedule_generation: number } | undefined
+    if (!task) return { advanced: false as const, reason: 'task-not-found' as const }
+    const state = conn.prepare('SELECT schedule_generation,recovery_cursor_at,pending_run_id FROM automation_task_recovery_state WHERE task_id=?')
+      .get(input.taskId) as { schedule_generation: number; recovery_cursor_at: number | null; pending_run_id: string | null } | undefined
+    if (task.enabled !== 1 || task.next_run_at !== input.expectedCursor
+      || !state || state.schedule_generation !== task.schedule_generation || state.recovery_cursor_at !== input.expectedCursor) {
+      return { advanced: false as const, reason: 'generation-changed' as const }
+    }
+    if (state.pending_run_id) return { advanced: false as const, reason: 'pending-claim' as const }
+    if (!Number.isFinite(input.expectedCursor) || !Number.isFinite(input.catchUpSlot) || input.catchUpSlot < input.expectedCursor
+      || input.skippedSlots.some((slot, index) => !Number.isFinite(slot) || slot < input.expectedCursor || slot >= input.catchUpSlot
+        || (index > 0 && slot <= input.skippedSlots[index - 1]!))) {
+      return { advanced: false as const, reason: 'invalid-slots' as const }
+    }
+
+    let skippedCount = 0
+    for (const slot of input.skippedSlots) {
+      const clientId = `${input.taskId}:${slot}`
+      const existing = conn.prepare('SELECT id,status FROM automation_task_runs WHERE client_id=?').get(clientId) as { id: string; status: string } | undefined
+      if (existing) {
+        if (existing.status !== 'skipped') return { advanced: false as const, reason: 'slot-already-claimed' as const }
+        continue
+      }
+      const now = Date.now()
+      const inserted = conn.prepare(`INSERT OR IGNORE INTO automation_task_runs(id,task_id,client_id,trigger,scheduled_for,status,error,delivery_status,run_phase,task_revision,schedule_generation,slot_at,created_at,updated_at)
+        SELECT ?,id,?,'schedule',?,'skipped','missed-window','none','terminal',task_revision,schedule_generation,?,?,? FROM automation_tasks WHERE id=?`)
+        .run(randomUUID(), clientId, slot, slot, now, now, input.taskId)
+      if (Number(inserted.changes) !== 1) {
+        const conflict = conn.prepare('SELECT status FROM automation_task_runs WHERE client_id=?').get(clientId) as { status: string } | undefined
+        if (conflict?.status !== 'skipped') return { advanced: false as const, reason: 'slot-already-claimed' as const }
+      } else skippedCount += 1
+    }
+
+    const now = Date.now()
+    const moved = conn.prepare('UPDATE automation_tasks SET next_run_at=? WHERE id=? AND next_run_at=? AND schedule_generation=?')
+      .run(input.catchUpSlot, input.taskId, input.expectedCursor, task.schedule_generation)
+    if (Number(moved.changes) !== 1) throw new Error('scheduled task cursor changed during missed-slot fast-forward')
+    const cursor = conn.prepare(`UPDATE automation_task_recovery_state SET recovery_cursor_at=?,updated_at=?
+      WHERE task_id=? AND schedule_generation=? AND pending_run_id IS NULL`)
+      .run(input.catchUpSlot, now, input.taskId, task.schedule_generation)
+    if (Number(cursor.changes) !== 1) throw new Error('scheduled task recovery state changed during missed-slot fast-forward')
+    return { advanced: true as const, skippedCount }
+  })
+  if (result.advanced) db.save()
+  return result
+}
+
 export function recordSkippedSlotAndAdvance(db: AppDatabase, input: RecordSkippedSlotInput): RecordSkippedSlotResult {
   const conn = getDbConnection(db)
   const result = runInTransaction(conn, () => {

@@ -8,19 +8,21 @@ function isWithin(root: string, target: string): boolean {
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
 }
 
-function pathApi(...values: string[]): typeof path.posix {
-  return values.some((value) => path.win32.isAbsolute(value) || /^[a-z]:[\\/]/i.test(value)) ? path.win32 : path.posix
+/** Final-check path semantics follow the trusted root/host; POSIX backslashes stay literal path characters. */
+function pathApi(referencePath: string): typeof path.posix {
+  const isExplicitWindowsPath = /^[a-z]:[\\/]/i.test(referencePath) || /^\\\\[^\\]/.test(referencePath)
+  return process.platform === 'win32' || isExplicitWindowsPath ? path.win32 : path.posix
 }
 
 function samePath(left: string, right: string): boolean {
-  const api = pathApi(left, right)
+  const api = pathApi(left)
   const a = api.normalize(left)
   const b = api.normalize(right)
   return api === path.win32 ? a.toLocaleLowerCase('en-US') === b.toLocaleLowerCase('en-US') : a === b
 }
 
 function isWithinPath(root: string, target: string): boolean {
-  const api = pathApi(root, target)
+  const api = pathApi(root)
   const relative = api.relative(api.resolve(root), api.resolve(target))
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative))
 }
@@ -55,7 +57,7 @@ export function isValidAutomationRunOutputScope(scope: AutomationRunOutputScope)
   }
 }
 
-/** Facts/final-check: result-write covers files below this run's archive, never reads or arbitrary authorized roots. */
+/** Facts/final-check: result-write covers files below this run's archive, never reads or arbitrary authorized roots; dialect boundaries are covered in taskOutputDirectory.test.ts. */
 export function matchesAutomationRunOutputWriteTarget(
   scope: AutomationRunOutputScope,
   target: { normalizedPath: string; parentReal: string; targetKind: string; zone?: string },
@@ -63,7 +65,7 @@ export function matchesAutomationRunOutputWriteTarget(
   if (!isValidAutomationRunOutputScope(scope)
     || (target.targetKind !== 'file' && target.targetKind !== 'missing')
     || target.zone === 'sensitive-file' || target.zone === 'system-dir') return false
-  const api = pathApi(scope.runOutputDir, target.normalizedPath, target.parentReal)
+  const api = pathApi(scope.runOutputDir)
   if (!api.isAbsolute(target.normalizedPath) || !api.isAbsolute(target.parentReal)) return false
   const root = api.resolve(scope.runOutputDir)
   const candidate = api.resolve(target.normalizedPath)

@@ -31,6 +31,7 @@ function taskInput(overrides: Partial<AutomationTaskInput> = {}): AutomationTask
 }
 
 const MIN = 60_000
+const isNewYorkTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone === 'America/New_York'
 
 describe('schedule 计算（P6 纯函数）', () => {
   it('interval：next = from + intervalMinutes', () => {
@@ -55,6 +56,28 @@ describe('schedule 计算（P6 纯函数）', () => {
     const slots = enumerateMissedSlots({ kind: 'interval', intervalMinutes: 30 }, 0, 100 * 24 * 60 * MIN)
     expect(slots.length).toBeLessThanOrEqual(48)
     expect(slots[slots.length - 1]!).toBeLessThanOrEqual(100 * 24 * 60 * MIN)
+  })
+
+  it('daily 超长停机时直接定位最近日期并只保留最近 48 个槽位', () => {
+    const from = new Date(2026, 0, 1, 9, 30).getTime()
+    const now = new Date(2026, 3, 10, 10, 0).getTime()
+    const latest = new Date(2026, 3, 10, 9, 30).getTime()
+    const firstRetained = new Date(latest)
+    firstRetained.setDate(firstRetained.getDate() - 47)
+
+    const slots = enumerateMissedSlots({ kind: 'daily', time: '09:30' }, from, now)
+
+    expect(slots).toHaveLength(48)
+    expect(slots[0]).toBe(firstRetained.getTime())
+    expect(slots[slots.length - 1]).toBe(latest)
+  })
+
+  it.skipIf(!isNewYorkTimeZone)('春季夏令时跳过计划时刻时回退到前一天仍使用原计划时分', () => {
+    const from = new Date(2026, 2, 7, 2, 30).getTime()
+    const now = new Date(2026, 2, 8, 3, 0).getTime()
+    const expected = new Date(2026, 2, 7, 2, 30).getTime()
+
+    expect(enumerateMissedSlots({ kind: 'daily', time: '02:30' }, from, now)).toEqual([expected])
   })
 })
 
@@ -108,6 +131,27 @@ describe('ButlerTaskScheduler（fake clock）', () => {
     expect(skipped.every((r) => r.error === 'missed-window')).toBe(true)
     const updated = getAutomationTask(d, task.id)!
     expect(updated.nextRunAt).toBe(120 * MIN)
+  })
+
+  it('停机超过 48 个槽位后补跑最近一次，并把游标推进到未来且只保留有界历史', async () => {
+    const d = db()
+    const downtime = 50 * 60 * MIN
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 0 }))
+    const runTask = vi.fn(async () => ({ ok: true })) as unknown as SchedulerRunFn
+    const scheduler = new ButlerTaskScheduler({ db: d, runTask, isTrayEnabled: () => true, now: () => downtime })
+
+    scheduler.recoverOnStartup()
+
+    expect(runTask).toHaveBeenCalledTimes(1)
+    expect(runTask.mock.calls[0]![1].scheduledFor).toBe(downtime)
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(downtime + 30 * MIN)
+    const recoveredRuns = listAutomationTaskRuns(d, task.id)
+    expect(recoveredRuns).toHaveLength(48)
+    expect(recoveredRuns.filter((run) => run.status === 'skipped')).toHaveLength(47)
+    expect(recoveredRuns.find((run) => run.status === 'skipped')?.scheduledFor).toBe(downtime - 47 * 30 * MIN)
+
+    await scheduler.tick()
+    expect(runTask).toHaveBeenCalledTimes(1)
   })
 
   it('启动恢复将 claim 后、run-start 前的 queued 槽位以原 runId 续接', async () => {

@@ -4,9 +4,8 @@ import {
   listEnabledAutomationTasksDue,
   markActiveRunsInterrupted,
   updateAutomationTask,
-  insertAutomationTaskRun,
   claimDueSlotAndAdvance,
-  recordSkippedSlotAndAdvance,
+  advanceMissedSlotsToCatchUp,
   listPendingScheduledClaims,
   finalizeOnceScheduledRun,
   computeNextRunAt,
@@ -44,20 +43,48 @@ export type ButlerSchedulerDeps = {
   logWarn?: (event: string, fields?: Record<string, unknown>) => void
 }
 
-/** 单次错过扫描上限：interval 任务最多回看 48 个槽位（防风暴）。 */
+/** 单次恢复最多保留 48 个最近槽位（含补跑槽位），避免长时间停机产生无界历史。 */
 const MAX_MISSED_SLOTS = 48
 
-/** 枚举 (from, now] 内错过的全部调度槽位（升序，有界）。from 本身视作第一个错过的槽位。 */
+/** 直接计算最近到期槽位，再最多向前枚举 48 个近期槽位；不会从旧游标扫描整个停机区间。 */
 export function enumerateMissedSlots(schedule: AutomationTaskSchedule, from: number, now: number): number[] {
-  const slots: number[] = []
-  let cursor = from
-  while (cursor <= now && slots.length < MAX_MISSED_SLOTS) {
-    slots.push(cursor)
-    const next = computeNextRunAt(schedule, cursor)
-    if (next <= cursor) break
-    cursor = next
+  if (from > now) return []
+  let latest: number
+  if (schedule.kind === 'interval') {
+    const interval = Math.max(1, schedule.intervalMinutes) * 60_000
+    latest = from + Math.floor((now - from) / interval) * interval
+  } else if (schedule.kind === 'once') {
+    latest = from
+  } else {
+    const [hour, minute] = schedule.time.split(':').map((value) => Number.parseInt(value, 10))
+    const candidate = new Date(now)
+    candidate.setHours(Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, 0, 0)
+    if (candidate.getTime() > now) {
+      candidate.setDate(candidate.getDate() - 1)
+      candidate.setHours(Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, 0, 0)
+    }
+    latest = candidate.getTime()
   }
-  return slots
+  if (latest < from || latest > now) return []
+
+  const reversed = [latest]
+  let cursor = latest
+  while (reversed.length < MAX_MISSED_SLOTS && schedule.kind !== 'once') {
+    let previous: number
+    if (schedule.kind === 'interval') {
+      previous = cursor - Math.max(1, schedule.intervalMinutes) * 60_000
+    } else {
+      const [hour, minute] = schedule.time.split(':').map((value) => Number.parseInt(value, 10))
+      const priorDate = new Date(cursor)
+      priorDate.setDate(priorDate.getDate() - 1)
+      priorDate.setHours(Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, 0, 0)
+      previous = priorDate.getTime()
+    }
+    if (previous < from || previous >= cursor) break
+    reversed.push(previous)
+    cursor = previous
+  }
+  return reversed.reverse()
 }
 
 export class ButlerTaskScheduler {
@@ -128,19 +155,22 @@ export class ButlerTaskScheduler {
     for (const task of this.dueTasks(now)) {
       if (pendingTaskIds.has(task.id)) continue
       const slots = enumerateMissedSlots(task.schedule, task.nextRunAt!, now)
-      let cursor = task.nextRunAt!
-      for (const slot of slots.slice(0, -1)) {
-        const nextSlot = computeNextRunAt(task.schedule, slot)
-        const recorded = recordSkippedSlotAndAdvance(this.db, { taskId: task.id, slot, nextSlot, clientId: `${task.id}:${slot}` })
-        if (recorded.recorded) skippedCount += 1
-        cursor = nextSlot
-      }
+      if (slots.length === 0) continue
       const catchUpSlot = slots[slots.length - 1]!
-      if (catchUpSlot <= now) {
-        const current = { ...task, nextRunAt: cursor }
-        void this.claimAndRun(current, catchUpSlot, now, `recover-${task.id}-${catchUpSlot}`)
-        catchUpCount += 1
+      const fastForward = advanceMissedSlotsToCatchUp(this.db, {
+        taskId: task.id,
+        expectedCursor: task.nextRunAt!,
+        catchUpSlot,
+        skippedSlots: slots.slice(0, -1)
+      })
+      if (!fastForward.advanced) {
+        this.logWarn('automation.scheduler.catch-up-fast-forward-failed', { taskId: task.id, reason: fastForward.reason })
+        continue
       }
+      skippedCount += fastForward.skippedCount
+      const current = { ...task, nextRunAt: catchUpSlot }
+      void this.claimAndRun(current, catchUpSlot, now, `recover-${task.id}-${catchUpSlot}`)
+      catchUpCount += 1
     }
     return { skippedCount, catchUpCount, interruptedCount }
   }
