@@ -57,7 +57,12 @@ export function buildCanonicalToolResultProjectionTargets(conn: DatabaseSync, ev
         if (!rawCall || typeof rawCall !== 'object' || Array.isArray(rawCall)) continue
         const call = rawCall as Record<string, unknown>
         if (typeof call.toolUseId !== 'string' || typeof call.name !== 'string' || !call.args || typeof call.args !== 'object' || Array.isArray(call.args)) continue
-        const projection = { toolUseId: call.toolUseId, stepId: sidecar.stepId, name: call.name, args: call.args, turnId: event.turnId }
+        const projection: Record<string, unknown> = {
+          toolUseId: call.toolUseId, stepId: sidecar.stepId, name: call.name, args: call.args, turnId: event.turnId
+        }
+        for (const key of ['requestId', 'invocationRequestId', 'lane'] as const) {
+          if (typeof call[key] === 'string') projection[key] = call[key]
+        }
         add(`tool-call:${call.toolUseId}`, [{ type: 'tool_call', payload: projection }], [`tool_call:${call.toolUseId}`])
       }
     }
