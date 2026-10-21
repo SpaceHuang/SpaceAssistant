@@ -9,8 +9,17 @@ function permissionRecord(access: AutomationTaskAccessPermissions | undefined): 
   return record.permissions
 }
 
+function isExplicitWindowsPath(value: string): boolean {
+  return /^[a-z]:[\\/]/i.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value)
+}
+
 function pathApi(...values: string[]): typeof path.posix {
-  return values.some((value) => path.win32.isAbsolute(value) || /^[a-z]:[\\/]/i.test(value)) ? path.win32 : path.posix
+  // facts: A leading slash is absolute in both path APIs, so win32.isAbsolute('/repo') cannot identify
+  // Windows syntax on POSIX hosts. Prefer explicit drive/UNC forms; use host context only for
+  // Windows root-relative paths that have no drive prefix.
+  const windowsPath = values.some(isExplicitWindowsPath)
+    || (process.platform === 'win32' && values.some((value) => path.win32.isAbsolute(value)))
+  return windowsPath ? path.win32 : path.posix
 }
 
 function isPathWithinAnyRoot(targetPath: string, roots: readonly string[]): boolean {

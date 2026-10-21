@@ -613,8 +613,8 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
   })
 
   it('routes each unattended Shell call to the exact cwd paired with its approved command', async () => {
-    const firstDir = '/task/work/first'
-    const secondDir = '/task/work/second'
+    const firstDir = '/task/work/Repo'
+    const secondDir = '/task/work/repo'
     const command = 'git status --short'
     const authorizationRecord = {
       id: 'multi-cwd-shell-receipt', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,

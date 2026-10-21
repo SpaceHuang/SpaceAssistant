@@ -64,6 +64,52 @@ describe('scheduled task tool permission matching', () => {
     expect(resolveAutomationShellWorkingDirectory(access, 'git status --short')).toBeUndefined()
   })
 
+  it('keeps case-distinct POSIX working directories separate', () => {
+    const first = '/workspace/Repo'
+    const second = '/workspace/repo'
+    const access = {
+      directories: [first, second], tools: ['run_shell' as const],
+      authorizationRecord: { ...record, permissions: [{
+        kind: 'local-shell' as const,
+        scopeRoots: [first, second],
+        commands: [first, second].map((workingDirectory) => ({ command: 'git status --short', workingDirectory }))
+      }] }
+    }
+
+    expect(resolveAutomationShellWorkingDirectory(access, 'git status --short', second)).toBe(second)
+  })
+
+  it('does not match a case-distinct POSIX directory when only the other spelling was approved', () => {
+    const approved = '/workspace/Repo'
+    const unapproved = '/workspace/repo'
+    const access = {
+      directories: [approved], tools: ['run_shell' as const],
+      authorizationRecord: { ...record, permissions: [{
+        kind: 'local-shell' as const,
+        scopeRoots: [approved],
+        commands: [{ command: 'git status --short', workingDirectory: approved }]
+      }] }
+    }
+
+    expect(resolveAutomationShellWorkingDirectory(access, 'git status --short', unapproved)).toBeUndefined()
+  })
+
+  it.each([
+    ['C:\\Workspace\\Repo', 'c:\\workspace\\repo'],
+    ['\\\\server\\share\\Repo', '\\\\SERVER\\SHARE\\repo']
+  ])('preserves case-insensitive matching for explicit Windows path %s', (approved, requested) => {
+    const access = {
+      directories: [approved], tools: ['run_shell' as const],
+      authorizationRecord: { ...record, permissions: [{
+        kind: 'local-shell' as const,
+        scopeRoots: [approved],
+        commands: [{ command: 'git status --short', workingDirectory: approved }]
+      }] }
+    }
+
+    expect(resolveAutomationShellWorkingDirectory(access, 'git status --short', requested)).toBe(approved)
+  })
+
   it('allows an omitted working directory only when the approved command resolves to one directory', () => {
     const access = {
       ...permissions,
