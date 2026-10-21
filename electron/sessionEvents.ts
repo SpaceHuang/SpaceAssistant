@@ -6,6 +6,7 @@ import type { SessionUsage } from '../src/shared/sessionUsage'
 import { foldCompactionEvents, projectCompactionMarkers, type CompactionReplay, type CompactionMarker } from '../src/shared/compactionEvents'
 import { withTransientLockRetry } from './safeAtomicWrite'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
+import { toolCallProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
 import { isSessionLedgerLifecycleLockHeld, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 
 export type SessionEventPayload = Record<string, unknown>
@@ -165,7 +166,7 @@ export async function ensureToolCallEvent(
     const existingPayload = { ...existing.payload }
     // Pre-turn-owner projections are compatible with canonical sidecars that have no turnId.
     if (input.turnId === undefined) delete existingPayload.turnId
-    if (!isDeepStrictEqual(existingPayload, payload)) {
+    if (!toolCallProjectionPayloadMatches(existingPayload, payload)) {
       throw new Error(`conflicting tool call ledger event: ${input.toolUseId}`)
     }
     return existing
