@@ -76,8 +76,8 @@ export function reconcileWikiFiles(files: WikiReconcileInput[], catalog: WikiRec
       diagnostics.push({ code: 'wiki-page-title-missing', path: item.file.path, pageId: item.marker.pageId, message: 'Page must contain a first-level title.' })
       continue
     }
-    if (schema && !schema.categories.some(category => category.id === item.marker.categoryId && category.status === 'active')) {
-      diagnostics.push({ code: 'wiki-page-category-invalid', path: item.file.path, pageId: item.marker.pageId, message: 'Page references a category that is missing or inactive in SCHEMA.' })
+    if (schema && !schema.categories.some(category => category.id === item.marker.categoryId)) {
+      diagnostics.push({ code: 'wiki-page-category-invalid', path: item.file.path, pageId: item.marker.pageId, message: 'Page references a category that is missing from SCHEMA.' })
       continue
     }
     pages.push({ pageId: item.marker.pageId, path: item.file.path, revision, contentHash: item.hash, title, categoryId: item.marker.categoryId, parentPageId: item.marker.parentPageId, summary: item.marker.summary, sourceRefs: item.marker.sourceRefs, externalEdit })

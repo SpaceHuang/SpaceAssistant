@@ -99,7 +99,7 @@ describe('reconcileExternalWikiChanges', () => {
     expect(await store.readText('.wiki-service/schema-history/2.md')).toBe(next)
   })
 
-  it('does not advance schemaVersion when external SCHEMA invalidates an active page', async () => {
+  it('advances schemaVersion when an external SCHEMA deprecates a category used by an existing page', async () => {
     const { store } = await fixture()
     const original = await store.readText('SCHEMA.md')
     const currentPage = page('page-a', 1, 'A', 'body')
@@ -110,8 +110,8 @@ describe('reconcileExternalWikiChanges', () => {
     const invalidating = original.replace('"status":"active"', '"status":"deprecated"')
     await store.write('SCHEMA.md', invalidating)
     const result = await reconcileExternalWikiChanges(store)
-    expect(result.diagnostics.map(item => item.code)).toContain('wiki-page-category-invalid')
-    expect(JSON.parse(await store.readText('.wiki-service/schema-state.json')).schemaVersion).toBe(1)
+    expect(result.diagnostics).toEqual([])
+    expect(JSON.parse(await store.readText('.wiki-service/schema-state.json')).schemaVersion).toBe(2)
     expect(await store.readText('wiki/topics/a.md')).toBe(currentPage)
   })
 

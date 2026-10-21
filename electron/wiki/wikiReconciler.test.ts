@@ -43,4 +43,13 @@ describe('reconcileWikiFiles', () => {
     const result = reconcileWikiFiles([{ path: 'wiki/a.md', content: `${marker}\n# A` }], [], { categories: [{ id: 'topic', status: 'active' }] })
     expect(result.diagnostics.map(item => item.code)).toContain('wiki-page-category-invalid')
   })
+
+  it('preserves existing page references to deprecated categories while still rejecting removed categories', () => {
+    const marker = serializeWikiPageMarker({ pageId: 'p-deprecated', categoryId: 'topic', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })
+    const files = [{ path: 'wiki/a.md', content: `${marker}\n# A` }]
+    expect(reconcileWikiFiles(files, [], { categories: [{ id: 'topic', status: 'deprecated' }] })).toMatchObject({
+      pages: [{ pageId: 'p-deprecated', categoryId: 'topic' }], diagnostics: []
+    })
+    expect(reconcileWikiFiles(files, [], { categories: [] }).diagnostics.map(item => item.code)).toContain('wiki-page-category-invalid')
+  })
 })

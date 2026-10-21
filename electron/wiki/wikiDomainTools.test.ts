@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
-import { applyWikiRestoreForContext, createWikiDomainTools, importWikiSourceForContext, listWikiPageRevisionsForContext, moveWikiPageForContext, openWikiPageForContext, prepareWikiRestoreForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, saveWikiPageForContext, searchWikiCatalog, searchWikiForContext, updateWikiSchemaForContext } from './wikiDomainTools'
+import { applyWikiRestoreForContext, createWikiDomainTools, getWikiSchemaForContext, importWikiSourceForContext, listWikiPageRevisionsForContext, moveWikiPageForContext, openWikiPageForContext, prepareWikiRestoreForContext, proposeWikiSchemaChangeForContext, readWikiPageForContext, readWikiSourceForContext, saveWikiPageForContext, searchWikiCatalog, searchWikiForContext, updateWikiSchemaForContext } from './wikiDomainTools'
 import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { createHash } from 'node:crypto'
@@ -309,6 +309,41 @@ describe('Wiki domain search tool', () => {
     const applied = await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1, proposalDiff: diff }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-user', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })
     expect(applied).toMatchObject({ success: true, data: { schemaVersion: 2 } })
     expect(await store.readText('SCHEMA.md')).toBe(proposed)
+  })
+
+  it('keeps existing pages readable while their category is deprecated and allows reactivation', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const activeSchema = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    const deprecatedSchema = activeSchema.replace('"status":"active"', '"status":"deprecated"')
+    await store.write('SCHEMA.md', activeSchema)
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-deprecated', lane: 'desktop', requestId: 'request-deprecate', toolUseId: 'tool-deprecate' }
+    const saved = await saveWikiPageForContext({ title: 'Existing page', categoryId: 'topic', summary: 'kept', markdown: 'Existing body', schemaVersion: 1 }, context)
+    expect(saved).toMatchObject({ success: true, data: { revision: 1 } })
+    const pageId = (saved as { data: { pageId: string } }).data.pageId
+
+    const deprecateProposal = await proposeWikiSchemaChangeForContext({ content: deprecatedSchema, expectedSchemaVersion: 1 }, context)
+    expect(deprecateProposal).toMatchObject({ success: true })
+    const deprecate = (deprecateProposal as { success: true; data: { proposalId: string; diff: { before: string; after: string } } }).data
+    expect(await updateWikiSchemaForContext({ proposalId: deprecate.proposalId, expectedSchemaVersion: 1, proposalDiff: deprecate.diff }, {
+      ...context, requestId: 'request-apply-deprecate', toolUseId: 'tool-apply-deprecate', toolUserConfirmed: true, userConfirmationAnswerer: 'user'
+    })).toMatchObject({ success: true, data: { schemaVersion: 2 } })
+
+    const opened = await openWikiPageForContext({ pageId }, context)
+    expect(opened).toMatchObject({ success: true, data: { pageId, revision: 1 } })
+    expect(await getWikiSchemaForContext(context)).toMatchObject({ success: true, data: { schemaVersion: 2, categories: [{ id: 'topic', status: 'deprecated' }] } })
+    expect(await readWikiPageForContext({ readHandle: (opened as { data: { readHandle: string } }).data.readHandle }, context)).toMatchObject({ success: true, data: { text: 'Existing body\n' } })
+
+    const reactivateProposal = await proposeWikiSchemaChangeForContext({ content: activeSchema, expectedSchemaVersion: 2 }, { ...context, requestId: 'request-propose-reactivate', toolUseId: 'tool-propose-reactivate' })
+    expect(reactivateProposal).toMatchObject({ success: true })
+    const reactivate = (reactivateProposal as { success: true; data: { proposalId: string; diff: { before: string; after: string } } }).data
+    expect(await updateWikiSchemaForContext({ proposalId: reactivate.proposalId, expectedSchemaVersion: 2, proposalDiff: reactivate.diff }, {
+      ...context, requestId: 'request-apply-reactivate', toolUseId: 'tool-apply-reactivate', toolUserConfirmed: true, userConfirmationAnswerer: 'user'
+    })).toMatchObject({ success: true, data: { schemaVersion: 3 } })
+    expect(await openWikiPageForContext({ pageId }, context)).toMatchObject({ success: true, data: { pageId, revision: 1 } })
   })
 
   it('passes host user confirmation provenance through the registered schema update tool', async () => {
