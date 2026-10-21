@@ -165,6 +165,27 @@ describe('Wiki domain search tool', () => {
     expect(JSON.stringify(read)).not.toContain('"pageId"')
   })
 
+  it('saves a desktop page and reads the authored body back through the page tools', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n')
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-save-read', lane: 'desktop', requestId: 'request-save-read', toolUseId: 'tool-save-read' }
+
+    const saved = await saveWikiPageForContext({ title: 'Desktop round trip', categoryId: 'topic', summary: 'round trip', markdown: 'Authored desktop body', schemaVersion: 1 }, context)
+    expect(saved).toMatchObject({ success: true, data: { revision: 1, projectionStatus: 'complete' } })
+    const pageId = (saved as { data: { pageId: string } }).data.pageId
+    const opened = await openWikiPageForContext({ pageId }, context)
+    expect(opened).toMatchObject({ success: true, data: { pageId, revision: 1, title: 'Desktop round trip', charCount: 22 } })
+    const readHandle = (opened as { data: { readHandle: string } }).data.readHandle
+    const read = await readWikiPageForContext({ readHandle }, context)
+
+    expect(read).toMatchObject({ success: true, data: { text: 'Authored desktop body\n', startOffset: 0, hasMore: false } })
+    expect(JSON.stringify(read)).not.toContain('wiki-page:start')
+  })
+
   it('reconciles an external edit before opening the page and pins the new immutable revision', async () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
