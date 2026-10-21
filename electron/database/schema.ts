@@ -2054,11 +2054,6 @@ CREATE INDEX IF NOT EXISTS idx_session_ledger_projection_outbox_pending
 
 /** v102 → v103: revalidate the global History cursor while allowing retired legacy rows and deleted events. */
 export const MIGRATION_V103_HISTORY_CURSOR_REVALIDATION_SQL = `
--- v46 populated this table from every cursor without a surviving event. An interior hole is
--- retired history: a later committed event proves allocation has advanced beyond it, and
--- session-local sequence checks still detect a missing event in any surviving session.
-DELETE FROM agent_history_pending_commit_cursor
-WHERE cursor_id < COALESCE((SELECT MAX(commit_order) FROM agent_history_events WHERE commit_order IS NOT NULL),0);
 UPDATE agent_history_cursor_integrity SET invalid=CASE WHEN
   EXISTS(SELECT 1 FROM agent_history_pending_commit_cursor) OR
   EXISTS(SELECT 1 FROM agent_history_events events WHERE events.commit_order IS NOT NULL AND NOT EXISTS(
