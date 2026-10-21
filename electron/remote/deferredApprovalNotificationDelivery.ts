@@ -11,6 +11,7 @@ import { buildDeferredApprovalAuditEvent } from '../confirmation/deferredApprova
 type TodoStore = ReturnType<typeof createDeferredTodoStore>
 type IntentStore = ReturnType<typeof createSecurityActionIntentStore>
 type Scope = { channel: 'feishu' | 'wechat'; identityKey: string; ownerId: string; authorizationEpoch: number }
+export type DeferredApprovalReplyTargetClassification = 'known' | 'unknown' | 'unavailable'
 type NotificationRow = {
   todo_id: string; notification_version: number; invocation_id: string; channel: Scope['channel']; identity_key: string; owner_id: string
   authorization_epoch: number; rule_id: string; facts_hash: string; short_code: string; trusted_message_id: string | null
@@ -197,6 +198,21 @@ export function createDeferredApprovalNotificationDelivery(input: {
           ...(state === 'delivered' && deliveredRow?.trusted_message_id ? { messageId: deliveredRow.trusted_message_id } : {}) })
       }
       return results
+    },
+
+    /**
+     * facts: identifies whether an exact platform message ID was issued as an approval notification for this channel and identity.
+     * The WeChat IPC passes this fact to WeChatCommandRouter; owner, epoch, lifecycle, and expiry are deliberately rechecked
+     * by deferredApprovalRuntime at the final ingress boundary. This lookup makes no approval decision.
+     * Boundary coverage: deferredApprovalNotificationDelivery.test.ts and weChatCommandRouter.test.ts.
+     */
+    classifyReplyTarget(request: { channel: Scope['channel']; identityKey: string; messageId: string }): Exclude<DeferredApprovalReplyTargetClassification, 'unavailable'> {
+      const messageId = request.messageId.trim()
+      if (!messageId) return 'unknown'
+      const row = liveConn().prepare(`SELECT 1 FROM deferred_approval_notifications
+        WHERE channel=? AND identity_key=? AND trusted_message_id=? LIMIT 1`)
+        .get(request.channel, request.identityKey, messageId)
+      return row ? 'known' : 'unknown'
     },
 
     list,

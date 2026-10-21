@@ -1,6 +1,6 @@
 {
   "name": "spaceassistant",
-  "version": "0.2.7",
+  "version": "0.2.9",
   "private": true,
   "license": "Apache-2.0",
   "description": "Electron + React + TypeScript desktop assistant",
@@ -251,6 +251,13 @@
       "target": [
         {
           "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "pkg",
           "arch": [
             "x64",
             "arm64"

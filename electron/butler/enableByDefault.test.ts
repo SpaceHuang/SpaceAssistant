@@ -6,7 +6,7 @@ import { createAutomationTask, getAutomationTask, listEnabledAutomationTasksDue,
 
 function uiPayload(): AutomationTaskInput {
   // 与渲染端 ButlerTaskSettings 提交载荷一致：不传 enabled
-  return { name: '巡检', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: '跑', deliveryPref: 'desktop' }
+  return { name: '巡检', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: '跑', deliveryPref: 'desktop', workDirs: ['/tmp/automation-test'] }
 }
 
 describe('新建任务默认开启', () => {

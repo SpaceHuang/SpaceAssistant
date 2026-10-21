@@ -17,12 +17,14 @@ import {
   readSessionLedgerReadiness,
   recoverInterruptedSessionLedgerCheck,
   reopenBlockedSessionLedger,
+  refreshSessionLedgerReadyProof,
   type SessionLedgerReadyProof,
   type SessionLedgerReadiness
 } from './sessionLedgerReadiness'
 import { drainCanonicalLedgerProjectionOutbox, type CanonicalLedgerProjectionTarget } from './sessionLedgerOutbox'
 import type { SessionLedgerLocationInput } from './sessionLedgerIdentity'
 import { withSessionEventWriterDrain } from './sessionEvents'
+import { withSessionLedgerProcessLock } from './sessionLedgerProcessLock'
 
 type LockEntry = { tail: Promise<void>; users: number }
 
@@ -48,7 +50,9 @@ export async function withSessionLedgerLifecycleLock<T>(locationKey: string, ope
   try {
     const held = new Set(heldLocationLocks.getStore() ?? [])
     held.add(locationKey)
-    return await heldLocationLocks.run(held, operation)
+    return await heldLocationLocks.run(held, () => /^[a-f0-9]{64}$/.test(locationKey)
+      ? withSessionLedgerProcessLock(locationKey, operation)
+      : operation())
   } finally {
     release()
     entry.users -= 1
@@ -67,8 +71,12 @@ export function withSessionLedgerLifecycleLocks<T>(locationKeys: readonly string
 export type SessionLedgerLifecycleDependencies = {
   fileExists(location: SessionLedgerLocationInput): Promise<boolean>
   readProof(location: SessionLedgerLocationInput): Promise<SessionLedgerReadyProof | undefined>
+  verifyPhysicalContinuity?(location: SessionLedgerLocationInput, readiness: SessionLedgerReadiness): Promise<boolean>
+  migrateLegacyReadyProof?(location: SessionLedgerLocationInput, readiness: SessionLedgerReadiness): Promise<SessionLedgerReadyProof | undefined>
   bootstrap(location: SessionLedgerLocationInput, bootstrapId: string): Promise<SessionLedgerReadyProof>
   baseline(location: SessionLedgerLocationInput): Promise<SessionLedgerReadyProof>
+  /** Recreates a wholly missing legacy ledger from canonical history, never a damaged existing file. */
+  rebuildMissingLegacyLedger?(location: SessionLedgerLocationInput): Promise<SessionLedgerReadyProof>
   applyTarget(location: SessionLedgerLocationInput, target: CanonicalLedgerProjectionTarget & { targetId: string }): Promise<{
     eventIds: readonly string[]; events: readonly SessionEventInput[]
   }>
@@ -94,6 +102,27 @@ function proofsEqual(readiness: SessionLedgerReadiness, proof: SessionLedgerRead
     readiness.proofTailFrame === proof.tailFrame && readiness.proofIndexSeq === proof.indexSeq &&
     readiness.proofIndexEventCount === proof.indexEventCount && readiness.proofIndexBytes === proof.indexBytes &&
     readiness.proofIndexLastAt === proof.indexLastAt
+}
+
+/** Canonical watermarks may advance before projection; the physical proof must not. */
+function physicalProofMatches(readiness: SessionLedgerReadiness, proof: SessionLedgerReadyProof): boolean {
+  if (readiness.ledgerGeneration !== proof.ledgerGeneration || !readiness.proofFileIdentity) return false
+  // Non-production dependencies have no byte-prefix verifier, so retain the
+  // conservative metadata check used by their lifecycle unit tests.
+  const oldInode = readiness.proofFileIdentity.split(':').slice(0, 2).join(':')
+  const newInode = proof.fileIdentity.split(':').slice(0, 2).join(':')
+  return oldInode === newInode && proof.fileBytes >= (readiness.proofFileBytes ?? 0) &&
+    proof.indexSeq >= (readiness.proofIndexSeq ?? 0) &&
+    proof.indexEventCount >= (readiness.proofIndexEventCount ?? 0) &&
+    proof.indexBytes >= (readiness.proofIndexBytes ?? 0)
+}
+
+function physicalMetadataMatches(readiness: SessionLedgerReadiness, proof: SessionLedgerReadyProof): boolean {
+  const oldInode = readiness.proofFileIdentity?.split(':').slice(0, 2).join(':')
+  const newInode = proof.fileIdentity.split(':').slice(0, 2).join(':')
+  return readiness.ledgerGeneration === proof.ledgerGeneration && Boolean(oldInode) && oldInode === newInode &&
+    proof.fileBytes >= (readiness.proofFileBytes ?? 0) && proof.indexSeq >= (readiness.proofIndexSeq ?? 0) &&
+    proof.indexEventCount >= (readiness.proofIndexEventCount ?? 0) && proof.indexBytes >= (readiness.proofIndexBytes ?? 0)
 }
 
 function hasCredentialedBootstrap(readiness: SessionLedgerReadiness): boolean {
@@ -125,8 +154,10 @@ export async function ensureSessionLedgerReady(input: {
       advanceSessionLedgerOwnerReconciliation(input.conn, current.ledgerLocationKey, input.processGeneration, now())
       current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
     }
+    const canRebuildMissingLegacyLedger = input.retryBlocked && current.origin === 'legacy' &&
+      current.state === 'blocked' && current.failureClass === 'ledger_missing' && Boolean(input.dependencies.rebuildMissingLegacyLedger)
     if (!resumeCredentialedBootstrap && current.ownerReconciledProcessGeneration < input.processGeneration) {
-      if (input.dependencies.reconcilePreviousOwner && (current.ownerReconciledProcessGeneration > 0 || current.origin === 'legacy')) {
+      if (!canRebuildMissingLegacyLedger && input.dependencies.reconcilePreviousOwner && (current.ownerReconciledProcessGeneration > 0 || current.origin === 'legacy')) {
         try {
           await input.dependencies.reconcilePreviousOwner(input.location, current.ownerReconciledProcessGeneration, input.processGeneration)
         } catch (error) {
@@ -144,7 +175,9 @@ export async function ensureSessionLedgerReady(input: {
     }
 
     if (current.state === 'blocked') {
-      if (!input.retryBlocked) return { status: 'blocked', readiness: current }
+      // A physical mismatch invalidates the old completeness claim. Retrying the
+      // incremental path could otherwise mint a new proof over the shortened file.
+      if (!input.retryBlocked || current.failureClass === 'physical_proof_mismatch') return { status: 'blocked', readiness: current }
       reopenBlockedSessionLedger(input.conn, current.ledgerLocationKey, now())
       current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
     }
@@ -156,6 +189,17 @@ export async function ensureSessionLedgerReady(input: {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const decision = decideSessionLedgerGate(current)
       if (decision.kind === 'allow-ready') {
+        if (input.dependencies.verifyPhysicalContinuity &&
+          (!current.proofTailFrame || !current.proofTailFrame.startsWith('full:'))) {
+          const migratedProof = await (input.dependencies.migrateLegacyReadyProof?.(input.location, current) ?? Promise.resolve(undefined))
+            .catch(() => undefined)
+          if (!migratedProof || !refreshSessionLedgerReadyProof(input.conn, current.ledgerLocationKey, migratedProof, now())) {
+            markSessionLedgerBlocked(input.conn, current.ledgerLocationKey, 'baseline', 'physical_proof_mismatch', now())
+            return { status: 'blocked', readiness: readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)! }
+          }
+          current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
+          return { status: 'ready', readiness: current }
+        }
         const observed = await input.dependencies.readProof(input.location).catch(() => undefined)
         if (observed && proofsEqual(current, observed)) return { status: 'ready', readiness: current }
         invalidateSessionLedgerProof(input.conn, current.ledgerLocationKey, now())
@@ -177,7 +221,8 @@ export async function ensureSessionLedgerReady(input: {
       } else if (decision.kind === 'check-baseline' || decision.kind === 'recover-check') {
         operation = 'baseline'
         baselineScanCount += 1
-        if (current.origin === 'legacy' && !(await input.dependencies.fileExists(input.location))) {
+        const ledgerExists = await input.dependencies.fileExists(input.location)
+        if (current.origin === 'legacy' && !ledgerExists && !input.dependencies.rebuildMissingLegacyLedger) {
           markMissingLegacyLedgerBlocked(input.conn, current.ledgerLocationKey, now())
           current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
           return { status: 'blocked', readiness: current }
@@ -185,7 +230,9 @@ export async function ensureSessionLedgerReady(input: {
         const token = beginSessionLedgerCheck(input.conn, current.ledgerLocationKey, now())
         if (!token) return { status: 'blocked', readiness: readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)! }
         try {
-          const proof = await input.dependencies.baseline(input.location)
+          const proof = current.origin === 'legacy' && !ledgerExists
+            ? await input.dependencies.rebuildMissingLegacyLedger!(input.location)
+            : await input.dependencies.baseline(input.location)
           const afterBaseline = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
           const currentToken = afterBaseline.state === 'unknown'
             ? beginSessionLedgerCheck(input.conn, current.ledgerLocationKey, now())
@@ -196,6 +243,18 @@ export async function ensureSessionLedgerReady(input: {
         }
       } else if (decision.kind === 'check-target') {
         operation = 'target'
+        const existingProof = await input.dependencies.readProof(input.location).catch(() => undefined)
+        const continuous = existingProof && (input.dependencies.verifyPhysicalContinuity
+          ? await input.dependencies.verifyPhysicalContinuity(input.location, current).catch(() => false)
+          : physicalProofMatches(current, existingProof))
+        const metadataMatches = existingProof && (input.dependencies.verifyPhysicalContinuity
+          ? physicalMetadataMatches(current, existingProof)
+          : physicalProofMatches(current, existingProof))
+        if (!existingProof || !continuous || !metadataMatches) {
+          markSessionLedgerBlocked(input.conn, current.ledgerLocationKey, 'baseline', 'physical_proof_mismatch', now())
+          current = readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)!
+          return { status: 'blocked', readiness: current }
+        }
         const token = beginSessionLedgerTargetCheck(input.conn, current.ledgerLocationKey, now())
         if (!token) return { status: 'blocked', readiness: readSessionLedgerReadiness(input.conn, current.ledgerLocationKey)! }
         const drained = await drainCanonicalLedgerProjectionOutbox(input.conn, current.ledgerLocationKey,

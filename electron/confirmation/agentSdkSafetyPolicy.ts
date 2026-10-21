@@ -118,6 +118,7 @@ export function createAgentSdkSafetyPolicy(input: {
           const sameWriteTarget = sameWritePathTarget(previous.result.writePathFact, result.writePathFact)
           const sameReadTarget = stableSerialize(previous.result.readPathFact) === stableSerialize(result.readPathFact)
           const sameFeishuMediaTarget = stableSerialize(previous.result.feishuMediaFact) === stableSerialize(result.feishuMediaFact)
+          const sameScriptApprovalBinding = matchesScriptApprovalBinding(previous.result, result)
           const sameWriteApprovalConfiguration = previous.result.facts.actionClass !== 'write' ||
             writeApprovalConfigurationSnapshot(previous.args) === writeApprovalConfigurationSnapshot(gateArgs)
           const sameConfirmedDecisionRule = decision.ruleId === previous.result.decision.ruleId ||
@@ -125,12 +126,12 @@ export function createAgentSdkSafetyPolicy(input: {
           const sameConfirmedDecision = previous.confirmed &&
             (decision.type === 'auto-allow' || decision.type === 'require-confirm') &&
             sameConfirmedDecisionRule && sameFacts
-          const recheckAllowed = samePolicyDependencies && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget && sameWriteApprovalConfiguration &&
+          const recheckAllowed = samePolicyDependencies && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget && sameScriptApprovalBinding && sameWriteApprovalConfiguration &&
             (previous.confirmed ? sameConfirmedDecision : decision.type === 'auto-allow')
           initial.delete(key)
           if (!recheckAllowed) {
             const confirmationScopeChanged = previous.confirmed && (
-              !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget ||
+              !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget || !sameScriptApprovalBinding ||
               !sameWriteApprovalConfiguration || !sameConfirmedDecision
             )
             const humanBottomLine = decision.type === 'require-confirm' && (
@@ -190,7 +191,10 @@ export function createAgentSdkStructuralPermitHandoff(input: {
           input: args.toolInput,
           target: result.writePathFact,
           decisionRuleId: result.decision.ruleId,
-          approval: result.fileAutoApproved ? 'auto-allow' : 'confirmed',
+          approval: result.decision.ruleId === 'automation-bound-output-write-allow' || result.fileAutoApproved ? 'auto-allow' : 'confirmed',
+          lane: result.lane,
+          ...(result.automationOutputBinding ? { automationOutputBinding: result.automationOutputBinding } : {}),
+          ...(result.automationOutputScope ? { automationOutputScope: result.automationOutputScope } : {}),
           ...(result.policyDecision ? { decisionId: result.policyDecision.decisionId, policyDependencyFingerprint: result.policyDecision.dependencyFingerprint } : {})
         })
         input.updateExecutionContext({ invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }, (context) => {
@@ -221,7 +225,10 @@ export function createAgentSdkStructuralPermitHandoff(input: {
           input: args.toolInput,
           target: result.writePathFact,
           decisionRuleId: result.decision.ruleId,
-          approval: result.fileAutoApproved ? 'auto-allow' : 'confirmed',
+          approval: result.decision.ruleId === 'automation-bound-output-write-allow' || result.fileAutoApproved ? 'auto-allow' : 'confirmed',
+          lane: result.lane,
+          ...(result.automationOutputBinding ? { automationOutputBinding: result.automationOutputBinding } : {}),
+          ...(result.automationOutputScope ? { automationOutputScope: result.automationOutputScope } : {}),
           ...(result.policyDecision ? { decisionId: result.policyDecision.decisionId, policyDependencyFingerprint: result.policyDecision.dependencyFingerprint } : {})
         })
         input.updateExecutionContext(call, (context) => { context.writeExecutionPermit = writePermit })
@@ -234,6 +241,21 @@ function stableSerialize(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined'
   if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
   return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize((value as Record<string, unknown>)[key])}`).join(',')}}`
+}
+
+/** final-check: an approved run_script call is bound to its host-computed code, parameter and environment digests. */
+function matchesScriptApprovalBinding(previous: ToolCallGateResult, current: ToolCallGateResult): boolean {
+  if (previous.facts.toolName !== 'run_script' && current.facts.toolName !== 'run_script') return true
+  if (previous.facts.toolName !== 'run_script' || current.facts.toolName !== 'run_script') return false
+  const binding = (result: ToolCallGateResult) => result.facts.signals.find((signal) => signal.kind === 'script-path-extraction')
+  const prior = binding(previous)
+  const latest = binding(current)
+  return prior?.kind === 'script-path-extraction' && latest?.kind === 'script-path-extraction'
+    && Boolean(prior.contentDigest && prior.parametersDigest && prior.environmentDigest)
+    && prior.contentDigest === latest.contentDigest
+    && prior.parametersDigest === latest.parametersDigest
+    && prior.environmentDigest === latest.environmentDigest
+    && prior.authenticationVersion === latest.authenticationVersion
 }
 
 /**

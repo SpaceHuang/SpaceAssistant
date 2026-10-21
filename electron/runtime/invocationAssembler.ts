@@ -27,7 +27,7 @@ import type { SessionStorage } from '../sessionStorage/contracts'
 import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
-import { buildSnapshotFromDb, getCachedTools, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
+import { buildSnapshotFromDb, getCachedTools, hashMcpServerProfile, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
 import { resolveRequestLocale } from '../llmSystemPrompt'
 import { resolvePublicMcpReadAuthorization } from '../mcp/publicMcpReadTrust'
 import { isPolicyPackage } from '../../src/shared/policy/policyPackages'
@@ -52,6 +52,7 @@ import { projectAgentToolResult } from '../../src/shared/agentToolResult'
 import { isProcessToolName } from '../../src/shared/processResultProjection'
 import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
 import { resolveRegisteredToolName } from '../tools/registeredToolName'
+import { resolveAutomationShellWorkingDirectory } from '../butler/automationTaskPermissionMatch'
 import { createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff, markAgentSdkSafetyDecisionConfirmed } from '../confirmation/agentSdkSafetyPolicy'
 import { createAgentSdkConfirmationPort, mapAgentSdkConfirmationOutcome } from '../confirmation/agentSdkConfirmationPort'
 import { registerActiveAgentToolCancellation } from '../activeAgentToolCancellation'
@@ -145,6 +146,15 @@ export interface AgentInvocationMaterials {
   /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
   onRemoteTextActivity?: (text: string) => void
   workDir: string
+  /** Trusted task root set from the immutable automation run snapshot. */
+  taskWorkDirs?: readonly string[]
+  /** Access permissions copied from the immutable automation run snapshot. */
+  taskAccessPermissions?: import('../../src/shared/automationTaskTypes').AutomationTaskAccessPermissions
+  /** Preflight-approved output binding set and archive target for this scheduled run. */
+  taskOutputBindings?: readonly import('../../src/shared/automationTaskTypes').TargetBinding[]
+  taskRunOutputDir?: string
+  /** Full host-derived output scope, paired with the immutable user authorization receipt. */
+  taskRunOutputScope?: import('../../src/shared/automationTaskTypes').AutomationRunOutputScope
   workDirManager?: import('../workDirManager').WorkDirManager
   resolveWorkDir?: () => string
   userDataDir: string
@@ -208,25 +218,6 @@ function mergeImOrchestrationFixtureRegistry(
   for (const tool of base.entries()) merged.register(tool)
   for (const tool of fixture.entries()) merged.register(tool)
   return merged
-}
-
-function mcpConnectionFingerprint(profile: import('../../src/shared/mcpTypes').McpServerProfile): string {
-  return createHash('sha256').update(JSON.stringify({
-    id: profile.id, enabled: profile.enabled, transport: profile.transport, timeoutSec: profile.timeoutSec,
-    // Token rotation / expiry is expected runtime state. Bind to the configured auth
-    // identity instead, so OAuth refresh does not revoke later calls in this turn.
-    auth: {
-      mode: profile.auth.mode,
-      headerName: profile.auth.headerName,
-      valuePrefix: profile.auth.valuePrefix,
-      oauthClientId: profile.auth.oauthClientId,
-      oauthScopes: profile.auth.oauthScopes
-    },
-    stdio: profile.stdio ? { command: profile.stdio.command, args: profile.stdio.args, cwd: profile.stdio.cwd,
-      env: profile.stdio.env.map(({ key, valuePresent }) => ({ key, valuePresent })) } : undefined,
-    http: profile.http,
-    enabledToolNames: profile.enabledToolNames
-  })).digest('hex')
 }
 
 /** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
@@ -646,7 +637,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const mcpProbeProfilesById: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile> | undefined = db && mcpSnapshotRaw.entries.size > 0
     ? new Map(listProfiles(db).map((p) => [p.id, p]))
     : undefined
-  const mcpProfileFingerprints = new Map([...(mcpProbeProfilesById?.values() ?? [])].map((profile) => [profile.id, mcpConnectionFingerprint(profile)]))
+  const mcpProfileFingerprints = new Map([...(mcpProbeProfilesById?.values() ?? [])].map((profile) => [profile.id, hashMcpServerProfile(profile)]))
   const mcpResolveExecutor = db
     ? (toolName: string, manager: McpConnectionManager, profilesById?: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile>) => {
         const entry = mcpSnapshotRaw.entries.get(toolName)
@@ -655,7 +646,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         if (!profile) return undefined
         const oauthProvider =
           profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(db, profile) : undefined
-        const expectedProfileFingerprint = mcpProfileFingerprints.get(profile.id) ?? mcpConnectionFingerprint(profile)
+        const expectedProfileFingerprint = mcpProfileFingerprints.get(profile.id) ?? hashMcpServerProfile(profile)
         return createMcpToolExecutor(entry, {
           getSession: (serverId: string) =>
             manager.connect(profile, async (kind) => getSecret(db, serverId, kind), { oauthProvider }),
@@ -663,7 +654,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           expectedProfileFingerprint,
           getCurrentProfileFingerprint: (currentServerId) => {
             const current = listProfiles(db).find((candidate) => candidate.id === currentServerId)
-            return current ? mcpConnectionFingerprint(current) : undefined
+            return current ? hashMcpServerProfile(current) : undefined
           },
           getCurrentTool: (serverId, originalName) => {
             const currentProfile = listProfiles(db).find((candidate) => candidate.id === serverId)
@@ -741,6 +732,15 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     const registry = getDefaultAgentRuntime().builtinRegistry as { get(name: string): unknown; entries?(): readonly Readonly<{ name: string }>[] }
     return resolveRegisteredToolName(name, registry)
   }
+  const resolveToolCallWorkDir = (
+    call: Readonly<{ toolName: string; input: Record<string, unknown> }>,
+    fallback: string
+  ): string => {
+    if (materialsLane !== 'automation' || resolveAgentSdkToolName(call.toolName) !== 'run_shell') return fallback
+    const command = typeof call.input.command === 'string' ? call.input.command : ''
+    const requestedWorkingDirectory = typeof call.input.workingDirectory === 'string' ? call.input.workingDirectory : undefined
+    return resolveAutomationShellWorkingDirectory(materials.taskAccessPermissions, command, requestedWorkingDirectory) ?? fallback
+  }
   const resolveAgentSdkGateArgs = async (
     binding: PermitBinding,
     call?: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>,
@@ -796,7 +796,12 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       requestId: binding.requestId,
       toolUseId: binding.toolCallId,
       sessionId: materials.sessionId,
-      workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+      workDir: resolveToolCallWorkDir(call, materials.resolveWorkDir?.() ?? materials.workDir),
+      ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
+      ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
+      ...(materials.taskOutputBindings ? { taskOutputBindings: materials.taskOutputBindings } : {}),
+      ...(materials.taskRunOutputDir ? { taskRunOutputDir: materials.taskRunOutputDir } : {}),
+      ...(materials.taskRunOutputScope ? { taskRunOutputScope: materials.taskRunOutputScope } : {}),
       userDataDir: materials.userDataDir,
       lane: materialsLane,
       remoteContext: materials.remoteContext,
@@ -923,7 +928,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const turnId = runtimeTurnId
       const fileStateCache = new FileStateCache()
       const createExecutionContext = input.createExecutionContext ?? ((call) => ({
-        workDir: (workspacePorts.snapshot() as { rootPath?: string }).rootPath || materials.resolveWorkDir?.() || materials.workDir,
+        workDir: resolveToolCallWorkDir(call, (workspacePorts.snapshot() as { rootPath?: string }).rootPath || materials.resolveWorkDir?.() || materials.workDir),
         userDataDir: materials.userDataDir,
         requestId: materials.requestId,
         toolUseId: call.toolCallId,
@@ -998,7 +1003,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         }
         const refreshed = {
           ...current,
-          workDir: sourceWorkDir ?? currentWorkDir,
+          workDir: resolveToolCallWorkDir(call, sourceWorkDir ?? currentWorkDir),
           browserConfig: materials.resolveBrowserConfig?.() ?? current.browserConfig ?? materials.browserConfig,
           toolsConfig: materials.resolveToolsConfig?.() ?? current.toolsConfig ?? materials.toolsConfig,
           shellConfig: materials.resolveShellConfig?.() ?? current.shellConfig ?? materials.shellConfig,
@@ -1048,6 +1053,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(materials.deadlineAt !== undefined ? { deadlineAt: materials.deadlineAt } : {}),
         ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
         ...(materials.approvalTaskDigestTruncated ? { taskDigestTruncated: true } : {}),
+        ...(materials.taskAccessPermissions?.authorizationRecord ? { taskAuthorizationRecord: materials.taskAccessPermissions.authorizationRecord } : {}),
         invokeApproval: (invocation) => {
           if (!db) return Promise.resolve({ ok: false as const, cause: 'unavailable' as const })
           return import('../confirmation/approvalAgent').then(({ runApprovalAgent }) => runApprovalAgent({
@@ -1056,6 +1062,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             ...(materials.historyForSession ? { historyForSession: materials.historyForSession } : {}),
             policyRuleFloor: materials.policyRuleFloor ?? effectiveRules,
             workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+            ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
+            ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
             userDataDir: materials.userDataDir,
             getToolsConfig: () => materials.toolsConfig,
             ...(materials.shellConfig !== undefined ? { getShellConfig: () => materials.shellConfig ?? null } : {}),
@@ -1715,7 +1723,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           ...(typeof record?.executorEntry === 'string' ? { executorEntry: record.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
           ...(typeof record?.executionErrorCode === 'string' ? { executionErrorCode: record.executionErrorCode } : {}),
           ...(typeof record?.invocationDisposition === 'string' ? { invocationDisposition: record.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
-        }, { workspaceRoot: materials.workDir, processTool: isProcessToolName(call.toolName) })
+        }, { workspaceRoot: materials.workDir, ...(materials.taskWorkDirs !== undefined ? { workspaceRoots: materials.taskWorkDirs } : {}), processTool: isProcessToolName(call.toolName) })
         if (projected.success && projected.autoApprovedWrite) {
           logAgentEvent('info', 'file.auto_approve', { requestId: materials.requestId, sessionId: materials.sessionId,
             toolUseId: call.toolCallId, tool: call.toolName, relPath: projected.autoApprovedWrite.path,

@@ -6,6 +6,17 @@ import { classifyWriteTargetScope, probeWritePathFact } from './writePathFacts'
 import { canCreateSymlinks } from '../../../src/test/symlinkCapability'
 
 describe('probeWritePathFact', () => {
+  it('写 scope 使用多根并集并保留目录边界', async () => {
+    const first = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-union-a-'))
+    const second = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-union-b-'))
+    try {
+      expect(await classifyWriteTargetScope(path.join(second, 'new.txt'), first, [first, second, second])).toBe('inside-workdir')
+      expect(await classifyWriteTargetScope(path.join(first, '..', `${path.basename(first)}-sibling`, 'x'), first, [first, second])).toBe('outside-workdir')
+    } finally {
+      await fs.rm(first, { recursive: true, force: true })
+      await fs.rm(second, { recursive: true, force: true })
+    }
+  })
   it('为普通存在与缺失目标产出规范化路径、zone 和父目录 identity', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-'))
     const outside = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-out-'))

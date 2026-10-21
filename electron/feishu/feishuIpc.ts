@@ -311,6 +311,13 @@ export function createFeishuBundle(deps: {
       channel: 'feishu', identityKey, ownerId, messageId
     }),
     resolveQuotedReplyContext: ({ message }) => resolveFeishuQuotedReplyContext({ runner, db: deps.db, message }),
+    classifyDeferredApprovalReplyTarget: ({ identityKey, messageId }) => {
+      try {
+        return deferredNotificationDelivery.classifyReplyTarget({ channel: 'feishu', identityKey, messageId })
+      } catch {
+        return 'unavailable'
+      }
+    },
     createDeferredConfirmationAdapter: (remoteContext) => createImDeferredConfirmationAdapter(deferredProducer, remoteContext)
     ,taskControlSafetyPort
   }

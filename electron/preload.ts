@@ -20,10 +20,12 @@ const api: SpaceAssistantApi = {
   butlerListTasks: () => ipcRenderer.invoke('butler:list') as Promise<import('../src/shared/automationTaskTypes').AutomationTask[]>,
   butlerListTaskRuns: (payload) => ipcRenderer.invoke('butler:list-runs', payload) as Promise<import('../src/shared/automationTaskTypes').AutomationTaskRun[]>,
   butlerChooseWorkDir: () => ipcRenderer.invoke('butler:choose-workdir'),
+  butlerChooseOutputDir: () => ipcRenderer.invoke('butler:choose-outputdir'),
   butlerGetTaskDefaults: () => ipcRenderer.invoke('butler:get-defaults'),
   butlerGetModelCandidates: () => ipcRenderer.invoke('butler:model-candidates'),
   butlerCreateTask: (payload) => ipcRenderer.invoke('butler:create', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerTaskWriteResult>,
-  butlerUpdateTask: (payload) => ipcRenderer.invoke('butler:update', payload) as Promise<{ ok: boolean; error?: string }>,
+  butlerUpdateTask: (payload) => ipcRenderer.invoke('butler:update', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerTaskWriteResult>,
+  butlerConfirmTaskAuthorization: (payload) => ipcRenderer.invoke('butler:confirm-write', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerTaskWriteResult>,
   butlerDeleteTask: (payload) => ipcRenderer.invoke('butler:delete', payload) as Promise<{ ok: boolean; error?: string }>,
   butlerRunTask: (payload) => ipcRenderer.invoke('butler:run-task', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerRunTaskResult>,
 

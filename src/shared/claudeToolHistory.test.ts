@@ -265,6 +265,13 @@ function toolCall(overrides: Partial<ToolCallRecord> & Pick<ToolCallRecord, 'id'
 }
 
 describe('buildToolResultBlock', () => {
+  it('preserves process paths from any task root without relativizing to the first root', () => {
+    const block = buildToolResultBlock(toolCall({
+      id: 'multi-root-cwd', toolName: 'run_shell', result: { success: true, data: { cwd: '/workspace/second/subdir' } }
+    }), { workspaceRoot: '/workspace/first', workspaceRoots: ['/workspace/first', '/workspace/second'] })
+    expect(JSON.parse(block.content)).toMatchObject({ data: { cwd: '/workspace/second/subdir' } })
+  })
+
   it('失败历史结果保留结构化 Agent 诊断 data', () => {
     const block = buildToolResultBlock(toolCall({
       id: 't1',

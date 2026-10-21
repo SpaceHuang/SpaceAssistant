@@ -10,6 +10,7 @@
 | 2026-06-06 | `shell-security-enhancement-requirement`（v2.0） | shell 命令分析与危险模式识别 | 脚本安全 parser 升级（`P0–P3` 完成） |
 | 2026-09-17 | `security-policy-single-entry-requirement` | 安全策略单一入口；原设置页入口删除并保留迁移提示 | 口径仍在生效 |
 | 2026-09-21 | `security-approval-concurrency-limits-and-observability-requirement`（v0.1，草案） | 并发、配额与可观测性问题清单（未实施） | 未见实现 |
+| 2026-10-19 | `tool-confirmation-top-level-design-v2` §5.6 会话补充 | Mock 预算只停止采样；独立总结与主机核验成功的部分覆盖清单仍可由用户确认，授权仅覆盖明确列出的权限 | E-15g |
 | —（四轮评审修订） | `tool-confirmation-top-level-design-v2` | 覆盖桌面/微信/飞书/自动任务所有链路的确认与授权机制，可进入 P0 | 框架部分已落地（`tool-confirmation-framework-implementation-plan.md` 已归档） |
 
 ## 取证命令

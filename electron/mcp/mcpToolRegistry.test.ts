@@ -8,6 +8,7 @@ import type { McpServerProfile } from '../../src/shared/mcpTypes'
 import {
   buildMappedToolDescriptors,
   buildSnapshotTools,
+  hashMcpServerProfile,
   mayBuildMcpToolSnapshot,
   cacheTools,
   clearCachedTools,
@@ -304,6 +305,13 @@ describe('buildSnapshotTools', () => {
       'mcp_b_t2_12345678'
     ])
     expect(snapshot.budgetDropped).toHaveLength(0)
+    expect(snapshot.entries.get('mcp_a_tool_a1_12345678')?.profileHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(snapshot.entries.get('mcp_a_tool_a1_12345678')?.profileHash).toBe(hashMcpServerProfile(profileA))
+  })
+
+  it('changes the profile fingerprint when the configured MCP endpoint changes', () => {
+    const httpProfile = { ...profileA, transport: 'streamable-http' as const, http: { endpoint: 'https://mcp.example/one' } }
+    expect(hashMcpServerProfile(httpProfile)).not.toBe(hashMcpServerProfile({ ...httpProfile, http: { endpoint: 'https://mcp.example/two' } }))
   })
 
   it('builds the same allowlisted snapshot for remote contexts', () => {

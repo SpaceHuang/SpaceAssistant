@@ -353,11 +353,11 @@ describe('session content cutover schema', () => {
     conn.close()
   })
 
-  it('v46 reconstructs pending and invalid History allocator state from existing v45 rows', () => {
+  it('v46 treats pre-existing unpaired History cursors as retired rather than in-flight allocations', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL); INSERT INTO schema_meta VALUES('schema_version','1');")
     runMigrations(conn)
-    const cursor = conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(1) as { lastInsertRowid: number | bigint }
+    conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(1)
     conn.exec(`
       DROP TRIGGER track_pending_history_cursor_allocation;
       DROP TRIGGER settle_pending_history_cursor_allocation;
@@ -371,16 +371,16 @@ describe('session content cutover schema', () => {
     runMigrations(conn)
 
     expect(conn.prepare('SELECT invalid FROM agent_history_cursor_integrity WHERE singleton_id=1').get())
-      .toEqual({ invalid: 1 })
+      .toEqual({ invalid: 0 })
     expect(conn.prepare('SELECT cursor_id FROM agent_history_pending_commit_cursor').all())
-      .toEqual([{ cursor_id: Number(cursor.lastInsertRowid) }])
+      .toEqual([])
     conn.close()
   })
 
   it.each([
     { name: 'an internal commit-order gap', eventOrders: [1, 3], cursorIds: [1, 2, 3] },
     { name: 'an unpaired trailing allocator cursor', eventOrders: [1, 2], cursorIds: [1, 2, 3] }
-  ])('v46 marks existing $name as invalid during upgrade', ({ eventOrders, cursorIds }) => {
+  ])('v46 tolerates existing $name during upgrade', ({ eventOrders, cursorIds }) => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`
       CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
@@ -407,10 +407,58 @@ describe('session content cutover schema', () => {
 
     runMigrations(conn)
 
-    expect(conn.prepare('SELECT invalid FROM agent_history_cursor_integrity WHERE singleton_id=1').get()).toEqual({ invalid: 1 })
-    const pendingCursorIds = cursorIds.filter((id) => !eventOrders.includes(id)).map((cursor_id) => ({ cursor_id }))
+    expect(conn.prepare('SELECT invalid FROM agent_history_cursor_integrity WHERE singleton_id=1').get()).toEqual({ invalid: 0 })
     expect(conn.prepare('SELECT cursor_id FROM agent_history_pending_commit_cursor ORDER BY cursor_id').all())
-      .toEqual(pendingCursorIds)
+      .toEqual([])
+    conn.close()
+  })
+
+  it.each([102, 103])('v%s upgrade clears v46-backfilled interior pending cursors when later events prove they were retired', (startingVersion) => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`
+      CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      INSERT INTO schema_meta VALUES('schema_version','${startingVersion}');
+      CREATE TABLE agent_history_cursor_integrity(singleton_id INTEGER PRIMARY KEY,invalid INTEGER NOT NULL);
+      INSERT INTO agent_history_cursor_integrity VALUES(1,1);
+      CREATE TABLE agent_history_pending_commit_cursor(cursor_id INTEGER PRIMARY KEY);
+      CREATE TABLE agent_history_commit_cursor(id INTEGER PRIMARY KEY,allocated_at INTEGER NOT NULL);
+      INSERT INTO agent_history_commit_cursor VALUES(1,1),(2,2),(3,3);
+      CREATE TABLE agent_history_events(commit_order INTEGER);
+      INSERT INTO agent_history_events VALUES(NULL),(1),(3);
+      -- This is the v46 LEFT JOIN backfill for an already retired cursor 2.
+      INSERT INTO agent_history_pending_commit_cursor
+        SELECT cursor.id FROM agent_history_commit_cursor cursor
+        LEFT JOIN agent_history_events events ON events.commit_order=cursor.id
+        WHERE events.commit_order IS NULL;
+    `)
+
+    runMigrations(conn)
+
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key=\'schema_version\'').get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+    expect(conn.prepare('SELECT invalid FROM agent_history_cursor_integrity WHERE singleton_id=1').get()).toEqual({ invalid: 0 })
+    expect(conn.prepare('SELECT cursor_id FROM agent_history_pending_commit_cursor').all()).toEqual([])
+    conn.close()
+  })
+
+  it('v104 keeps a trailing pending cursor blocked because no later commit proves it retired', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`
+      CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      INSERT INTO schema_meta VALUES('schema_version','103');
+      CREATE TABLE agent_history_cursor_integrity(singleton_id INTEGER PRIMARY KEY,invalid INTEGER NOT NULL);
+      INSERT INTO agent_history_cursor_integrity VALUES(1,1);
+      CREATE TABLE agent_history_pending_commit_cursor(cursor_id INTEGER PRIMARY KEY);
+      INSERT INTO agent_history_pending_commit_cursor VALUES(3);
+      CREATE TABLE agent_history_commit_cursor(id INTEGER PRIMARY KEY,allocated_at INTEGER NOT NULL);
+      INSERT INTO agent_history_commit_cursor VALUES(1,1),(2,2),(3,3);
+      CREATE TABLE agent_history_events(commit_order INTEGER);
+      INSERT INTO agent_history_events VALUES(1),(2);
+    `)
+
+    runMigrations(conn)
+
+    expect(conn.prepare('SELECT invalid FROM agent_history_cursor_integrity WHERE singleton_id=1').get()).toEqual({ invalid: 1 })
+    expect(conn.prepare('SELECT cursor_id FROM agent_history_pending_commit_cursor').all()).toEqual([{ cursor_id: 3 }])
     conn.close()
   })
 

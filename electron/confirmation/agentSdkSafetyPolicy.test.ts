@@ -88,6 +88,29 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate(staleBinding)).resolves.toEqual({ kind: 'deny', reasonCode: 'STALE_AUTHORIZATION' })
   })
 
+  it('run_script 审批后 SHA-256 或参数绑定变化时不沿用旧 Agent 审批', async () => {
+    const toolInput = { code: 'print(1)', language: 'python', args: ['first'] }
+    const scriptBinding = { ...binding, capabilityId: 'run_script',
+      inputSnapshotHash: createHash('sha256').update('{"args":["first"],"code":"print(1)","language":"python"}').digest('hex'),
+      capability: { state: 'known-authorized' as const, id: 'run_script' } }
+    const scriptArgs = { ...baseArgs, toolName: 'run_script', toolInput } as ToolCallGateArgs
+    const makeResult = (sha256: string, parametersSha256: string): ToolCallGateResult => {
+      const scriptFacts: ContentFacts = { toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+        signals: [{ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false,
+          contentDigest: sha256, parametersDigest: parametersSha256, environmentDigest: 'env-a', authenticationVersion: 'script-certifier-v1' }],
+        summary: { text: 'script review' } }
+      return { decision: { type: 'require-confirm', ruleId: 'automation-script-review', answerer: 'agent', riskLevel: 'high',
+        facts: scriptFacts, memoryTiers: [], timeoutMs: 1000, disposition: 'auto-eligible' }, facts: scriptFacts, approvedFactIds: [] }
+    }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(makeResult('a'.repeat(64), 'b'.repeat(64))).mockResolvedValueOnce(makeResult('c'.repeat(64), 'd'.repeat(64)))
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => scriptArgs, evaluateGate })
+
+    await expect(policy.evaluate(scriptBinding)).resolves.toMatchObject({ kind: 'ask', answerer: 'agent' })
+    markAgentSdkSafetyDecisionConfirmed(policy, scriptBinding, 'agent')
+    await expect(policy.evaluate({ ...scriptBinding, phase: 'recheck', authorizationVersion: 'script-v1' }))
+      .resolves.toMatchObject({ kind: 'ask', answerer: 'user', reasonCode: 'automation-script-review' })
+  })
+
   it('把用户明确选择的记忆键传到确认提交回调，未选择则不写入', async () => {
     const key = { kind: 'script-content' as const, digest: 'a'.repeat(64), sessionId: 'session-1' }
     const scriptFacts: ContentFacts = {
@@ -648,6 +671,40 @@ describe('createAgentSdkSafetyPolicy', () => {
     handoff.onInitialGateResult?.(binding, gateResult, args)
     expect(contexts.get(JSON.stringify([binding.invocationId, binding.toolCallId]))?.writeExecutionPermit).toMatchObject({
       requestId: binding.requestId, toolUseId: binding.toolCallId, toolName: 'write_file', decisionRuleId: 'write-rule', approval: 'confirmed'
+    })
+  })
+
+  it('把自动化输出 binding 放进签名 permit，并标记为策略自动放行', () => {
+    const contexts = new Map<string, Record<string, unknown>>()
+    const handoff = createAgentSdkStructuralPermitHandoff({
+      updateExecutionContext: (call, update) => {
+        const key = JSON.stringify([call.invocationId, call.toolCallId])
+        const context = contexts.get(key) ?? {}
+        update(context)
+        contexts.set(key, context)
+      }
+    })
+    const input = { path: '/tmp/results/20261018/reports/summary.txt', content: 'result' }
+    const outputBinding = {
+      kind: 'output' as const, path: '/tmp/results/reports/summary.txt', ancestor: '/tmp/results', relativeSuffix: 'reports/summary.txt',
+      outputRoot: '/tmp/results', expectedType: 'file' as const, rawText: 'write the summary', resolverVersion: 3,
+      rootsDigest: 'output-roots-digest', taskRevision: 8
+    }
+    const automationOutputBinding = { binding: outputBinding, runOutputDir: '/tmp/results/20261018' }
+    const args = { ...baseArgs, toolName: 'write_file', toolInput: input, requestId: binding.requestId, toolUseId: binding.toolCallId } as ToolCallGateArgs
+    const gateResult = {
+      ...result({ type: 'auto-allow', ruleId: 'automation-bound-output-write-allow', reason: 'bound scheduled output' }),
+      lane: 'automation',
+      writePathFact: {
+        rawPath: input.path, normalizedPath: input.path, zone: 'outside-workdir' as const, targetKind: 'missing' as const,
+        parentReal: '/tmp/results/20261018/reports', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 0, mtimeMs: 1, nlink: 2 }
+      },
+      automationOutputBinding
+    }
+
+    handoff.onInitialGateResult?.(binding, gateResult as never, args)
+    expect(contexts.get(JSON.stringify([binding.invocationId, binding.toolCallId]))?.writeExecutionPermit).toMatchObject({
+      decisionRuleId: 'automation-bound-output-write-allow', approval: 'auto-allow', lane: 'automation', automationOutputBinding
     })
   })
 

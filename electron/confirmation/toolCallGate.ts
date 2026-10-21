@@ -44,6 +44,10 @@ import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirect
 import { matchSessionDirectoryGrant } from './sessionDirectoryGrantMatcher'
 import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmationTimeout'
 import { SYSTEM_INVARIANT_ID_BY_GATE_RULE } from '../../src/shared/security/systemInvariantIds'
+import type { AutomationRunOutputScope, TargetBinding } from '../../src/shared/automationTaskTypes'
+import { matchesAutomationRunOutputWriteTarget, matchesBoundOutputWriteTarget } from '../butler/taskOutputDirectory'
+import { matchAutomationResultWritePermission } from '../butler/automationTaskPermissionMatch'
+import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
 
 /**
  * T1.2/T1.3：以 resolveWikiMount 为本次路径入参构造探测锚点与敏感根豁免。
@@ -87,6 +91,7 @@ import { analyzeShellCommand } from '../shell/analyzeShellCommand'
 import { classifyShellCommandEffect } from './extractors/shellEffectFacts'
 import { extractScriptPathFacts, type ScriptPathFacts } from './extractors/scriptPathFacts'
 import { getEffectiveSensitivePrefixes } from '../shell/shellSensitivePaths'
+import { matchAutomationGrepPermission, matchAutomationMcpPermission, matchAutomationScriptPermission, resolveAutomationShellWorkingDirectory } from '../butler/automationTaskPermissionMatch'
 import { evaluateFileToolAutoApproval } from '../tools/writeFileAutoApproval'
 import { extractHostname } from '../browser/urlSecurity'
 import type { ActDangerAssessment } from '../browser/browserActionPolicy'
@@ -117,7 +122,6 @@ import { sanitizeAgentText } from '../../src/shared/agentSafeText'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 import { CONFIRMATION_LABELS } from '../../src/shared/confirmation/labels'
 import { createInvocationFactsSnapshot } from '../../src/shared/confirmation/invocationFactsSnapshot'
-import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
 
 
 /** 出站写工具判定（等价现 toolChatLoop.isOutboundWriteTool：未知/非读 fail-closed 计写）。 */
@@ -137,6 +141,16 @@ export interface ToolCallGateArgs {
   toolInput: Record<string, unknown>
   sessionId: string
   workDir: string
+  /** Frozen task roots supplied by the trusted automation run snapshot. */
+  taskWorkDirs?: readonly string[]
+  /** Access grants frozen into the trusted automation run snapshot. */
+  taskAccessPermissions?: import('../../src/shared/automationTaskTypes').AutomationTaskAccessPermissions
+  /** Frozen output targets from this run's validated preflight snapshot. */
+  taskOutputBindings?: readonly TargetBinding[]
+  /** Archive directory resolved from the run's frozen scheduledFor slot. */
+  taskRunOutputDir?: string
+  /** Full host-derived archive scope matched against the task's immutable result-write receipt. */
+  taskRunOutputScope?: AutomationRunOutputScope
   userDataDir: string
   /** R1/R2：装配期解析的工作目录快照（诊断 basis 的权威来源；缺省用 workDir 字符串兜底） */
   workspace?: WorkspaceSnapshot
@@ -227,6 +241,8 @@ export function buildToolCallGateArgs(
 }
 
 export interface ToolCallGateResult {
+  /** Host-derived execution lane, carried into write permits for lane-specific final checks. */
+  lane?: ExecutionLane
   decision: Decision
   policyDecision?: import('../../src/shared/policy/policyDecision').PolicyDecision
   facts: ContentFacts
@@ -238,6 +254,10 @@ export interface ToolCallGateResult {
   wechatMediaPathFact?: ReadPathFact
   feishuMediaFact?: FeishuMediaTargetFact
   writePathFact?: WritePathFact
+  /** Host-issued output binding attestation; consumed by the execution permit final-check. */
+  automationOutputBinding?: { binding: Extract<TargetBinding, { kind: 'output' }>; runOutputDir: string }
+  /** Host-issued result-directory grant attestation; consumed by the execution permit final-check. */
+  automationOutputScope?: AutomationRunOutputScope
   writeExecutionPermit?: WriteExecutionPermit
   /** run_shell 预检通过时的结构化结果（供日志/确认卡片 hints）。 */
   shellPrecheck?: { analysis: ShellAnalysisResult; legacyAutoAllowEligible: boolean; legacyPolicy: import('../shell/legacyShellPolicyAdapter').LegacyShellPolicyInput; hints: ShellSecurityHints }
@@ -286,6 +306,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   const origin: OriginInfo = { kind: 'direct-owner' }
   const audit = args.audit ?? getSecurityAuditLog()
   const result: ToolCallGateResult = {
+    lane,
     decision: undefined as unknown as Decision,
     facts: undefined as unknown as ContentFacts,
     approvedFactIds: []
@@ -390,7 +411,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       const expanded = literal.replace(/^~(?=$|[\\/])/, home).replace(/\$\{?HOME\}?/g, home).replace(/%USERPROFILE%/ig, home)
       try {
         const wikiProbe = wikiProbeContext(args, expanded)
-        const fact = await probeWritePathFact({ rawPath: expanded, workDir: args.workDir, userDataDir: args.userDataDir, homeDir: home, customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [], mountAnchors: wikiProbe.mountAnchors, sensitiveRootExemptions: wikiProbe.sensitiveRootExemptions })
+        const fact = await probeWritePathFact({ rawPath: expanded, workDir: args.workDir, workDirs: args.taskWorkDirs, userDataDir: args.userDataDir, homeDir: home,
+          customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [], mountAnchors: wikiProbe.mountAnchors,
+          sensitiveRootExemptions: wikiProbe.sensitiveRootExemptions })
         if (uniquePaths.has(fact.normalizedPath)) continue
         uniquePaths.add(fact.normalizedPath)
         shellPathSignals.push({ kind: 'path-target', path: fact.vocabularyPath ?? fact.normalizedPath, zone: fact.zone })
@@ -401,13 +424,13 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (shellAnalysis.shellSecurityHints.outsideWorkDirRisk) shellPathSignals.push({ kind: 'path-outside-heuristic', reason: 'command-may-touch-outside-workdir' })
     shellPathSignals.push({ kind: 'command-effect', effect: classifyShellCommandEffect(command, shellAnalysis) })
     if (shellPathProbeFailed) shellPathSignals.push({ kind: 'extraction-failed', reason: 'shell-path-facts-incomplete' })
-    if (lane !== 'automation') {
     const precheck = await (args.runShellPrecheck ?? precheckRunShellTool)({
       command,
       workDir: args.workDir,
       userDataDir: args.userDataDir,
       shellConfig: args.shellConfig,
-      shellPrecheck: args.phase === 'recheck' ? undefined : args.shellPrecheck,
+      // Automation uses per-task approval, never desktop trusted-command state or its cache side effects.
+      shellPrecheck: lane === 'automation' || args.phase === 'recheck' ? undefined : args.shellPrecheck,
       analysis: shellAnalysis
     })
     if (!precheck.ok) {
@@ -453,9 +476,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       hints: precheck.hints
     }
     shellLegacyAutoAllowEligible = precheck.legacyAutoAllowEligible && !shellPathProbeFailed && !shellPathSignals.some((s) => s.kind === 'path-target' && (s.zone === 'sensitive-file' || s.zone === 'system-dir'))
-    } else {
-      shellLegacyAutoAllowEligible = false
-    }
+    if (lane === 'automation') shellLegacyAutoAllowEligible = false
   }
 
   // ===== 生效规则集（§4 第 1 区 + §2.1「自动」语义）：装配期解析注入（B1，门控不持库）=====
@@ -498,6 +519,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   let feishuMediaFact: FeishuMediaTargetFact | undefined
   let readPathProbeFailure: ReadPathProbeError | undefined
   let writePathFact: WritePathFact | undefined
+  let automationOutputBinding: ToolCallGateResult['automationOutputBinding']
+  let automationOutputScope: ToolCallGateResult['automationOutputScope']
   let writePathProbeFailure: WritePathProbeError | undefined
   let wikiRawTargetFailure = false
   let writePathInputFailure = false
@@ -572,6 +595,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         }`
       }
     }
+    if (lane === 'automation') facts.signals.push({ kind: 'automation-mcp-permission', status: descriptorHashValid && matchAutomationMcpPermission(args.taskAccessPermissions, args.mcpEntry) ? 'matched' : 'missing' })
     result.mcpEntry = args.mcpEntry
     if (!payloadCheck.ok) {
       audit.record({
@@ -632,7 +656,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
     for (const rawPath of scriptPaths.paths) {
       try {
-        const pathFact = await probeWritePathFact({ rawPath, workDir: args.workDir, userDataDir: args.userDataDir, homeDir: os.homedir(), customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
+        const pathFact = await probeWritePathFact({ rawPath, workDir: args.workDir, workDirs: args.taskWorkDirs, userDataDir: args.userDataDir, homeDir: os.homedir(), customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
         signals.push({ kind: 'path-target', path: pathFact.normalizedPath, zone: pathFact.zone })
       } catch {
         signals.push({ kind: 'extraction-failed', reason: 'script-path-probe-failed' })
@@ -676,6 +700,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         writePathFact = await probeWritePathFact({
           rawPath,
           workDir: args.workDir,
+          workDirs: args.taskWorkDirs,
           userDataDir: args.userDataDir,
           homeDir: os.homedir(),
           customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [],
@@ -685,9 +710,33 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         let writeScope: 'inside-workdir' | 'outside-workdir' | 'unknown'
         try {
           // T1.4：挂载命中时以 scopeBase（realBase）为包含判定根；未挂载行为不变
-          writeScope = await classifyWriteTargetScope(writePathFact.normalizedPath, writePathFact.scopeBase ?? args.workDir)
+          writeScope = await classifyWriteTargetScope(writePathFact.normalizedPath, writePathFact.scopeBase ?? args.workDir, writePathFact.scopeBase ? [writePathFact.scopeBase] : args.taskWorkDirs)
         } catch {
           writeScope = 'unknown'
+        }
+        // Facts phase: the user-confirmed result-write receipt authorizes ordinary files under this run's archive.
+        if (lane === 'automation' && (args.taskRunOutputScope || args.taskRunOutputDir)
+          && writePathFact.zone !== 'sensitive-file' && writePathFact.zone !== 'system-dir'
+          && (writePathFact.targetKind === 'file' || writePathFact.targetKind === 'missing')
+          && (args.toolName !== 'edit_file' || writePathFact.targetKind === 'file')) {
+          if (args.taskRunOutputScope
+            && matchAutomationResultWritePermission(args.taskAccessPermissions, args.taskRunOutputScope)
+            && matchesAutomationRunOutputWriteTarget(args.taskRunOutputScope, writePathFact)) {
+            automationOutputScope = args.taskRunOutputScope
+          } else {
+            // Compatibility: older task snapshots with an exact user-confirmed preflight binding remain valid.
+            for (const binding of args.taskOutputBindings ?? []) {
+              if (binding.kind !== 'output' || binding.resolverVersion !== 3) continue
+              try {
+                if (args.taskRunOutputDir && matchesBoundOutputWriteTarget(binding, args.taskRunOutputDir, writePathFact.normalizedPath)) {
+                  automationOutputBinding = { binding, runOutputDir: args.taskRunOutputDir }
+                  break
+                }
+              } catch {
+                // Invalid/out-of-archive bindings are facts that fail to match; policy remains deny.
+              }
+            }
+          }
         }
         facts = {
           toolName: descriptor.toolName,
@@ -700,6 +749,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           ],
           summary: { text: `${args.toolName} 写入目标已检查` }
         }
+        if (automationOutputBinding || automationOutputScope) facts.signals.push({ kind: 'automation-output-binding', status: 'matched' })
         if (args.imPolicySnapshot?.policyBehaviorVersion === 'im-standard-v2'
           && args.toolName === 'write_file' && writePathFact.targetKind === 'missing' && writePathFact.zone === 'workdir-normal'
           && writeScope === 'inside-workdir') facts.signals.push({ kind: 'write-target-new' })
@@ -745,6 +795,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
             userDataDir: args.userDataDir,
             homeDir: os.homedir(),
             customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [],
+            workDirs: args.taskWorkDirs,
             mountAnchors: readWikiProbe.mountAnchors,
             sensitiveRootExemptions: readWikiProbe.sensitiveRootExemptions
           })
@@ -870,7 +921,36 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
   }
 
-  if (args.toolName === 'run_shell' && facts) facts.signals.push(...shellPathSignals)
+  if (args.toolName === 'run_shell' && facts) {
+    facts.signals.push(...shellPathSignals)
+    // facts: report whether the frozen receipt matches the exact command text, arguments and cwd; policy rules decide the outcome.
+    if (lane === 'automation') {
+      const command = typeof args.toolInput.command === 'string' ? args.toolInput.command : ''
+      const requestedWorkingDirectory = typeof args.toolInput.workingDirectory === 'string' ? args.toolInput.workingDirectory : undefined
+      const receiptWorkingDirectory = resolveAutomationShellWorkingDirectory(args.taskAccessPermissions, command, requestedWorkingDirectory)
+      const matchesCallDirectory = receiptWorkingDirectory !== undefined && path.resolve(receiptWorkingDirectory) === path.resolve(args.workDir)
+      facts.signals.push({ kind: 'automation-shell-permission', status: matchesCallDirectory ? 'matched' : 'missing' })
+    }
+  }
+  if (args.toolName === 'grep' && facts) {
+    const searchPath = readPathFact?.normalizedPath ?? ''
+    if (lane === 'automation') facts.signals.push({ kind: 'automation-grep-permission', status: matchAutomationGrepPermission(args.taskAccessPermissions, searchPath) ? 'matched' : 'missing' })
+    const pattern = typeof args.toolInput.pattern === 'string' ? args.toolInput.pattern : ''
+    facts.signals.push({ kind: 'grep-invocation', path: searchPath, pattern,
+      ...(typeof args.toolInput.glob === 'string' ? { glob: args.toolInput.glob } : {}),
+      ...(typeof args.toolInput.output_mode === 'string' ? { outputMode: args.toolInput.output_mode } : {}),
+      ...(typeof args.toolInput.ignore_case === 'boolean' ? { ignoreCase: args.toolInput.ignore_case } : {}),
+      ...(typeof args.toolInput.include_ignored === 'boolean' ? { includeIgnored: args.toolInput.include_ignored } : {}),
+      ...(typeof args.toolInput.multiline === 'boolean' ? { multiline: args.toolInput.multiline } : {}),
+      ...(typeof args.toolInput.context === 'number' ? { context: args.toolInput.context } : {}),
+      ...(typeof args.toolInput.head_limit === 'number' ? { headLimit: args.toolInput.head_limit } : {}),
+      ...(typeof args.toolInput.timeout === 'number' ? { timeoutSeconds: args.toolInput.timeout } : {})
+    })
+  }
+  if (args.toolName === 'run_script' && facts && lane === 'automation') {
+    const observedPaths = facts.signals.flatMap((signal) => signal.kind === 'path-target' ? [signal.path] : [])
+    facts.signals.push({ kind: 'automation-script-permission', status: matchAutomationScriptPermission(args.taskAccessPermissions, args.workDir, observedPaths) ? 'matched' : 'missing' })
+  }
   // facts: report whether this generic filesystem invocation targets the mounted Wiki and whether its lifecycle is enabled.
   if (facts && args.wikiConfig && ['read_file', 'list_directory', 'grep', 'write_file', 'edit_file', 'run_shell'].includes(args.toolName)) {
     const rawPaths = args.toolName === 'run_shell'
@@ -1342,5 +1422,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   result.wechatMediaPathFact = wechatMediaPathFact
   result.feishuMediaFact = feishuMediaFact
   result.writePathFact = writePathFact
+  result.automationOutputBinding = automationOutputBinding
+  result.automationOutputScope = automationOutputScope
   return result
 }

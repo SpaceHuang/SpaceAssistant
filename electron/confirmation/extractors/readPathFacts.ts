@@ -23,6 +23,8 @@ export type ReadPathFact = {
 type ProbeInput = {
   rawPath: string
   workDir: string
+  /** Task-scoped roots; when present classification uses their union. */
+  workDirs?: readonly string[]
   userDataDir: string
   homeDir: string
   customSensitivePrefixes: readonly string[]
@@ -77,13 +79,15 @@ function isSystemDir(candidate: string): boolean {
 /** 路径 zone 的唯一纯分类入口，读写事实探测共同消费其结果。 */
 export function classifyReadPathZone(input: ProbeInput & { resolvedPath: string }): PathZone {
   const platform = isWindowsAbsolute(input.resolvedPath) ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
+  const workDirs = input.workDirs === undefined ? [input.workDir] : input.workDirs
+  const insideWorkDirs = () => workDirs.some((root) => under(input.resolvedPath, root))
   const exemptedByWikiRoot = (input.sensitiveRootExemptions ?? []).some((prefix) => prefix && under(input.resolvedPath, prefix))
   if (exemptedByWikiRoot) {
     // 豁免优先（B7）：短路全部敏感前缀匹配（含 AppData\Roaming / ~/Library 祖先级前缀），
     // zone 继续走 system-dir → 包含判定；不放松任何包含校验。
     return isSystemDir(input.resolvedPath)
       ? 'system-dir'
-      : under(input.resolvedPath, input.workDir)
+      : insideWorkDirs()
         ? 'workdir-normal'
         : 'outside-workdir'
   }
@@ -98,7 +102,7 @@ export function classifyReadPathZone(input: ProbeInput & { resolvedPath: string 
     ? 'sensitive-file'
     : isSystemDir(input.resolvedPath)
       ? 'system-dir'
-      : under(input.resolvedPath, input.workDir)
+      : insideWorkDirs()
         ? 'workdir-normal'
         : 'outside-workdir'
 }

@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createRetryAuditedFetch } from './anthropicClientFactory'
+import { createAnthropicClient, createRetryAuditedFetch } from './anthropicClientFactory'
+
+const anthropicMock = vi.hoisted(() => ({ config: undefined as Record<string, unknown> | undefined }))
+vi.mock('@anthropic-ai/sdk', () => ({
+  default: class MockAnthropic {
+    messages = { create: vi.fn() }
+    constructor(config: Record<string, unknown>) { anthropicMock.config = config }
+  }
+}))
 
 describe('createRetryAuditedFetch', () => {
   it('reports the measured wait before the second fetch attempt', async () => {
@@ -28,5 +36,12 @@ describe('createRetryAuditedFetch', () => {
     await fetch('https://example.test', { body: 'same-request' })
     await fetch('https://example.test', { body: 'same-request' })
     expect(retries).toEqual([])
+  })
+})
+
+describe('createAnthropicClient', () => {
+  it('passes a zero retry budget to the SDK for preflight callers', () => {
+    createAnthropicClient('api-key', 'https://model.test', { maxRetries: 0 })
+    expect(anthropicMock.config).toMatchObject({ apiKey: 'api-key', baseURL: 'https://model.test', maxRetries: 0 })
   })
 })

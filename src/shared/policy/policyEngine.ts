@@ -42,6 +42,29 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`write-target-scope:${signal.scope}`)
         break
+      case 'automation-output-binding':
+        tokens.add(signal.kind)
+        tokens.add(`automation-output-binding:${signal.status}`)
+        break
+      case 'automation-shell-permission':
+        tokens.add(signal.kind)
+        tokens.add(`automation-shell-permission:${signal.status}`)
+        break
+      case 'automation-grep-permission':
+        tokens.add(signal.kind)
+        tokens.add(`automation-grep-permission:${signal.status}`)
+        break
+      case 'automation-script-permission':
+        tokens.add(signal.kind)
+        tokens.add(`automation-script-permission:${signal.status}`)
+        break
+      case 'automation-mcp-permission':
+        tokens.add(signal.kind)
+        tokens.add(`automation-mcp-permission:${signal.status}`)
+        break
+      case 'grep-invocation':
+        tokens.add(signal.kind)
+        break
       case 'policy-tier':
         tokens.add(`policy-tier:${signal.tier}`)
         break

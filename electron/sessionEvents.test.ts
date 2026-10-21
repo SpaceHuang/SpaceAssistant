@@ -41,6 +41,30 @@ import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
 import { withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 
 describe('session events', () => {
+  it('attaches filesystem and process diagnostics when a ledger path vanishes during append', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-enoent-diagnostics-'))
+    const sink = getSessionEventSink(root, 'vanished-during-append', 1000)
+    const originalAppendFile = fs.appendFile.bind(fs)
+    const appendSpy = vi.spyOn(fs, 'appendFile').mockImplementationOnce(async (filePath, data, ...options) => {
+      await fs.rm(path.dirname(String(filePath)), { recursive: true, force: true })
+      return originalAppendFile(filePath, data, ...options)
+    })
+    try {
+      await expect(sink.appendCritical({ type: 'turn_start', payload: { turnId: 'diagnose' } })).rejects.toMatchObject({
+        code: 'EVENT_JSONL_APPEND_FAILED',
+        pathDiagnostics: {
+          phase: 'jsonl-append', pid: process.pid, ppid: process.ppid,
+          writerInitialized: true, lifecycleLockHeld: true,
+          components: expect.arrayContaining([expect.objectContaining({ path: sink.eventsPath, exists: false, errorCode: 'ENOENT' })])
+        }
+      })
+    } finally {
+      appendSpy.mockRestore()
+      await sink.close().catch(() => undefined)
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('writes deterministic interruption closures only for a canonical restart authorization', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-process-restart-'))
     try {

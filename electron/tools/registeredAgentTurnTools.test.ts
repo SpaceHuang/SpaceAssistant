@@ -559,6 +559,31 @@ describe('createRegisteredAgentTurnTools', () => {
     expect(executor.execute).not.toHaveBeenCalled()
   })
 
+  it('拒绝无输出 binding 的 automation 写许可并记录 final-check 不变量', async () => {
+    const input = { path: '/tmp/results/20261018/unbound.txt', content: 'must not dispatch' }
+    const executor = { name: 'write_file', execute: vi.fn(async () => ({ success: true })) }
+    const writeTool = createWriteFileRegisteredTools({ writeFile: executor as never, editFile: executor as never })[0]!
+    const toolUseId = 'automation-unbound-final-check'
+    const permit = buildWriteExecutionPermit({
+      requestId, toolUseId, toolName: 'write_file', input,
+      target: {
+        rawPath: input.path, normalizedPath: input.path, zone: 'outside-workdir', targetKind: 'missing',
+        parentReal: '/tmp/results/20261018', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 0, mtimeMs: 1, nlink: 1 }
+      },
+      decisionRuleId: 'automation-default-confirm', approval: 'confirmed', lane: 'automation'
+    })
+    const audit = { record: vi.fn() }
+
+    await expect(writeTool.begin(input, {
+      requestId, toolUseId, signal: new AbortController().signal,
+      executionContext: { requestId, toolUseId, sessionId: 'session', lane: 'automation', audit, writeExecutionPermit: permit }
+    } as never)).rejects.toThrow('automation-output-binding-missing')
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'policy.execution-veto', invariantId: 'SYS-AUTOOUTPUT-001', caseId: 'automation-output-binding-missing'
+    }))
+    expect(executor.execute).not.toHaveBeenCalled()
+  })
+
   it('在每次结果投影时解析当前 workspace root，而不是复用初始目录快照', async () => {
     const currentWorkDir = { value: '/workspace/old' }
     const registry = new TypedToolRegistry()

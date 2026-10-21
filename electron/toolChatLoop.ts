@@ -31,9 +31,6 @@ import type {
   WikiConfig
 } from '../src/shared/domainTypes'
 import { buildToolCapabilityConventionHint } from '../src/shared/skillPrompt'
-import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
-import { WIKI_DOMAIN_TOOL_DEFINITIONS } from './wiki/wikiToolDiscovery'
-import type { DynamicModelTool } from './runtime/dynamicToolRequest'
 import { buildMcpToolCatalogSection } from '../src/shared/toolCatalogPrompt'
 import { MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT } from '../src/shared/domainTypes'
 import { getCachedSkills } from './skills/skillCache'
@@ -97,6 +94,9 @@ import {
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
 import { computeDeferredPlan, computeEffectiveTools } from './effectiveTools'
+import { requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
+import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
+import { WIKI_DOMAIN_TOOL_DEFINITIONS } from './wiki/wikiToolDiscovery'
 import { clearToolRevocationRequest, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildCommandRetryKey, normalizeFileToolIdentity, normalizeToolErrorClass, SemanticToolRetryTracker } from './toolErrorRetryPolicy'
 import type { ContextMeter } from '../src/shared/contextMeterService'
@@ -159,8 +159,6 @@ export type RunToolChatSessionArgs = {
     deferredUnsurfacedCheck?: (toolName: string) => boolean
     /** FR12②：广告面层被裁工具名（被拒文案区分用）。 */
     eagerBudgetDroppedNames?: ReadonlySet<string>
-    /** Wiki discovery 仅向后续 request 注入 schema，不扩大授权集合。 */
-    dynamicToolsForNextRequest?: () => readonly DynamicModelTool[]
     resolveRegisteredToolName: (providerToolName: string) => string
     windowId?: string
     maxToolRounds?: number
@@ -703,11 +701,6 @@ async function runToolChatSessionInner(
   const { thinking, outputConfig: requestedOutputConfig } = buildThinkingWireParams(reasoningEffort ?? 'off')
   const maxConsecutiveToolErrors = 3
   const retryTracker = new SemanticToolRetryTracker(maxConsecutiveToolErrors)
-  const discoveredWikiTools = new Map<string, DynamicModelTool>()
-  const discoveredWikiToolNames = new Map<string, string>()
-  for (const definition of WIKI_DOMAIN_TOOL_DEFINITIONS) {
-    discoveredWikiToolNames.set(toolIdToOpenAiCompatibleApiToolName(definition.name), definition.name)
-  }
   const afterToolResult: NonNullable<import('../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']> = async (call, result, source) => {
     const output = result.output && typeof result.output === 'object' && !Array.isArray(result.output)
       ? result.output as Record<string, unknown>
@@ -722,22 +715,6 @@ async function runToolChatSessionInner(
         ? buildCommandRetryKey({ toolName: call.toolName, errorCode: 'SEMANTIC_CALL', command: typeof call.input.command === 'string' ? call.input.command : '', cwd: typeof call.input.cwd === 'string' ? call.input.cwd : '' })
         : `${call.toolName}:${createHash('sha256').update(JSON.stringify(call.input)).digest('hex')}`
     const resultIsError = result.isError ?? output?.success === false
-    if (call.toolName === 'memory' && !resultIsError) {
-      const data = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
-        ? output.data as { matches?: unknown }
-        : undefined
-      const matches = Array.isArray(data?.matches) ? data.matches : []
-      const knownNames = new Set(WIKI_DOMAIN_TOOL_DEFINITIONS.map((entry) => entry.name))
-      for (const value of matches) {
-        if (!value || typeof value !== 'object' || Array.isArray(value)) continue
-        const match = value as { name?: unknown; description?: unknown; input_schema?: unknown }
-        if (typeof match.name !== 'string' || !knownNames.has(match.name) || typeof match.description !== 'string' ||
-          !match.input_schema || typeof match.input_schema !== 'object' || Array.isArray(match.input_schema)) continue
-        const apiName = toolIdToOpenAiCompatibleApiToolName(match.name)
-        discoveredWikiTools.set(apiName, { name: apiName, description: match.description, inputSchema: match.input_schema as Record<string, unknown> })
-        discoveredWikiToolNames.set(apiName, match.name)
-      }
-    }
     logAgentEvent(resultIsError ? 'warn' : 'info', 'tool.result', {
       requestId: args.requestId,
       sessionId: args.sessionId,
@@ -943,7 +920,10 @@ async function runToolChatSessionInner(
     trim: toolsTrim,
     deferredPlan
   })
-  const { tools, toolNames, authorizedToolNames, compatToInternal, deferredToolNames } = effectiveTools
+  const tools = effectiveLane === 'automation'
+    ? requireAutomationShellWorkingDirectory(effectiveTools.tools)
+    : effectiveTools.tools
+  const { toolNames, authorizedToolNames, compatToInternal, deferredToolNames } = effectiveTools
   const wikiDeferredToolNames = new Set(toolNames.includes('memory') ? WIKI_DOMAIN_TOOL_DEFINITIONS.map((tool) => toolIdToOpenAiCompatibleApiToolName(tool.name)) : [])
   const hostedAuthorizedToolNames = new Set([...authorizedToolNames, ...wikiDeferredToolNames])
   const hostedDeferredToolNames = new Set([...deferredToolNames, ...wikiDeferredToolNames])
@@ -1075,14 +1055,13 @@ async function runToolChatSessionInner(
         try {
           const handoff = await args.onHostedTurnHandoff({
             request: canonicalRequest,
-            authorizedToolNames: hostedAuthorizedToolNames,
-            resolveRegisteredToolName: (providerToolName) => compatToInternal.get(providerToolName) ?? discoveredWikiToolNames.get(providerToolName) ?? providerToolName,
-            dynamicToolsForNextRequest: () => [...discoveredWikiTools.values()],
+            authorizedToolNames,
+            resolveRegisteredToolName: (providerToolName) => compatToInternal.get(providerToolName) ?? providerToolName,
             afterToolResult,
             beforeToolDispatch,
             beforeDispatchLease,
             // FR3/A 方案：延迟名随依赖传入，capabilities.define 并入 known + authorized（门禁簿记，零上下文成本）
-            deferredToolNames: hostedDeferredToolNames,
+            deferredToolNames,
             deferredUnsurfacedCheck,
             // FR8：延迟维度（turn 计量；索引每轮重发，节省量按轮落日志）
             ...(deferredToolNames.size > 0 && mcpCatalog && deferredPlan.mode === 'deferred'

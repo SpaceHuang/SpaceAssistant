@@ -41,15 +41,15 @@ import { buildClarificationPrompt } from '../remote/clarificationPrompt'
 import { canResumePreparedRemoteTurn, inspectRemoteTrackWorkRecovery, isRemoteTrackWorkSettled, settleRemoteTrackWorkFromTurn } from '../remote/remoteTrackWorkRecovery'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import type { WakeEventDispatcher } from '../remote/wakeEventDispatcher'
-import { isDeferredApprovalReplyCandidate, parseDeferredApprovalReply } from '../remote/deferredApprovalIngress'
+import { isDeferredApprovalReplyCandidate } from '../remote/deferredApprovalIngress'
+import type { DeferredApprovalReplyTargetClassification } from '../remote/deferredApprovalNotificationDelivery'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
 import { resolveFrozenImTurnExecutionConfig, resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
 import { readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 import type { WakeEventLoopInput } from '../remote/wakeEventDispatcher'
 import { readDeferredCompletionWake, markDeferredCompletionWakeDelivered } from '../remote/deferredCompletionWake'
-import { decideDeferredCompletionWakeRecovery, deliverDeferredApprovalRejectionNotice, deliverInterruptedDeferredCompletionNotice,
-  isRejectedDeferredCompletionResult } from '../remote/deferredCompletionWakeRecovery'
+import { decideDeferredCompletionWakeRecovery, deliverInterruptedDeferredCompletionNotice } from '../remote/deferredCompletionWakeRecovery'
 import type { ImTaskSafetyPort } from '../remote/imTaskControlCoordinator'
 import type { RemoteTrackContext } from '../../src/shared/remoteTrack'
 import { observeRemoteMessageAttribution, readDurableRemoteTrackEpoch, readRemoteTrackContextForInbound } from '../remote/remoteTrackAttributionService'
@@ -117,7 +117,7 @@ export type WeChatCommandRouterDeps = {
   isRemoteAsyncApprovalEnabled?: () => boolean
   retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>
   handleDeferredApprovalReply?: (input: { message: WeChatInboundMessage; text: string; replyToMessageId?: string }) => Promise<void>
-  isDeferredApprovalReplyTarget?: (input: { identityKey: string; ownerId: string; messageId: string }) => boolean
+  classifyDeferredApprovalReplyTarget?: (input: { identityKey: string; messageId: string }) => DeferredApprovalReplyTargetClassification
   handleClarificationReply?: (input: ClarificationResolverInput) => Promise<ClarificationResolverResult>
   createDeferredConfirmationAdapter?: (remoteContext: import('../tools/types').RemoteContext) => NonNullable<Parameters<typeof runWeChatRemoteAgent>[0]['confirmationAdapter']>
   resolveAgentSdkGateSupplement?: import('../runtime/invocationAssembler').AgentInvocationMaterials['resolveAgentSdkGateSupplement']
@@ -202,15 +202,6 @@ export class WeChatCommandRouter {
         if (!completion || completion.todo.channel !== 'wechat' || completion.todo.origin_session_id !== input.sessionId ||
           completion.todo.identity_key !== metadata.wechatMeta.userId || completion.todo.owner_id !== metadata.wechatMeta.userId) {
           throw new Error('WECHAT_COMPLETION_WAKE_BINDING_INVALID')
-        }
-        if (isRejectedDeferredCompletionResult(completion.execution.result)) {
-          const ownerId = metadata.wechatMeta.userId as string
-          const bot = this.deps.botService.getRawBot()
-          if (!bot) throw new Error('WECHAT_REJECTION_NOTICE_BOT_UNAVAILABLE')
-          await deliverDeferredApprovalRejectionNotice(this.deps.db, { todoId: event.payloadRef.approvalId, sessionId: input.sessionId,
-            channel: 'wechat', identityKey: ownerId, ownerId, recipient: ownerId,
-            send: (text) => bot.send(ownerId, formatRemoteOutboundMessage(text, input.sessionId)) })
-          continue
         }
         const context = completion.envelope.executionContext
         const userMessageId = context.currentUserMessageId
@@ -644,13 +635,26 @@ export class WeChatCommandRouter {
 
     const acceptedText = accept.userMessage ?? msg.text
     const approvalReplyCandidate = isDeferredApprovalReplyCandidate(acceptedText)
-    const trustedApprovalQuote = Boolean(approvalReplyCandidate && msg.quotedMessageId && this.deps.isDeferredApprovalReplyTarget?.({
-      identityKey: msg.userId, ownerId: msg.userId, messageId: msg.quotedMessageId
-    }))
-    // Keep approval-looking unquoted input and replies to trusted prompts fail-closed;
-    // ordinary quoted discussion reaches the model. Ingress authorization remains final.
-    const mustReserveForApprovalIngress = approvalReplyCandidate && (parseDeferredApprovalReply(acceptedText) !== null || !msg.quotedMessageId || trustedApprovalQuote)
-    if (mustReserveForApprovalIngress && this.deps.isRemoteAsyncApprovalEnabled?.() === true) {
+    let approvalQuoteClassification: DeferredApprovalReplyTargetClassification | undefined
+    if (approvalReplyCandidate && msg.quotedMessageId) {
+      try {
+        const classification = this.deps.classifyDeferredApprovalReplyTarget?.({ identityKey: msg.userId, messageId: msg.quotedMessageId })
+        approvalQuoteClassification = classification === 'known' || classification === 'unknown' ? classification : 'unavailable'
+      } catch {
+        approvalQuoteClassification = 'unavailable'
+      }
+    }
+    if (approvalReplyCandidate && msg.quotedMessageId && approvalQuoteClassification === 'unavailable') {
+      logWeChatCliEvent('error', 'wechat.deferred_approval_target_unavailable', { messageId: msg.messageId })
+      await sendAuthorizedReply('暂时无法核验这条审批引用，请稍后重试。')
+      return
+    }
+    // Known notification replies always reach the deterministic ingress, which checks expiry, todo state, and authorization.
+    // Unknown quoted discussion can reach the model; lookup failures stop here and never downgrade to ordinary input.
+    const shouldRouteApprovalReply = msg.quotedMessageId
+      ? approvalQuoteClassification === 'known'
+      : this.deps.isRemoteAsyncApprovalEnabled?.() === true
+    if (approvalReplyCandidate && shouldRouteApprovalReply) {
       try {
         await this.deps.handleDeferredApprovalReply?.({ message: msg, text: acceptedText, replyToMessageId: msg.quotedMessageId })
       } catch (error) {

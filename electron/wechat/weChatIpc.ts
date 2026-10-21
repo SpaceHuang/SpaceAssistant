@@ -46,7 +46,6 @@ import { createDeferredTodoTaskControlSafetyPort } from '../remote/deferredTodoT
 import { flushWeChatCliLogger, logWeChatCliEvent } from './weChatCliLogger'
 import { isTrayEnabled } from '../tray'
 import type { TurnRuntime } from '../turnRuntime'
-import { readWikiConfig } from '../wiki/wikiConfigReader'
 import { ensureRemoteImModelConfigMigrated } from '../remote/remoteImModelConfigDb'
 import { migrateLegacyImConfigBeforeChannelWrite, stripChannelPolicyFields } from '../confirmation/legacyImConfigBoundary'
 
@@ -67,8 +66,6 @@ let clarificationRecoveryTimer: ReturnType<typeof setInterval> | null = null
 let unregisterWeChatTodoInvalidator: (() => void) | null = null
 let unregisterWeChatPendingCancel: (() => void) | null = null
 let unregisterWeChatCacheClearer: (() => void) | null = null
-let unregisterWeChatAuditAppender: (() => void) | null = null
-const pendingWeChatAuditWrites = new Set<Promise<void>>()
 
 export function readWeChatConfigFromDb(db: AppDatabase): WeChatConfig {
   ensureRemoteImModelConfigMigrated(db)
@@ -94,7 +91,6 @@ export function createWeChatBundle(deps: {
   getModel: () => string
   getMaxParallel: () => number
   getToolsConfig: () => ReturnType<typeof mergeToolsConfig>
-  getWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
   appVersion: string
   onReachabilityChange?: (reachable: boolean) => void
   turnRuntime?: TurnRuntime
@@ -262,11 +258,8 @@ export function createWeChatBundle(deps: {
         ? new SqliteDecisionCache(getDbConnection(deps.db)).clearLane('wechat', 'session')
         : 0
   }, 'wechat-decision-cache')
-  unregisterWeChatAuditAppender?.()
-  unregisterWeChatAuditAppender = remoteAuthorizationRegistry.registerAuditAppender((event) => {
-    const write = auditLogger.append(event as { type: string })
-    pendingWeChatAuditWrites.add(write)
-    void write.then(() => pendingWeChatAuditWrites.delete(write), () => pendingWeChatAuditWrites.delete(write))
+  remoteAuthorizationRegistry.registerAuditAppender((event) => {
+    void auditLogger.append(event as { type: string })
   })
 
   const router = new WeChatCommandRouter({
@@ -290,7 +283,6 @@ export function createWeChatBundle(deps: {
     getModel: deps.getModel,
     getToolsConfig: deps.getToolsConfig,
     getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
-    getWikiConfig: deps.getWikiConfig ?? (() => readWikiConfig(deps.db)),
     getShellConfig: () => readShellConfigFromDb(deps.db),
     turnRuntime: deps.turnRuntime,
     isRemoteAsyncApprovalEnabled: () => readCfg().remoteEnabled && readCfg().loggedIn,
@@ -301,9 +293,13 @@ export function createWeChatBundle(deps: {
       channel: 'wechat', identityKey: message.userId, ownerId: message.userId, messageId: message.messageId,
       replyToMessageId, text
     }).then(() => undefined),
-    isDeferredApprovalReplyTarget: ({ identityKey, ownerId, messageId }) => deferredNotificationDelivery.isTrustedReplyTarget({
-      channel: 'wechat', identityKey, ownerId, messageId
-    }),
+    classifyDeferredApprovalReplyTarget: ({ identityKey, messageId }) => {
+      try {
+        return deferredNotificationDelivery.classifyReplyTarget({ channel: 'wechat', identityKey, messageId })
+      } catch {
+        return 'unavailable'
+      }
+    },
     createDeferredConfirmationAdapter: (remoteContext) => createImDeferredConfirmationAdapter(deferredProducer, remoteContext)
     ,taskControlSafetyPort
   })
@@ -408,12 +404,8 @@ export async function shutdownWeChatServices(): Promise<void> {
   unregisterWeChatPendingCancel = null
   unregisterWeChatCacheClearer?.()
   unregisterWeChatCacheClearer = null
-  unregisterWeChatAuditAppender?.()
-  unregisterWeChatAuditAppender = null
-  while (pendingWeChatAuditWrites.size) await Promise.allSettled([...pendingWeChatAuditWrites])
   logWeChatCliEvent('info', 'wechat.service.shutdown', {})
   await flushWeChatCliLogger()
-  bundle = null
 }
 
 export function registerWeChatIpcHandlers(

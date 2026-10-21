@@ -24,6 +24,7 @@ export type WritePathFact = {
 export type WritePathProbeInput = {
   rawPath: string
   workDir: string
+  workDirs?: readonly string[]
   userDataDir: string
   homeDir: string
   customSensitivePrefixes: readonly string[]
@@ -35,20 +36,22 @@ export type WritePathProbeInput = {
 
 export { type MountAnchor } from './mountAnchors'
 
-export async function classifyWriteTargetScope(normalizedPath: string, workDir: string): Promise<'inside-workdir' | 'outside-workdir'> {
-  const windowsPath = isWindowsAbsolute(normalizedPath) || isWindowsAbsolute(workDir)
+export async function classifyWriteTargetScope(normalizedPath: string, workDir: string, workDirs?: readonly string[]): Promise<'inside-workdir' | 'outside-workdir'> {
+  const roots = workDirs === undefined ? [workDir] : workDirs
+  const windowsPath = isWindowsAbsolute(normalizedPath) || roots.some(isWindowsAbsolute)
   const pathApi = windowsPath ? path.win32 : path
   // workDir 真实存在时用 realpath（防 symlink 化的 workDir 误判归属）；尚未创建（新会话首写是常态）
   // 或不可达时回退 lexical 归一——此前直接 ENOENT 上抛会让调用方判 scope=unknown，远程首写被
   // remote-write-scope-unknown-deny 终局拒绝（GitHub Linux CI 实证）。
-  const root = windowsPath
-    ? pathApi.normalize(workDir)
-    : await fs.realpath(workDir).catch(() => pathApi.normalize(workDir))
   const target = pathApi.normalize(normalizedPath)
-  const relative = pathApi.relative(root, target)
-  return relative === '..' || relative.startsWith(`..${pathApi.sep}`) || pathApi.isAbsolute(relative)
-    ? 'outside-workdir'
-    : 'inside-workdir'
+  for (const candidate of roots) {
+    const root = windowsPath
+      ? pathApi.normalize(candidate)
+      : await fs.realpath(candidate).catch(() => pathApi.normalize(candidate))
+    const relative = pathApi.relative(root, target)
+    if (relative !== '..' && !relative.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(relative)) return 'inside-workdir'
+  }
+  return 'outside-workdir'
 }
 
 export class WritePathProbeError extends Error {
@@ -113,7 +116,7 @@ export async function probeWritePathFact(input: WritePathProbeInput): Promise<Wr
   // T1.1：锚点命中时探测的包含判定锚点从 workDir 换为 realBase，入参换为挂载内相对路径。
   const anchorHit = matchMountAnchor(input.rawPath, input.workDir, input.mountAnchors)
   const anchoredInput: WritePathProbeInput = anchorHit
-    ? { ...input, rawPath: anchorHit.relInBase, workDir: anchorHit.anchor.base }
+    ? { ...input, rawPath: anchorHit.relInBase, workDir: anchorHit.anchor.base, workDirs: [anchorHit.anchor.base] }
     : input
   const rawPath = anchoredInput.rawPath.trim()
   if (!rawPath) throw new WritePathProbeError('INVALID_PATH')
@@ -208,6 +211,7 @@ export async function probeWritePathFact(input: WritePathProbeInput): Promise<Wr
     rawPath,
     resolvedPath: normalizedPath,
     workDir,
+    workDirs: anchoredInput.workDirs,
     userDataDir,
     homeDir,
     customSensitivePrefixes,

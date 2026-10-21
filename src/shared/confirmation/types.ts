@@ -1,3 +1,5 @@
+import type { AutomationTaskAuthorizationRecord } from '../automationTaskTypes'
+
 /**
  * 工具确认机制框架 —— 跨进程共享类型（唯一真实来源）
  *
@@ -134,6 +136,18 @@ export type FactSignal =
   | { kind: 'write-target-new' }
   | { kind: 'write-target-existing' }
   | { kind: 'write-target-scope'; scope: 'inside-workdir' | 'outside-workdir' | 'unknown' }
+  /** facts-stage host observation: a current user receipt authorizes this target under the run's result-output directory. */
+  | { kind: 'automation-output-binding'; status: 'matched' }
+  /** facts-stage host observation from the immutable task snapshot; policy decides whether Shell may run. */
+  | { kind: 'automation-shell-permission'; status: 'matched' | 'missing' }
+  /** facts-stage host observation: grep scope is matched against the approved task receipt. */
+  | { kind: 'automation-grep-permission'; status: 'matched' | 'missing' }
+  /** facts-stage host observation: script scope is matched; each script is still approved by its exact hash. */
+  | { kind: 'automation-script-permission'; status: 'matched' | 'missing' }
+  /** facts-stage host observation: MCP server configuration and exact registered tool descriptor match the user's receipt. */
+  | { kind: 'automation-mcp-permission'; status: 'matched' | 'missing' }
+  /** Host-extracted grep arguments included in the security review evidence. */
+  | { kind: 'grep-invocation'; path: string; pattern: string; glob?: string; outputMode?: string; ignoreCase?: boolean; includeIgnored?: boolean; multiline?: boolean; context?: number; headLimit?: number; timeoutSeconds?: number }
   | { kind: 'policy-tier'; tier: 'loose' | 'standard' | 'strict' | 'custom' }
   | { kind: 'outbound-content'; inspectionCoverage: 'complete' | 'partial' | 'unavailable'; evidenceKinds: readonly string[] }
   | { kind: 'network-egress'; domains: string[] }
@@ -335,6 +349,9 @@ export interface ApprovalCluePack {
   signals: string[]
   targetPath?: string
   command?: string
+  grepQuery?: string
+  /** Host-computed digests binding the exact script and parameters reviewed for this invocation. */
+  scriptApprovalBinding?: { sha256: string; parametersSha256: string; environmentSha256: string; certifier: string }
   /** Provenance of the exact facts reviewed by policy and approval; contains no raw input. */
   factsProvenance?: { factId: string; extractorVersion: string; completeness: 'complete' | 'partial' | 'missing' | 'parse-failed' | 'authentication-missing' | 'capability-description-stale'; factsRevision: number; policyVersion: string }
   /** Untrusted model-provided explanation attached to this invocation. */
@@ -352,6 +369,8 @@ export interface ApprovalCluePack {
   taskDigest?: string
   /** taskDigest 是否因长度限制截断；截断时不得作为 medium/high 授权依据。 */
   taskDigestTruncated?: boolean
+  /** Main-process verified authorization receipt copied from the immutable scheduled-task run snapshot. */
+  taskAuthorizationRecord?: AutomationTaskAuthorizationRecord
 }
 
 /** 一次审批 Agent 调用（I2：标准唯一；I5：由 AgentChannel 深度计数兜底递归）。 */

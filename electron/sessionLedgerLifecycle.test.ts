@@ -6,11 +6,40 @@ import {
   beginSessionLedgerTargetCheck, completeSessionLedgerTargetCheck, type SessionLedgerReadyProof
 } from './sessionLedgerReadiness'
 import { ensureSessionLedgerReady, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
+import { prepareSessionLedgerProcessLockTarget } from './sessionLedgerProcessLock'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { randomUUID, createHash } from 'node:crypto'
 
 const proof: SessionLedgerReadyProof = { canonicalWatermark: 'seq:3', ledgerGeneration: 1, fileIdentity: 'dev-ino', fileBytes: 80,
   tailFrame: 'tail-hash', indexSeq: 3, indexEventCount: 3, indexBytes: 80, indexLastAt: 100 }
 
 describe('session ledger lifecycle lock', () => {
+  it('serializes ledger maintenance with writers across processes', async () => {
+    const key = createHash('sha256').update(randomUUID()).digest('hex')
+    const target = await prepareSessionLedgerProcessLockTarget(key)
+    const script = `const lock=require('proper-lockfile').lock; lock(process.argv[1],{realpath:false,stale:30000,update:10000}).then(async release=>{process.stdout.write('locked\\n'); await new Promise(r=>setTimeout(r,250)); await release()}).catch(e=>{console.error(e);process.exit(1)})`
+    const child = spawn(process.execPath, ['-e', script, target], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk })
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('child did not acquire process lock')), 2000)
+      const poll = () => {
+        if (stdout.includes('locked')) { clearTimeout(timeout); resolve() }
+        else if (child.exitCode !== null) { clearTimeout(timeout); reject(new Error('child exited before acquiring process lock')) }
+        else setTimeout(poll, 5)
+      }
+      poll()
+    })
+    let entered = false
+    const operation = withSessionLedgerLifecycleLock(key, async () => { entered = true })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(entered).toBe(false)
+    await once(child, 'exit')
+    await operation
+    expect(entered).toBe(true)
+  })
+
   it('serializes operations for one location while allowing other locations to proceed', async () => {
     const order: string[] = []
     let release!: () => void

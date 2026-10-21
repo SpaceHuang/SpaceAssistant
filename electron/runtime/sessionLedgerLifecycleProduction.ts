@@ -5,12 +5,13 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import {
   bootstrapEmptySessionEventLedger,
+  createEmptySessionEventLedgerForCanonicalRebuild,
   establishExistingSessionEventLedgerBaseline,
   getSessionEventSink,
   resolveSessionEventPaths
 } from '../sessionEvents'
 import { runInTransaction } from '../database/transaction'
-import { buildCanonicalToolResultProjectionTargets, enqueueCanonicalLedgerProjectionTargetInTransaction } from '../sessionLedgerOutbox'
+import { buildCanonicalToolResultProjectionTargets, canonicalLedgerProjectionTargetId, enqueueCanonicalLedgerProjectionTargetInTransaction } from '../sessionLedgerOutbox'
 import type { SessionLedgerLifecycleDependencies } from '../sessionLedgerLifecycle'
 import { sessionLedgerLocationIdentity, type SessionLedgerLocationInput } from '../sessionLedgerIdentity'
 import { readSessionLedgerReadiness, type SessionLedgerReadyProof } from '../sessionLedgerReadiness'
@@ -63,20 +64,39 @@ export async function readSessionLedgerReadyProof(conn: DatabaseSync, location: 
     throw new Error('SESSION_LEDGER_INDEX_PROOF_INVALID')
   }
   const handle = await fs.open(paths.eventsPath, 'r')
-  let tail = Buffer.alloc(0)
+  const hash = createHash('sha256')
   try {
-    const length = Math.min(fileStat.size, 4096)
-    tail = Buffer.alloc(length)
-    if (length) await handle.read(tail, 0, length, fileStat.size - length)
+    const buffer = Buffer.alloc(64 * 1024)
+    let offset = 0
+    while (offset < fileStat.size) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, fileStat.size - offset), offset)
+      if (!bytesRead) throw new Error('SESSION_LEDGER_PROOF_FILE_CHANGED')
+      hash.update(buffer.subarray(0, bytesRead))
+      offset += bytesRead
+    }
   } finally { await handle.close() }
   return {
     canonicalWatermark: canonicalWatermark(conn, location),
     ledgerGeneration: readiness.ledgerGeneration,
     fileIdentity: `${fileStat.dev}:${fileStat.ino}:${fileStat.mtimeMs}`,
     fileBytes: fileStat.size,
-    tailFrame: createHash('sha256').update(tail).digest('hex'),
+    // The version tag distinguishes complete prefix digests from legacy tail hashes.
+    tailFrame: `full:${hash.digest('hex')}`,
     indexSeq: index.seq!, indexEventCount: index.eventCount!, indexBytes: index.bytes!, indexLastAt: index.lastAt!
   }
+}
+
+async function legacyTailDigest(eventsPath: string, fileBytes: number): Promise<string> {
+  const length = Math.min(fileBytes, 4096)
+  const handle = await fs.open(eventsPath, 'r')
+  const tail = Buffer.alloc(length)
+  try {
+    if (length) {
+      const { bytesRead } = await handle.read(tail, 0, length, fileBytes - length)
+      if (bytesRead !== length) throw new Error('SESSION_LEDGER_PROOF_FILE_CHANGED')
+    }
+  } finally { await handle.close() }
+  return createHash('sha256').update(tail).digest('hex')
 }
 
 function readCanonicalSessionHistory(conn: DatabaseSync, sessionId: string): HistoryEvent[] {
@@ -93,6 +113,48 @@ function readCanonicalSessionHistory(conn: DatabaseSync, sessionId: string): His
 
 export function createProductionSessionLedgerLifecycleDependencies(conn: DatabaseSync): SessionLedgerLifecycleDependencies {
   const proof = (location: SessionLedgerLocationInput) => readSessionLedgerReadyProof(conn, location)
+  const verifyPhysicalContinuity: NonNullable<SessionLedgerLifecycleDependencies['verifyPhysicalContinuity']> = async (location, readiness) => {
+    if (!readiness.proofFileIdentity || readiness.proofFileBytes === null || !readiness.proofTailFrame) return false
+    const paths = resolveSessionEventPaths(location.workDir, location.sessionId, location.createdAt)
+    const stat = await fs.lstat(paths.eventsPath)
+    const identity = `${stat.dev}:${stat.ino}`
+    if (stat.isSymbolicLink() || !stat.isFile() || identity !== readiness.proofFileIdentity.split(':').slice(0, 2).join(':') ||
+      stat.size < readiness.proofFileBytes) return false
+    const legacyProof = !readiness.proofTailFrame.startsWith('full:')
+    const handle = await fs.open(paths.eventsPath, 'r')
+    const hash = createHash('sha256')
+    try {
+      const buffer = Buffer.alloc(64 * 1024)
+      if (legacyProof) {
+        const length = Math.min(readiness.proofFileBytes, 4096)
+        const { bytesRead } = await handle.read(buffer, 0, length, readiness.proofFileBytes - length)
+        if (bytesRead !== length) return false
+        hash.update(buffer.subarray(0, bytesRead))
+      } else {
+        let offset = 0
+        while (offset < readiness.proofFileBytes) {
+          const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, readiness.proofFileBytes - offset), offset)
+          if (!bytesRead) return false
+          hash.update(buffer.subarray(0, bytesRead))
+          offset += bytesRead
+        }
+      }
+    } finally { await handle.close() }
+    return (legacyProof ? hash.digest('hex') : `full:${hash.digest('hex')}`) === readiness.proofTailFrame
+  }
+  const migrateLegacyReadyProof: NonNullable<SessionLedgerLifecycleDependencies['migrateLegacyReadyProof']> = async (location, readiness) => {
+    if (!readiness.proofTailFrame || readiness.proofTailFrame.startsWith('full:')) return undefined
+    const upgraded = await proof(location)
+    if (!upgraded) return undefined
+    const oldStyleProof = { ...upgraded, tailFrame: await legacyTailDigest(
+      resolveSessionEventPaths(location.workDir, location.sessionId, location.createdAt).eventsPath, upgraded.fileBytes) }
+    const matches = readiness.canonicalWatermark === oldStyleProof.canonicalWatermark &&
+      readiness.ledgerGeneration === oldStyleProof.ledgerGeneration && readiness.proofFileIdentity === oldStyleProof.fileIdentity &&
+      readiness.proofFileBytes === oldStyleProof.fileBytes && readiness.proofTailFrame === oldStyleProof.tailFrame &&
+      readiness.proofIndexSeq === oldStyleProof.indexSeq && readiness.proofIndexEventCount === oldStyleProof.indexEventCount &&
+      readiness.proofIndexBytes === oldStyleProof.indexBytes && readiness.proofIndexLastAt === oldStyleProof.indexLastAt
+    return matches ? upgraded : undefined
+  }
   const project = async (location: SessionLedgerLocationInput, target: Parameters<typeof projectCanonicalSessionLedgerTarget>[1]) => {
     const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
     return projectCanonicalSessionLedgerTarget(sink, target)
@@ -110,6 +172,8 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
       }
     },
     readProof: proof,
+    verifyPhysicalContinuity,
+    migrateLegacyReadyProof,
     bootstrap: async (location, bootstrapId) => {
       await bootstrapEmptySessionEventLedger(location.workDir, location.sessionId, location.createdAt, bootstrapId)
       const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
@@ -136,6 +200,49 @@ export function createProductionSessionLedgerLifecycleDependencies(conn: Databas
       const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, (target) => project(location, target))
       if (drained.failedTargetId) throw new Error('SESSION_LEDGER_BASELINE_PROJECTION_FAILED')
       return await proof(location) ?? Promise.reject(new Error('SESSION_LEDGER_BASELINE_PROOF_MISSING'))
+    },
+    rebuildMissingLegacyLedger: async (location) => {
+      // This recovery path is only authorized for an entirely absent ledger. A partial
+      // directory or either surviving ledger artifact is evidence that must be reviewed.
+      const events = readCanonicalSessionHistory(conn, location.sessionId).filter((event) => {
+        const ledgerLocation = (event.payload as { sessionLedger?: { location?: unknown } }).sessionLedger?.location as
+          Partial<SessionLedgerLocationInput> | undefined
+        return ledgerLocation?.workDir === location.workDir && ledgerLocation.sessionId === location.sessionId && ledgerLocation.createdAt === location.createdAt
+      })
+      if (!events.length) throw new Error('SESSION_LEDGER_REBUILD_CANONICAL_HISTORY_MISSING')
+      const identity = sessionLedgerLocationIdentity(location)
+      const generation = (conn.prepare('SELECT generation FROM sessions WHERE id=?').get(location.sessionId) as { generation: string } | undefined)?.generation
+      if (!generation) throw new Error('SESSION_LEDGER_SESSION_MISSING')
+      const targets = buildCanonicalToolResultProjectionTargets(conn, events, location.sessionId, generation)
+        .filter((target) => target.ledgerLocationKey === identity.key)
+      // Reset acknowledgements before creating any replacement artifact. If the process stops at any later
+      // boundary, the ordinary baseline retry still sees pending canonical obligations and completes replay.
+      runInTransaction(conn, () => {
+        for (const target of targets) enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target)
+        // The previous ack proves projection into the old file. A newly created file has no such contents,
+        // so every durable obligation must be replayed against this rebuild before a ready proof is minted.
+        conn.prepare(`UPDATE session_ledger_projection_outbox SET status='pending',acked_at=NULL WHERE ledger_location_key=?`)
+          .run(identity.key)
+      })
+      await createEmptySessionEventLedgerForCanonicalRebuild(location.workDir, location.sessionId, location.createdAt)
+      const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+      try {
+        await sink.flush()
+        const drained = await drainCanonicalLedgerProjectionOutbox(conn, identity.key, (target) => project(location, target))
+        if (drained.failedTargetId) throw new Error('SESSION_LEDGER_REBUILD_PROJECTION_FAILED')
+        const persistedTargets = conn.prepare(`SELECT target_id,status FROM session_ledger_projection_outbox WHERE ledger_location_key=?`)
+          .all(identity.key) as Array<{ target_id: string; status: string }>
+        const expectedTargetIds = new Set(targets.map(canonicalLedgerProjectionTargetId))
+        if (persistedTargets.length !== expectedTargetIds.size || persistedTargets.some(({ target_id, status }) =>
+          status !== 'acked' || !expectedTargetIds.has(target_id))) {
+          throw new Error('SESSION_LEDGER_REBUILD_PROJECTION_SET_INCOMPLETE')
+        }
+      } catch (error) {
+        await sink.close().catch(() => undefined)
+        throw error
+      }
+      await sink.close()
+      return await proof(location) ?? Promise.reject(new Error('SESSION_LEDGER_REBUILD_PROOF_MISSING'))
     },
     applyTarget: project,
     reconcilePreviousOwner: async (location) => {

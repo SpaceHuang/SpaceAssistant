@@ -6,6 +6,7 @@ export type PathScope = 'workspace' | 'system' | 'external' | 'unknown'
 export interface ProcessProjectionOptions {
   /** 当前工具调用获得授权的 workspace；未提供时不会把未知绝对路径当成 workspace。 */
   workspaceRoot?: string
+  workspaceRoots?: readonly string[]
   /** 测试或 Electron 主进程可注入密码学指纹实现。 */
   fingerprint?: (value: string) => string
   /** Agent/history 单个 stdout/stderr 字段的上限；telemetry 永远不输出原文。 */
@@ -131,6 +132,7 @@ function isSystemPath(value: string): boolean {
 function classifyPath(value: string, options: ProcessProjectionOptions): PathScope {
   const path = normalizePath(value)
   if (!isAbsolutePath(path)) return 'unknown'
+  if (options.workspaceRoots?.some((root) => isWithinRoot(path, root))) return 'workspace'
   if (options.workspaceRoot && isWithinRoot(path, options.workspaceRoot)) return 'workspace'
   if (isSystemPath(path)) return 'system'
   return 'external'
@@ -358,6 +360,7 @@ function projectPathValue(
   const scope = classifyPath(value, options)
   if (sink === 'telemetry') return { scope }
   if (scope === 'system') return { value: normalizePath(value), scope }
+  if (scope === 'workspace' && options.workspaceRoots?.length) return { value: normalizePath(value), scope }
   if (scope === 'workspace' && options.workspaceRoot) {
     return { value: relativeToWorkspace(value, options.workspaceRoot), scope }
   }

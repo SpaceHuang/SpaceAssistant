@@ -66,6 +66,46 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
     overrideability: 'none'
   },
   {
+    id: 'SYS-AUTOOUTPUT-001', owner: 'electron/confirmation', stage: 'final-check', category: 'integrity',
+    rationale: 'An unattended result write must carry a current user-confirmed result-write receipt and target a file below the archive directory derived for that run.',
+    effect: 'block', scope: 'electron/confirmation/writeExecutionPermit.ts:validateWriteExecutionPermit',
+    audit: 'policy.execution-veto with automation-output-binding-* or automation-output-scope-* case ID and decision rule linkage',
+    tests: ['electron/confirmation/writeExecutionPermit.test.ts', 'electron/confirmation/toolCallGate.test.ts', 'electron/confirmation/agentSdkSafetyPolicy.test.ts', 'electron/tools/registeredAgentTurnTools.test.ts'],
+    overrideability: 'none'
+  },
+  {
+    id: 'SYS-AUTOSHELL-001', owner: 'electron/butler + electron/confirmation', stage: 'final-check', category: 'capability',
+    rationale: 'An unattended Shell grant must come from a main-process authorization receipt created after the user confirms exact command arguments and working directory, then frozen with the task run; execution timeout remains an agent-selected runtime option and is not part of the grant.',
+    effect: 'validate', scope: 'electron/butler/butlerIpc.ts:butler:confirm-write;electron/butler/taskStore.ts:transitionClaimToRunning;electron/runtime/invocationAssembler.ts:createConfirmationPort;electron/confirmation/toolCallGate.ts:automation-shell-permission',
+    audit: 'policy decision records whether the frozen receipt matches exact Shell command arguments and cwd; execution timeout does not affect the match; the approval clue includes the host-issued receipt ID, task revision and exact permission scopes from the frozen run snapshot',
+    tests: ['electron/butler/butlerIpc.test.ts', 'electron/butler/taskStore.test.ts', 'electron/confirmation/agentChannel.test.ts', 'electron/confirmation/approvalAgent.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/toolCallGate.test.ts'],
+    overrideability: 'none'
+  },
+  {
+    id: 'SYS-AUTOTOOLS-001', owner: 'electron/butler + electron/confirmation', stage: 'final-check', category: 'integrity',
+    rationale: 'Scheduled grep, Shell, script, and MCP calls must match the host-issued task receipt scopes; MCP grants bind the exact service profile and tool descriptor, while each script approval additionally binds host-computed code, parameter and environment hashes.',
+    effect: 'validate', scope: 'electron/butler/taskPreflight.ts:requiredPermissions;electron/butler/butlerIpc.ts:buildPermissionList;electron/butler/automationTaskPermissionMatch.ts;electron/confirmation/toolCallGate.ts:automation-tool-permission;electron/confirmation/agentSdkSafetyPolicy.ts:matchesScriptApprovalBinding',
+    audit: 'policy trace records tool grant match status; reviewer evidence contains MCP service/tool identity and actual call arguments, exact Shell commands, grep arguments, and script digests; final-check rejects changed MCP service configuration or descriptor and changed script code, parameters, or environment hashes',
+    tests: ['electron/butler/taskPreflight.test.ts', 'electron/butler/butlerIpc.test.ts', 'electron/butler/taskStore.test.ts', 'electron/butler/automationTaskPermissionMatch.test.ts', 'electron/butler/butlerInvoker.test.ts', 'electron/mcp/mcpToolRegistry.test.ts', 'electron/confirmation/automationLane.test.ts', 'electron/confirmation/agentChannel.test.ts', 'electron/confirmation/approvalAgent.test.ts', 'electron/confirmation/agentSdkSafetyPolicy.test.ts'],
+    overrideability: 'none'
+  },
+  {
+    id: 'SYS-PREFLIGHT-001', owner: 'electron/butler', stage: 'admission', category: 'capability',
+    rationale: 'Task preflight records proposed calls only through synthetic adapters, enforces host-owned budgets, and derives permissions from the host trace so a model summary cannot add, omit, or alter an authorization.',
+    effect: 'block', scope: 'electron/butler/taskPreflightModelAnalyzer.ts;electron/butler/taskPreflightMockRunner.ts;electron/butler/taskPreflightPermissionDeriver.ts;electron/butler/taskPreflight.ts',
+    audit: 'preflight trace labels simulated calls and synthetic results; the permission review is a host projection of recorded tool identity and parameters; budget-limited traces are explicitly partial, while untrustworthy traces cannot issue a review or persist a task; production executors, subprocesses, MCP connections, network calls, and delivery adapters are unreachable',
+    tests: ['electron/butler/taskPreflightMockRunner.test.ts', 'electron/butler/taskPreflightModelAnalyzer.test.ts', 'electron/butler/taskPreflightPermissionDeriver.test.ts', 'electron/butler/taskPreflightNoSideEffects.test.ts', 'electron/butler/taskPreflight.test.ts', 'electron/butler/butlerIpc.test.ts'],
+    overrideability: 'none'
+  },
+  {
+    id: 'SYS-AUTOROOT-001', owner: 'electron/butler', stage: 'final-check', category: 'integrity',
+    rationale: 'An unattended run must preserve the canonical directory identities approved in its immutable task snapshot.',
+    effect: 'validate', scope: 'electron/butler/butlerInvoker.ts:executeClaimedRun-before-facts-and-dispatch',
+    audit: 'automation run fails with TASK_AUTHORIZED_ROOT_DRIFT before session creation, model invocation, or tool dispatch',
+    tests: ['electron/butler/taskConfigValidation.test.ts', 'electron/butler/butlerInvoker.test.ts'],
+    overrideability: 'none'
+  },
+  {
     id: 'SYS-CAPABILITY-001', owner: 'agent-sdk', stage: 'admission', category: 'capability',
     rationale: 'A tool without a host granted SDK capability cannot enter the execution port.',
     effect: 'block', scope: 'packages/agent-sdk/src/safetyGate.ts',

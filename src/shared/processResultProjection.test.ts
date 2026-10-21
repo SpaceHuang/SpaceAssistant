@@ -16,6 +16,13 @@ beforeEach(() => setKnownHomeDir('/Users/alice'))
 afterEach(() => setKnownHomeDir(undefined))
 
 describe('process result projections', () => {
+  it('keeps a process path absolute when it belongs to the second authorized root', () => {
+    const result = projectAgentToolResultForSink({ success: true, data: { cwd: '/workspace/second/subdir' } }, {
+      workspaceRoot: '/workspace/first', workspaceRoots: ['/workspace/first', '/workspace/second'], processTool: true
+    })
+    expect(result.data).toMatchObject({ cwd: '/workspace/second/subdir' })
+  })
+
   it('保留 unknown 执行事实用于本地与 IM 会话投影，但不扩展遥测字段', () => {
     const result = {
       success: false, error: 'TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH', data: null,

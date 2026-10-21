@@ -94,6 +94,39 @@ describe('deferred approval notification delivery reconciliation contract', () =
     temp.cleanup()
   })
 
+  it.each(['expired', 'dispatching', 'consumed'] as const)(
+    'classifies a sent approval target as known when the todo is %s and its authorization epoch is stale',
+    async (lifecycle) => {
+      const temp = createTempDatabase('approval-notification-target-classification-')
+      const stores = seed(temp.db)
+      const delivery = createDeferredApprovalNotificationDelivery({ db: temp.db, todoStore: stores.todoStore,
+        intentStore: stores.intentStore, adapter: { send: vi.fn().mockResolvedValue({ messageId: 'known-approval-notice' }) },
+        allocateShortCode: () => '14', audit: vi.fn() })
+      await delivery.createAndSend({ todoId: stores.todo.todoId, invocationId: stores.todo.invocationId,
+        ...scope, rule: stores.todo.rule, ...safeContent, now: stores.now })
+      const target = { channel: 'feishu' as const, identityKey: scope.identityKey, messageId: 'known-approval-notice' }
+
+      expect(delivery.classifyReplyTarget(target)).toBe('known')
+      expect(delivery.classifyReplyTarget({ ...target, messageId: 'ordinary-message' })).toBe('unknown')
+      expect(delivery.classifyReplyTarget({ ...target, identityKey: 'other-chat' })).toBe('unknown')
+
+      const todoContext = { ...scope, originSessionId: stores.todo.originSessionId, rule: stores.todo.rule }
+      if (lifecycle === 'expired') {
+        getDbConnection(temp.db).prepare('UPDATE deferred_todos SET expires_at=? WHERE todo_id=?').run(stores.now - 1, stores.todo.todoId)
+        expect(stores.todoStore.get(stores.todo.todoId, todoContext, stores.now)?.status).toBe('expired')
+      } else {
+        expect(stores.todoStore.claimForDispatch(stores.todo.todoId, todoContext, stores.now + 1)?.status).toBe('dispatching')
+        if (lifecycle === 'consumed') expect(stores.todoStore.markConsumed(stores.todo.todoId, todoContext, stores.now + 2)).toBe(true)
+      }
+      getDbConnection(temp.db).prepare(`UPDATE deferred_approval_notifications SET authorization_epoch=?,expires_at=?
+        WHERE todo_id=?`).run(scope.authorizationEpoch - 1, stores.now - 1, stores.todo.todoId)
+
+      expect(delivery.classifyReplyTarget(target)).toBe('known')
+      temp.db.close()
+      temp.cleanup()
+    }
+  )
+
   it.each([
     ['identity mismatch', { ...scope, identityKey: 'other-chat' }],
     ['owner mismatch', { ...scope, ownerId: 'other-owner' }],
