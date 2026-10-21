@@ -19,7 +19,7 @@
 
 **（2026-10-14 核验时为空）** —— 当时全部移入 `../archive/storage-session/`（共 66 件）；后续新增在途方案列于下方。
 
-- [启动时历史会话恢复耗时优化方案](./in-flight/启动历史会话恢复耗时优化方案.md) —— [执行计划](./in-flight/启动历史会话恢复耗时优化执行计划.md) P0–P8 记载源码阶段已完成；active workset、按 location 的台账恢复与 retention 共锁已落地，真实设备启动/首访性能仍待外部验收。
+- [启动时历史会话恢复耗时优化方案](./in-flight/启动历史会话恢复耗时优化方案.md) —— [执行计划](./in-flight/启动历史会话恢复耗时优化执行计划.md) P0–P8 记载源码阶段已完成；header 的“执行中”仅剩外验未收口。用户库迁移状态、真机启动/旧 ledger 首访性能的剩余证据只在该执行计划记录。后续结构重构吸收其已实现机制，不重复派发旧源码任务，归属见[新方案 §5.2.1](./in-flight/持久化与历史管理边界重构方案.md#521-与旧启动优化方案执行计划的归属)。
 - [持久化与历史管理边界重构方案](./in-flight/持久化与历史管理边界重构方案.md) —— 待评审；核对多种会话表示、重复判据、可用性与白名单闸门，提出职责收敛、迁移回退与分阶段验收。附[基线核验记录与隔离复现](./in-flight/持久化与历史管理边界核验记录-2026-10-21.md)。
 
 > **2026-10-14 核验更正（原判 C 有误）**：`message-fact-persistence-core-refactor-plan.md`、`message-fact-pipeline-prompt-cache-optimization-plan.md` —— 证据：2026-09-09 `refactor(message-fact): persist turn lifecycle in core`；`da010dcb feat(context): add prompt cache breakpoints`。
