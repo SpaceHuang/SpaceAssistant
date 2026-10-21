@@ -1,14 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import path from 'node:path'
 import { openDatabase } from '../database'
 import type { AppDatabase } from '../database'
 import {
   createAutomationTask,
   updateAutomationTask,
+  updateAutomationTaskConditional,
   deleteAutomationTask,
   getAutomationTask,
   listAutomationTasks,
+  listAutomationTaskRuns,
   listEnabledAutomationTasksDue,
   insertAutomationTaskRun,
+  insertManualTaskClaim,
+  transitionClaimToRunning,
   updateAutomationTaskRun,
   syncAutomationTaskRunDeliveryStatuses,
   getLatestRunForTask,
@@ -19,6 +24,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { createDeliveryHub } from '../driver/deliveryHub'
 import { SqliteDeliveryJournal } from '../driver/sqliteDeliveryJournal'
 import { createTempDatabase } from '../database/testHelpers'
+import type { TargetBinding } from '../../src/shared/automationTaskTypes'
 
 const dbs: AppDatabase[] = []
 
@@ -39,11 +45,138 @@ function taskInput(overrides: Partial<AutomationTaskInput> = {}): AutomationTask
     schedule: { kind: 'interval', intervalMinutes: 30 },
     prompt: '检查磁盘空间并汇报',
     deliveryPref: 'desktop',
+    workDirs: ['/tmp/automation'],
     ...overrides
   }
 }
 
 describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
+  it('round-trips the result output directory and organization without converting legacy authorized roots', () => {
+    const d = db()
+    const input = Object.assign(taskInput({ workDirs: ['/authorized/source'] }), {
+      authorizedDirs: ['/authorized/source'],
+      outputDir: '/results',
+      outputOrganization: 'hourly',
+    })
+    const task = createAutomationTask(d, input)
+
+    expect(task).toMatchObject({
+      workDirs: ['/authorized/source'],
+      authorizedDirs: ['/authorized/source'],
+      outputDir: '/results',
+      outputOrganization: 'hourly',
+    })
+  })
+
+  it('accepts Shell access only from the trusted authorization record and freezes that record into the run snapshot', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({
+      authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'],
+      accessPermissions: { directories: ['/ignored/client-copy'], tools: ['run_shell'] }
+    } as never))
+    expect(task.accessPermissions?.tools).toEqual([])
+    getDbConnection(d).prepare('UPDATE automation_tasks SET access_permissions_json = ? WHERE id = ?')
+      .run(JSON.stringify({ directories: ['/authorized/source'], tools: ['run_shell'] }), task.id)
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.tools).toEqual([])
+
+    const authorizedTask = createAutomationTask(d, taskInput({
+      name: 'approved shell task', authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'],
+      accessPermissions: { directories: ['/ignored/client-copy'], tools: [] }, outputDir: '/results', outputOrganization: 'hourly'
+    } as never), {
+      targetBindings: [],
+      authorizationRecord: {
+        id: 'authorization-1', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, preflightCoverage: 'partial', preflightFactsDigest: 'facts-digest', permissions: [
+          { kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/authorized/source', timeout: 60 }] },
+          { kind: 'grep', scopeRoots: ['/authorized/source'] },
+          { kind: 'run-script', scopeRoots: ['/authorized/source'], scriptHashBinding: 'per-invocation' },
+          { kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues', purpose: 'Find current issues', parameters: [{ name: 'query', required: true }], descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64) },
+          { kind: 'result-write', outputDirectory: '/results', organization: 'hourly' }
+        ],
+        preflightTrace: [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'TODO', path: '/authorized/source' }, dispatch: 'simulated', resultKind: 'synthetic' }]
+      }
+    } as never)
+    const claimed = insertManualTaskClaim(d, authorizedTask.id, 'shell-grant-snapshot')
+    const started = transitionClaimToRunning(d, claimed.runId!, authorizedTask.id, 0, claimed.scheduleGeneration!)
+
+    expect(authorizedTask.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1', preflightCoverage: 'partial' } })
+    expect(started).toMatchObject({ ok: true, snapshot: { accessPermissions: { directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1', preflightCoverage: 'partial' } } } })
+    updateAutomationTaskConditional(d, authorizedTask.id, { accessPermissions: { directories: ['/authorized/source'], tools: [] } } as never)
+    expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: ['run_shell', 'grep', 'run_script'], authorizationRecord: { id: 'authorization-1' } })
+    expect(getRunById(d, claimed.runId!)?.configSnapshot?.accessPermissions?.authorizationRecord?.preflightTrace).toEqual([
+      { kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'TODO', path: '/authorized/source' }, dispatch: 'simulated', resultKind: 'synthetic' }
+    ])
+  })
+
+  it('does not expose a persisted authorization receipt after its task revision becomes stale', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'authorization-stale', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log', workingDirectory: '/authorized/source' }] }]
+      }
+    })
+    getDbConnection(d).prepare('UPDATE automation_tasks SET task_revision = ? WHERE id = ?').run(2, task.id)
+
+    expect(getAutomationTask(d, task.id)?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: [] })
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
+  })
+
+  it('does not upgrade historical tool-name or root-only Shell grants into parameter authorization', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'legacy-shell-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'local-shell', scopeRoots: ['/authorized/source'] }]
+      }
+    } as never)
+    expect(getAutomationTask(d, task.id)?.accessPermissions).toMatchObject({ directories: ['/authorized/source'], tools: [] })
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
+  })
+
+  it('rejects MCP task grants without valid host fingerprints and parameter metadata', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'bad-mcp-receipt', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search',
+          description: 'Search issues', purpose: 'Find issues', parameters: [], descriptorHash: 'invalid', profileHash: 'b'.repeat(64) }]
+      }
+    } as never)
+
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
+  })
+
+  it('rejects an authorization receipt whose persisted mock trace exceeds its item budget', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'oversized-preflight-trace', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'result-write', outputDirectory: '/results', organization: 'daily' }],
+        preflightTrace: Array.from({ length: 14 }, (_, index) => ({
+          kind: 'proposed-tool-call' as const, toolName: 'grep', input: { pattern: `p-${index}` }, dispatch: 'simulated' as const
+        }))
+      }
+    } as never)
+
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord).toBeUndefined()
+  })
+
+  it('ignores legacy Shell timeout metadata when loading an authorization receipt', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ authorizedDirs: ['/authorized/source'], workDirs: ['/authorized/source'] }), {
+      authorizationRecord: {
+        id: 'invalid-shell-timeout', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+        taskRevision: 1, permissions: [{ kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log', workingDirectory: '/authorized/source', timeout: 86401 }] }]
+      }
+    } as never)
+
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.tools).toEqual(['run_shell'])
+    expect(getAutomationTask(d, task.id)?.accessPermissions?.authorizationRecord?.permissions).toEqual([
+      { kind: 'local-shell', scopeRoots: ['/authorized/source'], commands: [{ command: 'git log', workingDirectory: '/authorized/source' }] }
+    ])
+  })
+
   it('持续离线跨过投递 TTL 后自动过期并同步管家 run 状态', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000)
@@ -140,13 +273,13 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
   it('任务配置字段新建、更新、清除并保留 provider model name 语义', () => {
     const d = db()
     const task = createAutomationTask(d, taskInput({
-      workDir: '/tmp/automation', modelId: 'catalog-a', modelServiceId: 'service-a',
+      workDirs: ['/tmp/automation'], modelId: 'catalog-a', modelServiceId: 'service-a',
       modelOverride: 'same-provider-name', reasoningEffort: 'high'
     }))
-    expect(task).toMatchObject({ workDir: '/tmp/automation', modelId: 'catalog-a', modelServiceId: 'service-a', modelOverride: 'same-provider-name', reasoningEffort: 'high' })
+    expect(task).toMatchObject({ workDirs: ['/tmp/automation'], modelId: 'catalog-a', modelServiceId: 'service-a', modelOverride: 'same-provider-name', reasoningEffort: 'high' })
     expect(listAutomationTasks(d)[0]).toMatchObject({ modelId: 'catalog-a', modelServiceId: 'service-a' })
-    const updated = updateAutomationTask(d, task.id, { clearConfig: ['workDir', 'modelId', 'modelServiceId', 'reasoningEffort'] })
-    expect(updated).not.toHaveProperty('workDir')
+    const updated = updateAutomationTask(d, task.id, { clearConfig: ['workDirs', 'modelId', 'modelServiceId', 'reasoningEffort'] })
+    expect(updated?.workDirs).toEqual([])
     expect(updated).not.toHaveProperty('modelId')
     expect(updated?.modelOverride).toBe('same-provider-name')
   })
@@ -362,5 +495,340 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     createAutomationTask(d, taskInput({ name: 'disabled', schedule: { kind: 'interval', intervalMinutes: 30 }, nextRunAt: 500, enabled: false }))
     const due = listEnabledAutomationTasksDue(d, 5000)
     expect(due.map((t) => t.name)).toEqual(['due'])
+  })
+})
+
+describe('automation task multi-root compatibility storage', () => {
+  it('round-trips multiple canonical roots and treats explicit empty roots as empty', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/a', '/workspace/b'] }))
+    expect(getAutomationTask(d, task.id)).toMatchObject({ workDirs: ['/workspace/a', '/workspace/b'] })
+    expect(getDbConnection(d).prepare('SELECT work_dirs_json,work_dir FROM automation_tasks WHERE id=?').get(task.id)).toEqual({
+      work_dirs_json: '["/workspace/a","/workspace/b"]', work_dir: null,
+    })
+
+    const updated = updateAutomationTask(d, task.id, { workDirs: [] })
+    expect(updated?.workDirs).toEqual([])
+    expect(getAutomationTask(d, task.id)?.workDirs).toEqual([])
+  })
+
+  it('adapts a legacy single root into workDirs while preserving the legacy column', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/legacy/root'] }))
+    getDbConnection(d).prepare('UPDATE automation_tasks SET work_dirs_json=NULL,work_dir=? WHERE id=?').run('/legacy/root', task.id)
+    expect(getAutomationTask(d, task.id)).toMatchObject({ workDirs: ['/legacy/root'] })
+    const row = getDbConnection(d).prepare('SELECT work_dirs_json,work_dir FROM automation_tasks WHERE id=?').get(task.id)
+    expect(row).toEqual({ work_dirs_json: null, work_dir: '/legacy/root' })
+  })
+})
+
+describe('task revision and schedule generation', () => {
+  it('advances task revision on edits and schedule generation only on scheduling changes', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(10_000)
+    const d = db()
+    const task = createAutomationTask(d, taskInput())
+    expect(task).toMatchObject({ taskRevision: 0, scheduleGeneration: 0 })
+    const initialState = getDbConnection(d).prepare('SELECT schedule_generation,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?').get(task.id)
+    expect(initialState).toEqual({ schedule_generation: 0, recovery_cursor_at: task.nextRunAt })
+
+    const edited = updateAutomationTask(d, task.id, { prompt: 'changed prompt' })
+    expect(edited).toMatchObject({ taskRevision: 1, scheduleGeneration: 0, nextRunAt: task.nextRunAt })
+    expect(getDbConnection(d).prepare('SELECT schedule_generation,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ schedule_generation: 0, recovery_cursor_at: task.nextRunAt })
+
+    const rescheduled = updateAutomationTask(d, task.id, { schedule: { kind: 'interval', intervalMinutes: 60 } })
+    expect(rescheduled).toMatchObject({ taskRevision: 2, scheduleGeneration: 1, nextRunAt: 3_610_000 })
+    expect(getDbConnection(d).prepare('SELECT schedule_generation,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ schedule_generation: 1, recovery_cursor_at: 3_610_000 })
+  })
+
+  it('conditionally commits a preflight update only against its expected revision', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace'] }))
+    const newer = updateAutomationTask(d, task.id, { prompt: 'newer prompt' })!
+    const stale = updateAutomationTaskConditional(d, task.id, { prompt: 'stale overwrite', expectedTaskRevision: task.taskRevision }, {
+      targetBindings: [{ kind: 'exact', path: '/workspace/a.txt', targetType: 'file', targetReference: { kind: 'basename', value: 'a.txt' }, rawText: 'a.txt', resolverVersion: 2, rootsDigest: 'roots', taskRevision: 1 }]
+    })
+    expect(stale).toEqual({ ok: false, reason: 'task-revision-conflict' })
+    expect(getAutomationTask(d, task.id)).toMatchObject({ prompt: 'newer prompt', taskRevision: newer.taskRevision, preflightVersion: 0 })
+  })
+})
+
+
+describe('preflight binding persistence', () => {
+  it('commits v1 and target bindings together with task changes', () => {
+    const d = db()
+    const targetBindings: TargetBinding[] = [{
+      kind: 'exact', path: '/workspace/report.csv', targetType: 'file', targetReference: { kind: 'basename', value: 'report.csv' }, rawText: 'report.csv',
+      resolverVersion: 2, rootsDigest: 'roots-digest', taskRevision: 1,
+    }]
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace'] }), { targetBindings })
+    expect(task).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(targetBindings) })
+    const updatedBindings = targetBindings.map((binding) => ({ ...binding, taskRevision: 2 }))
+    const updated = updateAutomationTask(d, task.id, { prompt: 'updated' }, { targetBindings: updatedBindings })
+    expect(updated).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(updatedBindings), taskRevision: 2 })
+    expect(getAutomationTask(d, task.id)).toMatchObject({ preflightVersion: 1, targetBindingsJson: JSON.stringify(updatedBindings) })
+  })
+})
+
+describe('queued claim snapshot CAS', () => {
+  it('freezes split directory configuration and resolves the archive from the claimed slot with empty authorized roots', async () => {
+    const d = db()
+    const scheduledFor = new Date(2026, 9, 18, 7, 15).getTime()
+    const targetBindings: TargetBinding[] = [{
+      kind: 'output', path: '/results/reports/summary.txt', ancestor: '/results', relativeSuffix: 'reports/summary.txt', outputRoot: '/results',
+      expectedType: 'file', rawText: 'write summary', resolverVersion: 3, rootsDigest: 'output-digest', taskRevision: 1,
+    }]
+    const task = createAutomationTask(d, taskInput({
+      schedule: { kind: 'interval', intervalMinutes: 60 },
+      workDirs: [], authorizedDirs: [], outputDir: '/results', outputOrganization: 'hourly', nextRunAt: scheduledFor,
+    }), { targetBindings })
+    const { claimDueSlotAndAdvance } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: scheduledFor, nextSlot: scheduledFor + 60 * 60 * 1000, clientId: 'split-output-snapshot' })
+    expect(claim.claimed).toBe(true)
+    const editedBindings: TargetBinding[] = [{
+      ...targetBindings[0]!, path: '/new-results/report.txt', ancestor: '/new-results', relativeSuffix: 'report.txt', outputRoot: '/new-results', taskRevision: 2,
+    }]
+    updateAutomationTask(d, task.id, { authorizedDirs: ['/authorized/new'], outputDir: '/new-results', outputOrganization: 'daily' }, { targetBindings: editedBindings })
+
+    const started = transitionClaimToRunning(d, claim.runId!, task.id, scheduledFor, 0)
+
+    expect(started).toMatchObject({ ok: true, snapshot: {
+      authorizedDirs: ['/authorized/new'], workDirs: ['/authorized/new'], outputDir: '/new-results', outputOrganization: 'daily', scheduledFor,
+      runOutputDir: path.join('/new-results', '20261018'), targetSelections: editedBindings,
+    } })
+  })
+
+  it('manual claim freezes task revision exactly once when resumed', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/one', '/workspace/two'] }))
+    const claim = insertManualTaskClaim(d, task.id, 'manual-snapshot')
+    expect(claim.inserted).toBe(true)
+    const updated = updateAutomationTask(d, task.id, { prompt: 'updated prompt', workDirs: ['/workspace/new'] })!
+    const started = transitionClaimToRunning(d, claim.runId!, task.id, 0, claim.scheduleGeneration!)
+    expect(started).toMatchObject({ ok: true, snapshot: { prompt: 'updated prompt', workDirs: ['/workspace/new'], taskRevision: updated.taskRevision } })
+    expect(transitionClaimToRunning(d, claim.runId!, task.id, 0, claim.scheduleGeneration!)).toMatchObject({ ok: false, reason: 'claim-not-queued' })
+  })
+
+  it('freezes the latest edited task revision exactly once when queued work starts', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/old'], nextRunAt: 123 }))
+    const { claimDueSlotAndAdvance, transitionClaimToRunning } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 123, nextSlot: 456, clientId: 'queued-snapshot-cas' })
+    updateAutomationTask(d, task.id, { prompt: 'new prompt', workDirs: ['/workspace/new'] })
+
+    const first = transitionClaimToRunning(d, claim.runId!, task.id, 123, 0)
+    const duplicate = transitionClaimToRunning(d, claim.runId!, task.id, 123, 0)
+    expect(first).toMatchObject({ ok: true, snapshot: { taskRevision: 1, prompt: 'new prompt', workDirs: ['/workspace/new'] } })
+    expect(duplicate).toEqual({ ok: false, reason: 'claim-not-queued' })
+    expect(getRunById(d, claim.runId!)).toMatchObject({ status: 'running', runPhase: 'running', taskRevision: 1, scheduleGeneration: 0, slotAt: 123 })
+  })
+})
+
+describe('claim terminal cleanup identity', () => {
+  it('clears only the pending claim with the matching run id and schedule generation', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput())
+    const first = insertAutomationTaskRun(d, { taskId: task.id, clientId: 'pending-first', trigger: 'schedule', scheduledFor: 100 })
+    const conn = getDbConnection(d)
+    conn.prepare(`UPDATE automation_task_recovery_state SET pending_run_id=?,pending_run_slot=?,pending_schedule_generation=0 WHERE task_id=?`)
+      .run(first.runId, 100, task.id)
+    const { finalizeClaimAndClearPending } = await import('./taskStore')
+    expect(finalizeClaimAndClearPending(d, first.runId!, 'completed')).toEqual({ updated: true, clearedPending: true })
+    expect(conn.prepare('SELECT pending_run_id,pending_schedule_generation FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ pending_run_id: null, pending_schedule_generation: null })
+
+    const second = insertAutomationTaskRun(d, { taskId: task.id, clientId: 'pending-second', trigger: 'schedule', scheduledFor: 200 })
+    conn.prepare(`UPDATE automation_task_recovery_state SET pending_run_id=?,pending_run_slot=?,pending_schedule_generation=1 WHERE task_id=?`)
+      .run(second.runId, 200, task.id)
+    expect(finalizeClaimAndClearPending(d, first.runId!, 'failed', 'late completion')).toEqual({ updated: false, clearedPending: false })
+    expect(conn.prepare('SELECT pending_run_id,pending_schedule_generation FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ pending_run_id: second.runId, pending_schedule_generation: 1 })
+  })
+
+  it('keeps a matching queued schedule claim for same-run recovery and interrupts running claims transactionally', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance, listPendingScheduledClaims, markActiveRunsInterrupted, transitionClaimToRunning } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'recover-existing-claim' })
+    expect(markActiveRunsInterrupted(d)).toBe(0)
+    expect(listPendingScheduledClaims(d).map((pending) => pending.runId)).toEqual([claim.runId])
+    expect(transitionClaimToRunning(d, claim.runId!, task.id, 100, 0).ok).toBe(true)
+    expect(markActiveRunsInterrupted(d)).toBe(1)
+    expect(getRunById(d, claim.runId!)).toMatchObject({ status: 'interrupted', error: 'interrupted' })
+    expect(getDbConnection(d).prepare('SELECT pending_run_id,recovery_cursor_at FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ pending_run_id: null, recovery_cursor_at: 200 })
+  })
+})
+
+describe('atomic due slot claim', () => {
+  it('creates one pending claim and advances nextRunAt with the recovery cursor atomically', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(10_000)
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance } = await import('./taskStore')
+    const first = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'due-slot-100' })
+    expect(first).toMatchObject({ claimed: true, runId: expect.any(String) })
+    expect(claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'due-slot-100' })).toEqual(first)
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(200)
+    expect(getRunById(d, first.runId!)).toMatchObject({ status: 'queued', runPhase: 'queued-before-start', slotAt: 100, scheduleGeneration: 0 })
+    expect(getDbConnection(d).prepare('SELECT schedule_generation,recovery_cursor_at,pending_run_id,pending_run_slot,pending_schedule_generation FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ schedule_generation: 0, recovery_cursor_at: 100, pending_run_id: first.runId, pending_run_slot: 100, pending_schedule_generation: 0 })
+    expect(claimDueSlotAndAdvance(d, { taskId: task.id, slot: 200, nextSlot: 300, clientId: 'due-slot-200' })).toEqual({ claimed: false, reason: 'pending-claim' })
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(200)
+    const { finalizeClaimAndClearPending } = await import('./taskStore')
+    expect(finalizeClaimAndClearPending(d, first.runId!, 'completed')).toEqual({ updated: true, clearedPending: true })
+    expect(getDbConnection(d).prepare('SELECT recovery_cursor_at,pending_run_id FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ recovery_cursor_at: 200, pending_run_id: null })
+  })
+
+  it('allows a startup catch-up claim to advance from the already-recorded recovery cursor', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance, recordSkippedSlotAndAdvance } = await import('./taskStore')
+    expect(recordSkippedSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'skip-100' }).recorded).toBe(true)
+    expect(recordSkippedSlotAndAdvance(d, { taskId: task.id, slot: 200, nextSlot: 300, clientId: 'skip-200' }).recorded).toBe(true)
+    const catchUp = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 300, nextSlot: 400, clientId: 'catch-up-300', allowCursorAdvance: true })
+    expect(catchUp.claimed).toBe(true)
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(400)
+    expect(getRunById(d, catchUp.runId!)).toMatchObject({ status: 'queued', slotAt: 300 })
+  })
+
+  it('terminal update preserves result fields and clears its scheduled pending claim atomically', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'terminal-100' })
+    updateAutomationTaskRun(d, claim.runId!, { status: 'completed', resultSummary: 'done', deliveryStatus: 'pending' })
+    expect(getRunById(d, claim.runId!)).toMatchObject({ status: 'completed', resultSummary: 'done', deliveryStatus: 'pending' })
+    expect(getDbConnection(d).prepare('SELECT recovery_cursor_at,pending_run_id,pending_run_slot FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ recovery_cursor_at: 200, pending_run_id: null, pending_run_slot: null })
+  })
+})
+
+describe('pending claim task mutation conflicts', () => {
+  it('blocks schedule changes while queued, allows config edits, and keeps running claims across new generations', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ workDirs: ['/workspace/old'], nextRunAt: 100 }))
+    const { claimDueSlotAndAdvance, transitionClaimToRunning } = await import('./taskStore')
+    const claim = claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'pending-mutations' })
+    expect(claim.claimed).toBe(true)
+    expect(updateAutomationTask(d, task.id, { schedule: { kind: 'daily', time: '10:00' } })).toBeUndefined()
+    expect(updateAutomationTask(d, task.id, { prompt: 'edit while queued' })).toMatchObject({ taskRevision: 1, scheduleGeneration: 0 })
+    expect(transitionClaimToRunning(d, claim.runId!, task.id, 100, 0)).toMatchObject({ ok: true })
+    updateAutomationTask(d, task.id, { prompt: 'edit while running', workDirs: ['/workspace/new'] })
+    expect(getRunById(d, claim.runId!)?.configSnapshot).toMatchObject({ prompt: 'edit while queued', workDirs: ['/workspace/old'], taskRevision: 1 })
+
+    const scheduleChanged = updateAutomationTask(d, task.id, { schedule: { kind: 'daily', time: '10:00' } })
+    expect(scheduleChanged).toMatchObject({ scheduleGeneration: 1 })
+    expect(getDbConnection(d).prepare('SELECT schedule_generation,pending_run_id,pending_schedule_generation FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toMatchObject({ schedule_generation: 1, pending_run_id: claim.runId, pending_schedule_generation: 0 })
+    expect(deleteAutomationTask(d, task.id)).toBe(false)
+  })
+})
+
+describe('atomic missed-slot skip', () => {
+  it('writes the complete skipped result and advances the cursor exactly once', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const { recordSkippedSlotAndAdvance } = await import('./taskStore')
+    const input = { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'missed-slot-100' }
+    const first = recordSkippedSlotAndAdvance(d, input)
+    expect(first).toMatchObject({ recorded: true, runId: expect.any(String) })
+    expect(getRunById(d, first.runId!)).toMatchObject({ status: 'skipped', error: 'missed-window', deliveryStatus: 'none', runPhase: 'terminal', slotAt: 100 })
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(200)
+    expect(getDbConnection(d).prepare('SELECT recovery_cursor_at,pending_run_id FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ recovery_cursor_at: 200, pending_run_id: null })
+    expect(recordSkippedSlotAndAdvance(d, input)).toEqual(first)
+    expect(getDbConnection(d).prepare("SELECT COUNT(*) AS count FROM automation_task_runs WHERE client_id='missed-slot-100'").get()).toEqual({ count: 1 })
+  })
+})
+
+
+describe('task recovery transaction rollback', () => {
+  it('does not leave a task row when recovery state creation fails', () => {
+    const d = db()
+    const conn = getDbConnection(d)
+    conn.exec(`CREATE TRIGGER reject_recovery_insert BEFORE INSERT ON automation_task_recovery_state
+      BEGIN SELECT RAISE(ABORT,'injected recovery insert failure'); END;`)
+    expect(() => createAutomationTask(d, taskInput())).toThrow(/injected recovery insert failure/)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM automation_tasks').get()).toEqual({ count: 0 })
+  })
+
+  it('rolls back a due run insert and next slot when pending-state write fails', async () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 100 }))
+    const conn = getDbConnection(d)
+    conn.exec(`CREATE TRIGGER reject_pending_claim BEFORE UPDATE OF pending_run_id ON automation_task_recovery_state
+      BEGIN SELECT RAISE(ABORT,'injected pending-state failure'); END;`)
+    const { claimDueSlotAndAdvance } = await import('./taskStore')
+    expect(() => claimDueSlotAndAdvance(d, { taskId: task.id, slot: 100, nextSlot: 200, clientId: 'rollback-claim' }))
+      .toThrow(/injected pending-state failure/)
+    expect(getAutomationTask(d, task.id)?.nextRunAt).toBe(100)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM automation_task_runs WHERE client_id=?').get('rollback-claim')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT recovery_cursor_at,pending_run_id FROM automation_task_recovery_state WHERE task_id=?').get(task.id))
+      .toEqual({ recovery_cursor_at: 100, pending_run_id: null })
+  })
+})
+
+describe('recovery lifecycle randomized invariants', () => {
+  it('preserves cursor and pending identity through deterministic randomized schedule/config/restart operations', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const d = db()
+    const task = createAutomationTask(d, taskInput({ nextRunAt: 1_000_000 }))
+    const { claimDueSlotAndAdvance, markActiveRunsInterrupted, recordSkippedSlotAndAdvance, transitionClaimToRunning } = await import('./taskStore')
+    let seed = 0x51a7
+    const random = () => { seed = (seed * 48271) % 0x7fffffff; return seed }
+    for (let step = 0; step < 120; step += 1) {
+      const current = getAutomationTask(d, task.id)!
+      const recovery = getDbConnection(d).prepare('SELECT * FROM automation_task_recovery_state WHERE task_id=?').get(task.id) as { pending_run_id: string | null; pending_run_slot: number | null; pending_schedule_generation: number | null; recovery_cursor_at: number | null; schedule_generation: number }
+      const op = random() % 7
+      if (op === 0) updateAutomationTask(d, task.id, { prompt: `prompt-${step}` })
+      else if (op === 1 && !recovery.pending_run_id) {
+        const slot = current.nextRunAt ?? Date.now()
+        vi.setSystemTime(slot)
+        claimDueSlotAndAdvance(d, { taskId: task.id, slot, nextSlot: slot + 300_000, clientId: `${task.id}:${slot}` })
+      } else if (op === 2 && recovery.pending_run_id) {
+        const run = getRunById(d, recovery.pending_run_id)!
+        if (run.status === 'queued') transitionClaimToRunning(d, run.id, task.id, run.scheduledFor, run.scheduleGeneration!)
+        else updateAutomationTaskRun(d, run.id, { status: 'completed', resultSummary: `result-${step}` })
+      } else if (op === 3 && !recovery.pending_run_id) {
+        const slot = current.nextRunAt
+        if (slot != null) recordSkippedSlotAndAdvance(d, { taskId: task.id, slot, nextSlot: slot + 300_000, clientId: `${task.id}:${slot}` })
+      } else if (op === 4) {
+        const run = recovery.pending_run_id ? getRunById(d, recovery.pending_run_id) : undefined
+        if (!run || run.status === 'running') markActiveRunsInterrupted(d, `restart-${step}`)
+      } else if (op === 5) {
+        const run = recovery.pending_run_id ? getRunById(d, recovery.pending_run_id) : undefined
+        if (run?.runPhase === 'running' || !run) updateAutomationTask(d, task.id, { schedule: { kind: 'interval', intervalMinutes: step % 2 ? 5 : 10 } })
+      } else if (op === 6 && !recovery.pending_run_id) {
+        updateAutomationTask(d, task.id, { enabled: !current.enabled })
+      }
+
+      const afterTask = getAutomationTask(d, task.id)!
+      const afterState = getDbConnection(d).prepare('SELECT * FROM automation_task_recovery_state WHERE task_id=?').get(task.id) as { pending_run_id: string | null; pending_run_slot: number | null; pending_schedule_generation: number | null; recovery_cursor_at: number | null; schedule_generation: number }
+      expect(afterState.schedule_generation).toBe(afterTask.scheduleGeneration)
+      if (!afterState.pending_run_id) {
+        expect(afterState.pending_run_slot).toBeNull()
+        expect(afterState.pending_schedule_generation).toBeNull()
+        expect(afterState.recovery_cursor_at).toBe(afterTask.nextRunAt ?? null)
+      } else {
+        const pending = getRunById(d, afterState.pending_run_id)!
+        expect(['queued', 'running']).toContain(pending.status)
+        expect(afterState.pending_run_slot).toBe(pending.slotAt)
+        expect(afterState.pending_schedule_generation).toBe(pending.scheduleGeneration)
+        if (pending.status === 'queued') {
+          expect(pending.scheduleGeneration).toBe(afterTask.scheduleGeneration)
+          expect(afterState.recovery_cursor_at).toBe(pending.slotAt)
+          expect(afterTask.nextRunAt).toBeGreaterThan(pending.slotAt!)
+        }
+      }
+      const allRuns = listAutomationTaskRuns(d, task.id)
+      expect(new Set(allRuns.map((run) => run.clientId)).size).toBe(allRuns.length)
+      expect(allRuns.filter((run) => run.status === 'skipped').every((run) => run.error === 'missed-window' && run.runPhase === 'terminal')).toBe(true)
+    }
   })
 })

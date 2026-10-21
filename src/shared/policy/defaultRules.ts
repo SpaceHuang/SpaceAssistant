@@ -261,6 +261,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'deny', locked: true, reason: '无人值守调用无法确认脚本访问路径'
   },
   {
+    id: 'automation-script-permission-missing-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_script', signals: ['automation-script-permission:missing'] },
+    denyClass: 'forbidden',
+    action: 'deny', locked: true, reason: '定时任务未获得覆盖脚本工作目录和访问路径的 run_script 授权'
+  },
+  {
     id: 'automation-unverified-script-language-deny',
     when: 'invocation',
     match: { lane: ['automation'], toolName: 'run_script', signals: ['script-language-analysis:unverified'] },
@@ -281,15 +288,15 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   {
     id: 'automation-write-deny',
-    when: 'invocation', match: { lane: ['automation'], toolName: ['write_file', 'edit_file'] },
+    when: 'invocation', match: { lane: ['automation'], toolName: ['write_file', 'edit_file'], excludeSignals: ['automation-output-binding:matched'] },
     denyClass: 'forbidden',
-    action: 'deny', locked: true, reason: '无人值守调用不得写入本地文件'
+    action: 'deny', locked: true, reason: '无人值守调用不得写入未绑定的本地文件'
   },
   {
     id: 'automation-shell-deny',
-    when: 'invocation', match: { lane: ['automation'], toolName: 'run_shell' },
+    when: 'invocation', match: { lane: ['automation'], toolName: 'run_shell', signals: ['automation-shell-permission:missing'] },
     denyClass: 'forbidden',
-    action: 'deny', locked: true, reason: '无人值守调用不得执行 Shell 命令'
+    action: 'deny', locked: true, reason: '任务没有授予本地 Shell 命令权限'
   },
   {
     id: 'script-sensitive-path-confirm',
@@ -645,6 +652,15 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     reason: 'MCP account is not authorized for the requested data scope'
   },
   {
+    id: 'automation-mcp-permission-missing-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], signals: ['automation-mcp-permission:missing'] },
+    denyClass: 'forbidden',
+    action: 'deny',
+    locked: true,
+    reason: '定时任务未获得当前 MCP 服务和工具版本的用户授权'
+  },
+  {
     id: 'mcp-readonly-allow',
     when: 'invocation',
     match: { lane: ['desktop'], signals: ['mcp-readonly'] },
@@ -703,6 +719,21 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
 
   // ===== automation lane（偏差 21/22：无人值守链路的显式规则集，§P2-4）=====
   // 无人类应答者：规则显式写出，兜底 fail-closed；automation 不继承任何 desktop 专属豁免。
+  // Policy phase: only a host-produced match between the current result-write receipt and this run's archive can reach this write allow.
+  {
+    id: 'automation-bound-output-write-allow',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: ['write_file', 'edit_file'], signals: ['automation-output-binding:matched'] },
+    action: 'allow',
+    reason: '无人值守写入仅限用户授权的本次运行结果输出目录'
+  },
+  {
+    id: 'automation-grep-permission-missing-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'grep', signals: ['automation-grep-permission:missing'] },
+    action: 'deny', locked: true, denyClass: 'forbidden',
+    reason: '定时任务未获得覆盖本次搜索路径的 grep 授权'
+  },
   {
     id: 'automation-readonly-allow',
     when: 'invocation',
@@ -732,6 +763,41 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     locked: true,
     denyClass: 'forbidden',
     reason: '该命令使用了当前解析器不支持的结构，且当前为无人值守链路：无法分析即不可执行'
+  },
+  {
+    id: 'automation-shell-analysis-incomplete-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_shell', signals: ['shell-analysis-completeness:partial'] },
+    action: 'deny', locked: true, denyClass: 'forbidden',
+    reason: '无人值守 Shell 命令无法完整分析，已拒绝执行'
+  },
+  {
+    id: 'automation-shell-path-facts-incomplete-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_shell', signals: ['extraction-failed'] },
+    action: 'deny', locked: true, denyClass: 'forbidden',
+    reason: '无人值守 Shell 命令的路径事实不完整，已拒绝执行'
+  },
+  {
+    id: 'automation-shell-outside-root-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_shell', signals: ['path-target:outside-workdir'] },
+    action: 'deny', locked: true, denyClass: 'forbidden',
+    reason: '无人值守 Shell 命令触及任务授权目录之外的路径'
+  },
+  {
+    id: 'automation-shell-outside-risk-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_shell', signals: ['path-outside-heuristic'] },
+    action: 'deny', locked: true, denyClass: 'forbidden',
+    reason: '无人值守 Shell 命令可能访问授权目录之外的位置，已拒绝执行'
+  },
+  {
+    id: 'automation-authorized-shell-allow',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_shell', signals: ['automation-shell-permission:matched'] },
+    action: 'allow',
+    reason: '本地 Shell 命令由此任务的用户访问授权明确批准'
   },
   // 默认兜底（catch-all）：新工具天然 fail-safe——落 confirm；automation 无人类应答者，
   // 回答者派生为审批 Agent（askAnswererFor('automation')==='agent'，approve 可放行）。locked：无豁免来源。

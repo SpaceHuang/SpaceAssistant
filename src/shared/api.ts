@@ -197,10 +197,12 @@ export type SpaceAssistantApi = {
   butlerListTasks: () => Promise<import('./automationTaskTypes').AutomationTask[]>
   butlerListTaskRuns: (payload: { taskId: string }) => Promise<import('./automationTaskTypes').AutomationTaskRun[]>
   butlerChooseWorkDir: () => Promise<{ cancelled: true } | { cancelled: false; path?: string; error?: string }>
+  butlerChooseOutputDir: () => Promise<{ cancelled: true } | { cancelled: false; path?: string; error?: string }>
   butlerGetTaskDefaults: () => Promise<Partial<import('./automationTaskTypes').AutomationTaskInput>>
   butlerGetModelCandidates: () => Promise<Array<{ modelId: string; providerModelName: string; serviceId: string; serviceName: string; supportsThinking: boolean }>>
   butlerCreateTask: (payload: Partial<import('./automationTaskTypes').AutomationTaskInput>) => Promise<import('./automationTaskTypes').ButlerTaskWriteResult>
-  butlerUpdateTask: (payload: { id: string; patch: Partial<import('./automationTaskTypes').AutomationTask> }) => Promise<{ ok: boolean; error?: string }>
+  butlerUpdateTask: (payload: { id: string; patch: Partial<Omit<import('./automationTaskTypes').AutomationTask, 'accessPermissions'>> & { expectedTaskRevision?: number } }) => Promise<import('./automationTaskTypes').ButlerTaskWriteResult>
+  butlerConfirmTaskAuthorization: (payload: { reviewId: string }) => Promise<import('./automationTaskTypes').ButlerTaskWriteResult>
   butlerDeleteTask: (payload: { id: string }) => Promise<{ ok: boolean; error?: string }>
   butlerRunTask: (payload: { taskId: string; requestId?: string }) => Promise<import('./automationTaskTypes').ButlerRunTaskResult>
 

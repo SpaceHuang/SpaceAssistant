@@ -28,6 +28,7 @@ export interface BuildToolResultBlockOptions {
   onOversizedCompacted?: (info: OversizedCompactedInfo) => void
   /** 与实时链路一致的工作目录根：历史重建的 process 结果也要能判定 workspace 内路径 */
   workspaceRoot?: string
+  workspaceRoots?: readonly string[]
 }
 
 export function buildToolResultBlock(
@@ -45,10 +46,10 @@ export function buildToolResultBlock(
     const failure = tc.result.error || tc.result.userMessage
       ? tc.result
       : { ...tc.result, error: 'TOOL_EXECUTION_FAILED' }
-    return compactToolResultBuild(serializeAgentToolResult(failure, { processTool: isProcessToolName(tc.toolName), workspaceRoot: options?.workspaceRoot }), true, options)
+    return compactToolResultBuild(serializeAgentToolResult(failure, { processTool: isProcessToolName(tc.toolName), workspaceRoot: options?.workspaceRoot, workspaceRoots: options?.workspaceRoots }), true, options)
   }
   if (tc.result.data === undefined) return { content: '{}', isError: false }
-  const content = serializeAgentToolResult(tc.result, { processTool: isProcessToolName(tc.toolName), workspaceRoot: options?.workspaceRoot })
+  const content = serializeAgentToolResult(tc.result, { processTool: isProcessToolName(tc.toolName), workspaceRoot: options?.workspaceRoot, workspaceRoots: options?.workspaceRoots })
   return compactToolResultBuild(content, false, options)
 }
 
@@ -127,6 +128,7 @@ export type BuildClaudeToolChatMessagesOptions = {
   onOversizedToolResult?: (info: OversizedCompactedInfo & { toolUseId: string }) => void
   /** 会话工作目录根；缺省时历史重建无法把 cwd 判定为 workspace 内相对路径 */
   workspaceRoot?: string
+  workspaceRoots?: readonly string[]
 }
 
 /** 将本地消息列表转为带 content blocks 的 API 消息（含历史 tool_use / tool_result） */
@@ -174,6 +176,7 @@ export function buildClaudeToolChatMessages(
         if (tc.status === 'calling' || tc.status === 'confirming' || tc.status === 'executing') continue
         const block = buildToolResultBlock(tc, {
           workspaceRoot: options?.workspaceRoot,
+          workspaceRoots: options?.workspaceRoots,
           onOversizedCompacted: (info) =>
             options?.onOversizedToolResult?.({ ...info, toolUseId: tc.id })
         })

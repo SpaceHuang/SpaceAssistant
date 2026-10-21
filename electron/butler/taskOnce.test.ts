@@ -13,6 +13,7 @@ describe('一次性任务（once schedule）', () => {
     schedule: { kind: 'once', at },
     prompt: '跑一次',
     deliveryPref: 'none',
+    workDirs: ['/tmp'],
     ...overrides
   })
 
@@ -50,7 +51,7 @@ describe('一次性任务（once schedule）', () => {
     db.close()
   })
 
-  it('停机错过一次性任务：启动恢复补跑这一次（且仅一次）', () => {
+  it('停机错过一次性任务：启动恢复补跑这一次（且仅一次）', async () => {
     db = openDatabase(':memory:')
     const task = createAutomationTask(db, onceInput(10_000))
     const runTask = vi.fn(async () => ({ ok: true })) as unknown as SchedulerRunFn
@@ -60,6 +61,7 @@ describe('一次性任务（once schedule）', () => {
     expect(recovery.catchUpCount).toBe(1)
     expect(recovery.skippedCount).toBe(0)
     expect(runTask).toHaveBeenCalledTimes(1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
     const after = getAutomationTask(db, task.id)!
     expect(after.enabled).toBe(false)

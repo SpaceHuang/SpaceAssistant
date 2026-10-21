@@ -1203,6 +1203,54 @@ describe('线索包任务声明（D：可信证据分区）', () => {
     expect(content.indexOf('整理报告目录并汇总周报')).toBeGreaterThan(content.lastIndexOf('```'))
   })
 
+  it('把运行时保存的用户授权记录作为独立宿主事实交给安全审核 Agent', async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const authorizationRecord = {
+      id: 'authorization-1', actor: 'user-confirmation', source: 'task-preflight-confirmation', approvedAt: 123,
+      taskRevision: 4, preflightCoverage: 'partial', preflightFactsDigest: 'facts-4', permissions: [
+        { kind: 'local-shell', scopeRoots: ['/workspace/repo'], commands: [{ command: 'git log --oneline -5', workingDirectory: '/workspace/repo' }] },
+        { kind: 'grep', scopeRoots: ['/workspace/repo/src'] },
+        { kind: 'run-script', scopeRoots: ['/workspace/repo'], scriptHashBinding: 'per-invocation' },
+        { kind: 'mcp-tool', serverId: 'server-1', serverName: 'Issue Tracker', toolName: 'search_issues', description: 'Search issues',
+          purpose: 'Find the latest issues', parameters: [{ name: 'query', required: true }], descriptorHash: 'a'.repeat(64), profileHash: 'b'.repeat(64) },
+        { kind: 'result-write', outputDirectory: '/results', organization: 'daily' }
+      ],
+      preflightTrace: [{ kind: 'proposed-tool-call', toolName: 'grep', input: { pattern: 'TODO', path: '/workspace/repo/src' }, dispatch: 'simulated', resultKind: 'synthetic' }]
+    }
+    const rendered = renderCluePackForTest(clue({ taskAuthorizationRecord: authorizationRecord } as never))
+
+    expect(rendered).toContain('主进程记录的任务授权')
+    expect(rendered).toContain('authorization-1')
+    expect(rendered).toContain('/workspace/repo')
+    expect(rendered).toContain('git log --oneline -5')
+    expect(rendered).toContain('per-invocation')
+    expect(rendered).toContain('Find the latest issues')
+    expect(rendered).toContain('descriptorHash')
+    expect(rendered).toContain('/results')
+    expect(rendered).toContain('授权范围及预检拟调用轨迹（Mock 模拟，非真实访问事实）')
+    expect(rendered).toContain('"pattern":"TODO"')
+    expect(rendered).toContain('"preflightCoverage":"partial"')
+    expect(rendered).toContain('预检覆盖不完整')
+    expect(rendered).toContain('未列入记录的权限不在本次用户确认范围内')
+    expect(rendered).toContain('拟调用记录只证明预检模型提出过这些调用，不证明实际访问发生')
+    expect(rendered).toContain('不代表本次具体命令或目标已自动批准')
+  })
+
+  it('把 grep 查询参数和本次 run_script SHA-256 放进不可信调用证据', async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const rendered = renderCluePackForTest(clue({
+      toolName: 'run_script',
+      grepQuery: 'path=/workspace/repo/src; pattern=TODO; glob=*.ts; output_mode=content',
+      scriptApprovalBinding: { sha256: 'a'.repeat(64), parametersSha256: 'b'.repeat(64), environmentSha256: 'c'.repeat(64), certifier: 'script-certifier-v1' }
+    } as never))
+
+    expect(rendered).toContain('grep 搜索参数')
+    expect(rendered).toContain('pattern=TODO')
+    expect(rendered).toContain('run_script SHA-256 审批绑定')
+    expect(rendered).toContain('"sha256":"' + 'a'.repeat(64) + '"')
+    expect(rendered.indexOf('pattern=TODO')).toBeLessThan(rendered.indexOf('```', rendered.indexOf('grep 搜索参数')))
+  })
+
   it('无 taskDigest（P3 桌面等无任务上下文调用方）→ 不渲染任务小节', async () => {
     mockRunToolChatSession.mockResolvedValue({
       ok: true,

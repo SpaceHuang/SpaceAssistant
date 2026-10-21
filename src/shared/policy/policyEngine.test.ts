@@ -1117,6 +1117,16 @@ describe('shell signal tokens', () => {
     }]))
     expect(tokens).toContain('shell-connector:&&')
   })
+
+  it('maps host-matched scheduled task tool permissions into policy tokens', () => {
+    const tokens = signalTokenSet(mkFacts('grep', 'read', [
+      { kind: 'automation-grep-permission', status: 'missing' },
+      { kind: 'grep-invocation', path: '/workspace/src', pattern: 'TODO' }
+    ]))
+    expect(tokens).toContain('automation-grep-permission:missing')
+    expect(tokens).toContain('grep-invocation')
+    expect(signalTokenSet(mkFacts('run_script', 'execute', [{ kind: 'automation-script-permission', status: 'matched' }]))).toContain('automation-script-permission:matched')
+  })
 })
 
 describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () => {
@@ -1216,6 +1226,27 @@ describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () =>
     expect(d.type).toBe('require-confirm')
     expect(d.type === 'require-confirm' && d.ruleId).toBe('default-write-execute-ask')
     expect(d.type === 'require-confirm' && d.answerer).toBe('agent')
+  })
+})
+
+describe('automation 结果输出绑定策略', () => {
+  it('仅主机给出的精确输出绑定信号命中放行规则，其他写入继续命中 locked deny', () => {
+    const bound = decide(
+      mkFacts('write_file', 'write', [{ kind: 'automation-output-binding', status: 'matched' } as never]),
+      mkContext('automation'), DEFAULT_POLICY_RULES, deps()
+    )
+    const unbound = decide(mkFacts('write_file', 'write', []), mkContext('automation'), DEFAULT_POLICY_RULES, deps())
+
+    expect(bound).toMatchObject({ type: 'auto-allow', ruleId: 'automation-bound-output-write-allow' })
+    expect(unbound).toMatchObject({ type: 'deny', ruleId: 'automation-write-deny' })
+  })
+
+  it('输出目录不是授权读取根，automation 读取目录外目标时终局拒绝', () => {
+    const decision = decide(
+      mkFacts('read_file', 'read', [{ kind: 'path-target', path: '/results/20261018/report.txt', zone: 'outside-workdir' }]),
+      mkContext('automation'), DEFAULT_POLICY_RULES, deps()
+    )
+    expect(decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-read-deny' })
   })
 })
 

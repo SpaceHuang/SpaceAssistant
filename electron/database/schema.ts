@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 104
+export const DB_SCHEMA_VERSION = 107
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -705,6 +705,9 @@ CREATE TABLE IF NOT EXISTS automation_tasks (
   delivery_pref TEXT NOT NULL DEFAULT 'desktop',
   delivery_target TEXT,
   model_override TEXT,
+  output_dir TEXT,
+  output_organization TEXT,
+  access_permissions_json TEXT NOT NULL DEFAULT '{"directories":[],"tools":[]}',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,

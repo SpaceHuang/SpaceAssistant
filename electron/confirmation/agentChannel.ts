@@ -66,6 +66,27 @@ export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<Approv
   const extras: Partial<ApprovalCluePack> = {}
   for (const s of facts.signals) {
     if (s.kind === 'path-target' && !extras.targetPath) extras.targetPath = s.path
+    if (s.kind === 'script-path-extraction' && s.contentDigest && s.parametersDigest && s.environmentDigest && !extras.scriptApprovalBinding) {
+      extras.scriptApprovalBinding = {
+        sha256: s.contentDigest,
+        parametersSha256: s.parametersDigest,
+        environmentSha256: s.environmentDigest,
+        certifier: s.authenticationVersion ?? 'unknown'
+      }
+    }
+    if (s.kind === 'grep-invocation' && !extras.grepQuery) {
+      const options = [
+        s.glob ? `glob=${s.glob}` : undefined,
+        s.outputMode ? `output_mode=${s.outputMode}` : undefined,
+        s.ignoreCase !== undefined ? `ignore_case=${s.ignoreCase}` : undefined,
+        s.includeIgnored !== undefined ? `include_ignored=${s.includeIgnored}` : undefined,
+        s.multiline !== undefined ? `multiline=${s.multiline}` : undefined,
+        s.context !== undefined ? `context=${s.context}` : undefined,
+        s.headLimit !== undefined ? `head_limit=${s.headLimit}` : undefined,
+        s.timeoutSeconds !== undefined ? `timeout=${s.timeoutSeconds}` : undefined
+      ].filter((value): value is string => Boolean(value))
+      extras.grepQuery = `path=${s.path}; pattern=${s.pattern}${options.length ? `; ${options.join('; ')}` : ''}`
+    }
     if (s.kind === 'command-sequence' && !extras.command && s.commands.length > 0) {
       const rendered = renderCommandSequence(
         s.commands.slice(0, CLUE_COMMAND_MAX).map((cmd) => ({
@@ -118,6 +139,8 @@ export class AgentChannel implements ConfirmationChannel {
       /** 已声明的任务（D，可信证据）：装配方从外层任务上下文透传；缺省 = 无任务上下文。 */
       taskDigest?: string
       taskDigestTruncated?: boolean
+      /** Confirmed permission receipt frozen by the host in this automation run snapshot. */
+      taskAuthorizationRecord?: import('../../src/shared/automationTaskTypes').AutomationTaskAuthorizationRecord
       audit?: AuditSink
       invokeApproval: (inv: ApprovalInvocation) => Promise<ApprovalInvocationResult>
       /** 安全审批专属容量池；不占用普通 Agent turn 的 application admission 名额。 */
@@ -170,7 +193,8 @@ export class AgentChannel implements ConfirmationChannel {
       ...(this.deps.taskDigest ? {
         taskDigest: this.deps.taskDigest,
         ...(this.deps.taskDigestTruncated ? { taskDigestTruncated: true } : {})
-      } : {})
+      } : {}),
+      ...(this.deps.taskAuthorizationRecord ? { taskAuthorizationRecord: this.deps.taskAuthorizationRecord } : {})
     }
     // confirm.request 先于 effectiveTimeoutMs 提前返回记录（§5.4 附带缺口补审计）：
     // 该路径属 §4 可回退格，必须留下 agent 侧痕迹，否则回退率分母系统性漏计这类超时。

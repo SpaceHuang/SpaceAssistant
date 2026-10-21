@@ -9,6 +9,22 @@ import type { AuditSink } from './confirmation/channels'
 import type { ExecutionLane, PolicyRule } from '../src/shared/confirmation/types'
 import { buildTerminalToolContract, type TerminalProfileSnapshot } from './shell/terminalToolContract'
 
+/** Automation API schema: every Shell invocation must identify its approved per-command cwd. */
+export function requireAutomationShellWorkingDirectory<T extends readonly unknown[]>(tools: T): T {
+  return tools.map((tool) => {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return tool
+    const entry = tool as { name?: unknown; description?: unknown; input_schema?: unknown; [key: string]: unknown }
+    if (entry.name !== 'run_shell' || typeof entry.description !== 'string' || !entry.input_schema || typeof entry.input_schema !== 'object' || Array.isArray(entry.input_schema)) return tool
+    const schema = entry.input_schema as { required?: unknown; [key: string]: unknown }
+    const required = Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === 'string') : []
+    return {
+      ...entry,
+      description: `${entry.description} 定时任务必须在 workingDirectory 中提供本条命令已获批的工作目录。`,
+      input_schema: { ...schema, required: [...new Set([...required, 'workingDirectory'])] }
+    }
+  }) as unknown as T
+}
+
 export function isShellToolEnabled(shellConfig: ShellConfig | null | undefined, cfg: ToolsConfig): boolean {
   if (!shellConfig?.enabled) return false
   return isToolEnabledByConfig('run_shell', cfg)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
+import { filterBuiltinToolsForApi, requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
 import { MACOS_BASH_PROFILE } from './shell/shellProfiles'
 import { DEFAULT_SHELL_CONFIG, DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG } from '../src/shared/feishuTypes'
@@ -40,6 +40,17 @@ describe('toolsConfigRuntime shell profile snapshot', () => {
     expect(shell?.description).toContain('dialect=posix-bash')
     expect(shell?.description).toContain('/tmp/project')
     expect(shell?.input_schema).toEqual(expect.objectContaining({ required: ['command'] }))
+  })
+
+  it('requires the per-call working directory on the automation Shell schema', () => {
+    const shell = filterBuiltinToolsForApi(DEFAULT_TOOLS_CONFIG, undefined, undefined, undefined, DEFAULT_SHELL_CONFIG).find((tool) => tool.name === 'run_shell')!
+    const [automationShell] = requireAutomationShellWorkingDirectory([shell])
+
+    expect(automationShell?.input_schema).toMatchObject({
+      properties: { workingDirectory: { type: 'string' } },
+      required: ['command', 'workingDirectory']
+    })
+    expect(automationShell?.description).toContain('workingDirectory')
   })
 })
 

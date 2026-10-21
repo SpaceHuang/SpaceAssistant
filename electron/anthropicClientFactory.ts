@@ -45,9 +45,14 @@ export function createRetryAuditedFetch(fetchImpl: typeof fetch, onRetry?: (info
   }
 }
 
-export function createAnthropicClient(apiKey: string, baseURL?: string, options?: { onRetry?: (info: AnthropicRetryInfo) => void | Promise<void> }): Anthropic {
+export function createAnthropicClient(apiKey: string, baseURL?: string, options?: { onRetry?: (info: AnthropicRetryInfo) => void | Promise<void>; maxRetries?: number }): Anthropic {
   const fetchWithRetryAudit = createRetryAuditedFetch(globalThis.fetch, options?.onRetry)
-  const config = { apiKey, ...(baseURL ? { baseURL } : {}), ...(options ? { fetch: fetchWithRetryAudit } : {}) }
+  const config = {
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(options ? { fetch: fetchWithRetryAudit } : {}),
+    ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {})
+  }
   return new Anthropic(config)
 }
 

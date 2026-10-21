@@ -1,5 +1,8 @@
 import { getSessionEventSink, stripPartialJsonForPersist, type SessionEventSink } from '../sessionEvents'
 import type { SessionEventInput } from '../sessionEvents'
+import { constants } from 'node:fs'
+import { access, lstat, mkdir, realpath } from 'node:fs/promises'
+import path from 'node:path'
 
 /**
  * 管家的无窗口事件出口（P1 出口契约的 automation 装配）：
@@ -19,12 +22,29 @@ export type ButlerSessionEvents = {
 }
 
 export function createButlerSessionEvents(args: {
-  workDir: string
+  userDataDir: string
+  taskId: string
   sessionId: string
   sessionCreatedAt: number
   failClosedCriticalEvents?: boolean
-}): ButlerSessionEvents {
-  const sink = getSessionEventSink(args.workDir, args.sessionId, args.sessionCreatedAt)
+}): Promise<ButlerSessionEvents> {
+  const automationRoot = path.resolve(args.userDataDir, 'automation-sessions')
+  const privateRoot = path.resolve(automationRoot, args.taskId)
+  const initialize = async () => {
+    await mkdir(automationRoot, { recursive: true })
+    const rootInfo = await lstat(automationRoot)
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('AUTOMATION_SESSION_ROOT_INVALID')
+    await mkdir(privateRoot, { recursive: true })
+    const taskInfo = await lstat(privateRoot)
+    if (!taskInfo.isDirectory() || taskInfo.isSymbolicLink()) throw new Error('AUTOMATION_SESSION_ROOT_INVALID')
+    const canonical = await realpath(privateRoot)
+    const canonicalParent = await realpath(automationRoot)
+    if (!canonical.startsWith(`${canonicalParent}${path.sep}`)) throw new Error('AUTOMATION_SESSION_ROOT_INVALID')
+    await access(canonical, constants.R_OK | constants.W_OK | constants.X_OK)
+    return canonical
+  }
+  return initialize().then((canonicalRoot) => {
+  const sink = getSessionEventSink(canonicalRoot, args.sessionId, args.sessionCreatedAt)
   const emitSessionEvent = async (event: SessionEventInput): Promise<void> => {
     // R1：tool_call_delta.partialJson 原文不落台账（chunk 拼接可还原凭据）
     const persistable = stripPartialJsonForPersist(event)
@@ -51,4 +71,5 @@ export function createButlerSessionEvents(args: {
     emitFactEvent: () => undefined,
     onFileTreeChanged: () => undefined
   }
+  })
 }
