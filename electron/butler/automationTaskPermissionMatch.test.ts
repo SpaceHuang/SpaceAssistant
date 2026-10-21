@@ -64,7 +64,7 @@ describe('scheduled task tool permission matching', () => {
     expect(resolveAutomationShellWorkingDirectory(access, 'git status --short')).toBeUndefined()
   })
 
-  it('keeps case-distinct POSIX working directories separate', () => {
+  it.skipIf(process.platform === 'win32')('keeps case-distinct POSIX working directories separate', () => {
     const first = '/workspace/Repo'
     const second = '/workspace/repo'
     const access = {
@@ -79,7 +79,7 @@ describe('scheduled task tool permission matching', () => {
     expect(resolveAutomationShellWorkingDirectory(access, 'git status --short', second)).toBe(second)
   })
 
-  it('does not match a case-distinct POSIX directory when only the other spelling was approved', () => {
+  it.skipIf(process.platform === 'win32')('does not match a case-distinct POSIX directory when only the other spelling was approved', () => {
     const approved = '/workspace/Repo'
     const unapproved = '/workspace/repo'
     const access = {
