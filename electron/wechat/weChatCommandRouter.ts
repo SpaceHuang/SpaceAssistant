@@ -116,6 +116,7 @@ export type WeChatCommandRouterDeps = {
   isRemoteAsyncApprovalEnabled?: () => boolean
   retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>
   handleDeferredApprovalReply?: (input: { message: WeChatInboundMessage; text: string; replyToMessageId?: string }) => Promise<void>
+  isDeferredApprovalReplyTarget?: (input: { identityKey: string; ownerId: string; messageId: string }) => boolean
   handleClarificationReply?: (input: ClarificationResolverInput) => Promise<ClarificationResolverResult>
   createDeferredConfirmationAdapter?: (remoteContext: import('../tools/types').RemoteContext) => NonNullable<Parameters<typeof runWeChatRemoteAgent>[0]['confirmationAdapter']>
   resolveAgentSdkGateSupplement?: import('../runtime/invocationAssembler').AgentInvocationMaterials['resolveAgentSdkGateSupplement']
@@ -632,7 +633,13 @@ export class WeChatCommandRouter {
     }
 
     const acceptedText = accept.userMessage ?? msg.text
-    if (isDeferredApprovalReplyCandidate(acceptedText) && this.deps.isRemoteAsyncApprovalEnabled?.() === true) {
+    const approvalReplyCandidate = isDeferredApprovalReplyCandidate(acceptedText)
+    const trustedApprovalQuote = Boolean(msg.quotedMessageId && this.deps.isDeferredApprovalReplyTarget?.({
+      identityKey: msg.userId, ownerId: msg.userId, messageId: msg.quotedMessageId
+    }))
+    // Keep approval-looking unquoted input and replies to trusted prompts fail-closed;
+    // ordinary quoted discussion reaches the model. Ingress authorization remains final.
+    if (approvalReplyCandidate && (!msg.quotedMessageId || trustedApprovalQuote) && this.deps.isRemoteAsyncApprovalEnabled?.() === true) {
       try {
         await this.deps.handleDeferredApprovalReply?.({ message: msg, text: acceptedText, replyToMessageId: msg.quotedMessageId })
       } catch (error) {

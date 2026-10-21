@@ -199,6 +199,27 @@ export function createDeferredApprovalNotificationDelivery(input: {
       return results
     },
 
+    /**
+     * facts: identifies an exact, delivered approval prompt in the current channel, identity, owner, and authorization epoch.
+     * This is reply-routing evidence only; deferredApprovalRuntime revalidates authorization before accepting a reply.
+     */
+    isTrustedReplyTarget(request: Scope & { messageId: string; now?: number }): boolean {
+      const messageId = request.messageId.trim()
+      if (!messageId) return false
+      const now = request.now ?? Date.now()
+      const row = liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
+        WHERE channel=? AND identity_key=? AND owner_id=? AND authorization_epoch=? AND trusted_message_id=?
+          AND state='delivered' AND expires_at>? ORDER BY notification_version DESC LIMIT 1`)
+        .get(request.channel, request.identityKey, request.ownerId, request.authorizationEpoch, messageId, now) as NotificationRow | undefined
+      if (!row) return false
+      const todo = input.todoStore.get(row.todo_id, {
+        channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
+        authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(row.todo_id),
+        rule: { ruleId: row.rule_id, factsHash: row.facts_hash }
+      }, now)
+      return todo?.status === 'pending' && input.intentStore.authorizeResume(row.invocation_id)
+    },
+
     list,
     resolveCurrent(request: Scope & { shortCode: string; now?: number }) {
       const now = request.now ?? Date.now()

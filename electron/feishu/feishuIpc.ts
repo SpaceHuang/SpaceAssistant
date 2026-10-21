@@ -301,6 +301,16 @@ export function createFeishuBundle(deps: {
       channel: 'feishu', identityKey: message.chatId, ownerId: message.senderOpenId, messageId: message.messageId,
       replyToMessageId, text
     }).then(() => undefined),
+    isDeferredApprovalReplyTarget: ({ identityKey, ownerId, messageId }) => {
+      try {
+        return deferredNotificationDelivery.isTrustedReplyTarget({
+          channel: 'feishu', identityKey, ownerId, messageId,
+          authorizationEpoch: remoteAuthorizationRegistry.getAuthorizationEpoch('feishu')
+        })
+      } catch {
+        return false
+      }
+    },
     createDeferredConfirmationAdapter: (remoteContext) => createImDeferredConfirmationAdapter(deferredProducer, remoteContext)
     ,taskControlSafetyPort
   }
