@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 103
+export const DB_SCHEMA_VERSION = 104
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -2057,6 +2057,20 @@ export const MIGRATION_V103_HISTORY_CURSOR_REVALIDATION_SQL = `
 -- v46 populated this table from every cursor without a surviving event. An interior hole is
 -- retired history: a later committed event proves allocation has advanced beyond it, and
 -- session-local sequence checks still detect a missing event in any surviving session.
+DELETE FROM agent_history_pending_commit_cursor
+WHERE cursor_id < COALESCE((SELECT MAX(commit_order) FROM agent_history_events WHERE commit_order IS NOT NULL),0);
+UPDATE agent_history_cursor_integrity SET invalid=CASE WHEN
+  EXISTS(SELECT 1 FROM agent_history_pending_commit_cursor) OR
+  EXISTS(SELECT 1 FROM agent_history_events events WHERE events.commit_order IS NOT NULL AND NOT EXISTS(
+    SELECT 1 FROM agent_history_commit_cursor cursor WHERE cursor.id=events.commit_order
+  )) OR
+  COALESCE((SELECT MAX(commit_order) FROM agent_history_events WHERE commit_order IS NOT NULL),0) >
+    COALESCE((SELECT MAX(id) FROM agent_history_commit_cursor),0)
+  THEN 1 ELSE 0 END WHERE singleton_id=1;
+`
+
+/** v103 → v104: clear interior pending cursors backfilled by the original v46 migration. */
+export const MIGRATION_V104_HISTORY_CURSOR_REVALIDATION_SQL = `
 DELETE FROM agent_history_pending_commit_cursor
 WHERE cursor_id < COALESCE((SELECT MAX(commit_order) FROM agent_history_events WHERE commit_order IS NOT NULL),0);
 UPDATE agent_history_cursor_integrity SET invalid=CASE WHEN

@@ -413,11 +413,11 @@ describe('session content cutover schema', () => {
     conn.close()
   })
 
-  it('v103 clears v46-backfilled interior pending cursors when later events prove the cursor was retired', () => {
+  it.each([102, 103])('v%s upgrade clears v46-backfilled interior pending cursors when later events prove they were retired', (startingVersion) => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`
       CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
-      INSERT INTO schema_meta VALUES('schema_version','102');
+      INSERT INTO schema_meta VALUES('schema_version','${startingVersion}');
       CREATE TABLE agent_history_cursor_integrity(singleton_id INTEGER PRIMARY KEY,invalid INTEGER NOT NULL);
       INSERT INTO agent_history_cursor_integrity VALUES(1,1);
       CREATE TABLE agent_history_pending_commit_cursor(cursor_id INTEGER PRIMARY KEY);
@@ -440,11 +440,11 @@ describe('session content cutover schema', () => {
     conn.close()
   })
 
-  it('v103 keeps a trailing pending cursor blocked because no later commit proves it retired', () => {
+  it('v104 keeps a trailing pending cursor blocked because no later commit proves it retired', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`
       CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
-      INSERT INTO schema_meta VALUES('schema_version','102');
+      INSERT INTO schema_meta VALUES('schema_version','103');
       CREATE TABLE agent_history_cursor_integrity(singleton_id INTEGER PRIMARY KEY,invalid INTEGER NOT NULL);
       INSERT INTO agent_history_cursor_integrity VALUES(1,1);
       CREATE TABLE agent_history_pending_commit_cursor(cursor_id INTEGER PRIMARY KEY);
