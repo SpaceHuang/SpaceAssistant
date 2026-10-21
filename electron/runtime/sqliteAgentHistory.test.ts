@@ -2035,6 +2035,34 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('repairs pending projections for a parked invocation without appending after its terminal event', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const location = { workDir: '/workspace', sessionId: 'parked-session', createdAt: 1 }
+    await history.appendBatch([
+      { ...event('parked-proposal', 1), kind: 'model-response-committed', payload: {
+        message: { role: 'assistant', toolCalls: [{ id: 'parked-tool', name: 'read_file', input: { path: 'a.txt' } }] },
+        sessionLedger: { location, stepId: 'parked-step', toolCalls: [{ toolUseId: 'parked-tool', name: 'read_file', args: { path: 'a.txt' } }] }
+      } },
+      { ...event('parked-approval-waiting', 2), kind: 'approval-waiting', payload: {
+        toolCallId: 'parked-tool', approvalId: 'parked-approval', answerer: 'user', reasonCode: 'script-confirm', requestedAt: 1
+      } },
+      { ...event('parked-approval-deferred', 3), kind: 'approval-deferred', payload: {
+        toolCallId: 'parked-tool', approvalId: 'parked-approval', todoId: 'parked-todo', invocationId: 'inv-1', checkpointId: 'parked-checkpoint', workflowRevision: 1
+      } },
+      { ...event('parked-terminal', 4), kind: 'invocation-parked', payload: { status: 'parked', reason: 'deferred-approval', todoId: 'parked-todo' } }
+    ], 0)
+
+    await expect(history.recoverInterruptedInvocations({ repairToolCallLedger: async () => undefined })).resolves.toEqual([])
+
+    expect((await history.read('inv-1')).events.map(({ kind }) => kind)).toEqual([
+      'model-response-committed', 'approval-waiting', 'approval-deferred', 'invocation-parked'
+    ])
+    expect(conn.prepare("SELECT status FROM canonical_projection_repairs WHERE repair_kind='invocation-projections'").get())
+      .toEqual({ status: 'completed' })
+    conn.close()
+  })
+
   it('rolls back canonical terminal append when durable repair obligation registration fails', async () => {
     const conn = createDb()
     conn.exec(`CREATE TRIGGER reject_projection_repair BEFORE INSERT ON canonical_projection_repairs

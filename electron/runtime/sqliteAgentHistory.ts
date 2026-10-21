@@ -2372,7 +2372,9 @@ export class SqliteAgentHistory implements HistoryPort {
         flushRepairOutcomes()
         continue
       }
-      if (snapshot.events.at(-1)?.kind !== 'invocation-interrupted') {
+      // Parked approvals are already terminal. rebuildInvocationStates exposes them as
+      // non-executable interruptions, but startup must never append a second terminal.
+      if (snapshot.events.at(-1)?.kind !== 'invocation-interrupted' && snapshot.events.at(-1)?.kind !== 'invocation-parked') {
         const lastEvent = snapshot.events.at(-1)
         if (!lastEvent) continue
         const sequence = snapshot.version + 1
@@ -2434,7 +2436,7 @@ export class SqliteAgentHistory implements HistoryPort {
         snapshot = await this.read(invocationId)
         state = rebuildInvocationStates(snapshot).get(invocationId)
       }
-      if (state?.state === 'interrupted') recovered.push(state)
+      if (state?.state === 'interrupted' && snapshot.events.at(-1)?.kind !== 'invocation-parked') recovered.push(state)
       flushRepairOutcomes()
     }
     return recovered
