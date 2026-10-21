@@ -1,10 +1,11 @@
 import { expect, it } from 'vitest'
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { openDatabase } from '../database'
 import { createAutomationTask, updateAutomationTask } from './taskStore'
 import { TaskPathFactsProvider } from './taskPathFacts'
+import { runTaskPreflight } from './taskPreflight'
 import { resolveTaskTarget, validatePersistedTargetBindings } from './taskTargetResolver'
 
 async function withRoot(run: (root: string) => Promise<void>): Promise<void> {
@@ -106,5 +107,66 @@ it('rejects resolver and runtime validation when depth-limited facts omit a same
   if (initial.ok) {
     expect(validatePersistedTargetBindings({ bindings: [initial.binding], roots: [root], facts, taskRevision: 1 }))
       .toEqual({ ok: false, code: 'FACTS_INCOMPLETE' })
+  }
+}))
+
+it('preflights, saves, and revalidates an explicit deep path from direct host facts', async () => withRoot(async (root) => {
+  const deepDirectory = path.join(root, '1', '2', '3', '4')
+  await mkdir(deepDirectory, { recursive: true })
+  const targetPath = path.join(deepDirectory, 'note.txt')
+  await writeFile(targetPath, 'deep content')
+  const prompt = `Read ${targetPath}`
+  const analysis = {
+    targets: [{ kind: 'exact' as const, path: targetPath, targetType: 'file' as const }],
+    mockTrace: [{ kind: 'proposed-tool-call' as const, toolName: 'read_file', input: { path: targetPath }, dispatch: 'simulated' as const, resultKind: 'synthetic' as const }]
+  }
+  const preflight = await runTaskPreflight({
+    prompt, scheduleSummary: 'daily', deliverySummary: 'none', roots: [root], taskRevision: 1
+  }, { analyzer: { analyze: async () => analysis } })
+
+  expect(preflight.report).toMatchObject({ status: 'passed', blockers: [] })
+  expect(preflight.bindings).toMatchObject([{ kind: 'exact', path: targetPath, targetType: 'file', targetReference: { kind: 'path', value: targetPath } }])
+
+  const db = openDatabase(':memory:')
+  try {
+    const task = createAutomationTask(db, {
+      name: 'deep explicit target', prompt, schedule: { kind: 'interval', intervalMinutes: 30 },
+      deliveryPref: 'none', workDirs: [root]
+    }, { targetBindings: preflight.bindings })
+    const provider = new TaskPathFactsProvider()
+    const runtimeFacts = await provider.collect([root])
+    const exactFacts = await provider.inspectPaths([targetPath])
+    const withDirectFacts = { ...runtimeFacts, proposedPathCandidates: exactFacts }
+    expect(validatePersistedTargetBindings({
+      bindings: JSON.parse(task.targetBindingsJson ?? '[]'), roots: [root], facts: withDirectFacts, taskRevision: task.taskRevision!
+    })).toEqual({ ok: true })
+
+    await rm(targetPath)
+    await symlink(path.join(root, 'outside.txt'), targetPath)
+    const symlinkFacts = { ...await provider.collect([root]), proposedPathCandidates: await provider.inspectPaths([targetPath]) }
+    expect(validatePersistedTargetBindings({
+      bindings: JSON.parse(task.targetBindingsJson ?? '[]'), roots: [root], facts: symlinkFacts, taskRevision: task.taskRevision!
+    })).toMatchObject({ ok: false })
+
+    await rm(targetPath)
+    await mkdir(targetPath)
+    const changedTypeFacts = { ...await provider.collect([root]), proposedPathCandidates: await provider.inspectPaths([targetPath]) }
+    expect(validatePersistedTargetBindings({
+      bindings: JSON.parse(task.targetBindingsJson ?? '[]'), roots: [root], facts: changedTypeFacts, taskRevision: task.taskRevision!
+    })).toMatchObject({ ok: false })
+
+    const movedOutsidePath = path.join(path.dirname(root), `${path.basename(root)}-moved-note.txt`)
+    await rm(targetPath, { recursive: true, force: true })
+    await writeFile(movedOutsidePath, 'moved outside the authorized root')
+    try {
+      const movedFacts = { ...await provider.collect([root]), proposedPathCandidates: await provider.inspectPaths([targetPath]) }
+      expect(validatePersistedTargetBindings({
+        bindings: JSON.parse(task.targetBindingsJson ?? '[]'), roots: [root], facts: movedFacts, taskRevision: task.taskRevision!
+      })).toMatchObject({ ok: false })
+    } finally {
+      await rm(movedOutsidePath, { force: true })
+    }
+  } finally {
+    db.close()
   }
 }))

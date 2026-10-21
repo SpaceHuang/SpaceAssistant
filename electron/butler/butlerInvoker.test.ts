@@ -135,6 +135,8 @@ import { ButlerTaskScheduler, type SchedulerRunRequest } from './taskScheduler'
 import { claimDueSlotAndAdvance, createAutomationTask, createAutomationTask as createStoredAutomationTask, getLatestRunForTask, getRunById, insertManualTaskClaim, updateAutomationTask } from './taskStore'
 import type { AutomationTaskPermission, AutomationTaskRunConfigSnapshot } from '../../src/shared/automationTaskTypes'
 import { TaskPathFactsProvider } from './taskPathFacts'
+import { resolveTaskTarget } from './taskTargetResolver'
+import * as runShellExecutor from '../tools/runShellExecutor'
 import { resolveAutomationRunOutputDir } from './taskOutputDirectory'
 import { getSession } from '../database'
 import { getDbConnection } from '../database'
@@ -168,7 +170,7 @@ describe('buildButlerSystemAppendix tool scopes', () => {
     expect(appendix).toContain('git log --oneline -5')
     expect(appendix).toContain('/workspace/repo/src')
     expect(appendix).toContain('SHA-256')
-    expect(appendix).toContain('命令文本、参数和工作目录不变')
+    expect(appendix).toContain('命令文本、参数和目录不变')
     expect(appendix).not.toContain('超时=30s')
     expect(appendix).toContain('执行时自行选择合适的超时')
     expect(appendix).toContain('Issue Tracker/search_issues')
@@ -368,6 +370,101 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     } finally {
       await fs.rm(firstRoot, { recursive: true, force: true })
       await fs.rm(shellRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('dispatches separately approved Shell calls from each of their working directories', async () => {
+    const firstRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-shell-multi-cwd-first-'))
+    const secondRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-shell-multi-cwd-second-'))
+    const firstCanonical = await fs.realpath(firstRoot)
+    const secondCanonical = await fs.realpath(secondRoot)
+    const command = 'pwd'
+    const dispatchCwds: string[] = []
+    let providerCalls = 0
+    const executionSpy = vi.spyOn(runShellExecutor, 'executePreparedShellExecutionWithHostFallback').mockImplementation(async (prepared) => {
+      dispatchCwds.push(prepared.cwd)
+      return { success: true, data: { stdout: prepared.cwd }, duration: 0 } as never
+    })
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {},
+      finalMessage: vi.fn(async () => {
+        providerCalls += 1
+        return providerCalls === 1 ? {
+          content: [{ type: 'tool_use', id: 'butler-shell-first-root', name: 'run_shell', input: { command, workingDirectory: firstCanonical } },
+            { type: 'tool_use', id: 'butler-shell-second-root', name: 'run_shell', input: { command, workingDirectory: secondCanonical } }],
+          stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 4 }
+        } : { content: [{ type: 'text', text: 'both directories checked' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 4 } }
+      })
+    })) } })
+    const task = createAutomationTaskWithToolPermission(db, {
+      name: 'two approved shell directories', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'check both directories',
+      deliveryPref: 'none', workDirs: [firstRoot, secondRoot]
+    }, {
+      kind: 'local-shell', scopeRoots: [firstRoot, secondRoot],
+      commands: [{ command, workingDirectory: firstRoot }, { command, workingDirectory: secondRoot }]
+    })
+
+    try {
+      const result = await runButlerTask(makeDeps({ getShellConfig: () => ({ ...DEFAULT_SHELL_CONFIG, enabled: true }) }), task.id,
+        { trigger: 'manual', requestId: 'req-shell-multi-cwd' })
+
+      expect(result.ok, JSON.stringify(result)).toBe(true)
+      expect(providerCalls).toBe(2)
+      expect(dispatchCwds.sort()).toEqual([firstCanonical, secondCanonical].sort())
+    } finally {
+      executionSpy.mockRestore()
+      await fs.rm(firstRoot, { recursive: true, force: true })
+      await fs.rm(secondRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('revalidates a deep exact target from direct facts and blocks a later symlink before model dispatch', async () => {
+    const container = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'butler-deep-target-container-')))
+    const root = path.join(container, 'project')
+    const outputDir = path.join(container, 'output')
+    await fs.mkdir(root)
+    const deepDirectory = path.join(root, '1', '2', '3', '4')
+    await fs.mkdir(outputDir)
+    await fs.mkdir(deepDirectory, { recursive: true })
+    const targetPath = path.join(deepDirectory, 'note.txt')
+    await fs.writeFile(targetPath, 'preflight verified content')
+    const provider = new TaskPathFactsProvider()
+    const initialFacts = await provider.collect([root], outputDir)
+    const proposedPathCandidates = await provider.inspectPaths([targetPath])
+    const resolution = resolveTaskTarget({
+      rawText: `Read ${targetPath}`,
+      target: { kind: 'exact', path: targetPath, targetType: 'file' },
+      roots: [root], outputRoot: outputDir,
+      facts: { ...initialFacts, proposedPathCandidates }, taskRevision: 1
+    })
+    if (!resolution.ok) throw new Error(`deep target setup failed: ${resolution.issue.code}`)
+
+    let providerCalls = 0
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {},
+      finalMessage: vi.fn(async () => {
+        providerCalls += 1
+        return { content: [{ type: 'text', text: 'deep target was processed' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }
+      })
+    })) } })
+    const task = createAutomationTask(db, {
+      name: 'deep exact target', prompt: `Read ${targetPath}`, schedule: { kind: 'interval', intervalMinutes: 30 },
+      deliveryPref: 'none', authorizedDirs: [root], workDirs: [root], outputDir, outputOrganization: 'direct'
+    }, { targetBindings: [resolution.binding] })
+
+    try {
+      const firstRun = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-deep-target-valid' })
+      expect(firstRun.ok, JSON.stringify(firstRun)).toBe(true)
+      expect(providerCalls).toBe(1)
+      expect(getLatestRunForTask(db, task.id)?.configSnapshot?.preflightVersion).toBe(1)
+
+      await fs.rm(targetPath)
+      await fs.symlink(path.join(root, 'outside.txt'), targetPath)
+      const secondRun = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-deep-target-symlink' })
+      expect(secondRun.ok).toBe(false)
+      expect(providerCalls).toBe(1)
+    } finally {
+      await fs.rm(container, { recursive: true, force: true })
     }
   })
 

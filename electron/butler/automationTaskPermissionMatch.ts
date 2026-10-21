@@ -26,11 +26,40 @@ function isPathWithinAnyRoot(targetPath: string, roots: readonly string[]): bool
 }
 
 export function matchAutomationShellPermission(access: AutomationTaskAccessPermissions | undefined, command: string, workingDirectory: string): boolean {
-  if (!command || !workingDirectory) return false
-  return permissionRecord(access).some((permission) => permission.kind === 'local-shell'
+  return resolveAutomationShellWorkingDirectory(access, command, workingDirectory) !== undefined
+}
+
+function samePath(left: string, right: string): boolean {
+  const api = pathApi(left, right)
+  const normalizedLeft = api.resolve(left)
+  const normalizedRight = api.resolve(right)
+  return api === path.win32
+    ? normalizedLeft.toLocaleLowerCase('en-US') === normalizedRight.toLocaleLowerCase('en-US')
+    : normalizedLeft === normalizedRight
+}
+
+/**
+ * Facts: resolves one Shell call only from the immutable user receipt. The command and cwd are
+ * paired per call; omission is accepted only when that exact command has one approved cwd.
+ */
+export function resolveAutomationShellWorkingDirectory(
+  access: AutomationTaskAccessPermissions | undefined,
+  command: string,
+  requestedWorkingDirectory?: string
+): string | undefined {
+  if (!command) return undefined
+  const approvedDirectories = [...new Set(permissionRecord(access).flatMap((permission) => permission.kind === 'local-shell'
     && Array.isArray(permission.commands)
-    && permission.commands.some((approved) => approved.command === command && pathApi(approved.workingDirectory, workingDirectory).resolve(approved.workingDirectory) === pathApi(approved.workingDirectory, workingDirectory).resolve(workingDirectory))
-    && isPathWithinAnyRoot(workingDirectory, permission.scopeRoots))
+    ? permission.commands.filter((approved) => approved.command === command
+      && typeof approved.workingDirectory === 'string'
+      && isPathWithinAnyRoot(approved.workingDirectory, permission.scopeRoots))
+      .map((approved) => approved.workingDirectory)
+    : []))]
+  if (requestedWorkingDirectory !== undefined) {
+    if (!requestedWorkingDirectory) return undefined
+    return approvedDirectories.find((approved) => samePath(approved, requestedWorkingDirectory))
+  }
+  return approvedDirectories.length === 1 ? approvedDirectories[0] : undefined
 }
 
 export function matchAutomationGrepPermission(access: AutomationTaskAccessPermissions | undefined, targetPath: string): boolean {

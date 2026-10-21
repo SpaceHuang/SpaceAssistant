@@ -176,6 +176,34 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     expect(r.facts.signals).toContainEqual({ kind: 'automation-shell-permission', status: 'matched' })
   })
 
+  it('多目录 Shell 授权逐条匹配命令的 workingDirectory，不接受遗漏或错配的目录', async () => {
+    const firstRoot = path.resolve(os.tmpdir())
+    const secondRoot = path.join(firstRoot, 'second-project')
+    const command = 'git status --short'
+    const access = { directories: [firstRoot, secondRoot], tools: ['run_shell' as const], authorizationRecord: {
+      id: 'receipt-shell-multi-cwd', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,
+      approvedAt: 1, taskRevision: 1,
+      permissions: [{ kind: 'local-shell' as const, scopeRoots: [firstRoot, secondRoot], commands: [
+        { command, workingDirectory: firstRoot }, { command, workingDirectory: secondRoot }
+      ] }]
+    } }
+    const precheck = async () => ({ ok: true as const, analysis: {} as never, legacyAutoAllowEligible: false, legacyPolicy: {} as never, hints: {} as never })
+    const first = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_shell', toolInput: { command, workingDirectory: firstRoot },
+      taskAccessPermissions: access, taskWorkDirs: [firstRoot, secondRoot], workDir: firstRoot, runShellPrecheck: precheck, appDb: openDb() }))
+    const second = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_shell', toolInput: { command, workingDirectory: secondRoot },
+      taskAccessPermissions: access, taskWorkDirs: [firstRoot, secondRoot], workDir: secondRoot, runShellPrecheck: precheck, appDb: openDb() }))
+    const mismatched = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_shell', toolInput: { command, workingDirectory: secondRoot },
+      taskAccessPermissions: access, taskWorkDirs: [firstRoot, secondRoot], workDir: firstRoot, runShellPrecheck: precheck, appDb: openDb() }))
+    const omitted = await evaluateToolCallGate(base({ lane: 'automation', toolName: 'run_shell', toolInput: { command },
+      taskAccessPermissions: access, taskWorkDirs: [firstRoot, secondRoot], workDir: firstRoot, runShellPrecheck: precheck, appDb: openDb() }))
+
+    expect(first.facts.signals).toContainEqual({ kind: 'automation-shell-permission', status: 'matched' })
+    expect(second.facts.signals).toContainEqual({ kind: 'automation-shell-permission', status: 'matched' })
+    expect(mismatched.facts.signals).toContainEqual({ kind: 'automation-shell-permission', status: 'missing' })
+    expect(mismatched.decision).toMatchObject({ type: 'deny', ruleId: 'automation-shell-deny' })
+    expect(omitted.facts.signals).toContainEqual({ kind: 'automation-shell-permission', status: 'missing' })
+  })
+
   it('run_shell 的运行时超时可以变化而不影响任务授权匹配', async () => {
     const root = path.resolve(os.tmpdir())
     const permissionRecord = { id: 'receipt-shell', actor: 'user-confirmation' as const, source: 'task-preflight-confirmation' as const,

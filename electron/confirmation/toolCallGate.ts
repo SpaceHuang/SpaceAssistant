@@ -90,7 +90,7 @@ import { analyzeShellCommand } from '../shell/analyzeShellCommand'
 import { classifyShellCommandEffect } from './extractors/shellEffectFacts'
 import { extractScriptPathFacts, type ScriptPathFacts } from './extractors/scriptPathFacts'
 import { getEffectiveSensitivePrefixes } from '../shell/shellSensitivePaths'
-import { matchAutomationGrepPermission, matchAutomationMcpPermission, matchAutomationScriptPermission, matchAutomationShellPermission } from '../butler/automationTaskPermissionMatch'
+import { matchAutomationGrepPermission, matchAutomationMcpPermission, matchAutomationScriptPermission, resolveAutomationShellWorkingDirectory } from '../butler/automationTaskPermissionMatch'
 import { evaluateFileToolAutoApproval } from '../tools/writeFileAutoApproval'
 import { extractHostname } from '../browser/urlSecurity'
 import type { ActDangerAssessment } from '../browser/browserActionPolicy'
@@ -912,7 +912,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     // facts: report whether the frozen receipt matches the exact command text, arguments and cwd; policy rules decide the outcome.
     if (lane === 'automation') {
       const command = typeof args.toolInput.command === 'string' ? args.toolInput.command : ''
-      facts.signals.push({ kind: 'automation-shell-permission', status: matchAutomationShellPermission(args.taskAccessPermissions, command, args.workDir) ? 'matched' : 'missing' })
+      const requestedWorkingDirectory = typeof args.toolInput.workingDirectory === 'string' ? args.toolInput.workingDirectory : undefined
+      const receiptWorkingDirectory = resolveAutomationShellWorkingDirectory(args.taskAccessPermissions, command, requestedWorkingDirectory)
+      const matchesCallDirectory = receiptWorkingDirectory !== undefined && path.resolve(receiptWorkingDirectory) === path.resolve(args.workDir)
+      facts.signals.push({ kind: 'automation-shell-permission', status: matchesCallDirectory ? 'matched' : 'missing' })
     }
   }
   if (args.toolName === 'grep' && facts) {

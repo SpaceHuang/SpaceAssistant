@@ -57,12 +57,10 @@ function isPathWithin(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
-function receiptShellWorkingDirectory(snapshot: AutomationTaskRunConfigSnapshot): string | undefined {
-  const paths = new Set((snapshot.accessPermissions?.authorizationRecord?.permissions ?? [])
+function receiptShellWorkingDirectories(snapshot: AutomationTaskRunConfigSnapshot): string[] {
+  return [...new Set((snapshot.accessPermissions?.authorizationRecord?.permissions ?? [])
     .filter((permission) => permission.kind === 'local-shell')
-    .flatMap((permission) => permission.commands.map((command) => command.workingDirectory)))
-  if (paths.size > 1) throw new Error('TASK_SHELL_WORKING_DIRECTORY_AMBIGUOUS')
-  return paths.values().next().value
+    .flatMap((permission) => permission.commands.map((command) => command.workingDirectory)))].sort()
 }
 
 function runOutputScopeFromSnapshot(snapshot: AutomationTaskRunConfigSnapshot): AutomationRunOutputScope | undefined {
@@ -93,7 +91,7 @@ export function buildButlerSystemAppendix(
       ? `本次运行结果目录已获用户授权写入：${outputScope.runOutputDir}。报告、总结等文档结果应保存到此目录；目录只允许写入，不允许读取。`
       : '本任务没有有效的结果目录写入授权；不得创建或修改本地文件。',
     shellGrant?.kind === 'local-shell'
-      ? `本任务获批的 run_shell 命令及工作目录仅限：${shellGrant.commands.map(({ command, workingDirectory }) => `${command}（${workingDirectory}）`).join('；')}。必须保持命令文本、参数和工作目录不变；执行时自行选择合适的超时，超时不属于授权范围。Shell 预检仍可拒绝。`
+      ? `本任务获批的 run_shell 命令及工作目录仅限：${shellGrant.commands.map(({ command, workingDirectory }) => `${command}（${workingDirectory}）`).join('；')}。每次调用都必须在 workingDirectory 参数中填写该条获批命令对应的目录，并保持命令文本、参数和目录不变；执行时自行选择合适的超时，超时不属于授权范围。Shell 预检仍可拒绝。`
       : '本任务未获批 run_shell。遇到本地命令需求时说明缺少授权，不要用其他工具绕过权限。',
     grepGrant?.kind === 'grep'
       ? `本任务获批使用 grep 搜索的目录：${grepGrant.scopeRoots.join('、')}。搜索路径必须落在这些目录内。`
@@ -266,16 +264,32 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
       if (!taskAuthorizedRootSetMatchesSnapshot(facts.roots, rootsInput)) throw new Error('TASK_AUTHORIZED_ROOT_DRIFT')
       const rootsAfterFacts = await validateTaskAuthorizedDirsForRun(rootsInput, rootsInput)
       if (!rootsAfterFacts.ok) throw new Error(rootsAfterFacts.error)
-      const validation = validatePersistedTargetBindings({ bindings: claimSnapshot.targetSelections ?? [], roots: facts.roots, outputRoot: facts.outputRoot, facts, taskRevision: claimSnapshot.taskRevision ?? -1 })
+      const persistedBindings = claimSnapshot.targetSelections ?? []
+      // final-check: re-probe explicit bound paths directly before accepting the frozen target;
+      // basename bindings still require complete recursive facts inside validatePersistedTargetBindings.
+      const exactPathFacts = await pathFactsProvider.inspectPaths(persistedBindings.flatMap((binding) =>
+        binding.kind === 'exact' && binding.targetReference?.kind === 'path' ? [binding.path]
+          : binding.kind === 'collection' ? [binding.directory]
+            : []
+      ))
+      const bindingFacts = exactPathFacts.length ? { ...facts, proposedPathCandidates: exactPathFacts } : facts
+      const validation = validatePersistedTargetBindings({ bindings: persistedBindings, roots: facts.roots, outputRoot: facts.outputRoot, facts: bindingFacts, taskRevision: claimSnapshot.taskRevision ?? -1 })
       if (!validation.ok) throw new Error(`TASK_BINDING_REVALIDATION_FAILED:${validation.code}`)
-      // final-check: the session cwd must match the user-approved Shell receipt and remain under
-      // an unchanged authorized root; verify before creating a session or dispatching the model.
-      approvedShellWorkingDirectory = receiptShellWorkingDirectory(claimSnapshot)
-      if (approvedShellWorkingDirectory) {
-        if (!workDirs.some((root) => isPathWithin(root, approvedShellWorkingDirectory!))) throw new Error('TASK_SHELL_WORKING_DIRECTORY_NOT_AUTHORIZED')
-        const [candidate] = await pathFactsProvider.inspectPaths([approvedShellWorkingDirectory])
-        if (candidate?.path !== approvedShellWorkingDirectory || candidate.kind !== 'directory') throw new Error('TASK_SHELL_WORKING_DIRECTORY_CHANGED')
+      // final-check: recheck each receipt-bound Shell cwd before creating a session. A task may
+      // have several commands with different approved working directories; call-level dispatch
+      // resolves the exact command/cwd pair later, while the session keeps a stable base root.
+      const approvedShellWorkingDirectories = receiptShellWorkingDirectories(claimSnapshot)
+      if (approvedShellWorkingDirectories.some((cwd) => !workDirs.some((root) => isPathWithin(root, cwd)))) {
+        throw new Error('TASK_SHELL_WORKING_DIRECTORY_NOT_AUTHORIZED')
       }
+      if (approvedShellWorkingDirectories.length) {
+        const checked = await pathFactsProvider.inspectPaths(approvedShellWorkingDirectories)
+        const checkedByPath = new Map(checked.map((candidate) => [candidate.path, candidate]))
+        if (approvedShellWorkingDirectories.some((cwd) => checkedByPath.get(cwd)?.kind !== 'directory')) {
+          throw new Error('TASK_SHELL_WORKING_DIRECTORY_CHANGED')
+        }
+      }
+      if (approvedShellWorkingDirectories.length === 1) approvedShellWorkingDirectory = approvedShellWorkingDirectories[0]
       const safeRunOutputDir = await ensureAutomationRunOutputDirectory(claimSnapshot.outputDir, claimSnapshot.outputOrganization, claimSnapshot.scheduledFor)
       if (path.normalize(safeRunOutputDir) !== path.normalize(claimSnapshot.runOutputDir)) throw new Error('TASK_OUTPUT_SNAPSHOT_MISMATCH')
       runOutputDir = safeRunOutputDir

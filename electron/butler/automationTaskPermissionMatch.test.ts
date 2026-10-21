@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import path from 'node:path'
 import type { AutomationTaskAccessPermissions, AutomationTaskAuthorizationRecord } from '../../src/shared/automationTaskTypes'
-import { matchAutomationGrepPermission, matchAutomationMcpPermission, matchAutomationResultWritePermission, matchAutomationScriptPermission, matchAutomationShellPermission } from './automationTaskPermissionMatch'
+import { matchAutomationGrepPermission, matchAutomationMcpPermission, matchAutomationResultWritePermission, matchAutomationScriptPermission, matchAutomationShellPermission, resolveAutomationShellWorkingDirectory } from './automationTaskPermissionMatch'
 
 const root = '/workspace/repo'
 const record: AutomationTaskAuthorizationRecord = {
@@ -40,6 +41,41 @@ describe('scheduled task tool permission matching', () => {
     expect(matchAutomationShellPermission(permissions, 'git log --oneline -5', root)).toBe(true)
     expect(matchAutomationShellPermission(permissions, 'git log --oneline -10', root)).toBe(false)
     expect(matchAutomationShellPermission(permissions, 'git log --oneline -5', '/workspace/other')).toBe(false)
+  })
+
+  it('resolves an unattended Shell call to its individually approved working directory', () => {
+    const first = path.join(root, 'first')
+    const second = path.join(root, 'second')
+    const access = {
+      directories: [first, second], tools: ['run_shell' as const],
+      authorizationRecord: { ...record, permissions: [{
+        kind: 'local-shell' as const,
+        scopeRoots: [first, second],
+        commands: [
+          { command: 'git status --short', workingDirectory: first },
+          { command: 'git status --short', workingDirectory: second }
+        ]
+      }] }
+    }
+
+    expect(resolveAutomationShellWorkingDirectory(access, 'git status --short', first)).toBe(first)
+    expect(resolveAutomationShellWorkingDirectory(access, 'git status --short', second)).toBe(second)
+    expect(resolveAutomationShellWorkingDirectory(access, 'git status --short', path.join(root, 'other'))).toBeUndefined()
+    expect(resolveAutomationShellWorkingDirectory(access, 'git status --short')).toBeUndefined()
+  })
+
+  it('allows an omitted working directory only when the approved command resolves to one directory', () => {
+    const access = {
+      ...permissions,
+      authorizationRecord: { ...record, permissions: [{
+        kind: 'local-shell' as const,
+        scopeRoots: [root],
+        commands: [{ command: 'git status --short', workingDirectory: root }]
+      }] }
+    }
+
+    expect(resolveAutomationShellWorkingDirectory(access, 'git status --short')).toBe(root)
+    expect(resolveAutomationShellWorkingDirectory(access, 'git log')).toBeUndefined()
   })
 
   it('matches grep only when the normalized search path is inside its approved roots', () => {

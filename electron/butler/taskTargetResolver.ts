@@ -34,7 +34,33 @@ function findRoot(roots: readonly string[], target: string): string | undefined 
 }
 
 function findFact(facts: TaskPathFacts, target: string): TaskPathFactEntry | undefined {
+  // facts/final-check: a host-inspected exact candidate supersedes the earlier bounded walk for
+  // that path; this never expands roots or makes basename discovery complete.
+  const candidate = facts.proposedPathCandidates?.find((item) => item.path === target)
+  if (candidate) {
+    if (candidate.kind === 'missing' || candidate.kind === 'unavailable') return undefined
+    const root = findRoot(facts.roots, target)
+    return {
+      path: target,
+      relativePath: root ? path.relative(root, target).split(path.sep).join('/') : '',
+      kind: candidate.kind
+    }
+  }
   return facts.entries.find((entry) => entry.path === target)
+}
+
+function allDiscoverableEntries(facts: TaskPathFacts): TaskPathFactEntry[] {
+  const byPath = new Map(facts.entries.map((entry) => [entry.path, entry]))
+  for (const candidate of facts.proposedPathCandidates ?? []) {
+    if (candidate.kind === 'missing' || candidate.kind === 'unavailable') {
+      byPath.delete(candidate.path)
+      continue
+    }
+    if (!findRoot(facts.roots, candidate.path)) continue
+    const entry = findFact({ ...facts, proposedPathCandidates: [candidate] }, candidate.path)
+    if (entry) byPath.set(entry.path, entry)
+  }
+  return [...byPath.values()]
 }
 
 function resolveExistingPath(targetPath: string, roots: readonly string[], facts: TaskPathFacts, expected: 'file' | 'directory'): string | undefined {
@@ -83,7 +109,7 @@ export function resolveTaskTarget(input: ResolveTaskTargetInput): TaskTargetReso
       if (!isRelativePath && !facts.coverage.complete) return issue('FACTS_INCOMPLETE', { reference: target.path })
       if (isRelativePath && !facts.coverage.complete && roots.length !== 1) return issue('FACTS_INCOMPLETE', { reference: target.path })
       const normalizedRelative = path.posix.normalize(resolvedPath.replace(/\\/g, '/'))
-      const matches = facts.entries.filter((entry) => (isRelativePath
+      const matches = allDiscoverableEntries(facts).filter((entry) => (isRelativePath
         ? entry.relativePath === normalizedRelative
         : path.basename(entry.path) === resolvedPath) && entry.kind === target.targetType)
       if (matches.length === 0 && !facts.coverage.complete) return issue('FACTS_INCOMPLETE', { reference: target.path })

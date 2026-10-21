@@ -51,6 +51,7 @@ import { projectAgentToolResult } from '../../src/shared/agentToolResult'
 import { isProcessToolName } from '../../src/shared/processResultProjection'
 import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
 import { resolveRegisteredToolName } from '../tools/registeredToolName'
+import { resolveAutomationShellWorkingDirectory } from '../butler/automationTaskPermissionMatch'
 import { createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff, markAgentSdkSafetyDecisionConfirmed } from '../confirmation/agentSdkSafetyPolicy'
 import { createAgentSdkConfirmationPort, mapAgentSdkConfirmationOutcome } from '../confirmation/agentSdkConfirmationPort'
 import { registerActiveAgentToolCancellation } from '../activeAgentToolCancellation'
@@ -730,6 +731,15 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     const registry = getDefaultAgentRuntime().builtinRegistry as { get(name: string): unknown; entries?(): readonly Readonly<{ name: string }>[] }
     return resolveRegisteredToolName(name, registry)
   }
+  const resolveToolCallWorkDir = (
+    call: Readonly<{ toolName: string; input: Record<string, unknown> }>,
+    fallback: string
+  ): string => {
+    if (materialsLane !== 'automation' || resolveAgentSdkToolName(call.toolName) !== 'run_shell') return fallback
+    const command = typeof call.input.command === 'string' ? call.input.command : ''
+    const requestedWorkingDirectory = typeof call.input.workingDirectory === 'string' ? call.input.workingDirectory : undefined
+    return resolveAutomationShellWorkingDirectory(materials.taskAccessPermissions, command, requestedWorkingDirectory) ?? fallback
+  }
   const resolveAgentSdkGateArgs = async (
     binding: PermitBinding,
     call?: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>,
@@ -784,7 +794,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       requestId: binding.requestId,
       toolUseId: binding.toolCallId,
       sessionId: materials.sessionId,
-      workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+      workDir: resolveToolCallWorkDir(call, materials.resolveWorkDir?.() ?? materials.workDir),
       ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
       ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
       ...(materials.taskOutputBindings ? { taskOutputBindings: materials.taskOutputBindings } : {}),
@@ -913,7 +923,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const turnId = runtimeTurnId
       const fileStateCache = new FileStateCache()
       const createExecutionContext = input.createExecutionContext ?? ((call) => ({
-        workDir: (workspacePorts.snapshot() as { rootPath?: string }).rootPath || materials.resolveWorkDir?.() || materials.workDir,
+        workDir: resolveToolCallWorkDir(call, (workspacePorts.snapshot() as { rootPath?: string }).rootPath || materials.resolveWorkDir?.() || materials.workDir),
         userDataDir: materials.userDataDir,
         requestId: materials.requestId,
         toolUseId: call.toolCallId,
@@ -988,7 +998,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         }
         const refreshed = {
           ...current,
-          workDir: sourceWorkDir ?? currentWorkDir,
+          workDir: resolveToolCallWorkDir(call, sourceWorkDir ?? currentWorkDir),
           browserConfig: materials.resolveBrowserConfig?.() ?? current.browserConfig ?? materials.browserConfig,
           toolsConfig: materials.resolveToolsConfig?.() ?? current.toolsConfig ?? materials.toolsConfig,
           shellConfig: materials.resolveShellConfig?.() ?? current.shellConfig ?? materials.shellConfig,

@@ -94,6 +94,7 @@ import {
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
 import { computeDeferredPlan, computeEffectiveTools } from './effectiveTools'
+import { requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
 import { clearToolRevocationRequest, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildCommandRetryKey, normalizeFileToolIdentity, normalizeToolErrorClass, SemanticToolRetryTracker } from './toolErrorRetryPolicy'
 import type { ContextMeter } from '../src/shared/contextMeterService'
@@ -917,7 +918,10 @@ async function runToolChatSessionInner(
     trim: toolsTrim,
     deferredPlan
   })
-  const { tools, toolNames, authorizedToolNames, compatToInternal, deferredToolNames } = effectiveTools
+  const tools = effectiveLane === 'automation'
+    ? requireAutomationShellWorkingDirectory(effectiveTools.tools)
+    : effectiveTools.tools
+  const { toolNames, authorizedToolNames, compatToInternal, deferredToolNames } = effectiveTools
   if (effectiveTools.deferredDegradedToEager && deferredPlan.mode === 'deferred') {
     // O4（边界 11）：tool_search 被裁出广告面，延迟计划整体失效回退 eager（agentLogger warn，不进 wire 面与会话事件流）
     logAgentEvent('warn', 'mcp.deferredDegradedToEager', {
