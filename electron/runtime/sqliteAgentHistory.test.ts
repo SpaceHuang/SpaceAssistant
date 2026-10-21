@@ -47,6 +47,25 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it('accepts surviving cursor gaps and unsequenced legacy rows while rejecting pending allocations', () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const insertCursor = conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)')
+    insertCursor.run(1)
+    insertCursor.run(2)
+    conn.prepare(`INSERT INTO agent_history_events(
+      invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at,commit_order
+    ) VALUES('ordered',1,'ordered-1','ordered-1','turn',1,'test-event','{}',2,2)`).run()
+    conn.prepare(`INSERT INTO agent_history_events(
+      invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at
+    ) VALUES('legacy',1,'legacy-1','legacy-1','legacy-turn',1,'test-event','{}',1)`).run()
+
+    expect(history.isGlobalCommitCursorContiguous()).toBe(false)
+    conn.prepare('DELETE FROM agent_history_pending_commit_cursor WHERE cursor_id=1').run()
+    expect(history.isGlobalCommitCursorContiguous()).toBe(true)
+    conn.close()
+  })
+
   it('registers tool-result projection obligations with the canonical completion transaction', async () => {
     const conn = createDb()
     const sessionId = 'outbox-canonical-session'

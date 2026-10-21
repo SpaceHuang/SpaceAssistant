@@ -26,6 +26,7 @@ import {
   MIGRATION_V100_PROCESS_GENERATION_SQL,
   MIGRATION_V101_SESSION_LEDGER_READINESS_SQL,
   MIGRATION_V102_SESSION_LEDGER_OUTBOX_SQL,
+  MIGRATION_V103_HISTORY_CURSOR_REVALIDATION_SQL,
   MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL,
   MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
   MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
@@ -1945,6 +1946,14 @@ export function runMigrations(conn: DatabaseSync): void {
   if (version === 101) runInTransaction(conn, () => {
     conn.exec(MIGRATION_V102_SESSION_LEDGER_OUTBOX_SQL)
     version = 102
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 102) runInTransaction(conn, () => {
+    if (hasTable(conn, 'agent_history_cursor_integrity') && hasTable(conn, 'agent_history_pending_commit_cursor') &&
+      hasTable(conn, 'agent_history_commit_cursor') && hasTable(conn, 'agent_history_events')) {
+      conn.exec(MIGRATION_V103_HISTORY_CURSOR_REVALIDATION_SQL)
+    }
+    version = 103
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

@@ -820,15 +820,19 @@ export class SqliteAgentHistory implements HistoryPort {
     } catch { return false }
   }
 
-  /** Check that the global allocator cursor has no gap or unpersisted allocation. */
+  /** Check that surviving ordered events map to allocated cursors and no allocation remains pending. */
   isGlobalCommitCursorContiguous(): boolean {
-    const aggregate = this.conn.prepare(`SELECT COUNT(*) AS count, MIN(commit_order) AS minimum, MAX(commit_order) AS maximum
-      FROM agent_history_events`).get() as { count: number; minimum: number | null; maximum: number | null }
+    const aggregate = this.conn.prepare(`SELECT COUNT(commit_order) AS count, MIN(commit_order) AS minimum, MAX(commit_order) AS maximum,
+        COALESCE(SUM(CASE WHEN commit_order IS NOT NULL AND NOT EXISTS(
+          SELECT 1 FROM agent_history_commit_cursor cursor WHERE cursor.id=agent_history_events.commit_order
+        ) THEN 1 ELSE 0 END),0) AS missing_cursor_count
+      FROM agent_history_events`).get() as { count: number; minimum: number | null; maximum: number | null; missing_cursor_count: number }
     const cursor = this.conn.prepare('SELECT COALESCE(MAX(id), 0) AS maximum FROM agent_history_commit_cursor').get() as { maximum: number }
     const integrity = this.conn.prepare(`SELECT invalid, EXISTS(SELECT 1 FROM agent_history_pending_commit_cursor) AS has_pending
       FROM agent_history_cursor_integrity WHERE singleton_id=1`).get() as { invalid: number; has_pending: number } | undefined
-    return integrity?.invalid === 0 && integrity.has_pending === 0 && Number.isSafeInteger(aggregate.count) && aggregate.count === cursor.maximum &&
-      (aggregate.count === 0 ? aggregate.minimum === null && aggregate.maximum === null : aggregate.minimum === 1 && aggregate.maximum === aggregate.count)
+    return integrity?.invalid === 0 && integrity.has_pending === 0 && Number.isSafeInteger(aggregate.count) &&
+      aggregate.missing_cursor_count === 0 && (aggregate.count === 0 ? aggregate.minimum === null && aggregate.maximum === null :
+        aggregate.minimum !== null && aggregate.minimum > 0 && aggregate.maximum !== null && aggregate.maximum <= cursor.maximum)
   }
 
   /** Check full stream sequence/schema integrity without reading historical event payloads. */

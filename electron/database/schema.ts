@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 102
+export const DB_SCHEMA_VERSION = 103
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -1782,17 +1782,16 @@ INSERT OR IGNORE INTO agent_history_cursor_integrity(singleton_id,invalid) VALUE
 CREATE TABLE IF NOT EXISTS agent_history_pending_commit_cursor (
   cursor_id INTEGER PRIMARY KEY
 );
+-- Pre-v46 cursor gaps can be retired events (for example, a deleted session). Only allocations
+-- observed after the pending table exists can represent an in-flight, uncommitted event.
 DELETE FROM agent_history_pending_commit_cursor;
-INSERT INTO agent_history_pending_commit_cursor(cursor_id)
-SELECT cursor.id FROM agent_history_commit_cursor cursor
-LEFT JOIN agent_history_events events ON events.commit_order=cursor.id
-WHERE events.commit_order IS NULL;
 UPDATE agent_history_cursor_integrity SET invalid=CASE WHEN
-  (SELECT COUNT(*) FROM agent_history_events) != COALESCE((SELECT MAX(id) FROM agent_history_commit_cursor),0) OR
-  ((SELECT COUNT(*) FROM agent_history_events) > 0 AND (
-    (SELECT MIN(commit_order) FROM agent_history_events) != 1 OR
-    (SELECT MAX(commit_order) FROM agent_history_events) != (SELECT COUNT(*) FROM agent_history_events)
-  )) THEN 1 ELSE 0 END WHERE singleton_id=1;
+  EXISTS(SELECT 1 FROM agent_history_events events WHERE events.commit_order IS NOT NULL AND NOT EXISTS(
+    SELECT 1 FROM agent_history_commit_cursor cursor WHERE cursor.id=events.commit_order
+  )) OR
+  COALESCE((SELECT MAX(commit_order) FROM agent_history_events WHERE commit_order IS NOT NULL),0) >
+    COALESCE((SELECT MAX(id) FROM agent_history_commit_cursor),0)
+  THEN 1 ELSE 0 END WHERE singleton_id=1;
 `
 
 /** v46 triggers are kept separate so a failed replay of earlier table rebuilds can restore them. */
@@ -2051,6 +2050,18 @@ CREATE TABLE IF NOT EXISTS session_ledger_projection_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_session_ledger_projection_outbox_pending
   ON session_ledger_projection_outbox(ledger_location_key,status,canonical_sequence,projection_order);
+`
+
+/** v102 → v103: revalidate the global History cursor while allowing retired legacy rows and deleted events. */
+export const MIGRATION_V103_HISTORY_CURSOR_REVALIDATION_SQL = `
+UPDATE agent_history_cursor_integrity SET invalid=CASE WHEN
+  EXISTS(SELECT 1 FROM agent_history_pending_commit_cursor) OR
+  EXISTS(SELECT 1 FROM agent_history_events events WHERE events.commit_order IS NOT NULL AND NOT EXISTS(
+    SELECT 1 FROM agent_history_commit_cursor cursor WHERE cursor.id=events.commit_order
+  )) OR
+  COALESCE((SELECT MAX(commit_order) FROM agent_history_events WHERE commit_order IS NOT NULL),0) >
+    COALESCE((SELECT MAX(id) FROM agent_history_commit_cursor),0)
+  THEN 1 ELSE 0 END WHERE singleton_id=1;
 `
 
 /** v51: preserve stable catalog/provider/route identity on usage facts. */

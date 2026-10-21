@@ -95,6 +95,28 @@ describe('canonical session ledger outbox', () => {
     expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending[0].target_id, projected, 61)).toBe(true)
   })
 
+  it('acks an older tool-call outbox payload against an already enriched JSONL projection', () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: '/tmp/outbox-attribution-compat', isDefault: true }]))
+    const session = createSession(db, { name: 'outbox attribution compatibility', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?')
+      .get(session.id) as { ledger_location_key: string }
+    const toolCall = { toolUseId: 'compat-tool', stepId: 'compat-step', name: 'read_file', args: {}, turnId: 'compat-turn' }
+    const target: CanonicalLedgerProjectionTarget = { ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id,
+      sessionGeneration: session.generation, canonicalEventId: 'compat-canonical', projectionKind: 'tool-call:compat-tool',
+      expectedEvents: [{ type: 'tool_call', payload: toolCall }], expectedEventIds: ['tool_call:compat-tool'] }
+    appendCanonicalEvent(conn, session.id, 'compat-canonical')
+    runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
+    const pending = listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)[0]!
+    const enriched = { ...toolCall, requestId: 'request-1', invocationRequestId: 'invocation-1', lane: 'desktop' }
+
+    expect(acknowledgeCanonicalLedgerProjectionTarget(conn, pending.target_id, {
+      eventIds: target.expectedEventIds, events: [{ type: 'tool_call', payload: enriched }]
+    })).toBe(true)
+  })
+
   it('rolls back an outbox target with its canonical batch and rejects target conflicts', () => {
     const db = createMemoryAppDb()
     databases.push(db)
