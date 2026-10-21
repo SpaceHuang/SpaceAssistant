@@ -11,6 +11,7 @@ import { buildDeferredApprovalAuditEvent } from '../confirmation/deferredApprova
 type TodoStore = ReturnType<typeof createDeferredTodoStore>
 type IntentStore = ReturnType<typeof createSecurityActionIntentStore>
 type Scope = { channel: 'feishu' | 'wechat'; identityKey: string; ownerId: string; authorizationEpoch: number }
+export type DeferredApprovalReplyTargetClassification = 'known' | 'unknown' | 'unavailable'
 type NotificationRow = {
   todo_id: string; notification_version: number; invocation_id: string; channel: Scope['channel']; identity_key: string; owner_id: string
   authorization_epoch: number; rule_id: string; facts_hash: string; short_code: string; trusted_message_id: string | null
@@ -200,24 +201,18 @@ export function createDeferredApprovalNotificationDelivery(input: {
     },
 
     /**
-     * facts: identifies an exact, delivered approval prompt in the current channel, identity, owner, and authorization epoch.
-     * This is reply-routing evidence only; deferredApprovalRuntime revalidates authorization before accepting a reply.
+     * facts: identifies whether an exact platform message ID was issued as an approval notification for this channel and identity.
+     * The WeChat IPC passes this fact to WeChatCommandRouter; owner, epoch, lifecycle, and expiry are deliberately rechecked
+     * by deferredApprovalRuntime at the final ingress boundary. This lookup makes no approval decision.
+     * Boundary coverage: deferredApprovalNotificationDelivery.test.ts and weChatCommandRouter.test.ts.
      */
-    isTrustedReplyTarget(request: Scope & { messageId: string; now?: number }): boolean {
+    classifyReplyTarget(request: { channel: Scope['channel']; identityKey: string; messageId: string }): Exclude<DeferredApprovalReplyTargetClassification, 'unavailable'> {
       const messageId = request.messageId.trim()
-      if (!messageId) return false
-      const now = request.now ?? Date.now()
-      const row = liveConn().prepare(`SELECT ${COLUMNS} FROM deferred_approval_notifications
-        WHERE channel=? AND identity_key=? AND owner_id=? AND authorization_epoch=? AND trusted_message_id=?
-          AND state='delivered' AND expires_at>? ORDER BY notification_version DESC LIMIT 1`)
-        .get(request.channel, request.identityKey, request.ownerId, request.authorizationEpoch, messageId, now) as NotificationRow | undefined
-      if (!row) return false
-      const todo = input.todoStore.get(row.todo_id, {
-        channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
-        authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(row.todo_id),
-        rule: { ruleId: row.rule_id, factsHash: row.facts_hash }
-      }, now)
-      return todo?.status === 'pending' && input.intentStore.authorizeResume(row.invocation_id)
+      if (!messageId) return 'unknown'
+      const row = liveConn().prepare(`SELECT 1 FROM deferred_approval_notifications
+        WHERE channel=? AND identity_key=? AND trusted_message_id=? LIMIT 1`)
+        .get(request.channel, request.identityKey, messageId)
+      return row ? 'known' : 'unknown'
     },
 
     list,

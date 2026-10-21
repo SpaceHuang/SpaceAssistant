@@ -133,7 +133,7 @@ describe('WeChatCommandRouter', () => {
   let sessionId: string
   let closeDb: () => void
 
-  function makeRouter(wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }, handleDeferredApprovalReply?: (input: { message: import('../../src/shared/wechatTypes').WeChatInboundMessage; text: string }) => Promise<void>, approvalGate?: boolean, retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>, resolveAgentSdkGateSupplement?: unknown): WeChatCommandRouter {
+  function makeRouter(wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }, handleDeferredApprovalReply?: (input: { message: import('../../src/shared/wechatTypes').WeChatInboundMessage; text: string }) => Promise<void>, approvalGate?: boolean, retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>, resolveAgentSdkGateSupplement?: unknown, classifyDeferredApprovalReplyTarget?: (input: { identityKey: string; messageId: string }) => 'known' | 'unknown' | 'unavailable'): WeChatCommandRouter {
     const mockWorkDirManager = {
       listProfiles: () => [],
       getActiveProfileId: () => 'p1',
@@ -169,6 +169,7 @@ describe('WeChatCommandRouter', () => {
       getToolsConfig: () => ({ deniedTools: [] }) as never,
       wakeEventDispatcher: wakeDispatcher,
       handleDeferredApprovalReply,
+      classifyDeferredApprovalReplyTarget,
       retryDeferredApprovalNotifications,
       isRemoteAsyncApprovalEnabled: () => approvalGate ?? true
       ,resolveAgentSdkGateSupplement
@@ -481,6 +482,61 @@ describe('WeChatCommandRouter', () => {
     expect(retryDeferredApprovalNotifications).toHaveBeenCalledWith({ identityKey: 'wx-user@test', ownerId: 'wx-user@test' })
     expect(mockResolveSession).not.toHaveBeenCalled()
     expect(mockRunAgent).not.toHaveBeenCalled()
+  })
+
+  it('keeps stale known-notification replies in the safety ingress, including duplicate delivery after consumption', async () => {
+    const handleDeferredApprovalReply = vi.fn(async () => undefined)
+    const classifyDeferredApprovalReplyTarget = vi.fn(() => 'known' as const)
+    router = makeRouter(undefined, handleDeferredApprovalReply, false, undefined, undefined, classifyDeferredApprovalReplyTarget)
+    const incoming = makeIncomingMessage({ text: '批准 07', raw: {
+      ...makeIncomingMessage().raw,
+      client_id: 'wechat-consumed-approval-reply',
+      item_list: [{ ref_msg: { message_id: 'expired-consumed-approval-notice' } }]
+    } as never })
+
+    await router.handleSdkInbound(incoming)
+    await router.handleSdkInbound(incoming)
+
+    expect(classifyDeferredApprovalReplyTarget).toHaveBeenCalledWith({ identityKey: 'wx-user@test', messageId: 'expired-consumed-approval-notice' })
+    expect(handleDeferredApprovalReply).toHaveBeenCalledTimes(2)
+    expect(mockResolveSession).not.toHaveBeenCalled()
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(listImInboxMessages(db, { queueScope: buildImQueueScope('wechat', sessionId) })).toEqual([])
+  })
+
+  it('allows ordinary approval-word discussion in an unknown quote to reach the model', async () => {
+    const handleDeferredApprovalReply = vi.fn(async () => undefined)
+    const classifyDeferredApprovalReplyTarget = vi.fn(() => 'unknown' as const)
+    router = makeRouter(undefined, handleDeferredApprovalReply, true, undefined, undefined, classifyDeferredApprovalReplyTarget)
+
+    await router.handleSdkInbound(makeIncomingMessage({ text: '批准 07', raw: {
+      ...makeIncomingMessage().raw,
+      client_id: 'wechat-ordinary-quoted-discussion',
+      item_list: [{ ref_msg: { message_id: 'ordinary-message' } }]
+    } as never }))
+
+    expect(handleDeferredApprovalReply).not.toHaveBeenCalled()
+    expect(classifyDeferredApprovalReplyTarget).toHaveBeenCalledOnce()
+    expect(mockResolveSession).toHaveBeenCalledOnce()
+    expect(mockRunAgent).toHaveBeenCalledOnce()
+  })
+
+  it('blocks approval-shaped quoted input from ordinary routing when target classification fails', async () => {
+    const handleDeferredApprovalReply = vi.fn(async () => undefined)
+    const classifyDeferredApprovalReplyTarget = vi.fn(() => { throw new Error('lookup unavailable') })
+    router = makeRouter(undefined, handleDeferredApprovalReply, true, undefined, undefined, classifyDeferredApprovalReplyTarget)
+
+    await router.handleSdkInbound(makeIncomingMessage({ text: '批准 07', raw: {
+      ...makeIncomingMessage().raw,
+      client_id: 'wechat-approval-target-lookup-failure',
+      item_list: [{ ref_msg: { message_id: 'possibly-known-notice' } }]
+    } as never }))
+
+    expect(handleDeferredApprovalReply).not.toHaveBeenCalled()
+    expect(reply).toHaveBeenCalledOnce()
+    expect(mockResolveSession).not.toHaveBeenCalled()
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(listImInboxMessages(db, { queueScope: buildImQueueScope('wechat', sessionId) })).toEqual([])
   })
 
   it('routes an approval-shaped message as an ordinary inbound while the durable gate is closed', async () => {

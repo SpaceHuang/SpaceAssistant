@@ -301,14 +301,11 @@ export function createFeishuBundle(deps: {
       channel: 'feishu', identityKey: message.chatId, ownerId: message.senderOpenId, messageId: message.messageId,
       replyToMessageId, text
     }).then(() => undefined),
-    isDeferredApprovalReplyTarget: ({ identityKey, ownerId, messageId }) => {
+    classifyDeferredApprovalReplyTarget: ({ identityKey, messageId }) => {
       try {
-        return deferredNotificationDelivery.isTrustedReplyTarget({
-          channel: 'feishu', identityKey, ownerId, messageId,
-          authorizationEpoch: remoteAuthorizationRegistry.getAuthorizationEpoch('feishu')
-        })
+        return deferredNotificationDelivery.classifyReplyTarget({ channel: 'feishu', identityKey, messageId })
       } catch {
-        return false
+        return 'unavailable'
       }
     },
     createDeferredConfirmationAdapter: (remoteContext) => createImDeferredConfirmationAdapter(deferredProducer, remoteContext)

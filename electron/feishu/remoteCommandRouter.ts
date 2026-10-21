@@ -61,6 +61,7 @@ import { canResumePreparedRemoteTurn, inspectRemoteTrackWorkRecovery, isRemoteTr
 import type { WakeEventLoopInput } from '../remote/wakeEventDispatcher'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { isDeferredApprovalReplyCandidate } from '../remote/deferredApprovalIngress'
+import type { DeferredApprovalReplyTargetClassification } from '../remote/deferredApprovalNotificationDelivery'
 import type { WakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { readDeferredCompletionWake, markDeferredCompletionWakeDelivered } from '../remote/deferredCompletionWake'
 import { decideDeferredCompletionWakeRecovery, deliverInterruptedDeferredCompletionNotice } from '../remote/deferredCompletionWakeRecovery'
@@ -133,7 +134,7 @@ export type RemoteCommandRouterDeps = {
   isRemoteAsyncApprovalEnabled?: () => boolean
   retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>
   handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string; replyToMessageId?: string }) => Promise<void>
-  isDeferredApprovalReplyTarget?: (input: { identityKey: string; ownerId: string; messageId: string }) => boolean
+  classifyDeferredApprovalReplyTarget?: (input: { identityKey: string; messageId: string }) => DeferredApprovalReplyTargetClassification
   handleClarificationReply?: (input: ClarificationResolverInput) => Promise<ClarificationResolverResult>
   createDeferredConfirmationAdapter?: (remoteContext: import('../tools/types').RemoteContext) => NonNullable<Parameters<typeof runFeishuRemoteAgent>[0]['confirmationAdapter']>
   resolveAgentSdkGateSupplement?: import('../runtime/invocationAssembler').AgentInvocationMaterials['resolveAgentSdkGateSupplement']

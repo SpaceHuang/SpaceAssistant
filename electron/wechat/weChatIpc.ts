@@ -293,14 +293,11 @@ export function createWeChatBundle(deps: {
       channel: 'wechat', identityKey: message.userId, ownerId: message.userId, messageId: message.messageId,
       replyToMessageId, text
     }).then(() => undefined),
-    isDeferredApprovalReplyTarget: ({ identityKey, ownerId, messageId }) => {
+    classifyDeferredApprovalReplyTarget: ({ identityKey, messageId }) => {
       try {
-        return deferredNotificationDelivery.isTrustedReplyTarget({
-          channel: 'wechat', identityKey, ownerId, messageId,
-          authorizationEpoch: remoteAuthorizationRegistry.getAuthorizationEpoch('wechat')
-        })
+        return deferredNotificationDelivery.classifyReplyTarget({ channel: 'wechat', identityKey, messageId })
       } catch {
-        return false
+        return 'unavailable'
       }
     },
     createDeferredConfirmationAdapter: (remoteContext) => createImDeferredConfirmationAdapter(deferredProducer, remoteContext)
