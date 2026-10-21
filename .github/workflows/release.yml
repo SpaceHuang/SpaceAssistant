@@ -123,6 +123,7 @@ jobs:
               npm run verify:rg:package -- "$APP"
             done < <(find release -type d -name '*.app' -prune -print)
             test "$FOUND" -eq 1
+            test -n "$(find release -maxdepth 1 -type f -name '*.pkg' -print -quit)"
           fi
 
       - name: Probe node:sqlite under Electron
@@ -135,6 +136,7 @@ jobs:
           path: |
             release/*.exe
             release/*.dmg
+            release/*.pkg
           if-no-files-found: error
 
   publish:
@@ -167,10 +169,10 @@ jobs:
           echo "Downloaded artifact tree:"
           find release-assets -type f | sort
           mkdir -p dist-release
-          find release-assets -type f \( -name '*.exe' -o -name '*.dmg' \) -exec cp -v {} dist-release/ \;
+          find release-assets -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.pkg' \) -exec cp -v {} dist-release/ \;
           echo "Release assets:"
           ls -la dist-release
-          test "$(find dist-release -type f | wc -l)" -ge 3
+          test "$(find dist-release -type f | wc -l)" -ge 5
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
