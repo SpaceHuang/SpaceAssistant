@@ -199,7 +199,7 @@ describe('RemoteCommandRouter workdir binding', () => {
   function makeRouter(
     db: ReturnType<typeof openDatabase>,
     manager: ReturnType<typeof createWorkDirManager>,
-    options?: { maxParallel?: number; tryResolveConfirm?: boolean; imChannel?: FeishuImChannel; approvalGate?: boolean; wc?: { send: (...args: unknown[]) => void }; turnRuntime?: TurnRuntime; wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }; retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>; handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string }) => Promise<void>; isDeferredApprovalReplyTarget?: (input: { identityKey: string; ownerId: string; messageId: string }) => boolean; handleClarificationReply?: (input: import('../remote/clarificationInbound').ClarificationResolverInput) => Promise<import('../remote/clarificationInbound').ClarificationResolverResult> }
+    options?: { maxParallel?: number; tryResolveConfirm?: boolean; imChannel?: FeishuImChannel; approvalGate?: boolean; wc?: { send: (...args: unknown[]) => void }; turnRuntime?: TurnRuntime; wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }; retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>; handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string }) => Promise<void>; isDeferredApprovalReplyTarget?: (input: { identityKey: string; ownerId: string; messageId: string }) => boolean; resolveQuotedReplyContext?: (input: { message: FeishuInboundMessage }) => Promise<{ content: string; sessionId?: string } | null>; handleClarificationReply?: (input: import('../remote/clarificationInbound').ClarificationResolverInput) => Promise<import('../remote/clarificationInbound').ClarificationResolverResult> }
   ) {
     const auditAppend = vi.fn().mockResolvedValue(undefined)
     const processedStore = makeProcessedStore()
@@ -239,6 +239,7 @@ describe('RemoteCommandRouter workdir binding', () => {
       retryDeferredApprovalNotifications: options?.retryDeferredApprovalNotifications,
       handleDeferredApprovalReply: options?.handleDeferredApprovalReply,
       isDeferredApprovalReplyTarget: options?.isDeferredApprovalReplyTarget,
+      resolveQuotedReplyContext: options?.resolveQuotedReplyContext,
       handleClarificationReply: options?.handleClarificationReply,
       isRemoteAsyncApprovalEnabled: () => options?.approvalGate ?? true
     } as never)
@@ -307,17 +308,20 @@ describe('RemoteCommandRouter workdir binding', () => {
   it('keeps an ordinary quoted rejection in the conversation when the quote is not an approval notice', async () => {
     const { db, manager } = setupDbAndManager()
     mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '拒绝该提案' })
-    const session = createSession(db, { name: 'Feishu proposal discussion' })
+    const session = createSession(db, { name: 'Feishu proposal discussion', metadata: { source: 'feishu', feishuChatId: 'chat-1' } })
     mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
     mockRunFeishuRemoteAgent.mockResolvedValue({ summary: '已处理', pendingConfirm: false, ok: true })
     const handleDeferredApprovalReply = vi.fn(async () => undefined)
-    const { router } = makeRouter(db, manager, { handleDeferredApprovalReply, isDeferredApprovalReplyTarget: () => false })
+    const resolveQuotedReplyContext = vi.fn(async () => ({ content: '已生成 Wiki Schema 变更提案；提案尚未批准、未应用。', sessionId: session.id }))
+    const { router } = makeRouter(db, manager, { handleDeferredApprovalReply, isDeferredApprovalReplyTarget: () => false, resolveQuotedReplyContext })
 
     await router.handleInbound(makeInbound({ messageId: 'proposal-rejection', replyToMessageId: 'proposal-response', content: '拒绝该提案' }))
 
     expect(handleDeferredApprovalReply).not.toHaveBeenCalled()
-    expect(mockResolveFeishuSession).toHaveBeenCalled()
-    expect(mockRunFeishuRemoteAgent).toHaveBeenCalled()
+    expect(resolveQuotedReplyContext).toHaveBeenCalledWith(expect.objectContaining({ message: expect.objectContaining({ replyToMessageId: 'proposal-response' }) }))
+    expect(mockResolveFeishuSession).not.toHaveBeenCalled()
+    expect(mockRunFeishuRemoteAgent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: session.id,
+      userMessage: expect.stringContaining('已生成 Wiki Schema 变更提案') }))
   })
 
   it('keeps malformed approval text replying to a trusted notice reserved for the safety ingress', async () => {
@@ -329,6 +333,21 @@ describe('RemoteCommandRouter workdir binding', () => {
 
     expect(handleDeferredApprovalReply).toHaveBeenCalledWith(expect.objectContaining({ text: '拒绝该提案', replyToMessageId: 'trusted-notice' }))
     expect(mockResolveFeishuSession).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when a quoted approval-like message has no readable app reply context', async () => {
+    const { db, manager } = setupDbAndManager()
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '拒绝该提案' })
+    const { router, processedStore } = makeRouter(db, manager, {
+      isDeferredApprovalReplyTarget: () => false,
+      resolveQuotedReplyContext: async () => null
+    })
+
+    await router.handleInbound(makeInbound({ messageId: 'proposal-rejection-without-context', replyToMessageId: 'proposal-response', content: '拒绝该提案' }))
+
+    expect(mockResolveFeishuSession).not.toHaveBeenCalled()
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+    expect(processedStore.markCompleted).toHaveBeenCalledWith('proposal-rejection-without-context', expect.any(String), 'quoted_context_unavailable')
   })
 
   it('routes a strict synchronous confirmation through the Feishu adapter before async approval ingress', async () => {

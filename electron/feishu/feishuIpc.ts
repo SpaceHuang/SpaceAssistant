@@ -15,6 +15,7 @@ import { FeishuEventService } from './feishuEventService'
 import { prepareInboundFeishuAttachments } from './feishuInboundAttachmentDownload'
 import { sendFeishuApprovalTextToTarget } from './feishuReply'
 import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteCommandRouter'
+import { resolveFeishuQuotedReplyContext } from './feishuQuotedReplyContext'
 import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import { getMainWindow } from '../windowRef'
 import type { AppConfig } from '../../src/shared/domainTypes'
@@ -309,6 +310,7 @@ export function createFeishuBundle(deps: {
     isDeferredApprovalReplyTarget: ({ identityKey, ownerId, messageId }) => deferredNotificationDelivery.isTrustedReplyTarget({
       channel: 'feishu', identityKey, ownerId, messageId
     }),
+    resolveQuotedReplyContext: ({ message }) => resolveFeishuQuotedReplyContext({ runner, db: deps.db, message }),
     createDeferredConfirmationAdapter: (remoteContext) => createImDeferredConfirmationAdapter(deferredProducer, remoteContext)
     ,taskControlSafetyPort
   }
