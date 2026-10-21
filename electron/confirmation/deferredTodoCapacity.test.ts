@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
+import { DB_SCHEMA_VERSION } from '../database/schema'
 import { runMigrations } from '../database/migrations'
 import { createDeferredTodoCapacityController } from './deferredTodoCapacity'
 
@@ -62,7 +63,7 @@ describe('deferred todo capacity reservations', () => {
     conn.exec('DROP TABLE deferred_todo_capacity_reservations')
     conn.prepare("UPDATE schema_meta SET value='70' WHERE key='schema_version'").run()
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '102' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deferred_todo_capacity_reservations'").get())
       .toEqual({ name: 'deferred_todo_capacity_reservations' })
     db.close()
