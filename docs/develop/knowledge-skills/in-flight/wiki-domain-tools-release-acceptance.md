@@ -1,16 +1,16 @@
 # Wiki 专属能力接口发布验收记录
 
-> 状态：E-14 本机源码已关闭；桌面读取正文边界的 TDD 修复已提交，定向测试通过，当前编译代码对隔离页面的 `open_page` / `read_page` 工具调用通过。真实 DeepSeek 保存后复读仍未在修复版桌面 UI 候选复验：此前 UI 测试使用旧编译包，保存成功但读取失败；更新包后启动遇到 `kLSNoExecutableErr`，随后 macOS 桌面自动化报告设备锁定。桌面链路是本版本验收硬门槛，故 E-15 未关闭。按用户 2026-10-21 的优先级指示，本版本可接受 IM Wiki 链路不可用，IM 未通过项不阻塞桌面修复，也不记作通过。飞书引用拒绝子项有通过证据；其他真实确认/取消及 Schema 应用/恢复尚未完成。E-16 的 macOS arm64 候选包隔离验收已通过；E-17 尚未执行，隔离 Wiki lifecycle 保持 `domain_ready`。Windows/其他平台归入各自发布验收，不阻塞本次 macOS 目标。
+> 状态：E-14 本机源码已关闭；桌面正文边界回归以 TDD 修复并提交。2026-10-21 修复版隔离 macOS arm64 候选的真实 DeepSeek 保存、固定 revision 打开和全文读取通过，读回正文逐字一致且无存储标记泄漏。桌面 Wiki 硬门槛通过。按用户优先级，本版本允许 IM Wiki 不可用；未完成渠道作为未支持缺口保留，不计为通过。E-16 隔离迁移验收通过；E-17 已在隔离候选启用，目标生命周期为 `domain_enabled`。最终 `npm test` 为 1109 文件通过、1 跳过，10527 项通过、111 项跳过；`npm run build` 通过（Vite 有既有 dynamic import 与 chunk-size 警告）。Windows/其他平台归入各自发布验收，不阻塞本次 macOS 目标。
 > 执行计划：[wiki-domain-tools-execution-plan.md](./wiki-domain-tools-execution-plan.md)
 
 ## 验收信息
 
 | 项目 | 记录 |
 | --- | --- |
-| 验收日期 | 2026-10-21（E-15 飞书 deferred Wiki 写入续验；E-16 迁移报告补验于 2026-10-20） |
+| 验收日期 | 2026-10-21（E-15 修复版桌面真实模型保存/读取复验；E-16 迁移报告补验于 2026-10-20） |
 | 源码关闭提交 | `f5b27dbd`（实现）、`61e320a7`（策略分类）、`e66bbf17`（E-14 证据）、`2737d84f`（首次启动 lifecycle 显示修复）、`e7262730`（保留 Wiki executor 的宿主确认来源） |
 | 候选版本 | SpaceAssistant 0.2.7 |
-| 当前结论 | `wikiDomainRead` 的正文边界回归先 RED 后 GREEN；27 项定向测试通过，Electron 类型检查通过。新增保存后打开/读取集成回归覆盖完整桌面领域工具往返。当前工作树编译代码对隔离临时页执行 `open_page` + `read_page` 返回 revision 1 和 17 字符正文，不含存储标记。旧版候选 UI 的同一保存后复读失败。当前 worktree 的标准 arm64 dir 包构建成功且签名校验通过，但 LaunchServices 启动仍报 `kLSNoExecutableErr`，直接启动异常退出；桌面自动化现已解除锁定，真实模型 UI 复验仍未完成。桌面端仍是本版本硬门槛。用户允许本版本 IM Wiki 链路不可用，相关真实渠道缺口不阻塞桌面工作且不记为通过。E-16 macOS arm64 候选验收已完成；E-17 未启用。Windows/其他平台留待各自发布验收 |
+| 当前结论 | `wikiDomainRead` 正文边界回归先 RED 后 GREEN；27 项定向测试、Electron 类型检查通过。2026-10-21 修复版候选 `/private/tmp/wiki-domain-tools-desktop-fix/SpaceAssistant-fixed2.app` 由真实 `deepseek-flash` 完成 `memory_wiki_get_schema`、`memory_wiki_search`、`memory_wiki_save_page`、`memory_wiki_open_page`、`memory_wiki_read_page`：pageId `68d8df29-d84e-49db-8d1a-716c869fe6a0`，revision 1，projection `complete`，读取 `hasMore=false`，charCount 17 / lineCount 2，正文“桌面 Wiki 保存读取回归正文”逐字匹配且无存储封套；SCHEMA 未修改。桌面真实模型保存后复读与硬门槛通过。E-15 IM 渠道缺口按用户决定作为本版本未支持项保留，不冒充通过。E-16 macOS arm64 候选验收完成；E-17 已在隔离根完成启用，生命周期 `domain_enabled`。最终 `npm test`：1109 文件通过、1 跳过；10527 项通过、111 项跳过。`npm run build` 通过，Vite 有既有 dynamic import/chunk-size 警告。Windows/其他平台留待各自发布验收 |
 
 ## E-14 本机源码验收
 
@@ -67,6 +67,10 @@
 | 目标平台 userData 权限与 `safeAtomicWrite` 兼容性 | macOS 26.5.2 arm64 隔离默认 HOME fixture | 候选包在默认 userData 路径真实协调 page history、catalog、schema history、index 和 log；Wiki 根、`.wiki-service` 与 `wiki/topics` 目录权限为 0755、Wiki 文件 0600，DB 目录 0755、数据库文件 0644，owner 均为隔离用户。对 Wiki 文件的实际原子协调写入成功；其他 macOS 版本与 x64 硬件未验证 | 当前 arm64 候选目标通过；其他目标平台留待各自发布验收 | Codex / 2026-10-18 |
 | 候选包迁移报告 UI、冲突、确认与切换后 index/log | macOS 26.5.2 arm64；SpaceAssistant 0.2.7 修复版 arm64 dir 候选副本 `com.spaceassistant.wikidomaincandidate2`（成功迁移）与 `com.spaceassistant.wikidomaincandidate3`（最新标题冲突构建）；隔离 userData `/tmp/wiki-domain-tools-rerun-userdata`、`/tmp/wiki-domain-tools-conflict-userdata` | `npm exec vitest run electron/wiki/wikiMigrationPreflight.test.ts electron/wiki/wikiMigrationCoordinator.test.ts electron/wiki/wikiMigrationJournal.test.ts`：3 文件、21 项通过；新增 index 投影断言和同标题异路径冲突用例均先 RED、修复后 GREEN。`npm run build:electron:incremental` 与最终 arm64 dir 打包成功，ad-hoc 签名和 `codesign --verify --deep --strict` 通过。候选进程 helper 命令行核实使用 `/tmp` userData；成功迁移 fixture 中 SCHEMA、index、log、page、raw 均位于隔离根。Wiki UI 预览显示 4 个文件、6 个变更，包含迁移说明普通页、只读旧日志归档、页面 marker、SCHEMA 分类区块、`wiki/index.md` 的 `index-projection` 和 `wiki/log.md` 的 `log-projection`；确认按钮启用。原生最终确认对话框显示同一 manifest hash，确认后 UI 回到正常 Wiki 面板。migration `61090b6f-51cb-4433-afa2-579846f22e7f` 状态 `completed`，6/6 entries 为 `verified`。切换后 index 包含 Runtime 与迁移说明两个普通页面、不含人工区块；log 为 `# Wiki Operation Log`。旧 index/log 的 `backup/4.bak`、`backup/5.bak` 分别逐字等于迁移前内容，SHA-256 为 `d4965bb54feaf33ed6dc33b69eab31619e564693afe0f676ee21a78e33dcd3e1`、`cf450460a6cd4e2918ae8d477bf3247be9949948e53258bd9d771d8e6c23f6fc`。最新 Candidate3 对另一 fixture 的旧 index note 标题与不同路径页面冲突时，UI 明确列出两条冲突路径并禁用“确认迁移”；取消后七个 Wiki/control 文件哈希未变，lifecycle 仍为 `initializing`。legacy log 另有只读历史归档。此前默认 `Application Support/SpaceAssistant` 隔离 HOME page/SCHEMA/raw 协调、旧版写入、外部标题冲突零写入、权限与 safeAtomicWrite 验收仍适用 | AC-16 迁移报告、冲突门控、人工确认、旧 index/log 字节备份与切换后服务投影通过；合并既有 default-userData、外部编辑、权限及 atomic-write 证据后，E-16 完成。E-15 的真实飞书/微信仍待验收，不启用 E-17 | Codex / 2026-10-20 |
 
+## E-15 桌面真实模型复验（2026-10-21）
+
+用户从 Finder 启动修复版候选 `/private/tmp/wiki-domain-tools-desktop-fix/SpaceAssistant-fixed2.app` 后，CUA 核实窗口 URL 属于该包的 `app.asar`，Bundle ID 为 `com.spaceassistant.wikidesktopfix2`，模型为真实 `deepseek-flash`。在隔离 userData `/private/tmp/wiki-domain-tools-desktop-fix/userdata` 的新会话执行 `memory_wiki_get_schema`（schemaVersion 1、`topic` active）、标题查重、`memory_wiki_save_page`、`memory_wiki_open_page`（固定 revision 1）及 `memory_wiki_read_page`（`hasMore=false`）。pageId `68d8df29-d84e-49db-8d1a-716c869fe6a0`，projection `complete`，读取元数据 charCount 17、lineCount 2；读回正文“桌面 Wiki 保存读取回归正文”逐字一致，未泄漏存储 marker/metadata，SCHEMA 未修改。页面和会话仅写入隔离候选数据。由此关闭本版本桌面 Wiki 保存/读取硬门槛；IM Wiki 渠道依用户优先级作为本版本未支持项保留，未验收场景不记为通过。
+
 ## E-17 启用门禁
 
-E-17 未执行。E-16 已通过；E-15 的真实飞书/微信会话尚未完成，只有 E-15 通过后才可检查目标 Wiki 根的 bootstrap seal / lifecycle / migration manifest 并执行启用。当前隔离 Wiki lifecycle 继续保持 `domain_ready`；无有效证据时不得启用旁路规则。
+E-17 已在本次隔离 macOS 候选执行。目标根 `/private/tmp/wiki-domain-tools-desktop-fix/userdata/llm-wiki` 的 bootstrap seal root identity 与目录一致，`.wiki-service/state.json` 前态为 `domain_ready`，`initialization=empty` 且无 `migrationId`；因此迁移检查为 no-op。使用当前工作树 `createWikiLifecycleController(root).enable()` 完成转换，随后重新读取确认 lifecycle 为 `domain_enabled`。该转换仅作用于隔离候选根，不触及日常 userData；当前版本 Wiki 通用文件旁路拒绝行为另由 E-12 policy/file IPC 边界测试覆盖。E-15 桌面硬门槛与 E-16 macOS arm64 隔离验收通过；IM Wiki 渠道依用户决定保留为本版本未支持项，未验收渠道不记作通过。Windows/其他平台不由本次 macOS 结果覆盖。
