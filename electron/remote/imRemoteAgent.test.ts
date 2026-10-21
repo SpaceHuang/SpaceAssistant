@@ -1073,8 +1073,10 @@ describe('runImRemoteAgent', () => {
     const session = createSession(db, { name: 'remote-current-turn-input' })
     setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
     const { prepareTurnAtomically, appendMessage } = await import('../database')
+    appendMessage(db, { id: 'remote-prior-user', sessionId: session.id, role: 'user', content: '生成提案', timestamp: 0, status: 'sent' })
+    appendMessage(db, { id: 'remote-prior-assistant', sessionId: session.id, role: 'assistant', content: '提案 ID：proposal-from-prior-turn', timestamp: 0, status: 'sent' })
     prepareTurnAtomically(db, {
-      user: { id: 'remote-accepted-user', sessionId: session.id, role: 'user', content: 'accepted remote input', timestamp: 1, status: 'sent' },
+      user: { id: 'remote-accepted-user', sessionId: session.id, role: 'user', content: '批准并应用该提案', timestamp: 1, status: 'sent' },
       assistant: { id: 'remote-accepted-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
       turn: { turnId: 'remote-accepted-turn', requestId: 'remote-accepted-request', sessionId: session.id, assistantMessageId: 'remote-accepted-assistant', state: 'prepared', startToken: 'remote-accepted-token' }
     })
@@ -1099,6 +1101,7 @@ describe('runImRemoteAgent', () => {
 
     expect(captured?.messages.list.map((message) => message.id)).toContain('remote-accepted-user')
     expect(captured?.messages.currentUserMessageId).toBe('remote-accepted-user')
+    expect(captured?.messages.list.map((message) => message.content)).toContain('提案 ID：proposal-from-prior-turn')
     expect(captured?.messages.list.map((message) => message.content)).not.toContain('unrelated session tail')
     expect(captured?.acceptedTurn).toBe(acceptedTurn)
     expect(mockGetMessages).not.toHaveBeenCalled()
@@ -3826,14 +3829,14 @@ describe('runImRemoteAgent', () => {
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({
         toolCallId: 'feishu-history-read-unavailable',
-        result: { success: false, error: 'History is unavailable for this session' }
+        result: { success: false, error: '没有可回查的压缩历史；这只表示缺少压缩检查点，请检查本次请求已提供的消息，不要据此判断对话上下文缺失。' }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
           toolUseId: 'feishu-history-read-unavailable',
-          result: { success: false, error: 'History is unavailable for this session' }
+          result: { success: false, error: '没有可回查的压缩历史；这只表示缺少压缩检查点，请检查本次请求已提供的消息，不要据此判断对话上下文缺失。' }
         })
       } finally { await sink.close() }
     } finally {

@@ -1362,13 +1362,13 @@ describe('runWeChatRemoteAgent', () => {
       expect(providerCalls).toBe(2)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({
-        toolCallId: 'wechat-history-read-unavailable', result: { success: false, error: 'History is unavailable for this session' }
+        toolCallId: 'wechat-history-read-unavailable', result: { success: false, error: '没有可回查的压缩历史；这只表示缺少压缩检查点，请检查本次请求已提供的消息，不要据此判断对话上下文缺失。' }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
-          toolUseId: 'wechat-history-read-unavailable', result: { success: false, error: 'History is unavailable for this session' }
+          toolUseId: 'wechat-history-read-unavailable', result: { success: false, error: '没有可回查的压缩历史；这只表示缺少压缩检查点，请检查本次请求已提供的消息，不要据此判断对话上下文缺失。' }
         })
       } finally { await sink.close() }
     } finally {
