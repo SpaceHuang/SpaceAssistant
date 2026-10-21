@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createWikiFileStore } from './wikiFileStore'
 import { createWikiDomainReadService } from './wikiDomainRead'
+import { serializeWikiPageMarker } from './wikiReconciler'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -14,6 +15,35 @@ async function fixture() {
 }
 
 describe('WikiDomainReadService', () => {
+  it('returns authored Markdown body without the storage marker or generated title heading', async () => {
+    const { store } = await fixture()
+    const body = '# Guide\n\n## Details\n\nAuthored content.\n'
+    const snapshot = `${serializeWikiPageMarker({ pageId: 'p-1', categoryId: 'topic', summary: 'summary', parentPageId: null, sourceRefs: [], revision: 3 })}\n# Guide\n\n${body}`
+    await store.writeImmutable('.wiki-service/page-history/p-1/3.md', snapshot)
+    const service = createWikiDomainReadService({ store, pages: [{ pageId: 'p-1', title: 'Guide', categoryId: 'topic', path: 'wiki/guide.md', revision: 3 }] })
+
+    const opened = await service.openPage('p-1', { callerId: 'caller', lane: 'desktop' })
+    const read = await service.readPage(opened.readHandle, { callerId: 'caller', lane: 'desktop' })
+
+    expect(opened.charCount).toBe(Array.from(body).length)
+    expect(read.text).toBe(body)
+    expect(read.text).not.toContain('wiki-page:start')
+    expect(read.text).not.toContain('"pageId"')
+  })
+
+  it('returns metadata from the requested historical revision', async () => {
+    const { store } = await fixture()
+    const snapshot = `${serializeWikiPageMarker({ pageId: 'p-history', categoryId: 'concept', summary: 'old summary', parentPageId: 'parent-old', sourceRefs: [{ sourceId: 'source-old', sourceRevision: 2 }], revision: 2 })}\n# Old title\n\nOld body\n`
+    await store.writeImmutable('.wiki-service/page-history/p-history/2.md', snapshot)
+    const service = createWikiDomainReadService({ store, pages: [{ pageId: 'p-history', title: 'Current title', categoryId: 'topic', summary: 'current summary', parentPageId: 'parent-current', sourceRefs: [{ sourceId: 'source-current', sourceRevision: 5 }], path: 'wiki/page.md', revision: 3 }] })
+
+    const opened = await service.openPage('p-history', { callerId: 'caller', lane: 'desktop' }, 2)
+    const read = await service.readPage(opened.readHandle, { callerId: 'caller', lane: 'desktop' })
+
+    expect(opened).toMatchObject({ revision: 2, title: 'Old title', categoryId: 'concept', summary: 'old summary', parentPageId: 'parent-old', sourceRefs: [{ sourceId: 'source-old', sourceRevision: 2 }] })
+    expect(read.text).toBe('Old body\n')
+  })
+
   it('reads immutable page snapshots with bounded, Unicode-safe cursors', async () => {
     const { store } = await fixture()
     await store.writeImmutable('.wiki-service/page-history/p-1/1.md', `${'😀'.repeat(8)}\nsecond line\n`)

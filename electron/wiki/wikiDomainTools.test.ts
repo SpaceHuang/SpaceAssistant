@@ -143,6 +143,28 @@ describe('Wiki domain search tool', () => {
     expect(await readWikiPageForContext({ readHandle }, context)).toMatchObject({ success: false, error: 'wiki-access-denied' })
   })
 
+  it('returns authored Markdown through the desktop page tools, not the storage envelope', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const body = '# Guide\n\n## Details\n\nAuthored content.\n'
+    const snapshot = `${serializeWikiPageMarker({ pageId: 'p-envelope', categoryId: 'topic', summary: 'summary', parentPageId: null, sourceRefs: [], revision: 3 })}\n# Guide\n\n${body}`
+    await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: 'p-envelope', path: 'wiki/guide.md', revision: 3, title: 'Guide', categoryId: 'topic', summary: 'summary' }] })
+    await store.writeImmutable('.wiki-service/page-history/p-envelope/3.md', Buffer.from(snapshot))
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-envelope', lane: 'desktop' }
+
+    const opened = await openWikiPageForContext({ pageId: 'p-envelope' }, context)
+    expect(opened).toMatchObject({ success: true, data: { title: 'Guide', revision: 3, charCount: Array.from(body).length } })
+    const readHandle = (opened.data as { readHandle: string }).readHandle
+    const read = await readWikiPageForContext({ readHandle }, context)
+
+    expect(read).toMatchObject({ success: true, data: { text: body, startOffset: 0, endOffset: Array.from(body).length, hasMore: false } })
+    expect(JSON.stringify(read)).not.toContain('wiki-page:start')
+    expect(JSON.stringify(read)).not.toContain('"pageId"')
+  })
+
   it('reconciles an external edit before opening the page and pins the new immutable revision', async () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)

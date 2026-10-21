@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { WikiFileStore } from './wikiFileStore'
+import { parseWikiPageMarker } from './wikiReconciler'
 
 export interface WikiPageReadRecord { pageId: string; title: string; categoryId: string; summary?: string; parentPageId?: string | null; path: string; revision: number; sourceRefs?: Array<{ sourceId: string; sourceRevision: number }> }
 export interface WikiReadCaller { callerId: string; lane: string }
@@ -36,9 +37,27 @@ export function createWikiDomainReadService(options: {
       let text: string
       try { text = (await options.store.readText(`.wiki-service/page-history/${pageId}/${revision}.md`)) }
       catch { throw new WikiDomainReadError('wiki-page-unavailable') }
+      let pageAtRevision: WikiPageReadRecord = { ...page, revision }
+      const parsed = parseWikiPageMarker(text)
+      if (parsed.marker) {
+        if (parsed.marker.pageId !== pageId || parsed.marker.revision !== revision) throw new WikiDomainReadError('wiki-page-unavailable')
+        const content = splitStoredPageTitle(parsed.body)
+        text = content.markdown
+        pageAtRevision = {
+          ...page,
+          revision,
+          title: content.title ?? page.title,
+          categoryId: parsed.marker.categoryId,
+          summary: parsed.marker.summary,
+          parentPageId: parsed.marker.parentPageId,
+          sourceRefs: parsed.marker.sourceRefs
+        }
+      } else if (text.includes('<!-- wiki-page:start -->') || text.includes('<!-- wiki-page:end -->')) {
+        throw new WikiDomainReadError('wiki-page-unavailable')
+      }
       const readHandle = randomUUID()
-      handles.set(readHandle, { caller, page, revision, text, expiresAt: now() + handleTtlMs, cursors: new Map() })
-      return { readHandle, pageId, revision, title: page.title, categoryId: page.categoryId, summary: page.summary ?? '', parentPageId: page.parentPageId ?? null, sourceRefs: page.sourceRefs ?? [], charCount: Array.from(text).length, lineCount: text.split('\n').length }
+      handles.set(readHandle, { caller, page: pageAtRevision, revision, text, expiresAt: now() + handleTtlMs, cursors: new Map() })
+      return { readHandle, pageId, revision, title: pageAtRevision.title, categoryId: pageAtRevision.categoryId, summary: pageAtRevision.summary ?? '', parentPageId: pageAtRevision.parentPageId ?? null, sourceRefs: pageAtRevision.sourceRefs ?? [], charCount: Array.from(text).length, lineCount: text.split('\n').length }
     },
     async readPage(readHandle: string, caller: WikiReadCaller, input: { cursor?: string; startLine?: number; maxChars?: number } = {}) {
       const handle = handles.get(readHandle)
@@ -107,6 +126,17 @@ export function createWikiDomainReadService(options: {
       return { results: matches.slice(0, limit).map(page => ({ pageId: page.pageId, title: page.title, categoryId: page.categoryId, summary: page.summary ?? '', revision: page.revision })), totalMatches: matches.length }
     },
   }
+}
+
+function splitStoredPageTitle(markdown: string): { title?: string; markdown: string } {
+  const lines = markdown.split('\n')
+  const headingIndex = lines.findIndex(line => line.trim() !== '')
+  if (headingIndex < 0) return { markdown }
+  const match = /^#\s+(.+?)\s*#*\s*$/.exec(lines[headingIndex]!.trim())
+  if (!match) return { markdown }
+  lines.splice(headingIndex, 1)
+  if (lines[headingIndex] === '') lines.splice(headingIndex, 1)
+  return { title: match[1]!.trim(), markdown: lines.join('\n') }
 }
 
 function decodeSourceCursor(cursor: string, key: string): number {
