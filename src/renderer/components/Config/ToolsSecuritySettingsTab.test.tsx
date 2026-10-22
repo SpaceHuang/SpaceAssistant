@@ -121,7 +121,6 @@ describe('SecuritySettingsTab（§7 五区）', () => {
       securityWritePolicy: vi.fn().mockResolvedValue({ status: 'committed', revision: 6 }),
       securitySetPolicyPackage: vi.fn().mockResolvedValue({ ok: true }),
       securitySetRuleOverride: vi.fn().mockResolvedValue({ ok: true }),
-      securitySetRuleEnabled: vi.fn().mockResolvedValue({ ok: true }),
       securityRemoveRuleOverride: vi.fn().mockResolvedValue({ ok: true, removed: 1 }),
       securityListDecisionCache: vi.fn().mockResolvedValue([
         {
@@ -144,6 +143,9 @@ describe('SecuritySettingsTab（§7 五区）', () => {
   })
 
   it('IM 套餐写入共同策略快照并携带读取到的 revision', { timeout: 20000 }, async () => {
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 5, snapshot: { selectedPackage: 'custom' }
+    })
     renderTab()
     const panel = await openLaneTab('IM 远程')
     const packageSelect = (await within(panel).findAllByRole('combobox'))[0]!
@@ -311,7 +313,7 @@ describe('SecuritySettingsTab（§7 五区）', () => {
     expect(within(panel).getByText('universal-no-lane')).toBeTruthy()
     expect(within(panel).queryByText('im-write-ask')).toBeNull()
     expect(within(panel).queryByText('remote-shell-disabled')).toBeNull()
-    // 已移除独立的「链路硬约束」主开关，系统保护规则用「启用/不启用」开关
+    // 已移除独立的「链路硬约束」主开关
     expect(within(panel).queryByText('链路硬约束')).toBeNull()
   })
 
@@ -324,31 +326,43 @@ describe('SecuritySettingsTab（§7 五区）', () => {
     expect(within(panel).getByText('im-write-ask')).toBeTruthy()
   })
 
-  it('IM 远程 Tab 展示系统保护规则（locked）的「启用/不启用」开关，不渲染锁定标记', { timeout: 20000 }, async () => {
+  it('IM 远程 Tab 在 custom 套餐下允许配置原 locked 规则动作', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL, packages: { ...MODEL.packages, wechat: 'custom' }
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {} }
+    })
     renderTab()
     const panel = await openLaneTab('IM 远程')
     expect(await within(panel).findByText('im-write-ask')).toBeTruthy()
     expect(within(panel).getByText('remote-shell-disabled')).toBeTruthy()
-    // locked 系统保护规则用「启用/不启用」Switch，不再显示「锁定」标记
-    expect(within(panel).queryByText('锁定')).toBeNull()
     const ruleRow = within(panel).getByText('remote-shell-disabled').closest('tr')!
-    const sw = ruleRow.querySelector('.ant-switch')!
-    expect(sw).toBeTruthy()
-    expect(sw.className).toContain('ant-switch-checked')
+    expect(ruleRow.querySelector('.ant-switch')).toBeNull()
+    expect(within(ruleRow as HTMLElement).getByRole('combobox')).toBeTruthy()
     // 桌面规则不出现在微信 Tab
     expect(within(panel).queryByText('script-clean-allow-desktop')).toBeNull()
   })
 
-  it('IM 系统保护规则开关通过共同快照禁用 locked deny', { timeout: 20000 }, async () => {
+  it('IM 原 locked 规则动作通过共同快照保存并遵守 revision', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL, packages: { ...MODEL.packages, wechat: 'custom' }
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {} }
+    })
     renderTab()
     const panel = await openLaneTab('IM 远程')
-    const ruleRow = (await within(panel).findByText('remote-shell-disabled')).closest('tr')!
-    const sw = ruleRow.querySelector('.ant-switch')!
-    fireEvent.click(sw)
+    const ruleRow = (await within(panel).findByText('im-write-ask')).closest('tr')!
+    const selector = within(ruleRow as HTMLElement).getByRole('combobox')
+    fireEvent.mouseDown(selector)
+    fireEvent.click((await within(document.body).findAllByText('直接执行')).at(-1)!)
     await waitFor(() => {
       expect(window.api.securityWritePolicy).toHaveBeenCalledWith({
         lane: 'wechat', expectedRevision: 5,
-        change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: false }
+        change: { kind: 'rule-override', ruleId: 'im-write-ask', action: 'allow' }
       })
     })
   })
@@ -360,7 +374,7 @@ describe('SecuritySettingsTab（§7 五区）', () => {
     fireEvent.mouseDown(select)
     fireEvent.click(await screen.findByText('严格'))
     await waitFor(() => {
-      expect(window.api.securitySetPolicyPackage).toHaveBeenCalledWith({ lane: 'desktop', package: 'strict' })
+      expect(window.api.securitySetPolicyPackage).toHaveBeenCalledWith({ lane: 'desktop', package: 'strict', expectedRevision: 0 })
     })
   })
 
@@ -436,6 +450,9 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
       ...MODEL,
       packages: { ...MODEL.packages, desktop: 'custom' }
     })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 5, snapshot: { selectedPackage: 'custom' }
+    })
     renderTab()
     const panel = await screen.findByRole('tabpanel')
     const row = (await within(panel).findByText('mcp-tool-ask')).closest('tr')!
@@ -450,7 +467,8 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
       expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({
         ruleId: 'mcp-tool-ask',
         action: 'auto-evaluator',
-        lane: 'desktop'
+        lane: 'desktop',
+        expectedRevision: 5
       })
     })
   })

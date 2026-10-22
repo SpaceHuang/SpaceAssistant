@@ -36,6 +36,7 @@ export interface SecuritySettingsRuleView {
 export interface SecuritySettingsModelPayload {
   /** 1. 策略套餐（每链路）；规则行的生效动作由渲染端按 LANE_PROFILES.effectiveActionFor 计算 */
   packages: PolicyPackageMap
+  policyRevisions?: Partial<Record<'desktop' | 'im', number>>
   /** 2. 工具开关（deniedTools） */
   deniedTools: string[]
   /** 4. 确认记忆（decision_cache 全量，渲染端按档位分组） */

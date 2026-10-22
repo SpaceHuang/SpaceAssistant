@@ -1,12 +1,12 @@
 # 自定义安全策略完整可配置执行计划
 
 - **日期：** 2026-10-22
-- **状态：** Phase 0–2 已关闭；Phase 3–5 源码实施与验收进行中；T10 外部验收未开始
+- **状态：** Phase 0–4 已关闭；Phase 5 源码集成与回滚验收进行中；T10 外部验收未开始
 - **方案真源：** [自定义安全策略完整可配置开发计划](./custom-policy-full-control-development-plan.md)
 - **验收与不变量真源：** 方案 INV-01–INV-10；产品行为 AC-1–AC-22 以需求稿为准
 - **代码基线：** `109a938404124235d632e4cdbd4f9e06eaa48728`
 
-本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 T7 与 Phase 5 T9 仍待关闭。T8 旧 rule-enabled shim 目前仍存在，按计划待 T8 迁移所有 caller 后删除。
+本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 renderer 合并用例 21 项通过，i18n normal/strict 与 renderer typecheck 通过；Impeccable detector 返回 `[]`。Strict i18n 报出的 1713 条均位于测试文件（符合仓库例外），源码为 0。Phase 5 T8/T9 仍待关闭。T8 旧 rule-enabled shim 当前保留，待 T8 所有 caller 核验后删除。
 
 本轮计划评审（2026-10-22）处理：B1 全规则覆盖及消费点、B4 T4/T7/T8 的兼容接口顺序；B2/B3/B5 分别在 T6/T5/T4 按最小范围补充。负责人确认 ingress 消息须经批准后才进入处理，exposure 对象须经批准后才暴露；这是本期必做能力，见需求 AC-21/AC-22。
 
@@ -214,7 +214,7 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
 - [x] **Phase 1 关闭门槛**
   - **证据来源：** T2 与 T3 的测试/决策 trace 断言；若改 `src/shared/confirmation/types.ts`，同时提供 `npm run typecheck:shared` 输出。
   - **完成判据：** T2/T3 测试通过；旧停用数据仍按兼容路径工作（T4 尚未启动）；每种展示规则类型的动作均有消费测试；automation 未意外开放。
-  - **阶段收尾证据：** `vitest run` Phase 1 合并集合 15 files / 255 tests passed；覆盖 policy action/lane contract、多规则优先级、ingress ask 的原消息对象、exposure ask 的精确工具对象，以及 automation floor。代码和阶段状态随本提交关闭。
+  - **阶段收尾证据：** `vitest run` Phase 1 合并集合 19 files / 347 tests passed；覆盖 policy action/lane contract、多规则优先级、ingress ask 的原消息对象、exposure ask 的精确工具对象，以及 automation floor。代码和阶段状态随本提交关闭。
 
 ### Phase 2：持久化、IPC 与存量迁移
 
@@ -262,17 +262,18 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
 
 **阶段输入：** D-UI 已批准，T1b 视觉基线、Phase 1 action contract、Phase 2 新 write API；T7。**阶段产出：** 自定义规则可编辑和可保存；renderer 使用新 action API。**允许改动：** `ToolsSecuritySettingsTab.tsx`、settings model/IPC payload、i18n 与 renderer tests。**移除兼容：** UI 旧启停控件与旧 payload/key；旧 IPC/API shim 保留到 T8。**失败回退：** 可回退 UI，T4 shim 仍支持旧调用。入口与暴露 ask 均为本期必做能力；按需求 AC-21/AC-22 实现并验收。
 
-- [ ] **T7 · 改造规则行、IM 共享提示和保存反馈**
+- [x] **T7 · 改造规则行、IM 共享提示和保存反馈**
   - **目标文件：** `src/renderer/components/Config/ToolsSecuritySettingsTab.tsx`、`toolsSecurityFormat.ts`（如 view formatting 所需）、`ToolsSecuritySettingsTab.test.tsx`、`src/renderer/i18n/resources/{zh-CN,en-US}/config.json`、`src/renderer/i18n/types.ts`。
   - **产物：** 规则 action selector、逐条 reset、默认人工批准频率说明、旧停用迁移说明、IM shared-domain notice、pending/success/failure/conflict UI、语言同步。
   - **完成判据：** 每条规则（含 ingress/exposure）动作集合准确；不出现 locked 只读行或启停开关；成功后才更新显示；revision 冲突重新读取；所有文案经 `t()`；实现后 `$impeccable` 检查完成。自动化/静态检查作为本机门禁；真实 Electron 窗口窄布局手工结果记录为外部验收 T10，不阻塞源码阶段。
   - **验证命令：** `npm exec vitest run src/renderer/components/Config/ToolsSecuritySettingsTab.test.tsx`；`npm run i18n:generate-types`；`npm run i18n:check`；`npm run typecheck:renderer`。
-  - **环境 / 状态：** 本机自动化 / 未开始；完成 AC-1、AC-7–AC-9、AC-19，INV-08。真实窗口检查归 T10。
+  - **阶段证据：** renderer 组件 21 tests passed；`i18n:generate-types` 已运行；`i18n:check`、`i18n:check:strict`、renderer typecheck 通过；Impeccable detector 返回 `[]`。未改现有页面布局；桌面真实窗口窄布局归 T10。
+  - **环境 / 状态：** 本机自动化 / 已完成；完成 AC-1、AC-7–AC-9、AC-19，INV-08。真实窗口检查归 T10。
 
-- [ ] **Phase 4 关闭门槛**
+- [x] **Phase 4 关闭门槛**
   - **证据来源：** T7 renderer tests、i18n check、typecheck、I8 card approval、`$impeccable` 检查记录。
   - **完成判据：** 桌面/IM action options 与主进程 validator 一致；共享配置说明明确；失败/冲突不误报；zh-CN/en-US keys 完整对齐；未经批准的界面改动为零。
-  - **阶段收尾：** 运行相关 renderer 测试、i18n 检查及 typecheck，一次提交阶段代码。
+  - **阶段收尾证据：** renderer 测试、i18n normal/strict、renderer typecheck 通过；当前 Impeccable 检查无 finding。Phase 4 UI/i18n 与阶段状态随本阶段提交关闭。
 
 ### Phase 5：集成、回滚与源码关闭
 
