@@ -1,12 +1,12 @@
 # 自定义安全策略完整可配置执行计划
 
 - **日期：** 2026-10-22
-- **状态：** Phase 0–5 源码阶段已关闭；Phase 6/T10 外部验收未开始
+- **状态：** Phase 0–5 源码阶段已关闭；Phase 6/T10 外部验收进行中（本机包阶段遇到 hdiutil 超时，桌面仍锁定）
 - **方案真源：** [自定义安全策略完整可配置开发计划](./custom-policy-full-control-development-plan.md)
 - **验收与不变量真源：** 方案 INV-01–INV-10；产品行为 AC-1–AC-22 以需求稿为准
 - **代码基线：** `109a938404124235d632e4cdbd4f9e06eaa48728`
 
-本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 renderer 合并用例 21 项通过，i18n normal/strict 与 renderer typecheck 通过；Impeccable detector 返回 `[]`。Phase 5 T8 已删除旧 rule-enabled shim，并完成 AC/INV 矩阵；跨域集合 40 文件 / 802 项通过。Strict i18n 报出的 1714 条均位于测试文件（符合仓库例外），源码为 0。T9 隔离 SQLite 回滚演练与全仓最终验收已完成；T10 外部验收未开始。
+本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 renderer 合并用例 21 项通过，i18n normal/strict 与 renderer typecheck 通过；Impeccable detector 返回 `[]`。Phase 5 T8 已删除旧 rule-enabled shim，并完成 AC/INV 矩阵；跨域集合 40 文件 / 802 项通过。Strict i18n 报出的 1714 条均位于测试文件（符合仓库例外），源码为 0。T9 隔离 SQLite 回滚演练与全仓最终验收已完成。T10 已尝试 macOS 包验收：x64 app bundle 构建并通过 ad-hoc signature verification，app.asar SHA-256=`7f1975aa8c7b1700000cdf8b70c6aa9b49f8e1ca5badf59eaee340fd71b0fcc1`；DMG 创建时 electron-builder 与直接 hdiutil 均超时。随后直接运行发布流水线使用的 `npx electron-builder --mac pkg --x64 --publish never` 成功生成 199 MB x64 PKG，SHA-256=`29374df0539af8a8cbad006718b2d2a601bb180c131e4355c9be37cf14369c0a`；`verify:macos-app` 与 `verify:rg:package` 通过，PKG payload 包含 app。PKG 未签名，app 为 ad-hoc 签名，当前 DMG/arm64 均未验收。Mac 锁定导致应用启动与 UI smoke 尚未执行；真实微信/飞书账号、脱敏旧库副本尚未定位。
 
 本轮计划评审（2026-10-22）处理：B1 全规则覆盖及消费点、B4 T4/T7/T8 的兼容接口顺序；B2/B3/B5 分别在 T6/T5/T4 按最小范围补充。负责人确认 ingress 消息须经批准后才进入处理，exposure 对象须经批准后才暴露；这是本期必做能力，见需求 AC-21/AC-22。
 
@@ -345,12 +345,12 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
 
 **阶段输入：** T9 源码关闭；D-UI 批准；可用测试机器、备份数据库副本与真实 IM 测试账号。**阶段产出：** 手工/外部渠道记录、启用决定。**允许改动：** 发现问题后回到对应任务修复并重新验收；不绕过 AC。**失败回退：** 停止发布或关闭新功能入口；保留数据备份和审计；不得恢复旧代码并让新格式数据裸跑。
 
-- [ ] **T10 · 验收桌面、IM 账号、存量升级和发布包**
+- [～] **T10 · 验收桌面、IM 账号、存量升级和发布包**
   - **目标范围：** Electron 桌面设置页；真实微信/飞书 owner 测试环境；脱敏存量 DB 副本；目标 OS 安装包。
   - **产物：** 外部验收记录（测试版本/账号环境、用例、结果、审批失效和 executor 未调用证据、迁移前后备份 hash、回滚结果）。
   - **完成判据：** 桌面自定义动作能控制真实调用；共享 IM 修改在两个 channel 正确生效；待审批/迟到批准按新策略收敛；已开始执行不被误称取消；存量 disabled 用户升级迁移与重启保持结果；正式包可启动并保存设置。
   - **验证方式：** 手工桌面与真实 IM scenario；目标平台 packaged app smoke test；存量数据库仅在隔离副本执行。
-  - **环境 / 状态：** 外部 / 未开始；外部资源不到位时该任务保持未完成，不回写源码阶段为阻塞。
+  - **环境 / 状态：** 外部 / 进行中。本机 macOS x64 app bundle (`release/mac/SpaceAssistant.app`) 完成构建，`codesign --verify --deep --strict` 通过，二进制为 x86_64，资源签名为 ad-hoc（无 Developer ID）；app.asar SHA-256=`7f1975aa8c7b1700000cdf8b70c6aa9b49f8e1ca5badf59eaee340fd71b0fcc1`。`npm run pack:mac` 的 x64 app 后处理成功，但打包至 DMG 创建时 hdiutil 反复退出码 1 / 超时；同一 app bundle 的直接 `hdiutil create` 也超时。改走发布流水线的 PKG target 后，`npx electron-builder --mac pkg --x64 --publish never` 成功生成 199 MB `release/SpaceAssistant-0.2.9.pkg`，SHA-256=`29374df0539af8a8cbad006718b2d2a601bb180c131e4355c9be37cf14369c0a`，payload 含 app；`verify:macos-app` 与 `verify:rg:package` 通过。PKG 无签名，app ad-hoc 签名；DMG 与 arm64 未完成。Cua 环境报告 Mac 锁定，桌面设置保存和 app 启动 smoke 尚未执行。当前 shell 未发现 IM 凭证变量；尚未获得可用微信/飞书 owner 测试环境、脱敏旧库副本与目标群/测试对象。需在用户解锁并提供非生产验收资源后继续；不在此处将源码阶段改回未关闭。
 
 ## 最终完成定义
 
