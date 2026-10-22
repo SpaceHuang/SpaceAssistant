@@ -1,8 +1,9 @@
 import type { AppDatabase } from '../database/sqliteStore'
-import { getDbConnection } from '../database'
+import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { summarizeFailedInvocation } from '../runtime/continuationSummary'
-import type { ContinuationSourceQueries, FailedSourceCandidate, ContinuationSourceInspection } from './contracts'
+import type { ContinuationSourceQueries } from './public/ports'
+import type { FailedSourceCandidate, ContinuationSourceInspection } from './public/model'
 
 /** Session-scoped canonical History inspection; callers choose policy but never enumerate storage. */
 export function inspectContinuationSources(db: AppDatabase): ContinuationSourceQueries {

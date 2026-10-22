@@ -4,6 +4,7 @@ import { getMessages } from '../database/operations'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
 import { SqliteAgentHistory, type CanonicalSessionTranscriptRead } from './sqliteAgentHistory'
 import { canonicalBackedSessionProjectionMatches } from './sessionTranscriptProjection'
+import { hasCurrentProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 
 export type SessionProjectionMigrationDisposition =
   | 'projection_migrated'
@@ -74,9 +75,9 @@ function hasCurrentProjectionCache(
   history: SqliteAgentHistory,
   transcript: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }>
 ): boolean {
-  const eligibility = getDbConnection(db).prepare(`SELECT session_generation FROM canonical_session_projection_eligibility
-    WHERE session_id=?`).get(transcript.sessionId) as { session_generation: string } | undefined
-  if (eligibility?.session_generation !== transcript.sessionGeneration) return false
+  const writeMode = getDbConnection(db).prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
+    .get(transcript.sessionId) as { write_mode: string } | undefined
+  if (writeMode?.write_mode !== 'canonical' && !hasCurrentProjectionEligibility(db, transcript.sessionId)) return false
   const cache = history.readCanonicalSessionCache({ ...transcript, cacheKey: 'transcript' })
   if (cache.kind !== 'hit') return false
   try {

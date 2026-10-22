@@ -280,79 +280,326 @@ export function canonicalSessionTranscriptEvents(events: readonly HistoryEvent[]
  * omitted ID never means deletion. Any ambiguous ordering falls back to legacy.
  */
 export function foldClaudeSessionSnapshots(snapshots: readonly CanonicalSessionSnapshot[]): ClaudeChatMessageWithBlocks[] {
-  if (snapshots.length === 0) return []
-  const ordered = [...snapshots].sort((left, right) => left.sessionSeq - right.sessionSeq || left.commitOrder - right.commitOrder)
-  const sessionId = ordered[0]!.sessionId
-  let previousSessionSeq = 0
-  let previousCommitOrder = 0
-  const folded: ClaudeChatMessageWithBlocks[] = []
-  const indexById = new Map<string, number>()
-
-  for (const snapshot of ordered) {
-    if (!snapshot.sessionId || snapshot.sessionId !== sessionId || !snapshot.invocationId ||
-      !Number.isSafeInteger(snapshot.sessionSeq) || snapshot.sessionSeq <= previousSessionSeq ||
-      !Number.isSafeInteger(snapshot.commitOrder) || snapshot.commitOrder <= previousCommitOrder) {
-      throw new Error('canonical session snapshot order or ownership is invalid')
-    }
-    previousSessionSeq = snapshot.sessionSeq
-    previousCommitOrder = snapshot.commitOrder
-
-    const sessionMessages = snapshot.messages
-    const ids = sessionMessages.map((message) => {
-      if (!message.id?.trim()) throw new Error('canonical session snapshot is missing stable message identity')
-      return message.id
-    })
-    if (new Set(ids).size !== ids.length) throw new Error('canonical session snapshot contains duplicate stable message identity')
-
-    const currentIds = folded.map((message) => message.id!)
-    const commonIds = ids.filter((id) => indexById.has(id))
-    if (folded.length > 0) {
-      const currentSuffix = currentIds.slice(-commonIds.length)
-      if (commonIds.length === 0 || currentSuffix.some((id, index) => id !== commonIds[index])) {
-        throw new Error('canonical session snapshot order conflicts with prior snapshots')
-      }
-      const firstNewIndex = ids.findIndex((id) => !indexById.has(id))
-      const lastCommonIndex = ids.reduce((last, id, index) => indexById.has(id) ? index : last, -1)
-      if (firstNewIndex >= 0 && firstNewIndex < lastCommonIndex) {
-        throw new Error('canonical session snapshot inserts messages before an established suffix')
-      }
-    }
-
-    for (const [messageIndex, message] of sessionMessages.entries()) {
-      const id = ids[messageIndex]!
-      const existingIndex = indexById.get(id)
-      if (existingIndex === undefined) {
-        indexById.set(id, folded.length)
-        folded.push(structuredClone(message))
-        continue
-      }
-      if (folded[existingIndex]?.role !== message.role) throw new Error(`canonical message identity changed role: ${id}`)
-      folded[existingIndex] = structuredClone(message)
-    }
+  const session = createCanonicalSessionSnapshotFoldSession()
+  for (const snapshot of [...snapshots].sort((left, right) => left.sessionSeq - right.sessionSeq || left.commitOrder - right.commitOrder)) {
+    session.fold(snapshot)
   }
-  return folded
+  return session.messages()
 }
 
-/** Rebuilds the accepted model/tool suffix from committed History events; incomplete dispatches fail closed. */
-export function rebuildClaudeMessagesFromHistory(
-  events: readonly HistoryEvent[],
-  options: Readonly<{ omitAnonymousReplayFromSessionTranscript?: boolean; allowPendingToolCalls?: boolean; synthesizeUnknownToolResults?: boolean }> = {}
+export type CanonicalSessionSnapshotFoldSession = Readonly<{
+  fold(snapshot: CanonicalSessionSnapshot): readonly CanonicalSessionSnapshotOperation[]
+  messages(): ClaudeChatMessageWithBlocks[]
+  stateJson(): string
+  indexJson(): string
+}>
+
+/** Resumable in-memory fold session; callers can persist stateJson and externalize messages/ID facts separately. */
+export function createCanonicalSessionSnapshotFoldSession(
+  stateJson?: string,
+  priorMessages: readonly ClaudeChatMessageWithBlocks[] = [],
+  externalIndexJson?: string
+): CanonicalSessionSnapshotFoldSession {
+  let state = stateJson === undefined ? createCanonicalSessionSnapshotFoldState() : parseCanonicalSessionSnapshotFoldState(stateJson)
+  if (!state) throw new Error('canonical session snapshot fold checkpoint is invalid')
+  if (state.messageCount !== priorMessages.length) throw new Error('canonical session snapshot fold checkpoint does not match its external message index')
+  let currentMessages = priorMessages.map((message) => structuredClone(message))
+  let indexEntries = snapshotIndexEntries(currentMessages)
+  if (externalIndexJson !== undefined) {
+    const externalIndex = parseCanonicalSessionSnapshotExternalIndex(externalIndexJson)
+    if (!externalIndex || externalIndex.messageCount !== state.messageCount || externalIndex.entries.length !== state.messageCount ||
+      JSON.stringify(externalIndex.entries) !== JSON.stringify(indexEntries)) {
+      throw new Error('canonical session snapshot checkpoint does not match its external message index')
+    }
+    indexEntries = externalIndex.entries
+  }
+  return Object.freeze({
+    fold(snapshot: CanonicalSessionSnapshot) {
+      const existingById = new Map(indexEntries.map((entry) => [entry.id, entry] as const))
+      const existingMessages = snapshot.messages.flatMap((message) => message.id && existingById.has(message.id) ? [existingById.get(message.id)!] : [])
+      const commonCount = existingMessages.length
+      const facts = { messageCount: indexEntries.length, existingMessages,
+        tailMessageIds: commonCount === 0 ? [] : indexEntries.slice(-commonCount).map((entry) => entry.id) }
+      const folded = foldCanonicalSessionSnapshot(state!, snapshot, facts)
+      currentMessages = applyCanonicalSessionSnapshotOperations(currentMessages, folded.operations)
+      indexEntries = snapshotIndexEntries(currentMessages)
+      state = folded.state
+      return folded.operations
+    },
+    messages: () => currentMessages.map((message) => structuredClone(message)),
+    stateJson: () => JSON.stringify(state),
+    indexJson: () => JSON.stringify({ formatVersion: 1, messageCount: indexEntries.length, entries: indexEntries }),
+  })
+}
+
+export type CanonicalSessionSnapshotExternalIndex = Readonly<{
+  formatVersion: 1
+  messageCount: number
+  entries: readonly Readonly<{ id: string; role: string; ordinal: number }>[]
+  ids?: readonly string[]
+}>
+
+export function parseCanonicalSessionSnapshotExternalIndex(json: string): CanonicalSessionSnapshotExternalIndex | null {
+  let value: unknown
+  try { value = JSON.parse(json) } catch { return null }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const index = value as Partial<CanonicalSessionSnapshotExternalIndex>
+  if (index.formatVersion !== 1 || !Number.isSafeInteger(index.messageCount) || (index.messageCount ?? -1) < 0 ||
+    !Array.isArray(index.entries) || index.entries.length !== index.messageCount) return null
+  if (index.ids !== undefined && (!Array.isArray(index.ids) || index.ids.length !== index.entries.length ||
+    index.ids.some((id, ordinal) => id !== index.entries![ordinal]?.id))) return null
+  const ids = new Set<string>()
+  for (let ordinal = 0; ordinal < index.entries.length; ordinal += 1) {
+    const entry = index.entries[ordinal]
+    if (!entry || typeof entry.id !== 'string' || !entry.id.trim() || !['user', 'assistant', 'system'].includes(entry.role) ||
+      entry.ordinal !== ordinal || ids.has(entry.id)) return null
+    ids.add(entry.id)
+  }
+  return Object.freeze({ formatVersion: 1, messageCount: index.messageCount!,
+    entries: Object.freeze(index.entries.map((entry) => Object.freeze({ ...entry }))),
+    ...(index.ids === undefined ? {} : { ids: Object.freeze([...index.ids]) }) })
+}
+
+function snapshotIndexEntries(messages: readonly ClaudeChatMessageWithBlocks[]): ReadonlyArray<{ id: string; role: string; ordinal: number }> {
+  return Object.freeze(messages.map((message, ordinal) => {
+    if (!message.id?.trim() || !['user', 'assistant', 'system'].includes(message.role)) {
+      throw new Error('canonical session snapshot external message index is invalid')
+    }
+    return Object.freeze({ id: message.id, role: message.role, ordinal })
+  }))
+}
+
+export type CanonicalSessionSnapshotFoldState = Readonly<{
+  formatVersion: 1
+  sessionId: string | null
+  lastSessionSeq: number
+  lastCommitOrder: number
+  messageCount: number
+}>
+export type CanonicalSessionSnapshotIndexFacts = Readonly<{
+  messageCount: number
+  existingMessages: readonly Readonly<{ id: string; role: string; ordinal: number }>[]
+  tailMessageIds: readonly string[]
+}>
+export type CanonicalSessionSnapshotOperation = Readonly<
+  | { type: 'append'; message: ClaudeChatMessageWithBlocks }
+  | { type: 'upsert'; message: ClaudeChatMessageWithBlocks }
+>
+export type CanonicalSessionSnapshotFoldResult = Readonly<{
+  state: CanonicalSessionSnapshotFoldState
+  operations: readonly CanonicalSessionSnapshotOperation[]
+}>
+
+export function createCanonicalSessionSnapshotFoldState(): CanonicalSessionSnapshotFoldState {
+  return Object.freeze({ formatVersion: 1, sessionId: null, lastSessionSeq: 0, lastCommitOrder: 0, messageCount: 0 })
+}
+
+/** Reject corrupt durable ID-index state before it can authorize snapshot replacement. */
+export function parseCanonicalSessionSnapshotFoldState(json: string): CanonicalSessionSnapshotFoldState | null {
+  let value: unknown
+  try { value = JSON.parse(json) } catch { return null }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const state = value as Partial<CanonicalSessionSnapshotFoldState>
+  if (state.formatVersion !== 1 || !(state.sessionId === null || (typeof state.sessionId === 'string' && state.sessionId.length > 0)) ||
+    !Number.isSafeInteger(state.lastSessionSeq) || (state.lastSessionSeq ?? -1) < 0 ||
+    !Number.isSafeInteger(state.lastCommitOrder) || (state.lastCommitOrder ?? -1) < 0 ||
+    !Number.isSafeInteger(state.messageCount) || (state.messageCount ?? -1) < 0) return null
+  const empty = state.sessionId === null && state.lastSessionSeq === 0 && state.lastCommitOrder === 0 && state.messageCount === 0
+  if (!empty && (state.sessionId === null || (state.lastSessionSeq ?? 0) < 1 || (state.lastCommitOrder ?? 0) < 1)) return null
+  return Object.freeze({ formatVersion: 1, sessionId: state.sessionId!, lastSessionSeq: state.lastSessionSeq!,
+    lastCommitOrder: state.lastCommitOrder!, messageCount: state.messageCount! })
+}
+
+/** Merge one ordered invocation snapshot while retaining established messages omitted by later contexts. */
+export function foldCanonicalSessionSnapshot(
+  state: CanonicalSessionSnapshotFoldState,
+  snapshot: CanonicalSessionSnapshot,
+  facts: CanonicalSessionSnapshotIndexFacts
+): CanonicalSessionSnapshotFoldResult {
+  if (!snapshot.sessionId || (state.sessionId !== null && snapshot.sessionId !== state.sessionId) || !snapshot.invocationId ||
+    !Number.isSafeInteger(snapshot.sessionSeq) || snapshot.sessionSeq <= state.lastSessionSeq ||
+    !Number.isSafeInteger(snapshot.commitOrder) || snapshot.commitOrder <= state.lastCommitOrder) {
+    throw new Error('canonical session snapshot order or ownership is invalid')
+  }
+  const ids = snapshot.messages.map((message) => {
+    if (!message.id?.trim()) throw new Error('canonical session snapshot is missing stable message identity')
+    return message.id
+  })
+  if (new Set(ids).size !== ids.length) throw new Error('canonical session snapshot contains duplicate stable message identity')
+  if (!Number.isSafeInteger(facts.messageCount) || facts.messageCount !== state.messageCount || !Array.isArray(facts.existingMessages) || !Array.isArray(facts.tailMessageIds)) {
+    throw new Error('canonical session snapshot index facts are invalid')
+  }
+  const currentRoles = new Map<string, string>()
+  const ordinals = new Set<number>()
+  for (const item of facts.existingMessages) {
+    if (!item.id?.trim() || !['user', 'assistant', 'system'].includes(item.role) || !Number.isSafeInteger(item.ordinal) || item.ordinal < 0 || item.ordinal >= facts.messageCount ||
+      currentRoles.has(item.id) || ordinals.has(item.ordinal) || !ids.includes(item.id)) throw new Error('canonical session snapshot index facts are invalid')
+    currentRoles.set(item.id, item.role); ordinals.add(item.ordinal)
+  }
+  const existingIds = new Set(currentRoles.keys())
+  const commonIds = ids.filter((id) => existingIds.has(id))
+  if (facts.messageCount > 0) {
+    if (commonIds.length === 0 || facts.tailMessageIds.length !== commonIds.length || facts.tailMessageIds.some((id, index) => id !== commonIds[index]) ||
+      facts.existingMessages.filter((item) => commonIds.includes(item.id)).sort((a, b) => a.ordinal - b.ordinal).map((item) => item.id).some((id, index) => id !== commonIds[index])) {
+      throw new Error('canonical session snapshot order conflicts with prior snapshots')
+    }
+    const firstNewIndex = ids.findIndex((id) => !existingIds.has(id))
+    const lastCommonIndex = ids.reduce((last, id, index) => existingIds.has(id) ? index : last, -1)
+    if (firstNewIndex >= 0 && firstNewIndex < lastCommonIndex) {
+      throw new Error('canonical session snapshot inserts messages before an established suffix')
+    }
+  }
+  const operations: CanonicalSessionSnapshotOperation[] = []
+  let nextCount = state.messageCount
+  for (const message of snapshot.messages) {
+    const id = message.id!
+    const existingRole = currentRoles.get(id)
+    if (existingRole === undefined) {
+      nextCount++
+      currentRoles.set(id, message.role)
+      operations.push(Object.freeze({ type: 'append', message: structuredClone(message) }))
+    } else {
+      if (existingRole !== message.role) throw new Error(`canonical message identity changed role: ${id}`)
+      operations.push(Object.freeze({ type: 'upsert', message: structuredClone(message) }))
+    }
+  }
+  return Object.freeze({ state: Object.freeze({ formatVersion: 1, sessionId: snapshot.sessionId,
+    lastSessionSeq: snapshot.sessionSeq, lastCommitOrder: snapshot.commitOrder, messageCount: nextCount }),
+    operations: Object.freeze(operations) })
+}
+
+export function applyCanonicalSessionSnapshotOperations(
+  current: readonly ClaudeChatMessageWithBlocks[], operations: readonly CanonicalSessionSnapshotOperation[]
 ): ClaudeChatMessageWithBlocks[] {
-  const messages: ClaudeChatMessageWithBlocks[] = []
-  const pendingToolCalls = new Set<string>()
-  const toolCallOrder: string[] = []
-  const replayResults = new Map<string, { type: 'tool_result'; tool_use_id: string; content: unknown; is_error?: boolean }>()
+  const result = [...current]
+  const indexById = new Map(result.flatMap((message, index) => message.id ? [[message.id, index] as const] : []))
+  for (const operation of operations) {
+    const id = operation.message.id
+    if (!id?.trim()) throw new Error('canonical session snapshot output is missing stable message identity')
+    const existingIndex = indexById.get(id)
+    if (operation.type === 'append') {
+      if (existingIndex !== undefined) throw new Error(`canonical session snapshot append duplicated ID: ${id}`)
+      indexById.set(id, result.length)
+      result.push(structuredClone(operation.message))
+    } else {
+      if (existingIndex === undefined) throw new Error(`canonical session snapshot upsert target is missing: ${id}`)
+      if (result[existingIndex]?.role !== operation.message.role) throw new Error(`canonical message identity changed role: ${id}`)
+      result[existingIndex] = structuredClone(operation.message)
+    }
+  }
+  return result
+}
+
+export type CanonicalHistoryReductionOptions = Readonly<{
+  omitAnonymousReplayFromSessionTranscript?: boolean
+  allowPendingToolCalls?: boolean
+  synthesizeUnknownToolResults?: boolean
+}>
+export type CanonicalHistoryReplayResult = Readonly<{
+  type: 'tool_result'; tool_use_id: string; content: unknown; is_error?: boolean
+}>
+/** JSON-serializable fold state; a preparing worker can persist it between bounded source chunks. */
+export type CanonicalHistoryReductionState = Readonly<{
+  formatVersion: 1
+  invocationId: string | null
+  turnId: string | null
+  lastSequence: number
+  terminalEvent: boolean
+  options: Required<CanonicalHistoryReductionOptions>
+  pendingToolCalls: readonly string[]
+  toolCallOrder: readonly string[]
+  replayResults: readonly (readonly [string, CanonicalHistoryReplayResult])[]
+}>
+export type CanonicalHistoryOutputOperation = Readonly<
+  | { type: 'append'; messages: readonly ClaudeChatMessageWithBlocks[] }
+  | { type: 'replace'; messages: readonly ClaudeChatMessageWithBlocks[] }
+>
+export type CanonicalHistoryReductionSlice = Readonly<{
+  state: CanonicalHistoryReductionState
+  outputOperations: readonly CanonicalHistoryOutputOperation[]
+}>
+
+export function createCanonicalHistoryReductionState(options: CanonicalHistoryReductionOptions = {}): CanonicalHistoryReductionState {
+  return Object.freeze({ formatVersion: 1, invocationId: null, turnId: null, lastSequence: 0, terminalEvent: false,
+    options: Object.freeze({ omitAnonymousReplayFromSessionTranscript: options.omitAnonymousReplayFromSessionTranscript ?? false,
+      allowPendingToolCalls: options.allowPendingToolCalls ?? false, synthesizeUnknownToolResults: options.synthesizeUnknownToolResults ?? false }),
+    pendingToolCalls: Object.freeze([]), toolCallOrder: Object.freeze([]), replayResults: Object.freeze([]) })
+}
+
+/** Parse only self-consistent JSON state; callers must reject a malformed persisted fold rather than resume it. */
+export function parseCanonicalHistoryReductionState(json: string): CanonicalHistoryReductionState | null {
+  let value: unknown
+  try { value = JSON.parse(json) } catch { return null }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const state = value as Partial<CanonicalHistoryReductionState>
+  const isStringList = (list: unknown): list is string[] => Array.isArray(list) &&
+    list.every((entry) => typeof entry === 'string' && entry.length > 0) && new Set(list).size === list.length
+  const options = state.options
+  if (state.formatVersion !== 1 || !(state.invocationId === null || (typeof state.invocationId === 'string' && state.invocationId.length > 0)) ||
+    !(state.turnId === null || (typeof state.turnId === 'string' && state.turnId.length > 0)) ||
+    !Number.isSafeInteger(state.lastSequence) || (state.lastSequence ?? -1) < 0 ||
+    typeof state.terminalEvent !== 'boolean' ||
+    (state.lastSequence === 0) !== (state.invocationId === null && state.turnId === null) ||
+    !options || typeof options !== 'object' ||
+    typeof options.omitAnonymousReplayFromSessionTranscript !== 'boolean' ||
+    typeof options.allowPendingToolCalls !== 'boolean' || typeof options.synthesizeUnknownToolResults !== 'boolean' ||
+    !isStringList(state.pendingToolCalls) || !isStringList(state.toolCallOrder) || !Array.isArray(state.replayResults)) return null
+  const order = new Set(state.toolCallOrder)
+  if (state.pendingToolCalls.some((toolCallId) => !order.has(toolCallId))) return null
+  const replayResults: Array<readonly [string, CanonicalHistoryReplayResult]> = []
+  const replayIds = new Set<string>()
+  for (const candidate of state.replayResults) {
+    if (!Array.isArray(candidate) || candidate.length !== 2 || typeof candidate[0] !== 'string' || !order.has(candidate[0]) ||
+      replayIds.has(candidate[0]) || !candidate[1] || typeof candidate[1] !== 'object' ||
+      candidate[1].type !== 'tool_result' || candidate[1].tool_use_id !== candidate[0] ||
+      !Object.hasOwn(candidate[1], 'content') || (candidate[1].is_error !== undefined && typeof candidate[1].is_error !== 'boolean')) return null
+    replayIds.add(candidate[0])
+    replayResults.push(Object.freeze([candidate[0], Object.freeze({ ...candidate[1] })] as const))
+  }
+  return Object.freeze({ formatVersion: 1, invocationId: state.invocationId!, turnId: state.turnId!, lastSequence: state.lastSequence!, terminalEvent: state.terminalEvent!,
+    options: Object.freeze({ ...options }),
+    pendingToolCalls: Object.freeze([...state.pendingToolCalls]), toolCallOrder: Object.freeze([...state.toolCallOrder]),
+    replayResults: Object.freeze(replayResults) })
+}
+
+/** Fold one contiguous invocation's next event slice into a durable, serializable state. */
+export function foldCanonicalHistoryChunk(
+  state: CanonicalHistoryReductionState,
+  events: readonly HistoryEvent[]
+): CanonicalHistoryReductionSlice {
+  const outputOperations: CanonicalHistoryOutputOperation[] = []
+  let pendingOutputMessages: ClaudeChatMessageWithBlocks[] = []
+  const pendingToolCalls = new Set(state.pendingToolCalls)
+  const toolCallOrder = [...state.toolCallOrder]
+  const replayResults = new Map(state.replayResults)
+  let invocationId = state.invocationId
+  let turnId = state.turnId
+  let lastSequence = state.lastSequence
+  let terminalEvent = state.terminalEvent
+  const options = state.options
+  const flushOutput = () => {
+    if (pendingOutputMessages.length) outputOperations.push(Object.freeze({ type: 'append', messages: Object.freeze(pendingOutputMessages) }))
+    pendingOutputMessages = []
+  }
+  const emitMessage = (message: ClaudeChatMessageWithBlocks) => { pendingOutputMessages.push(message) }
   const flushResults = () => {
     const ordered = toolCallOrder.flatMap((toolCallId) => {
       const result = replayResults.get(toolCallId)
       return result ? [result] : []
     })
-    if (ordered.length) messages.push({ role: 'user', content: ordered })
+    if (ordered.length) emitMessage({ role: 'user', content: ordered })
     for (const toolCallId of toolCallOrder) replayResults.delete(toolCallId)
     toolCallOrder.length = 0
   }
 
   for (const event of events) {
+    if (!event.invocationId || !event.turnId || !Number.isSafeInteger(event.sequence) || event.sequence < 1 ||
+      (invocationId !== null && invocationId !== event.invocationId) || (turnId !== null && turnId !== event.turnId) || terminalEvent ||
+      event.sequence <= lastSequence) throw new Error('canonical history reducer event identity or sequence is invalid')
+    invocationId ??= event.invocationId
+    turnId ??= event.turnId
+    lastSequence = event.sequence
+    terminalEvent = ['invocation-parked', 'invocation-interrupted', 'invocation-completed', 'invocation-failed'].includes(event.kind)
     if (event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted') {
       const payload = event.payload as { messages?: unknown; requiredUserMessage?: { id?: unknown; message?: unknown } }
       if (!Array.isArray(payload?.messages)) throw new Error(`invalid canonical transcript snapshot: ${event.eventId}`)
@@ -370,7 +617,9 @@ export function rebuildClaudeMessagesFromHistory(
         if (match < 0) throw new Error(`compacted transcript omitted required message: ${required.id}`)
         replacement[match] = { ...replacement[match]!, id: required.id }
       }
-      messages.splice(0, messages.length, ...replacement)
+      pendingOutputMessages = []
+      outputOperations.length = 0
+      outputOperations.push(Object.freeze({ type: 'replace', messages: Object.freeze(replacement) }))
       pendingToolCalls.clear()
       toolCallOrder.length = 0
       replayResults.clear()
@@ -388,8 +637,8 @@ export function rebuildClaudeMessagesFromHistory(
       if (!message || (message.role !== 'user' && message.role !== 'assistant')) throw new Error(`invalid canonical replay message: ${event.eventId}`)
       if (message.role === 'assistant') throw new Error('assistant replay messages must use model-response-committed')
       if (!message.id?.trim() && options.omitAnonymousReplayFromSessionTranscript) continue
-      if (typeof message.content === 'string') messages.push({ role: 'user', content: message.content, ...(message.id ? { id: message.id } : {}) })
-      else if (Array.isArray(message.content)) messages.push({ role: 'user', content: message.content.map((block) => {
+      if (typeof message.content === 'string') emitMessage({ role: 'user', content: message.content, ...(message.id ? { id: message.id } : {}) })
+      else if (Array.isArray(message.content)) emitMessage({ role: 'user', content: message.content.map((block) => {
         if (block.type === 'text') return { type: 'text', text: block.text }
         return { type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } }
       }), ...(message.id ? { id: message.id } : {}) })
@@ -415,7 +664,7 @@ export function rebuildClaudeMessagesFromHistory(
         toolCallOrder.push(tool.id)
         blocks.push({ type: 'tool_use', id: tool.id, name: tool.name, input: tool.input, ...(tool.thoughtSignature ? { thought_signature: tool.thoughtSignature } : {}) })
       }
-      messages.push({ role: 'assistant', content: typeof message.content === 'string' ? message.content : blocks,
+      emitMessage({ role: 'assistant', content: typeof message.content === 'string' ? message.content : blocks,
         ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}), ...(message.id ? { id: message.id } : {}) })
       continue
     }
@@ -434,20 +683,65 @@ export function rebuildClaudeMessagesFromHistory(
       })
     }
   }
+  flushOutput()
+  return Object.freeze({ state: Object.freeze({ formatVersion: 1, invocationId, turnId, lastSequence, terminalEvent, options,
+    pendingToolCalls: Object.freeze([...pendingToolCalls]), toolCallOrder: Object.freeze(toolCallOrder),
+    replayResults: Object.freeze([...replayResults.entries()]) }), outputOperations: Object.freeze(outputOperations) })
+}
+
+/** Finish the fold; pending tool calls fail closed unless this view explicitly allows them. */
+export function finalizeCanonicalHistoryReduction(state: CanonicalHistoryReductionState): Readonly<{ outputOperations: readonly CanonicalHistoryOutputOperation[] }> {
+  const outputOperations: CanonicalHistoryOutputOperation[] = []
+  let pendingOutputMessages: ClaudeChatMessageWithBlocks[] = []
+  const flushOutput = () => {
+    if (pendingOutputMessages.length) outputOperations.push(Object.freeze({ type: 'append', messages: Object.freeze(pendingOutputMessages) }))
+    pendingOutputMessages = []
+  }
+  const emitMessage = (message: ClaudeChatMessageWithBlocks) => { pendingOutputMessages.push(message) }
+  const pendingToolCalls = new Set(state.pendingToolCalls)
+  const toolCallOrder = [...state.toolCallOrder]
+  const replayResults = new Map(state.replayResults)
   const unresolvedToolOrder = toolCallOrder.filter((toolCallId) => pendingToolCalls.has(toolCallId))
+  const flushResults = () => {
+    const ordered = toolCallOrder.flatMap((toolCallId) => {
+      const result = replayResults.get(toolCallId)
+      return result ? [result] : []
+    })
+    if (ordered.length) emitMessage({ role: 'user', content: ordered })
+    for (const toolCallId of toolCallOrder) replayResults.delete(toolCallId)
+    toolCallOrder.length = 0
+  }
   flushResults()
-  if (options.synthesizeUnknownToolResults && pendingToolCalls.size) {
+  if (state.options.synthesizeUnknownToolResults && pendingToolCalls.size) {
     const unknownResults = unresolvedToolOrder.map((toolCallId) => ({
       type: 'tool_result' as const, tool_use_id: toolCallId,
       content: 'The prior operation was dispatched but its outcome is unknown. Do not replay it; verify safely or ask the user.', is_error: true
     }))
-    if (unknownResults.length) messages.push({ role: 'user', content: unknownResults })
+    if (unknownResults.length) emitMessage({ role: 'user', content: unknownResults })
     pendingToolCalls.clear()
   }
-  if (pendingToolCalls.size && !options.allowPendingToolCalls) {
+  if (pendingToolCalls.size && !state.options.allowPendingToolCalls) {
     throw new Error(`history contains unresolved tool calls: ${[...pendingToolCalls].join(',')}`)
   }
-  return messages
+  flushOutput()
+  return Object.freeze({ outputOperations: Object.freeze(outputOperations) })
+}
+
+export function applyCanonicalHistoryOutputOperations(
+  current: readonly ClaudeChatMessageWithBlocks[], operations: readonly CanonicalHistoryOutputOperation[]
+): ClaudeChatMessageWithBlocks[] {
+  let result = [...current]
+  for (const operation of operations) result = operation.type === 'replace'
+    ? [...operation.messages]
+    : [...result, ...operation.messages]
+  return result
+}
+
+/** Rebuilds the accepted model/tool suffix from committed History events; incomplete dispatches fail closed. */
+export function rebuildClaudeMessagesFromHistory(events: readonly HistoryEvent[], options: CanonicalHistoryReductionOptions = {}): ClaudeChatMessageWithBlocks[] {
+  const slice = foldCanonicalHistoryChunk(createCanonicalHistoryReductionState(options), events)
+  const finalized = finalizeCanonicalHistoryReduction(slice.state)
+  return applyCanonicalHistoryOutputOperations([], [...slice.outputOperations, ...finalized.outputOperations])
 }
 
 function notDispatchedReplayContent(reason: unknown): string {

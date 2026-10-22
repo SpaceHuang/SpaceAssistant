@@ -40,8 +40,6 @@ vi.mock('./database', () => ({
   getConfigValue: (...args: unknown[]) => mockGetConfigValue(...args),
   setConfigValue: (...args: unknown[]) => mockSetConfigValue(...args),
   deleteConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   getDbConnection: vi.fn(() => ({ exec: vi.fn() })),
 }))
 
@@ -115,6 +113,11 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 function makeCtx(): AppIpcContext {
   const ctx: AppIpcContext = {
     db: { flushSave: vi.fn(), save: vi.fn() } as unknown as AppIpcContext['db'],
+    turnRuntime: {
+      coordinator: {}, subscribe: () => () => undefined, listActive: () => [], listTerminals: () => [],
+      getTurn: () => undefined, checkpointStatus: () => undefined, cancel: () => false,
+      consume: () => { throw new Error('unexpected turn event') }, terminal: () => undefined, retryCheckpoint: () => undefined
+    } as unknown as NonNullable<AppIpcContext['turnRuntime']>,
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),

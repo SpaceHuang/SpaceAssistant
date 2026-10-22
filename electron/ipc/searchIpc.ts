@@ -2,7 +2,7 @@
 import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { SearchResult } from '../../src/shared/domainTypes'
-import { appendSearchHistory, listSearchHistory } from '../database'
+import { appendSearchHistory, listSearchHistory } from '../database/operations'
 import { searchFilesUnder } from './ipcShared'
 
 export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
@@ -14,7 +14,18 @@ export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     appendSearchHistory(ctx.db, q)
     const results: SearchResult[] = []
     const activeProfileId = ctx.workDirManager.getActiveProfileId()
-    for (const hit of ctx.sessionStorage!.queries.searchMessages({ query: q, activeProfileId, limit: 50 })) {
+    const storage = ctx.sessionStorage!
+    let hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })
+    if (storage.ensureChatBodyV1) {
+      const sessionIds = [...new Set(hits.filter((hit) => hit.requiresProjectionPreparation).map(({ sessionId }) => sessionId))]
+      if (sessionIds.length) {
+        for (const sessionId of sessionIds) await storage.ensureChatBodyV1({ sessionId })
+        // Cross-session preparation may change a source between reads; rerun the full query
+        // so final candidates, body authority, ordering, and limit share a fresh SQLite snapshot.
+        hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })
+      }
+    }
+    for (const hit of hits) {
       results.push({
         id: `msg:${hit.messageId}`,
         type: 'session',

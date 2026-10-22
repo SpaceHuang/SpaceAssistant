@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import { appendMessage, createPersistedTurn, createSession, openDatabase, setConfigValue } from './database'
+import { appendMessage, createPersistedTurn, createSession } from './database/operations'
+import { openDatabase, setConfigValue } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()

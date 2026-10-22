@@ -744,6 +744,32 @@ describe('spillStore P-5 protocol', () => {
     expect(commitCanonicalLocator).not.toHaveBeenCalled()
   })
 
+  it('does not publish a locator when spill writing is interrupted and reclaims the partial file only after a full reference scan', async () => {
+    const { root, store } = await createStore()
+    const canonicalCommit = vi.fn()
+    const originalOpen = fs.open.bind(fs)
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (...args: unknown[]) => {
+      const handle = await (originalOpen as (...values: unknown[]) => ReturnType<typeof fs.open>)(...args)
+      const originalWrite = handle.writeFile.bind(handle)
+      vi.spyOn(handle, 'writeFile').mockImplementation((async () => {
+        await originalWrite('partial spill contents')
+        throw new Error('injected spill write interruption')
+      }) as never)
+      return handle
+    }) as never)
+
+    await expect(store.commitSourceTruth('large source payload '.repeat(1_000), canonicalCommit))
+      .rejects.toThrow('injected spill write interruption')
+    openSpy.mockRestore()
+    expect(canonicalCommit).not.toHaveBeenCalled()
+    const partialFiles = (await fs.readdir(root)).filter((name) => name.endsWith('.spill'))
+    expect(partialFiles).toHaveLength(1)
+    await expect(store.reconcileOrphans({ referencedLocators: new Set(), fullReferenceScanComplete: false }))
+      .rejects.toThrow(/full reference scan/)
+    await expect(store.reconcileOrphans({ referencedLocators: new Set(), fullReferenceScanComplete: true })).resolves.toEqual(partialFiles)
+    await expect(fs.stat(path.join(root, partialFiles[0]!))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('keeps an unreferenced durable file after locator commit failure for full-scan orphan reconciliation', async () => {
     const { root, store } = await createStore()
     let locator = ''

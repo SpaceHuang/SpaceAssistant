@@ -13,6 +13,7 @@ import type { CopyTreeWithManifestResult } from './streamingCopy'
 import { runSessionMaintenanceWorker, COMPACTION_WORKER_ENTRY_UNAVAILABLE } from './sessionStorageMaintenanceWorkerClient'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { pruneSessionArchives } from './sessionArchiveRetention'
+import { sqlActiveTurnPredicate } from '../sessionStorage/domain/turnState'
 
 export { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 export { StorageMaintenanceError } from './storageMaintenanceError'
@@ -148,7 +149,7 @@ export function activeSessionTurnCount(db: AppDatabase): number {
   return Number((conn.prepare(`SELECT
     (SELECT COUNT(*) FROM session_execution_claims WHERE status IN ('claimed','executing','transcript_committed','commit_uncertain')) +
     (SELECT COUNT(*) FROM session_execution_queue WHERE status IN ('queued','claimed','executing','transcript_committed','commit_uncertain')) +
-    (SELECT COUNT(*) FROM turns WHERE state IN ('configuring','prepared','executing','waiting-confirm')) +
+    (SELECT COUNT(*) FROM turns WHERE ${sqlActiveTurnPredicate()}) +
     (SELECT COUNT(*) FROM messages WHERE status IN ('queued','streaming')) AS count`).get() as { count: number }).count)
 }
 

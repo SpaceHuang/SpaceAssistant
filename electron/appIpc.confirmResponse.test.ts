@@ -1,9 +1,10 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
 import { isPendingConfirm, waitForToolConfirm } from './toolConfirmRegistry'
 import type { CacheKey } from '../src/shared/confirmation/types'
+import { createMemoryAppDb } from './database/testHelpers'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -36,8 +37,6 @@ vi.mock('./database', () => ({
   updateMessageContent: vi.fn(),
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   setSessionUsage: vi.fn(),
   getSessionUsage: vi.fn(),
   deleteSessionUsage: vi.fn(),
@@ -108,9 +107,9 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
   }
 }
 
-function makeCtx(): AppIpcContext {
+function makeCtx(db: AppIpcContext['db']): AppIpcContext {
   return {
-    db: { save: vi.fn() } as unknown as AppIpcContext['db'],
+    db,
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),
@@ -136,12 +135,16 @@ const persistentTierKey: CacheKey = { kind: 'shell-command', verb: 'git status',
 
 describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
   let ipc: ReturnType<typeof mockIpcMain>
+  let db: ReturnType<typeof createMemoryAppDb>
 
   beforeEach(() => {
     vi.clearAllMocks()
+    db = createMemoryAppDb()
     ipc = mockIpcMain()
-    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx())
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx(db))
   })
+
+  afterEach(() => db.close())
 
   const invoke = (payload: Record<string, unknown>) =>
     ipc.getHandler('tool:confirm-response')?.(null, payload) as Promise<void>

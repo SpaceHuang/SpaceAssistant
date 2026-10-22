@@ -1,4 +1,5 @@
 import type { AppDatabase } from '../database'
+import { prepareChatBodiesForSessions, readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import { getConfigValue, getDbConnection } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation, type AgentInvocationMaterials } from '../runtime/invocationAssembler'
@@ -36,7 +37,7 @@ import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../r
 import { buildRemoteProgressHookContext } from './buildRemoteProgressContext'
 import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import { createImOrchestrationToolRegistry } from './imOrchestrationTools'
 import { ensureImTurnTaskControl, getTaskControlRecord } from '../database/taskControl'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
@@ -228,7 +229,7 @@ export async function runImRemoteAgent(args: {
       rawMessages = storage.execution.loadAcceptedMessages({ sessionId: args.sessionId, turnId: args.turnId })
       acceptedUserMessageId = persisted.userMessageId
     } else {
-      rawMessages = storage.queries.readMessages({ sessionId: args.sessionId })
+      rawMessages = await readChatMessagesAfterPreparation(storage, { sessionId: args.sessionId })
     }
     let historyForSession = (sessionId: string) => storage.execution.historyFor({ sessionId })
     if (args.remoteContext.trackContext) {
@@ -274,6 +275,7 @@ export async function runImRemoteAgent(args: {
           eventKind: 'track-association-write-failed', reasonCode: 'turn-association-write-failed', occurredAt: Date.now() }) } catch { /* preserve association failure */ }
         throw error
       }
+      await prepareChatBodiesForSessions(storage, [args.sessionId, ...persistedView.includedSessionIds])
       const acceptedSnapshotMessage = rawMessages.find((message) => message.id === acceptedUserMessageId)
       const acceptedPersistedMessage = storage.queries.readMessage({ sessionId: args.sessionId, messageId: acceptedUserMessageId })
       if (!acceptedSnapshotMessage || !acceptedPersistedMessage || acceptedSnapshotMessage.sessionId !== acceptedPersistedMessage.sessionId ||
@@ -287,10 +289,16 @@ export async function runImRemoteAgent(args: {
       })
       if (trackMessages.some((message) => !message)) throw new Error('TRACK_MODEL_INPUT_MESSAGE_MISSING')
       rawMessages = filterTrackModelInputMessages(trackMessages as import('../../src/shared/domainTypes').Message[], persistedView, acceptedUserMessageId)
+      // Hosted's current turn is durably bound to Track by turnId, while the loop first
+      // probes its History under requestId. Permit that exact accepted request as a
+      // same-session alias; all historical invocations still come only from the frozen view.
+      const requestInvocationId = args.acceptedTurn?.requestId ?? requestId
+      const scopedInvocationSessionMap = { ...persistedView.invocationSessionMap, [requestInvocationId]: args.sessionId }
+      const scopedInvocationIds = [...new Set([...persistedView.includedInvocationIds, requestInvocationId])]
       const scopedHistory = createCrossSessionTrackScopedHistoryPort(
         (sessionId) => storage.execution.historyFor({ sessionId }),
-        { currentSessionId: args.sessionId, allowedInvocationIds: persistedView.includedInvocationIds,
-          invocationSessionMap: persistedView.invocationSessionMap }
+        { currentSessionId: args.sessionId, allowedInvocationIds: scopedInvocationIds,
+          invocationSessionMap: scopedInvocationSessionMap }
       )
       historyForSession = (sessionId: string) => {
         if (sessionId !== args.sessionId) throw new Error('TRACK_HISTORY_SESSION_MISMATCH')

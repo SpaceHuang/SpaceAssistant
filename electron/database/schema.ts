@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 107
+export const DB_SCHEMA_VERSION = 113
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -2079,6 +2079,155 @@ UPDATE agent_history_cursor_integrity SET invalid=CASE WHEN
   COALESCE((SELECT MAX(commit_order) FROM agent_history_events WHERE commit_order IS NOT NULL),0) >
     COALESCE((SELECT MAX(id) FROM agent_history_commit_cursor),0)
   THEN 1 ELSE 0 END WHERE singleton_id=1;
+`
+
+/** v107 → v108: empty scope-keyed projection proof and payload tables. */
+export const MIGRATION_V108_SESSION_PROJECTION_STATE_SQL = `
+CREATE TABLE IF NOT EXISTS session_projection_state (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  scope_key TEXT NOT NULL,
+  session_generation TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('invalid','rebuilding','valid','rejected')),
+  history_watermark_json TEXT,
+  message_revision INTEGER CHECK(message_revision IS NULL OR message_revision >= 0),
+  source_identity_json TEXT,
+  payload_generation TEXT,
+  payload_digest TEXT,
+  validated_range_json TEXT,
+  process_generation INTEGER CHECK(process_generation IS NULL OR process_generation >= 0),
+  rebuild_token TEXT,
+  failure_case_json TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+  retry_after INTEGER,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id,scope_key),
+  CHECK((status='rebuilding' AND process_generation IS NOT NULL AND rebuild_token IS NOT NULL) OR
+        (status<>'rebuilding' AND process_generation IS NULL AND rebuild_token IS NULL)),
+  CHECK((status='valid' AND history_watermark_json IS NOT NULL AND message_revision IS NOT NULL AND
+         payload_generation IS NOT NULL AND payload_digest IS NOT NULL AND validated_range_json IS NOT NULL) OR status<>'valid'),
+  CHECK((status='rejected' AND failure_case_json IS NOT NULL) OR status<>'rejected')
+);
+CREATE INDEX IF NOT EXISTS idx_session_projection_state_due
+  ON session_projection_state(status,retry_after,session_id,scope_key)
+  WHERE status IN ('invalid','rejected');
+CREATE INDEX IF NOT EXISTS idx_session_projection_state_rebuilding
+  ON session_projection_state(process_generation,session_id,scope_key)
+  WHERE status='rebuilding';
+
+CREATE TABLE IF NOT EXISTS session_projection_cache (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  scope_key TEXT NOT NULL,
+  payload_generation TEXT NOT NULL,
+  source_identity_json TEXT NOT NULL,
+  payload_digest TEXT NOT NULL,
+  validated_range_json TEXT NOT NULL,
+  inline_payload TEXT,
+  blob_locator TEXT,
+  blob_byte_length INTEGER CHECK(blob_byte_length IS NULL OR blob_byte_length > 0),
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id,scope_key),
+  CHECK((inline_payload IS NOT NULL AND blob_locator IS NULL AND blob_byte_length IS NULL) OR
+        (inline_payload IS NULL AND blob_locator IS NOT NULL AND blob_byte_length IS NOT NULL))
+);
+
+`
+
+/** Source mutations synchronously revoke all dependent projection proofs in their transaction. */
+export const MIGRATION_V108_SESSION_PROJECTION_CONTENT_INVALIDATION_SQL = `
+CREATE TRIGGER IF NOT EXISTS invalidate_session_projection_after_content_revision
+AFTER UPDATE OF session_generation,message_revision,api_read_mode,write_mode,cleanup_state ON session_message_content_cutover
+WHEN OLD.session_generation IS NOT NEW.session_generation OR OLD.message_revision IS NOT NEW.message_revision OR
+     OLD.api_read_mode IS NOT NEW.api_read_mode OR OLD.write_mode IS NOT NEW.write_mode OR OLD.cleanup_state IS NOT NEW.cleanup_state
+BEGIN
+  UPDATE session_projection_state SET status='invalid',history_watermark_json=NULL,message_revision=NULL,
+    source_identity_json=NULL,payload_generation=NULL,payload_digest=NULL,validated_range_json=NULL,
+    process_generation=NULL,rebuild_token=NULL,failure_case_json=NULL,attempts=0,retry_after=NULL,updated_at=NEW.updated_at
+    WHERE session_id=NEW.session_id AND NOT (scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D' AND status='rejected');
+  DELETE FROM session_projection_cache WHERE session_id=NEW.session_id;
+END;
+`
+
+export const MIGRATION_V108_SESSION_PROJECTION_HISTORY_INVALIDATION_SQL = `
+CREATE TRIGGER IF NOT EXISTS invalidate_session_projection_after_history_event_insert
+AFTER INSERT ON agent_history_events BEGIN
+  UPDATE session_projection_state SET status='invalid',history_watermark_json=NULL,message_revision=NULL,
+    source_identity_json=NULL,payload_generation=NULL,payload_digest=NULL,validated_range_json=NULL,
+    process_generation=NULL,rebuild_token=NULL,failure_case_json=NULL,attempts=0,retry_after=NULL,updated_at=NEW.created_at
+    WHERE session_id=NEW.session_id AND NOT (scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D' AND status='rejected');
+  DELETE FROM session_projection_cache WHERE session_id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS invalidate_session_projection_after_history_event_update
+AFTER UPDATE ON agent_history_events BEGIN
+  UPDATE session_projection_state SET status='invalid',history_watermark_json=NULL,message_revision=NULL,
+    source_identity_json=NULL,payload_generation=NULL,payload_digest=NULL,validated_range_json=NULL,
+    process_generation=NULL,rebuild_token=NULL,failure_case_json=NULL,attempts=0,retry_after=NULL,updated_at=NEW.created_at
+    WHERE (session_id=OLD.session_id OR session_id=NEW.session_id) AND NOT (scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D' AND status='rejected');
+  DELETE FROM session_projection_cache WHERE session_id=OLD.session_id OR session_id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS invalidate_session_projection_after_history_event_delete
+AFTER DELETE ON agent_history_events BEGIN
+  UPDATE session_projection_state SET status='invalid',history_watermark_json=NULL,message_revision=NULL,
+    source_identity_json=NULL,payload_generation=NULL,payload_digest=NULL,validated_range_json=NULL,
+    process_generation=NULL,rebuild_token=NULL,failure_case_json=NULL,attempts=0,retry_after=NULL,updated_at=OLD.created_at
+    WHERE session_id=OLD.session_id AND NOT (scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D' AND status='rejected');
+  DELETE FROM session_projection_cache WHERE session_id=OLD.session_id;
+END;
+`
+
+export const MIGRATION_V108_SESSION_PROJECTION_STREAM_INVALIDATION_SQL = `
+CREATE TRIGGER IF NOT EXISTS invalidate_session_projection_after_history_stream_owner_update
+AFTER UPDATE OF session_id ON agent_history_streams WHEN OLD.session_id IS NOT NEW.session_id BEGIN
+  UPDATE session_projection_state SET status='invalid',history_watermark_json=NULL,message_revision=NULL,
+    source_identity_json=NULL,payload_generation=NULL,payload_digest=NULL,validated_range_json=NULL,
+    process_generation=NULL,rebuild_token=NULL,failure_case_json=NULL,attempts=0,retry_after=NULL,updated_at=unixepoch()*1000
+    WHERE (session_id=OLD.session_id OR session_id=NEW.session_id) AND NOT (scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D' AND status='rejected');
+  DELETE FROM session_projection_cache WHERE session_id=OLD.session_id OR session_id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS invalidate_session_projection_after_history_stream_delete
+AFTER DELETE ON agent_history_streams BEGIN
+  UPDATE session_projection_state SET status='invalid',history_watermark_json=NULL,message_revision=NULL,
+    source_identity_json=NULL,payload_generation=NULL,payload_digest=NULL,validated_range_json=NULL,
+    process_generation=NULL,rebuild_token=NULL,failure_case_json=NULL,attempts=0,retry_after=NULL,updated_at=unixepoch()*1000
+    WHERE session_id=OLD.session_id AND NOT (scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D' AND status='rejected');
+  DELETE FROM session_projection_cache WHERE session_id=OLD.session_id;
+END;
+`
+
+export const MIGRATION_V109_SESSION_PROJECTION_BUILD_CHECKPOINT_SQL = `
+CREATE TRIGGER IF NOT EXISTS clear_session_projection_checkpoint_after_invalidation
+AFTER UPDATE OF status,process_generation,rebuild_token ON session_projection_state
+WHEN NEW.status<>'rebuilding' OR NEW.process_generation IS NULL OR NEW.rebuild_token IS NULL
+BEGIN
+  UPDATE session_projection_state SET build_checkpoint_json=NULL
+  WHERE session_id=NEW.session_id AND scope_key=NEW.scope_key;
+END;
+`
+
+/** v109 → v110: bind blob cache roots to their exact encoded payload length. */
+export const MIGRATION_V110_SESSION_PROJECTION_BLOB_LENGTH_SQL = `
+ALTER TABLE session_projection_cache ADD COLUMN blob_byte_length INTEGER CHECK(blob_byte_length IS NULL OR blob_byte_length > 0);
+DELETE FROM session_projection_cache;
+UPDATE session_projection_state SET status='invalid',history_watermark_json=NULL,message_revision=NULL,
+  source_identity_json=NULL,payload_generation=NULL,payload_digest=NULL,validated_range_json=NULL,
+  process_generation=NULL,rebuild_token=NULL,failure_case_json=NULL,attempts=0,retry_after=NULL,build_checkpoint_json=NULL
+WHERE status='valid';
+CREATE TRIGGER IF NOT EXISTS validate_session_projection_blob_length_insert
+BEFORE INSERT ON session_projection_cache
+WHEN NOT ((NEW.inline_payload IS NOT NULL AND NEW.blob_locator IS NULL AND NEW.blob_byte_length IS NULL) OR
+          (NEW.inline_payload IS NULL AND NEW.blob_locator IS NOT NULL AND NEW.blob_byte_length > 0))
+BEGIN SELECT RAISE(ABORT,'invalid session projection cache manifest'); END;
+CREATE TRIGGER IF NOT EXISTS validate_session_projection_blob_length_update
+BEFORE UPDATE OF inline_payload,blob_locator,blob_byte_length ON session_projection_cache
+WHEN NOT ((NEW.inline_payload IS NOT NULL AND NEW.blob_locator IS NULL AND NEW.blob_byte_length IS NULL) OR
+          (NEW.inline_payload IS NULL AND NEW.blob_locator IS NOT NULL AND NEW.blob_byte_length > 0))
+BEGIN SELECT RAISE(ABORT,'invalid session projection cache manifest'); END;
+`
+
+/** v110 → v111: index old-process projection build takeover enumeration. */
+export const MIGRATION_V111_SESSION_PROJECTION_REBUILDING_INDEX_SQL = `
+CREATE INDEX IF NOT EXISTS idx_session_projection_state_rebuilding
+  ON session_projection_state(process_generation,session_id,scope_key)
+  WHERE status='rebuilding';
 `
 
 /** v51: preserve stable catalog/provider/route identity on usage facts. */

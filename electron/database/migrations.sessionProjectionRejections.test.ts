@@ -1,84 +1,31 @@
-import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { appendMessage, createSession } from './operations'
+import { createSession } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
+import { runMigrations } from './migrations'
+import { SCHEMA_META_KEYS } from './schema'
 
-const REJECTION_COLUMNS = [
-  'session_id', 'session_generation', 'fingerprint', 'watermark_event_id', 'watermark_invocation_id',
-  'event_count', 'legacy_message_count', 'legacy_max_rowid', 'legacy_digest', 'attempts', 'retry_after',
-  'last_reason', 'permanent', 'stale_metadata', 'updated_at'
-]
-
-function insertRejectionRow(db: Parameters<typeof createMemoryAppDb> extends never ? never : ReturnType<typeof createMemoryAppDb>, sessionId: string, generation: string): void {
-  getDbConnection(db).prepare(`INSERT INTO canonical_session_projection_rejections(
-    session_id, session_generation, fingerprint, watermark_event_id, watermark_invocation_id,
-    event_count, legacy_message_count, legacy_max_rowid, legacy_digest, attempts, retry_after, last_reason, permanent, stale_metadata, updated_at
-  ) VALUES(?, ?, 'fp', 'evt-1', 'inv-1', 3, 2, 12, 'digest', 1, 0, 'legacy-mismatch', 0, 0, 1)`).run(sessionId, generation)
-}
-
-describe('canonical session projection rejection negative cache (P0-①)', () => {
-  it('creates the rejection table with the planned negative-cache columns', () => {
+describe('legacy projection rejection retirement', () => {
+  it('drops v112 rejection and eligibility rows while keeping scope state', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
-    const session = createSession(db, { name: 'rejection schema', model: 'test' })
-    insertRejectionRow(db, session.id, session.generation)
-    const columns = (conn.prepare('PRAGMA table_info(canonical_session_projection_rejections)').all() as Array<{ name: string }>).map(({ name }) => name)
-    expect(columns).toEqual(REJECTION_COLUMNS)
-    db.close()
-  })
+    const session = createSession(db, { name: 'legacy rejection retirement', model: 'test' })
+    conn.exec(`CREATE TABLE canonical_session_projection_rejections(
+      session_id TEXT PRIMARY KEY, session_generation TEXT NOT NULL, fingerprint TEXT NOT NULL,
+      attempts INTEGER NOT NULL, retry_after INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE canonical_session_projection_eligibility(
+        session_id TEXT PRIMARY KEY, session_generation TEXT NOT NULL, validated_at INTEGER NOT NULL);`)
+    conn.prepare(`INSERT INTO canonical_session_projection_rejections VALUES(?,?,?,?,?,?)`)
+      .run(session.id, session.generation, 'legacy-fingerprint', 2, 100, 1)
+    conn.prepare(`INSERT INTO canonical_session_projection_eligibility VALUES(?,?,?)`).run(session.id, session.generation, 1)
+    conn.prepare('UPDATE schema_meta SET value=? WHERE key=?').run('112', SCHEMA_META_KEYS.schemaVersion)
 
-  it('keeps rejection rows when the v46 history-cursor invalidation trigger fires', () => {
-    const db = createMemoryAppDb()
-    const conn = getDbConnection(db)
-    const session = createSession(db, { name: 'cursor-trigger exemption', model: 'test' })
-    insertRejectionRow(db, session.id, session.generation)
+    runMigrations(conn)
 
-    // 对照组先确认「本应被清空」的数据存在：cursor 维护触发器会清空缓存与资格行
-    // （createSession 已 seed 两行），唯独 rejection 行保留——恒真断言证明不了豁免行为。
-    const emptySha = createHash('sha256').update('[]').digest('hex')
-    const seededCache = conn.prepare("SELECT value_sha256 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id) as { value_sha256: string } | undefined
-    if (seededCache) expect(seededCache.value_sha256).toBe(emptySha)
-    conn.prepare('INSERT OR REPLACE INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at) VALUES(?, ?, 1)').run(session.id, session.generation)
-
-    conn.prepare("INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(1)").run()
-    conn.prepare('UPDATE agent_history_commit_cursor SET allocated_at=2 WHERE id=1').run()
-
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_rejections WHERE session_id=?').get(session.id))
-      .toEqual({ session_id: session.id })
-    // 对照组：同一次 cursor 维护会清空投影缓存与 eligibility，rejection 表必须被显式豁免。
-    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
-      .toBeUndefined()
-    expect(conn.prepare('SELECT 1 FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id))
-      .toBeUndefined()
-    db.close()
-  })
-
-  it('keeps rejection rows when legacy message rows are written', () => {
-    const db = createMemoryAppDb()
-    const conn = getDbConnection(db)
-    const session = createSession(db, { name: 'message-trigger exemption', model: 'test' })
-    insertRejectionRow(db, session.id, session.generation)
-
-    appendMessage(db, { id: 'rejection-keep-user', sessionId: session.id, role: 'user', content: 'next input', timestamp: 1, status: 'sent' })
-
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_rejections WHERE session_id=?').get(session.id))
-      .toEqual({ session_id: session.id })
-    expect(conn.prepare('SELECT 1 FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id))
-      .toBeUndefined()
-    db.close()
-  })
-
-  it('cascades rejection rows when their session is deleted', () => {
-    const db = createMemoryAppDb()
-    const conn = getDbConnection(db)
-    const session = createSession(db, { name: 'rejection cascade', model: 'test' })
-    insertRejectionRow(db, session.id, session.generation)
-
-    conn.prepare('DELETE FROM sessions WHERE id=?').run(session.id)
-
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_rejections WHERE session_id=?').get(session.id))
-      .toBeUndefined()
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)")
+      .all('canonical_session_projection_eligibility', 'canonical_session_projection_rejections')).toEqual([])
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key=?").get(SCHEMA_META_KEYS.schemaVersion)).toEqual({ value: '113' })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_projection_state WHERE session_id=?').get(session.id)).toEqual({ count: 0 })
     db.close()
   })
 })

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { appendMessage, claimQueuedTurnAtomically, createPersistedTurn, createSession, enqueueQueuedUserMessage, getDbConnection, openDatabase, prepareTurnAtomically } from './database'
+import { appendMessage, claimQueuedTurnAtomically, createPersistedTurn, createSession, enqueueQueuedUserMessage, prepareTurnAtomically, updateMessageContent } from './database/operations'
+import { getDbConnection, openDatabase } from './database'
 import { loadAuthoritativeTurnContext as loadAuthoritativeTurnContextWithStorage, normalizeAndValidateClaudeMessagesWithContentBlocks } from './claudeStreamHandlers'
 import { buildToolChatMessagesFromSource } from './chatMessageBuild'
 import { selectRecoveryMessages } from '../src/shared/overflowRecovery'
@@ -117,6 +118,37 @@ describe('loadAuthoritativeTurnContext', () => {
       .run('accepted question', JSON.stringify([{ ...acceptedAttachment, stagingKey: `chat-attachments/${session.id}/replaced.png` }]), 'accepted-user')
     expect(() => loadAuthoritativeTurnContext(db, 'accepted-turn', session.id, 'accepted-request', 'accepted-token'))
       .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    db.close()
+  })
+
+  it('accepted-input History fingerprint keeps an edited current user message from changing a prepared turn', () => {
+    const db = openDatabase(':memory:')
+    const session = createSession(db, { name: 'accepted-input-edit-fence' })
+    prepareTurnAtomically(db, {
+      user: { id: 'accepted-edit-user', sessionId: session.id, role: 'user', content: 'accepted before edit', timestamp: 1, status: 'sent' },
+      assistant: { id: 'accepted-edit-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'accepted-edit-turn', requestId: 'accepted-edit-request', sessionId: session.id, assistantMessageId: 'accepted-edit-assistant', state: 'prepared', startToken: 'accepted-edit-token' }
+    })
+
+    updateMessageContent(db, 'accepted-edit-user', { content: 'edited after acceptance' })
+
+    expect(() => loadAuthoritativeTurnContext(db, 'accepted-edit-turn', session.id, 'accepted-edit-request', 'accepted-edit-token'))
+      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    db.close()
+  })
+
+  it('legacy accepted turns without an input receipt read the edited user value at handoff time', () => {
+    const db = openDatabase(':memory:')
+    const session = createSession(db, { name: 'legacy-edit-handoff' })
+    const user = appendMessage(db, { id: 'legacy-edit-user', sessionId: session.id, role: 'user', content: 'before edit', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'legacy-edit-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'legacy-edit-turn', requestId: 'legacy-edit-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: 'legacy-edit-assistant', contextBoundarySequence: 0, state: 'prepared', startToken: 'legacy-edit-token' })
+
+    updateMessageContent(db, 'legacy-edit-user', { content: 'after edit' })
+
+    const context = loadAuthoritativeTurnContext(db, 'legacy-edit-turn', session.id, 'legacy-edit-request', 'legacy-edit-token')
+    expect(context.messages).toContainEqual(expect.objectContaining({ id: 'legacy-edit-user', content: 'after edit' }))
     db.close()
   })
 

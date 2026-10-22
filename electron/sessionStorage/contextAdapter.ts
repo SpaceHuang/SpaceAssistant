@@ -1,11 +1,12 @@
 import { createContextRegistrar, createSessionContextAdapter, type ContextFrame, type SessionContextAdapter } from '../../packages/agent-sdk/src/context'
 import type { Message, Session } from '../../src/shared/domainTypes'
-import type { SessionQueries } from './contracts'
+import type { SessionQueries } from './public/ports'
 import { projectReplaySurfaceWithSources, surfaceItemIdentitiesForProjectionSubset, applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint } from '../../src/shared/surfaceReplay'
 import { currentCompactionWindowId, type CompactionReplay } from '../../src/shared/compactionEvents'
 import { buildToolChatMessagesFromSource } from '../chatMessageBuild'
 import { appendCompactionTransaction, type SessionEventSink } from '../sessionEvents'
 import type { SessionContextSurfaceMessage } from '../sessionContextCompaction'
+import type { SessionCommitEvent, SessionHistoryPort } from './public/ports'
 
 /** Internal factory-owned signer for a session scope. Only the returned ContextPort belongs to consumers. */
 export async function createStorageSessionContextAdapter(input: Readonly<{
@@ -16,6 +17,7 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
   userDataDir: string
   replay: CompactionReplay
   sink: SessionEventSink
+  commitCanonicalCompaction(input: { operationId: string; compactionId: string; output: ContextFrame; historyPayload: Record<string, unknown> }): Promise<void>
   isBusy(): boolean
 }>): Promise<Readonly<{ adapter: SessionContextAdapter; messages: SessionContextSurfaceMessage[]; windowId: string }>> {
   const registrar = createContextRegistrar()
@@ -60,11 +62,12 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
   const adapter = createSessionContextAdapter({
     scope: { kind: 'session', sessionId: input.sessionId }, registrar,
     capture,
-    persist: async ({ expectedSurfaceFingerprint, historyPayload }) => {
+    persist: async ({ operationId, expectedSurfaceFingerprint, outputFingerprint, output, historyPayload }) => {
       if (input.isBusy()) return { status: 'busy' as const }
       if (await latestFingerprint() !== expectedSurfaceFingerprint) return { status: 'stale' as const }
       const transaction = historyPayload as { start?: Record<string, unknown>; summary?: Record<string, unknown> }
       if (!transaction.start || !transaction.summary) throw new Error('SESSION_CONTEXT_TRANSACTION_REQUIRED')
+      await input.commitCanonicalCompaction({ operationId, compactionId: String(transaction.start.compactionId ?? operationId), output, historyPayload: historyPayload as Record<string, unknown> })
       await appendCompactionTransaction(input.sink, transaction.start, transaction.summary)
       return { status: 'committed' as const }
     }

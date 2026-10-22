@@ -16,6 +16,24 @@ describe('host-only storage lifecycle control', () => {
   })
 
 
+  it('starts and owns a foreground projection preparation through quiescence', async () => {
+    let finish!: () => void
+    const active = new Promise<void>((resolve) => { finish = resolve })
+    const prepare = vi.fn(async () => { await active })
+    const stop = vi.fn()
+    const start = vi.fn(() => ({ stop, quiesce: async () => { await active } }))
+    const lifecycle = createStorageLifecycleControl({ tasks: [{ taskId: 'projection-build', category: 'derived-index', start, prepare }] })
+    const request = { sessionId: 'session-1', scopeKey: 'chatMessageV1', specVersion: 1 }
+    const preparation = lifecycle.prepareProjection(request)
+    expect(start).toHaveBeenCalledOnce()
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(request)
+    const stopping = lifecycle.stop({ deadlineMs: 100 })
+    expect(stop).toHaveBeenCalledOnce()
+    finish()
+    await expect(preparation).resolves.toBeUndefined()
+    await expect(stopping).resolves.toEqual({ status: 'quiescent' })
+  })
+
   it('does not claim maintenance is scheduled before background work is authorized', () => {
     const start = vi.fn(() => ({ stop: vi.fn(), quiesce: async () => undefined }))
     const lifecycle = createStorageLifecycleControl({ tasks: [{ taskId: 'test-task', category: 'pending-reclamation', start }] })

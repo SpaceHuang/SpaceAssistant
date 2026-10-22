@@ -1,4 +1,4 @@
-import type { SessionCommands } from '../sessionStorage/contracts'
+import type { SessionCommands } from '../sessionStorage/public/ports'
 
 export function touchRemoteSessionActivity(
   commands: Pick<SessionCommands, 'recordRemoteSessionActivity'>,

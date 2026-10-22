@@ -1,15 +1,18 @@
-import { createHash } from 'node:crypto'
 import type { AppDatabase } from '../database'
-import { getMessages } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
 import {
-  clearProjectionRejection, computeLegacyProjectionDigest, getProjectionRejection,
+  clearProjectionRejection, computeLegacyProjectionDigest, getProjectionRejection, listProjectionRejectionWork, recordProjectionRejection,
   projectionRejectionBackoffDelayMs, readProjectionO1Metadata
 } from './sessionProjectionRejection'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { drainSessionProjectionRevalidationQueue, enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
-import { markSessionProjectionEligible, refreshSessionTranscriptProjectionFastPath } from './sessionTranscriptProjection'
+import {
+  computeCanonicalProjectionFingerprint as readCanonicalProjectionFingerprint,
+  publishTranscriptParityProof,
+  readLegacyProjectionMessages,
+  refreshValidatedProjectionFastPath,
+  validateAndCacheCanonicalProjection
+} from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 
 /**
  * P0-③ background revalidation executor (plan §4 保障链 / §5 ③). Full rebuild+compare runs
@@ -22,57 +25,36 @@ const PERMANENT_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 /** Aggregated canonical event-range fingerprint (v4 B1); only the revalidator computes it. */
 export function computeCanonicalProjectionFingerprint(db: AppDatabase, sessionId: string): string {
-  const hash = createHash('sha256')
-  for (const row of getDbConnection(db).prepare(
-    'SELECT payload_json FROM agent_history_events WHERE session_id=? ORDER BY session_seq ASC'
-  ).iterate(sessionId) as Iterable<{ payload_json: string }>) {
-    hash.update(row.payload_json).update('\n')
-  }
-  return hash.digest('hex')
+  return readCanonicalProjectionFingerprint(db, sessionId)
 }
 
 function recordRevalidationFailure(db: AppDatabase, sessionId: string, reason: string): void {
   const existing = getProjectionRejection(db, sessionId)
   const o1 = readProjectionO1Metadata(db, sessionId)
-  const legacyDigest = computeLegacyProjectionDigest(getMessages(db, sessionId, Number.MAX_SAFE_INTEGER))
+  const legacyDigest = computeLegacyProjectionDigest(readLegacyProjectionMessages(db, sessionId))
   const fingerprint = computeCanonicalProjectionFingerprint(db, sessionId)
   const attempts = (existing?.attempts ?? 0) + 1
   const fingerprintUnchanged = Boolean(existing?.fingerprint) && existing!.fingerprint === fingerprint
   const permanent = existing?.permanent === true || (fingerprintUnchanged && attempts >= PERMANENT_AFTER_ATTEMPTS)
   const now = Date.now()
   const retryAfter = permanent ? now + PERMANENT_TTL_MS : now + projectionRejectionBackoffDelayMs(attempts)
-  getDbConnection(db).prepare(`INSERT INTO canonical_session_projection_rejections(
-    session_id, session_generation, fingerprint, watermark_event_id, watermark_invocation_id,
-    event_count, legacy_message_count, legacy_max_rowid, legacy_digest, attempts, retry_after, last_reason,
-    permanent, stale_metadata, updated_at
-  ) VALUES(?, (SELECT generation FROM sessions WHERE id=?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-  ON CONFLICT(session_id) DO UPDATE SET
-    fingerprint=excluded.fingerprint, watermark_event_id=excluded.watermark_event_id, watermark_invocation_id=excluded.watermark_invocation_id,
-    event_count=excluded.event_count, legacy_message_count=excluded.legacy_message_count, legacy_max_rowid=excluded.legacy_max_rowid,
-    legacy_digest=excluded.legacy_digest, attempts=excluded.attempts, retry_after=excluded.retry_after,
-    last_reason=excluded.last_reason, permanent=excluded.permanent, stale_metadata=0, updated_at=excluded.updated_at
-  `).run(
-    sessionId, sessionId, fingerprint, o1.watermarkEventId, o1.watermarkInvocationId, o1.eventCount,
-    o1.legacyMessageCount, o1.legacyMaxRowid, legacyDigest, attempts, retryAfter, reason, permanent ? 1 : 0, now
-  )
+  recordProjectionRejection(db, sessionId, reason, o1, legacyDigest, { fingerprint, permanent })
 }
 
 /** One full revalidate cycle for a session; a mismatch updates the verdict, a match clears it. */
 function revalidateSession(db: AppDatabase, sessionId: string): string {
-  const legacyMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+  const legacyMessages = readLegacyProjectionMessages(db, sessionId)
   if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) {
     // Sessions outside the projection's field contract never re-enter canonical reads; a stale
     // verdict would only keep forcing pointless background work (P0-④ explicit clear path).
     clearProjectionRejection(db, sessionId)
     return 'other'
   }
-  const history = new SqliteAgentHistory(getDbConnection(db))
-  const verified = history.readCanonicalSessionTranscript(sessionId, legacyMessages.map(({ id, role, content, timestamp }) => ({
+  const { verified, cacheWritten } = validateAndCacheCanonicalProjection(db, sessionId, legacyMessages.map(({ id, role, content, timestamp }) => ({
     id, role: role as 'user' | 'assistant', content, timestamp
   })))
   if (verified.kind === 'matched') {
-    const granted = history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })
-    if (granted) markSessionProjectionEligible(db, sessionId, verified.sessionGeneration)
+    if (cacheWritten) publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
     clearProjectionRejection(db, sessionId)
     return 'matched'
   }
@@ -133,7 +115,7 @@ export async function runDueSessionProjectionRevalidations(db: AppDatabase,
  */
 export function checkpointSessionTranscriptProjection(db: AppDatabase, sessionId: string): boolean {
   try {
-    if (refreshSessionTranscriptProjectionFastPath(db, sessionId)) {
+    if (refreshValidatedProjectionFastPath(db, sessionId)) {
       clearProjectionRejection(db, sessionId)
       return true
     }
@@ -153,8 +135,17 @@ export function drainOnceSessionProjectionRevalidations(db: AppDatabase): void {
   void runDueSessionProjectionRevalidations(db).catch(() => { /* revalidation is best-effort */ })
 }
 
-export function startSessionProjectionRevalidationDrain(db: AppDatabase, intervalMs = 60_000): { stop: () => void } {
-  const timer = setInterval(() => drainOnceSessionProjectionRevalidations(db), intervalMs)
+export function startSessionProjectionRevalidationDrain(db: AppDatabase, intervalMs = 60_000, now: () => number = Date.now): { stop: () => void } {
+  const enqueuePersistedDueWork = () => {
+    for (const entry of listProjectionRejectionWork(db, now())) enqueueSessionProjectionRevalidation(db, entry.sessionId, { stale: entry.stale })
+  }
+  enqueuePersistedDueWork()
+  // Recover due persisted work on startup; waiting for the first interval can defer it by a minute.
+  void runDueSessionProjectionRevalidations(db, { now: now() }).catch(() => undefined)
+  const timer = setInterval(() => {
+    enqueuePersistedDueWork()
+    void runDueSessionProjectionRevalidations(db, { now: now() }).catch(() => undefined)
+  }, intervalMs)
   timer.unref?.()
   return { stop: () => clearInterval(timer) }
 }

@@ -1,5 +1,5 @@
 import type { IncomingMessage, WeChatBot } from '@wechatbot/wechatbot'
-import type { SessionCommands } from '../sessionStorage/contracts'
+import type { SessionCommands } from '../sessionStorage/public/ports'
 import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
 import type { PromptSendResult } from '../confirmation/promptSend'
 import type { RemoteTrackOutboundDeliveryContext } from '../remote/remoteTrackOutbound'

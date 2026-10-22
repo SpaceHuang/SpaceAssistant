@@ -1,9 +1,13 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
-import { appendSearchHistory } from './database'
+import { listSearchHistory } from './database/operations'
 import * as sessionTranscriptProjection from './runtime/sessionTranscriptProjection'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
+import { createMemoryAppDb } from './database/testHelpers'
+
+const openDbs: Array<ReturnType<typeof createMemoryAppDb>> = []
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -38,8 +42,6 @@ vi.mock('./database', () => ({
   updateMessageContent: vi.fn(),
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   searchMessages: vi.fn(() => []),
   getDbConnection: vi.fn(() => ({})),
 }))
@@ -86,8 +88,11 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 }
 
 function makeCtx(): AppIpcContext {
+  const db = createMemoryAppDb()
+  openDbs.push(db)
   return {
-    db: { save: vi.fn(), flushSave: vi.fn(), close: vi.fn() } as AppIpcContext['db'],
+    db,
+    sessionStorage: createSqliteSessionStorage(db),
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),
@@ -119,13 +124,17 @@ describe('search:execute IPC handler', () => {
     ipc = mockIpcMain()
   })
 
+  afterEach(() => {
+    for (const db of openDbs.splice(0)) db.close()
+  })
+
   it('returns empty array for blank query', async () => {
     const ctx = makeCtx()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     const handler = ipc.getHandler('search:execute')!
     const results = await handler({}, '   ')
     expect(results).toEqual([])
-    expect(appendSearchHistory).not.toHaveBeenCalled()
+    expect(listSearchHistory(ctx.db)).toEqual([])
   })
 
   it('returns session results with sessionId and messageId', async () => {
@@ -141,7 +150,7 @@ describe('search:execute IPC handler', () => {
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     const handler = ipc.getHandler('search:execute')!
     const results = await handler({}, 'React')
-    expect(appendSearchHistory).toHaveBeenCalledWith(ctx.db, 'React')
+    expect(listSearchHistory(ctx.db)).toEqual(['React'])
     expect(sessionTranscriptProjection.searchProjectedMessages).toHaveBeenCalledWith(ctx.db, 'React', 'default', 50)
     expect(results).toHaveLength(1)
     expect(results[0]).toMatchObject({
@@ -152,6 +161,33 @@ describe('search:execute IPC handler', () => {
       messageId: 'm1',
       preview: '如何优化 React 渲染性能'
     })
+  })
+
+  it('prepares each provisional result session then reruns the complete cross-session search', async () => {
+    const ctx = makeCtx()
+    const db = createMemoryAppDb()
+    ctx.db = db
+    const base = createSqliteSessionStorage(ctx.db)
+    const events: string[] = []
+    const hits = [
+      { messageId: 'm1', sessionId: 's1', content: 'hit one', sessionName: 'one', requiresProjectionPreparation: true },
+      { messageId: 'm2', sessionId: 's1', content: 'hit two', sessionName: 'one', requiresProjectionPreparation: true },
+      { messageId: 'm3', sessionId: 's2', content: 'hit three', sessionName: 'two', requiresProjectionPreparation: true },
+      { messageId: 'm4', sessionId: 'legacy', content: 'legacy hit', sessionName: 'legacy' }
+    ]
+    ctx.sessionStorage = {
+      ...base,
+      ensureChatBodyV1: vi.fn(async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`) }),
+      queries: { ...base.queries, searchMessages: vi.fn(() => { events.push('search'); return hits }) }
+    }
+    try {
+      registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+      const results = await ipc.getHandler('search:execute')!({}, 'needle')
+
+      expect(events).toEqual(['search', 'ensure:s1', 'ensure:s2', 'search'])
+      expect(results).toHaveLength(4)
+    } finally { db.close() }
   })
 
   it('returns file results with path', async () => {

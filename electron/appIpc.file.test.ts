@@ -1,9 +1,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { createHash } from 'node:crypto'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
 import { waitForToolConfirm } from './toolConfirmRegistry'
-import * as database from './database'
+import * as databaseComposition from './database'
 import * as databaseOperations from './database/operations'
 import { getMainWindow } from './windowRef'
 import { BrowserWindow } from 'electron'
@@ -18,12 +19,41 @@ import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { getDbConnection as getActualDbConnection } from './database/sqliteStore'
 import { TurnCoordinator } from '../src/shared/turnCoordinator'
-import type { SessionQueries, SessionStorage } from './sessionStorage/contracts'
+import type { SessionQueries } from './sessionStorage/public/ports'
+import type { SessionStorage } from './sessionStorage/host/ports'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createSessionCommands } from './sessionStorage/commands'
 import { createSessionExecutionStore } from './sessionStorage/execution'
+import { runHostedAgentTurn, type AgentTurnHost } from '../packages/agent-sdk/src/turn'
+import { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
+import { RecordingModelProvider } from '../packages/agent-provider-testing/src'
+
+const database = {
+  listSessions: vi.fn(() => []),
+  listPersistedTurns: vi.fn(() => []),
+  createSession: vi.fn(),
+  getSession: vi.fn(),
+  getPersistedTurn: vi.fn(),
+  listTurnErrorsByAssistantMessageIds: vi.fn((): Array<{ assistantMessageId: string; message: string }> => []),
+  setPersistedTurnExecutionConfig: vi.fn(() => true),
+  createPersistedTurn: vi.fn(),
+  failConfiguringTurn: vi.fn(() => true),
+  getMessage: vi.fn(),
+  getMessageSequence: vi.fn(),
+  getRecentTurnRoutingMessages: vi.fn(() => []),
+  hasVisionInTurnRoutingContext: vi.fn(() => false),
+  updateSession: vi.fn(),
+  deleteSession: vi.fn(),
+  getMessages: vi.fn(() => []),
+  appendMessage: vi.fn(),
+  updateMessageContent: vi.fn(),
+  getSessionUsage: vi.fn(),
+  getSessionMessageRevisionSnapshot: vi.fn((_db: unknown, sessionId: string) => ({ sessionId, generation: 'generation-1', messageRevision: 1 })),
+  hasActiveTurn: vi.fn(() => false)
+}
 
 const WORK_DIR = path.resolve('/fake/workdir')
+const mockReadTurnByRequest = vi.fn()
 
 const mockFs = vi.hoisted(() => ({
   writeFile: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
@@ -43,35 +73,15 @@ vi.mock('fs/promises', () => ({
 }))
 
 vi.mock('electron', () => ({
+  app: { isPackaged: false },
   dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn(), showMessageBox: vi.fn() },
   BrowserWindow: vi.fn()
 }))
 
 vi.mock('./database', () => ({
-  listSessions: vi.fn(() => []),
-  listPersistedTurns: vi.fn(() => []),
-  createSession: vi.fn(),
-  getSession: vi.fn(),
-  getTurnByRequestId: vi.fn(),
-  getPersistedTurn: vi.fn(),
-  listTurnErrorsByAssistantMessageIds: vi.fn((): Array<{ assistantMessageId: string; message: string }> => []),
-  setPersistedTurnExecutionConfig: vi.fn(() => true),
-  failConfiguringTurn: vi.fn(() => true),
-  getMessage: vi.fn(),
-  getMessageSequence: vi.fn(),
-  getRecentTurnRoutingMessages: vi.fn(() => []),
-  hasVisionInTurnRoutingContext: vi.fn(() => false),
-  updateSession: vi.fn(),
-  deleteSession: vi.fn(),
-  getMessages: vi.fn(() => []),
-  appendMessage: vi.fn(),
-  updateMessageContent: vi.fn(),
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   getDbConnection: vi.fn(() => ({ exec: vi.fn() }))
-  ,getSessionMessageRevisionSnapshot: vi.fn((_db: unknown, sessionId: string) => ({ sessionId, generation: 'generation-1', messageRevision: 1 }))
 }))
 
 vi.mock('./runtime/sessionContentWriteAuthority', () => ({
@@ -162,7 +172,7 @@ function makeCtx(): AppIpcContext {
   }
   const issuedFences = new WeakMap<object, {
     sessionId: string
-    snapshot: ReturnType<typeof database.getSessionMessageRevisionSnapshot>
+    snapshot: ReturnType<typeof databaseOperations.getSessionMessageRevisionSnapshot>
     boundarySequence?: number
     excludeMessageIds: string[]
     limit?: number
@@ -203,7 +213,7 @@ function makeCtx(): AppIpcContext {
         ),
         ...(userInput !== undefined ? { userInput } : {}),
         hasVision: database.hasVisionInTurnRoutingContext(ctx.db, input.sessionId, input.boundarySequence, input.excludeMessageIds ?? []),
-        fence: fence as import('./sessionStorage/contracts').SelectionFence
+        fence: fence as import('./sessionStorage/public/model').SelectionFence
       }
     },
     resolveRoutingInput: ({ sessionId, selection, routeInput }) => {
@@ -231,7 +241,7 @@ function makeCtx(): AppIpcContext {
       })
       const fence = Object.freeze({})
       issuedFences.set(fence, { ...issued, ...(canonical ? { canonical: canonical.fence } : {}) })
-      return { routeInput: canonical?.routeInput ?? routeInput, fence: fence as import('./sessionStorage/contracts').SelectionFence }
+      return { routeInput: canonical?.routeInput ?? routeInput, fence: fence as import('./sessionStorage/public/model').SelectionFence }
     },
     readSelectionSnapshot: (sessionId, fence) => {
       const issued = issuedFences.get(fence as object)
@@ -255,6 +265,7 @@ function makeCtx(): AppIpcContext {
     searchMessages: ({ query, activeProfileId, limit }) => sessionTranscriptProjection.searchProjectedMessages(ctx.db, query, activeProfileId, limit),
     readRetryTarget: ({ sessionId, failedAssistantMessageId }) =>
       sessionTranscriptProjection.resolveProjectedRetryContext(ctx.db, sessionId, failedAssistantMessageId),
+    listTurnErrorsByAssistantMessageIds: (ids) => database.listTurnErrorsByAssistantMessageIds(ctx.db, ids),
     readMessageSequence: ({ sessionId, messageId }) => database.getMessageSequence(ctx.db, sessionId, messageId)
   }
   const execution = createSessionExecutionStore(ctx.db, queries)
@@ -264,6 +275,24 @@ function makeCtx(): AppIpcContext {
     execution
   } satisfies SessionStorage
   return ctx
+}
+
+function routeSessionStorageTurnReadsThroughDatabaseMocks(ctx: AppIpcContext): void {
+  const storage = ctx.sessionStorage!
+  const execution = storage.execution
+  ctx.sessionStorage = { ...storage, execution: {
+    ...execution,
+    readTurn: ({ sessionId, turnId }) => {
+      const turn = database.getPersistedTurn(ctx.db, turnId)
+      return turn?.sessionId === sessionId ? turn : undefined
+    },
+    readTurnByRequest: ({ sessionId, requestId }) => mockReadTurnByRequest(sessionId, requestId),
+    commitExecutionConfig: ({ ref, config, intentFingerprint, fence }) => {
+      const snapshot = storage.queries.readSelectionSnapshot(ref.sessionId, fence)
+      return database.setPersistedTurnExecutionConfig(ctx.db, ref.turnId, config, intentFingerprint, snapshot ?? fence)
+    },
+    failConfiguring: ({ ref, version, error }) => database.failConfiguringTurn(ctx.db, ref.turnId, version, error)
+  } } as SessionStorage
 }
 
 describe('file IPC handlers', () => {
@@ -279,7 +308,10 @@ describe('file IPC handlers', () => {
     resetRealDbForwarding?.()
     resetRealDbForwarding = undefined
     vi.clearAllMocks()
-    vi.mocked(database.getDbConnection).mockReturnValue({
+    mockReadTurnByRequest.mockReset()
+    vi.mocked(databaseComposition.getConfigValue).mockReset()
+    vi.mocked(databaseComposition.setConfigValue).mockReset()
+    vi.mocked(databaseComposition.getDbConnection).mockReturnValue({
       exec: vi.fn(), prepare: vi.fn(() => ({ get: vi.fn(), all: vi.fn(() => []), run: vi.fn(() => ({ changes: 1 })) }))
     } as never)
     mockFs.writeFile.mockResolvedValue(undefined)
@@ -316,13 +348,24 @@ describe('file IPC handlers', () => {
     expect(page).toEqual({ messages: [message], nextSequence: 8 })
   })
 
-  it('backup payload trusts the injected query result and does not fall back to a database reader', () => {
+  it('backup payload trusts the injected query result and does not fall back to a database reader', async () => {
     const queries = Object.freeze({ ...ctx.sessionStorage!.queries, readSession: vi.fn(() => undefined) })
     ctx.sessionStorage = { ...ctx.sessionStorage!, queries } as SessionStorage
 
-    expect(loadBackupPayload(ctx, 'missing-backup-session')).toBeNull()
+    await expect(loadBackupPayload(ctx, 'missing-backup-session')).resolves.toBeNull()
     expect(database.getSession).not.toHaveBeenCalled()
     expect(queries.readSession).toHaveBeenCalledWith('missing-backup-session')
+  })
+
+  it('prepares canonical chat bodies before selecting the backup session snapshot', async () => {
+    const events: string[] = []
+    const queries = Object.freeze({ ...ctx.sessionStorage!.queries, readSession: vi.fn(() => { events.push('select'); return undefined }) })
+    ctx.sessionStorage = { ...ctx.sessionStorage!, queries,
+      ensureChatBodyV1: async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`); return [] } } as SessionStorage
+
+    await expect(loadBackupPayload(ctx, 'backup-order-session')).resolves.toBeNull()
+
+    expect(events).toEqual(['ensure:backup-order-session', 'select'])
   })
 
   it('API context baseline IPC resolves the latest-window rows through canonical bodies', async () => {
@@ -332,8 +375,8 @@ describe('file IPC handlers', () => {
       sessionId: 'api-baseline-session', entries: [{ message, sequence: 9 }]
     })
 
-    expect(ipc.getHandler('chat:get-api-context-baseline')!({}, { sessionId: 'api-baseline-session' }))
-      .toEqual({ sessionId: 'api-baseline-session', entries: [{ message, sequence: 9 }] })
+    await expect(ipc.getHandler('chat:get-api-context-baseline')!({}, { sessionId: 'api-baseline-session' }))
+      .resolves.toEqual({ sessionId: 'api-baseline-session', entries: [{ message, sequence: 9 }] })
     expect(readBaseline).toHaveBeenCalledWith(ctx.db, 'api-baseline-session')
   })
 
@@ -343,21 +386,28 @@ describe('file IPC handlers', () => {
   })
 
   it('canonical-backed message edits go through the canonical append-and-mirror writer', async () => {
-    const message = { id: 'ipc-canonical-edit', sessionId: 'ipc-edit-session', role: 'user', content: 'edited', timestamp: 1 } as import('../src/shared/domainTypes').Message
-    vi.mocked(database.getDbConnection).mockReturnValue({
-      prepare: vi.fn(() => ({ get: vi.fn(() => ({ content_storage_state: 'canonical-backed-dual-write' })) }))
-    } as never)
+    const session = databaseOperations.createSession(ctx.db, { name: 'canonical edit', model: 'deepseek-chat' })
+    const persisted = databaseOperations.appendMessage(ctx.db, { id: 'ipc-canonical-edit', sessionId: session.id, role: 'user', content: 'edited', timestamp: 1, status: 'sent' })
+    const message = persisted.message
+    getActualDbConnection(ctx.db).prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE id=?").run(message.id)
+    const events: string[] = []
+    const storage = ctx.sessionStorage as unknown as { queries: SessionQueries; ensureChatBodyV1: (input: { sessionId: string }) => Promise<unknown> }
+    const queries = storage.queries as SessionQueries & { readMessage: SessionQueries['readMessage'] }
+    storage.ensureChatBodyV1 = async ({ sessionId }) => { events.push(`ensure:${sessionId}`) }
+    const readMessage = queries.readMessage
+    queries.readMessage = (input) => { events.push(`select:${input.sessionId}`); return readMessage(input) }
     vi.mocked(database.getMessage).mockReturnValue(message)
     vi.spyOn(sessionTranscriptProjection, 'getProjectedMessage').mockReturnValue(message)
     vi.mocked(database.getMessageSequence).mockReturnValue(4)
 
     const result = await ipc.getHandler('message:patch-non-turn')!({}, {
-      sessionId: 'ipc-edit-session', messageId: message.id, patch: { content: 'edited' }
+      sessionId: session.id, messageId: message.id, patch: { content: 'edited' }
     })
 
     expect(sessionContentWriteAuthority.writeCanonicalBackedMessageContent).toHaveBeenCalledWith(ctx.db, message.id, 'edited')
     expect(database.updateMessageContent).not.toHaveBeenCalled()
     expect(result).toEqual({ message, sequence: 4 })
+    expect(events).toEqual([`ensure:${session.id}`, `select:${session.id}`])
   })
 
   it('routes toolCalls metadata through its dedicated command and rejects mixed patches', async () => {
@@ -478,7 +528,7 @@ describe('file IPC handlers', () => {
 
   it('相同 requestId 重放优先返回冻结 turn，不读取漂移后的当前配置', async () => {
     const frozenConfig = { lane: 'desktop' as const, model: 'deepseek-chat', maxTokens: 4096, enableThinking: false, locale: 'zh-CN' }
-    vi.mocked(database.getTurnByRequestId).mockReturnValue({
+    mockReadTurnByRequest.mockReturnValue({
       turnId: 'frozen-turn', requestId: 'stable-request', sessionId: 'session-1',
       assistantMessageId: 'assistant-1', userMessageId: 'user-1', state: 'prepared', version: 0,
       startToken: 'frozen-token',
@@ -494,10 +544,11 @@ describe('file IPC handlers', () => {
         : { id: 'assistant-1', sessionId: 'session-1', role: 'assistant', content: '', timestamp: 2, status: 'streaming', schemaVersion: 1 })
 
     const coordinator = new TurnCoordinator({
-      findByRequestId: (sessionId, requestId) => database.getTurnByRequestId(ctx.db, sessionId, requestId)
+      findByRequestId: (sessionId, requestId) => mockReadTurnByRequest(sessionId, requestId)
     } as never, { now: Date.now, id: () => 'unused-turn-id' })
     ctx.turnRuntime = { coordinator, cancel: vi.fn(), listActive: vi.fn(() => []), subscribe: vi.fn(() => () => undefined) } as unknown as AppIpcContext['turnRuntime']
     ipc = mockIpcMain()
+    routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
 
     const handler = ipc.getHandler('chat:prepare-turn')!
@@ -524,7 +575,7 @@ describe('file IPC handlers', () => {
       coordinator: { prepare: vi.fn().mockReturnValue(started), consume: vi.fn(), restoreTurn: vi.fn(), recover: vi.fn(), getTerminal: vi.fn() },
       cancel: vi.fn(), listActive: vi.fn(() => []), subscribe: vi.fn(() => () => undefined)
     } as unknown as AppIpcContext['turnRuntime']
-    vi.mocked(database.getTurnByRequestId).mockReturnValueOnce(undefined)
+    mockReadTurnByRequest.mockReturnValueOnce(undefined)
     vi.mocked(database.getPersistedTurn).mockReturnValue({
       turnId: started.turnId, requestId: started.requestId, sessionId: started.sessionId,
       assistantMessageId: started.assistantMessage.id, userMessageId: started.userMessage.id,
@@ -560,6 +611,7 @@ describe('file IPC handlers', () => {
     const intent = { mode: 'reuse-user' as const, requestId: started.requestId, sessionId: started.sessionId, userMessageId: 'reuse-user', excludeMessageIds: [], config: {} }
 
     ipc = mockIpcMain()
+    routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     await expect(ipc.getHandler('chat:prepare-turn')!({}, intent)).resolves.toMatchObject({ turnId: started.turnId })
     await vi.waitFor(() => expect(mockSkillManager.route).toHaveBeenCalledTimes(1))
@@ -619,7 +671,7 @@ describe('file IPC handlers', () => {
     } as unknown as AppIpcContext['turnRuntime']
     const executeTurn = vi.fn().mockResolvedValue(undefined)
     ctx.executeTurn = executeTurn
-    vi.mocked(database.getTurnByRequestId)
+    mockReadTurnByRequest
       .mockReturnValueOnce(undefined)
       .mockReturnValue({
         turnId: started.turnId, requestId: started.requestId, sessionId: started.sessionId,
@@ -634,6 +686,7 @@ describe('file IPC handlers', () => {
     vi.mocked(database.getSession).mockReturnValue({ id: 'session-1', model: 'deepseek-chat', skillsState: {}, metadata: {} } as never)
 
     ipc = mockIpcMain()
+    routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     const handler = ipc.getHandler('chat:prepare-turn')!
     const intent = { mode: 'create-user' as const, requestId: 'configuring-request', sessionId: 'session-1', input: { text: 'hello' }, config: {} }
@@ -674,9 +727,26 @@ describe('file IPC handlers', () => {
       consume: runtimeConsume,
       cancel: vi.fn(), listActive: vi.fn(() => []), subscribe: vi.fn(() => () => undefined)
     } as unknown as AppIpcContext['turnRuntime']
-    const executeTurn = vi.fn().mockResolvedValue(undefined)
+    const provider = new RecordingModelProvider([
+      { type: 'text-delta', text: 'should not reach provider' },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 },
+      { type: 'finish', reason: 'stop' }
+    ])
+    const registry = new ModelProviderRegistry()
+    registry.register({ routeId: 'desktop-test', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, provider)
+    const hostedHost: AgentTurnHost = {
+      createPorts: async () => ({
+        registry, safetyGate: {} as never, prepareTool: vi.fn(), toolExecution: {} as never,
+        request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 32 },
+        routeId: 'desktop-test', invocationId: started.turnId, maxModelTurns: 1
+      })
+    }
+    const executeTurn = vi.fn(async () => {
+      await runHostedAgentTurn({ host: hostedHost, invocationId: started.turnId, turnId: started.turnId,
+        routeId: 'desktop-test', request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 32 } })
+    })
     ctx.executeTurn = executeTurn
-    vi.mocked(database.getTurnByRequestId).mockReturnValueOnce(undefined)
+    mockReadTurnByRequest.mockReturnValueOnce(undefined)
     vi.mocked(database.getPersistedTurn).mockReturnValue({
       turnId: started.turnId, requestId: started.requestId, sessionId: started.sessionId,
       assistantMessageId: started.assistantMessage.id, userMessageId: started.userMessage.id,
@@ -686,6 +756,7 @@ describe('file IPC handlers', () => {
     vi.mocked(database.setPersistedTurnExecutionConfig).mockReturnValueOnce(false)
 
     ipc = mockIpcMain()
+    routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     const handler = ipc.getHandler('chat:prepare-turn')!
     await expect(handler({}, {
@@ -706,6 +777,7 @@ describe('file IPC handlers', () => {
       code: 'configuration-failed', message: 'TURN_CONTEXT_CHANGED_DURING_PREPARATION'
     }))
     expect(executeTurn).not.toHaveBeenCalled()
+    expect(provider.calls).toHaveLength(0)
   })
 
   it('配置阶段失败时把 source-failed 事实（含真实原因）交给 projection，渲染层才能标失败并显示原因', async () => {
@@ -733,7 +805,7 @@ describe('file IPC handlers', () => {
       listActive: vi.fn(() => []),
       subscribe: vi.fn(() => () => undefined)
     } as unknown as AppIpcContext['turnRuntime']
-    vi.mocked(database.getTurnByRequestId).mockReturnValue(undefined)
+    mockReadTurnByRequest.mockReturnValue(undefined)
     vi.mocked(database.getPersistedTurn).mockReturnValue({
       turnId: started.turnId, requestId: started.requestId, sessionId: started.sessionId,
       assistantMessageId: started.assistantMessage.id, userMessageId: started.userMessage.id,
@@ -743,6 +815,7 @@ describe('file IPC handlers', () => {
     mockSkillManager.route.mockRejectedValueOnce(new Error('会话模型「claude-sonnet-4-20250514」当前不可用'))
 
     ipc = mockIpcMain()
+    routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     const handler = ipc.getHandler('chat:prepare-turn')!
 
@@ -789,7 +862,7 @@ describe('file IPC handlers', () => {
     const executeTurn = vi.fn().mockResolvedValue(undefined)
     ctx.executeTurn = executeTurn
     let cancelled = false
-    vi.mocked(database.getTurnByRequestId).mockReturnValueOnce(undefined)
+    mockReadTurnByRequest.mockReturnValueOnce(undefined)
     vi.mocked(database.getPersistedTurn).mockImplementation(() => ({
       turnId: started.turnId, requestId: started.requestId, sessionId: started.sessionId,
       assistantMessageId: started.assistantMessage.id, userMessageId: started.userMessage.id,
@@ -798,6 +871,7 @@ describe('file IPC handlers', () => {
     vi.mocked(database.getSession).mockReturnValue({ id: 'session-1', model: 'deepseek-chat', skillsState: {}, metadata: {} } as never)
 
     ipc = mockIpcMain()
+    routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     const prepared = await ipc.getHandler('chat:prepare-turn')!({}, {
       mode: 'create-user', requestId: started.requestId, sessionId: started.sessionId, input: { text: 'hello' }, config: {}
@@ -1142,7 +1216,7 @@ describe('file IPC handlers', () => {
   it('真实 SQLite prepare-turn 在 canonical-only + reopen 后向技能路由提供复用正文和历史上下文', async () => {
     vi.restoreAllMocks()
     const temp = createTempDatabase('prepare-turn-canonical-only-')
-    const real = await vi.importActual<typeof import('./database')>('./database')
+    const real = { ...await vi.importActual<typeof import('./database')>('./database'), ...await vi.importActual<typeof import('./database/operations')>('./database/operations') }
     const db = temp.db
     const session = real.createSession(db, { name: 'canonical prepare', model: 'deepseek-chat', workDirProfileId: 'default' })
     const earlierUser = real.appendMessage(db, { id: 'prepare-earlier-user', sessionId: session.id, role: 'user',
@@ -1164,9 +1238,9 @@ describe('file IPC handlers', () => {
     db.close()
     const reopened = real.openDatabase(temp.dbPath)
 
-    const forwardingNames = ['getDbConnection', 'getSession', 'getTurnByRequestId', 'getPersistedTurn', 'getSessionMessageRevisionSnapshot',
+    const forwardingNames = ['getSession', 'getPersistedTurn', 'getSessionMessageRevisionSnapshot',
       'getMessage', 'listPersistedTurns', 'appendMessage', 'setPersistedTurnExecutionConfig', 'failConfiguringTurn',
-      'getConfigValue', 'getRecentTurnRoutingMessages', 'hasVisionInTurnRoutingContext'] as const
+      'getRecentTurnRoutingMessages', 'hasVisionInTurnRoutingContext'] as const
     const originalImplementations = new Map(forwardingNames.map((name) => [name, vi.mocked(database[name] as never).getMockImplementation()]))
     resetRealDbForwarding = () => {
       for (const name of forwardingNames) {
@@ -1179,14 +1253,25 @@ describe('file IPC handlers', () => {
     const forward = <K extends keyof typeof real>(name: K) => vi.mocked(database[name] as never).mockImplementation((...args: never[]) =>
       (real[name] as (...values: never[]) => unknown)(...args) as never)
     for (const name of forwardingNames) forward(name)
-    vi.mocked(database.getDbConnection).mockImplementation(() => getActualDbConnection(reopened))
+    vi.mocked(databaseComposition.getDbConnection).mockImplementation(() => getActualDbConnection(reopened))
+    vi.mocked(databaseComposition.getConfigValue).mockImplementation((_db, key) => real.getConfigValue(reopened, key))
+    vi.mocked(databaseComposition.setConfigValue).mockImplementation((_db, key, value) => real.setConfigValue(reopened, key, value))
     ctx.db = reopened
-    ctx.sessionStorage = createSqliteSessionStorage(reopened)
+    const projectionReadEvents: string[] = []
+    const sqliteSessionStorage = createSqliteSessionStorage(reopened)
+    ctx.sessionStorage = {
+      ...sqliteSessionStorage,
+      ensureChatBodyV1: vi.fn(async () => { projectionReadEvents.push('ensure') }),
+      queries: { ...sqliteSessionStorage.queries, readRoutingInput: (input) => {
+        projectionReadEvents.push('select')
+        return sqliteSessionStorage.queries.readRoutingInput(input)
+      } }
+    }
 
     let coordinatorId = 0
     const storage = {
       findByRequestId: (sessionId: string, requestId: string) => {
-        const turn = real.getTurnByRequestId(reopened, sessionId, requestId)
+        const turn = databaseOperations.getTurnByRequestId(reopened, sessionId, requestId)
         if (!turn) return undefined
         const assistantMessage = sessionTranscriptProjection.getProjectedMessage(reopened, turn.assistantMessageId)
         const userMessage = turn.userMessageId ? sessionTranscriptProjection.getProjectedMessage(reopened, turn.userMessageId) : undefined
@@ -1216,6 +1301,8 @@ describe('file IPC handlers', () => {
     const coordinator = new TurnCoordinator(storage as never, { now: Date.now, id: () => `prepare-generated-${++coordinatorId}` })
     ctx.turnRuntime = { coordinator, consume: vi.fn((turnId: string, event: never) => coordinator.consume(turnId, event)),
       cancel: vi.fn(), listActive: vi.fn(() => []), subscribe: vi.fn(() => () => undefined) } as unknown as AppIpcContext['turnRuntime']
+    let hostedExecution: () => Promise<void> = async () => undefined
+    ctx.executeTurn = () => hostedExecution()
     ipc = mockIpcMain()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
 
@@ -1223,6 +1310,7 @@ describe('file IPC handlers', () => {
       mode: 'reuse-user', requestId: 'prepare-real-request', sessionId: session.id, userMessageId: reused.id,
       excludeMessageIds: [], config: {}
     })).resolves.toMatchObject({ turnId: 'prepare-generated-2' })
+    expect(projectionReadEvents).toEqual(['ensure', 'select'])
     await vi.waitFor(() => expect(mockSkillManager.route).toHaveBeenCalledTimes(1))
     expect(mockSkillManager.route).toHaveBeenCalledWith(expect.objectContaining({
       userInput: 'reused canonical input',
@@ -1240,7 +1328,7 @@ describe('file IPC handlers', () => {
     )
     expect(getActualDbConnection(reopened).prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get(reused.id))
       .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
-    const preparedTurn = real.getTurnByRequestId(reopened, session.id, 'prepare-real-request')
+    const preparedTurn = databaseOperations.getTurnByRequestId(reopened, session.id, 'prepare-real-request')
     expect(preparedTurn?.state).toBe('prepared')
 
     mockSkillManager.route.mockClear()
@@ -1259,32 +1347,131 @@ describe('file IPC handlers', () => {
       excludeMessageIds: [], config: {}
     })).rejects.toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
     expect(mockSkillManager.route).not.toHaveBeenCalled()
-    expect(real.getTurnByRequestId(reopened, session.id, 'prepare-missing-canonical-request')).toBeUndefined()
+    expect(databaseOperations.getTurnByRequestId(reopened, session.id, 'prepare-missing-canonical-request')).toBeUndefined()
 
-    const restoredPayload = {
-      messages: [earlierUser, earlierAssistant, reused].map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp }))
-    }
-    getActualDbConnection(reopened).prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?')
-      .run(JSON.stringify(restoredPayload), 'prepare-canonical-context')
-    getActualDbConnection(reopened).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
-      .run(session.id)
+    const editSession = real.createSession(reopened, { name: 'B02 editable legacy session', model: 'deepseek-chat', workDirProfileId: 'default' })
+    const editEarlierUser = real.appendMessage(reopened, { id: 'prepare-edit-earlier-user', sessionId: editSession.id, role: 'user',
+      content: 'history before edit', timestamp: 10, status: 'sent' }).message
+    const editEarlierAssistant = real.appendMessage(reopened, { id: 'prepare-edit-earlier-assistant', sessionId: editSession.id, role: 'assistant',
+      content: 'earlier answer', timestamp: 11, status: 'completed' })
+    const editReuseUser = real.appendMessage(reopened, { id: 'prepare-edit-reuse-user', sessionId: editSession.id, role: 'user',
+      content: 'current accepted question', timestamp: 12, status: 'sent' }).message
     let releaseConcurrentRoute!: (value: { skills: [] }) => void
     mockSkillManager.route.mockImplementationOnce(async () => {
-      getActualDbConnection(reopened).prepare('UPDATE messages SET images_delivered_to_api=1 WHERE id=?').run(earlierUser.id)
       return await new Promise((resolve) => { releaseConcurrentRoute = resolve })
     })
+    const concurrentProvider = new RecordingModelProvider([
+      { type: 'text-delta', text: 'must not dispatch after stale selection' },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 },
+      { type: 'finish', reason: 'stop' }
+    ])
+    const concurrentRegistry = new ModelProviderRegistry()
+    concurrentRegistry.register({ routeId: 'desktop-test', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, concurrentProvider)
     const concurrentIntent = {
-      mode: 'reuse-user', requestId: 'prepare-concurrent-change-request', sessionId: session.id, userMessageId: reused.id,
+      mode: 'reuse-user', requestId: 'prepare-concurrent-change-request', sessionId: editSession.id, userMessageId: editReuseUser.id,
       excludeMessageIds: [], config: {}
     }
     await expect(ipc.getHandler('chat:prepare-turn')!({}, concurrentIntent)).resolves.toMatchObject({ turnId: expect.any(String) })
     await vi.waitFor(() => expect(releaseConcurrentRoute).toBeTypeOf('function'))
+    const concurrentTurn = databaseOperations.getTurnByRequestId(reopened, editSession.id, concurrentIntent.requestId)
+    expect(concurrentTurn).toBeDefined()
+    hostedExecution = async () => {
+      const context = createSqliteSessionStorage(reopened).execution.loadAcceptedMessages({ sessionId: editSession.id, turnId: concurrentTurn!.turnId })
+      const currentUser = context.find((message) => message.id === editReuseUser.id)!
+      const concurrentHost: AgentTurnHost = {
+        createPorts: async () => ({
+          registry: concurrentRegistry, safetyGate: {} as never, prepareTool: vi.fn(), toolExecution: {} as never,
+          request: { messages: context.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })), maxTokens: 32 },
+          routeId: 'desktop-test', invocationId: concurrentTurn!.turnId, maxModelTurns: 1, turnId: concurrentTurn!.turnId,
+          currentUserMessageId: editReuseUser.id,
+          requiredUserMessage: { id: editReuseUser.id, message: { id: editReuseUser.id, role: currentUser.role, content: currentUser.content, timestamp: currentUser.timestamp } }
+        })
+      }
+      await runHostedAgentTurn({ host: concurrentHost, invocationId: concurrentTurn!.turnId, turnId: concurrentTurn!.turnId,
+        routeId: 'desktop-test', request: { messages: context.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })), maxTokens: 32 },
+        requiredUserMessage: { id: editReuseUser.id, message: { id: editReuseUser.id, role: currentUser.role, content: currentUser.content, timestamp: currentUser.timestamp } } })
+    }
+    await expect(ipc.getHandler('chat:execute-turn')!({ sender: {} }, {
+      requestId: concurrentIntent.requestId, turnId: concurrentTurn!.turnId, turnStartToken: concurrentTurn!.startToken, sessionId: editSession.id
+    })).resolves.toMatchObject({ accepted: true, turnId: concurrentTurn!.turnId })
+    const editedPriorUser = await ipc.getHandler('message:patch-non-turn')!({}, {
+      sessionId: editSession.id, messageId: editEarlierUser.id, patch: { content: 'edited dependent history through IPC' }
+    }) as { message: { content: string } }
+    expect(editedPriorUser.message.content).toBe('edited dependent history through IPC')
+    expect(mockSkillManager.route).toHaveBeenCalledWith(expect.objectContaining({
+      userInput: 'current accepted question',
+      recentMessages: [
+        { role: 'user', content: 'history before edit' },
+        { role: 'assistant', content: 'earlier answer' },
+        { role: 'user', content: 'current accepted question' }
+      ],
+      sessionId: editSession.id
+    }))
+    expect([
+      real.getMessageSequence(reopened, editSession.id, editEarlierUser.id),
+      real.getMessageSequence(reopened, editSession.id, editEarlierAssistant.message.id),
+      real.getMessageSequence(reopened, editSession.id, editReuseUser.id)
+    ]).toEqual([0, 1, 2])
+    const digest = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
+    expect(digest(editEarlierUser.content)).toBe('1f68e9318d352545523256d4ce1c59f1ade95fb0492a76ef26c87ea2238793d5')
+    expect(digest(editedPriorUser.message.content)).toBe('c143e6ed9bb60e1e01be4a3ef1b21689fa7ecd97dec9557b10f0b21b4e4ad4f1')
+    expect(createSqliteSessionStorage(reopened).queries.readMessage({ sessionId: editSession.id, messageId: editEarlierUser.id }))
+      .toMatchObject({ content: 'edited dependent history through IPC' })
     const pendingConfiguration = ipc.getHandler('chat:prepare-turn')!({}, concurrentIntent)
     releaseConcurrentRoute({ skills: [] })
     expect(mockSkillManager.route).toHaveBeenCalledOnce()
     await expect(pendingConfiguration).rejects.toThrow('TURN_CONTEXT_CHANGED_DURING_PREPARATION')
-    expect(real.getTurnByRequestId(reopened, session.id, 'prepare-concurrent-change-request'))
+    expect(databaseOperations.getTurnByRequestId(reopened, editSession.id, 'prepare-concurrent-change-request'))
       .toMatchObject({ state: 'terminal', outcome: 'failed', error: { code: 'configuration-failed', message: 'TURN_CONTEXT_CHANGED_DURING_PREPARATION' } })
+    await vi.waitFor(() => expect(real.getPersistedTurn(reopened, concurrentTurn!.turnId)?.state).toBe('terminal'))
+    expect(concurrentProvider.calls).toHaveLength(0)
+
+    const controlSession = real.createSession(reopened, { name: 'B02 no-edit control', model: 'deepseek-chat', workDirProfileId: 'default' })
+    const controlUser = real.appendMessage(reopened, { id: 'prepare-no-revision-user', sessionId: controlSession.id, role: 'user',
+      content: 'unchanged accepted question', timestamp: 20, status: 'sent' }).message
+    let releaseControlRoute!: (value: { skills: [] }) => void
+    mockSkillManager.route.mockImplementationOnce(async () => await new Promise((resolve) => { releaseControlRoute = resolve }))
+    const controlRequestId = 'prepare-no-revision-control-request'
+    const controlIntent = { mode: 'reuse-user', requestId: controlRequestId, sessionId: controlSession.id, userMessageId: controlUser.id, excludeMessageIds: [], config: {} }
+    const controlProvider = new RecordingModelProvider([
+      { type: 'text-delta', text: 'route control reached provider' },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 },
+      { type: 'finish', reason: 'stop' }
+    ])
+    const controlRegistry = new ModelProviderRegistry()
+    controlRegistry.register({ routeId: 'desktop-test', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, controlProvider)
+    let controlTurnId = ''
+    hostedExecution = async () => {
+      const context = createSqliteSessionStorage(reopened).execution.loadAcceptedMessages({ sessionId: controlSession.id, turnId: controlTurnId })
+      const userMessage = context.find((message) => message.id === controlUser.id)!
+      const controlHost: AgentTurnHost = {
+        createPorts: async () => ({
+          registry: controlRegistry, safetyGate: {} as never, prepareTool: vi.fn(), toolExecution: {} as never,
+          request: { messages: context.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })), maxTokens: 32 },
+          routeId: 'desktop-test', invocationId: controlTurnId, maxModelTurns: 1, turnId: controlTurnId,
+          currentUserMessageId: controlUser.id,
+          requiredUserMessage: { id: controlUser.id, message: { id: controlUser.id, role: userMessage.role, content: userMessage.content, timestamp: userMessage.timestamp } }
+        })
+      }
+      await runHostedAgentTurn({ host: controlHost, invocationId: controlTurnId, turnId: controlTurnId, routeId: 'desktop-test',
+        request: { messages: context.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })), maxTokens: 32 },
+        requiredUserMessage: { id: controlUser.id, message: { id: controlUser.id, role: userMessage.role, content: userMessage.content, timestamp: userMessage.timestamp } } })
+    }
+    const controlPrepare = ipc.getHandler('chat:prepare-turn')!({}, controlIntent)
+    await vi.waitFor(() => expect(releaseControlRoute).toBeTypeOf('function'))
+    const controlTurn = databaseOperations.getTurnByRequestId(reopened, controlSession.id, controlRequestId)
+    expect(controlTurn).toBeDefined()
+    controlTurnId = controlTurn!.turnId
+    await expect(ipc.getHandler('chat:execute-turn')!({ sender: {} }, {
+      requestId: controlRequestId, turnId: controlTurnId, turnStartToken: controlTurn!.startToken, sessionId: controlSession.id
+    })).resolves.toMatchObject({ accepted: true, turnId: controlTurnId })
+    const controlRevisionBeforeRelease = real.getSessionMessageRevisionSnapshot(reopened, controlSession.id)
+    releaseControlRoute({ skills: [] })
+    await expect(controlPrepare).resolves.toMatchObject({ turnId: controlTurn!.turnId, startToken: controlTurn!.startToken })
+    expect(real.getSessionMessageRevisionSnapshot(reopened, controlSession.id)).toEqual(controlRevisionBeforeRelease)
+    await vi.waitFor(() => expect(controlProvider.calls).toHaveLength(1))
+    expect(controlProvider.calls[0]?.route).toMatchObject({ routeId: 'desktop-test', modelId: 'test-model' })
+    expect(controlProvider.calls[0]?.request.messages).toContainEqual(expect.objectContaining({ role: 'user', content: 'unchanged accepted question' }))
     reopened.close()
     temp.cleanup()
   })
@@ -1292,7 +1479,7 @@ describe('file IPC handlers', () => {
   it('display-message IPC 在 canonical-only + reopen 后读取 terminal 正文并拒绝畸形 History', async () => {
     vi.restoreAllMocks()
     const temp = createTempDatabase('display-terminal-canonical-only-')
-    const real = await vi.importActual<typeof import('./database')>('./database')
+    const real = { ...await vi.importActual<typeof import('./database')>('./database'), ...await vi.importActual<typeof import('./database/operations')>('./database/operations') }
     const db = temp.db
     const session = real.createSession(db, { name: 'terminal display', model: 'deepseek-chat', workDirProfileId: 'default' })
     const user = real.appendMessage(db, { id: 'display-terminal-user', sessionId: session.id, role: 'user',
@@ -1332,20 +1519,122 @@ describe('file IPC handlers', () => {
       .run('{"messages":', 'display-terminal-context')
     getActualDbConnection(reopened).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
       .run(session.id)
-    expect(() => ipc.getHandler('chat:get-display-message-page')!({}, { sessionId: session.id, limit: 10 }))
-      .toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+    await expect(Promise.resolve(ipc.getHandler('chat:get-display-message-page')!({}, { sessionId: session.id, limit: 10 })))
+      .rejects.toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
     expect(getActualDbConnection(reopened).prepare('SELECT content FROM messages WHERE id=?').get(assistant.id))
       .toEqual({ content: '' })
     getActualDbConnection(reopened).prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?')
       .run(JSON.stringify({ messages: [] }), 'display-terminal-context')
     getActualDbConnection(reopened).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
       .run(session.id)
-    expect(() => ipc.getHandler('chat:get-display-message-page')!({}, { sessionId: session.id, limit: 10 }))
-      .toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+    await expect(Promise.resolve(ipc.getHandler('chat:get-display-message-page')!({}, { sessionId: session.id, limit: 10 })))
+      .rejects.toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
     expect(getActualDbConnection(reopened).prepare('SELECT content FROM messages WHERE id=?').get(assistant.id))
       .toEqual({ content: '' })
     reopened.close()
     temp.cleanup()
   })
 
+  // Keep this file-backed integration last: it restores module mocks and rebinds database handlers to its own file DB.
+  it('B04 file-backed retry intent resolves the failed target and reaches the provider with edited history', async () => {
+    vi.restoreAllMocks()
+    const temp = createTempDatabase('desktop-retry-intent-')
+    const real = { ...await vi.importActual<typeof import('./database')>('./database'), ...await vi.importActual<typeof import('./database/operations')>('./database/operations') }
+    const db = temp.db
+    const session = real.createSession(db, { name: 'retry intent', model: 'deepseek-chat', workDirProfileId: 'default' })
+    const priorUser = real.appendMessage(db, { id: 'retry-intent-prior-user', sessionId: session.id, role: 'user', content: 'before prior edit', timestamp: 1, status: 'sent' })
+    const priorAssistant = real.appendMessage(db, { id: 'retry-intent-prior-assistant', sessionId: session.id, role: 'assistant', content: 'before assistant edit', timestamp: 2, status: 'completed' })
+    const targetUser = real.appendMessage(db, { id: 'retry-intent-target-user', sessionId: session.id, role: 'user', content: 'retry required user sentinel', timestamp: 3, status: 'sent' })
+    const failedAssistant = real.appendMessage(db, { id: 'retry-intent-failed-assistant', sessionId: session.id, role: 'assistant', content: 'failed retry source sentinel', timestamp: 4, status: 'failed' })
+    real.appendMessage(db, { id: 'retry-intent-later-user', sessionId: session.id, role: 'user', content: 'later physical user sentinel', timestamp: 5, status: 'sent' })
+    real.createPersistedTurn(db, { turnId: 'retry-intent-source-turn', requestId: 'retry-intent-source-request', sessionId: session.id,
+      userMessageId: targetUser.message.id, assistantMessageId: failedAssistant.message.id, state: 'terminal', outcome: 'failed' })
+    real.setConfigValue(db, 'secrets.apiKeyEnc', 'safe:test-key')
+    vi.mocked(database.appendMessage).mockImplementation((_db, input) => real.appendMessage(db, input))
+    vi.mocked(database.createPersistedTurn).mockImplementation((_db, turn) => real.createPersistedTurn(db, turn))
+    mockReadTurnByRequest.mockImplementation((_db, sessionId, requestId) => databaseOperations.getTurnByRequestId(db, sessionId, requestId))
+    vi.mocked(database.getPersistedTurn).mockImplementation((_db, turnId) => real.getPersistedTurn(db, turnId))
+    vi.mocked(database.hasActiveTurn).mockImplementation(() => real.hasActiveTurn(db, session.id))
+    vi.mocked(database.setPersistedTurnExecutionConfig).mockImplementation((_db, turnId, config, fingerprint, fence) =>
+      real.setPersistedTurnExecutionConfig(db, turnId, config, fingerprint, fence))
+    vi.mocked(database.failConfiguringTurn).mockImplementation((_db, turnId, version, error) => real.failConfiguringTurn(db, turnId, version, error))
+    vi.mocked(databaseComposition.getConfigValue).mockImplementation((_db, key) => real.getConfigValue(db, key))
+    vi.mocked(databaseComposition.setConfigValue).mockImplementation((_db, key, value) => real.setConfigValue(db, key, value))
+    vi.mocked(database.getSessionUsage).mockImplementation((_db, sessionId) => real.getSessionUsage(db, sessionId))
+    vi.mocked(databaseComposition.getDbConnection).mockImplementation(() => getActualDbConnection(db))
+    vi.mocked(database.getSessionMessageRevisionSnapshot).mockImplementation((_db, sessionId) => real.getSessionMessageRevisionSnapshot(db, sessionId))
+    ctx.db = db
+    ctx.sessionStorage = createSqliteSessionStorage(db)
+    const retryProvider = new RecordingModelProvider([
+      { type: 'text-delta', text: 'retry provider completed' },
+      { type: 'usage', inputTokens: 2, outputTokens: 1 },
+      { type: 'finish', reason: 'stop' }
+    ])
+    ctx.executeTurn = async (_sender, payload) => {
+      const context = ctx.sessionStorage!.execution.loadAcceptedMessages({ sessionId: session.id, turnId: payload.turnId })
+      const currentUser = context.find((message) => message.id === targetUser.message.id)!
+      const registry = new ModelProviderRegistry()
+      registry.register({ routeId: 'desktop-test', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, retryProvider)
+      const host: AgentTurnHost = {
+        createPorts: async () => ({
+          registry, safetyGate: {} as never, prepareTool: vi.fn(), toolExecution: {} as never,
+          request: { messages: context.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })), maxTokens: 32 },
+          routeId: 'desktop-test', invocationId: payload.turnId, turnId: payload.turnId, maxModelTurns: 1,
+          currentUserMessageId: targetUser.message.id,
+          requiredUserMessage: { id: targetUser.message.id, message: { id: targetUser.message.id, role: currentUser.role, content: currentUser.content, timestamp: currentUser.timestamp } }
+        })
+      }
+      await runHostedAgentTurn({ host, invocationId: payload.turnId, turnId: payload.turnId, routeId: 'desktop-test',
+        request: { messages: context.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })), maxTokens: 32 },
+        requiredUserMessage: { id: targetUser.message.id, message: { id: targetUser.message.id, role: currentUser.role, content: currentUser.content, timestamp: currentUser.timestamp } } })
+    }
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+    const editedPriorUser = await ipc.getHandler('message:patch-non-turn')!({}, {
+      sessionId: session.id, messageId: priorUser.message.id, patch: { content: 'edited retry prior user sentinel' }
+    }) as { message: { content: string } }
+    expect(editedPriorUser.message.content).toBe('edited retry prior user sentinel')
+    const editedPriorAssistant = await ipc.getHandler('message:patch-non-turn')!({}, {
+      sessionId: session.id, messageId: priorAssistant.message.id, patch: { content: 'edited retry prior assistant sentinel' }
+    }) as { message: { content: string } }
+    expect(editedPriorAssistant.message.content).toBe('edited retry prior assistant sentinel')
+
+    const target = await ipc.getHandler('chat:resolve-retry-context')!({}, { sessionId: session.id, failedAssistantMessageId: failedAssistant.message.id }) as {
+      currentUser: { message: { id: string; content: string }; sequence: number }; excludeMessageIds: string[]
+    }
+    expect(target).toMatchObject({ currentUser: { message: { id: targetUser.message.id, content: targetUser.message.content }, sequence: targetUser.sequence }, excludeMessageIds: [failedAssistant.message.id] })
+    expect([
+      real.getMessageSequence(db, session.id, priorUser.message.id),
+      real.getMessageSequence(db, session.id, priorAssistant.message.id),
+      real.getMessageSequence(db, session.id, targetUser.message.id),
+      real.getMessageSequence(db, session.id, failedAssistant.message.id)
+    ]).toEqual([0, 1, 2, 3])
+    const submitted = await ipc.getHandler('chat:submit-outbound')!({}, {
+      sessionId: session.id,
+      text: target.currentUser.message.content,
+      contextIntent: { kind: 'reuse-user', currentUser: { message: target.currentUser.message, order: { kind: 'persisted', sequence: target.currentUser.sequence } }, excludeMessageIds: target.excludeMessageIds }
+    }) as { accepted: string; turnId: string }
+    expect(submitted).toMatchObject({ accepted: 'turn-started', turnId: expect.any(String) })
+    const retryTurn = real.getPersistedTurn(db, submitted.turnId)
+    expect(retryTurn).toMatchObject({ requestId: expect.not.stringMatching('retry-intent-source-request'), userMessageId: targetUser.message.id,
+      contextBoundarySequence: targetUser.sequence, excludeMessageIds: [failedAssistant.message.id] })
+    await vi.waitFor(() => expect(retryProvider.calls).toHaveLength(1))
+    const actual = retryProvider.calls[0]!.request.messages
+    expect(retryProvider.calls[0]!.route).toMatchObject({ routeId: 'desktop-test', modelId: 'test-model' })
+    const digest = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
+    expect(digest(priorUser.message.content)).toBe('b38db8db2e9d5d295c481ff7ae86e159ccea9c787b1783cfc074fc234f5f6de1')
+    expect(digest(editedPriorUser.message.content)).toBe('187056231ec189941f12a22a56c32440db4ba4b8a1de318f78f6d94d87e1ab4d')
+    expect(digest(priorAssistant.message.content)).toBe('d9ced13e89a4a4c6c7eababa4cfbc40b87564addf6c5dee35b4b516fb4c24465')
+    expect(digest(editedPriorAssistant.message.content)).toBe('7b59cb80f4ecdd016a260cdd32d4d43a85492520d2ce8447cce272d971c1b648')
+    expect(digest(actual.find((message) => message.content === editedPriorUser.message.content)!.content)).toBe('187056231ec189941f12a22a56c32440db4ba4b8a1de318f78f6d94d87e1ab4d')
+    expect(digest(actual.find((message) => message.content === editedPriorAssistant.message.content)!.content)).toBe('7b59cb80f4ecdd016a260cdd32d4d43a85492520d2ce8447cce272d971c1b648')
+    expect(actual).toContainEqual(expect.objectContaining({ role: 'user', content: 'edited retry prior user sentinel' }))
+    expect(actual).toContainEqual(expect.objectContaining({ role: 'assistant', content: 'edited retry prior assistant sentinel' }))
+    expect(actual.filter((message) => message.content === 'retry required user sentinel')).toHaveLength(1)
+    expect(actual).not.toContainEqual(expect.objectContaining({ content: 'failed retry source sentinel' }))
+    expect(actual).not.toContainEqual(expect.objectContaining({ content: 'later physical user sentinel' }))
+    db.close()
+    temp.cleanup()
+  })
 })

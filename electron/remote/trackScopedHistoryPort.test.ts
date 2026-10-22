@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { HistoryEvent, HistorySnapshot } from '../../packages/agent-sdk/src/history'
-import type { SessionHistoryPort } from '../sessionStorage/contracts'
+import type { SessionHistoryPort } from '../sessionStorage/public/ports'
 import { createTrackScopedHistoryPort, createCrossSessionTrackScopedHistoryPort } from './trackScopedHistoryPort'
 
 function snapshot(invocationId: string): HistorySnapshot {
@@ -78,5 +78,19 @@ describe('Track-scoped HistoryPort', () => {
     const crossSession: HistoryEvent = { ...event, invocationId: 'origin-turn', turnId: 'origin-turn' }
     await expect(scoped.appendBatch([event, crossSession], 0)).rejects.toThrow('TRACK_HISTORY_APPEND_CROSSES_SESSIONS')
     await expect(scoped.read('foreign')).rejects.toThrow('TRACK_HISTORY_INVOCATION_OUT_OF_SCOPE')
+  })
+
+  it('allows a requestId alias only when its resolved canonical turn is also in the Track view', async () => {
+    const history = makeHistory()
+    history.read = vi.fn(async (invocationId: string) => invocationId === 'request-a' ? snapshot('turn-a') : snapshot(invocationId))
+    const scoped = createCrossSessionTrackScopedHistoryPort(() => history, {
+      currentSessionId: 'session-a', allowedInvocationIds: ['request-a', 'turn-a'],
+      invocationSessionMap: { 'request-a': 'session-a', 'turn-a': 'session-a' }
+    })
+
+    await expect(scoped.read('request-a')).resolves.toMatchObject({ invocationId: 'turn-a' })
+    await expect(scoped.read('request-b')).rejects.toThrow('TRACK_HISTORY_INVOCATION_OUT_OF_SCOPE')
+    history.read = vi.fn(async () => snapshot('turn-b'))
+    await expect(scoped.read('request-a')).rejects.toThrow('TRACK_HISTORY_INVOCATION_MISMATCH')
   })
 })

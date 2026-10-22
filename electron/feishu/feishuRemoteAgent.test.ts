@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import { AppDatabase, createSession, getDbConnection, openDatabase, prepareTurnAtomically, setConfigValue } from '../database'
+import { createSession, prepareTurnAtomically } from '../database/operations'
+import { AppDatabase, getDbConnection, openDatabase, setConfigValue } from '../database'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'

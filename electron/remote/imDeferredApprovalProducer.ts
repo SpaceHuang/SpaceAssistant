@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { ConfirmOutcome, ApprovalInvocationResult } from '../../src/shared/confirmation/types'
 import type { DeferredApprovalCause } from '../../src/shared/confirmation/deferredApprovalResult'
 import type { RemoteContext } from '../tools/types'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import type { AppDatabase } from '../database/sqliteStore'
 import type { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import type { createDeferredTodoCapacityController } from '../confirmation/deferredTodoCapacity'
@@ -19,13 +19,14 @@ import type { ConfirmationPort, ToolConfirmationResult } from '../../packages/ag
 import type { GateConfirmationContext } from '../confirmation/agentSdkConfirmationPort'
 
 /** Resolve the authenticated inbound message by ID across its IM queue scope. */
-export function resolveImTaskDigest(
-  sessionStorage: Pick<SessionStorage, 'queries'> | undefined,
+export async function resolveImTaskDigest(
+  sessionStorage: Pick<SessionStorage, 'queries' | 'ensureChatBodyV1'> | undefined,
   remoteContext: RemoteContext
-): string | undefined {
+): Promise<string | undefined> {
   const sessionId = remoteContext.originSessionId
   const messageId = remoteContext.currentUserMessageId
   if (!sessionStorage || !sessionId || !messageId) return undefined
+  await sessionStorage.ensureChatBodyV1?.({ sessionId })
   const message = sessionStorage.queries.readMessage({ sessionId, messageId })
   return message?.role === 'user' && typeof message.content === 'string' ? message.content : undefined
 }
@@ -76,7 +77,7 @@ export function createImDeferredApprovalProducer(input: {
   notificationDelivery: ReturnType<typeof createDeferredApprovalNotificationDelivery>
   isEnabled(): boolean
   getAuthorizationEpoch(): number
-  resolveTaskDigest(context: RemoteContext): string | undefined
+  resolveTaskDigest(context: RemoteContext): Promise<string | undefined> | string | undefined
   onFallback?(reason: string): void
   ttlMs?: number
 }) {
@@ -131,7 +132,7 @@ export function createImDeferredApprovalProducer(input: {
       const providerRouteId = remoteContext.providerRouteId
       const model = remoteContext.model
       const workDirProfileId = remoteContext.workDirProfileId
-      const taskDigest = input.resolveTaskDigest(remoteContext)
+      const taskDigest = await input.resolveTaskDigest(remoteContext)
       const missingContext = [
         !binding && 'taskBinding', !identityKey && 'identityKey', !ownerId && 'authOwner', !remoteContext.originSessionId && 'originSessionId',
         !requestId && 'requestId', !turnId && 'turnId', !messageId && 'messageId', !providerRouteId && 'providerRouteId', !model && 'model',

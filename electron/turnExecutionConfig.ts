@@ -15,7 +15,7 @@ import { getConfigValue, type AppDatabase } from './database'
 import { readActiveLlmServiceIds, readLlmServices, readStoredModels, resolveLlmCredentialsForModel, resolveLlmCredentialsForPair } from './llmServiceResolver'
 import { ensureRemoteImModelConfigMigrated, remoteImModelConfigDbKeys } from './remote/remoteImModelConfigDb'
 import type { AutomationTaskRunConfigSnapshot } from '../src/shared/automationTaskTypes'
-import type { SessionCommands, SessionQueries } from './sessionStorage/contracts'
+import type { SessionCommands, SessionQueries } from './sessionStorage/public/ports'
 
 export type TurnExecutionLane = NonNullable<TurnExecutionConfig['lane']>
 

@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -18,18 +19,18 @@ import { runInTransaction } from '../database/transaction'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { reconcileTerminalContentSegments, SqliteAgentHistory } from './sqliteAgentHistory'
 import { toCanonicalModelMessages } from './canonicalHistory'
+import { createCanonicalSessionSnapshotFoldSession } from './canonicalHistory'
 import { CREATE_TABLES_SQL } from '../database/schema'
 import { ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from '../sessionEvents'
 import { claimSessionExecution, markSessionExecutionStarted, releaseSessionExecution } from '../database/sessionTranscript'
-import { createMemoryAppDb } from '../database/testHelpers'
-import { createTempDatabase } from '../database/testHelpers'
+import { createMemoryAppDb, createTempDatabase, seedValidProjectionScope } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { appendMessage, createSession } from '../database/operations'
 import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } from '../sessionStorage/certification'
 import { markSessionMessageContentWriteStopped } from '../sessionStorage/maintenance'
 import { enableCanonicalSessionWriteAuthority } from './sessionContentWriteAuthority'
-import { createSpillStore, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
+import { createSpillStore, readCanonicalSpillReferences, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
 import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivityTimeline'
 import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
 
@@ -97,6 +98,36 @@ describe('SqliteAgentHistory', () => {
     expect(JSON.parse(proposalTarget.expected_events_json)).toEqual([{
       type: 'tool_call', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', name: 'read_file', args: { path: 'a.txt' }, turnId: 'turn-1' }
     }])
+    await fs.rm(workDir, { recursive: true, force: true })
+    conn.close()
+  })
+
+  it('rolls back canonical History when a required ledger outbox target cannot be registered', async () => {
+    const conn = createDb()
+    const sessionId = 'outbox-required-rollback-session'
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'history-outbox-required-rollback-'))
+    conn.prepare(`INSERT INTO sessions(id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation,work_dir_profile_id)
+      VALUES(?, 'outbox rollback', 'model', 0.7, 1024, 1000, 1000, '{}', '{}', 1, 'outbox-rollback-generation', 'profile')`).run(sessionId)
+    conn.exec(`CREATE TRIGGER fail_required_ledger_outbox BEFORE INSERT ON session_ledger_projection_outbox
+      BEGIN SELECT RAISE(ABORT, 'injected required ledger outbox failure'); END`)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+    const location = { workDir, sessionId, createdAt: 1000 }
+    const events: HistoryEvent[] = [
+      { ...event('outbox-required-proposal', 1), kind: 'model-response-committed', payload: {
+        modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'outbox-required-tool', name: 'read_file', input: { path: 'a.txt' } }] },
+        sessionLedger: { location, stepId: 'outbox-required-step', toolCalls: [{ toolUseId: 'outbox-required-tool', name: 'read_file', args: { path: 'a.txt' } }] }
+      } },
+      { ...event('outbox-required-result', 2), kind: 'tool-call-finished', payload: { toolCallId: 'outbox-required-tool', result: { success: true, data: 'ok' },
+        sessionLedger: { location, stepId: 'outbox-required-step', turnId: 'outbox-required-turn', result: { success: true, data: 'ok' } } } }
+    ]
+
+    await expect(history.appendBatch(events, 0)).rejects.toThrow('injected required ledger outbox failure')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id IN (?,?)')
+      .get('outbox-required-proposal', 'outbox-required-result')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_streams WHERE invocation_id=?').get('inv-1')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_ledger_projection_outbox WHERE canonical_event_id IN (?,?)')
+      .get('outbox-required-proposal', 'outbox-required-result')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId)).toBeUndefined()
     await fs.rm(workDir, { recursive: true, force: true })
     conn.close()
   })
@@ -363,11 +394,7 @@ describe('SqliteAgentHistory', () => {
       VALUES('atomic-terminal-turn','atomic-terminal-request','atomic-terminal-session','atomic-terminal-assistant','executing',1,1,0)`).run()
     conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write'
       WHERE session_id='atomic-terminal-session'`).run()
-    conn.prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)`)
-      .run('atomic-terminal-session', 'generation')
-    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
-      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,1,0,1,'seed-event','seed-invocation',1,1)`)
-      .run('atomic-terminal-session', 'generation')
+    const parityScope = seedValidProjectionScope(db, 'atomic-terminal-session')
     const terminal: HistoryEvent = { ...event('atomic-terminal', 1), invocationId: 'atomic-terminal-invocation', turnId: 'atomic-terminal-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
     const intent = { sessionId: 'atomic-terminal-session', baseVersion: 0, outcome: 'completed' as const,
       messages: [{ role: 'user', content: 'accepted' }, { id: 'atomic-terminal-assistant', role: 'assistant', content: 'beforeafter' }],
@@ -392,8 +419,8 @@ describe('SqliteAgentHistory', () => {
       .map((item) => item.kind)).toEqual(['text', 'tool', 'text'])
     expect(conn.prepare(`SELECT message_revision,api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?`)
       .get('atomic-terminal-session')).toEqual({ message_revision: 3, api_read_mode: 'revalidation-required', write_mode: 'dual-write', cleanup_state: 'retained' })
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get('atomic-terminal-session')).toBeUndefined()
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get('atomic-terminal-session')).toBeUndefined()
+    expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get('atomic-terminal-session', parityScope))
+      .toEqual({ status: 'invalid' })
     db.close()
   })
 
@@ -420,11 +447,7 @@ describe('SqliteAgentHistory', () => {
     conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
       VALUES(?,?,?,?,'executing',1,1,0)`).run(turnId, `${turnId}-request`, sessionId, messageId)
     conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write' WHERE session_id=?`).run(sessionId)
-    conn.prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)`)
-      .run(sessionId, 'generation')
-    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
-      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,1,0,1,'seed-event','seed-invocation',1,1)`)
-      .run(sessionId, 'generation')
+    seedValidProjectionScope(db, sessionId)
     const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
 
     await history.appendBatch([{ ...event('stale-response-event', 1), invocationId: 'stale-invocation', turnId,
@@ -565,17 +588,11 @@ describe('SqliteAgentHistory', () => {
     const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
     await history.appendBatch([{ ...event('compaction-eligibility-context-event', 1), invocationId: 'compaction-eligibility-invocation', kind: 'invocation-context-committed',
       payload: { messages: [{ id: 'compaction-eligibility-user', role: 'user', content: 'full UI prompt', timestamp: 10 }] } }], 0)
-    const watermark = conn.prepare(`SELECT session_seq,commit_order,event_id,invocation_id FROM agent_history_events WHERE event_id=?`)
-      .get('compaction-eligibility-context-event') as { session_seq: number; commit_order: number; event_id: string; invocation_id: string }
     conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
-    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
-      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,1,?,?,?,?,?,1)`)
-      .run(sessionId, 'generation', watermark.session_seq, watermark.commit_order, watermark.event_id, watermark.invocation_id, 1)
 
     await history.appendBatch([{ ...event('compaction-eligibility-snapshot-event', 2), invocationId: 'compaction-eligibility-invocation', kind: 'transcript-compacted',
       payload: { messages: [{ id: 'compaction-eligibility-user', role: 'user', content: 'provider summary', timestamp: 10 }] } }], 1)
 
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').all(sessionId)).toEqual([])
     expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
       .toEqual({ api_read_mode: 'revalidation-required' })
     expect(conn.prepare('SELECT content FROM messages WHERE id=?').get('compaction-eligibility-user'))
@@ -583,7 +600,7 @@ describe('SqliteAgentHistory', () => {
     db.close()
   })
 
-  it('preserves API eligibility when an already committed History event is replayed idempotently', async () => {
+  it('preserves canonical API read mode when an already committed History event is replayed idempotently', async () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
     const sessionId = 'idempotent-history-eligibility-session'
@@ -593,18 +610,11 @@ describe('SqliteAgentHistory', () => {
     const committed: HistoryEvent = { ...event('idempotent-eligibility-event', 1), invocationId: 'idempotent-eligibility-invocation',
       kind: 'transcript-compacted', payload: { messages: [{ role: 'user', content: 'same provider snapshot' }] } }
     await history.appendBatch([committed], 0)
-    const watermark = conn.prepare(`SELECT session_seq,commit_order,event_id,invocation_id FROM agent_history_events WHERE event_id=?`)
-      .get(committed.eventId) as { session_seq: number; commit_order: number; event_id: string; invocation_id: string }
     conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
-    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
-      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,0,?,?,?,?,?,1)`)
-      .run(sessionId, 'generation', watermark.session_seq, watermark.commit_order, watermark.event_id, watermark.invocation_id, 1)
 
     await expect(history.appendBatch([committed], 0)).resolves.toMatchObject({ version: 1, duplicate: true })
     expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
       .toEqual({ api_read_mode: 'canonical' })
-    expect(conn.prepare('SELECT session_id,canonical_session_seq,watermark_event_id FROM canonical_session_api_context_eligibility WHERE session_id=?')
-      .get(sessionId)).toEqual({ session_id: sessionId, canonical_session_seq: watermark.session_seq, watermark_event_id: watermark.event_id })
     db.close()
   })
 
@@ -615,9 +625,6 @@ describe('SqliteAgentHistory', () => {
     conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
       VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
     conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
-    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
-      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,0,0,0,NULL,NULL,1,1)`)
-      .run(sessionId, 'generation')
     const directEvent: HistoryEvent = { ...event('direct-append-compaction', 1), invocationId: 'direct-append-invocation',
       kind: 'transcript-compacted', payload: { messages: [{ role: 'user', content: 'provider summary' }] } }
 
@@ -626,7 +633,6 @@ describe('SqliteAgentHistory', () => {
 
     expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
       .toEqual({ api_read_mode: 'revalidation-required' })
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').all(sessionId)).toEqual([])
     db.close()
   })
 
@@ -1305,9 +1311,6 @@ describe('SqliteAgentHistory', () => {
     conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
       VALUES('atomic-context-later-failure-user',?,'user','original body','sent',1,10,0)`).run(sessionId)
     conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
-    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
-      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version)
-      VALUES(?,?,0,0,0,'seed-event','seed-invocation',1,1)`).run(sessionId, 'generation')
     conn.exec(`CREATE TRIGGER fail_later_history_event BEFORE INSERT ON agent_history_events
       WHEN NEW.event_id='atomic-context-later-failure-event' BEGIN SELECT RAISE(ABORT, 'injected later History failure'); END`)
     const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
@@ -1322,8 +1325,6 @@ describe('SqliteAgentHistory', () => {
       .toEqual({ content: 'original body' })
     expect(conn.prepare('SELECT message_revision,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
       .toEqual({ message_revision: 1, api_read_mode: 'canonical' })
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(sessionId))
-      .toEqual({ session_id: sessionId })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE invocation_id=?').get('atomic-context-later-failure-invocation'))
       .toEqual({ count: 0 })
     db.close()
@@ -1516,6 +1517,53 @@ describe('SqliteAgentHistory', () => {
     expect(spillFiles).toHaveLength(2)
     await expect(reconcileSpillOrphansAgainstCanonicalHistory(spillStore, conn)).resolves.toEqual(expect.arrayContaining(spillFiles))
     await expect(fs.readdir(spillRoot)).resolves.toEqual([])
+    temp.cleanup()
+  })
+
+  it('commits a spilled terminal event with an inline transcript when transcript spill preparation fails', async () => {
+    const temp = createTempDatabase('history-terminal-transcript-spill-failure-')
+    const conn = getDbConnection(temp.db)
+    const sessionId = 'terminal-transcript-spill-failure-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const turnId = 'terminal-transcript-spill-failure-turn'
+    const owner = claimSessionExecution(temp.db, { sessionId, turnId, ownerId: 'spill-failure-owner' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(temp.db, { sessionId, turnId, ownerId: 'spill-failure-owner', generation: owner.generation })
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    const baseStore = createSpillStore(spillRoot)
+    let spillAttempts = 0
+    const spillStore = {
+      ...baseStore,
+      commitSourceTruthUnderFence: vi.fn(async (payload: string) => {
+        spillAttempts += 1
+        if (spillAttempts === 2) throw new Error('injected transcript spill preparation failure')
+        return baseStore.commitSourceTruthUnderFence(payload)
+      })
+    } as SpillStore
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId, spillStore)
+    const output = 'large terminal output '.repeat(4_000)
+    const transcript = 'large transcript message '.repeat(4_000)
+
+    await history.appendBatch([{ ...event('terminal-transcript-spill-failure-event', 1), invocationId: turnId, turnId,
+      kind: 'invocation-completed', payload: { status: 'completed', outputText: output } }], 0, {
+      sessionId, baseVersion: 0, outcome: 'completed', messages: [{ role: 'assistant', content: transcript }]
+    })
+
+    const storedEvent = JSON.parse(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
+      .get('terminal-transcript-spill-failure-event')!.payload_json as string) as { outputText: { __spaceassistant_spill_v1: { locator: string } } }
+    const storedTranscript = conn.prepare('SELECT messages_json,version FROM session_transcript_entries WHERE session_id=?')
+      .get(sessionId) as { messages_json: string; version: number }
+    expect(spillAttempts).toBe(2)
+    expect(storedEvent.outputText.__spaceassistant_spill_v1.locator).toMatch(/^[0-9a-f-]+\.spill$/)
+    expect(JSON.parse(storedTranscript.messages_json)).toEqual([{ role: 'assistant', content: transcript }])
+    expect(storedTranscript.version).toBe(1)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId))
+      .toEqual({ count: 1 })
+    expect((await history.readCompletedInvocationForSession(turnId, sessionId)).outputText).toBe(output)
+    const refs = readCanonicalSpillReferences(conn)
+    expect(refs.referencedLocators).toEqual(new Set([storedEvent.outputText.__spaceassistant_spill_v1.locator]))
+    expect(await fs.readdir(spillRoot)).toEqual([storedEvent.outputText.__spaceassistant_spill_v1.locator])
     temp.cleanup()
   })
 
@@ -1729,12 +1777,19 @@ describe('SqliteAgentHistory', () => {
       WHEN NEW.session_id='${sessionId}' BEGIN SELECT RAISE(ABORT, 'injected terminal checkpoint failure'); END`)
     const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
     const terminal: HistoryEvent = { ...event('atomic-terminal-checkpoint-failure-event', 1), invocationId: 'atomic-terminal-checkpoint-failure-invocation', turnId: 'atomic-terminal-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
+    const beforeHistoryCursor = conn.prepare('SELECT COALESCE(MAX(id),0) AS value FROM agent_history_commit_cursor').get()
+    const beforeSessionCursor = conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId)
     await expect(history.appendBatch([terminal], 0, { sessionId, baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'accepted' }] }))
       .rejects.toThrow('injected terminal checkpoint failure')
     expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-terminal-checkpoint-failure-event')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_streams WHERE invocation_id=?').get('atomic-terminal-checkpoint-failure-invocation'))
+      .toEqual({ count: 0 })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COALESCE(MAX(id),0) AS value FROM agent_history_commit_cursor').get()).toEqual(beforeHistoryCursor)
+    expect(conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId)).toEqual(beforeSessionCursor)
     expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'executing' })
+    expect(conn.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
     db.close()
   })
 
@@ -1802,7 +1857,7 @@ describe('SqliteAgentHistory', () => {
       { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
       { id: 'assistant-1', role: 'assistant', content: 'answer revised', timestamp: 2, attachments: [{ name: 'not-canonical' }] },
       { id: 'user-2', role: 'user', content: 'second', timestamp: 3 }
-    ])).toEqual({ kind: 'unavailable', reason: 'legacy-mismatch' })
+    ])).toMatchObject({ kind: 'matched' })
     for (const unsupported of [
       { thinking: { content: 'thinking', isVisible: false, startTime: 1 } },
       { contentSegments: [{ type: 'text', text: 'first', startTime: 1 }] },
@@ -1814,12 +1869,19 @@ describe('SqliteAgentHistory', () => {
         { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
         { id: 'assistant-1', role: 'assistant', content: 'answer revised', timestamp: 2, ...unsupported },
         { id: 'user-2', role: 'user', content: 'second', timestamp: 3 }
-      ])).toEqual({ kind: 'unavailable', reason: 'legacy-mismatch' })
+      ])).toMatchObject({ kind: 'matched' })
     }
     const matched = folded as Extract<typeof folded, { kind: 'matched' }>
     expect(history.readCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content' })).toEqual({ kind: 'miss', reason: 'cache-missing' })
     expect(history.writeCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content', value: JSON.stringify(matched.messages) })).toBe(true)
     expect(history.readCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content' })).toMatchObject({ kind: 'hit', value: JSON.stringify(matched.messages), sessionSeq: 2 })
+    const richLegacyBody = [
+      { id: 'user-1', role: 'user' as const, content: 'first', timestamp: 1 },
+      { id: 'assistant-1', role: 'assistant' as const, content: 'answer revised', timestamp: 2, toolCalls: [] },
+      { id: 'user-2', role: 'user' as const, content: 'second', timestamp: 3 }
+    ]
+    expect(history.readCanonicalSessionTranscriptWithCache('session-fold', 'assistant-content', richLegacyBody)).toMatchObject({ kind: 'matched', source: 'L1' })
+    expect(history.readCanonicalSessionTranscript('session-fold', richLegacyBody)).toMatchObject({ kind: 'matched' })
     expect(history.readCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content', sessionGeneration: 'stale-generation' })).toEqual({ kind: 'miss', reason: 'watermark-invalid' })
     conn.prepare("UPDATE agent_history_events SET event_id='replaced-anchor' WHERE event_id='snapshot-b'").run()
     expect(history.readCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content' })).toEqual({ kind: 'miss', reason: 'cache-missing' })
@@ -1919,18 +1981,73 @@ describe('SqliteAgentHistory', () => {
       { ...event('l1-response-terminal', 3), invocationId: 'l1-response-inv', kind: 'invocation-completed', payload: { status: 'completed' } }
     ], 1)
 
-    expect(history.readCanonicalSessionTranscriptWithCache('session-l1-response', 'transcript', [
+    const l1 = history.readCanonicalSessionTranscriptWithCache('session-l1-response', 'transcript', [
       { id: 'l1-response-user', role: 'user', content: 'question', timestamp: 1 },
       { id: 'l1-response-assistant', role: 'assistant', content: 'answer', timestamp: 2 }
     // P1-①: the append transaction already folded these events into the cache.
-    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 0, messages: [
+    ])
+    expect(l1).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 0, messages: [
       { id: 'l1-response-user' }, { id: 'l1-response-assistant', timestamp: 2 }
     ] })
+    if (l1.kind !== 'matched') throw new Error('expected cached transcript')
+    const snapshotFoldCache = history.readCanonicalSessionCache({ ...l1.watermark, cacheKey: 'transcript:snapshot-fold-v1' })
+    expect(snapshotFoldCache.kind).toBe('hit')
+    if (snapshotFoldCache.kind !== 'hit') throw new Error('expected persisted snapshot fold checkpoint')
+    const persistedFold = JSON.parse(snapshotFoldCache.value) as { formatVersion: number; stateJson: string; indexJson: string }
+    const resumedFold = createCanonicalSessionSnapshotFoldSession(persistedFold.stateJson, l1.messages, persistedFold.indexJson)
+    expect(JSON.parse(persistedFold.stateJson)).toMatchObject({ sessionId: 'session-l1-response', lastSessionSeq: 3, lastCommitOrder: 3, messageCount: 2 })
+    expect(JSON.parse(resumedFold.indexJson())).toMatchObject({ messageCount: 2, entries: [
+      { id: 'l1-response-user', role: 'user', ordinal: 0 }, { id: 'l1-response-assistant', role: 'assistant', ordinal: 1 },
+    ] })
     conn.prepare("DELETE FROM agent_history_events WHERE event_id='l1-response-answer'").run()
+    expect(conn.prepare(`SELECT COUNT(*) AS count FROM canonical_session_projection_cache
+      WHERE session_id='session-l1-response' AND cache_key='transcript:snapshot-fold-v1'`).get()).toEqual({ count: 0 })
     expect(history.readCanonicalSessionTranscriptWithCache('session-l1-response', 'transcript', [
       { id: 'l1-response-user', role: 'user', content: 'question', timestamp: 1 }
     ])).toEqual({ kind: 'unavailable', reason: 'order-invalid' })
     conn.close()
+  })
+
+  it('restores the stable-ID snapshot fold checkpoint and external index after SQLite reopen', async () => {
+    const temp = createTempDatabase('canonical-snapshot-fold-index-reopen-')
+    let reopened: ReturnType<typeof openDatabase> | undefined
+    try {
+      const session = createSession(temp.db, { name: 'snapshot fold index reopen', model: 'test' })
+      const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 100, session.id)
+      const messages = [{ role: 'user' as const, content: 'prompt', id: 'snapshot-fold-user', timestamp: 1 }]
+      await history.appendBatch([{ ...event('snapshot-fold-context', 1), invocationId: 'snapshot-fold-inv', kind: 'invocation-context-committed',
+        payload: { messages } }], 0)
+      const baseline = history.readCanonicalSessionTranscript(session.id, messages)
+      if (baseline.kind !== 'matched') throw new Error('expected canonical snapshot fold baseline')
+      expect(history.writeCanonicalSessionCache({ ...baseline, cacheKey: 'transcript', value: JSON.stringify(baseline.messages) })).toBe(true)
+      const persisted = history.readCanonicalSessionCache({ ...baseline, cacheKey: 'transcript:snapshot-fold-v1' })
+      expect(persisted.kind).toBe('hit')
+
+      temp.db.close()
+      reopened = openDatabase(temp.dbPath)
+      const restoredHistory = new SqliteAgentHistory(getDbConnection(reopened), 1, () => 101, session.id)
+      const restored = restoredHistory.readCanonicalSessionTranscriptWithCache(session.id, 'transcript', messages)
+      expect(restored).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 0, messages })
+      if (restored.kind !== 'matched') throw new Error('expected restored canonical transcript')
+      const restoredIndex = restoredHistory.readCanonicalSessionCache({ ...restored.watermark, cacheKey: 'transcript:snapshot-fold-v1' })
+      expect(restoredIndex.kind).toBe('hit')
+      if (restoredIndex.kind !== 'hit') throw new Error('expected restored snapshot fold index')
+      const checkpoint = JSON.parse(restoredIndex.value) as { formatVersion: number; stateJson: string; indexJson: string }
+      const fold = createCanonicalSessionSnapshotFoldSession(checkpoint.stateJson, restored.messages, checkpoint.indexJson)
+      expect(JSON.parse(fold.stateJson())).toMatchObject({ sessionId: session.id, lastSessionSeq: 1, messageCount: 1 })
+      expect(JSON.parse(fold.indexJson())).toMatchObject({ messageCount: 1,
+        entries: [{ id: 'snapshot-fold-user', role: 'user', ordinal: 0 }] })
+      const tamperedIndexValue = JSON.stringify({ ...checkpoint, indexJson: JSON.stringify({ formatVersion: 1, messageCount: 1,
+        entries: [{ id: 'forged-message-id', role: 'user', ordinal: 0 }] }) })
+      const tamperedDigest = createHash('sha256').update(tamperedIndexValue, 'utf8').digest('hex')
+      getDbConnection(reopened).prepare(`UPDATE canonical_session_projection_cache SET value=?,value_sha256=?
+        WHERE session_id=? AND cache_key='transcript:snapshot-fold-v1'`).run(tamperedIndexValue, tamperedDigest, session.id)
+      expect(restoredHistory.readCanonicalSessionTranscriptWithCache(session.id, 'transcript', messages))
+        .toMatchObject({ kind: 'matched', source: 'L2', messages })
+    } finally {
+      reopened?.close()
+      temp.cleanup()
+    }
   })
 
   it('distinguishes an empty session watermark and invalidates it when that session id is recreated', async () => {
@@ -3812,6 +3929,36 @@ describe('SqliteAgentHistory', () => {
         sessionLedger: { location, turnId: 'turn-1', reason: 'interrupted' }
       } })
     ] })
+    conn.close()
+  })
+
+  it('continues the startup workset after one session History stream is unreadable and reports its owner', async () => {
+    const conn = createDb()
+    const damagedSessionId = 'history-recovery-damaged-session'
+    const healthySessionId = 'history-recovery-healthy-session'
+    const damagedHistory = new SqliteAgentHistory(conn, 1, Date.now, damagedSessionId)
+    const healthyHistory = new SqliteAgentHistory(conn, 1, Date.now, healthySessionId)
+    const recoveryHistory = new SqliteAgentHistory(conn)
+    await damagedHistory.appendBatch([{ ...event('damaged-session-input', 1), invocationId: 'damaged-invocation',
+      kind: 'session-input-committed', payload: { sessionId: damagedSessionId, messageId: 'damaged-user', role: 'user', inputFingerprint: 'a'.repeat(64) } }], 0)
+    await healthyHistory.appendBatch([{ ...event('healthy-session-input', 1), invocationId: 'healthy-invocation',
+      kind: 'session-input-committed', payload: { sessionId: healthySessionId, messageId: 'healthy-user', role: 'user', inputFingerprint: 'b'.repeat(64) } }], 0)
+    conn.prepare("UPDATE agent_history_events SET payload_json='{' WHERE event_id='damaged-session-input'").run()
+    const onSessionRecoveryFailure = vi.fn()
+    const healthyLocation = { workDir: '/workspace', sessionId: healthySessionId, createdAt: 1000 }
+    const recovered = await recoveryHistory.recoverInterruptedInvocations({
+      resolveSessionLedgerLocation: (sessionId) => sessionId === healthySessionId ? healthyLocation : undefined,
+      onSessionRecoveryFailure
+    })
+
+    expect(recovered).toMatchObject([{ invocationId: 'healthy-invocation', state: 'interrupted' }])
+    expect(onSessionRecoveryFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('history stream damaged-invocation is corrupt') }),
+      'damaged-invocation', damagedSessionId
+    )
+    await expect(recoveryHistory.read('healthy-invocation')).resolves.toMatchObject({
+      events: expect.arrayContaining([expect.objectContaining({ kind: 'invocation-interrupted' })])
+    })
     conn.close()
   })
 

@@ -12,6 +12,7 @@ import { ensureLegacyLedgerReadiness, refreshSessionLedgerReadyProof } from '../
 import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
 import { createProductionSessionLedgerLifecycleDependencies } from './sessionLedgerLifecycleProduction'
 import { createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from '../storage/sessionEventRetention'
+import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
 
 describe('production session ledger lifecycle', () => {
   const databases: ReturnType<typeof createMemoryAppDb>[] = []
@@ -232,12 +233,30 @@ describe('production session ledger lifecycle', () => {
       proof_index_seq=NULL,proof_index_event_count=NULL,proof_index_bytes=NULL,proof_index_last_at=NULL WHERE ledger_location_key=?`)
       .run(identity.key)
     const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    const compactionCandidate = { kind: 'summary', checkpointMessage: { id: 'missing-checkpoint', role: 'user', content: 'checkpoint snapshot' },
+      checkpointReplayIdentity: 'checkpoint-replay-identity', shadowedRanges: [{ start: 'old-start', end: 'old-end' }] }
+    const compactionStart = { compactionId: 'missing-manual-compaction', windowId: 'manual-window', inputSurfaceFingerprint: 'input-fingerprint',
+      surfaceBoundaryId: 'old-end', targetTokens: 0, reason: 'user_compact', sourceRequestId: 'manual-request' }
+    const compactionSummary = { compactionId: compactionStart.compactionId, windowId: compactionStart.windowId,
+      summaryHash: computeCompactionSummaryHash(compactionCandidate), outputSurfaceFingerprint: 'output-fingerprint',
+      shadowedRanges: compactionCandidate.shadowedRanges, candidate: compactionCandidate }
     await history.appendBatch([{
       invocationId: 'rebuild-invocation', turnId: 'rebuild-turn', sequence: 1, schemaVersion: 1,
       eventId: 'rebuild-model-response', idempotencyKey: 'rebuild-model-response', kind: 'model-response-committed',
       payload: { modelTurn: 1, message: { role: 'assistant', toolCalls: [{ id: 'rebuild-tool', name: 'read_file', input: { path: 'canonical.txt' } }] },
         sessionLedger: { location, stepId: 'rebuild-step', toolCalls: [{ toolUseId: 'rebuild-tool', name: 'read_file', args: { path: 'canonical.txt' } }],
           requestUsage: { requestId: 'rebuild-request', usage: { inputTokens: 10, outputTokens: 2 } } } }
+    }], 0)
+    await history.appendBatch([{
+      invocationId: 'manual-compaction-invocation', turnId: 'manual-compaction-invocation', sequence: 1, schemaVersion: 1,
+      eventId: 'manual-compaction-canonical-event', idempotencyKey: 'manual-compaction-canonical-event', kind: 'transcript-compacted',
+      payload: { compactionId: compactionStart.compactionId, messages: [compactionCandidate.checkpointMessage],
+        sessionLedger: { location, start: compactionStart, summary: compactionSummary },
+        surfaceReplay: { windowId: 'manual-window', inputFingerprint: 'input-fingerprint', outputFingerprint: 'output-fingerprint', checkpointReplayIdentity: 'checkpoint-replay-identity' } }
+    }, {
+      invocationId: 'manual-compaction-invocation', turnId: 'manual-compaction-invocation', sequence: 2, schemaVersion: 1,
+      eventId: 'manual-compaction-completed', idempotencyKey: 'manual-compaction-completed', kind: 'invocation-completed',
+      payload: { status: 'completed', completedAt: 2 }
     }], 0)
 
     const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
@@ -265,6 +284,11 @@ describe('production session ledger lifecycle', () => {
       toolUseId: 'rebuild-tool', name: 'read_file', args: { path: 'canonical.txt' }, turnId: 'rebuild-turn'
     })
     expect(events.map(({ type }) => type)).toContain('request_usage')
+    const compactedEvent = events.find(({ type }) => type === 'compaction_summary')
+    expect(compactedEvent?.payload).toMatchObject({ compactionId: compactionStart.compactionId,
+      candidate: { checkpointReplayIdentity: 'checkpoint-replay-identity' }, outputSurfaceFingerprint: 'output-fingerprint' })
+    expect(events.map(({ type }) => type).filter((type) => type.startsWith('compaction_')))
+      .toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
     expect(await fs.stat(resolveSessionEventPaths(root, otherSession.id, otherSession.createdAt).eventsPath).catch(() => undefined)).toBeUndefined()
     expect(conn.prepare("SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id='rebuild-model-response'").get())
       .toEqual({ status: 'acked' })

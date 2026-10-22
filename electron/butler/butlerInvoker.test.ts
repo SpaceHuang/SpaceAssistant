@@ -124,7 +124,8 @@ vi.mock('./butlerSessionEvents', async (importOriginal) => {
   }
 })
 
-import { appendMessage, openDatabase, setConfigValue, type AppDatabase } from '../database'
+import { appendMessage } from '../database/operations'
+import { openDatabase, setConfigValue, type AppDatabase } from '../database'
 import { DEFAULT_SHELL_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { TurnRuntime } from '../turnRuntime'
@@ -138,7 +139,7 @@ import { TaskPathFactsProvider } from './taskPathFacts'
 import { resolveTaskTarget } from './taskTargetResolver'
 import * as runShellExecutor from '../tools/runShellExecutor'
 import { resolveAutomationRunOutputDir } from './taskOutputDirectory'
-import { getSession } from '../database'
+import { getSession } from '../database/operations'
 import { getDbConnection } from '../database'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from '../database/operations'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'

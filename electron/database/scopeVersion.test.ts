@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createSession, deleteQueuedUserMessage, deleteSession, appendMessage, enqueueQueuedUserMessage, updateSession, type AppDatabase } from './index'
+import { createSession, deleteQueuedUserMessage, deleteSession, appendMessage, enqueueQueuedUserMessage, updateSession } from './operations'
+import type { AppDatabase } from './index'
 import { createTempDatabase } from './testHelpers'
 import {
   bumpScopeVersionInTx,
@@ -8,7 +9,7 @@ import {
   setInvalidationBroadcaster
 } from './scopeVersion'
 import { runInTransaction } from './transaction'
-import { getDbConnection } from './index'
+import { getDbConnection } from './sqliteStore'
 
 describe('scopeVersion(Storage 版本号,偏差 11 权威源)', () => {
   let db: AppDatabase

@@ -4,7 +4,9 @@ import { runHostedAgentTurn } from '../../packages/agent-sdk/src/turn'
 import { ToolLoopRoundLimitError } from '../../packages/agent-sdk/src/turn'
 import type { HistoryPort } from '../../packages/agent-sdk/src/history'
 import type { RunToolChatSessionArgs, RunToolChatSessionResult } from '../toolChatLoop'
-import type { SessionExecutionStore, SessionHistoryPort, SessionQueries } from '../sessionStorage/contracts'
+import type { SessionExecutionStore } from '../sessionStorage/application/ports'
+import { createSessionCommitService } from '../sessionStorage/application/sessionCommitService'
+import type { SessionHistoryPort, SessionQueries } from '../sessionStorage/public/ports'
 import type { createAgentSdkConfirmationPort } from '../confirmation/agentSdkConfirmationPort'
 import { HostedTurnFinalizedError, type HostedTurnFinalization } from './hostedTurnFinalization'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -13,6 +15,7 @@ import { decodeTerminalOutcome } from './terminalOutcome'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { ContinuationContext } from '../../src/shared/assistantFactAggregator'
 import { queueInputFingerprint } from '../queueInputFingerprint'
+import { readChatMessageAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
 
@@ -97,13 +100,14 @@ function committedTranscriptMessages(messages: readonly CanonicalModelMessage[])
   return messages.filter((message) => message.role !== 'system')
 }
 
-function recoverAcceptedRestartInput(input: {
+async function recoverAcceptedRestartInput(input: {
   snapshot: Awaited<ReturnType<HistoryPort['read']>>
   sessionQueries?: SessionQueries
+  ensureChatBodyV1?: (input: { sessionId: string }) => Promise<unknown>
   sessionId: string
   requestMessages: readonly CanonicalModelMessage[]
   requiredUserMessage: CanonicalModelMessage
-}): { id: string; message: CanonicalModelMessage } | undefined {
+}): Promise<{ id: string; message: CanonicalModelMessage } | undefined> {
   const [accepted, terminal] = input.snapshot.events
   const terminalPayload = terminal?.payload && typeof terminal.payload === 'object' && !Array.isArray(terminal.payload)
     ? terminal.payload as Record<string, unknown>
@@ -113,7 +117,10 @@ function recoverAcceptedRestartInput(input: {
   const marker = accepted.payload && typeof accepted.payload === 'object' ? accepted.payload as Record<string, unknown> : undefined
   if (marker?.sessionId !== input.sessionId || marker.role !== 'user' || typeof marker.messageId !== 'string' ||
     typeof marker.inputFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(marker.inputFingerprint)) return undefined
-  const stored = input.sessionQueries?.readMessage({ sessionId: input.sessionId, messageId: marker.messageId })
+  const stored = input.sessionQueries ? await readChatMessageAfterPreparation({
+    ensureChatBodyV1: input.ensureChatBodyV1,
+    queries: input.sessionQueries
+  }, { sessionId: input.sessionId, messageId: marker.messageId }) : undefined
   if (!stored || stored.sessionId !== input.sessionId || stored.role !== 'user' || stored.attachments?.length ||
     queueInputFingerprint({ text: stored.content, attachments: stored.attachments }) !== marker.inputFingerprint) return undefined
   const content = ensureApiTextContent(stored.content)
@@ -149,6 +156,7 @@ export function createHostedTurnHandoff(input: {
   sessionId?: string
   acceptedTurn?: AcceptedTurn
   sessionQueries?: SessionQueries
+  ensureChatBodyV1?: (input: { sessionId: string }) => Promise<unknown>
   sessionExecution?: SessionExecutionStore
   maxToolRounds?: number
   hostHistory?: HistoryPort
@@ -172,7 +180,7 @@ export function createHostedTurnHandoff(input: {
     let keepClaimedForReconciliation = false
     let executionStarted = false
     try {
-    let checkpoint: import('../sessionStorage/contracts').HostedTranscriptSnapshot | undefined
+    let checkpoint: import('../sessionStorage/public/model').HostedTranscriptSnapshot | undefined
     if (input.sessionExecution && input.sessionId) {
       const ownerId = `runtime:${process.pid}:${randomUUID()}`
       queuedOwnership = { sessionId: input.sessionId, turnId: input.turnId, ownerId }
@@ -224,8 +232,9 @@ export function createHostedTurnHandoff(input: {
           snapshotVersion = snapshot.version
           previousTurnId = snapshot.events.at(-1)?.turnId
           const acceptedInput = input.sessionExecution && handoff.requiredUserMessage
-            ? recoverAcceptedRestartInput({ snapshot, sessionId: input.sessionId, requestMessages: handoff.request.messages,
-                requiredUserMessage: handoff.requiredUserMessage.message, sessionQueries: input.sessionQueries })
+            ? await recoverAcceptedRestartInput({ snapshot, sessionId: input.sessionId, requestMessages: handoff.request.messages,
+                requiredUserMessage: handoff.requiredUserMessage.message, sessionQueries: input.sessionQueries,
+                ensureChatBodyV1: input.ensureChatBodyV1 })
             : undefined
           if (acceptedInput && handoff.requiredUserMessage) {
             const prior = await sessionHistory.readLatestInvocationForSession(input.sessionId, {
@@ -314,6 +323,17 @@ export function createHostedTurnHandoff(input: {
     const identityBoundHostHistory = handoff.assistantMessageId
       ? bindAssistantMessageIdentity(hostedHistory, handoff.assistantMessageId)
       : hostedHistory
+    const commitBoundHostHistory = input.sessionId ? createSessionCommitService({
+      sessionId: input.sessionId,
+      invocationId: input.invocationId,
+      turnId: input.turnId,
+      history: identityBoundHostHistory
+    }).historyPort : identityBoundHostHistory
+    const leaseBoundHostHistory: HistoryPort = ownership ? {
+      appendBatch: (events, expectedVersion, transcriptCommit) => commitBoundHostHistory.appendBatch(events, expectedVersion,
+        transcriptCommit ? { ...transcriptCommit, executionLease: ownership } : undefined),
+      read: (invocationId) => commitBoundHostHistory.read(invocationId)
+    } : commitBoundHostHistory
     const runtime = await input.agentSdk.createHostedTurnRuntime({
       ...(input.confirmationAdapter ? { confirmationAdapter: input.confirmationAdapter } : {}),
       authorizedToolNames: handoff.authorizedToolNames,
@@ -322,7 +342,7 @@ export function createHostedTurnHandoff(input: {
       ...(handoff.deferredUnsurfacedCheck ? { deferredUnsurfacedCheck: handoff.deferredUnsurfacedCheck } : {}),
       ...(handoff.eagerBudgetDroppedNames ? { eagerBudgetDroppedNames: handoff.eagerBudgetDroppedNames } : {}),
       resolveRegisteredToolName: handoff.resolveRegisteredToolName,
-      hostHistory: identityBoundHostHistory,
+      hostHistory: leaseBoundHostHistory,
       ...(ownership && checkpoint ? { sessionTranscriptBaseVersion: checkpoint.version } : {}),
       ...(transcriptFailureMessages ? { sessionTranscriptFailureMessages: transcriptFailureMessages } : {}),
       ...(handoff.afterToolResult ? { afterToolResult: handoff.afterToolResult } : {}),

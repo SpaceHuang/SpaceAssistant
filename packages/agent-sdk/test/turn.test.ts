@@ -1909,7 +1909,7 @@ describe('runAgentTurn', () => {
       ? { reasonCode: 'CONTEXT_OVERFLOW', messages, retryEvent: { attempt: 1, code: 'provider_context_overflow' } }
       : undefined)
     const onModelRequest = vi.fn(({ attempt }: { attempt: number; modelTurn: number }) => { order.push(`request:${attempt}`) })
-    const contextProjectionCommitter = vi.fn(async () => { order.push('context-projection') })
+    const contextProjectionCommitter = vi.fn(async (_candidate: import('../src/context').ContextReplacement) => { order.push('context-projection') })
     const onProviderRetry = vi.fn(async () => {
       const events = (await history.read('inv')).events
       expect(events.some((event) => event.kind === 'transcript-compacted')).toBe(true)
@@ -1937,6 +1937,14 @@ describe('runAgentTurn', () => {
     expect(onProviderRetry).toHaveBeenCalledWith({ attempt: 1, modelTurn: 1, routeId: route.routeId, requestId: 'inv:round:1', code: 'provider_context_overflow' })
     expect(order).toEqual(['request:1', 'context-projection', 'attempt-discarded', 'retry-event', 'request:2'])
     expect(contextProjectionCommitter).toHaveBeenCalledOnce()
+    const recoveryProjection = contextProjectionCommitter.mock.calls[0]?.[0] as { reason?: string; historyPayload?: Record<string, unknown> }
+    expect(recoveryProjection).toMatchObject({
+      reason: 'provider-recovery',
+      historyPayload: { messages: [{ role: 'user', content: 'hello' }], recoveryReason: 'CONTEXT_OVERFLOW' }
+    })
+    // Provider overflow recovery changes the execution transcript only. It has no surface
+    // compaction transaction and must not fabricate a JSONL compaction ledger projection.
+    expect(recoveryProjection.historyPayload).not.toHaveProperty('sessionLedger')
     expect(result.text).toBe('recovered')
     const events = (await history.read('inv')).events
     expect(events.filter((event) => event.kind === 'transcript-compacted')).toHaveLength(1)

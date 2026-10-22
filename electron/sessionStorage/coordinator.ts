@@ -18,9 +18,9 @@ import {
   ,checkpointTurnAtomically
   ,claimQueuedTurnAtomically
   ,recoverPersistedTurn
-} from '../database'
-import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database'
+} from '../database/operations'
+import type { AppDatabase } from '../database/sqliteStore'
+import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { HistoryCorruptionError } from '../../packages/agent-sdk/src/history'
 import { decodeTerminalOutcome } from '../runtime/terminalOutcome'

@@ -1,5 +1,5 @@
 import type { ZodType } from 'zod'
-import type { SessionQueries } from '../sessionStorage/contracts'
+import type { SessionQueries } from '../sessionStorage/public/ports'
 
 /** 能力家族：env=自我知觉（只读探测），action=产品功能执行 */
 export type CapabilityFamily = 'env' | 'action'
@@ -9,6 +9,11 @@ export type CapabilityRisk = 'read' | 'act'
 
 /** lane 隔离：初期仅桌面 lane 注册 */
 export type CapabilityLane = 'desktop'
+
+export interface McpCapabilityConfigPort {
+  addServer(params: unknown): Promise<unknown>
+  listServers(): unknown[]
+}
 
 /**
  * 子进程探测缝：env 探测类 handler 通过它执行外部命令（参数数组、禁 shell 拼接）。
@@ -40,10 +45,11 @@ export interface CapabilityContext {
   runProbe?: (command: string[], timeoutMs: number) => Promise<ProbeOutcome | null>
   /** 浏览器依赖检测缝（env.browserDetect 用，委托 stagehandService 的缓存实现） */
   detectBrowserDependencies?: (force: boolean) => Promise<unknown>
-  /** Phase 2 功能执行系列所需的主进程服务 */
-  appDatabase?: unknown
+  /** MCP capability's narrow configuration port; no database handle crosses the capability boundary. */
+  mcpConfig?: McpCapabilityConfigPort
   /** Session reads are supplied by the invocation composition root. */
   sessionQueries?: SessionQueries
+  ensureChatBodyV1?: (input: { sessionId: string; signal?: AbortSignal }) => Promise<unknown>
   workDirManager?: unknown
   /** R1：装配期解析的工作目录快照（单一事实源）；env.workspace 等能力消费，不读全局 active。 */
   workspaceSnapshot?: import('../../src/shared/agent/workspace').WorkspaceSnapshot

@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import type { AppDatabase } from '../../database'
+import type { AppDatabase } from '../../database/sqliteStore'
 import { getDbConnection } from '../../database/sqliteStore'
 import { runInTransaction } from '../../database/transaction'
 import { SqliteAgentHistory } from '../../runtime/sqliteAgentHistory'
+import { sqlActiveTurnPredicate } from '../domain/turnState'
 
 type CleanupProgressRow = Readonly<{
   session_generation: string
@@ -108,7 +109,7 @@ export function markSessionMessageContentWriteStopped(db: AppDatabase, sessionId
       UNION ALL SELECT 1 FROM session_execution_queue WHERE session_id=?
         AND status IN ('queued','claimed','executing','transcript_committed','commit_uncertain')
       UNION ALL SELECT 1 FROM turns WHERE session_id=?
-        AND state NOT IN ('completed','failed','cancelled','interrupted')
+        AND ${sqlActiveTurnPredicate()}
       UNION ALL SELECT 1 FROM messages WHERE session_id=? AND status IN ('queued','streaming')
       LIMIT 1`).get(sessionId, sessionId, sessionId, sessionId)
     if (activeControl) return false
@@ -193,7 +194,7 @@ export function beginSessionMessageContentCleanup(db: AppDatabase, sessionId: st
       UNION ALL SELECT 1 FROM session_execution_queue WHERE session_id=?
         AND status IN ('queued','claimed','executing','transcript_committed','commit_uncertain')
       UNION ALL SELECT 1 FROM turns WHERE session_id=?
-        AND state NOT IN ('completed','failed','cancelled','interrupted')
+        AND ${sqlActiveTurnPredicate()}
       UNION ALL SELECT 1 FROM messages WHERE session_id=? AND status IN ('queued','streaming')
       LIMIT 1`).get(sessionId, sessionId, sessionId, sessionId)
     if (activeControl) return false
@@ -270,7 +271,7 @@ export function clearNextSessionMessageContentBatch(
       UNION ALL SELECT 1 FROM session_execution_queue WHERE session_id=?
         AND status IN ('queued','claimed','executing','transcript_committed','commit_uncertain')
       UNION ALL SELECT 1 FROM turns WHERE session_id=?
-        AND state NOT IN ('completed','failed','cancelled','interrupted')
+        AND ${sqlActiveTurnPredicate()}
       UNION ALL SELECT 1 FROM messages WHERE session_id=? AND status IN ('queued','streaming')
       LIMIT 1`).get(sessionId, sessionId, sessionId, sessionId)
     if (activeControl) return ineligible('active-control')
@@ -375,7 +376,7 @@ export function verifyAndCompleteSessionMessageContentCleanup(db: AppDatabase, s
       UNION ALL SELECT 1 FROM session_execution_queue WHERE session_id=?
         AND status IN ('queued','claimed','executing','transcript_committed','commit_uncertain')
       UNION ALL SELECT 1 FROM turns WHERE session_id=?
-        AND state NOT IN ('completed','failed','cancelled','interrupted')
+        AND ${sqlActiveTurnPredicate()}
       UNION ALL SELECT 1 FROM messages WHERE session_id=? AND status IN ('queued','streaming')
       LIMIT 1`).get(sessionId, sessionId, sessionId, sessionId)
     if (activeControl) return false

@@ -1,5 +1,5 @@
 import { createLifecycleTaskHandle } from '../sessionStorage/lifecycle'
-import type { MaintenanceReason } from '../sessionStorage/contracts'
+import type { MaintenanceReason } from '../sessionStorage/host/ports'
 import { recordMaintenanceFailure, recordMaintenanceSuccess, shouldRunMaintenance, type MaintenanceWatermarkInput } from './maintenanceWatermark'
 
 export type MaintenanceJobResult = Readonly<{ success: boolean; scannedCount: number; processedCount: number; errorCode?: string }>

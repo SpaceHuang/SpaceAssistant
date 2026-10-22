@@ -1,5 +1,5 @@
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
-import type { SessionCommands, SessionQueries } from './sessionStorage/contracts'
+import type { SessionCommands, SessionQueries } from './sessionStorage/public/ports'
 import { isRequestLeaseOwner } from './remote/remoteAgentRegistry'
 import { REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from './remote/remoteSessionGuardMessages'
 import type { WorkDirManager } from './workDirManager'

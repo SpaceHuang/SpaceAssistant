@@ -7,6 +7,7 @@ import { runInTransaction } from '../database/transaction'
 import { canonicalBackedSessionProjectionMatches } from './sessionTranscriptProjection'
 import { SqliteAgentHistory, type CanonicalSessionTranscriptRead } from './sqliteAgentHistory'
 import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
+import { hasCurrentProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 
 export type SessionProjectionConsistencyStatus = 'consistent' | 'legacy_exception' | 'deleted' | 'difference'
 export type SessionProjectionLegacyComparison = 'exact' | 'skeleton' | 'legacy-exception' | 'not-compared'
@@ -123,8 +124,6 @@ function readLegacyRequiredException(
 ): SessionProjectionConsistencySession {
   const conn = getDbConnection(db)
   getMessages(db, session.id, Number.MAX_SAFE_INTEGER)
-  const eligibility = conn.prepare(`SELECT session_generation FROM canonical_session_projection_eligibility WHERE session_id=?`)
-    .get(session.id) as { session_generation: string } | undefined
   const projectionCache = conn.prepare(`SELECT 1 AS present FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'`)
     .get(session.id)
   const cutover = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
@@ -133,7 +132,7 @@ function readLegacyRequiredException(
   if (item.status !== 'legacy_required' || item.legacy_decision !== 'retain-legacy' || !item.legacy_owner || !item.reason) {
     issues.push('legacy-exception-policy-incomplete')
   }
-  if (eligibility?.session_generation === session.generation || cutover?.write_mode === 'canonical') {
+  if (hasCurrentProjectionEligibility(db, session.id) || cutover?.write_mode === 'canonical') {
     issues.push('legacy-exception-conflicts-with-canonical-owner')
   }
   return {
@@ -339,8 +338,12 @@ export function auditSessionProjectionMigration(
     const cacheRows = conn.prepare(`SELECT session_id,cache_key FROM canonical_session_projection_cache ORDER BY session_id,cache_key`)
       .all() as Array<{ session_id: string; cache_key: string }>
     for (const cache of cacheRows) {
+      // The snapshot-fold row is a validated internal acceleration index paired with the
+      // transcript cache. auditOneSession reads the canonical transcript through History,
+      // which validates the fold checkpoint and falls back to replay when it is unusable.
       const cacheIssue = !liveSessionIds.has(cache.session_id) ? 'orphan-projection-cache'
-        : cache.cache_key !== 'transcript' ? `unsupported-cache-key-${cache.cache_key}` : undefined
+        : cache.cache_key !== 'transcript' && cache.cache_key !== 'transcript:snapshot-fold-v1'
+          ? `unsupported-cache-key-${cache.cache_key}` : undefined
       if (!cacheIssue) continue
       const index = results.findIndex(({ sessionId }) => sessionId === cache.session_id)
       if (index >= 0) {

@@ -1,5 +1,7 @@
-import type { AppDatabase, PersistedTurn } from '../database'
-import { enqueueQueuedUserMessage, getDbConnection, getPersistedTurn, getTurnByRequestId, hasActiveTurn, setPersistedTurnExecutionConfig, failConfiguringTurn } from '../database'
+import type { AppDatabase } from '../database/sqliteStore'
+import type { PersistedTurn } from '../database/operations'
+import { enqueueQueuedUserMessage, getNextQueuedMessage, getPersistedTurn, getTurnByRequestId, hasActiveTurn, listPersistedTurns, setPersistedTurnExecutionConfig, failConfiguringTurn } from '../database/operations'
+import { getDbConnection } from '../database/sqliteStore'
 import { createHash } from 'node:crypto'
 import { appendMessage } from '../database/operations'
 import type { Message } from '../../src/shared/domainTypes'
@@ -14,13 +16,27 @@ import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { getProjectedTurnContext } from '../runtime/sessionTranscriptProjection'
 import { readCanonicalApiContextIfEligible } from './certification'
 import { shadowAcceptedTurnContext } from '../runtime/sessionStorageShadow'
-import type { ContinuationIntentAcceptance, EnqueueResult, PreparedIdentity, SessionContinuationRecord, SessionExecutionStore, SessionHistoryPort } from './contracts'
-import type { SessionQueries } from './contracts'
+import type { ContinuationIntentAcceptance, EnqueueResult } from './public/model'
+import type { PreparedIdentity, ContinuationRecordSnapshot, SessionExecutionStore } from './application/ports'
+import type { SessionHistoryPort } from './public/ports'
+import type { SessionQueries } from './public/ports'
 import type { HistoryPort } from '../../packages/agent-sdk/src/history'
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { createTurnCoordinatorStorage } from './coordinator'
+import { createSessionCommitService } from './application/sessionCommitService'
+import { TurnRuntime, type TurnRuntimeOptions } from '../turnRuntime'
 import { cancelPendingAgentContinuation, claimAgentContinuation, createOrGetAgentContinuation, readAgentContinuationByRequest, readAgentContinuationByTarget, readAwaitingAgentContinuationBySource, readCancelledAgentContinuationBySource, setAgentContinuationStatus, setAgentContinuationStatusForTurn, startAgentContinuation, validateContinuationCheckpoint, validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
+
+const turnStorageByExecution = new WeakMap<SessionExecutionStore, TurnRuntimeOptions['storage']>()
+
+/** Host-only factory: the application execution port never exposes its raw TurnStorage. */
+export function createTurnRuntimeForSessionExecution(execution: SessionExecutionStore,
+  options: Omit<TurnRuntimeOptions, 'storage'>): TurnRuntime {
+  const storage = turnStorageByExecution.get(execution)
+  if (!storage) throw new Error('SESSION_EXECUTION_TURN_RUNTIME_BINDING_MISSING')
+  return new TurnRuntime({ ...options, storage })
+}
 
 /** Narrow SQLite execution adapter for prepared acceptance and validated context loading. */
 export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQueries, options: { getTurnRuntime?: () => import('../turnRuntime').TurnRuntime } = {}): SessionExecutionStore {
@@ -29,7 +45,6 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
   const liveConn = () => getDbConnection(db)
   const coordinator = createTurnCoordinatorStorage(db)
   const execution: SessionExecutionStore = {
-    coordinator,
     continuations: Object.freeze({
       createOrGet: ({ sessionId, sourceInvocationId, requestIdempotencyKey, createdBy, frozenConfig }: Parameters<SessionExecutionStore['continuations']['createOrGet']>[0]) => {
         if (!sessionId.trim() || !sourceInvocationId.trim()) throw new Error('CONTINUATION_IDENTITY_REQUIRED')
@@ -71,18 +86,23 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
         })
       }
     }),
-    prepareTurn: (input) => coordinator.prepareAtomic(input),
-    claimQueuedTurn: (input) => coordinator.claimQueuedAtomic(input),
+    prepareTurn: (input) => createSessionCommitService({ sessionId: input.turn.sessionId, invocationId: input.turn.requestId,
+      turnId: input.turn.turnId, history: createSessionHistoryPort(db, input.turn.sessionId) }).prepareTurn(input, coordinator.prepareAtomic),
+    claimQueuedTurn: (input) => createSessionCommitService({ sessionId: input.sessionId, invocationId: input.requestId,
+      turnId: input.turnId, history: createSessionHistoryPort(db, input.sessionId) }).claimQueuedTurn(input, coordinator.claimQueuedAtomic),
     historyFor: ({ sessionId }) => createSessionHistoryPort(db, sessionId),
     acceptPrepared: ({ prepared, lane, config }: { prepared: PreparedIdentity; lane: NonNullable<TurnExecutionConfig['lane']>; config: TurnExecutionConfig }): AcceptedTurn => {
       if (!prepared.userMessage?.id) throw new Error('TURN_USER_MESSAGE_MISSING')
       const transcript = readSessionTranscript(db, prepared.sessionId)
       if (transcript.status !== 'ready') throw new Error('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
-      return acceptTurnContext(db, createAcceptedTurn({
+      const candidate = createAcceptedTurn({
         turnId: prepared.turnId, requestId: prepared.requestId, sessionId: prepared.sessionId,
         lane, startToken: prepared.startToken, currentUserMessageId: prepared.userMessage.id,
         transcriptVersion: transcript.version, config: { ...config, lane }
-      }))
+      })
+      const commitService = createSessionCommitService({ sessionId: prepared.sessionId, invocationId: prepared.requestId,
+        turnId: prepared.turnId, history: createSessionHistoryPort(db, prepared.sessionId) })
+      return commitService.acceptTurn(candidate, (accepted) => acceptTurnContext(db, accepted))
     },
     readTurn: ({ sessionId, turnId }) => {
       const turn = getPersistedTurn(db, turnId)
@@ -90,6 +110,10 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
     },
     readTurnByRequest: ({ sessionId, requestId }) => getTurnByRequestId(db, sessionId, requestId),
     hasActiveTurn: (sessionId) => hasActiveTurn(db, sessionId),
+    listStartupOrphanTurns: () => listPersistedTurns(db)
+      .filter(({ state }) => state === 'prepared' || state === 'executing' || state === 'waiting-confirm')
+      .map(({ turnId, state, assistantMessageId }) => ({ turnId, state, assistantMessageId })),
+    getNextQueuedMessage: (sessionId) => getNextQueuedMessage(db, sessionId),
     readAccepted: ({ sessionId, requestId }) => readAcceptedTurn(db, sessionId, requestId),
     readTranscriptState: (sessionId) => {
       const { messages: _messages, ...state } = readSessionTranscript(db, sessionId)
@@ -305,7 +329,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       if (receipt.status === 'accepted_continuation') {
         if (!receipt.targetId) return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
         const continuation = conn.prepare(`SELECT ac.continuation_id AS continuationId,ac.source_invocation_id AS sourceInvocationId,ac.source_turn_id AS sourceTurnId,ac.checkpoint_sequence AS checkpointSequence,ac.request_idempotency_key AS requestIdempotencyKey,ac.created_by AS createdBy,ac.frozen_config_json AS frozenConfigJson,ac.frozen_config_sha256 AS frozenConfigSha256,ac.target_invocation_id AS targetInvocationId,ac.target_turn_id AS targetTurnId,ac.target_start_token AS targetStartToken,ac.status,ac.created_at AS createdAt,ac.updated_at AS updatedAt,t.session_id AS sessionId
-          FROM agent_continuations ac JOIN turns t ON t.turn_id=ac.source_turn_id WHERE ac.continuation_id=?`).get(receipt.targetId) as (SessionContinuationRecord & { sessionId: string }) | undefined
+          FROM agent_continuations ac JOIN turns t ON t.turn_id=ac.source_turn_id WHERE ac.continuation_id=?`).get(receipt.targetId) as (ContinuationRecordSnapshot & { sessionId: string }) | undefined
         if (!continuation || continuation.requestIdempotencyKey !== requestId || continuation.sessionId !== sessionId || receipt.route !== 'continuation') {
           const turn = getTurnByRequestId(db, sessionId, requestId)
           if (turn?.turnId === receipt.targetId && receipt.route === 'continuation') {
@@ -324,7 +348,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       }
       if (receipt.status === 'starting_continuation') {
         const continuation = conn.prepare(`SELECT ac.continuation_id AS continuationId,ac.source_invocation_id AS sourceInvocationId,ac.source_turn_id AS sourceTurnId,ac.checkpoint_sequence AS checkpointSequence,ac.request_idempotency_key AS requestIdempotencyKey,ac.created_by AS createdBy,ac.frozen_config_json AS frozenConfigJson,ac.frozen_config_sha256 AS frozenConfigSha256,ac.target_invocation_id AS targetInvocationId,ac.target_turn_id AS targetTurnId,ac.target_start_token AS targetStartToken,ac.status,ac.created_at AS createdAt,ac.updated_at AS updatedAt,t.session_id AS sessionId
-          FROM agent_continuations ac JOIN turns t ON t.turn_id=ac.source_turn_id WHERE ac.request_idempotency_key=?`).get(requestId) as (SessionContinuationRecord & { sessionId: string }) | undefined
+          FROM agent_continuations ac JOIN turns t ON t.turn_id=ac.source_turn_id WHERE ac.request_idempotency_key=?`).get(requestId) as (ContinuationRecordSnapshot & { sessionId: string }) | undefined
         const source = conn.prepare('SELECT source_invocation_id,source_turn_id,source_sequence FROM continuation_intents WHERE request_id=? AND session_id=?').get(requestId, sessionId) as { source_invocation_id?: string; source_turn_id?: string; source_sequence?: number } | undefined
         if (continuation && continuation.sessionId === sessionId && continuation.sourceInvocationId === source?.source_invocation_id && continuation.sourceTurnId === source.source_turn_id && continuation.checkpointSequence === source.source_sequence) return { kind: 'starting', receipt, continuation }
         return { kind: 'starting', receipt }
@@ -349,7 +373,9 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       return loadAcceptedMessagesForTurn(db, turn, queries)
     }
   }
-  return Object.freeze(execution)
+  const frozenExecution = Object.freeze(execution)
+  turnStorageByExecution.set(frozenExecution, coordinator)
+  return frozenExecution
 }
 
 function createSessionHistoryPort(db: AppDatabase, sessionId: string): SessionHistoryPort {
@@ -373,7 +399,7 @@ function writeContinuationIntentState(
   input: { requestId: string; sessionId: string; text: string; attachments?: Message['attachments']; payloadSha256: string; intentKind: 'exact-continue' | 'follow-up' },
   next: { route: string; status: string },
   rejectionReason?: string
-): import('./contracts').ContinuationIntentReceipt {
+): import('./public/model').ContinuationIntentReceipt {
   if (!input.requestId.trim() || !input.sessionId.trim()) throw new Error('CONTINUATION_IDENTITY_REQUIRED')
   if (!/^[a-f0-9]{64}$/.test(input.payloadSha256)) throw new Error('CONTINUATION_PAYLOAD_FINGERPRINT_INVALID')
   return runInTransaction(conn, () => {

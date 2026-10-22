@@ -1,7 +1,8 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterAll, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
+import { createMemoryAppDb } from './database/testHelpers'
 import { isToolRevoked, registerToolRevocationRequest, clearToolRevocationRequest } from './toolRevocationRegistry'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { createAgentRuntime } from './runtime/agentRuntime'
@@ -13,6 +14,9 @@ import { ToolRevocationRegistry } from './toolRevocationRegistry'
 import { McpConcurrencyGate } from './mcp/mcpToolExecutor'
 import { PolicyAuthorizationChangeRegistry } from './runtime/policyAuthorizationChangeRegistry'
 
+
+const TEST_DB = createMemoryAppDb()
+afterAll(() => TEST_DB.close())
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -46,8 +50,6 @@ vi.mock('./database', () => ({
   getConfigValue: mockGetConfigValue,
   deleteConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   setSessionUsage: vi.fn(),
   getSessionUsage: vi.fn(),
   deleteSessionUsage: vi.fn(),
@@ -156,7 +158,7 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 
 function makeCtx(): AppIpcContext {
   return {
-    db: { save: vi.fn(), flushSave: vi.fn() } as unknown as AppIpcContext['db'],
+    db: TEST_DB,
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),

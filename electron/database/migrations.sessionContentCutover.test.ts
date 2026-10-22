@@ -2,6 +2,41 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { runMigrations } from './migrations'
 import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION } from './schema'
+import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
+
+const apiRouteScopes = [encodeProjectionScopeKey({ scope: 'apiBaselineV1', specVersion: 1 }),
+  encodeProjectionScopeKey({ scope: 'routeV1', specVersion: 1 })] as const
+
+function seedApiRouteScopes(conn: DatabaseSync, sessionId: string, generation: string, revision: number): void {
+  const watermark = JSON.stringify([0, 0, null, null])
+  for (const [index, scopeKey] of apiRouteScopes.entries()) {
+    conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
+      message_revision,payload_generation,payload_digest,validated_range_json,source_identity_json,updated_at)
+      VALUES(?,?,?,'valid',?,?,?,?,'{}','{}',1) ON CONFLICT(session_id,scope_key) DO UPDATE SET
+        session_generation=excluded.session_generation,status='valid',history_watermark_json=excluded.history_watermark_json,
+        message_revision=excluded.message_revision,payload_generation=excluded.payload_generation,payload_digest=excluded.payload_digest,
+        validated_range_json=excluded.validated_range_json,source_identity_json=excluded.source_identity_json,updated_at=excluded.updated_at`)
+      .run(sessionId, scopeKey, generation, watermark, revision, `payload-${index}`, `digest-${index}`)
+  }
+}
+
+function seedTranscriptParity(conn: DatabaseSync, sessionId: string, generation: string, revision: number): void {
+  const scopeKey = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
+  conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
+    message_revision,payload_generation,payload_digest,validated_range_json,updated_at)
+    VALUES(?,?,?,'valid','[0,0,null,null]',?,'test-payload','test-digest','{}',10)
+    ON CONFLICT(session_id,scope_key) DO UPDATE SET session_generation=excluded.session_generation,status='valid',
+      history_watermark_json=excluded.history_watermark_json,message_revision=excluded.message_revision,
+      payload_generation=excluded.payload_generation,payload_digest=excluded.payload_digest,validated_range_json=excluded.validated_range_json`)
+    .run(sessionId, scopeKey, generation, revision)
+}
+
+function expectNoValidApiRouteScopes(conn: DatabaseSync, sessionId?: string): void {
+  const statement = sessionId
+    ? conn.prepare("SELECT scope_key FROM session_projection_state WHERE session_id=? AND scope_key IN (?,?) AND status='valid'")
+    : conn.prepare("SELECT scope_key FROM session_projection_state WHERE scope_key IN (?,?) AND status='valid'")
+  expect(sessionId ? statement.all(sessionId, ...apiRouteScopes) : statement.all(...apiRouteScopes)).toEqual([])
+}
 
 describe('session content cutover schema', () => {
   function makeV37Database() {
@@ -56,7 +91,7 @@ describe('session content cutover schema', () => {
         { session_id: 'legacy-session', session_generation: 'gen-1', message_revision: 0, api_read_mode: 'legacy', write_mode: 'legacy', cleanup_state: 'retained' },
         { session_id: 'second-session', session_generation: 'gen-2', message_revision: 0, api_read_mode: 'legacy', write_mode: 'legacy', cleanup_state: 'retained' }
       ])
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_session_api_context_eligibility'").get()).toBeUndefined()
     conn.close()
   })
 
@@ -154,11 +189,10 @@ describe('session content cutover schema', () => {
     `)
     const grant = () => {
       conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id='legacy-session'").run()
-      conn.prepare('INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,?,?,?,?,?,?,?)')
-        .run('legacy-session','gen-1',0,1,1,'event-1','inv-1',10,1)
+      seedApiRouteScopes(conn, 'legacy-session', 'gen-1', 0)
     }
     const assertRevoked = () => {
-      expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
+      expectNoValidApiRouteScopes(conn, 'legacy-session')
       expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get('legacy-session'))
         .toEqual({ api_read_mode: 'revalidation-required' })
     }
@@ -173,7 +207,7 @@ describe('session content cutover schema', () => {
     assertRevoked()
     grant()
     conn.prepare("UPDATE agent_history_streams SET session_id='second-session' WHERE invocation_id='inv-1'").run()
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
+    expectNoValidApiRouteScopes(conn, 'legacy-session')
     expect(conn.prepare("SELECT api_read_mode FROM session_message_content_cutover WHERE session_id='legacy-session'").get())
       .toEqual({ api_read_mode: 'revalidation-required' })
     expect(conn.prepare("SELECT api_read_mode FROM session_message_content_cutover WHERE session_id='second-session'").get())
@@ -184,44 +218,44 @@ describe('session content cutover schema', () => {
   it('message INSERT/UPDATE/DELETE atomically advances the skeleton revision and revokes both read eligibilities', () => {
     const conn = makeV37Database()
     runMigrations(conn)
-    const grant = conn.prepare('INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,?,?,?,?,?,?,?)')
     const regrant = (revision: number) => {
       conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id='legacy-session'").run()
-      grant.run('legacy-session', 'gen-1', revision, 3, 7, 'event-7', 'invocation-1', 10, 1)
-      conn.prepare('INSERT OR REPLACE INTO canonical_session_projection_eligibility VALUES(?,?,?)').run('legacy-session', 'gen-1', 10)
+      seedApiRouteScopes(conn, 'legacy-session', 'gen-1', revision)
+      seedTranscriptParity(conn, 'legacy-session', 'gen-1', revision)
     }
     const state = () => conn.prepare('SELECT message_revision,api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get('legacy-session')
     regrant(0)
     conn.exec('BEGIN IMMEDIATE')
     conn.prepare("UPDATE messages SET content='rolled back body' WHERE id='legacy-message'").run()
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
+    expectNoValidApiRouteScopes(conn, 'legacy-session')
     expect(state()).toMatchObject({ message_revision: 1, api_read_mode: 'revalidation-required' })
     conn.exec('ROLLBACK')
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([{ session_id: 'legacy-session' }])
+    expect(conn.prepare("SELECT COUNT(*) AS count FROM session_projection_state WHERE session_id='legacy-session' AND status='valid'").get())
+      .toEqual({ count: 3 })
     expect(state()).toMatchObject({ message_revision: 0, api_read_mode: 'canonical' })
 
     conn.prepare("UPDATE messages SET content='edited body' WHERE id='legacy-message'").run()
     expect(state()).toMatchObject({ message_revision: 1, api_read_mode: 'revalidation-required' })
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
+    expectNoValidApiRouteScopes(conn, 'legacy-session')
+    expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE session_id='legacy-session' AND status='valid'").all()).toHaveLength(0)
 
     regrant(1)
     conn.prepare("INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence) VALUES('new-message','legacy-session','assistant','new body','completed',1,2,2)").run()
     expect(state()).toMatchObject({ message_revision: 2, api_read_mode: 'revalidation-required' })
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
+    expectNoValidApiRouteScopes(conn, 'legacy-session')
+    expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE scope_key=? AND status='valid'").all(encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toEqual([])
 
     regrant(2)
     conn.prepare("DELETE FROM messages WHERE id='new-message'").run()
     expect(state()).toMatchObject({ message_revision: 3, api_read_mode: 'revalidation-required' })
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
+    expectNoValidApiRouteScopes(conn, 'legacy-session')
+    expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE scope_key=? AND status='valid'").all(encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toEqual([])
 
     regrant(3)
     conn.prepare("UPDATE messages SET attachments='[{\"id\":\"edited-attachment\"}]' WHERE id='legacy-message'").run()
     expect(state()).toMatchObject({ message_revision: 4, api_read_mode: 'revalidation-required' })
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
+    expectNoValidApiRouteScopes(conn, 'legacy-session')
+    expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE scope_key=? AND status='valid'").all(encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toEqual([])
     conn.close()
   })
 
@@ -229,17 +263,16 @@ describe('session content cutover schema', () => {
     const conn = makeV37Database()
     runMigrations(conn)
     conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id='legacy-session'").run()
-    conn.prepare('INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run('legacy-session', 'gen-1', 0, 3, 7, 'event-7', 'invocation-1', 10, 1)
-    conn.prepare('INSERT OR REPLACE INTO canonical_session_projection_eligibility VALUES(?,?,?)').run('legacy-session', 'gen-1', 10)
+    seedApiRouteScopes(conn, 'legacy-session', 'gen-1', 0)
+    seedTranscriptParity(conn, 'legacy-session', 'gen-1', 0)
 
     conn.prepare("UPDATE sessions SET generation='gen-3' WHERE id='legacy-session'").run()
     expect(conn.prepare('SELECT session_generation,message_revision FROM session_message_content_cutover WHERE session_id=?').get('legacy-session'))
       .toEqual({ session_generation: 'gen-3', message_revision: 1 })
     expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get('legacy-session'))
       .toEqual({ api_read_mode: 'revalidation-required' })
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
+    expectNoValidApiRouteScopes(conn, 'legacy-session')
+    expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE scope_key=? AND status='valid'").all(encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toEqual([])
 
     conn.prepare("INSERT INTO sessions(id,generation) VALUES('new-session','gen-new')").run()
     expect(conn.prepare('SELECT session_generation,api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get('new-session'))
@@ -255,11 +288,10 @@ describe('session content cutover schema', () => {
       .toEqual({ content: '', content_storage_state: 'legacy' })
     // Sparse v37 fixture adds the body-state column without its production CHECK constraint.
 
-    conn.prepare('INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run('legacy-session', 'gen-1', 0, 3, 7, 'event-7', 'invocation-1', 10, 1)
+    seedApiRouteScopes(conn, 'legacy-session', 'gen-1', 0)
     expect(conn.prepare('PRAGMA foreign_key_check').all()).toEqual([])
     conn.prepare("DELETE FROM sessions WHERE id='legacy-session'").run()
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').all('legacy-session')).toEqual([])
+    expect(conn.prepare('SELECT session_id FROM session_projection_state WHERE session_id=?').all('legacy-session')).toEqual([])
     expect(conn.prepare('SELECT session_id FROM session_message_content_cutover WHERE session_id=?').all('legacy-session')).toEqual([])
     expect(conn.prepare('PRAGMA foreign_key_check').all()).toEqual([])
     conn.close()

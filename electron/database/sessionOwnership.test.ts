@@ -2,12 +2,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  createSession,
-  listSessions,
-  searchMessages,
-  openDatabase
-} from '../database'
+import { createSession, listSessions, searchMessages } from './operations'
+import { openDatabase } from '../database'
 import { DatabaseSync } from 'node:sqlite'
 import { getDbConnection } from './sqliteStore'
 import {

@@ -1,5 +1,5 @@
 import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
-import type { SessionHistoryPort } from '../sessionStorage/contracts'
+import type { SessionHistoryPort } from '../sessionStorage/public/ports'
 
 /** Adds Track invocation ownership on top of the existing session-scoped History capability. */
 export function createTrackScopedHistoryPort(
@@ -58,7 +58,10 @@ export function createCrossSessionTrackScopedHistoryPort(
     }),
     read: async (invocationId) => {
       const snapshot = await portForInvocation(invocationId).read(invocationId)
-      if (snapshot.invocationId !== invocationId) throw new Error('TRACK_HISTORY_INVOCATION_MISMATCH')
+      // final-check: History may resolve the current accepted requestId to its canonical
+      // turn stream. Permit that resolution only when both the request alias and resolved
+      // canonical turn ID are independently present in this Track's frozen allowlist.
+      if (snapshot.invocationId !== invocationId && !allowed.has(snapshot.invocationId)) throw new Error('TRACK_HISTORY_INVOCATION_MISMATCH')
       return snapshot
     },
     appendBatch: async (events, expectedVersion, transcriptCommit) => {

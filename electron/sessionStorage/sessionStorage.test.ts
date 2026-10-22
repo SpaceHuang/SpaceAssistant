@@ -1,14 +1,27 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { appendMessage, appendMessagesAtomically, createPersistedTurn, createSession, enqueueQueuedUserMessage, getPersistedTurn, getQueueInputReceipt, getSession } from '../database/operations'
-import { getDbConnection } from '../database'
+import fs from 'node:fs'
+import path from 'node:path'
+import { appendMessage, appendMessagesAtomically, createPersistedTurn, createSession, enqueueQueuedUserMessage, enqueueQueuedUserMessageInScope, getPersistedTurn, getQueueInputReceipt, getSession, setConfigValue, updateMessageContent, updatePersistedTurnState } from '../database/operations'
+import { getDbConnection, openDatabase } from '../database'
+import { queueInputFingerprint } from '../queueInputFingerprint'
+import { runInTransaction } from '../database/transaction'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
-import { createMemoryAppDb } from '../database/testHelpers'
-import { createSqliteSessionStorage } from './sqliteSessionStorage'
+import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
+import { createSessionTurnRuntime, createSqliteSessionStorage } from './sqliteSessionStorage'
+import { encodeChatBodyV1 } from './domain/projectionSpec'
 import { TurnRuntime } from '../turnRuntime'
 import { bindSessionStorageContextPort, createBoundSessionContextAdapter } from './contextPortRegistry'
 import { buildToolChatMessagesFromSource } from '../chatMessageBuild'
 import { computeReplaySurfaceFingerprint, projectReplaySurface, projectReplaySurfaceWithSources } from '../../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
+import { getProjectedMessages, readSessionTranscriptProjection } from '../runtime/sessionTranscriptProjection'
+import { drainCanonicalLedgerProjectionOutbox, enqueueCanonicalLedgerProjectionTargetInTransaction, listPendingCanonicalLedgerProjectionTargets } from '../sessionLedgerOutbox'
+import { getSessionEventSink, readSessionEvents, resolveSessionEventPaths } from '../sessionEvents'
+import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
+import { createProductionSessionLedgerLifecycleDependencies } from '../runtime/sessionLedgerLifecycleProduction'
+import { projectCanonicalSessionLedgerTarget } from '../runtime/sessionLedgerOutboxProjector'
+import { buildImQueueScope } from '../../src/shared/queueScope'
+import { compactSessionContext } from '../sessionContextCompaction'
 
 describe('SQLite session storage public queries', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
@@ -16,6 +29,126 @@ describe('SQLite session storage public queries', () => {
   afterEach(() => {
     db?.close()
     db = undefined
+  })
+
+  it('keeps raw TurnStorage private to host composition', () => {
+    db = createMemoryAppDb()
+    const storage = createSqliteSessionStorage(db)
+
+    expect('coordinator' in storage.execution).toBe(false)
+  })
+
+  it('reads persisted turn state by request through the public query port', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'turn status query' })
+    appendMessage(db, { id: 'turn-status-assistant', sessionId: session.id, role: 'assistant', content: 'done', timestamp: 1, status: 'completed' })
+    createPersistedTurn(db, { turnId: 'turn-status-turn', requestId: 'turn-status-request', sessionId: session.id,
+      assistantMessageId: 'turn-status-assistant', state: 'terminal', outcome: 'completed' })
+    const storage = createSqliteSessionStorage(db)
+
+    expect(storage.queries.readTurnByRequest({ sessionId: session.id, requestId: 'turn-status-request' }))
+      .toMatchObject({ turnId: 'turn-status-turn', sessionId: session.id, requestId: 'turn-status-request', state: 'terminal', outcome: 'completed' })
+    expect(storage.queries.readTurnByRequest({ sessionId: session.id, requestId: 'missing' })).toBeUndefined()
+  })
+
+  it('reads request header and context facts from canonical History when the JSONL ledger is absent', async () => {
+    const temp = createTempDatabase('session-context-meter-canonical-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'context-meter-ledger')
+    fs.mkdirSync(workDir, { recursive: true })
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'canonical ContextMeter facts' })
+      const storage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir })
+      const requestId = 'context-meter-request-1'
+      const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+      const requestHeader = { schemaVersion: 1, requestId, attempt: 1, turnId: 'context-meter-turn', modelTurn: 1,
+        surfaceSnapshot: { schemaVersion: 1, fingerprint: 'surface-one', systemFingerprint: 'system-one', toolsFingerprint: 'tools-one', surfaceTokens: 100, systemTokens: 10, toolsTokens: 10, messageTokens: 80 } }
+      const requestContext = { schemaVersion: 1, requestId, attempt: 1, contextWindow: { tokens: 120_000 }, provider: 'test-provider', model: 'test-model',
+        budget: { estimatorVersion: 'estimate-v1', serializationVersion: 'serialization-v1' } }
+      const history = storage.execution.historyFor({ sessionId: session.id })
+      await history.appendBatch([{
+        invocationId: 'context-meter-invocation', turnId: 'context-meter-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'context-meter-request-start', idempotencyKey: 'context-meter-request-start', kind: 'model-request-started',
+        payload: { requestId, modelTurn: 1, attempt: 1, sessionLedger: { location, requestHeader, requestContext } }
+      }], 0)
+      const retryPayload = { requestId: 'context-meter-request-1', attempt: 2, turnId: 'context-meter-turn', stepId: 'context-meter-invocation', code: 'provider_context_overflow', backoffMs: 0 }
+      await history.appendBatch([{
+        invocationId: 'context-meter-retry', turnId: 'context-meter-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'context-meter-retry-event', idempotencyKey: 'context-meter-retry-event', kind: 'provider-retry-scheduled',
+        payload: { requestId, modelTurn: 1, retryAttempt: 2, code: 'provider_context_overflow', sessionLedger: { location, requestRetry: retryPayload } }
+      }], 0)
+      const discardedUsage = { schemaVersion: 1, requestId: 'context-meter-request-1', turnId: 'context-meter-turn', usage: { input_tokens: 110, output_tokens: 8 }, source: 'api' }
+      const finalRequestId = 'context-meter-request-2'
+      const finalContext = { schemaVersion: 1, requestId: finalRequestId, attempt: 1, contextWindow: { tokens: 120_000 }, provider: 'test-provider', model: 'test-model',
+        budget: { estimatorVersion: 'estimate-v1', serializationVersion: 'serialization-v1' } }
+      const finalUsage = { schemaVersion: 1, requestId: finalRequestId, turnId: 'context-meter-turn', usage: { input_tokens: 90, output_tokens: 12 }, source: 'api' }
+      await history.appendBatch([
+        { invocationId: 'context-meter-usage', turnId: 'context-meter-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'context-meter-discarded-usage', idempotencyKey: 'context-meter-discarded-usage', kind: 'model-attempt-discarded',
+          payload: { modelTurn: 1, attempt: 1, reasonCode: 'CONTEXT_OVERFLOW', sessionLedger: { location, requestUsage: discardedUsage } } },
+        { invocationId: 'context-meter-usage', turnId: 'context-meter-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'context-meter-final-response', idempotencyKey: 'context-meter-final-response', kind: 'model-response-committed',
+          payload: { modelTurn: 1, attempt: 2, message: { role: 'assistant', content: 'done' }, sessionLedger: { location,
+            requestUsage: finalUsage, requestContext: finalContext } } }
+      ], 0)
+
+      const events = await storage.readContextMeterEvents({ sessionId: session.id, workDir })
+      expect(events.map(({ type, payload }) => ({ type, payload }))).toEqual([
+        { type: 'request_header', payload: requestHeader },
+        { type: 'request_context', payload: requestContext },
+        { type: 'request_retry', payload: retryPayload },
+        { type: 'request_usage', payload: discardedUsage },
+        { type: 'request_usage', payload: finalUsage },
+        { type: 'request_context', payload: { ...finalContext, projectionStage: 'final' } }
+      ])
+      expect(events.map(({ seq }) => seq)).toEqual([...events.map(({ seq }) => seq)].sort((left, right) => left - right))
+    } finally {
+      db?.close()
+      db = undefined
+      temp.cleanup()
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves the ordered JSONL ContextMeter stream while it still contains legacy-only request facts', async () => {
+    const temp = createTempDatabase('session-context-meter-mixed-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'context-meter-mixed-ledger')
+    fs.mkdirSync(workDir, { recursive: true })
+    let sink: ReturnType<typeof getSessionEventSink> | undefined
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'mixed ContextMeter facts' })
+      sink = getSessionEventSink(workDir, session.id, session.createdAt)
+      const legacyHeader = { schemaVersion: 1, requestId: 'legacy-meter-request', attempt: 1, surfaceSnapshot: { schemaVersion: 1 } }
+      const legacyContext = { schemaVersion: 1, requestId: 'legacy-meter-request', attempt: 1, contextWindow: { tokens: 10_000 }, budget: { estimatorVersion: 'v1', serializationVersion: 'v1' } }
+      await sink.appendCritical({ type: 'request_header', payload: legacyHeader })
+      await sink.appendCritical({ type: 'request_context', payload: legacyContext })
+      const storage = createSqliteSessionStorage(db, {
+        getWorkDirForSession: () => workDir, getSessionEventSink: () => sink!
+      })
+      const location = { workDir, sessionId: session.id, createdAt: session.createdAt }
+      const canonicalHeader = { schemaVersion: 1, requestId: 'canonical-meter-request', attempt: 1, surfaceSnapshot: { schemaVersion: 1 } }
+      const canonicalContext = { schemaVersion: 1, requestId: 'canonical-meter-request', attempt: 1, contextWindow: { tokens: 10_000 }, budget: { estimatorVersion: 'v1', serializationVersion: 'v1' } }
+      await storage.execution.historyFor({ sessionId: session.id }).appendBatch([{
+        invocationId: 'canonical-meter-invocation', turnId: 'canonical-meter-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'canonical-meter-start', idempotencyKey: 'canonical-meter-start', kind: 'model-request-started',
+        payload: { requestId: canonicalHeader.requestId, modelTurn: 1, attempt: 1, sessionLedger: { location, requestHeader: canonicalHeader, requestContext: canonicalContext } }
+      }], 0)
+      await sink.appendCritical({ type: 'request_header', payload: canonicalHeader })
+      await sink.appendCritical({ type: 'request_context', payload: canonicalContext })
+
+      const events = await storage.readContextMeterEvents({ sessionId: session.id, workDir })
+      expect(events.map(({ type, payload }) => ({ type, payload }))).toEqual([
+        { type: 'request_header', payload: legacyHeader }, { type: 'request_context', payload: legacyContext },
+        { type: 'request_header', payload: canonicalHeader }, { type: 'request_context', payload: canonicalContext }
+      ])
+    } finally {
+      await sink?.close()
+      db?.close()
+      db = undefined
+      temp.cleanup()
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
   })
 
   it('binds the database at construction and preserves chat-page sequence semantics', () => {
@@ -69,6 +202,179 @@ describe('SQLite session storage public queries', () => {
     appendMessagesAtomically(db, [{ id: 'foreign-user', sessionId: otherSession.id, role: 'user', content: 'foreign', timestamp: 30, status: 'sent' }])
     expect(() => storage.queries.readRoutingInput({ sessionId: session.id, requiredUserMessageId: 'foreign-user' }))
       .toThrow('TURN_USER_MESSAGE_MISSING')
+  })
+
+  it('keeps chat-body digest narrow while conservatively invalidating the route selection fence for every non-body field', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'body digest and fence', model: 'test' })
+    appendMessage(db, { id: 'fence-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
+    const storage = createSqliteSessionStorage(db)
+    const patches: Array<{ field: string; patch: Parameters<typeof updateMessageContent>[2] }> = [
+      { field: 'attachments', patch: { attachments: [{ id: 'fence-attachment', fileName: 'note.txt', mimeType: 'text/plain', byteLength: 4, stagingKey: 'stage/note.txt' }] } },
+      { field: 'imagesDeliveredToApi', patch: { imagesDeliveredToApi: true } },
+      { field: 'toolUse', patch: { toolUse: { id: 'fence-use', toolName: 'read_file', toolType: 'builtin', parameters: {}, status: 'completed', timestamp: 1 } } },
+      { field: 'toolCalls', patch: { toolCalls: [{ id: 'fence-call', toolName: 'read_file', input: {}, status: 'completed' }] } },
+      { field: 'thinking', patch: { thinking: { content: 'changed metadata', isVisible: true } } },
+      { field: 'contentSegments', patch: { contentSegments: [{ type: 'text', text: 'metadata segment' }] } },
+      { field: 'skillHints', patch: { skillHints: [{ id: 'fence-hint', text: 'hint', shownAt: 1 }] } },
+      { field: 'schemaVersion', patch: { schemaVersion: 2 } },
+      { field: 'status', patch: { status: 'failed' } }
+    ]
+
+    for (const { field, patch } of patches) {
+      const selected = storage.queries.readRoutingInput({ sessionId: session.id, requiredUserMessageId: 'fence-user' })
+      const before = storage.queries.readMessage({ sessionId: session.id, messageId: 'fence-user' })!
+      const beforeDigest = encodeChatBodyV1([before])
+      expect(storage.queries.isSelectionCurrent(session.id, selected.fence), field).toBe(true)
+      expect(updateMessageContent(db, 'fence-user', patch), field).not.toBeNull()
+      const after = storage.queries.readMessage({ sessionId: session.id, messageId: 'fence-user' })!
+      expect(encodeChatBodyV1([after]), field).toBe(beforeDigest)
+      expect(storage.queries.isSelectionCurrent(session.id, selected.fence), field).toBe(false)
+    }
+  })
+
+  it('projects route attachments only through hasVision and keeps unrelated DTO fields out of route output', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'route attachment projection', model: 'test' })
+    appendMessage(db, { id: 'route-attachment-user', sessionId: session.id, role: 'user', content: 'inspect this', timestamp: 1, status: 'sent' })
+    const storage = createSqliteSessionStorage(db)
+    const before = storage.queries.readRoutingInput({ sessionId: session.id, requiredUserMessageId: 'route-attachment-user' })
+    expect(before).toMatchObject({ userInput: 'inspect this', hasVision: false })
+
+    updateMessageContent(db, 'route-attachment-user', { attachments: [{ id: 'route-image', fileName: 'image.png', mimeType: 'image/png',
+      byteLength: 4, stagingKey: 'stage/route-image.png' }] })
+    const withImage = storage.queries.readRoutingInput({ sessionId: session.id, requiredUserMessageId: 'route-attachment-user' })
+    expect(withImage).toMatchObject({ userInput: 'inspect this', hasVision: true, recentMessages: before.recentMessages })
+    expect(storage.queries.isSelectionCurrent(session.id, before.fence)).toBe(false)
+
+    updateMessageContent(db, 'route-attachment-user', { thinking: { content: 'private reasoning', isVisible: true },
+      toolCalls: [{ id: 'route-tool', toolName: 'read_file', input: {}, status: 'completed' }],
+      contentSegments: [{ type: 'text', text: 'presentation-only segment' }] })
+    const afterMetadata = storage.queries.readRoutingInput({ sessionId: session.id, requiredUserMessageId: 'route-attachment-user' })
+    expect(afterMetadata).toMatchObject({ userInput: 'inspect this', hasVision: true, recentMessages: withImage.recentMessages })
+    expect(storage.queries.isSelectionCurrent(session.id, withImage.fence)).toBe(false)
+  })
+
+  it('keeps route, export and search scopes distinct for metadata and queued-message fields', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection scopes', model: 'test' })
+    appendMessage(db, { id: 'scope-user', sessionId: session.id, role: 'user', content: 'body sentinel', timestamp: 1, status: 'sent', thinking: { content: 'private thought', isVisible: true }, contentSegments: [{ type: 'text', text: 'segment sentinel' }] })
+    appendMessage(db, { id: 'scope-assistant', sessionId: session.id, role: 'assistant', content: 'answer sentinel', timestamp: 2, status: 'completed', toolCalls: [{ id: 'scope-tool', toolName: 'read_file', input: { path: 'note.txt' }, status: 'completed' }] })
+    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'scope-queued', content: 'queued excluded sentinel' })
+    const queries = createSqliteSessionStorage(db).queries
+
+    const routing = queries.readRoutingInput({ sessionId: session.id, requiredUserMessageId: 'scope-user' })
+    expect(routing.recentMessages).toEqual([
+      { role: 'user', content: 'body sentinel' }, { role: 'assistant', content: 'answer sentinel' }
+    ])
+    expect(routing.recentMessages.some((message) => JSON.stringify(message).includes('segment sentinel'))).toBe(false)
+
+    const chatPage = queries.readChatPage({ sessionId: session.id, limit: 20 })
+    expect(chatPage.entries.map(({ message }) => message.id)).toEqual(['scope-user', 'scope-assistant', queued.persisted.message.id])
+    expect(chatPage.entries.at(-1)).toMatchObject({ sequence: 2, message: { status: 'queued', content: 'queued excluded sentinel' } })
+    const apiBaseline = queries.readApiBaseline({ sessionId: session.id, limit: 20 })
+    expect(apiBaseline.entries.map(({ message }) => message.id)).toEqual(['scope-user', 'scope-assistant', queued.persisted.message.id])
+    expect(apiBaseline.entries.at(-1)).toMatchObject({ sequence: 2, message: { status: 'queued', content: 'queued excluded sentinel' } })
+
+    const exported = queries.readExportPage({ sessionId: session.id, fromSequence: 0, pageSize: 10 })
+    expect(exported.rows.map(({ message }) => message.id)).toEqual(['scope-user', 'scope-assistant', queued.persisted.message.id])
+    expect(exported.rows[0]?.message).toMatchObject({ thinking: { content: 'private thought' }, contentSegments: [{ text: 'segment sentinel' }] })
+    expect(exported.rows[1]?.message.toolCalls).toHaveLength(1)
+
+    const corpus = queries.readSearchCorpusPage({ sessionId: session.id, fromSequence: 0, pageSize: 10 })
+    expect(corpus.entries.map(({ message }) => message.id)).toEqual(['scope-user', 'scope-assistant'])
+    expect(corpus.entries[0]?.message).toMatchObject({ thinking: { content: 'private thought' }, contentSegments: [{ text: 'segment sentinel' }] })
+    expect(corpus.entries.some(({ message }) => message.id === queued.persisted.message.id)).toBe(false)
+  })
+
+  it('includes non-desktop queue scopes in the single-session search corpus while desktop readers stay scoped', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'search queue-scope boundary', model: 'test' })
+    appendMessage(db, { id: 'desktop-row', sessionId: session.id, role: 'user', content: 'desktop body', timestamp: 1, status: 'sent' })
+    const imQueued = enqueueQueuedUserMessageInScope(db, { sessionId: session.id, requestId: 'im-search-scope', content: 'im queued body',
+      queueScope: buildImQueueScope('feishu', session.id) })
+    expect(updateMessageContent(db, imQueued.persisted.message.id, { status: 'sent' })).not.toBeNull()
+    const queries = createSqliteSessionStorage(db).queries
+
+    expect(queries.readChatPage({ sessionId: session.id, limit: 10 }).entries.map(({ message }) => message.id)).toEqual(['desktop-row'])
+    expect(queries.readExportPage({ sessionId: session.id, fromSequence: 0, pageSize: 10 }).rows.map(({ message }) => message.id))
+      .toEqual(['desktop-row'])
+    expect(queries.readApiBaseline({ sessionId: session.id, limit: 10 }).entries.map(({ message }) => message.id))
+      .toEqual(['desktop-row', imQueued.persisted.message.id])
+    expect(queries.readSearchCorpusPage({ sessionId: session.id, fromSequence: 0, pageSize: 10 }).entries.map(({ message }) => message.id))
+      .toEqual(['desktop-row', imQueued.persisted.message.id])
+  })
+
+  it('preserves every mutable Message DTO field in chat and export scopes while sequence remains selection metadata', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'export field matrix', model: 'test' })
+    appendMessage(db, { id: 'export-field-row', sessionId: session.id, role: 'assistant', content: 'base', timestamp: 7, status: 'completed' })
+    const storage = createSqliteSessionStorage(db)
+    const cases: Array<{ patch: Parameters<typeof updateMessageContent>[2]; field: string; value: unknown }> = [
+      { patch: { content: 'body-v2' }, field: 'content', value: 'body-v2' },
+      { patch: { status: 'failed' }, field: 'status', value: 'failed' },
+      { patch: { schemaVersion: 2 }, field: 'schemaVersion', value: 2 },
+      { patch: { attachments: [{ id: 'attachment-v2', fileName: 'note.txt', mimeType: 'text/plain', byteLength: 4, stagingKey: 'stage/note.txt' }] }, field: 'attachments', value: [{ id: 'attachment-v2', fileName: 'note.txt', mimeType: 'text/plain', byteLength: 4, stagingKey: 'stage/note.txt' }] },
+      { patch: { imagesDeliveredToApi: true }, field: 'imagesDeliveredToApi', value: true },
+      { patch: { toolUse: { id: 'tool-use-v2', toolName: 'read_file', toolType: 'builtin', parameters: { path: 'note.txt' }, status: 'completed', timestamp: 8 } }, field: 'toolUse', value: { id: 'tool-use-v2', toolName: 'read_file', toolType: 'builtin', parameters: { path: 'note.txt' }, status: 'completed', timestamp: 8 } },
+      { patch: { toolCalls: [{ id: 'tool-call-v2', toolName: 'read_file', input: { path: 'note.txt' }, status: 'completed' }] }, field: 'toolCalls', value: [{ id: 'tool-call-v2', toolName: 'read_file', input: { path: 'note.txt' }, status: 'completed' }] },
+      { patch: { thinking: { content: 'thinking-v2', isVisible: true } }, field: 'thinking', value: { content: 'thinking-v2', isVisible: true } },
+      { patch: { contentSegments: [{ type: 'text', text: 'segment-v2' }] }, field: 'contentSegments', value: [{ type: 'text', text: 'segment-v2' }] },
+      { patch: { skillHints: [{ id: 'skill-v2', text: 'hint', shownAt: 9 }] }, field: 'skillHints', value: [{ id: 'skill-v2', text: 'hint', shownAt: 9 }] }
+    ]
+
+    for (const { patch, field, value } of cases) {
+      if (field === 'schemaVersion') {
+        getDbConnection(db).prepare('UPDATE messages SET schema_version=? WHERE id=?').run(value, 'export-field-row')
+      } else {
+        expect(updateMessageContent(db, 'export-field-row', patch)).not.toBeNull()
+      }
+      const exported = storage.queries.readExportPage({ sessionId: session.id, fromSequence: 0, pageSize: 1 }).rows[0]?.message
+      expect(exported, `export field ${field}`).toHaveProperty(field, value)
+      expect(exported).toMatchObject({ id: 'export-field-row', sessionId: session.id, role: 'assistant', timestamp: 7 })
+      const chatPage = storage.queries.readChatPage({ sessionId: session.id, limit: 1 })
+      expect(chatPage.entries[0]?.message, `chat field ${field}`).toHaveProperty(field, value)
+      expect(chatPage.entries[0]).toMatchObject({ sequence: 0, message: { id: 'export-field-row', sessionId: session.id, role: 'assistant', timestamp: 7 } })
+      const searchCorpus = storage.queries.readSearchCorpusPage({ sessionId: session.id, fromSequence: 0, pageSize: 1 })
+      expect(searchCorpus.entries[0]?.message, `search corpus field ${field}`).toHaveProperty(field, value)
+      expect(searchCorpus.entries[0]).toMatchObject({ sequence: 0, message: { id: 'export-field-row', sessionId: session.id, role: 'assistant', timestamp: 7 } })
+      const apiBaseline = storage.queries.readApiBaseline({ sessionId: session.id, limit: 1 })
+      expect(apiBaseline.entries[0]?.message, `API baseline field ${field}`).toHaveProperty(field, value)
+      expect(apiBaseline.entries[0]).toMatchObject({ sequence: 0, message: { id: 'export-field-row', sessionId: session.id, role: 'assistant', timestamp: 7 } })
+    }
+  })
+
+  it('returns one coherent source snapshot across full, tail, page, item, search, export, and API views', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection snapshot agreement', model: 'test' })
+    appendMessagesAtomically(db, [
+      { id: 'snapshot-u1', sessionId: session.id, role: 'user', content: 'first', timestamp: 1, status: 'sent' },
+      { id: 'snapshot-a1', sessionId: session.id, role: 'assistant', content: 'answer', timestamp: 2, status: 'completed' },
+      { id: 'snapshot-u2', sessionId: session.id, role: 'user', content: 'second', timestamp: 3, status: 'sent' },
+      { id: 'snapshot-a2', sessionId: session.id, role: 'assistant', content: 'latest', timestamp: 4, status: 'completed' },
+    ])
+    const queries = createSqliteSessionStorage(db).queries
+    const full = queries.readMessages({ sessionId: session.id })
+    const tail = queries.readChatPage({ sessionId: session.id, limit: 2 })
+    const earlierPage = queries.readChatPage({ sessionId: session.id, beforeSequence: tail.oldestSequence, limit: 2 })
+    const firstExportPage = queries.readExportPage({ sessionId: session.id, fromSequence: 0, pageSize: 2 })
+    const secondExportPage = queries.readExportPage({ sessionId: session.id, fromSequence: firstExportPage.nextSequence, pageSize: 2 })
+    const exportRows = [...firstExportPage.rows, ...secondExportPage.rows]
+    const firstSearchPage = queries.readSearchCorpusPage({ sessionId: session.id, fromSequence: 0, pageSize: 50 })
+    const searchRows = firstSearchPage.entries
+    const apiBaseline = queries.readApiBaseline({ sessionId: session.id })
+
+    expect([...earlierPage.entries, ...tail.entries].map(({ message }) => message.id)).toEqual(full.map(({ id }) => id))
+    expect(exportRows.map(({ message }) => message.id)).toEqual(full.map(({ id }) => id))
+    expect(searchRows.map(({ message }) => message.id)).toEqual(full.map(({ id }) => id))
+    expect(apiBaseline.entries.map(({ message }) => message.id)).toEqual(full.map(({ id }) => id))
+    for (const [index, message] of full.entries()) {
+      expect(queries.readMessage({ sessionId: session.id, messageId: message.id })).toEqual(message)
+      expect(queries.readMessageSequence({ sessionId: session.id, messageId: message.id })).toBe(index)
+      expect(exportRows[index]).toMatchObject({ sequence: index, message })
+      expect(searchRows[index]).toMatchObject({ sequence: index, message })
+      expect(apiBaseline.entries[index]).toMatchObject({ sequence: index, message })
+    }
   })
 
   it('selects latest retry source through queries and preserves the unique failed assistant rule', () => {
@@ -194,6 +500,151 @@ describe('SQLite session storage public queries', () => {
     expect(snapshot.frame.windowId).toBe('window-before-restart')
   })
 
+  it('commits manual compaction facts and the complete replacement snapshot to canonical History', async () => {
+    const temp = createTempDatabase('session-context-canonical-compaction-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'session-context-ledger')
+    fs.mkdirSync(workDir, { recursive: true })
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'canonical manual compaction' })
+      const messages = [
+        { id: 'manual-compact-u1', sessionId: session.id, role: 'user' as const, content: 'old question '.repeat(80), timestamp: 1, status: 'sent' as const },
+        { id: 'manual-compact-a1', sessionId: session.id, role: 'assistant' as const, content: 'old answer '.repeat(80), timestamp: 2, status: 'completed' as const },
+        { id: 'manual-compact-u2', sessionId: session.id, role: 'user' as const, content: 'current question '.repeat(80), timestamp: 3, status: 'sent' as const },
+        { id: 'manual-compact-a2', sessionId: session.id, role: 'assistant' as const, content: 'current answer '.repeat(80), timestamp: 4, status: 'completed' as const }
+      ]
+      appendMessagesAtomically(db, messages)
+      const storage = createSqliteSessionStorage(db, {
+        getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
+        getSessionEventSink: getSessionEventSink
+      })
+      const bound = await createBoundSessionContextAdapter(storage.contexts, { sessionId: session.id, isBusy: () => false })
+      const result = await compactSessionContext({
+        sessionId: session.id, requestId: 'manual-compact-request', windowId: bound.windowId,
+        messages: bound.messages, totalInputBudget: 100000, locale: 'en-US', contextAdapter: bound.adapter,
+        summarize: async () => ({ task: 'task', completed: 'done', decisions: 'decision', constraints: 'constraints',
+          pending: 'pending', blockers: 'none', nextStep: 'continue' })
+      })
+      expect(result.status).toBe('committed')
+      if (result.status !== 'committed') throw new Error(`manual compaction failed: ${result.status}`)
+      const snapshot = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).readSync(result.compactionId)
+      expect(snapshot.events.map(({ kind }) => kind)).toEqual(['transcript-compacted', 'invocation-completed'])
+      const compacted = snapshot.events[0]!.payload as { messages: Array<{ id?: string }>; sessionLedger?: { start?: Record<string, unknown>; summary?: Record<string, unknown> }; surfaceReplay?: Record<string, unknown> }
+      expect(compacted.messages).toHaveLength(4)
+      expect(compacted.messages[0]).toMatchObject({ role: 'user', content: expect.stringContaining('context_checkpoint') })
+      expect(compacted.messages.slice(1).map(({ id }) => id)).toEqual(['manual-compact-a1', 'manual-compact-u2', 'manual-compact-a2'])
+      expect(compacted.messages.map(({ id }) => id)).toContain('manual-compact-u2')
+      expect(compacted.messages).not.toContainEqual(expect.objectContaining({ id: 'manual-compact-u1' }))
+      expect(compacted.sessionLedger?.start).toMatchObject({ compactionId: result.compactionId, inputSurfaceFingerprint: expect.any(String) })
+      expect(compacted.sessionLedger?.summary).toMatchObject({ compactionId: result.compactionId,
+        outputSurfaceFingerprint: result.outputSurfaceFingerprint, candidate: { checkpointReplayIdentity: expect.any(String) } })
+      expect(compacted.surfaceReplay).toMatchObject({ inputFingerprint: expect.any(String), outputFingerprint: result.outputSurfaceFingerprint,
+        checkpointReplayIdentity: expect.any(String), windowId: result.windowId })
+      const canonicalStream = await storage.execution.historyFor({ sessionId: session.id }).read(result.compactionId)
+      expect(canonicalStream.version).toBe(2)
+      const persistedPayload = canonicalStream.events[0]!.payload as { messages: Array<{ id?: string }>; sessionLedger?: { start?: Record<string, unknown>; summary?: Record<string, unknown> } }
+      await fs.promises.rm(getSessionEventSink(workDir, session.id, session.createdAt).eventsPath, { force: true })
+      const canonicalReplay = storage.queries.readCanonicalCompactionReplay(session.id)
+      expect(canonicalReplay.committed).toHaveLength(1)
+      expect(canonicalReplay.committed[0]).toMatchObject({
+        compactionId: result.compactionId,
+        start: { type: 'compaction_start', payload: { compactionId: result.compactionId, windowId: bound.windowId } },
+        summary: { type: 'compaction_summary', payload: { compactionId: result.compactionId, outputSurfaceFingerprint: result.outputSurfaceFingerprint,
+          candidate: { checkpointReplayIdentity: expect.any(String) } } },
+        end: { type: 'compaction_end', payload: { status: 'committed', outputSurfaceFingerprint: result.outputSurfaceFingerprint } }
+      })
+      const restored = await createBoundSessionContextAdapter(storage.contexts, { sessionId: session.id, isBusy: () => false })
+      const restoredSnapshot = await restored.adapter.port.readCurrent({ kind: 'session', sessionId: session.id })
+      expect(restoredSnapshot.frame.windowId).toBe(result.windowId)
+      expect(restoredSnapshot.frame.items[0]?.replayIdentity).toBe((compacted.surfaceReplay as { checkpointReplayIdentity: string }).checkpointReplayIdentity)
+      await storage.execution.historyFor({ sessionId: session.id }).appendBatch([{
+        invocationId: 'invalid-compaction-sidecar', turnId: 'invalid-compaction-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'invalid-compaction-sidecar:event:1', idempotencyKey: 'invalid-compaction-sidecar:transcript-compacted:1',
+        kind: 'transcript-compacted', payload: { compactionId: 'invalid-canonical-compaction', messages: [{ role: 'user', content: 'x' }],
+          sessionLedger: { location: { workDir, sessionId: session.id, createdAt: session.createdAt }, start: { compactionId: 'invalid-canonical-compaction' } } }
+      }], 0)
+      const invalidSidecarReplay = storage.queries.readCanonicalCompactionReplay(session.id)
+      expect(invalidSidecarReplay.committed.map(({ compactionId }) => compactionId)).toEqual([result.compactionId])
+      expect(invalidSidecarReplay.rejected).toContainEqual({ compactionId: 'invalid-canonical-compaction', reason: 'canonical-session-ledger-missing-or-invalid' })
+      const transaction = await fs.promises.readFile(path.join(workDir, 'sessions'), 'utf8').catch(() => '')
+      expect(persistedPayload.sessionLedger?.summary).toBeDefined()
+      expect(transaction).toBe('')
+      expect(listPendingCanonicalLedgerProjectionTargets(getDbConnection(db), getDbConnection(db).prepare(
+        'SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id)?.ledger_location_key as string)).toHaveLength(1)
+    } finally {
+      db?.close()
+      db = undefined
+      temp.cleanup()
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('replays a canonical manual compaction after a crash before its JSONL projection', async () => {
+    const temp = createTempDatabase('session-context-canonical-compaction-recovery-')
+    const workDir = path.join(path.dirname(temp.dbPath), 'session-context-canonical-compaction-recovery')
+    fs.mkdirSync(workDir, { recursive: true })
+    try {
+      db = temp.db
+      setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'profile', path: workDir, isDefault: true }]))
+      const session = createSession(db, { name: 'canonical compaction recovery', workDirProfileId: 'profile' })
+      const messages = [
+        { id: 'crash-compact-u1', sessionId: session.id, role: 'user' as const, content: 'old question '.repeat(80), timestamp: 1, status: 'sent' as const },
+        { id: 'crash-compact-a1', sessionId: session.id, role: 'assistant' as const, content: 'old answer '.repeat(80), timestamp: 2, status: 'completed' as const },
+        { id: 'crash-compact-u2', sessionId: session.id, role: 'user' as const, content: 'current question '.repeat(80), timestamp: 3, status: 'sent' as const },
+        { id: 'crash-compact-a2', sessionId: session.id, role: 'assistant' as const, content: 'current answer '.repeat(80), timestamp: 4, status: 'completed' as const }
+      ]
+      appendMessagesAtomically(db, messages)
+      const conn = getDbConnection(db)
+      const dependencies = createProductionSessionLedgerLifecycleDependencies(conn)
+      const ensureLedger = async ({ session: current, workDir: root }: { session: import('../../src/shared/domainTypes').Session; workDir: string }) => {
+        const readiness = await ensureSessionLedgerReady({ conn, location: { workDir: root, sessionId: current.id, createdAt: current.createdAt },
+          sessionGeneration: current.generation, processGeneration: 1, retryBlocked: true, dependencies })
+        return readiness.status === 'ready'
+      }
+      const paths = resolveSessionEventPaths(workDir, session.id, session.createdAt)
+      const failedSink = { eventsPath: paths.eventsPath, indexPath: paths.indexPath, appendCritical: vi.fn(async () => { throw new Error('simulated process loss') }),
+        appendChunk: vi.fn(), waitForCapacity: vi.fn(), flush: vi.fn(), close: vi.fn() }
+      const interruptedStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
+        getSessionEventSink: () => failedSink as never, readCompactionReplay: async () => ({ committed: [], rejected: [] }) as never,
+        ensureSessionLedgerReady: ensureLedger })
+      const interrupted = await createBoundSessionContextAdapter(interruptedStorage.contexts, { sessionId: session.id, isBusy: () => false })
+      const compacted = await compactSessionContext({
+        sessionId: session.id, requestId: 'crash-compact-request', windowId: interrupted.windowId,
+        messages: interrupted.messages, totalInputBudget: 100000, locale: 'en-US', contextAdapter: interrupted.adapter,
+        summarize: async () => ({ task: 'task', completed: 'done', decisions: 'decision', constraints: 'constraints',
+          pending: 'pending', blockers: 'none', nextStep: 'continue' })
+      })
+      expect(compacted.status).toBe('failed')
+      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+      const compactedStream = conn.prepare(`SELECT streams.invocation_id FROM agent_history_streams streams
+        JOIN agent_history_events events ON events.invocation_id=streams.invocation_id
+        WHERE streams.session_id=? AND events.kind='transcript-compacted'`).get(session.id) as { invocation_id: string } | undefined
+      expect(compactedStream).toBeDefined()
+      expect(history.readSync(compactedStream!.invocation_id).events).toHaveLength(2)
+      expect((await readSessionEvents(paths.eventsPath)).some(({ type }) => type.startsWith('compaction_'))).toBe(false)
+
+      const recoveredStorage = createSqliteSessionStorage(db, { getWorkDirForSession: () => workDir, getUserDataDir: () => '/tmp',
+        ensureSessionLedgerReady: ensureLedger })
+      const recovered = await createBoundSessionContextAdapter(recoveredStorage.contexts, { sessionId: session.id, isBusy: () => false })
+      const snapshot = await recovered.adapter.port.readCurrent({ kind: 'session', sessionId: session.id })
+      expect(recovered.messages[0]?.id).toMatch(/^checkpoint:/)
+      expect(snapshot.frame.items[0]?.replayIdentity).toBeTruthy()
+      expect(snapshot.frame.items[0]?.message.id).toBe(recovered.messages[0]?.id)
+      const canonicalEvent = conn.prepare("SELECT event_id FROM agent_history_events WHERE invocation_id=? AND kind='transcript-compacted'")
+        .get(compactedStream!.invocation_id) as { event_id: string }
+      expect(conn.prepare('SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id=?').get(canonicalEvent.event_id))
+        .toEqual({ status: 'acked' })
+      expect((await readSessionEvents(paths.eventsPath)).map(({ type }) => type).filter((type) => type.startsWith('compaction_')))
+        .toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
+    } finally {
+      db?.close()
+      db = undefined
+      temp.cleanup()
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+
   it('exposes the full-history context token summary through SessionQueries', () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'context-summary-query' })
@@ -261,6 +712,29 @@ describe('SQLite session storage public queries', () => {
       messageId: message.id,
       toolCalls: [{ ...nextCalls[0]!, status: 'failed' }]
     })).toThrow('TOOL_CALL_SCROLLBACK_PATCH_INVALID')
+  })
+
+  it('owns session usage snapshots through session queries and commands', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'session usage snapshot' })
+    const storage = createSqliteSessionStorage(db)
+    const usage = { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 12 }
+
+    expect(storage.queries.readSessionUsage(session.id)).toBeUndefined()
+    storage.commands.setSessionUsage(session.id, usage)
+    expect(storage.queries.readSessionUsage(session.id)).toEqual(usage)
+    storage.commands.deleteSessionUsage(session.id)
+    expect(storage.queries.readSessionUsage(session.id)).toBeUndefined()
+  })
+
+  it('strips retired plan metadata through a named session command and keeps unrelated metadata', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'strip plan metadata', metadata: { note: 'keep', plan: { old: true }, pending_plan: 'legacy' } })
+    const commands = createSqliteSessionStorage(db).commands
+
+    expect(commands.stripLegacyPlanMetadata(session.id)?.metadata).toEqual({ note: 'keep' })
+    expect(commands.stripLegacyPlanMetadata(session.id)?.metadata).toEqual({ note: 'keep' })
+    expect(commands.stripLegacyPlanMetadata('missing-session')).toBeUndefined()
   })
 
   it('updates title lifecycle flags through a named command without exposing arbitrary metadata patches', () => {
@@ -702,6 +1176,54 @@ describe('SQLite session storage public queries', () => {
   })
 })
 
+describe('SQLite session storage public query contracts', () => {
+  let db: ReturnType<typeof createMemoryAppDb> | undefined
+  afterEach(() => { db?.close(); db = undefined })
+
+  it('reads durable turn errors scoped to requested assistant IDs in input order', () => {
+    db = createMemoryAppDb()
+    const first = createSession(db, { name: 'error lookup first' })
+    const second = createSession(db, { name: 'error lookup second' })
+    for (const [session, id, turn] of [[first, 'error-a', 'turn-a'], [second, 'error-b', 'turn-b']] as const) {
+      appendMessage(db, { id, sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'failed' })
+      createPersistedTurn(db, { turnId: turn, requestId: `request-${turn}`, sessionId: session.id, assistantMessageId: id, state: 'terminal', error: { code: 'TURN_FAILED', message: `failure ${id}` } })
+    }
+    const queries = createSqliteSessionStorage(db).queries
+    expect(queries.listTurnErrorsByAssistantMessageIds(['error-b', 'error-a', 'error-b', 'missing']))
+      .toEqual([{ assistantMessageId: 'error-b', message: 'failure error-b' }, { assistantMessageId: 'error-a', message: 'failure error-a' }])
+  })
+})
+
+describe('SQLite session storage execution query contracts', () => {
+  let db: ReturnType<typeof createMemoryAppDb> | undefined
+  afterEach(() => { db?.close(); db = undefined })
+
+  it('lists the narrow active turn identities needed by startup orphan cleanup', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'startup orphan turns' })
+    appendMessage(db, { id: 'startup-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    appendMessage(db, { id: 'terminal-assistant', sessionId: session.id, role: 'assistant', content: 'done', timestamp: 2, status: 'completed' })
+    createPersistedTurn(db, { turnId: 'startup-active', requestId: 'startup-request', sessionId: session.id, assistantMessageId: 'startup-assistant', state: 'executing' })
+    createPersistedTurn(db, { turnId: 'startup-terminal', requestId: 'terminal-request', sessionId: session.id, assistantMessageId: 'terminal-assistant', state: 'terminal' })
+
+    expect(createSqliteSessionStorage(db).execution.listStartupOrphanTurns()).toEqual([
+      { turnId: 'startup-active', state: 'executing', assistantMessageId: 'startup-assistant' }
+    ])
+  })
+
+  it('reads the next queued message through the session execution port', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'execution queue query' })
+    const other = createSession(db, { name: 'other execution queue' })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'queue-first', content: 'first' })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'queue-second', content: 'second' })
+    enqueueQueuedUserMessage(db, { sessionId: other.id, requestId: 'queue-other', content: 'other session' })
+
+    expect(createSqliteSessionStorage(db).execution.getNextQueuedMessage(session.id))
+      .toMatchObject({ message: { content: 'first' }, requestId: 'queue-first' })
+  })
+})
+
 describe('SQLite session storage execution boundary', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
 
@@ -758,6 +1280,468 @@ describe('SQLite session storage execution boundary', () => {
     expect(claimed.assistant.message).toMatchObject({ id: 'execution-claim-assistant', status: 'streaming' })
     expect(getPersistedTurn(db, 'execution-claim-turn')).toMatchObject({ userMessageId: queued.persisted.message.id, state: 'prepared' })
     expect(getQueueInputReceipt(db, session.id, 'execution-claim-request')).toMatchObject({ state: 'claimed', turnId: 'execution-claim-turn' })
+  })
+
+  it('preserves queue identity and single-owner execution through a seeded edit-claim-reopen sequence', () => {
+    const temp = createTempDatabase('session-storage-lifecycle-sequence-')
+    try {
+      db = temp.db
+      const session = createSession(db, { name: 'lifecycle sequence', model: 'test' })
+      const storage = createSqliteSessionStorage(db)
+      let seed = 0x51a7e
+      const next = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed }
+      const first = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'sequence-q1', content: 'Q1 original' })
+      expect(first.duplicate).toBe(false)
+      expect(enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'sequence-q1', content: 'Q1 original' })).toMatchObject({ duplicate: true, persisted: { message: { id: first.persisted.message.id } } })
+      expect(() => enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'sequence-q1', content: 'conflicting replay' })).toThrow('QUEUE_REQUEST_FINGERPRINT_MISMATCH')
+      const second = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'sequence-q2', content: 'Q2 original' })
+      const edited = storage.commands.editQueuedMessage({ sessionId: session.id, messageId: first.persisted.message.id, content: `Q1 edit ${next()}` })
+      expect(edited).toMatchObject({ ok: true, message: { status: 'queued' } })
+      if (!edited.ok) throw new Error('unexpected queued edit rejection')
+      expect(getQueueInputReceipt(db, session.id, 'sequence-q1')).toMatchObject({ state: 'queued', queuedMessageId: first.persisted.message.id })
+
+      const claimed = storage.execution.claimQueuedTurn({ sessionId: session.id, userMessageId: first.persisted.message.id,
+        turnId: 'sequence-turn-1', assistantMessageId: 'sequence-assistant-1', requestId: 'sequence-q1', startToken: 'sequence-token-1' })
+      expect(claimed.user.message).toMatchObject({ id: first.persisted.message.id, status: 'sent', content: edited.message.content })
+      expect(getQueueInputReceipt(db, session.id, 'sequence-q1')).toMatchObject({ state: 'claimed', turnId: 'sequence-turn-1' })
+      const claimA = storage.execution.claimExecution({ sessionId: session.id, turnId: 'sequence-turn-1', ownerId: 'sequence-owner-a' })
+      expect(claimA.acquired).toBe(true)
+      expect(storage.execution.claimExecution({ sessionId: session.id, turnId: 'sequence-turn-2', ownerId: 'sequence-owner-b' })).toMatchObject({ acquired: false, reason: 'owned' })
+      const persistedPath = temp.dbPath
+      db.close()
+      db = undefined
+      db = openDatabase(persistedPath)
+      const afterReopen = createSqliteSessionStorage(db)
+      expect(afterReopen.queries.readMessage({ sessionId: session.id, messageId: first.persisted.message.id })).toMatchObject({ content: edited.message.content, status: 'sent' })
+      expect(getPersistedTurn(db, 'sequence-turn-1')).toMatchObject({ requestId: 'sequence-q1', userMessageId: first.persisted.message.id, state: 'prepared' })
+      expect(getQueueInputReceipt(db, session.id, 'sequence-q1')).toMatchObject({ state: 'claimed', turnId: 'sequence-turn-1' })
+      expect(getQueueInputReceipt(db, session.id, 'sequence-q2')).toMatchObject({ state: 'queued', queuedMessageId: second.persisted.message.id })
+      expect(afterReopen.execution.claimExecution({ sessionId: session.id, turnId: 'sequence-turn-2', ownerId: 'sequence-owner-c' })).toMatchObject({ acquired: false, reason: 'owned' })
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')").get(session.id)).toMatchObject({ count: 1 })
+    } finally {
+      db?.close()
+      db = undefined
+      temp.cleanup()
+    }
+  })
+
+  it('keeps queue receipts, message identity, and single-owner state through a seeded random lifecycle', async () => {
+    const temp = createTempDatabase('session-storage-random-lifecycle-')
+    try {
+      db = temp.db
+      const ledgerRoot = path.join(path.dirname(temp.dbPath), 'random-lifecycle-ledger')
+      fs.mkdirSync(ledgerRoot, { recursive: true })
+      setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'random-profile', path: ledgerRoot, isDefault: true }]))
+      const session = createSession(db, { name: 'random lifecycle', model: 'test', workDirProfileId: 'random-profile' })
+      let storage = createSqliteSessionStorage(db)
+      let seed = 0x7a11ce55
+      const next = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed }
+      const operationTrace: string[] = []
+      const entries = Array.from({ length: 8 }, (_, index) => {
+        const requestId = `random-q${index}`
+        const created = enqueueQueuedUserMessage(db!, { sessionId: session.id, requestId, content: `body-${index}` })
+        expect(created.duplicate).toBe(false)
+        expect(enqueueQueuedUserMessage(db!, { sessionId: session.id, requestId, content: `body-${index}` })).toMatchObject({ duplicate: true, persisted: { message: { id: created.persisted.message.id } } })
+        return { requestId, messageId: created.persisted.message.id, state: 'queued' as 'queued' | 'claimed' | 'cancelled', content: `body-${index}`, turnId: undefined as string | undefined }
+      })
+      const assertLifecycleInvariants = (activeOwners: number) => {
+        const claimedTurnIds = entries.filter(({ state }) => state === 'claimed').map(({ turnId }) => turnId)
+        expect(claimedTurnIds.every((turnId) => Boolean(turnId))).toBe(true)
+        expect(new Set(claimedTurnIds).size).toBe(claimedTurnIds.length)
+        for (const entry of entries) {
+          const receipt = getQueueInputReceipt(db!, session.id, entry.requestId)
+          if (entry.state === 'cancelled') {
+            expect(receipt).toMatchObject({ state: 'cancelled', queuedMessageId: null })
+            expect(storage.queries.readMessage({ sessionId: session.id, messageId: entry.messageId })).toBeUndefined()
+          } else {
+            expect(receipt).toMatchObject({ state: entry.state, queuedMessageId: entry.messageId,
+              ...(entry.state === 'claimed' ? { turnId: entry.turnId } : {}) })
+            expect(storage.queries.readMessage({ sessionId: session.id, messageId: entry.messageId })).toMatchObject({
+              id: entry.messageId, content: entry.content, status: entry.state === 'claimed' ? 'sent' : 'queued'
+            })
+          }
+        }
+        expect(getDbConnection(db!).prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')")
+          .get(session.id)).toMatchObject({ count: activeOwners })
+      }
+      assertLifecycleInvariants(0)
+
+      // Reproducible mixed edit/cancel/claim sequence; after every transition check receipt-to-message identity.
+      const queueMutations = entries.flatMap((entry) => {
+        const choice = next() % 4
+        return choice === 0 ? [{ kind: 'cancel' as const, entry }]
+          : choice < 3 ? [{ kind: 'edit' as const, entry }] : []
+      })
+      for (let index = queueMutations.length - 1; index > 0; index -= 1) {
+        const swapIndex = next() % (index + 1)
+        ;[queueMutations[index], queueMutations[swapIndex]] = [queueMutations[swapIndex]!, queueMutations[index]!]
+      }
+      for (const mutation of queueMutations) {
+        const { entry } = mutation
+        if (mutation.kind === 'cancel') {
+          operationTrace.push(`cancel:${entry.requestId}`)
+          expect(storage.commands.deleteQueuedMessage(entry.messageId)).toEqual({ ok: true, sessionId: session.id })
+          entry.state = 'cancelled'
+          expect(getQueueInputReceipt(db, session.id, entry.requestId)).toMatchObject({ state: 'cancelled', queuedMessageId: null })
+          expect(storage.queries.readMessage({ sessionId: session.id, messageId: entry.messageId })).toBeUndefined()
+        } else {
+          entry.content = `${entry.content}-edit-${next()}`
+          operationTrace.push(`edit:${entry.requestId}`)
+          const edited = storage.commands.editQueuedMessage({ sessionId: session.id, messageId: entry.messageId, content: entry.content })
+          expect(edited).toMatchObject({ ok: true, message: { id: entry.messageId, content: entry.content, status: 'queued' } })
+        }
+        assertLifecycleInvariants(0)
+      }
+      const live = entries.filter(({ state }) => state === 'queued')
+      for (const entry of live) {
+        expect(getQueueInputReceipt(db, session.id, entry.requestId)).toMatchObject({ state: 'queued', queuedMessageId: entry.messageId })
+        expect(storage.queries.readMessage({ sessionId: session.id, messageId: entry.messageId })).toMatchObject({ id: entry.messageId, content: entry.content, status: 'queued' })
+        assertLifecycleInvariants(0)
+      }
+      const reorderedIds = live.map(({ messageId }) => messageId)
+      for (let index = reorderedIds.length - 1; index > 0; index -= 1) {
+        const swapIndex = next() % (index + 1)
+        ;[reorderedIds[index], reorderedIds[swapIndex]] = [reorderedIds[swapIndex]!, reorderedIds[index]!]
+      }
+      const reordered = storage.commands.reorderQueuedMessages({ sessionId: session.id, messageIds: reorderedIds })
+      operationTrace.push(`reorder:${reorderedIds.join(',')}`)
+      expect(reordered).toMatchObject({ ok: true, entries: reorderedIds.map((messageId) => ({ message: { id: messageId, status: 'queued' } })) })
+      const reorderedLive = reorderedIds.map((messageId) => live.find((entry) => entry.messageId === messageId)!)
+      live.splice(0, live.length, ...reorderedLive)
+      assertLifecycleInvariants(0)
+      const winner = live[0]!
+      const claimed = storage.execution.claimQueuedTurn({ sessionId: session.id, userMessageId: winner.messageId, turnId: 'random-turn',
+        assistantMessageId: 'random-assistant', requestId: winner.requestId, startToken: 'random-token' })
+      operationTrace.push(`claim-turn:${winner.requestId}`)
+      winner.state = 'claimed'
+      winner.turnId = 'random-turn'
+      expect(claimed.user.message).toMatchObject({ id: winner.messageId, content: winner.content, status: 'sent' })
+      expect(getQueueInputReceipt(db, session.id, winner.requestId)).toMatchObject({ state: 'claimed', queuedMessageId: winner.messageId, turnId: 'random-turn' })
+      assertLifecycleInvariants(0)
+      expect(storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn', ownerId: 'random-owner-a' })).toMatchObject({ acquired: true })
+      assertLifecycleInvariants(1)
+      const independentSession = createSession(db, { name: 'random lifecycle independent', model: 'test', workDirProfileId: 'random-profile' })
+      const independentQueued = enqueueQueuedUserMessage(db, { sessionId: independentSession.id, requestId: 'random-independent-q', content: 'independent-session-body' })
+      const independentClaim = storage.execution.claimQueuedTurn({ sessionId: independentSession.id, userMessageId: independentQueued.persisted.message.id,
+        turnId: 'random-independent-turn', assistantMessageId: 'random-independent-assistant', requestId: 'random-independent-q', startToken: 'random-independent-token' })
+      expect(independentClaim.user.message).toMatchObject({ id: independentQueued.persisted.message.id, status: 'sent' })
+      const independentOwner = storage.execution.claimExecution({ sessionId: independentSession.id, turnId: 'random-independent-turn', ownerId: 'random-independent-owner' })
+      expect(independentOwner).toMatchObject({ acquired: true })
+      if (!independentOwner.acquired) throw new Error('expected independent session execution owner')
+      let independentLease = { sessionId: independentSession.id, turnId: 'random-independent-turn', ownerId: 'random-independent-owner', generation: independentOwner.generation }
+      const independentPending = enqueueQueuedUserMessage(db, { sessionId: independentSession.id, requestId: 'random-independent-pending-q', content: 'independent pending body' })
+      let independentPendingState: 'queued' | 'cancelled' = 'queued'
+      let independentPendingContent = 'independent pending body'
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE status IN ('claimed','executing','transcript_committed')")
+        .get()).toMatchObject({ count: 2 })
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')")
+        .get(independentSession.id)).toMatchObject({ count: 1 })
+      expect(storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn', ownerId: 'random-owner-b' })).toMatchObject({ acquired: false })
+      assertLifecycleInvariants(1)
+      const originalLease = { sessionId: session.id, turnId: 'random-turn', ownerId: 'random-owner-a', generation: 1 }
+      expect(storage.execution.releaseExecution(originalLease)).toBe(true)
+      operationTrace.push('release:random-owner-a')
+      const renewed = storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn', ownerId: 'renewed-owner-a' })
+      expect(renewed).toMatchObject({ acquired: true })
+      if (!renewed.acquired) throw new Error('expected renewed owner claim')
+      const renewedLease = { sessionId: session.id, turnId: 'random-turn', ownerId: 'renewed-owner-a', generation: renewed.generation }
+      expect(storage.execution.releaseExecution(originalLease)).toBe(false)
+      assertLifecycleInvariants(1)
+      expect(storage.execution.releaseExecution(renewedLease)).toBe(true)
+      assertLifecycleInvariants(0)
+      const contenderOwners = ['random-owner-c', 'random-owner-d', 'random-owner-e', 'random-owner-f']
+      for (let index = contenderOwners.length - 1; index > 0; index -= 1) {
+        const swapIndex = next() % (index + 1)
+        ;[contenderOwners[index], contenderOwners[swapIndex]] = [contenderOwners[swapIndex]!, contenderOwners[index]!]
+      }
+      let priorLease = renewedLease
+      let activeLease: typeof originalLease | undefined
+      for (const ownerId of contenderOwners) {
+        const acquired = storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn', ownerId })
+        operationTrace.push(`claim-owner:${ownerId}`)
+        expect(acquired).toMatchObject({ acquired: true })
+        if (!acquired.acquired) throw new Error('expected randomized owner claim')
+        activeLease = { sessionId: session.id, turnId: 'random-turn', ownerId, generation: acquired.generation }
+        expect(activeLease.generation).toBeGreaterThan(priorLease.generation)
+        expect(storage.execution.releaseExecution(priorLease)).toBe(false)
+        expect(storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn', ownerId: `${ownerId}-rival` })).toMatchObject({ acquired: false })
+        assertLifecycleInvariants(1)
+        priorLease = activeLease
+        if (ownerId !== contenderOwners.at(-1)) expect(storage.execution.releaseExecution(activeLease)).toBe(true)
+        assertLifecycleInvariants(ownerId === contenderOwners.at(-1) ? 1 : 0)
+      }
+      expect(() => storage.execution.claimQueuedTurn({ sessionId: session.id, userMessageId: live.find(({ state }) => state === 'queued')!.messageId,
+        turnId: 'random-turn-2', assistantMessageId: 'random-assistant-2', requestId: live.find(({ state }) => state === 'queued')!.requestId,
+        startToken: 'random-token-2' })).toThrow('SESSION_TURN_BUSY')
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')")
+        .get(session.id)).toMatchObject({ count: 1 })
+      assertLifecycleInvariants(1)
+      if (!activeLease) throw new Error('expected a live execution lease before claiming another queued turn')
+      expect(storage.execution.releaseExecution(activeLease)).toBe(true)
+      expect(updatePersistedTurnState(db, 'random-turn', 'terminal', { outcome: 'completed' })).toBe(true)
+      expect(storage.execution.readTurn({ sessionId: session.id, turnId: 'random-turn' }))
+        .toMatchObject({ state: 'terminal', outcome: 'completed' })
+      assertLifecycleInvariants(0)
+      const secondWinner = live.find(({ state }) => state === 'queued')!
+      const secondClaim = storage.execution.claimQueuedTurn({ sessionId: session.id, userMessageId: secondWinner.messageId, turnId: 'random-turn-2',
+        assistantMessageId: 'random-assistant-2', requestId: secondWinner.requestId, startToken: 'random-token-2' })
+      secondWinner.state = 'claimed'
+      secondWinner.turnId = 'random-turn-2'
+      operationTrace.push(`claim-turn:${secondWinner.requestId}`)
+      expect(secondClaim.user.message).toMatchObject({ id: secondWinner.messageId, content: secondWinner.content, status: 'sent' })
+      const secondTurnOwner = storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn-2', ownerId: 'random-turn-2-owner' })
+      expect(secondTurnOwner).toMatchObject({ acquired: true })
+      if (!secondTurnOwner.acquired) throw new Error('expected second turn execution owner')
+      const secondTurnLease = { sessionId: session.id, turnId: 'random-turn-2', ownerId: 'random-turn-2-owner', generation: secondTurnOwner.generation }
+      expect(storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn-2', ownerId: 'random-turn-2-rival' }))
+        .toMatchObject({ acquired: false })
+      assertLifecycleInvariants(1)
+
+      const persistedPath = temp.dbPath
+      operationTrace.push('reopen:active-owner')
+      db.close()
+      db = openDatabase(persistedPath)
+      storage = createSqliteSessionStorage(db)
+      for (const entry of entries) {
+        const receipt = getQueueInputReceipt(db, session.id, entry.requestId)
+        expect(receipt).toMatchObject({ queuedMessageId: entry.state === 'cancelled' ? null : entry.messageId, state: entry.state })
+        if (entry.state === 'cancelled') expect(storage.queries.readMessage({ sessionId: session.id, messageId: entry.messageId })).toBeUndefined()
+        else expect(storage.queries.readMessage({ sessionId: session.id, messageId: entry.messageId })).toMatchObject({
+          id: entry.messageId, content: entry.content, status: entry.state === 'claimed' ? 'sent' : 'queued'
+        })
+      }
+      assertLifecycleInvariants(1)
+      expect(operationTrace).toContain(`claim-turn:${winner.requestId}`)
+      const queuedMutationKinds = operationTrace.filter((step) => step.startsWith('edit:') || step.startsWith('cancel:'))
+        .map((step) => step.startsWith('edit:') ? 'edit' : 'cancel')
+      expect(queuedMutationKinds).toContain('edit')
+      expect(queuedMutationKinds).toContain('cancel')
+      expect(queuedMutationKinds.some((kind, index) => index > 0 && kind !== queuedMutationKinds[index - 1])).toBe(true)
+      expect(operationTrace.at(-1)).toBe('reopen:active-owner')
+      expect(storage.execution.readTurn({ sessionId: session.id, turnId: 'random-turn' }))
+        .toMatchObject({ requestId: winner.requestId, userMessageId: winner.messageId, state: 'terminal', outcome: 'completed' })
+      expect(storage.execution.readTurn({ sessionId: session.id, turnId: 'random-turn-2' }))
+        .toMatchObject({ requestId: secondWinner.requestId, userMessageId: secondWinner.messageId, state: 'prepared' })
+      expect(getQueueInputReceipt(db, independentSession.id, 'random-independent-q')).toMatchObject({
+        state: 'claimed', queuedMessageId: independentQueued.persisted.message.id, turnId: 'random-independent-turn'
+      })
+      expect(storage.queries.readMessage({ sessionId: independentSession.id, messageId: independentQueued.persisted.message.id }))
+        .toMatchObject({ content: 'independent-session-body', status: 'sent' })
+      expect(storage.execution.readTurn({ sessionId: independentSession.id, turnId: 'random-independent-turn' }))
+        .toMatchObject({ requestId: 'random-independent-q', userMessageId: independentQueued.persisted.message.id })
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE status IN ('claimed','executing','transcript_committed')")
+        .get()).toMatchObject({ count: 2 })
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')")
+        .get(session.id)).toMatchObject({ count: 1 })
+
+      const rebuildMessages = entries.filter(({ state }) => state === 'claimed').map((entry) => ({
+        id: entry.messageId, role: 'user' as const, content: entry.content,
+        timestamp: storage.queries.readMessage({ sessionId: session.id, messageId: entry.messageId })!.timestamp
+      }))
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+      await history.appendBatch([{
+        invocationId: 'random-lifecycle-rebuild-invocation', turnId: 'random-lifecycle-rebuild-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'random-lifecycle-rebuild-context', idempotencyKey: 'random-lifecycle-rebuild-context',
+        kind: 'invocation-context-committed', payload: { messages: rebuildMessages }
+      }], 0)
+      expect(history.readCanonicalSessionTranscriptForShadow(session.id)).toMatchObject({ kind: 'matched' })
+      getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run(winner.messageId)
+      getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+      const rebuilt = readSessionTranscriptProjection(db, session.id)
+      expect(rebuilt.source).toBe('canonical:L2')
+      expect(getProjectedMessages(db, session.id).filter(({ id }) => id === winner.messageId).map(({ id, content }) => ({ id, content })))
+        .toEqual(rebuildMessages.filter(({ id }) => id === winner.messageId).map(({ id, content }) => ({ id, content })))
+      for (const entry of entries) {
+        const projected = getProjectedMessages(db, session.id).find(({ id }) => id === entry.messageId)
+        if (entry.state === 'cancelled') expect(projected).toBeUndefined()
+        else expect(projected).toMatchObject({ id: entry.messageId, content: entry.content, status: entry.state === 'claimed' ? 'sent' : 'queued' })
+      }
+      assertLifecycleInvariants(1)
+      expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toMatchObject({ integrity_check: 'ok' })
+
+      const ledgerConn = getDbConnection(db)
+      const ledgerLocation = ledgerConn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?')
+        .get(session.id) as { ledger_location_key: string }
+      const ledgerEventId = `random-lifecycle-ledger-${(next() >>> 0).toString(16)}`
+      await new SqliteAgentHistory(ledgerConn, 1, Date.now, session.id).appendBatch([{
+        invocationId: 'random-lifecycle-ledger-invocation', turnId: 'random-lifecycle-ledger-turn', sequence: 1, schemaVersion: 1,
+        eventId: ledgerEventId, idempotencyKey: ledgerEventId, kind: 'invocation-context-committed', payload: { messages: rebuildMessages }
+      }], 0)
+      const target = {
+        ledgerLocationKey: ledgerLocation.ledger_location_key, sessionId: session.id, sessionGeneration: session.generation,
+        canonicalEventId: ledgerEventId, projectionKind: 'tool-result',
+        expectedEvents: [{ type: 'tool_result' as const, payload: { toolUseId: 'random-ledger-tool', stepId: 'random-ledger-step', result: { success: true } } }],
+        expectedEventIds: ['tool_result:random-ledger-tool']
+      }
+      runInTransaction(ledgerConn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(ledgerConn, target))
+      const sink = getSessionEventSink(ledgerRoot, session.id, session.createdAt)
+      try {
+        const failed = await drainCanonicalLedgerProjectionOutbox(ledgerConn, ledgerLocation.ledger_location_key,
+          async () => { throw new Error('seeded random lifecycle sink failure') })
+        expect(failed.failedTargetId).toBeTruthy()
+        expect(listPendingCanonicalLedgerProjectionTargets(ledgerConn, ledgerLocation.ledger_location_key)).toHaveLength(1)
+        const interleavedEdit = entries.find(({ state }) => state === 'queued')!
+        interleavedEdit.content = `${interleavedEdit.content}-while-ledger-pending-${next()}`
+        operationTrace.push(`edit-during-ledger-retry:${interleavedEdit.requestId}`)
+        expect(() => updateMessageContent(db!, interleavedEdit.messageId, { content: 'unscoped-canonical-bypass' }))
+          .toThrow('canonical write authority requires a canonical History append')
+        const editedWhilePending = storage.commands.editQueuedMessage({ sessionId: session.id, messageId: interleavedEdit.messageId, content: interleavedEdit.content })
+        expect(editedWhilePending).toMatchObject({ ok: true, message: { id: interleavedEdit.messageId, content: interleavedEdit.content, status: 'queued' } })
+        if (!editedWhilePending.ok) throw new Error('unexpected queued edit rejection during pending ledger projection')
+        expect(getQueueInputReceipt(db, session.id, interleavedEdit.requestId)?.fingerprint)
+          .toBe(queueInputFingerprint({ text: interleavedEdit.content, attachments: editedWhilePending.message.attachments }))
+        assertLifecycleInvariants(1)
+        const interleavedCancel = entries.find(({ state, messageId }) => state === 'queued' && messageId !== interleavedEdit.messageId)
+        expect(interleavedCancel).toBeDefined()
+        if (!interleavedCancel) throw new Error('expected another queued entry to cancel during ledger retry')
+        operationTrace.push(`cancel-during-ledger-retry:${interleavedCancel.requestId}`)
+        expect(storage.commands.deleteQueuedMessage(interleavedCancel.messageId)).toEqual({ ok: true, sessionId: session.id })
+        interleavedCancel.state = 'cancelled'
+        assertLifecycleInvariants(1)
+        expect(storage.execution.releaseExecution(secondTurnLease)).toBe(true)
+        expect(updatePersistedTurnState(db, 'random-turn-2', 'terminal', { outcome: 'completed' })).toBe(true)
+        const thirdWinner = entries.find(({ state }) => state === 'queued')!
+        const thirdClaim = storage.execution.claimQueuedTurn({ sessionId: session.id, userMessageId: thirdWinner.messageId, turnId: 'random-turn-3',
+          assistantMessageId: 'random-assistant-3', requestId: thirdWinner.requestId, startToken: 'random-token-3' })
+        thirdWinner.state = 'claimed'
+        thirdWinner.turnId = 'random-turn-3'
+        operationTrace.push(`claim-turn-during-ledger-retry:${thirdWinner.requestId}`)
+        expect(thirdClaim.user.message).toMatchObject({ id: thirdWinner.messageId, content: thirdWinner.content, status: 'sent' })
+        const thirdOwner = storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn-3', ownerId: 'random-turn-3-owner' })
+        expect(thirdOwner).toMatchObject({ acquired: true })
+        if (!thirdOwner.acquired) throw new Error('expected third turn execution owner')
+        let retryLease = { sessionId: session.id, turnId: 'random-turn-3', ownerId: 'random-turn-3-owner', generation: thirdOwner.generation }
+        expect(storage.execution.readTurn({ sessionId: session.id, turnId: 'random-turn-2' }))
+          .toMatchObject({ state: 'terminal', outcome: 'completed' })
+        assertLifecycleInvariants(1)
+        const reopenPath = temp.dbPath
+        db.close()
+        db = openDatabase(reopenPath)
+        storage = createSqliteSessionStorage(db)
+        let reopenedConn = getDbConnection(db)
+        const pending = listPendingCanonicalLedgerProjectionTargets(reopenedConn, ledgerLocation.ledger_location_key)
+        expect(pending).toHaveLength(1)
+        assertLifecycleInvariants(1)
+        expect(storage.queries.readMessage({ sessionId: session.id, messageId: interleavedEdit.messageId }))
+          .toMatchObject({ content: interleavedEdit.content, status: interleavedEdit.state === 'claimed' ? 'sent' : 'queued' })
+        expect(storage.execution.readTurn({ sessionId: session.id, turnId: 'random-turn' }))
+          .toMatchObject({ requestId: winner.requestId, userMessageId: winner.messageId, state: 'terminal', outcome: 'completed' })
+        expect(storage.execution.readTurn({ sessionId: session.id, turnId: 'random-turn-2' }))
+          .toMatchObject({ requestId: secondWinner.requestId, userMessageId: secondWinner.messageId, state: 'terminal', outcome: 'completed' })
+        expect(storage.execution.readTurn({ sessionId: session.id, turnId: 'random-turn-3' }))
+          .toMatchObject({ requestId: thirdWinner.requestId, userMessageId: thirdWinner.messageId, state: 'prepared' })
+        const seededAdditionalFailures = 1 + (next() % 3)
+        for (let retry = 0; retry < seededAdditionalFailures; retry += 1) {
+          operationTrace.push(`ledger-retry-failure:${retry + 1}`)
+          const retryFailure = await drainCanonicalLedgerProjectionOutbox(reopenedConn, ledgerLocation.ledger_location_key,
+            async () => { throw new Error(`seeded random lifecycle retry failure ${retry + 1}`) })
+          expect(retryFailure.failedTargetId).toBeTruthy()
+          expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, ledgerLocation.ledger_location_key)).toHaveLength(1)
+          const retryQueueEntries = entries.filter(({ state }) => state === 'queued')
+          if (retryQueueEntries.length > 0) {
+            const retryEntry = retryQueueEntries[next() % retryQueueEntries.length]!
+            if ((next() & 1) === 0) {
+              retryEntry.content = `${retryEntry.content}-retry-edit-${next()}`
+              operationTrace.push(`retry-edit-during-ledger-failure:${retryEntry.requestId}`)
+              expect(storage.commands.editQueuedMessage({ sessionId: session.id, messageId: retryEntry.messageId, content: retryEntry.content }))
+                .toMatchObject({ ok: true, message: { id: retryEntry.messageId, content: retryEntry.content, status: 'queued' } })
+            } else {
+              operationTrace.push(`retry-cancel-during-ledger-failure:${retryEntry.requestId}`)
+              expect(storage.commands.deleteQueuedMessage(retryEntry.messageId)).toEqual({ ok: true, sessionId: session.id })
+              retryEntry.state = 'cancelled'
+            }
+          }
+          if (independentPendingState === 'queued') {
+            if ((next() & 1) === 0) {
+              independentPendingContent= `${independentPendingContent}-retry-edit-${next()}`
+              operationTrace.push(`independent-retry-edit:${retry + 1}`)
+              expect(storage.commands.editQueuedMessage({ sessionId: independentSession.id,
+                messageId: independentPending.persisted.message.id, content: independentPendingContent }))
+                .toMatchObject({ ok: true, message: { id: independentPending.persisted.message.id, content: independentPendingContent, status: 'queued' } })
+            } else {
+              operationTrace.push(`independent-retry-cancel:${retry + 1}`)
+              expect(storage.commands.deleteQueuedMessage(independentPending.persisted.message.id))
+                .toEqual({ ok: true, sessionId: independentSession.id })
+              independentPendingState = 'cancelled'
+            }
+          }
+          if (retry > 0 && (next() & 1) === 0) {
+            expect(storage.execution.releaseExecution(retryLease)).toBe(true)
+            expect(storage.execution.releaseExecution(retryLease)).toBe(false)
+            const retryOwnerId = `random-turn-3-retry-owner-${(next() >>> 0).toString(16)}`
+            const retryOwner = storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn-3', ownerId: retryOwnerId })
+            expect(retryOwner.acquired).toBe(true)
+            if (!retryOwner.acquired) throw new Error('expected seeded retry owner claim')
+            expect(retryOwner.generation).toBeGreaterThan(retryLease.generation)
+            retryLease = { sessionId: session.id, turnId: 'random-turn-3', ownerId: retryOwnerId, generation: retryOwner.generation }
+            expect(storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn-3', ownerId: `${retryOwnerId}-rival` }))
+              .toMatchObject({ acquired: false })
+            operationTrace.push(`primary-retry-owner-generation:${retryLease.generation}`)
+          } else {
+            expect(storage.execution.releaseExecution(independentLease)).toBe(true)
+            expect(storage.execution.releaseExecution(independentLease)).toBe(false)
+            const independentOwnerId = `random-independent-retry-owner-${(next() >>> 0).toString(16)}`
+            const nextIndependentOwner = storage.execution.claimExecution({ sessionId: independentSession.id,
+              turnId: 'random-independent-turn', ownerId: independentOwnerId })
+            expect(nextIndependentOwner.acquired).toBe(true)
+            if (!nextIndependentOwner.acquired) throw new Error('expected seeded independent retry owner claim')
+            expect(nextIndependentOwner.generation).toBeGreaterThan(independentLease.generation)
+            independentLease = { sessionId: independentSession.id, turnId: 'random-independent-turn',
+              ownerId: independentOwnerId, generation: nextIndependentOwner.generation }
+            expect(storage.execution.claimExecution({ sessionId: independentSession.id, turnId: 'random-independent-turn',
+              ownerId: `${independentOwnerId}-rival` })).toMatchObject({ acquired: false })
+            operationTrace.push(`independent-retry-owner-generation:${independentLease.generation}`)
+          }
+          expect(reopenedConn.prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE status IN ('claimed','executing','transcript_committed')")
+            .get()).toMatchObject({ count: 2 })
+          expect(reopenedConn.prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')")
+            .get(session.id)).toMatchObject({ count: 1 })
+          expect(reopenedConn.prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')")
+            .get(independentSession.id)).toMatchObject({ count: 1 })
+          assertLifecycleInvariants(1)
+          const retryReopenPath = temp.dbPath
+          db.close()
+          db = openDatabase(retryReopenPath)
+          storage = createSqliteSessionStorage(db)
+          reopenedConn = getDbConnection(db)
+          expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, ledgerLocation.ledger_location_key)).toHaveLength(1)
+          expect(storage.execution.readTurn({ sessionId: session.id, turnId: 'random-turn-3' }))
+            .toMatchObject({ state: 'prepared', requestId: thirdWinner.requestId })
+          expect(getQueueInputReceipt(db, independentSession.id, 'random-independent-pending-q'))
+            .toMatchObject(independentPendingState === 'cancelled'
+              ? { state: 'cancelled', queuedMessageId: null }
+              : { state: 'queued', queuedMessageId: independentPending.persisted.message.id })
+          if (independentPendingState === 'cancelled') {
+            expect(storage.queries.readMessage({ sessionId: independentSession.id, messageId: independentPending.persisted.message.id })).toBeUndefined()
+          } else {
+            expect(storage.queries.readMessage({ sessionId: independentSession.id, messageId: independentPending.persisted.message.id }))
+              .toMatchObject({ content: independentPendingContent, status: 'queued' })
+          }
+          expect(storage.execution.readTurn({ sessionId: independentSession.id, turnId: 'random-independent-turn' }))
+            .toMatchObject({ state: 'prepared', requestId: 'random-independent-q' })
+          assertLifecycleInvariants(1)
+        }
+        expect(operationTrace.some((step) => step.startsWith('independent-retry-owner-generation:'))).toBe(true)
+        expect(operationTrace.some((step) => step.startsWith('independent-retry-edit:') || step.startsWith('independent-retry-cancel:'))).toBe(true)
+        expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, ledgerLocation.ledger_location_key,
+          (item) => projectCanonicalSessionLedgerTarget(sink, item))).toEqual({ projected: 1 })
+        expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, ledgerLocation.ledger_location_key,
+          (item) => projectCanonicalSessionLedgerTarget(sink, item))).toEqual({ projected: 0 })
+        expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, ledgerLocation.ledger_location_key)).toEqual([])
+        assertLifecycleInvariants(1)
+        expect(operationTrace.filter((step) => step.startsWith('ledger-retry-failure:')).length).toBe(seededAdditionalFailures)
+        expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result' && event.payload.toolUseId === 'random-ledger-tool')).toHaveLength(1)
+        expect(reopenedConn.prepare('PRAGMA integrity_check').get()).toMatchObject({ integrity_check: 'ok' })
+      } finally {
+        await sink.close()
+      }
+    } finally {
+      db?.close()
+      db = undefined
+      for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${temp.dbPath}${suffix}`, { force: true })
+      fs.rmSync(path.dirname(temp.dbPath), { recursive: true, force: true })
+    }
   })
 
   it('reads a continuation intent only through its session and request identity', () => {
@@ -944,7 +1928,7 @@ describe('SQLite session storage execution boundary', () => {
     ], 0)
     let runtime: TurnRuntime | undefined
     const storage = createSqliteSessionStorage(db, { getTurnRuntime: () => runtime! })
-    runtime = new TurnRuntime({ storage: storage.execution.coordinator, deps: { now: () => 10, id: (() => { let id = 0; return () => `launch-${++id}` })() } })
+    runtime = createSessionTurnRuntime(storage, { deps: { now: () => 10, id: (() => { let id = 0; return () => `launch-${++id}` })() } })
     const snapshot = history.readSync('launch-source-invocation')
     const launch = await storage.execution.continuationLaunch.prepareAndClaim({
       payload: { requestId: 'launch-request', sessionId: session.id, text: '继续' },

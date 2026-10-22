@@ -30,7 +30,7 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, type SessionEventSink } from './sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, type SessionEventSink } from './sessionEvents'
 import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { ContextMeter } from '../src/shared/contextMeterService'
@@ -44,7 +44,7 @@ import { toCanonicalModelMessages } from './runtime/canonicalHistory'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
 import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExecutionConfig } from './runtime/continuationSafetySnapshot'
-import type { SessionStorage } from './sessionStorage/contracts'
+import type { SessionStorage } from './sessionStorage/host/ports'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -406,8 +406,13 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           ? `continuation:${authoritative.executionConfig.continuationSource.continuationId}`
           : currentCompactionWindowId(compactionReplay, sessionId)
         const contextEventLedger = eventWriter
-          ? (await readSessionEvents(eventWriter.eventsPath)).map((event) => ({ seq: event.seq, type: event.type, payload: event.payload }))
+          ? [...await sessionStorage.readContextMeterEvents({ sessionId, workDir: deps.getWorkDir() })]
           : []
+        const appendContextMeterEvent = (event: { seq: number; type: string; payload: Record<string, unknown> }) => {
+          if (event.type !== 'request_header' && event.type !== 'request_context' && event.type !== 'request_usage' && event.type !== 'request_retry') return
+          const nextSeq = Math.max(event.seq, (contextEventLedger.at(-1)?.seq ?? 0) + 1)
+          contextEventLedger.push({ ...event, type: event.type as 'request_header' | 'request_context' | 'request_usage' | 'request_retry', seq: nextSeq })
+        }
         const contextMeter = new ContextMeter(() => contextEventLedger)
         const replayFingerprint = (surface: readonly unknown[]) => computeReplaySurfaceFingerprint(frozen.system ?? '', surface)
         const historyFacts = authoritative.continuationTranscript
@@ -539,7 +544,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
             // Hosted SDK projections are part of the committed History contract: if a critical
             // JSONL projection fails, stop before dispatch and let startup recovery repair it.
             failClosedCriticalEvents: true,
-            onCommitted: (committed) => contextEventLedger.push({ seq: committed.seq, type: committed.type, payload: committed.payload }),
+            onCommitted: appendContextMeterEvent,
             onChunkDropped: () => { droppedChunkEvents += 1 },
             onCriticalFailure: (error) => eventAppendFailures.push(toEventPersistenceFailure(error))
           }),
@@ -641,7 +646,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
           }
         })
         const hostedHandoffOptions = {
-          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, ...(authoritative.executionConfig?.continuationContext ? { continuationContext: authoritative.executionConfig.continuationContext } : {}), refreshExecutionContext: (_call, stage, current) => {
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, ...(authoritative.executionConfig?.continuationContext ? { continuationContext: authoritative.executionConfig.continuationContext } : {}), refreshExecutionContext: (_call, stage, current) => {
             const toolsConfig = deps.getToolsConfig()
             const browserConfig = deps.getBrowserConfig()
             const shellConfig = deps.getShellConfig()

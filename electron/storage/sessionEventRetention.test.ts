@@ -12,6 +12,7 @@ import { appendMessage, setConfigValue } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { rebuildClaudeMessagesFromHistory } from '../runtime/canonicalHistory'
+import * as transcriptProjection from '../runtime/sessionTranscriptProjection'
 import {
   createSessionLedgerCompactionDependencyGuard,
   createCanonicalSessionProjectionRetentionPreparer,
@@ -37,6 +38,27 @@ afterEach(() => {
 })
 
 describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
+  it('prepares chatBodyV1 before selecting projected messages for retention', async () => {
+    const db = createMemoryAppDb()
+    getDbConnection(db).prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES('retention-order','s','m',0.7,1,1,1,'{}','{}',1,'retention-order-generation')`).run()
+    const order: string[] = []
+    const projectionRead = vi.spyOn(transcriptProjection, 'getProjectedMessages').mockImplementation(() => {
+      order.push('read-projected-messages')
+      return []
+    })
+    try {
+      const prepare = createCanonicalSessionProjectionRetentionPreparer(db, async ({ sessionId }) => {
+        order.push(`ensure:${sessionId}`)
+      })
+      await prepare('retention-order-19700101', '/work')
+      expect(order).toEqual(['ensure:retention-order', 'read-projected-messages'])
+    } finally {
+      projectionRead.mockRestore()
+      db.close()
+    }
+  })
+
   it('retains the newest event sessions by index timestamp', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-'))
     for (const [id, time] of [['old', 1], ['new', 2]] as const) {
@@ -153,6 +175,24 @@ describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
     expect(result.removed).toBe(1)
     await expect(fs.stat(path.join(root, 'sessions', 'old-19700101'))).rejects.toThrow()
     expect(await fs.stat(path.join(root, 'sessions', 'new-19700101'))).toBeTruthy()
+  })
+
+  it('fails closed when a canonical compaction dependency has an unknown owner and corrupt payload', async () => {
+    const db = createMemoryAppDb()
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-corrupt-history-'))
+    const conn = getDbConnection(db)
+    conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(?,1,1,NULL)')
+      .run('unknown-owner-compaction')
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at,session_id)
+      VALUES(?,1,?,?,?,?,?,?,?,NULL)`).run('unknown-owner-compaction', 'corrupt-compaction', 'corrupt-key', 'corrupt-turn', 1,
+      'transcript-compacted', '{', 1)
+    try {
+      const dependencyGuard = createSessionLedgerCompactionDependencyGuard(db)
+      await expect(dependencyGuard('unknown-owner-19700101', root)).rejects.toThrow('canonical compaction History is corrupt')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+      db.close()
+    }
   })
 
   it('retains a blocked candidate without invoking dependency deletion checks', async () => {

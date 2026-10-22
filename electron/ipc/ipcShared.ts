@@ -9,7 +9,7 @@ import { LLM_SERVICE_CONFIG_KEYS } from '../llmServiceResolver'
 import { WikiConfig, FeishuConfig } from '../../src/shared/domainTypes'
 import { app } from 'electron'
 import { detectLocaleFromSystem, isAppLocale } from '../../src/shared/locale'
-import { getConfigValue, setConfigValue, deleteConfigValue, updateSession } from '../database'
+import { getConfigValue, setConfigValue, deleteConfigValue } from '../database'
 import { readWikiConfig as readWikiConfigFromDb } from '../wiki/wikiConfigReader'
 
 import { getMainWindow } from '../windowRef'
@@ -27,7 +27,7 @@ import { recordSystemManagedCacheEntry } from '../confirmation/decisionCacheWrit
 import { type Dirent } from 'fs'
 import { type MessagePageReader } from '../sessionBackupManager'
 import type { AuditSink } from '../confirmation/channels'
-import type { SessionQueries } from '../sessionStorage/contracts'
+import type { SessionCommands, SessionQueries } from '../sessionStorage/public/ports'
 
 export async function searchFilesUnder(
   absRoot: string,
@@ -139,20 +139,17 @@ export function readAppLocale(db: AppDatabase): AppConfig['locale'] {
 }
 
 
-export function stripSessionMetadataAndPersist(db: AppDatabase, session: Session): Session {
-  if (!hasPlanMetadataKeys(session.metadata)) return session
-  const metadata = stripPlanFieldsFromSessionMetadata(session.metadata ?? {})
-  return updateSession(db, session.id, { metadata }) ?? session
+export function stripSessionMetadataAndPersist(commands: SessionCommands, session: Session): Session {
+  return hasPlanMetadataKeys(session.metadata) ? commands.stripLegacyPlanMetadata(session.id) ?? session : session
 }
 
-export function stripAllSessionsAndPersist(db: AppDatabase, queries: SessionQueries, options?: { view?: 'all' | 'user-visible' }): Session[] {
+export function stripAllSessionsAndPersist(db: AppDatabase, commands: SessionCommands, queries: SessionQueries, options?: { view?: 'all' | 'user-visible' }): Session[] {
   const sessions = queries.listSessions(options)
   let changed = false
   const result = sessions.map((s) => {
     if (!hasPlanMetadataKeys(s.metadata)) return s
     changed = true
-    const metadata = stripPlanFieldsFromSessionMetadata(s.metadata ?? {})
-    return updateSession(db, s.id, { metadata }) ?? { ...s, metadata }
+    return commands.stripLegacyPlanMetadata(s.id) ?? { ...s, metadata: stripPlanFieldsFromSessionMetadata(s.metadata ?? {}) }
   })
   if (changed) db.flushSave()
   return result
@@ -209,7 +206,10 @@ export function backupPageReader(ctx: AppIpcContext, sessionId: string): Message
   }
 }
 
-export function loadBackupPayload(ctx: AppIpcContext, sessionId: string) {
+export async function loadBackupPayload(ctx: AppIpcContext, sessionId: string) {
+  const storage = ctx.sessionStorage
+  if (!storage) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
+  await storage.ensureChatBodyV1?.({ sessionId })
   const queries = ctx.sessionStorage?.queries
   if (!queries) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
   const s = queries.readSession(sessionId)

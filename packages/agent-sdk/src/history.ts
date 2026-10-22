@@ -13,11 +13,14 @@ export type HistorySnapshot = { invocationId: string; version: number; schemaVer
 export type RebuiltInvocationState = { invocationId: string; state: 'interrupted' | 'completed' | 'failed' | 'denied' | 'cancelled'; lastEventId: string }
 export type HistoryAppendResult = { version: number; duplicate: boolean }
 export type InvocationHistoryAppendResult = HistoryAppendResult & { events: readonly HistoryEvent[] }
+export type SessionExecutionLease = Readonly<{ sessionId: string; turnId: string; ownerId: string; generation: number }>
 export type SessionTranscriptCommitIntent = Readonly<{
   sessionId: string
   baseVersion: number
   outcome: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
   messages: readonly Readonly<Record<string, unknown>>[]
+  /** Present when the terminal commit must prove the live execution owner in the same SQLite transaction. */
+  executionLease?: SessionExecutionLease
   /** Atomic mirror into the authoritative desktop message skeleton, when this turn owns one. */
   messageMirror?: Readonly<{
     messageId: string

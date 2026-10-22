@@ -1,5 +1,5 @@
 import type { IncomingMessage } from '@wechatbot/wechatbot'
-import type { SessionCommands } from '../sessionStorage/contracts'
+import type { SessionCommands } from '../sessionStorage/public/ports'
 import {
   DEFAULT_REMOTE_PROGRESS_CONFIG,
   mergeRemoteProgressConfig,

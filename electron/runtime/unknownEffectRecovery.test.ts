@@ -75,7 +75,7 @@ describe('unknown effect recovery state', () => {
         return { version: current.version, duplicate: false }
       }
     }
-    await recordUnknownEffectRiskAcceptance({ history, targetInvocationId: 'target', acceptedIds: ['origin:old'] })
+    await recordUnknownEffectRiskAcceptance({ history, sessionId: 'session', targetInvocationId: 'target', acceptedIds: ['origin:old'] })
     current = { ...current, events: [...current.events,
       { invocationId: 'target', turnId: 'turn', sequence: 3, schemaVersion: 1, eventId: 'started-new', idempotencyKey: 'started-new',
         kind: 'tool-call-started', payload: { toolCallId: 'new', toolName: 'write_file', inputHash: 'b'.repeat(64) } },
@@ -109,7 +109,7 @@ describe('unknown effect recovery state', () => {
         return { version: current.version, duplicate: false }
       }
     }
-    await recordUnknownEffectRiskAcceptance({ history, targetInvocationId: 'target', acceptedIds: ['origin:a'], now: 42 })
+    await recordUnknownEffectRiskAcceptance({ history, sessionId: 'session', targetInvocationId: 'target', acceptedIds: ['origin:a'], now: 42 })
     expect(readUnknownEffectRecoveryState(current).mode).toBe('risk-accepted')
     const child = snapshot([{ id: 'origin:a', originInvocationId: 'origin', toolCallId: 'a' }])
     child.invocationId = 'child'
@@ -125,7 +125,7 @@ describe('unknown effect recovery state', () => {
         return { version: current.version, duplicate: false }
       }
     }
-    await approveOneTimeUnknownEffectRetry({ history, targetInvocationId: 'target', unknownEffectId: 'origin:a', now: 10 })
+    await approveOneTimeUnknownEffectRetry({ history, sessionId: 'session', targetInvocationId: 'target', unknownEffectId: 'origin:a', now: 10 })
     expect(await findOneTimeUnknownEffectRetryApproval({ history, targetInvocationId: 'target', toolName: 'edit_file', inputHash: 'abc' })).toBeUndefined()
     expect(await findOneTimeUnknownEffectRetryApproval({ history, targetInvocationId: 'target', toolName: 'write_file', inputHash: 'changed' })).toBeUndefined()
     const approvalEventId = await findOneTimeUnknownEffectRetryApproval({ history, targetInvocationId: 'target', toolName: 'write_file', inputHash: 'abc' })

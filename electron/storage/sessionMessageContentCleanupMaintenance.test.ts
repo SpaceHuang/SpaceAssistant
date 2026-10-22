@@ -112,8 +112,6 @@ async function prepareCanonicalSession(db: ReturnType<typeof createTempDatabase>
   await appendCanonicalTranscript(db, session.id, messages)
   expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
   expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
-  getDbConnection(db).prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at)
-    VALUES(?,?,?)`).run(session.id, session.generation, Date.now())
   return session.id
 }
 
@@ -173,8 +171,6 @@ describe('会话正文清理维护 worker', () => {
       await appendCanonicalTranscript(db, session.id, messages)
       expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
       expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
-      getDbConnection(db).prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at)
-        VALUES(?,?,?)`).run(session.id, session.generation, Date.now())
       approveCleanupScope(db, [session.id])
 
       const options = { batchSize: 1, maxSessionsPerRun: 10, maxBatchesPerSession: 1 }
@@ -224,9 +220,6 @@ describe('会话正文清理维护 worker', () => {
       await appendCanonicalTranscript(temp.db, session.id, messages)
       expect(certifyCanonicalSessionApiRead(temp.db, session.id).status).toBe('eligible')
       expect(enableCanonicalSessionWriteAuthority(temp.db, session.id).status).toBe('enabled')
-      getDbConnection(temp.db).prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at)
-        VALUES(?,?,?)`).run(session.id, session.generation, Date.now())
-      getDbConnection(temp.db).prepare(`DELETE FROM canonical_session_api_context_eligibility WHERE session_id=?`).run(session.id)
       getDbConnection(temp.db).prepare(`DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'`).run(session.id)
       getDbConnection(temp.db).prepare(`UPDATE session_message_content_cutover SET api_read_mode='revalidation-required' WHERE session_id=?`).run(session.id)
       approveCleanupScope(temp.db, [session.id])

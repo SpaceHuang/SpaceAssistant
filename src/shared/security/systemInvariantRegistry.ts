@@ -128,5 +128,14 @@ export const SYSTEM_INVARIANT_REGISTRY: readonly SystemInvariantRegistration[] =
     audit: 'policy.execution-veto cause recheck-requires-confirm with decision linkage',
     tests: ['electron/confirmation/toolCallGate.test.ts', 'electron/confirmation/agentSdkSafetyPolicy.test.ts'],
     overrideability: 'none'
+  },
+  {
+    id: 'SYS-SESSIONLEASE-001', owner: 'electron/database/sessionTranscript.ts + electron/runtime/sqliteAgentHistory.ts',
+    stage: 'final-check', category: 'integrity',
+    rationale: 'A terminal History and transcript commit must prove the live session execution owner and generation before recording the result.',
+    effect: 'validate', scope: 'electron/runtime/sqliteAgentHistory.ts:appendBatch;electron/database/sessionTranscript.ts:commitSessionTranscriptInTransaction',
+    audit: 'stale or mismatched session execution claim/queue rejects with SESSION_EXECUTION_CLAIM_FENCED and the enclosing History/transcript transaction rolls back',
+    tests: ['electron/runtime/hostedTurnHandoff.test.ts', 'electron/database/sessionTranscript.test.ts'],
+    overrideability: 'none'
   }
 ])

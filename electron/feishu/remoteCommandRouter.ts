@@ -15,7 +15,8 @@ import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 import type { TurnRuntime } from '../turnRuntime'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
+import { readChatMessageAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { resolveClarificationControlMessage, type ClarificationResolverInput, type ClarificationResolverResult } from '../remote/clarificationInbound'
@@ -48,7 +49,6 @@ import {
 } from './feishuOwnerBind'
 import { CLAIM_LEASE_MS } from '../remote/imProcessedStore'
 import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, getImInboxMessageContext, listImInboxMessages, parkImInboxMessageForClarification, resumeClarificationInboxMessage } from '../database/imInbox'
-import { getTurnByRequestId } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { expireDuePendingClarifications, finishClarificationSendAttempt, listPendingClarificationNotices,
   listRecoverableClarificationPrompts, startClarificationSendAttempt, hasPendingClarificationForScope } from '../database/clarificationStore'
@@ -216,7 +216,7 @@ export class RemoteCommandRouter {
         const userMessageId = context.currentUserMessageId
         const messageId = context.messageId
         if (typeof userMessageId !== 'string' || typeof messageId !== 'string') throw new Error('FEISHU_COMPLETION_WAKE_CONTEXT_INVALID')
-        const originalMessage = this.deps.sessionStorage.queries.readMessage({ sessionId: input.sessionId, messageId: userMessageId })
+        const originalMessage = await readChatMessageAfterPreparation(this.deps.sessionStorage, { sessionId: input.sessionId, messageId: userMessageId })
         const originalContent = originalMessage?.content ?? listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 })
           .find(({ messageId: queuedId }) => queuedId === userMessageId)?.content
         if (typeof originalContent !== 'string') throw new Error(`FEISHU_COMPLETION_WAKE_SOURCE_MESSAGE_MISSING:${userMessageId}`)
@@ -226,7 +226,7 @@ export class RemoteCommandRouter {
         }
         const requestId = `completion:${event.eventId}`
         const recovery = decideDeferredCompletionWakeRecovery({
-          read: () => getTurnByRequestId(this.deps.db, input.sessionId, requestId),
+          read: () => this.deps.sessionStorage!.queries.readTurnByRequest({ sessionId: input.sessionId, requestId }),
           recover: () => this.deps.turnRuntime?.recover()
         })
         if (recovery.kind === 'recovery-pending') throw new Error('FEISHU_COMPLETION_WAKE_RECOVERY_PENDING')
@@ -271,10 +271,39 @@ export class RemoteCommandRouter {
       if (event.type !== 'im-inbound' || event.payloadRef.kind !== 'im-inbox-message') throw new Error('FEISHU_WAKE_EVENT_UNSUPPORTED')
       if (event.sessionId !== input.sessionId) throw new Error('FEISHU_WAKE_SESSION_MISMATCH')
       const messageId = event.payloadRef.messageId
-      const queued = listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 }).find((item) => item.messageId === messageId)
-      if (!queued) throw new Error('FEISHU_WAKE_INBOX_MESSAGE_MISSING')
+      const queuedView = listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 }).find((item) => item.messageId === messageId)
       const channelContext = getImInboxMessageContext(this.deps.db, messageId)
       if (!channelContext || channelContext.channel !== 'feishu') throw new Error('FEISHU_WAKE_PLATFORM_CONTEXT_MISSING')
+      const requestId = `wake:${event.eventId}`
+      let priorTurn = this.deps.sessionStorage!.queries.readTurnByRequest({ sessionId: session.id, requestId })
+      const acceptedSnapshot = readAcceptedTurn(this.deps.db, session.id, requestId)
+      if (priorTurn?.state === 'terminal' && priorTurn.userMessageId === messageId &&
+        acceptedSnapshot?.currentUserMessageId === messageId && !queuedView && !channelContext.clarificationWorkId) {
+        const terminalMessage = this.deps.sessionStorage.queries.readMessage({ sessionId: session.id, messageId })
+        if (terminalMessage?.role !== 'user' || terminalMessage.status !== 'sent') throw new Error('FEISHU_WAKE_TERMINAL_MESSAGE_INVALID')
+        if (channelContext.trackId) convergeRemoteTrackTerminal(this.deps.db, { trackId: channelContext.trackId,
+          target: priorTurn.outcome === 'completed' || priorTurn.outcome === 'parked' ? 'completed' : priorTurn.outcome === 'cancelled' ? 'cancelled' : 'failed',
+          occurredAt: Date.now(), readActiveConfirmations: (trackId) => this.deps.imChannel.listPendingTrackConfirmations(trackId) })
+        if (!ackImInboxMessage(this.deps.db, { queueScope: scope, messageId, ownerId: input.ownerId })) {
+          const claim = claimImInboxMessage(this.deps.db, { queueScope: scope, messageId, ownerId: input.ownerId })
+          if (!claim || !ackImInboxMessage(this.deps.db, { queueScope: scope, messageId, ownerId: input.ownerId })) {
+            throw new Error('FEISHU_WAKE_TERMINAL_INBOX_ACK_FAILED')
+          }
+        }
+        continue
+      }
+      const canResumePrepared = priorTurn !== undefined && (channelContext.clarificationWorkId
+        ? inspectRemoteTrackWorkRecovery(this.deps.db, channelContext.clarificationWorkId)?.decision.kind === 'resume-prepared-turn'
+        : canResumePreparedRemoteTurn({ turnState: priorTurn.state, turnId: priorTurn.turnId, requestId: priorTurn.requestId,
+          sessionId: priorTurn.sessionId, userMessageId: priorTurn.userMessageId, turnConfig: priorTurn.executionConfig, accepted: acceptedSnapshot }))
+      const queued = queuedView ?? await (async () => {
+        const sent = await readChatMessageAfterPreparation(this.deps.sessionStorage!, { sessionId: session.id, messageId })
+        const sequence = this.deps.sessionStorage!.queries.readMessageSequence({ sessionId: session.id, messageId })
+        if (!canResumePrepared || priorTurn?.userMessageId !== messageId || acceptedSnapshot?.currentUserMessageId !== messageId ||
+          sent?.role !== 'user' || sent.status !== 'sent' || sequence === null) return undefined
+        return { messageId, content: sent.content, sequence }
+      })()
+      if (!queued) throw new Error('FEISHU_WAKE_INBOX_MESSAGE_MISSING')
       const clarificationWorkState = channelContext.clarificationWorkId
         ? (getDbConnection(this.deps.db).prepare('SELECT state FROM remote_track_work_queue WHERE work_id=?')
           .get(channelContext.clarificationWorkId) as { state: string } | undefined)?.state
@@ -288,18 +317,11 @@ export class RemoteCommandRouter {
       }
       const lease = claimImInboxMessage(this.deps.db, { queueScope: scope, messageId: queued.messageId, ownerId: input.ownerId })
       if (!lease) throw new Error('FEISHU_WAKE_INBOX_CLAIM_FAILED')
-      const requestId = `wake:${event.eventId}`
-      let priorTurn = getTurnByRequestId(this.deps.db, session.id, requestId)
       const workRecovery = channelContext.clarificationWorkId
         ? inspectRemoteTrackWorkRecovery(this.deps.db, channelContext.clarificationWorkId) : null
-      const acceptedSnapshot = readAcceptedTurn(this.deps.db, session.id, requestId)
-      const canResumePrepared = priorTurn !== undefined && (channelContext.clarificationWorkId
-        ? workRecovery?.decision.kind === 'resume-prepared-turn'
-        : canResumePreparedRemoteTurn({ turnState: priorTurn.state, turnId: priorTurn.turnId, requestId: priorTurn.requestId,
-          sessionId: priorTurn.sessionId, userMessageId: priorTurn.userMessageId, turnConfig: priorTurn.executionConfig, accepted: acceptedSnapshot }))
       if (priorTurn && priorTurn.state !== 'terminal' && !canResumePrepared) {
         this.deps.turnRuntime?.recover()
-        priorTurn = getTurnByRequestId(this.deps.db, session.id, requestId)
+        priorTurn = this.deps.sessionStorage!.queries.readTurnByRequest({ sessionId: session.id, requestId })
       }
       if (priorTurn) {
         if (priorTurn.state === 'terminal') {
@@ -421,7 +443,7 @@ export class RemoteCommandRouter {
       }) }
     })
     if (!result.ok) throw new Error(`FEISHU_WAKE_TURN_FAILED:${result.summary}`)
-    const outcome = getTurnByRequestId(this.deps.db, input.sessionId, input.requestId)?.outcome
+    const outcome = this.deps.sessionStorage!.queries.readTurnByRequest({ sessionId: input.sessionId, requestId: input.requestId })?.outcome
     if (result.parked && outcome === 'parked') return
     if (outcome !== 'completed') throw new Error('FEISHU_WAKE_TURN_NOT_DURABLY_COMPLETED')
     const wakeFacts = createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body: result.summary,

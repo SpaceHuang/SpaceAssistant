@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { collectSessionStorageStrictProfile } from './sessionStorageProfile'
-import { getSessionLedgerRecoveryRoots } from '../runtime/sessionLedgerRecovery'
+import { getSessionLedgerRoots } from '../storage/sessionLedgerRoots'
 import { resolveRetentionPolicy } from '../storage/retentionPolicy'
 import { readCanonicalSpillReferences } from '../storage/spillStore'
 import type { SpillDescriptor } from '../storage/spillProtocol'
@@ -123,7 +123,7 @@ export function collectSessionStorageCleanupEstimate(dbPath: string, now = Date.
       ? (conn.prepare('SELECT value FROM configs WHERE key=?').get(key) as { value: string } | undefined)?.value
       : undefined
     const retention = resolveRetentionPolicy({ getConfigValue: getConfig })
-    const roots = getSessionLedgerRecoveryRoots(getConfig('config.workDir'), getConfig('config.workDirProfiles'))
+    const roots = getSessionLedgerRoots(getConfig('config.workDir'), getConfig('config.workDirProfiles'))
     const sessionEventDirectories = inventorySessionEventDirectories(roots, retention.sessionEventMaxSessions)
     const spillReferenceByLocator = new Map<string, SpillDescriptor>()
     let estimateReferenceScanComplete = true

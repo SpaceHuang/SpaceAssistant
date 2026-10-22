@@ -1,4 +1,4 @@
-import type { SessionCommands } from '../sessionStorage/contracts'
+import type { SessionCommands } from '../sessionStorage/public/ports'
 import {
   formatRemoteOutboundMessage,
   sessionSuffixLength as defaultSessionSuffixLength

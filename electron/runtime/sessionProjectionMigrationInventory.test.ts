@@ -4,6 +4,7 @@ import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { getDbConnection, openSqliteDatabaseReadOnly } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { buildSessionProjectionMigrationInventory, classifySessionProjectionMigrationScope, SessionProjectionMigrationInventoryError } from './sessionProjectionMigrationInventory'
+import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 async function appendCanonicalContext(db: ReturnType<typeof createMemoryAppDb>, sessionId: string,
   messages: Array<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>): Promise<void> {
@@ -54,10 +55,10 @@ describe('session projection migration inventory', () => {
     expect(inventory.classifiedSessionCount).toBe(4)
     // P1-①：写路径覆盖的会话（eligibility + 缓存由 append 事务授予）满足 hasCurrentProjectionCache，
     // inventory 如实归类为 projection_migrated（等效已迁移，migration 无需再处理）。
-    expect(inventory.counts).toEqual({ projection_migrated: 2, projection_eligible: 0, legacy_required: 1, deleted: 1 })
+    expect(inventory.counts).toEqual({ projection_migrated: 0, projection_eligible: 2, legacy_required: 1, deleted: 1 })
     expect(inventory.sessions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sessionId: migrated.id, disposition: 'projection_migrated' }),
-      expect.objectContaining({ sessionId: eligible.id, sessionGeneration: expect.any(String), disposition: 'projection_migrated' }),
+      expect.objectContaining({ sessionId: migrated.id, disposition: 'projection_eligible' }),
+      expect.objectContaining({ sessionId: eligible.id, sessionGeneration: expect.any(String), disposition: 'projection_eligible' }),
       expect.objectContaining({ sessionId: legacy.id, sessionGeneration: expect.any(String), disposition: 'legacy_required', reason: 'history-absent' }),
       expect.objectContaining({ sessionId: 'deleted-before-scan', disposition: 'deleted' })
     ]))
@@ -93,17 +94,18 @@ describe('session projection migration inventory', () => {
     await appendCanonicalContext(db, session.id, [{ id: 'inventory-read-only-user', role: 'user', content: 'question', timestamp: 1 }])
     const conn = getDbConnection(db)
     conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
-    conn.prepare('DELETE FROM canonical_session_projection_eligibility WHERE session_id=?').run(session.id)
+    const parityScope = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
+    conn.prepare('DELETE FROM session_projection_state WHERE session_id=? AND scope_key=?').run(session.id, parityScope)
     const before = {
       caches: conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_cache WHERE session_id=?').get(session.id),
-      eligibility: conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id),
+      eligibility: conn.prepare('SELECT COUNT(*) AS count FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, parityScope),
       cutover: conn.prepare('SELECT * FROM session_message_content_cutover WHERE session_id=?').get(session.id)
     }
 
     expect(buildSessionProjectionMigrationInventory(db).counts.projection_eligible).toBe(1)
     expect({
       caches: conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_cache WHERE session_id=?').get(session.id),
-      eligibility: conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id),
+      eligibility: conn.prepare('SELECT COUNT(*) AS count FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, parityScope),
       cutover: conn.prepare('SELECT * FROM session_message_content_cutover WHERE session_id=?').get(session.id)
     }).toEqual(before)
     db.close()
@@ -189,13 +191,13 @@ describe('session projection migration inventory', () => {
     expect(inventory.excludedInternalHiddenSessionCount).toBe(2)
     expect(inventory.internalHistory).toMatchObject({ sessionCount: 2, withHistoryCount: 1, healthyCount: 1, unhealthyCount: 0 })
     expect(inventory.classifiedSessionCount).toBe(4)
-    expect(inventory.counts).toEqual({ projection_migrated: 3, projection_eligible: 0, legacy_required: 0, deleted: 1 })
+    expect(inventory.counts).toEqual({ projection_migrated: 0, projection_eligible: 3, legacy_required: 0, deleted: 1 })
     expect(inventory.sessions.map(({ sessionId }) => sessionId)).not.toContain(internalWithHistory.id)
     expect(inventory.sessions.map(({ sessionId }) => sessionId)).not.toContain(internalEmpty.id)
     expect(inventory.sessions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sessionId: user.id, disposition: 'projection_migrated' }),
-      expect.objectContaining({ sessionId: remote.id, disposition: 'projection_migrated' }),
-      expect.objectContaining({ sessionId: automation.id, disposition: 'projection_migrated' }),
+      expect.objectContaining({ sessionId: user.id, disposition: 'projection_eligible' }),
+      expect.objectContaining({ sessionId: remote.id, disposition: 'projection_eligible' }),
+      expect.objectContaining({ sessionId: automation.id, disposition: 'projection_eligible' }),
       expect.objectContaining({ sessionId: 'deleted-product-session', disposition: 'deleted' })
     ]))
     expect(conn.prepare('SELECT ownership,visibility,metadata FROM sessions WHERE id=?').get(remote.id)).toMatchObject({

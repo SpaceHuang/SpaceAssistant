@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Message } from '../../src/shared/domainTypes'
-import { appendMessage, createSession, getApiContextBaseline, getChatMessagePage, getMessage, getMessageSkeletons, getMessages, getMessagesPageWithSequence, getRecentTurnRoutingMessages, getSearchCorpusPage, getTurnContext, resolveRetryContext, searchMessages } from '../database/operations'
+import { appendMessage, createSession, enqueueQueuedUserMessageInScope, getApiContextBaseline, getChatMessagePage, getMessage, getMessageSkeletons, getMessages, getMessagesPageWithSequence, getRecentTurnRoutingMessages, getSearchCorpusPage, getTurnContext, resolveRetryContext, searchMessages, updateMessageContent, updateSession } from '../database/operations'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
+import { buildImQueueScope } from '../../src/shared/queueScope'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import * as agentLogger from '../agentLogger/agentLogger'
 import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
@@ -20,9 +21,9 @@ describe('session transcript projection P2 read path', () => {
 
     const result = readSessionTranscriptProjection(db, session.id)
 
-    expect(result).toMatchObject({ source: 'canonical:L1', messages: [] })
+    expect(result).toMatchObject({ source: 'canonical:L2', messages: [] })
     expect(logSpy).toHaveBeenCalledWith('info', 'session.transcript.read', expect.objectContaining({
-      sessionId: session.id, consumer: 'transcript', source: 'canonical:L1', outcome: 'canonical', durationMs: expect.any(Number)
+      sessionId: session.id, consumer: 'transcript', source: 'canonical:L2', outcome: 'canonical', durationMs: expect.any(Number)
     }))
     expect(logSpy.mock.calls[0]?.[2]).not.toHaveProperty('content')
     logSpy.mockRestore()
@@ -37,9 +38,9 @@ describe('session transcript projection P2 read path', () => {
     expect(session.generation).toBe(persisted.generation)
     expect(conn.prepare("SELECT session_generation,session_seq,commit_order,event_count,value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
       .toEqual({ session_generation: persisted.generation, session_seq: -1, commit_order: -1, event_count: 0, value: '[]' })
-    expect(conn.prepare('SELECT session_generation FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id))
-      .toEqual({ session_generation: persisted.generation })
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1', messages: [] })
+    expect(conn.prepare(`SELECT status FROM session_projection_state WHERE session_id=?
+      AND scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D'`).get(session.id)).toBeUndefined()
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2', messages: [] })
     db.close()
   })
 
@@ -63,8 +64,9 @@ describe('session transcript projection P2 read path', () => {
       getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
       // A full exact legacy/canonical comparison establishes the per-session fast-page eligibility marker.
       expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
-      expect(getDbConnection(db).prepare('SELECT session_generation FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id))
-        .toEqual({ session_generation: session.generation })
+      expect(getDbConnection(db).prepare(`SELECT status FROM session_projection_state WHERE session_id=?
+        AND scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D'`).get(session.id))
+        .toMatchObject({ status: 'valid' })
 
       const projectedSamples: number[] = []
       const legacyPageSamples: number[] = []
@@ -1524,7 +1526,8 @@ describe('session transcript projection P2 read path', () => {
     const authoritative = readSessionTranscriptProjection(db, session.id)
     expect(authoritative).toMatchObject({ source: 'legacy', reason: 'legacy-mismatch' })
     expect(authoritative.messages[0]).toMatchObject({ id: 'projection-user', content: 'stale projection copy' })
-    expect(getDbConnection(db).prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(getDbConnection(db).prepare("SELECT session_id FROM session_projection_state WHERE session_id=? AND status='valid' AND scope_key LIKE '%transcriptParityV1%'")
+      .get(session.id)).toBeUndefined()
     expect(getProjectedChatMessagePage(db, session.id, undefined, 20)).toMatchObject({ entries: [
       { message: { id: 'projection-user', content: 'stale projection copy', status: 'sent' }, sequence: 0 },
       { message: { id: 'projection-assistant', content: 'answer', status: 'sent' }, sequence: 1 }
@@ -1862,6 +1865,172 @@ describe('session transcript projection P2 read path', () => {
     db.close()
   })
 
+  it('enumerates cross-session candidates and reads canonical bodies within one SQLite snapshot', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'search snapshot' })
+    appendMessage(db, { id: 'search-snapshot-user', sessionId: session.id, role: 'user', content: 'needle', timestamp: 1, status: 'sent' })
+    const conn = getDbConnection(db)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'search-snapshot-invocation', turnId: 'search-snapshot-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'search-snapshot-context', idempotencyKey: 'search-snapshot-context', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'search-snapshot-user', role: 'user', content: 'needle', timestamp: 1 }] }
+    }], 0)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run('search-snapshot-user')
+    conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+
+    const events: string[] = []
+    let transactionDepth = 0
+    const exec = conn.exec.bind(conn)
+    const prepare = conn.prepare.bind(conn)
+    const execSpy = vi.spyOn(conn, 'exec').mockImplementation((sql: string) => {
+      if (sql === 'BEGIN') { transactionDepth += 1; events.push('begin') }
+      if (sql === 'COMMIT') events.push('commit')
+      const result = exec(sql)
+      if (sql === 'COMMIT' || sql === 'ROLLBACK') transactionDepth -= 1
+      return result
+    })
+    const prepareSpy = vi.spyOn(conn, 'prepare').mockImplementation((sql: string) => {
+      if (sql.includes('SELECT m.id,m.session_id,m.content')) events.push(`candidates:${transactionDepth}`)
+      if (sql.includes('FROM agent_history_events')) events.push(`history:${transactionDepth}`)
+      return prepare(sql)
+    })
+    try {
+      expect(searchProjectedMessages(db, 'needle', '', 10)).toMatchObject([{ messageId: 'search-snapshot-user', content: 'needle' }])
+      expect(events.indexOf('begin'), events.join(',')).toBeLessThan(events.findIndex((event) => event.startsWith('candidates:')))
+      expect(events).toContain('candidates:1')
+      expect(events).toContain('history:1')
+      expect(events.indexOf('commit')).toBeGreaterThan(events.findIndex((event) => event.startsWith('history:')))
+    } finally {
+      execSpy.mockRestore()
+      prepareSpy.mockRestore()
+      db.close()
+    }
+  })
+
+  it.each([
+    { name: 'after', goodTimestamp: 30, brokenTimestamp: 10, outcome: 'hit' },
+    { name: 'before', goodTimestamp: 10, brokenTimestamp: 30, outcome: 'error' }
+  ] as const)('global search limit does not visit a broken canonical candidate $name the returned page', async ({ goodTimestamp, brokenTimestamp, outcome }) => {
+    const db = createMemoryAppDb()
+    const good = createSession(db, { name: 'good canonical candidate', model: 'test' })
+    const goodBody = 'global-boundary-needle-good'
+    appendMessage(db, { id: 'global-good-message', sessionId: good.id, role: 'user', content: goodBody, timestamp: goodTimestamp, status: 'sent' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, good.id)
+    await history.appendBatch([{
+      invocationId: 'global-good-invocation', turnId: 'global-good-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'global-good-context', idempotencyKey: 'global-good-context', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'global-good-message', role: 'user', content: goodBody, timestamp: goodTimestamp }] }
+    }], 0)
+    const broken = createSession(db, { name: 'broken canonical candidate', model: 'test' })
+    appendMessage(db, { id: 'global-broken-message', sessionId: broken.id, role: 'user', content: '', timestamp: brokenTimestamp, status: 'sent' })
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id IN (?,?)").run(good.id, broken.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id='global-good-message'").run()
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id='global-broken-message'").run()
+
+    if (outcome === 'hit') {
+      expect(searchProjectedMessages(db, 'global-boundary-needle', '', 1)).toEqual([{
+        messageId: 'global-good-message', sessionId: good.id, content: goodBody, sessionName: 'good canonical candidate',
+        requiresProjectionPreparation: true
+      }])
+    } else {
+      expect(() => searchProjectedMessages(db, 'global-boundary-needle', '', 1)).toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+    }
+    db.close()
+  })
+
+  it('keeps global search profile and ownership filters while retaining queued and non-user statuses', () => {
+    const db = createMemoryAppDb()
+    const profileA = createSession(db, { name: 'profile A', model: 'test', workDirProfileId: 'profile-a' })
+    const profileB = createSession(db, { name: 'profile B', model: 'test', workDirProfileId: 'profile-b' })
+    const unprofiled = createSession(db, { name: 'unprofiled', model: 'test' })
+    const internal = createSession(db, { name: 'internal', model: 'test', ownership: 'internal' })
+    appendMessage(db, { id: 'global-profile-a', sessionId: profileA.id, role: 'user', content: 'profile-needle queued', timestamp: 4, status: 'queued' })
+    const imQueued = enqueueQueuedUserMessageInScope(db, { sessionId: profileA.id, requestId: 'global-search-im-queued',
+      content: 'profile-needle IM queue scope', queueScope: buildImQueueScope('feishu', profileA.id) })
+    appendMessage(db, { id: 'global-profile-b', sessionId: profileB.id, role: 'user', content: 'profile-needle other profile', timestamp: 3, status: 'sent' })
+    appendMessage(db, { id: 'global-unprofiled', sessionId: unprofiled.id, role: 'assistant', content: 'profile-needle unprofiled', timestamp: 2, status: 'failed' })
+    appendMessage(db, { id: 'global-internal', sessionId: internal.id, role: 'user', content: 'profile-needle hidden internal', timestamp: 1, status: 'sent' })
+
+    expect(searchProjectedMessages(db, 'profile-needle', 'profile-a', 20).map(({ messageId }) => messageId))
+      .toEqual([imQueued.persisted.message.id, 'global-profile-a', 'global-unprofiled'])
+    db.close()
+  })
+
+  it('reselects global search hits after session name, profile ownership, and internal ownership changes', () => {
+    const temp = createTempDatabase('global-search-dependency-invalidation-')
+    const { db } = temp
+    try {
+      const session = createSession(db, { name: 'search name before', model: 'test', workDirProfileId: 'profile-a' })
+      appendMessage(db, { id: 'global-dependency-message', sessionId: session.id, role: 'user', content: 'stable dependency needle', timestamp: 10, status: 'sent' })
+      expect(searchProjectedMessages(db, 'dependency needle', 'profile-a', 10)).toEqual([{
+        messageId: 'global-dependency-message', sessionId: session.id, content: 'stable dependency needle', sessionName: 'search name before'
+      }])
+
+      expect(updateSession(db, session.id, { name: 'search name after' })?.name).toBe('search name after')
+      expect(searchProjectedMessages(db, 'dependency needle', 'profile-a', 10)[0]?.sessionName).toBe('search name after')
+
+      updateSession(db, session.id, { workDirProfileId: 'profile-b' })
+      expect(searchProjectedMessages(db, 'dependency needle', 'profile-a', 10)).toEqual([])
+      expect(searchProjectedMessages(db, 'dependency needle', 'profile-b', 10)).toHaveLength(1)
+
+      updateSession(db, session.id, { ownership: 'internal' })
+      expect(searchProjectedMessages(db, 'dependency needle', 'profile-b', 10)).toEqual([])
+      expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
+    } finally {
+      temp.cleanup()
+    }
+  })
+
+  it('reselects global search content and timestamp dependencies without filtering by message status', () => {
+    const temp = createTempDatabase('global-search-message-dependencies-')
+    const { db } = temp
+    try {
+      const session = createSession(db, { name: 'global message dependencies', model: 'test', workDirProfileId: 'profile-a' })
+      appendMessage(db, { id: 'global-dependency-newer', sessionId: session.id, role: 'user', content: 'needle newer body', timestamp: 20, status: 'sent' })
+      appendMessage(db, { id: 'global-dependency-older', sessionId: session.id, role: 'assistant', content: 'needle older body', timestamp: 10, status: 'failed' })
+      expect(searchProjectedMessages(db, 'needle', 'profile-a', 10).map(({ messageId }) => messageId))
+        .toEqual(['global-dependency-newer', 'global-dependency-older'])
+
+      expect(updateMessageContent(db, 'global-dependency-newer', { content: 'renamed body' })).not.toBeNull()
+      expect(searchProjectedMessages(db, 'needle', 'profile-a', 10).map(({ messageId }) => messageId))
+        .toEqual(['global-dependency-older'])
+      expect(updateMessageContent(db, 'global-dependency-older', {
+        status: 'queued', thinking: { content: 'needle in thinking only', isVisible: true }
+      })).not.toBeNull()
+      expect(searchProjectedMessages(db, 'needle', 'profile-a', 10).map(({ messageId }) => messageId))
+        .toEqual(['global-dependency-older'])
+
+      expect(updateMessageContent(db, 'global-dependency-newer', { content: 'needle restored body' })).not.toBeNull()
+      getDbConnection(db).prepare('UPDATE messages SET timestamp=5 WHERE id=?').run('global-dependency-newer')
+      expect(searchProjectedMessages(db, 'needle', 'profile-a', 10).map(({ messageId }) => messageId))
+        .toEqual(['global-dependency-older', 'global-dependency-newer'])
+      expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
+    } finally {
+      temp.cleanup()
+    }
+  })
+
+  it('treats global search LIKE metacharacters as literal query text', () => {
+    const temp = createTempDatabase('global-search-literal-like-')
+    const { db } = temp
+    try {
+      const session = createSession(db, { name: 'literal LIKE query', model: 'test', workDirProfileId: 'profile-a' })
+      appendMessage(db, { id: 'global-percent-literal', sessionId: session.id, role: 'user', content: 'value 100% exact', timestamp: 3, status: 'sent' })
+      appendMessage(db, { id: 'global-percent-wildcard', sessionId: session.id, role: 'user', content: 'value 100X approximate', timestamp: 2, status: 'sent' })
+      appendMessage(db, { id: 'global-underscore-literal', sessionId: session.id, role: 'assistant', content: 'file_name exact', timestamp: 1, status: 'failed' })
+
+      expect(searchProjectedMessages(db, '100%', 'profile-a', 10).map(({ messageId }) => messageId)).toEqual(['global-percent-literal'])
+      expect(searchProjectedMessages(db, 'file_name', 'profile-a', 10).map(({ messageId }) => messageId)).toEqual(['global-underscore-literal'])
+      expect(searchProjectedMessages(db, 'fileXname', 'profile-a', 10)).toEqual([])
+      expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
+    } finally {
+      temp.cleanup()
+    }
+  })
+
   it('searches a canonical-only body after database reopen and transcript cache loss', async () => {
     const temp = createTempDatabase('canonical-search-reopen-')
     let reopened: ReturnType<typeof openDatabase> | undefined
@@ -1888,8 +2057,18 @@ describe('session transcript projection P2 read path', () => {
 
       reopened = openDatabase(temp.dbPath)
 
+      const coldRead = readSessionTranscriptProjection(reopened, session.id)
+      expect(coldRead.source).toBe('canonical:L2')
+      expect(coldRead.messages[0]).toMatchObject({ id: 'search-reopen-user-0', content: body })
+      expect(readSessionTranscriptProjection(reopened, session.id).source).toBe('canonical:L1')
+      expect(getProjectedChatMessagePage(reopened, session.id, null, 10).entries[0]?.message.content).toBe(body)
+      expect(getProjectedApiContextBaseline(reopened, session.id).entries[0]?.message.content).toBe(body)
+      expect(getProjectedSearchCorpusPage(reopened, session.id, 0, 10).entries[0]?.message.content).toBe(body)
+      expect(getProjectedMessage(reopened, 'search-reopen-user-0')?.content).toBe(body)
+
       expect(searchProjectedMessages(reopened, 'needle-0', '', 10)).toEqual([{
-        messageId: 'search-reopen-user-0', sessionId: session.id, content: body, sessionName: 'canonical search reopen'
+        messageId: 'search-reopen-user-0', sessionId: session.id, content: body, sessionName: 'canonical search reopen',
+        requiresProjectionPreparation: true
       }])
       const page1 = getProjectedMessagesPageWithSequence(reopened, session.id, 0, 2)
       expect(page1.rows.map(({ sequence, message }) => [sequence, message.content])).toEqual([
@@ -1905,7 +2084,8 @@ describe('session transcript projection P2 read path', () => {
         .toEqual({ cache_key: 'transcript' })
     } finally {
       reopened?.close()
-      temp.cleanup()
+      for (const suffix of ['', '-wal', '-shm']) await fs.rm(`${temp.dbPath}${suffix}`, { force: true })
+      await fs.rm(path.dirname(temp.dbPath), { recursive: true, force: true })
     }
   })
 
@@ -2050,7 +2230,7 @@ describe('session transcript projection P2 read path', () => {
 
     // P1-①: the write path advanced the cache and granted eligibility during the append, so
     // even the first read is served from the warm L1 seed.
-    expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L2')
     expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L1')
     expect(readSessionTranscriptProjection(db, legacy.id)).toMatchObject({ source: 'legacy', reason: 'history-absent' })
     expect(getProjectedChatMessagePage(db, eligible.id, null, 20).entries[0]?.message.content).toBe('same content')
@@ -2076,7 +2256,7 @@ describe('session transcript projection P2 read path', () => {
       eventId: 'pending-canonical-context', idempotencyKey: 'pending-canonical-context', kind: 'invocation-context-committed',
       payload: { messages: [{ role: 'user', id: 'pending-canonical-user', content: 'committed question', timestamp: 1 }] }
     }], 0)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
     appendMessage(db, { id: 'pending-not-canonical-yet', sessionId: session.id, role: 'user', content: 'queued question', timestamp: 2, status: 'queued' })
 
     expect(getProjectedChatMessagePage(db, session.id, undefined, 20)).toMatchObject({ entries: [

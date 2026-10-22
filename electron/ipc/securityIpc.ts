@@ -125,26 +125,24 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     const runtime = await import('../confirmation/policyRulesRuntime')
     const model = await import('../confirmation/settingsSecurityModel')
     const auditMod = await import('../confirmation/audit')
-    const { SqliteDecisionCache } = await import('../confirmation/sqliteDecisionCache')
-    const { PolicyRuleStore } = await import('../confirmation/policyRuleStore')
     const { DEFAULT_POLICY_RULES } = await import('../../src/shared/policy/defaultRules')
     const { recordSettingsChange } = await import('../confirmation/settingsAudit')
-    return { runtime, model, auditMod, SqliteDecisionCache, PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange }
+    return { runtime, model, auditMod, DEFAULT_POLICY_RULES, recordSettingsChange }
   }
 
   ipcMain.handle('security:get-settings-model', async () => {
-    const { runtime, model, auditMod, SqliteDecisionCache, PolicyRuleStore, DEFAULT_POLICY_RULES } =
+    const { runtime, model, auditMod, DEFAULT_POLICY_RULES } =
       await securityDeps()
-    const { getDbConnection } = await import('../database')
-    const conn = getDbConnection(ctx.db)
+    const securityStorage = ctx.securitySettingsStorage
+    if (!securityStorage) throw new Error('security settings storage is not configured')
     const tools = readToolsConfig(ctx.db)
     return model.buildSettingsSecurityModel({
       packages: runtime.readPolicyPackages(ctx.db),
       deniedTools: tools.deniedTools,
-      cache: new SqliteDecisionCache(conn).list(),
+      cache: securityStorage.listDecisionCache(),
       rules: model.toRuleViews(
         DEFAULT_POLICY_RULES,
-        new PolicyRuleStore(conn).listOverrides(),
+        securityStorage.listRuleOverrides(),
         runtime.readDisabledPolicyRuleIds(ctx.db)
       ),
       retentionDays: runtime.readSecurityAuditRetentionDays(ctx.db),
@@ -191,9 +189,8 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
   ipcMain.handle(
     'security:set-rule-override',
     async (_e, payload: { ruleId?: unknown; action?: unknown; lane?: unknown; params?: unknown }) => {
-      const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
+      const { DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
       const { validateRuleOverride } = await import('../../src/shared/policy/policyPackages')
-      const { getDbConnection } = await import('../database')
       const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
       const lane =
         payload?.lane === 'desktop' || payload?.lane === 'wechat' || payload?.lane === 'feishu' || payload?.lane === 'automation'
@@ -206,7 +203,8 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         payload?.params && typeof payload.params === 'object' && !Array.isArray(payload.params)
           ? (payload.params as Record<string, unknown>)
           : {}
-      const store = new PolicyRuleStore(getDbConnection(ctx.db))
+      const store = ctx.securitySettingsStorage
+      if (!store) throw new Error('security settings storage is not configured')
       const prev = store.getOverride(ruleId)
       const before = prev?.action ?? check.rule.action
       store.setOverride({ ruleId, action: payload!.action as never, params })
@@ -226,12 +224,12 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
   )
 
   ipcMain.handle('security:remove-rule-override', async (_e, payload: { ruleId?: unknown }) => {
-    const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
-    const { getDbConnection } = await import('../database')
+    const { DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
     const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
     const rule = DEFAULT_POLICY_RULES.find((r) => r.id === ruleId)
     if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
-    const store = new PolicyRuleStore(getDbConnection(ctx.db))
+    const store = ctx.securitySettingsStorage
+    if (!store) throw new Error('security settings storage is not configured')
     const prev = store.getOverride(ruleId)
     const removed = store.removeOverride(ruleId)
     ctx.db.flushSave()
@@ -287,20 +285,18 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
   )
 
   ipcMain.handle('security:list-cache', async () => {
-    const { SqliteDecisionCache } = await securityDeps()
-    const { getDbConnection } = await import('../database')
-    return new SqliteDecisionCache(getDbConnection(ctx.db)).list()
+    if (!ctx.securitySettingsStorage) throw new Error('security settings storage is not configured')
+    return ctx.securitySettingsStorage.listDecisionCache()
   })
 
   ipcMain.handle('security:clear-cache', async (_e, payload: { key?: unknown }) => {
-    const { SqliteDecisionCache } = await securityDeps()
-    const { getDbConnection } = await import('../database')
     const { canonicalKeyJson } = await import('../confirmation/sqliteDecisionCache')
-    const cache = new SqliteDecisionCache(getDbConnection(ctx.db))
+    const cache = ctx.securitySettingsStorage
+    if (!cache) throw new Error('security settings storage is not configured')
     const audit = getSecurityAuditLog()
     // 清除即"下次再问"（§7 第 4 区）；单条/全部均落 cache.clear 审计
     const key = payload?.key && typeof payload.key === 'object' ? (payload.key as never) : null
-    const cleared = key ? cache.clear(key) : cache.clearAll()
+    const cleared = key ? cache.clearDecisionCache(key) : cache.clearAllDecisionCache()
     // B6/B7：decision_cache 与旧信任存储（shell 信任命令 / 浏览器域名信任）双源生效，
     // 清除必须联动撤销旧存储，否则信任永久生效、不可见、不可撤销（fail-open）。
     const legacyRevoked = key

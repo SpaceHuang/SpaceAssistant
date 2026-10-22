@@ -1,4 +1,5 @@
 import type { AppDatabase } from '../database'
+import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import path from 'node:path'
 import { getConfigValue } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
@@ -111,7 +112,7 @@ export { APPROVAL_TASK_DIGEST_MAX_CHARS, buildApprovalTaskDigest, buildApprovalT
 
 export type ButlerInvokerDeps = {
   db: AppDatabase
-  sessionStorage?: import('../sessionStorage/contracts').SessionStorage
+  sessionStorage?: import('../sessionStorage/host/ports').SessionStorage
   turnRuntime?: TurnRuntime
   getWorkDir: () => string
   getUserDataPath: () => string
@@ -456,7 +457,7 @@ export async function executeClaimedRun(deps: ButlerInvokerDeps, claim: { taskId
 
 async function runButlerModelTurn(
   deps: ButlerInvokerDeps,
-  args: { sessionStorage: import('../sessionStorage/contracts').SessionStorage; sessionId: string; requestId: string; turnId?: string; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn; llmServiceId?: string; taskPrompt: string; currentUserMessageId?: string; assistantMessageId?: string; runConfig: AutomationTaskRunConfigSnapshot & { model: ModelEntry; taskId: string } }
+  args: { sessionStorage: import('../sessionStorage/host/ports').SessionStorage; sessionId: string; requestId: string; turnId?: string; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn; llmServiceId?: string; taskPrompt: string; currentUserMessageId?: string; assistantMessageId?: string; runConfig: AutomationTaskRunConfigSnapshot & { model: ModelEntry; taskId: string } }
 ): Promise<ButlerTurnResult> {
   const db = deps.db
   const sessionStorage = args.sessionStorage
@@ -477,7 +478,7 @@ async function runButlerModelTurn(
     if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
     rawMessages = sessionStorage.execution.loadAcceptedMessages({ sessionId: args.sessionId, turnId: args.turnId })
   } else {
-    rawMessages = sessionStorage.queries.readMessages({ sessionId: args.sessionId })
+    rawMessages = await readChatMessagesAfterPreparation(sessionStorage, { sessionId: args.sessionId })
   }
   const built = buildClaudeToolChatMessages(rawMessages, {
     workspaceRoot: args.runConfig.workDir!,
@@ -601,7 +602,7 @@ async function runButlerModelTurn(
   let res: Awaited<ReturnType<typeof runToolChatSession>> | undefined
   try {
     res = await runToolChatSession(invocation, ports, {
-      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: hostedTurnId, turnId: hostedTurnId, acceptedTurn: args.acceptedTurn, sessionQueries: sessionStorage.queries, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds })
+      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: hostedTurnId, turnId: hostedTurnId, acceptedTurn: args.acceptedTurn, sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds })
     })
     reason = res.ok ? 'completed' : res.cancelled ? 'cancelled' : 'failed'
   } catch (error) {

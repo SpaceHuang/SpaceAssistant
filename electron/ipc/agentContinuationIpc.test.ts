@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { appendMessage, createPersistedTurn, createSession, getDbConnection, getPersistedTurn } from '../database'
+import { appendMessage, createPersistedTurn, createSession, getPersistedTurn } from '../database/operations'
+import { getDbConnection } from '../database'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
-import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { createSessionTurnRuntime, createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TurnRuntime } from '../turnRuntime'
 import { continueAgentFromCheckpoint, registerAgentContinuationIpc, startAgentContinuationFromSource } from './agentProtocolIpc'
 import { validateUnknownRecoveryCheckpoint } from '../runtime/agentContinuation'
@@ -44,8 +45,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     ], 0)
     let runtime: TurnRuntime | undefined
     const sessionStorage = createSqliteSessionStorage(db, { getTurnRuntime: () => runtime! })
-    runtime = new TurnRuntime({
-      storage: sessionStorage.execution.coordinator,
+    runtime = createSessionTurnRuntime(sessionStorage, {
       deps: { now: () => 20, id: (() => { let id = 0; return () => `ipc-target-${++id}` })() }
     })
     const ctx = { db, sessionStorage, executeTurn: vi.fn(async () => undefined) } as unknown as AppIpcContext
@@ -191,7 +191,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     const pending = await continueAgentFromCheckpoint({ ...options,
       payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'recover-after-decision' } })
     if (!pending.accepted) throw new Error(pending.reason)
-    await recordUnknownEffectRiskAcceptance({ history, targetInvocationId: pending.targetInvocationId!,
+    await recordUnknownEffectRiskAcceptance({ history, sessionId: session.id, targetInvocationId: pending.targetInvocationId!,
       acceptedIds: ['source-turn:unknown-call'] })
 
     const resumed = await continueAgentFromCheckpoint({ ...options,
@@ -208,7 +208,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     const pending = await continueAgentFromCheckpoint({ ...options,
       payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'recover-after-retry-approval' } })
     if (!pending.accepted) throw new Error(pending.reason)
-    await approveOneTimeUnknownEffectRetry({ history, targetInvocationId: pending.targetInvocationId!,
+    await approveOneTimeUnknownEffectRetry({ history, sessionId: session.id, targetInvocationId: pending.targetInvocationId!,
       unknownEffectId: 'source-turn:unknown-call' })
 
     const resumed = await continueAgentFromCheckpoint({ ...options,

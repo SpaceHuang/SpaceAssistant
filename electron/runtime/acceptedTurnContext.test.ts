@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
-import { appendMessage, createSession, getDbConnection, openDatabase } from '../database'
+import { getDbConnection, openDatabase } from '../database'
+import { appendMessage, createPersistedTurn, createSession } from '../database/operations'
 import { createAcceptedTurnFromPrepared as createAcceptedTurnFromPreparedWithPort, loadAcceptedTurnMessages as loadAcceptedTurnMessagesWithPort } from './acceptedTurnContext'
 import { commitSessionTranscript } from '../database/sessionTranscript'
 import { readAcceptedTurn } from '../database/acceptedTurnStorage'
@@ -201,6 +202,8 @@ describe('loadAcceptedTurnMessages Phase 5.2 shadow ordering', () => {
     expect(sessionStorageCertification.certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
     const { enableCanonicalSessionWriteAuthority } = await import('./sessionContentWriteAuthority')
     expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
+    createPersistedTurn(db, { turnId: 'accepted-cleanup-terminal-turn', requestId: 'accepted-cleanup-terminal-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: user.message.id, state: 'terminal', outcome: 'completed' })
     expect(sessionStorageMaintenance.markSessionMessageContentWriteStopped(db, session.id)).toBe(true)
     expect(sessionStorageMaintenance.beginSessionMessageContentCleanup(db, session.id)).toBe(true)
     expect(sessionStorageMaintenance.clearNextSessionMessageContentBatch(db, session.id, 10))

@@ -8,6 +8,7 @@ import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
 import { clearNextSessionMessageContentBatch } from '../sessionStorage/maintenance'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import * as projectionModule from './sessionTranscriptProjection'
+import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 describe('legacy-required session projection queue', () => {
   it('records an owner, retain-legacy decision, readable behavior, and reconciles against M3-1', () => {
@@ -18,9 +19,10 @@ describe('legacy-required session projection queue', () => {
     expect(inventory.counts.legacy_required).toBe(1)
     const run = startSessionProjectionMigration(db, inventory, { runId: 'run-legacy-required', now: 10 })
     const conn = getDbConnection(db)
+    const parityScope = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
     const beforeQueueRead = {
       cache: conn.prepare("SELECT COUNT(*) AS count FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id),
-      eligibility: conn.prepare('SELECT * FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)
+      eligibility: conn.prepare('SELECT * FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, parityScope)
     }
 
     const report = listLegacyRequiredSessionProjections(db, run.runId)
@@ -42,7 +44,7 @@ describe('legacy-required session projection queue', () => {
     conn.prepare("UPDATE session_projection_migration_items SET status='legacy_required' WHERE run_id=? AND session_id=?").run(run.runId, session.id)
     expect({
       cache: conn.prepare("SELECT COUNT(*) AS count FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id),
-      eligibility: conn.prepare('SELECT * FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)
+      eligibility: conn.prepare('SELECT * FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, parityScope)
     }).toEqual(beforeQueueRead)
     expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', messages: [expect.objectContaining({ content: 'legacy body' })] })
     expect(clearNextSessionMessageContentBatch(db, session.id)).toMatchObject({ status: 'ineligible', cleanedMessageCount: 0 })

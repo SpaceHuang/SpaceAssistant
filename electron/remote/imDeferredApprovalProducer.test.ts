@@ -34,7 +34,7 @@ function seedImPolicy(db: ReturnType<typeof createMemoryAppDb>): void {
 }
 
 describe('production IM deferred approval producer', () => {
-  it('reads the authenticated user message from the IM queue scope when resolving task delegation', () => {
+  it('reads the authenticated user message from the IM queue scope when resolving task delegation', async () => {
     const db = createMemoryAppDb()
     const sessionId = createSession(db, { name: 'im-task-digest' }).id
     const userMessageId = 'wechat-scoped-user-message'
@@ -44,9 +44,24 @@ describe('production IM deferred approval producer', () => {
 
     const storage = createSqliteSessionStorage(db)
     expect(storage.queries.readMessages({ sessionId })).toEqual([])
-    expect(resolveImTaskDigest(storage, { source: 'wechat', originSessionId: sessionId, currentUserMessageId: userMessageId } as RemoteContext))
-      .toBe('覆盖 b.txt 为 test')
+    await expect(resolveImTaskDigest(storage, { source: 'wechat', originSessionId: sessionId, currentUserMessageId: userMessageId } as RemoteContext))
+      .resolves.toBe('覆盖 b.txt 为 test')
     db.close()
+  })
+
+  it('prepares canonical chat bodies before reading the delegated task digest', async () => {
+    const events: string[] = []
+    const storage = {
+      ensureChatBodyV1: async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`) },
+      queries: { readMessage: ({ sessionId, messageId }: { sessionId: string; messageId: string }) => {
+        events.push(`select:${sessionId}:${messageId}`)
+        return { role: 'user', content: 'digest body' }
+      } }
+    } as never
+
+    await expect(resolveImTaskDigest(storage, { source: 'wechat', originSessionId: 'digest-session', currentUserMessageId: 'digest-message' } as RemoteContext))
+      .resolves.toBe('digest body')
+    expect(events).toEqual(['ensure:digest-session', 'select:digest-session:digest-message'])
   })
 
   it('creates a WeChat approval todo when the authenticated user message is stored in the IM queue scope', async () => {

@@ -5,7 +5,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
-import { appendMessage, createPersistedTurn, createSession, getPersistedTurn, openDatabase, setConfigValue, type AppDatabase } from './database'
+import { appendMessage, claimQueuedTurnAtomically, createPersistedTurn, createSession, enqueueQueuedUserMessage, getPersistedTurn, getQueueInputReceipt, getSessionMessageRevisionSnapshot, prepareTurnAtomically, setPersistedTurnExecutionConfig, updatePersistedTurnState, updateQueuedUserMessageContent } from './database/operations'
+import { openDatabase, setConfigValue, type AppDatabase } from './database'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { createAgentRuntime } from './runtime/agentRuntime'
@@ -43,6 +44,11 @@ import { logAgentEvent } from './agentLogger/agentLogger'
 import { foldCompactionEvents } from '../src/shared/compactionEvents'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createBoundSessionContextAdapter } from './sessionStorage/contextPortRegistry'
+import { commitSessionTranscript, readSessionTranscript } from './database/sessionTranscript'
+import { registerAgentIpc } from './ipc/agentProtocolIpc'
+import { createAcceptedTurn } from '../src/shared/acceptedTurn'
+import { acceptTurnContext, readAcceptedTurn } from './database/acceptedTurnStorage'
+import { queueInputFingerprint } from './queueInputFingerprint'
 
 const hostedTestUserDataDir = path.join(os.tmpdir(), 'spaceassistant-hosted-test-user-data')
 
@@ -213,6 +219,279 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     db.close()
     if (workDir) await fs.rm(workDir, { recursive: true, force: true })
     resetDefaultAgentRuntimeForTests()
+  })
+
+  it('uses a positive Hosted checkpoint at the next real provider request', async () => {
+    workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-checkpoint-input-'))
+    const dbPath = path.join(workDir, 'session.db')
+    db.close()
+    db = openDatabase(dbPath)
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const route = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
+      contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens,
+      reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
+    const providerRequests: Array<readonly unknown[]> = []
+    const providerRoutes: Array<unknown> = []
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: route.protocol, dialect: route.dialect,
+      adapterVersion: route.adapterVersion, modelId: route.modelId, endpoint: route.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* (input) {
+        providerCalls += 1
+        providerRequests.push(input.request.messages)
+        providerRoutes.push(structuredClone(input.route))
+        yield { type: 'text-delta', text: 'checkpoint branch answer' } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      }
+    })
+    setDefaultAgentRuntime(runtime)
+
+    const session = createSession(db, { name: 'checkpoint-positive', model: modelId, maxTokens: 512 })
+    const priorUser = appendMessage(db, { id: 'checkpoint-prior-user', sessionId: session.id, role: 'user', content: 'checkpoint prior user sentinel', timestamp: 1, status: 'sent' })
+    const priorAssistant = appendMessage(db, { id: 'checkpoint-prior-assistant', sessionId: session.id, role: 'assistant', content: 'checkpoint prior assistant sentinel', timestamp: 2, status: 'completed' })
+    const current = appendMessage(db, { id: 'checkpoint-current-user', sessionId: session.id, role: 'user', content: 'checkpoint current user sentinel', timestamp: 3, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'checkpoint-current-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 4, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'checkpoint-current-turn', requestId: 'checkpoint-current-request', sessionId: session.id,
+      userMessageId: current.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: current.sequence,
+      state: 'prepared', startToken: 'checkpoint-current-token', executionConfig: {
+        lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US'
+      } })
+    const acceptedTurn = createAcceptedTurn({ turnId: 'checkpoint-current-turn', requestId: 'checkpoint-current-request', sessionId: session.id,
+      lane: 'desktop', startToken: 'checkpoint-current-token', currentUserMessageId: current.message.id, transcriptVersion: 0,
+      config: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' } })
+    acceptTurnContext(db, acceptedTurn)
+    expect(commitSessionTranscript(db, { sessionId: session.id, turnId: 'checkpoint-prior-turn', baseVersion: 0, outcome: 'completed', messages: [
+      { id: priorUser.message.id, role: 'user', content: priorUser.message.content, timestamp: priorUser.message.timestamp },
+      { id: priorAssistant.message.id, role: 'assistant', content: priorAssistant.message.content, timestamp: priorAssistant.message.timestamp }
+    ] })).toMatchObject({ committed: true, version: 1 })
+    expect(readAcceptedTurn(db, session.id, acceptedTurn.requestId)?.transcriptVersion).toBe(0)
+    db.close()
+    db = openDatabase(dbPath)
+    expect(readAcceptedTurn(db, session.id, acceptedTurn.requestId)?.transcriptVersion).toBe(0)
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 1, lastTurnId: 'checkpoint-prior-turn' })
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
+      getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }),
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
+    })
+
+    const result = await execute(makeSender(), { requestId: 'checkpoint-current-request', turnId: 'checkpoint-current-turn',
+      turnStartToken: 'checkpoint-current-token', sessionId: session.id })
+
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'checkpoint branch answer' }] })
+    expect(providerCalls).toBe(1)
+    expect(providerRoutes).toEqual([expect.objectContaining({ routeId: route.routeId, modelId, endpoint })])
+    expect(readAcceptedTurn(db, session.id, acceptedTurn.requestId)?.transcriptVersion).toBe(0)
+    expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'user', content: 'checkpoint prior user sentinel' }))
+    expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'assistant', content: 'checkpoint prior assistant sentinel' }))
+    expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'user', content: 'checkpoint current user sentinel' }))
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 2, lastTurnId: 'checkpoint-current-turn' })
+    expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
+  })
+
+  it.each([
+    { checkpointed: false, expectedPriorUser: 'edited prior user sentinel', expectedPriorAssistant: 'edited prior assistant sentinel', excludedPriorUser: 'old prior user sentinel', excludedPriorAssistant: 'old prior assistant sentinel' },
+    { checkpointed: true, expectedPriorUser: 'old prior user sentinel', expectedPriorAssistant: 'old prior assistant sentinel', excludedPriorUser: 'edited prior user sentinel', excludedPriorAssistant: 'edited prior assistant sentinel' }
+  ])('routes reachable prior user/assistant edits to provider according to checkpoint=$checkpointed', async ({ checkpointed, expectedPriorUser, expectedPriorAssistant, excludedPriorUser, excludedPriorAssistant }) => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const route = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
+      contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens,
+      reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
+    const providerRequests: Array<readonly unknown[]> = []
+    const providerRoutes: Array<unknown> = []
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: route.protocol, dialect: route.dialect,
+      adapterVersion: route.adapterVersion, modelId: route.modelId, endpoint: route.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* (input) {
+        providerCalls += 1
+        providerRequests.push(input.request.messages)
+        providerRoutes.push(structuredClone(input.route))
+        yield { type: 'text-delta', text: 'edited checkpoint answer' } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      }
+    })
+    setDefaultAgentRuntime(runtime)
+
+    const session = createSession(db, { name: 'checkpoint-edited-history', model: modelId, maxTokens: 512 })
+    const priorUser = appendMessage(db, { id: 'edited-checkpoint-prior-user', sessionId: session.id, role: 'user', content: 'old prior user sentinel', timestamp: 1, status: 'sent' })
+    const priorAssistant = appendMessage(db, { id: 'edited-checkpoint-prior-assistant', sessionId: session.id, role: 'assistant', content: 'old prior assistant sentinel', timestamp: 2, status: 'completed' })
+    if (checkpointed) {
+      expect(commitSessionTranscript(db, { sessionId: session.id, turnId: 'edited-checkpoint-prior-turn', baseVersion: 0, outcome: 'completed', messages: [
+        { id: priorUser.message.id, role: 'user', content: priorUser.message.content, timestamp: priorUser.message.timestamp },
+        { id: priorAssistant.message.id, role: 'assistant', content: priorAssistant.message.content, timestamp: priorAssistant.message.timestamp }
+      ] })).toMatchObject({ committed: true, version: 1 })
+    }
+
+    const patchHandlers = new Map<string, (...args: unknown[]) => unknown>()
+    const sessionStorage = createSqliteSessionStorage(db)
+    registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => patchHandlers.set(channel, handler) } as never, {
+      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      getWorkDir: () => workDir, setWorkDir: () => undefined, getUserDataPath: () => hostedTestUserDataDir,
+      getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir }) as never
+    })
+    const patch = patchHandlers.get('message:patch-non-turn')!
+    await patch(makeSender(), { sessionId: session.id, messageId: priorUser.message.id, patch: { content: 'edited prior user sentinel' } })
+    await patch(makeSender(), { sessionId: session.id, messageId: priorAssistant.message.id, patch: { content: 'edited prior assistant sentinel' } })
+    expect(getDbConnection(db).prepare('SELECT id,sequence,content FROM messages WHERE session_id=? ORDER BY sequence LIMIT 2').all(session.id))
+      .toEqual([
+        { id: priorUser.message.id, sequence: 0, content: 'edited prior user sentinel' },
+        { id: priorAssistant.message.id, sequence: 1, content: 'edited prior assistant sentinel' }
+      ])
+    const prepared = prepareTurnAtomically(db, {
+      user: { id: 'edited-checkpoint-current-user', sessionId: session.id, role: 'user', content: 'current request sentinel', timestamp: 3, status: 'sent' },
+      assistant: { id: 'edited-checkpoint-current-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 4, status: 'streaming' },
+      turn: { turnId: 'edited-checkpoint-current-turn', requestId: 'edited-checkpoint-current-request', sessionId: session.id,
+        assistantMessageId: 'edited-checkpoint-current-assistant', state: 'configuring', startToken: 'edited-checkpoint-current-token' }
+    })
+    const current = prepared.user
+    const executionConfig = { lane: 'desktop' as const, model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system',
+      maxTokens: 512, enableThinking: false, locale: 'en-US' }
+    const snapshot = getSessionMessageRevisionSnapshot(db, session.id)!
+    expect(setPersistedTurnExecutionConfig(db, 'edited-checkpoint-current-turn', executionConfig, 'edited-checkpoint-current-fingerprint', snapshot)).toBe(true)
+    const acceptedTurn = createAcceptedTurn({ turnId: 'edited-checkpoint-current-turn', requestId: 'edited-checkpoint-current-request', sessionId: session.id,
+      lane: 'desktop', startToken: 'edited-checkpoint-current-token', currentUserMessageId: current.message.id,
+      transcriptVersion: checkpointed ? 1 : 0, config: executionConfig })
+    acceptTurnContext(db, acceptedTurn)
+    expect(readAcceptedTurn(db, session.id, acceptedTurn.requestId)).toEqual(acceptedTurn)
+    expect(getPersistedTurn(db, acceptedTurn.turnId)).toMatchObject({ acceptedInputHistoryVersion: 1, intentFingerprint: 'edited-checkpoint-current-fingerprint' })
+    const acceptedInput = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).readSync(acceptedTurn.turnId).events
+      .find(({ kind }) => kind === 'session-input-committed')
+    expect(acceptedInput?.payload).toMatchObject({ sessionId: session.id, messageId: current.message.id, role: 'user',
+      inputFingerprint: queueInputFingerprint({ text: current.message.content, attachments: current.message.attachments }) })
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
+      getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }),
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
+    })
+
+    const result = await execute(makeSender(), { requestId: 'edited-checkpoint-current-request', turnId: 'edited-checkpoint-current-turn',
+      turnStartToken: 'edited-checkpoint-current-token', sessionId: session.id })
+
+    expect(result).toMatchObject({ ok: true })
+    expect(providerCalls).toBe(1)
+    expect(providerRoutes).toHaveLength(1)
+    expect(providerRoutes[0]).toMatchObject({ routeId: route.routeId, modelId, endpoint })
+    expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'user', content: expectedPriorUser }))
+    expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'assistant', content: expectedPriorAssistant }))
+    expect(providerRequests[0]).not.toContainEqual(expect.objectContaining({ content: excludedPriorUser }))
+    expect(providerRequests[0]).not.toContainEqual(expect.objectContaining({ content: excludedPriorAssistant }))
+    expect(providerRequests[0]).toContainEqual(expect.objectContaining({ role: 'user', content: 'current request sentinel' }))
+    expect(JSON.stringify(providerRequests[0]).split('current request sentinel').length - 1).toBe(1)
+  })
+
+  it('delivers edited Q1 once after H0 commits while Q2 remains queued', async () => {
+    workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-queue-reopen-'))
+    const dbPath = path.join(workDir, 'session.db')
+    db.close()
+    db = openDatabase(dbPath)
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const route = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
+      contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens,
+      reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
+    const providerRequests: Array<readonly unknown[]> = []
+    const providerRoutes: Array<unknown> = []
+    let releaseH0!: () => void
+    let markH0Started!: () => void
+    const h0Started = new Promise<void>((resolve) => { markH0Started = resolve })
+    const h0Release = new Promise<void>((resolve) => { releaseH0 = resolve })
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: route.protocol, dialect: route.dialect,
+      adapterVersion: route.adapterVersion, modelId: route.modelId, endpoint: route.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* (input) {
+        providerCalls += 1
+        providerRequests.push(input.request.messages)
+        providerRoutes.push(structuredClone(input.route))
+        if (providerCalls === 1) {
+          markH0Started()
+          await h0Release
+        }
+        yield { type: 'text-delta', text: `queue barrier answer ${providerCalls}` } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      }
+    })
+    setDefaultAgentRuntime(runtime)
+
+    const session = createSession(db, { name: 'hosted-queue-barrier', model: modelId, maxTokens: 512 })
+    const h0User = appendMessage(db, { id: 'queue-h0-user', sessionId: session.id, role: 'user', content: 'H0 accepted sentinel', timestamp: 1, status: 'sent' })
+    const h0Assistant = appendMessage(db, { id: 'queue-h0-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'queue-h0-turn', requestId: 'queue-h0-request', sessionId: session.id,
+      userMessageId: h0User.message.id, assistantMessageId: h0Assistant.message.id, contextBoundarySequence: h0User.sequence,
+      state: 'prepared', startToken: 'queue-h0-token', executionConfig: {
+        lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US'
+      } })
+    let execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
+      getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }),
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
+    })
+
+    const h0Execution = execute(makeSender(), { requestId: 'queue-h0-request', turnId: 'queue-h0-turn', turnStartToken: 'queue-h0-token', sessionId: session.id })
+    await h0Started
+    const q1 = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'queue-q1-request', content: 'Q1 original sentinel' })
+    const q2 = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'queue-q2-request', content: 'Q2 queued sentinel' })
+    expect(updateQueuedUserMessageContent(db, { sessionId: session.id, messageId: q1.persisted.message.id, content: 'Q1 edited sentinel' }))
+      .toMatchObject({ ok: true })
+    const editedReceipt = getQueueInputReceipt(db, session.id, 'queue-q1-request')
+    expect(editedReceipt).toMatchObject({ requestId: 'queue-q1-request', queuedMessageId: q1.persisted.message.id, state: 'queued' })
+    expect(editedReceipt?.fingerprint).toBe(queueInputFingerprint({ text: 'Q1 edited sentinel', attachments: [] }))
+    releaseH0()
+    await expect(h0Execution).resolves.toMatchObject({ ok: true })
+    expect(updatePersistedTurnState(db, 'queue-h0-turn', 'terminal', { outcome: 'completed' })).toBe(true)
+    db.close()
+    db = openDatabase(dbPath)
+    execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
+      getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }),
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
+      turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
+    })
+    const claimed = claimQueuedTurnAtomically(db, { sessionId: session.id, userMessageId: q1.persisted.message.id,
+      turnId: 'queue-q1-turn', assistantMessageId: 'queue-q1-assistant', requestId: 'queue-q1-request', startToken: 'queue-q1-token',
+      executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' } })
+    expect(updateQueuedUserMessageContent(db, { sessionId: session.id, messageId: q1.persisted.message.id, content: 'Q1 late edit sentinel' }))
+      .toEqual({ ok: false, error: 'message_not_queued' })
+
+    const q1Result = await execute(makeSender(), { requestId: 'queue-q1-request', turnId: 'queue-q1-turn', turnStartToken: 'queue-q1-token', sessionId: session.id })
+
+    expect(q1Result).toMatchObject({ ok: true })
+    expect(getQueueInputReceipt(db, session.id, 'queue-q1-request')).toMatchObject({ requestId: 'queue-q1-request', turnId: 'queue-q1-turn', state: 'claimed' })
+    expect(getPersistedTurn(db, 'queue-q1-turn')).toMatchObject({ requestId: 'queue-q1-request', userMessageId: q1.persisted.message.id, acceptedInputHistoryVersion: 1 })
+    const acceptedInput = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).readSync('queue-q1-turn').events
+      .find(({ kind }) => kind === 'session-input-committed')
+    expect(acceptedInput?.payload).toMatchObject({ sessionId: session.id, messageId: q1.persisted.message.id, role: 'user',
+      inputFingerprint: queueInputFingerprint({ text: 'Q1 edited sentinel', attachments: [] }) })
+    expect(providerCalls).toBe(2)
+    expect(providerRoutes).toHaveLength(2)
+    expect(providerRoutes[0]).toMatchObject({ routeId: route.routeId, modelId, endpoint })
+    expect(providerRoutes[1]).toMatchObject({ routeId: route.routeId, modelId, endpoint })
+    expect(providerRequests[0]).toContainEqual(expect.objectContaining({ content: 'H0 accepted sentinel' }))
+    expect(providerRequests[1]).toContainEqual(expect.objectContaining({ role: 'user', content: 'Q1 edited sentinel' }))
+    expect(providerRequests[1].filter((message) => (message as { content?: unknown }).content === 'Q1 edited sentinel')).toHaveLength(1)
+    expect(providerRequests[1]).not.toContainEqual(expect.objectContaining({ content: 'Q1 original sentinel' }))
+    expect(providerRequests[1]).not.toContainEqual(expect.objectContaining({ content: 'Q1 late edit sentinel' }))
+    expect(providerRequests[1]).not.toContainEqual(expect.objectContaining({ content: 'Q2 queued sentinel' }))
+    expect(claimed.user.message.content).toBe('Q1 edited sentinel')
+    expect(q2.persisted.message.status).toBe('queued')
+    expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
   })
 
   it('runs the real Desktop loop through Hosted provider and persists canonical SQLite History', async () => {

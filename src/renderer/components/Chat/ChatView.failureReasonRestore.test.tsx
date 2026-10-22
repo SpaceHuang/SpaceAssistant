@@ -204,6 +204,10 @@ describe('ChatView 失败原因回溯', () => {
       chatGetMessageSequence: vi.fn().mockResolvedValue(null),
       chatGetNextQueuedMessage: vi.fn().mockResolvedValue(null),
       chatResolveRetryContext: vi.fn().mockResolvedValue(null),
+      chatSubmitOutbound: vi.fn().mockResolvedValue({
+        accepted: 'turn-started', sessionId: testSession.id, turnId: 'retry-turn',
+        assistantMessage: { ...failedAssistant, id: 'retry-assistant', status: 'streaming', content: '' }, warnings: []
+      }),
       chatContinueFromCheckpoint: vi.fn().mockResolvedValue({ accepted: true, status: 'running' }),
       messageAppendNonTurn: vi.fn().mockResolvedValue(null),
       messagePatchNonTurn: vi.fn().mockResolvedValue(null),
@@ -264,6 +268,32 @@ describe('ChatView 失败原因回溯', () => {
     }))
     await waitFor(() => expect(window.api.chatContinueFromCheckpoint).toHaveBeenCalledWith({
       sessionId: testSession.id, sourceTurnId: 'turn-1', requestIdempotencyKey: expect.any(String)
+    }))
+  })
+
+  it('失败消息重试按钮复用因果 user、boundary 与 exclude IDs', async () => {
+    vi.mocked(window.api.chatResolveRetryContext).mockResolvedValue({
+      failedAssistant: { message: failedAssistant, sequence: 2 },
+      currentUser: { message: userMessage, sequence: 1 },
+      excludeMessageIds: ['a-failed'],
+      sourceInvocationId: 'request-1',
+      sourceTurnId: 'turn-1'
+    })
+    renderChatView()
+
+    fireEvent.click(await screen.findByRole('button', { name: '从头重试' }))
+
+    await waitFor(() => expect(window.api.chatResolveRetryContext).toHaveBeenCalledWith({
+      sessionId: testSession.id, failedAssistantMessageId: failedAssistant.id
+    }))
+    await waitFor(() => expect(window.api.chatSubmitOutbound).toHaveBeenCalledWith({
+      sessionId: testSession.id,
+      text: userMessage.content,
+      contextIntent: {
+        kind: 'reuse-user',
+        currentUser: { message: userMessage, order: { kind: 'persisted', sequence: 1 } },
+        excludeMessageIds: ['a-failed']
+      }
     }))
   })
 })

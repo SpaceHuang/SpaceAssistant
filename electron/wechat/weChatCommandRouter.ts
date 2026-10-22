@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { readChatMessageAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import type { ToolsConfig } from '../../src/shared/domainTypes'
@@ -28,9 +29,8 @@ import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
 const WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE = '用户确认超时（5分钟），工具调用已取消'
 import type { TurnRuntime } from '../turnRuntime'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, getImInboxMessageContext, listImInboxMessages, parkImInboxMessageForClarification, resumeClarificationInboxMessage } from '../database/imInbox'
-import { getTurnByRequestId } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { expireDuePendingClarifications, finishClarificationSendAttempt, listPendingClarificationNotices,
   listRecoverableClarificationPrompts, startClarificationSendAttempt, hasPendingClarificationForScope } from '../database/clarificationStore'
@@ -207,7 +207,7 @@ export class WeChatCommandRouter {
         const userMessageId = context.currentUserMessageId
         const messageId = context.messageId
         if (typeof userMessageId !== 'string' || typeof messageId !== 'string') throw new Error('WECHAT_COMPLETION_WAKE_CONTEXT_INVALID')
-        const originalMessage = this.deps.sessionStorage.queries.readMessage({ sessionId: input.sessionId, messageId: userMessageId })
+        const originalMessage = await readChatMessageAfterPreparation(this.deps.sessionStorage, { sessionId: input.sessionId, messageId: userMessageId })
         const originalContent = originalMessage?.content ?? listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 })
           .find(({ messageId: queuedId }) => queuedId === userMessageId)?.content
         if (typeof originalContent !== 'string') throw new Error('WECHAT_COMPLETION_WAKE_SOURCE_MESSAGE_MISSING')
@@ -217,7 +217,7 @@ export class WeChatCommandRouter {
         }
         const requestId = `completion:${event.eventId}`
         const recovery = decideDeferredCompletionWakeRecovery({
-          read: () => getTurnByRequestId(this.deps.db, input.sessionId, requestId),
+          read: () => this.deps.sessionStorage!.queries.readTurnByRequest({ sessionId: input.sessionId, requestId }),
           recover: () => this.deps.turnRuntime?.recover()
         })
         if (recovery.kind === 'recovery-pending') throw new Error('WECHAT_COMPLETION_WAKE_RECOVERY_PENDING')
@@ -270,7 +270,7 @@ export class WeChatCommandRouter {
       if (event.sessionId !== input.sessionId) throw new Error('WECHAT_WAKE_SESSION_MISMATCH')
       const messageId = event.payloadRef.messageId
       const requestId = `wake:${event.eventId}`
-      let priorTurn = getTurnByRequestId(this.deps.db, session.id, requestId)
+      let priorTurn = this.deps.sessionStorage!.queries.readTurnByRequest({ sessionId: session.id, requestId })
       let queued = listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 }).find((item) => item.messageId === messageId)
       const pendingMessageContext = getImInboxMessageContext(this.deps.db, messageId)
       const workRecovery = pendingMessageContext?.clarificationWorkId
@@ -280,11 +280,22 @@ export class WeChatCommandRouter {
         ? workRecovery?.decision.kind === 'resume-prepared-turn'
         : canResumePreparedRemoteTurn({ turnState: priorTurn.state, turnId: priorTurn.turnId, requestId: priorTurn.requestId,
           sessionId: priorTurn.sessionId, userMessageId: priorTurn.userMessageId, turnConfig: priorTurn.executionConfig, accepted: acceptedSnapshot }))
+      // A prepared turn may already have moved its inbox user from queued to sent
+      // before the process stopped. Rehydrate only when the durable AcceptedTurn,
+      // persisted turn, wake payload, and sent user row all name the same message.
+      if (!queued && canResumePrepared && priorTurn?.userMessageId === messageId && acceptedSnapshot?.currentUserMessageId === messageId) {
+        const acceptedMessage = await readChatMessageAfterPreparation(this.deps.sessionStorage, { sessionId: input.sessionId, messageId })
+        const sequence = this.deps.sessionStorage.queries.readMessageSequence({ sessionId: input.sessionId, messageId })
+        if (acceptedMessage?.role === 'user' && acceptedMessage.status === 'sent' && sequence !== null) {
+          queued = { messageId, sessionId: acceptedMessage.sessionId, role: 'user', content: acceptedMessage.content,
+            status: acceptedMessage.status, sequence, timestamp: acceptedMessage.timestamp }
+        }
+      }
       if (priorTurn && priorTurn.state !== 'terminal' && !canResumePrepared) {
         // Prepared turns have not entered the runtime and can resume from their frozen
         // accepted snapshot. Other unfinished turns must first converge through startup recovery.
         this.deps.turnRuntime?.recover()
-        priorTurn = getTurnByRequestId(this.deps.db, session.id, requestId)
+        priorTurn = this.deps.sessionStorage!.queries.readTurnByRequest({ sessionId: session.id, requestId })
       }
       if (priorTurn?.state === 'terminal') {
         const completedMessageId = priorTurn.userMessageId
@@ -472,7 +483,7 @@ export class WeChatCommandRouter {
       throw error
     }
     if (!result.ok) throw new Error(`WECHAT_WAKE_TURN_FAILED:${result.summary}`)
-    const outcome = getTurnByRequestId(this.deps.db, input.sessionId, input.requestId)?.outcome
+    const outcome = this.deps.sessionStorage!.queries.readTurnByRequest({ sessionId: input.sessionId, requestId: input.requestId })?.outcome
     if (result.parked && outcome === 'parked') return
     if (outcome !== 'completed') throw new Error('WECHAT_WAKE_TURN_NOT_DURABLY_COMPLETED')
     const bot = this.deps.botService.getBot()

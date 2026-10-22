@@ -14,7 +14,7 @@ import {
 } from '../../src/shared/confirmation/approvalVerdict'
 import type { BrowserConfig, ShellConfig, ToolsConfig } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation } from '../runtime/invocationAssembler'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
@@ -419,7 +419,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       emitSessionEvent: () => undefined
     })
     const runPromise = runToolChatSession(invocation, ports, {
-      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: acceptedTurn.turnId, turnId: acceptedTurn.turnId, acceptedTurn, sessionQueries: deps.sessionStorage.queries, sessionExecution: deps.sessionStorage.execution, routeId: providerRouteId, sessionId })
+      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: acceptedTurn.turnId, turnId: acceptedTurn.turnId, acceptedTurn, sessionQueries: deps.sessionStorage.queries, ensureChatBodyV1: deps.sessionStorage.ensureChatBodyV1, sessionExecution: deps.sessionStorage.execution, routeId: providerRouteId, sessionId })
     })
     runCreated = true
     // P1-4：run 收敛时置位（孤儿 run 存续期窗口由 finally 判断保持开启）；拒绝已被 race 派生分支处理

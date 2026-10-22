@@ -4,9 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import type { HistoryEvent } from '../packages/agent-sdk/src/history'
 import { appendSqliteAgentHistoryBatchInTransaction } from './database/agentHistoryStorage'
-import { createMemoryAppDb } from './database/testHelpers'
+import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
+import { openDatabase } from './database'
 import { getDbConnection } from './database/sqliteStore'
 import { createSession, setConfigValue } from './database/operations'
+import { updateSessionOwnership } from './database/operations'
 import { runInTransaction } from './database/transaction'
 import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 import {
@@ -179,6 +181,50 @@ describe('canonical session ledger outbox', () => {
     const second = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key, apply, 5)
     expect(second).toEqual({ projected: 1 })
     expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toEqual([])
+  })
+
+  it('keeps seeded ledger retry obligations durable across reopen and acknowledges exactly once', async () => {
+    const temp = createTempDatabase('session-ledger-seeded-retry-')
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-seeded-retry-sink-'))
+    let db = temp.db
+    let reopened = false
+    try {
+      setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: root, isDefault: true }]))
+      const session = createSession(db, { name: 'seeded ledger retry', workDirProfileId: 'p' })
+      const conn = getDbConnection(db)
+      const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?').get(session.id) as { ledger_location_key: string }
+      const eventId = `seeded-retry-${(0x1ed6e >>> 0).toString(16)}`
+      appendCanonicalEvent(conn, session.id, eventId)
+      const target: CanonicalLedgerProjectionTarget = { ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id,
+        sessionGeneration: session.generation, canonicalEventId: eventId, projectionKind: 'tool-result',
+        expectedEvents: [{ type: 'tool_result', payload: { toolUseId: 'seeded-tool', stepId: 'seeded-step', result: { success: true } } }], expectedEventIds: ['tool_result:seeded-tool'] }
+      runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
+      const sink = getSessionEventSink(root, session.id, session.createdAt)
+      try {
+        const failure = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key, async () => { throw new Error('seeded sink failure') })
+        expect(failure.failedTargetId).toBeTruthy()
+        expect(listPendingCanonicalLedgerProjectionTargets(conn, readiness.ledger_location_key)).toHaveLength(1)
+        const dbPath = temp.dbPath
+        db.close()
+        db = openDatabase(dbPath)
+        reopened = true
+        const reopenedConn = getDbConnection(db)
+        expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, readiness.ledger_location_key)).toHaveLength(1)
+        const apply = (pending: CanonicalLedgerProjectionTarget & { targetId: string }) => projectCanonicalSessionLedgerTarget(sink, pending)
+        expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, readiness.ledger_location_key, apply)).toEqual({ projected: 1 })
+        expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, readiness.ledger_location_key, apply)).toEqual({ projected: 0 })
+        expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, readiness.ledger_location_key)).toEqual([])
+        expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result' && event.payload.toolUseId === 'seeded-tool')).toHaveLength(1)
+      } finally { await sink.close() }
+    } finally {
+      db.close()
+      await fs.rm(root, { recursive: true, force: true })
+      if (!reopened) temp.cleanup()
+      else {
+        for (const suffix of ['', '-wal', '-shm']) await fs.rm(`${temp.dbPath}${suffix}`, { force: true })
+        await fs.rm(path.dirname(temp.dbPath), { recursive: true, force: true })
+      }
+    }
   })
 
   it('projects a tool-result target idempotently to JSONL before acknowledgement', async () => {

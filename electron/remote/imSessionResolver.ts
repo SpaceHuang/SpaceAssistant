@@ -1,6 +1,6 @@
 import type { Session } from '../../src/shared/domainTypes'
 import type { RemoteImCommonConfig } from '../../src/shared/imTypes'
-import type { SessionQueries } from '../sessionStorage/contracts'
+import type { SessionQueries } from '../sessionStorage/public/ports'
 import {
   pickRemoteSessionCandidate,
   readRemoteSessionIdleMinutes,

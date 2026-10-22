@@ -2,8 +2,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createSession, updateSession } from './database/operations'
 import { openDatabase } from './database'
-import { createSession, updateSession } from './database'
 import { createWorkDirManager } from './workDirManager'
 import {
   createWorkspaceSnapshotTracker,

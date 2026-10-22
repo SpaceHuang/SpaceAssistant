@@ -22,7 +22,7 @@ import { readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsRecorder'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
@@ -220,7 +220,7 @@ function mergeImOrchestrationFixtureRegistry(
 }
 
 /** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
-function buildWorkspacePorts(materials: AgentInvocationMaterials, sessionQueries: import('../sessionStorage/contracts').SessionQueries | undefined): AgentHostPorts['workspace'] {
+function buildWorkspacePorts(materials: AgentInvocationMaterials, sessionQueries: import('../sessionStorage/public/ports').SessionQueries | undefined): AgentHostPorts['workspace'] {
   const tracker = createWorkspaceSnapshotTracker({
     sessionQueries,
     sessionId: materials.sessionId,
@@ -958,7 +958,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         policyRevision: authorizationVersion,
         shellOutputMode: resolveEffectiveShellOutputMode(materials.shellConfig ?? undefined, undefined, materials.remoteContext?.source),
         ...(db ? { appDatabase: db } : {}),
-        ...(sessionStorage ? { sessionQueries: sessionStorage.queries } : {}),
+        ...(sessionStorage ? { sessionQueries: sessionStorage.queries, ensureChatBodyV1: sessionStorage.ensureChatBodyV1 } : {}),
         ...(sessionStorage ? { sessionCommands: sessionStorage.commands } : {}),
         isSessionDirectoryGrantActive: (grant: Pick<SessionDirectoryGrantRecord, 'grantId' | 'sessionId' | 'realPath' | 'identity'>) => {
           const currentSession = sessionStorage?.queries.readSession(grant.sessionId)

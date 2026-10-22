@@ -4,6 +4,7 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 /** Grant the fast path once (exact L2 match), then keep appending through the write path. */
 async function createEligibleSession(label: string) {
@@ -36,17 +37,17 @@ describe('write-path incremental projection cache (P1-①)', () => {
         ] }
     }], 1)
 
-    // append 返回即推进：缓存 watermark 与 eligibility 都已就位，无需读路径触发。
+    // append 返回即推进 payload cache，但只有 full L2 对拍能发布 transcript parity proof。
     const cacheRow = getDbConnection(db).prepare(
       "SELECT session_seq, event_count FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'"
     ).get(session.id) as { session_seq: number; event_count: number }
     expect(cacheRow).toMatchObject({ session_seq: 2, event_count: 2 })
-    expect(getDbConnection(db).prepare('SELECT 1 FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id))
-      .toEqual({ '1': 1 })
+    expect(getDbConnection(db).prepare("SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=? AND status='valid'")
+      .get(session.id, encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toBeUndefined()
     db.close()
   })
 
-  it('keeps the next read on the warm L1 path after mirrored writes', async () => {
+  it('requires L2 parity validation after an append until a fresh proof is published', async () => {
     const { db, session, history } = await createEligibleSession('warm')
     appendMessage(db, { id: 'warm-user-2', sessionId: session.id, role: 'user', content: 'second question', timestamp: 2, status: 'sent' })
     await history.appendBatch([{
@@ -60,11 +61,11 @@ describe('write-path incremental projection cache (P1-①)', () => {
     }], 1)
 
     const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1', messages: [
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2', messages: [
       { id: 'warm-user', content: 'first question' },
       { id: 'warm-user-2', content: 'second question' }
     ] })
-    expect(rebuildSpy).not.toHaveBeenCalled()
+    expect(rebuildSpy).toHaveBeenCalledOnce()
     rebuildSpy.mockRestore()
     db.close()
   })
@@ -101,7 +102,8 @@ describe('write-path incremental projection cache (P1-①)', () => {
     const conn = getDbConnection(db)
     // 缓存被清（落后）：写路径不得失败，也不得凭空授予 eligibility。
     conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
-    conn.prepare('DELETE FROM canonical_session_projection_eligibility WHERE session_id=?').run(session.id)
+    conn.prepare('DELETE FROM session_projection_state WHERE session_id=? AND scope_key=?').run(session.id,
+      encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))
     appendMessage(db, { id: 'fallback-user-2', sessionId: session.id, role: 'user', content: 'second question', timestamp: 2, status: 'sent' })
     await expect(history.appendBatch([{
       invocationId: 'fallback-invocation', turnId: 'fallback-turn', sequence: 2, schemaVersion: 1,
@@ -115,7 +117,8 @@ describe('write-path incremental projection cache (P1-①)', () => {
 
     expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
       .toBeUndefined()
-    expect(conn.prepare('SELECT 1 FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id))
+    expect(conn.prepare('SELECT 1 FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id,
+      encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })))
       .toBeUndefined()
     db.close()
   })

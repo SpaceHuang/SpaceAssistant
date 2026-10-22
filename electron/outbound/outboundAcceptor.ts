@@ -16,12 +16,13 @@ import {
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../src/shared/contextUsageEstimate'
-import { getSessionUsage, type AppDatabase } from '../database'
+import type { AppDatabase } from '../database'
 import { readStoredModels } from '../llmServiceResolver'
 import { createHash } from 'node:crypto'
 export { summarizeFailedInvocation } from '../runtime/continuationSummary'
-import type { SessionCommands, SessionExecutionStore } from '../sessionStorage/contracts'
-import type { ContinuationSourceRef, SessionQueries } from '../sessionStorage/contracts'
+import type { SessionCommands, SessionQueries } from '../sessionStorage/public/ports'
+import type { ContinuationSourceRef } from '../sessionStorage/public/model'
+import type { SessionExecutionStore } from '../sessionStorage/application/ports'
 import { TransactionCommitUnknownError } from '../database/transaction'
 
 /** 出站受理时的主进程状态快照（全部由主进程权威源构建，渲染端不再提供其中任何一项） */
@@ -560,6 +561,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
                 requestId: contextIntent.requestId ?? deps.newRequestId(),
                 sessionId,
                 userMessageId: contextIntent.currentUser.message.id,
+                contextBoundarySequence: contextIntent.currentUser.order.sequence,
                 excludeMessageIds: contextIntent.excludeMessageIds ?? [],
                 config: {}
               }
@@ -619,16 +621,18 @@ const TERMINAL_FACT_EVENTS = new Set(['source-completed', 'source-failed', 'sour
  * 上下文占用 ≥80% 通过型警告（P2-2）：主进程权威计算，替代渲染端 historyForApi 私算。
  * 返回错误码数组（渲染端仅翻译展示），空数组 = 无警告，照常发起。
  */
-export function computeContextPressureWarnings(
+export async function computeContextPressureWarnings(
   db: AppDatabase,
   sessionId: string,
   attachments: Message['attachments'] | undefined,
-  sessionQueries: SessionQueries
-): string[] {
+  sessionQueries: SessionQueries,
+  ensureChatBodyV1?: (input: { sessionId: string }) => Promise<unknown>
+): Promise<string[]> {
+  await ensureChatBodyV1?.({ sessionId })
   const session = sessionQueries.readSession(sessionId)
   if (!session) return []
   const messages = sessionQueries.readMessages({ sessionId })
-  const usage = getSessionUsage(db, sessionId)
+  const usage = sessionQueries.readSessionUsage(sessionId)
   const lastAssistantThinking = [...messages]
     .reverse()
     .find((m) => m.role === 'assistant' && m.thinking)?.thinking

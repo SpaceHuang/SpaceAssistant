@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
-import { appendMessage, createSession, getMessage } from '../database'
+import { appendMessage, createSession, getMessage } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript } from '../database/sessionTranscript'
 import { getPersistedTurn, listPersistedTurns } from '../database/operations'

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appendMessage, createSession } from '../database'
+import { appendMessage, createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { createRemoteTrack } from '../database/remoteTrackStore'
 import { getDbConnection } from '../database/sqliteStore'

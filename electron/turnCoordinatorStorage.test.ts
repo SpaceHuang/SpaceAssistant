@@ -1,22 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
-import {
-  appendMessage,
-  createSession,
-  createPersistedTurn,
-  enqueueQueuedUserMessage,
-  getQueueInputReceipt,
-  getMessagesPage,
-  getPersistedTurn,
-  getTurnContext,
-  listPersistedTurns,
-  openDatabase,
-  setConfigValue
-} from './database'
+import { openDatabase, setConfigValue, getDbConnection } from './database'
+import { appendMessage, createSession, createPersistedTurn, enqueueQueuedUserMessage, getQueueInputReceipt, getMessagesPage, getPersistedTurn, getTurnContext, listPersistedTurns } from './database/operations'
 import { createTurnCoordinatorStorage } from './sessionStorage/coordinator'
 import { TurnCoordinator } from '../src/shared/turnCoordinator'
 import { TurnRuntime } from './turnRuntime'
-import { getDbConnection } from './database'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 
 describe('createTurnCoordinatorStorage', () => {

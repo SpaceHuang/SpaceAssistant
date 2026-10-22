@@ -142,6 +142,17 @@ describe('TurnCoordinator', () => {
     expect(db.append).not.toHaveBeenCalled()
   })
 
+  it('reuse-user 同一 requestId 的 context boundary 变化会拒绝重用原 turn', () => {
+    const db = storage()
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'retry-boundary-turn' })
+    coordinator.prepare({ mode: 'reuse-user', requestId: 'retry-boundary-request', sessionId: 's1', userMessageId: user.id,
+      contextBoundarySequence: 1, excludeMessageIds: ['a1'], config: {} })
+
+    expect(() => coordinator.prepare({ mode: 'reuse-user', requestId: 'retry-boundary-request', sessionId: 's1', userMessageId: user.id,
+      contextBoundarySequence: 2, excludeMessageIds: ['a1'], config: {} })).toThrow('TURN_REQUEST_FINGERPRINT_MISMATCH')
+    expect(db.append).toHaveBeenCalledTimes(1)
+  })
+
   it('legacy turn 缺少 fingerprint 时保持只读兼容并返回原 turn', () => {
     const db = storage()
     const legacy = { turnId: 'legacy-turn', requestId: 'legacy-r', sessionId: 's1', userMessage: user, assistantMessage: assistant, version: 0, startToken: 'legacy-token' }

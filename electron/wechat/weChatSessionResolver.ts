@@ -1,4 +1,4 @@
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import type { WeChatConfig, WeChatInboundMessage } from '../../src/shared/wechatTypes'
 import { resolveImSession, truncateTitle } from '../remote/imSessionResolver'
 

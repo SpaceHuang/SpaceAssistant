@@ -19,7 +19,7 @@ import { ImChannel, type ImCommitResult, type ImPendingConfirm } from '../confir
 import { formatMcpConfirmPromptDetails } from '../confirmation/mcpConfirmPrompt'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWriter'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, reconcileConfirmationSubmission, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { recordRemoteTrackConfirmationState } from '../database/remoteTrackStore'
 import { sanitizeAgentText } from '../../src/shared/agentSafeText'

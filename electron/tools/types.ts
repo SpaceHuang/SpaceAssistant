@@ -11,7 +11,7 @@ import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit
 import type { HistoryFact } from '../../src/shared/historyReader'
 import type { RegisteredFeishuAttachment } from '../feishu/feishuAttachmentRegistry'
 import type { ChildProcess, spawn as nodeSpawn } from 'child_process'
-import type { SessionCommands, SessionQueries } from '../sessionStorage/contracts'
+import type { SessionCommands, SessionQueries } from '../sessionStorage/public/ports'
 import type { RemoteTrackContext, TrackModelInputViewRef } from '../../src/shared/remoteTrack'
 
 export interface RemoteContext {
@@ -112,6 +112,7 @@ export interface ToolExecutionContext {
   policyRevision?: string
   appDatabase?: AppDatabase
   sessionQueries?: SessionQueries
+  ensureChatBodyV1?: (input: { sessionId: string; signal?: AbortSignal }) => Promise<unknown>
   sessionCommands?: Pick<SessionCommands, 'recordRemoteSessionActivity' | 'updateSettings'>
   workDirManager?: WorkDirManager
   /** R1：本次工具调用边界解析的工作目录快照（env.workspace 等能力消费单一事实源） */

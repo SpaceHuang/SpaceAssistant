@@ -1,8 +1,14 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterAll, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
-import { updateQueuedUserMessageContent } from './database'
+import { createMemoryAppDb } from './database/testHelpers'
+import { TurnCoordinator } from '../src/shared/turnCoordinator'
+
+const mockEditQueuedMessage = vi.fn()
+
+const TEST_DB = createMemoryAppDb()
+afterAll(() => TEST_DB.close())
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -30,7 +36,6 @@ vi.mock('electron', () => ({
 vi.mock('./database', () => ({
   listSessions: vi.fn(() => []),
   createSession: vi.fn(),
-  updateQueuedUserMessageContent: vi.fn(),
   getSession: vi.fn(),
   updateSession: vi.fn(),
   deleteSession: vi.fn(),
@@ -39,8 +44,6 @@ vi.mock('./database', () => ({
   updateMessageContent: vi.fn(),
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   setSessionUsage: vi.fn(),
   getSessionUsage: vi.fn(),
   deleteSessionUsage: vi.fn(),
@@ -107,7 +110,7 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 
 function makeCtx(): AppIpcContext {
   const ctx: AppIpcContext = {
-    db: { save: vi.fn(), flushSave: vi.fn() } as unknown as AppIpcContext['db'],
+    db: TEST_DB,
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),
@@ -129,10 +132,18 @@ function makeCtx(): AppIpcContext {
   ctx.sessionStorage = {
     queries: {} as never,
     commands: {
-      editQueuedMessage: (input) => updateQueuedUserMessageContent(ctx.db, input)
+      editQueuedMessage: (...args) => mockEditQueuedMessage(...args)
     } as never,
     execution: {} as never
   }
+  const coordinator = new TurnCoordinator({ findByRequestId: () => undefined } as never, { now: Date.now, id: () => 'unused-turn-id' })
+  ctx.turnRuntime = {
+    coordinator,
+    cancel: vi.fn(),
+    listActive: vi.fn(() => []),
+    listTerminals: vi.fn(() => []),
+    subscribe: vi.fn(() => () => undefined)
+  } as unknown as AppIpcContext['turnRuntime']
   return ctx
 }
 
@@ -152,15 +163,15 @@ describe('security:clear-cache 联动撤销旧信任存储（B6/B7）', () => {
 
   it('queued message edit IPC returns declared success result and flushes backup', async () => {
     const message = { id: 'q1', sessionId: 's1', role: 'user', content: 'edited', timestamp: 1, status: 'queued', schemaVersion: 1 }
-    vi.mocked((await import('./database')).updateQueuedUserMessageContent).mockReturnValue({ ok: true, message, sequence: 7 } as never)
+    mockEditQueuedMessage.mockReturnValue({ ok: true, message, sequence: 7 })
     const result = await ipc.getHandler('chat:update-queued-message')?.(null, { sessionId: 's1', messageId: 'q1', content: 'edited' })
-    expect((await import('./database')).updateQueuedUserMessageContent).toHaveBeenCalledWith(ctx.db, { sessionId: 's1', messageId: 'q1', content: 'edited' })
+    expect(mockEditQueuedMessage).toHaveBeenCalledWith({ sessionId: 's1', messageId: 'q1', content: 'edited' })
     expect(result).toEqual({ ok: true, message, sequence: 7 })
     expect(ctx.backup.flush).toHaveBeenCalledWith('s1', expect.any(Function))
   })
 
   it('queued message edit IPC preserves declared error result without flushing backup', async () => {
-    vi.mocked((await import('./database')).updateQueuedUserMessageContent).mockReturnValue({ ok: false, error: 'message_not_queued' })
+    mockEditQueuedMessage.mockReturnValue({ ok: false, error: 'message_not_queued' })
     const result = await ipc.getHandler('chat:update-queued-message')?.(null, { sessionId: 's1', messageId: 'q1', content: 'edited' })
     expect(result).toEqual({ ok: false, error: 'message_not_queued' })
     expect(ctx.backup.flush).not.toHaveBeenCalled()

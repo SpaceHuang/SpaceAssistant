@@ -1,14 +1,15 @@
-import type { SessionRecoveryPort, SessionRecoveryReadiness, SessionRecoveryReport } from './contracts'
+import type { SessionRecoveryHistoryResult, SessionRecoveryPort, SessionRecoveryReadiness, SessionRecoveryReport } from './application/ports'
 import type { AppDatabase } from '../database/sqliteStore'
-import { getDbConnection } from '../database'
-import type { SessionQueries, SessionExecutionStore } from './contracts'
+import { getDbConnection } from '../database/sqliteStore'
+import type { SessionQueries } from './public/ports'
+import type { SessionExecutionStore } from './application/ports'
 import { createSessionTranscriptRecoveryAdapter } from './recoveryDatabaseAdapter'
 import type { PersistedTurn } from '../database/operations'
 import { reconcileRunningAgentContinuations } from '../runtime/agentContinuation'
 import { hasUnfinishedStartupProjections, restorePersistedTurnSnapshotsDetailed } from './recoveryHelpers'
 
 export type SessionRecoveryDependencies = Readonly<{
-  history(): Promise<Readonly<{ interruptedCount: number; repairFailureCount: number }>>
+  history(): Promise<Readonly<{ interruptedCount: number; repairFailureCount: number; sessionFailures?: readonly Readonly<{ sessionId: string; invocationId: string; capability: 'execution' | 'ledger'; failureClass: 'history-stream-corrupt' | 'ledger-repair-failed' | 'ledger-repair-pending' }>[] }>>
   snapshots(): Promise<Readonly<{ restoredCount: number; skippedCanonicalUnavailableCount: number; missingAssistantCount: number }>> | Readonly<{ restoredCount: number; skippedCanonicalUnavailableCount: number; missingAssistantCount: number }>
   coordinator(): Promise<Readonly<{ recoveredCount: number; succeeded: boolean }>> | Readonly<{ recoveredCount: number; succeeded: boolean }>
   hasUnfinishedProjections(): boolean
@@ -38,29 +39,29 @@ const emptyContinuations = { interrupted: 0, unknownSideEffect: 0, settled: 0 }
 export function createSessionRecoveryPort(dependencies: SessionRecoveryDependencies): SessionRecoveryPort {
   let completed: SessionRecoveryReport | undefined
   let inFlight: Promise<SessionRecoveryReport> | undefined
+  let historyResult: SessionRecoveryHistoryResult | undefined
+  let historyInFlight: Promise<SessionRecoveryHistoryResult> | undefined
 
-  const recover = (): Promise<SessionRecoveryReport> => {
-    if (completed) return Promise.resolve(completed)
-    if (inFlight) return inFlight
-    inFlight = (async () => {
-      const failures: Array<{ stage: SessionRecoveryReport['failures'][number]['stage']; error: Error }> = []
+  const recoverHistory = (): Promise<SessionRecoveryHistoryResult> => {
+    if (historyResult) return Promise.resolve(historyResult)
+    if (historyInFlight) return historyInFlight
+    historyInFlight = (async () => {
+      const failures: Array<{ stage: 'history'; error: Error; sessionId?: string; invocationId?: string }> = []
       const asError = (value: unknown) => value instanceof Error ? value : new Error(String(value))
-      let history = { succeeded: false, interruptedCount: 0, repairFailureCount: 0 }
-      let snapshots = emptySnapshots
-      let coordinator = emptyCoordinator
-      let reconciliation: SessionRecoveryReport['reconciliation'] = { status: 'skipped', reason: 'history-recovery-incomplete' }
-      let continuations = emptyContinuations
-
+      let history = { succeeded: false, interruptedCount: 0, repairFailureCount: 0,
+        sessionFailures: [] as readonly Readonly<{ sessionId: string; invocationId: string; capability: 'execution' | 'ledger'; failureClass: 'history-stream-corrupt' | 'ledger-repair-failed' | 'ledger-repair-pending' }>[] }
       try {
         const result = await dependencies.history()
-        history = { ...result, succeeded: result.repairFailureCount === 0 }
+        const sessionFailures = result.sessionFailures ?? []
+        history = { ...result, sessionFailures, succeeded: result.repairFailureCount === sessionFailures.length }
+        for (const failure of sessionFailures) failures.push({ stage: 'history', error: new Error(failure.failureClass === 'history-stream-corrupt' ? 'SESSION_HISTORY_STREAM_CORRUPT' : failure.failureClass === 'ledger-repair-failed' ? 'SESSION_LEDGER_REPAIR_FAILED' : 'SESSION_LEDGER_REPAIR_PENDING'),
+          sessionId: failure.sessionId, invocationId: failure.invocationId })
         if (!history.succeeded) failures.push({ stage: 'history', error: new Error('SESSION_HISTORY_RECOVERY_REPORTED_FAILURES') })
       } catch (error) {
         failures.push({ stage: 'history', error: asError(error) })
       }
-
-      let ledgerRepairFailureCount = 0
       if (dependencies.ledgerRepairs) {
+        let ledgerRepairFailureCount = 0
         try {
           ledgerRepairFailureCount = await dependencies.ledgerRepairs()
           if (ledgerRepairFailureCount > 0) failures.push({ stage: 'history', error: new Error('SESSION_LEDGER_RECOVERY_REPORTED_FAILURES') })
@@ -71,6 +72,24 @@ export function createSessionRecoveryPort(dependencies: SessionRecoveryDependenc
         history = { ...history, repairFailureCount: history.repairFailureCount + ledgerRepairFailureCount }
         history = { ...history, succeeded: history.succeeded && ledgerRepairFailureCount === 0 }
       }
+      historyResult = Object.freeze({ history: Object.freeze(history), failures: Object.freeze(failures.map((failure) => Object.freeze(failure))) })
+      return historyResult
+    })().finally(() => { historyInFlight = undefined })
+    return historyInFlight
+  }
+
+  const recover = (): Promise<SessionRecoveryReport> => {
+    if (completed) return Promise.resolve(completed)
+    if (inFlight) return inFlight
+    inFlight = (async () => {
+      const historyPhase = await recoverHistory()
+      const failures: Array<{ stage: SessionRecoveryReport['failures'][number]['stage']; error: Error; sessionId?: string; invocationId?: string }> = [...historyPhase.failures]
+      const asError = (value: unknown) => value instanceof Error ? value : new Error(String(value))
+      const history = historyPhase.history
+      let snapshots = emptySnapshots
+      let coordinator = emptyCoordinator
+      let reconciliation: SessionRecoveryReport['reconciliation'] = { status: 'skipped', reason: 'history-recovery-incomplete' }
+      let continuations = emptyContinuations
 
       let snapshotsSucceeded = true
       try { snapshots = await dependencies.snapshots() }
@@ -104,9 +123,9 @@ export function createSessionRecoveryPort(dependencies: SessionRecoveryDependenc
       try { continuations = dependencies.continuations(history.succeeded && coordinator.succeeded) }
       catch (error) { failures.push({ stage: 'continuations', error: asError(error) }) }
 
-      const blocked = !history.succeeded || !coordinator.succeeded || reconciliation.status === 'skipped' || failures.length > 0
+      const blocked = !history.succeeded || !coordinator.succeeded || reconciliation.status === 'skipped' || failures.some((failure) => !failure.sessionId)
       const report: SessionRecoveryReport = Object.freeze({
-        status: blocked ? 'blocked' : snapshots.skippedCanonicalUnavailableCount > 0 ? 'degraded' : 'ready',
+        status: blocked ? 'blocked' : snapshots.skippedCanonicalUnavailableCount > 0 || history.sessionFailures.length > 0 ? 'degraded' : 'ready',
         history: Object.freeze(history), snapshots: Object.freeze(snapshots), coordinator: Object.freeze(coordinator),
         reconciliation: Object.freeze(reconciliation), continuations: Object.freeze(continuations),
         failures: Object.freeze(failures.map((failure) => Object.freeze(failure)))
@@ -118,9 +137,15 @@ export function createSessionRecoveryPort(dependencies: SessionRecoveryDependenc
   }
 
   return Object.freeze({
+    recoverHistory,
     recover,
+    inspectRecoveryStatus: () => Object.freeze({ state: completed?.status ?? 'pending' }),
     inspectReadiness: (sessionId: string) => {
       if (!completed) return { readable: false, executable: false, reason: 'recovery-pending' as const }
+      if (completed.history.sessionFailures.some((failure) => failure.sessionId === sessionId && failure.capability === 'execution')) {
+        const readiness = dependencies.inspectReadiness(sessionId)
+        return { ...readiness, executable: false, reason: 'recovery-pending' as const }
+      }
       if (completed.status === 'blocked') {
         const readiness = dependencies.inspectReadiness(sessionId)
         return { ...readiness, executable: false, reason: readiness.reason ?? 'recovery-pending' as const }
@@ -159,7 +184,8 @@ export function createSqliteSessionRecoveryPort(input: Readonly<{
       throw error
     }
     const transcript = input.execution.readTranscriptState(sessionId)
-    if (transcript.status !== 'ready') return { readable: true, executable: false, reason: 'execution-blocked' }
+    if (transcript.status === 'commit_uncertain') return { readable: true, executable: false, reason: 'commit-uncertain' }
+    if (transcript.status === 'blocked') return { readable: true, executable: false, reason: 'execution-blocked' }
     return { readable: true, executable: true }
   }
   return createSessionRecoveryPort({

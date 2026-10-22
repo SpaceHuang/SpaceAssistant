@@ -3,8 +3,9 @@ import { randomUUID } from 'crypto'
 import { appendMessage, createPersistedTurn, createSession } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { cleanupStreamingResiduesOnStartup } from './streamingCleanup'
-import { getMessages } from './index'
+import { getMessages } from './operations'
 import { getDbConnection } from './sqliteStore'
+import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 describe('cleanupStreamingResiduesOnStartup', () => {
   it('14: downgrades streaming assistant and in-progress toolCalls', () => {
@@ -74,20 +75,19 @@ describe('cleanupStreamingResiduesOnStartup', () => {
     const session = createSession(db, { name: 'cleanup-content-fence' })
     appendMessage(db, { id: 'cleanup-fenced-assistant', sessionId: session.id, role: 'assistant', content: 'partial', timestamp: 1, status: 'streaming',
       toolCalls: [{ id: 'cleanup-tool', toolName: 'read_file', input: {}, status: 'executing', riskLevel: 'low' }] })
-    const generation = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
     conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(session.id)
-    conn.prepare('INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)')
-      .run(session.id, generation.generation)
-    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
-      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version)
-      VALUES(?,?,1,1,1,'watermark','invocation',1,1)`).run(session.id, generation.generation)
+    const generation = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
+    const scopeKey = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
+    conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
+      message_revision,payload_generation,payload_digest,validated_range_json,updated_at)
+      VALUES(?,?,?,'valid','{}',0,'payload','digest','{}',1)`).run(session.id, scopeKey, generation.generation)
 
     expect(cleanupStreamingResiduesOnStartup(db)).toBe(1)
 
     expect(conn.prepare('SELECT content,status,content_storage_state FROM messages WHERE id=?').get('cleanup-fenced-assistant'))
       .toEqual({ content: 'partial', status: 'failed', content_storage_state: 'legacy' })
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
-    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, scopeKey))
+      .toEqual({ status: 'invalid' })
     expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
       .toEqual({ api_read_mode: 'revalidation-required' })
   })

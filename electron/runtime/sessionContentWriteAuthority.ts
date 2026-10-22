@@ -4,6 +4,8 @@ import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { toCanonicalModelMessages } from './canonicalHistory'
+import { createSessionCommitService } from '../sessionStorage/application/sessionCommitService'
+import { createSqliteSessionApiRouteProjectionFence } from '../sessionStorage/infrastructure/sqlite/sessionApiRouteProjectionFence'
 
 export type CanonicalWriteAuthorityResult = Readonly<{
   status: 'enabled' | 'ineligible'
@@ -17,31 +19,26 @@ export function enableCanonicalSessionWriteAuthority(db: AppDatabase, sessionId:
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
     const state = conn.prepare(`SELECT sessions.generation,cutover.session_generation AS cutover_generation,
-        cutover.message_revision,cutover.api_read_mode,
-        cutover.write_mode,cutover.cleanup_state,eligibility.session_generation AS eligible_generation,
-        eligibility.skeleton_revision,eligibility.canonical_session_seq,eligibility.canonical_commit_order,
-        eligibility.watermark_event_id,eligibility.watermark_invocation_id,eligibility.protocol_version
+        cutover.message_revision,cutover.api_read_mode,cutover.write_mode,cutover.cleanup_state
       FROM sessions JOIN session_message_content_cutover cutover ON cutover.session_id=sessions.id
-      LEFT JOIN canonical_session_api_context_eligibility eligibility ON eligibility.session_id=sessions.id
       WHERE sessions.id=?`).get(sessionId) as {
         generation: string; cutover_generation: string; message_revision: number; api_read_mode: string; write_mode: string; cleanup_state: string
-        eligible_generation: string | null; skeleton_revision: number | null; canonical_session_seq: number | null
-        canonical_commit_order: number | null; watermark_event_id: string | null; watermark_invocation_id: string | null
-        protocol_version: number | null
       } | undefined
     const ineligible = (reason: NonNullable<CanonicalWriteAuthorityResult['reason']>): CanonicalWriteAuthorityResult =>
       ({ status: 'ineligible', reason, migratedMessageCount: 0 })
     if (!state) return ineligible('session-or-cutover-state-missing')
     if (state.write_mode !== 'legacy' && state.write_mode !== 'canonical') return ineligible('write-mode-conflict')
-    if (state.cutover_generation !== state.generation || state.api_read_mode !== 'canonical' || state.cleanup_state !== 'retained' ||
-      state.eligible_generation !== state.generation || state.skeleton_revision !== state.message_revision ||
-      state.protocol_version !== 1) return ineligible('read-fence-not-current')
+    if (state.cutover_generation !== state.generation || state.api_read_mode !== 'canonical' || state.cleanup_state !== 'retained') {
+      return ineligible('read-fence-not-current')
+    }
 
     const transcript = new SqliteAgentHistory(conn, 1, Date.now, sessionId).readCanonicalSessionTranscriptForShadow(sessionId)
     if (transcript.kind !== 'matched' || transcript.eventCount === 0 ||
-      transcript.sessionGeneration !== state.generation || transcript.sessionSeq !== state.canonical_session_seq ||
-      transcript.commitOrder !== state.canonical_commit_order || transcript.watermarkEventId !== state.watermark_event_id ||
-      transcript.watermarkInvocationId !== state.watermark_invocation_id) return ineligible('canonical-transcript-mismatch')
+      transcript.sessionGeneration !== state.generation ||
+      !createSqliteSessionApiRouteProjectionFence(db).isCurrent({ sessionId, sessionGeneration: state.generation,
+        messageRevision: state.message_revision, historyWatermarkJson: JSON.stringify([
+          transcript.sessionSeq, transcript.commitOrder, transcript.watermarkEventId, transcript.watermarkInvocationId
+        ]) })) return ineligible('read-fence-not-current')
     const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
     const cache = history.readCanonicalSessionCache({ ...transcript, cacheKey: 'transcript' })
     let cacheMatches = false
@@ -109,14 +106,14 @@ export async function writeCanonicalBackedMessageContent(db: AppDatabase, messag
   const turnId = (conn.prepare('SELECT turn_id FROM turns WHERE session_id=? AND assistant_message_id=? ORDER BY created_at DESC LIMIT 1')
     .get(row.session_id, messageId) as { turn_id: string } | undefined)?.turn_id ?? `message-edit-${invocationId}`
   const now = Date.now()
-  await history.appendBatch([
-    { invocationId, turnId, sequence: 1, schemaVersion: 1, eventId: randomUUID(), idempotencyKey: randomUUID(),
-      kind: 'invocation-context-committed', payload: { messages: canonicalMessages, canonicalWriteFence: {
+  const commitService = createSessionCommitService({ sessionId: row.session_id, invocationId, turnId, history })
+  await commitService.reviseCanonicalMessage({
+    messages: canonicalMessages,
+    canonicalWriteFence: {
         sessionGeneration: transcript.sessionGeneration, sessionSeq: transcript.sessionSeq, commitOrder: transcript.commitOrder,
         watermarkEventId: transcript.watermarkEventId, watermarkInvocationId: transcript.watermarkInvocationId
-      } } },
-    { invocationId, turnId, sequence: 2, schemaVersion: 1, eventId: randomUUID(), idempotencyKey: randomUUID(),
-      kind: 'invocation-completed', payload: { status: 'completed', completedAt: now } }
-  ], 0)
+    },
+    completedAt: now
+  }, 0)
   return true
 }

@@ -20,7 +20,8 @@ import { registerPolicyIpc } from './ipc/policyIpc'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
 import { runStorageProfileWorker } from './storageProfile/storageProfileWorkerClient'
-import type { SessionStorage } from './sessionStorage/contracts'
+import type { SessionStorage } from './sessionStorage/host/ports'
+import { createSecuritySettingsStorage } from './confirmation/securitySettingsStorage'
 
 // 兼容 re-export:既有外部消费方(butler/main/llmSystemPrompt)从本文件导入
 export { readAppLocale } from './ipc/ipcShared'
@@ -30,6 +31,8 @@ export type AppIpcContext = {
   storageProfileCoordinator?: StorageProfileCoordinator
   /** Bound session capabilities created once at this composition root. */
   sessionStorage?: SessionStorage
+  /** Security policy/cache persistence adapter bound at this composition root. */
+  securitySettingsStorage?: ReturnType<typeof createSecuritySettingsStorage>
   backup: DebouncedSessionBackupManager
   workDirManager: WorkDirManager
   getWorkDir: () => string
@@ -54,7 +57,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): St
   const storageProfileCoordinator = ctx.storageProfileCoordinator ?? new StorageProfileCoordinator({
     run: (request, options) => runStorageProfileWorker(request, { signal: options.signal })
   })
-  const context = { ...ctx, storageProfileCoordinator, sessionStorage: ctx.sessionStorage ?? createSqliteSessionStorage(ctx.db) }
+  const context = { ...ctx, storageProfileCoordinator,
+    sessionStorage: ctx.sessionStorage ?? createSqliteSessionStorage(ctx.db),
+    securitySettingsStorage: ctx.securitySettingsStorage ?? createSecuritySettingsStorage(ctx.db) }
   registerDesktopIpc(ipcMain, context)
   registerAgentIpc(ipcMain, context)
   registerSessionIpc(ipcMain, context)

@@ -1,9 +1,13 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterAll, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
+import { createMemoryAppDb } from './database/testHelpers'
 import { resolveTestConnectionCredentials } from './llmServiceResolver'
 import { fetchServiceModels } from './llmModelListFetcher'
+
+const TEST_DB = createMemoryAppDb()
+afterAll(() => TEST_DB.close())
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -39,8 +43,6 @@ vi.mock('./database', () => ({
   updateMessageContent: vi.fn(),
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   searchMessages: vi.fn(() => [])
 }))
 
@@ -78,7 +80,7 @@ const mockIpcMain = () => {
 
 function makeCtx(): AppIpcContext {
   return {
-    db: { save: vi.fn(), flushSave: vi.fn(), close: vi.fn() } as AppIpcContext['db'],
+    db: TEST_DB,
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),

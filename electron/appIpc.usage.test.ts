@@ -1,7 +1,11 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterAll, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
+import { createMemoryAppDb } from './database/testHelpers'
+
+const TEST_DB = createMemoryAppDb()
+afterAll(() => TEST_DB.close())
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -36,8 +40,6 @@ vi.mock('./database', () => ({
   updateMessageContent: vi.fn(),
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   setSessionUsage: (...args: unknown[]) => mockSetSessionUsage(...args),
   getSessionUsage: (...args: unknown[]) => mockGetSessionUsage(...args),
   deleteSessionUsage: (...args: unknown[]) => mockDeleteSessionUsage(...args),
@@ -87,7 +89,7 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 
 function makeCtx(dbOverrides: Partial<AppIpcContext['db']> = {}): AppIpcContext {
   return {
-    db: { save: vi.fn(), ...dbOverrides } as AppIpcContext['db'],
+    db: Object.assign(TEST_DB, { save: vi.fn(), ...dbOverrides }),
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),
@@ -119,22 +121,22 @@ describe('usage IPC handlers', () => {
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
   })
 
-  it('usage:set delegates to setSessionUsage', async () => {
+  it('usage:set stores a session usage snapshot readable through usage:get', async () => {
     const usage = { input_tokens: 5000 }
     await ipc.getHandler('usage:set')?.(null, { sessionId: 's1', usage })
-    expect(mockSetSessionUsage).toHaveBeenCalledWith(ctx.db, 's1', usage)
+    expect(ipc.getHandler('usage:get')?.(null, 's1')).toEqual(usage)
   })
 
-  it('usage:get delegates to getSessionUsage', async () => {
-    mockGetSessionUsage.mockReturnValue({ input_tokens: 100 })
-    const result = await ipc.getHandler('usage:get')?.(null, 's1')
-    expect(mockGetSessionUsage).toHaveBeenCalledWith(ctx.db, 's1')
-    expect(result).toEqual({ input_tokens: 100 })
+  it('usage:get returns undefined when the session has no usage snapshot', async () => {
+    expect(ipc.getHandler('usage:get')?.(null, 'missing-session')).toBeUndefined()
   })
 
-  it('usage:delete delegates to deleteSessionUsage and saves', async () => {
+  it('usage:delete removes a snapshot and saves', async () => {
+    const usage = { input_tokens: 5000 }
+    await ipc.getHandler('usage:set')?.(null, { sessionId: 's1', usage })
+    vi.mocked(ctx.db.save).mockClear()
     await ipc.getHandler('usage:delete')?.(null, 's1')
-    expect(mockDeleteSessionUsage).toHaveBeenCalledWith(ctx.db, 's1')
     expect(ctx.db.save).toHaveBeenCalled()
+    expect(ipc.getHandler('usage:get')?.(null, 's1')).toBeUndefined()
   })
 })

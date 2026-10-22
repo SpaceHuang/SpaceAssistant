@@ -1,4 +1,4 @@
-import type { SessionCommands } from '../sessionStorage/contracts'
+import type { SessionCommands } from '../sessionStorage/public/ports'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import { sendFeishuRemoteOutbound } from '../feishu/feishuRemoteOutbound'
 import { logFeishuCliEvent } from '../feishu/feishuCliLogger'

@@ -132,6 +132,21 @@ describe('action.session.status', () => {
 })
 
 describe('action.session.read', () => {
+  it('prepares the chat body after visibility checks and before selecting export rows', async () => {
+    const id = await seedSession('projection capability read', ['body'])
+    const events: string[] = []
+    const base = createSqliteSessionStorage(db).queries
+    const queries = { ...base, readExportPage: (input: Parameters<typeof base.readExportPage>[0]) => {
+      events.push('select-export')
+      return base.readExportPage(input)
+    } }
+
+    await findCap('action.session.read').handler({ sessionId: id }, ctx({ sessionQueries: queries,
+      ensureChatBodyV1: async ({ sessionId }) => { events.push(`ensure:${sessionId}`) } }))
+
+    expect(events).toEqual([`ensure:${id}`, 'select-export'])
+  })
+
   it('按 sequence 游标分页读取消息（复用 getMessagesPage）', async () => {
     const id = await seedSession('阅读会话', ['消息 0', '消息 1', '消息 2'])
     const read = findCap('action.session.read')

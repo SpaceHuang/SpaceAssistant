@@ -31,9 +31,6 @@ async function makeEligible(db: ReturnType<typeof createTempDatabase>['db'], ses
   }], 0)
   expect(certifyCanonicalSessionApiRead(db, sessionId).status).toBe('eligible')
   expect(enableCanonicalSessionWriteAuthority(db, sessionId).status).toBe('enabled')
-  const session = getDbConnection(db).prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string }
-  getDbConnection(db).prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at)
-    VALUES(?,?,?)`).run(sessionId, session.generation, Date.now())
 }
 
 describe('session content cleanup authorization scope', () => {

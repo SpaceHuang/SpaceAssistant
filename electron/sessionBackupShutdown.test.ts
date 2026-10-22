@@ -19,11 +19,15 @@ describe('shutdown session backup flush', () => {
     try {
       const session = createSession(db, { name: 'pending backup', model: 'test' })
       appendMessage(db, { id: 'pending-backup-message', sessionId: session.id, role: 'user', content: 'still pending', timestamp: 1, status: 'sent' })
-      const storage = createSqliteSessionStorage(db)
+      const events: string[] = []
+      const baseStorage = createSqliteSessionStorage(db)
+      const storage = { ...baseStorage, ensureChatBodyV1: async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`) },
+        queries: { ...baseStorage.queries, readSession: (sessionId: string) => { events.push(`select:${sessionId}`); return baseStorage.queries.readSession(sessionId) } } }
       const manager = new DebouncedSessionBackupManager(new SessionBackupManager(workDir))
       manager.schedule(session.id, async () => null)
 
-      await flushPendingSessionBackups(manager, storage.queries)
+      await flushPendingSessionBackups(manager, storage)
+      expect(events).toEqual([`ensure:${session.id}`, `select:${session.id}`])
 
       const date = new Date(session.createdAt).toISOString().slice(0, 10).replace(/-/g, '')
       const content = JSON.parse(await fs.readFile(path.join(workDir, 'sessions', `${session.id}-${date}`, 'messages.json'), 'utf8'))

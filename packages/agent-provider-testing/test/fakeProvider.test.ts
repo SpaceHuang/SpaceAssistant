@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CanonicalFakeProvider, createOpenAiProtocolFixtures } from '../src'
+import { CanonicalFakeProvider, createOpenAiProtocolFixtures, RecordingModelProvider } from '../src'
 import type { PreparedModelCall } from '../../agent-sdk/src/model'
 
 describe('CanonicalFakeProvider', () => {
@@ -32,5 +32,24 @@ describe('CanonicalFakeProvider', () => {
       for await (const chunk of provider.stream(call)) received.push(chunk)
       expect(received).toEqual(fixtures[protocol])
     }
+  })
+})
+
+describe('RecordingModelProvider', () => {
+  it('records deep-frozen snapshots for every stream call', async () => {
+    const provider = new RecordingModelProvider([{ type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }])
+    const call: PreparedModelCall = {
+      route: { routeId: 'recording', protocol: 'openai-responses', dialect: 'responses-v1', adapterVersion: 'fake-1', modelId: 'test-model' },
+      request: { messages: [{ role: 'user', content: 'first' }], maxTokens: 20 }
+    }
+    const consume = async () => { for await (const _chunk of provider.stream(call)) void _chunk }
+
+    await consume()
+    call.request.messages[0]!.content = 'mutated after first call'
+    await consume()
+
+    expect(provider.calls.map(({ request }) => request.messages[0]?.content)).toEqual(['first', 'mutated after first call'])
+    expect(Object.isFrozen(provider.calls[0]?.request.messages)).toBe(true)
+    expect(Object.isFrozen(provider.calls[0]?.request.messages[0])).toBe(true)
   })
 })

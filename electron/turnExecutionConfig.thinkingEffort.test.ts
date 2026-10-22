@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from './database/testHelpers'
-import { createSession, getConfigValue, getDbConnection, setConfigValue, updateSession, type AppDatabase } from './database'
+import { createSession, getSession, updateSession } from './database/operations'
+import { getConfigValue, getDbConnection, setConfigValue, type AppDatabase } from './database'
 import { resolvePinnedAutomationTurnExecutionConfig as resolvePinnedAutomationTurnExecutionConfigWithQueries, resolveThinkingEffort, resolveTrustedTurnExecutionConfig as resolveTrustedTurnExecutionConfigWithQueries } from './turnExecutionConfig'
 import type { ModelEntry } from '../src/shared/domainTypes'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
@@ -367,7 +368,7 @@ describe('resolvePinnedAutomationTurnExecutionConfig', () => {
     const session = createSession(db, { name: 'automation', model: model.name, llmServiceId: SERVICE_ID, thinkingEffort: 'high', ownership: 'automation' })
     setConfigValue(db, 'config.activeLlmServiceIds', '[]')
     await expect(resolvePinnedAutomationTurnExecutionConfig(db, session.id, { resolutionStatus: 'resolved', modelId: model.id, providerModelName: model.name, serviceId: SERVICE_ID, requestedEffort: 'high', effectiveEffort: 'high' })).rejects.toThrow(/AUTOMATION_SERVICE_CONFIG_INVALID/)
-    expect((await import('./database')).getSession(db, session.id)).toMatchObject({ model: model.name, llmServiceId: SERVICE_ID, thinkingEffort: 'high' })
+    expect(getSession(db, session.id)).toMatchObject({ model: model.name, llmServiceId: SERVICE_ID, thinkingEffort: 'high' })
     db.close()
   })
 })

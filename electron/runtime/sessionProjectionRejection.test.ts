@@ -5,6 +5,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { clearProjectionRejection, getProjectionRejection, readProjectionO1Metadata } from './sessionProjectionRejection'
 import { getProjectedChatMessagePage, getProjectedMessagesPageWithSequence, readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import { computeLegacyProjectionDigest } from './sessionProjectionRejection'
 
 /** Build a mismatched session: legacy holds [A, B] while canonical History folds to [A']. */
 async function createMismatchedSession() {
@@ -23,6 +24,18 @@ async function createMismatchedSession() {
 }
 
 describe('session projection rejection negative cache (P0-②)', () => {
+  it('uses the chatBodyV1 fields for its revalidation digest', () => {
+    const message = { id: 'm1', sessionId: 's1', role: 'assistant' as const, content: 'body', timestamp: 1, status: 'completed' as const, schemaVersion: 1 }
+    expect(computeLegacyProjectionDigest([{ ...message, status: 'failed' }])).toBe(computeLegacyProjectionDigest([message]))
+    expect(computeLegacyProjectionDigest([{ ...message, content: 'edited' }])).not.toBe(computeLegacyProjectionDigest([message]))
+  })
+
+  it('hashes only chatBodyV1 fields, so status changes do not invalidate the body digest', () => {
+    const message = { id: 'm1', sessionId: 's1', role: 'assistant' as const, content: 'body', timestamp: 1, status: 'completed' as const, schemaVersion: 1 }
+    expect(computeLegacyProjectionDigest([{ ...message, status: 'failed' }])).toBe(computeLegacyProjectionDigest([message]))
+    expect(computeLegacyProjectionDigest([{ ...message, content: 'edited' }])).not.toBe(computeLegacyProjectionDigest([message]))
+  })
+
   it('records a rejection verdict with O(1) metadata after the first full compare fails', async () => {
     const { db, session } = await createMismatchedSession()
     const o1 = readProjectionO1Metadata(db, session.id)
@@ -173,5 +186,13 @@ describe('negative cache covers non-mismatch unavailable kinds (install-shipping
     expect(rebuildSpy).toHaveBeenCalledTimes(1)
     rebuildSpy.mockRestore()
     db.close()
+  })
+})
+
+describe('ProjectionSpec.chatBodyV1 digest', () => {
+  it('does not invalidate a body digest when only display status changes', async () => {
+    const { computeLegacyProjectionDigest } = await import('./sessionProjectionRejection')
+    const message = { id: 'm1', sessionId: 's1', role: 'assistant' as const, content: 'body', timestamp: 1, status: 'completed' as const, schemaVersion: 1 }
+    expect(computeLegacyProjectionDigest([{ ...message, status: 'failed' }])).toBe(computeLegacyProjectionDigest([message]))
   })
 })

@@ -1,14 +1,19 @@
-import type { SessionQueries } from './sessionStorage/contracts'
+import type { SessionQueries } from './sessionStorage/public/ports'
 import type { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 
 /** Flush pending debounce-window backups while the host-owned SessionQueries and database are still available. */
 export async function flushPendingSessionBackups(
   manager: Pick<DebouncedSessionBackupManager, 'getPendingSessionIds' | 'flushAllWithRetry'>,
-  queries: Pick<SessionQueries, 'readSession' | 'readExportPage'>
+  storage: Readonly<{
+    queries: Pick<SessionQueries, 'readSession' | 'readExportPage'>
+    ensureChatBodyV1?: (input: { sessionId: string }) => Promise<unknown>
+  }>
 ): Promise<void> {
   const sessionIds = manager.getPendingSessionIds()
   if (sessionIds.length === 0) return
   await manager.flushAllWithRetry(sessionIds, async (sessionId) => {
+    await storage.ensureChatBodyV1?.({ sessionId })
+    const queries = storage.queries
     const session = queries.readSession(sessionId)
     if (!session) return null
     return {

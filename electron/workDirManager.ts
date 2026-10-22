@@ -5,7 +5,7 @@ import type { Session } from '../src/shared/domainTypes'
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
 import type { AppDatabase } from './database'
 import { getConfigValue, setConfigValue } from './database'
-import type { SessionCommands, SessionQueries } from './sessionStorage/contracts'
+import type { SessionCommands, SessionQueries } from './sessionStorage/public/ports'
 
 const PROFILES_KEY = 'config.workDirProfiles'
 const ACTIVE_KEY = 'config.activeWorkDirProfileId'

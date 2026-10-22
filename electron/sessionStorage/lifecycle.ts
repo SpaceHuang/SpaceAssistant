@@ -1,15 +1,4 @@
-import type { StorageLifecycleControl, MaintenanceState } from './contracts'
-
-export type LifecycleTaskHandle = Readonly<{
-  stop(): void
-  quiesce(): Promise<void>
-  request?(reason: import('./contracts').MaintenanceReason): void
-}>
-export type LifecycleTaskRegistration = Readonly<{
-  taskId: string
-  category: NonNullable<MaintenanceState['category']>
-  start(): LifecycleTaskHandle | undefined
-}>
+import type { StorageLifecycleControl, MaintenanceState, MaintenanceReason, LifecycleTaskHandle, LifecycleTaskRegistration } from './host/ports'
 
 /** Host-owned coordinator for existing maintenance schedulers; task policy remains with each existing owner. */
 export function createStorageLifecycleControl(input: {
@@ -55,6 +44,23 @@ export function createStorageLifecycleControl(input: {
       const scheduled = targets.some((record) => ensureStarted(record))
       if (!scheduled && (active.length > 0 || targets.every(({ paused }) => paused))) return { status: 'coalesced' as const }
       return scheduled ? { status: 'scheduled' as const } : { status: 'not-needed' as const }
+    },
+    prepareProjection: async (request: Parameters<StorageLifecycleControl['prepareProjection']>[0]) => {
+      if (stopped) throw new Error('STORAGE_LIFECYCLE_STOPPED')
+      const record = records.find(({ task }) => task.category === 'derived-index' && task.prepare)
+      if (!record) throw new Error('PROJECTION_PREPARATION_UNAVAILABLE')
+      if (record.paused) throw new Error('PROJECTION_PREPARATION_PAUSED')
+      if (!record.handle) {
+        try {
+          record.handle = record.task.start()
+          record.lastError = undefined
+        } catch (error) {
+          record.lastError = error instanceof Error ? error.name : 'TASK_START_FAILED'
+          throw error
+        }
+      }
+      if (!record.handle) throw new Error('PROJECTION_TASK_NOT_STARTED')
+      return record.task.prepare!(request)
     },
     allowBackgroundWork: () => { if (!stopped) { allowed = true; records.forEach(ensureStarted) } },
     pauseMaintenance: async (request: Parameters<StorageLifecycleControl['pauseMaintenance']>[0] = {}) => {
@@ -106,7 +112,7 @@ export function createStorageLifecycleControl(input: {
 export function createLifecycleTaskHandle(
   stop: () => void,
   quiesce: () => Promise<void> = () => Promise.resolve(),
-  request?: (reason: import('./contracts').MaintenanceReason) => void
+  request?: (reason: MaintenanceReason) => void
 ): LifecycleTaskHandle {
   return Object.freeze({ stop, quiesce, ...(request ? { request } : {}) })
 }

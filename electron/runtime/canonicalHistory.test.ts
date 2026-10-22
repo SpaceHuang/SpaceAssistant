@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { commitCompactionAcrossStores, foldClaudeSessionSnapshots, isCanonicalProjectionWatermarkValid, toCanonicalModelMessages } from './canonicalHistory'
+import { commitCompactionAcrossStores, createCanonicalHistoryReductionState, foldCanonicalHistoryChunk,
+  applyCanonicalHistoryOutputOperations, finalizeCanonicalHistoryReduction, foldClaudeSessionSnapshots,
+  foldCanonicalSessionSnapshot, createCanonicalSessionSnapshotFoldState, parseCanonicalSessionSnapshotFoldState,
+  createCanonicalSessionSnapshotFoldSession, parseCanonicalSessionSnapshotExternalIndex,
+  applyCanonicalSessionSnapshotOperations, isCanonicalProjectionWatermarkValid, parseCanonicalHistoryReductionState, toCanonicalModelMessages } from './canonicalHistory'
 import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import { buildClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
@@ -97,6 +101,53 @@ describe('toCanonicalModelMessages', () => {
 })
 
 describe('rebuildClaudeMessagesFromHistory', () => {
+  it('resumes serializable reducer state across event chunks with tool ordering and snapshot replacement', () => {
+    const events: HistoryEvent[] = [
+      { invocationId: 'chunked', turnId: 'turn-1', sequence: 1, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'old' }] } },
+      { invocationId: 'chunked', turnId: 'turn-1', sequence: 2, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'working', toolCalls: [{ id: 'first', name: 'lookup', input: {} }, { id: 'second', name: 'lookup', input: {} }] } } },
+      { invocationId: 'chunked', turnId: 'turn-1', sequence: 3, schemaVersion: 1, eventId: 'second-result', idempotencyKey: 'second-result', kind: 'tool-call-finished', payload: { toolCallId: 'second', replayContent: '2' } },
+      { invocationId: 'chunked', turnId: 'turn-1', sequence: 4, schemaVersion: 1, eventId: 'compact', idempotencyKey: 'compact', kind: 'transcript-compacted', payload: { messages: [{ role: 'user', content: 'new' }] } },
+      { invocationId: 'chunked', turnId: 'turn-1', sequence: 5, schemaVersion: 1, eventId: 'end', idempotencyKey: 'end', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'done' } } }
+    ]
+    let state = createCanonicalHistoryReductionState()
+    let output = [] as ReturnType<typeof applyCanonicalHistoryOutputOperations>
+    const firstSlice = foldCanonicalHistoryChunk(state, events.slice(0, 3))
+    state = parseCanonicalHistoryReductionState(JSON.stringify(firstSlice.state))!
+    expect(state).not.toBeNull()
+    output = applyCanonicalHistoryOutputOperations(output, firstSlice.outputOperations)
+    const secondSlice = foldCanonicalHistoryChunk(state, events.slice(3))
+    state = parseCanonicalHistoryReductionState(JSON.stringify(secondSlice.state))!
+    output = applyCanonicalHistoryOutputOperations(output, secondSlice.outputOperations)
+    const final = finalizeCanonicalHistoryReduction(state)
+    output = applyCanonicalHistoryOutputOperations(output, final.outputOperations)
+
+    expect(output).toEqual(rebuildClaudeMessagesFromHistory(events))
+    expect(output).toEqual([
+      { role: 'user', content: 'new' }, { role: 'assistant', content: 'done' }
+    ])
+    expect(firstSlice.outputOperations.map(({ type }) => type)).toEqual(['replace', 'append'])
+    expect(secondSlice.outputOperations.map(({ type }) => type)).toEqual(['replace', 'append'])
+  })
+
+  it('rejects corrupted serialized reducer state and inconsistent pending-tool indexes', () => {
+    const state = createCanonicalHistoryReductionState()
+    expect(parseCanonicalHistoryReductionState('{bad-json')).toBeNull()
+    expect(parseCanonicalHistoryReductionState(JSON.stringify({ ...state, options: { ...state.options, allowPendingToolCalls: 'yes' } }))).toBeNull()
+    expect(parseCanonicalHistoryReductionState(JSON.stringify({ ...state, pendingToolCalls: ['missing'], toolCallOrder: [] }))).toBeNull()
+  })
+
+  it('keeps durable reducer state bounded while returning this slice as output deltas', () => {
+    const events = Array.from({ length: 128 }, (_, index): HistoryEvent => ({ invocationId: 'bounded-fold', turnId: 'turn-bounded',
+      sequence: index + 1, schemaVersion: 1, eventId: `bounded-${index + 1}`, idempotencyKey: `bounded-${index + 1}`,
+      kind: 'model-response-committed', payload: { message: { role: 'assistant', content: `message-${index + 1}` } } }))
+    const state = createCanonicalHistoryReductionState()
+    const result = foldCanonicalHistoryChunk(state, events)
+
+    expect(result.outputOperations).toHaveLength(1)
+    expect(result.outputOperations[0]).toMatchObject({ type: 'append', messages: { length: 128 } })
+    expect(JSON.stringify(result.state).length).toBeLessThan(512)
+  })
+
   it('settles a deferred approval without inventing a tool execution result in provider history', () => {
     const events: HistoryEvent[] = [
       { invocationId: 'deferred-replay', turnId: 'turn-1', sequence: 1, schemaVersion: 1, eventId: 'deferred-response', idempotencyKey: 'deferred-response', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'write a file' }] } },
@@ -399,6 +450,131 @@ describe('rebuildClaudeMessagesFromHistory', () => {
 })
 
 describe('foldClaudeSessionSnapshots', () => {
+  const snapshotFacts = (messages: readonly { id?: string; role: string }[]) => {
+    const byId = new Map(messages.flatMap((message, ordinal) => message.id ? [[message.id, { id: message.id, role: message.role, ordinal }] as const] : []))
+    return (snapshot: { messages: readonly { id?: string; role: string }[] }) => {
+      const existingMessages = snapshot.messages.flatMap((message) => message.id && byId.has(message.id) ? [byId.get(message.id)!] : [])
+      return { messageCount: messages.length, existingMessages,
+        tailMessageIds: existingMessages.length ? messages.slice(-existingMessages.length).map((message) => message.id!) : [] }
+    }
+  }
+  it('merges snapshots incrementally by stable ID and resumes the fold cursor from JSON', () => {
+    const snapshots = [
+      { sessionId: 's', invocationId: 'i1', sessionSeq: 2, commitOrder: 2, messages: [
+        { role: 'user', id: 'u1', content: 'old' }, { role: 'assistant', id: 'a1', content: 'answer' }
+      ] },
+      { sessionId: 's', invocationId: 'i2', sessionSeq: 4, commitOrder: 4, messages: [
+        { role: 'user', id: 'u1', content: 'edited in provider context' },
+        { role: 'assistant', id: 'a1', content: 'answer revised' },
+        { role: 'user', id: 'u2', content: 'next turn' }
+      ] }
+    ] as const
+    let state = createCanonicalSessionSnapshotFoldState()
+    let messages = [] as ReturnType<typeof applyCanonicalSessionSnapshotOperations>
+    const first = foldCanonicalSessionSnapshot(state, snapshots[0], snapshotFacts(messages)(snapshots[0]))
+    state = parseCanonicalSessionSnapshotFoldState(JSON.stringify(first.state))!
+    messages = applyCanonicalSessionSnapshotOperations(messages, first.operations)
+    const second = foldCanonicalSessionSnapshot(state, snapshots[1], snapshotFacts(messages)(snapshots[1]))
+    state = parseCanonicalSessionSnapshotFoldState(JSON.stringify(second.state))!
+    messages = applyCanonicalSessionSnapshotOperations(messages, second.operations)
+
+    expect(messages).toEqual(foldClaudeSessionSnapshots(snapshots as never))
+    expect(messages).toEqual([
+      { role: 'user', id: 'u1', content: 'edited in provider context' },
+      { role: 'assistant', id: 'a1', content: 'answer revised' },
+      { role: 'user', id: 'u2', content: 'next turn' }
+    ])
+  })
+
+  it('retains omitted older IDs and rejects incremental order, identity, and cursor corruption', () => {
+    const first = { sessionId: 's', invocationId: 'i1', sessionSeq: 2, commitOrder: 2, messages: [
+      { role: 'user', id: 'u1', content: 'old' }, { role: 'assistant', id: 'a1', content: 'answer' }
+    ] } as const
+    const state = foldCanonicalSessionSnapshot(createCanonicalSessionSnapshotFoldState(), first, snapshotFacts([])(first)).state
+    const truncated = { sessionId: 's', invocationId: 'i2', sessionSeq: 4, commitOrder: 4,
+      messages: [{ role: 'assistant', id: 'a1', content: 'updated' }] } as const
+    const delta = foldCanonicalSessionSnapshot(state, truncated, snapshotFacts(first.messages)(truncated))
+    expect(applyCanonicalSessionSnapshotOperations(first.messages, delta.operations)).toEqual([
+      { role: 'user', id: 'u1', content: 'old' }, { role: 'assistant', id: 'a1', content: 'updated' }
+    ])
+    expect(() => foldCanonicalSessionSnapshot(state, { ...truncated, messages: [
+      { role: 'assistant', id: 'a1', content: 'updated' }, { role: 'user', id: 'u1', content: 'reordered' }
+    ] }, snapshotFacts(first.messages)({ ...truncated, messages: [
+      { role: 'assistant', id: 'a1', content: 'updated' }, { role: 'user', id: 'u1', content: 'reordered' }
+    ] }))).toThrow(/snapshot order conflicts/)
+    expect(() => foldCanonicalSessionSnapshot(state, { ...truncated, messages: [
+      { role: 'assistant', id: 'new-before-overlap', content: 'bad' }, truncated.messages[0]
+    ] }, snapshotFacts(first.messages)({ ...truncated, messages: [
+      { role: 'assistant', id: 'new-before-overlap', content: 'bad' }, truncated.messages[0]
+    ] }))).toThrow(/inserts messages before/)
+    expect(() => foldCanonicalSessionSnapshot(state, { ...truncated, messages: [
+      { role: 'user', id: 'a1', content: 'identity role changed' }
+    ] }, snapshotFacts(first.messages)({ ...truncated, messages: [
+      { role: 'user', id: 'a1', content: 'identity role changed' }
+    ] }))).toThrow(/identity changed role/)
+    expect(() => foldCanonicalSessionSnapshot(state, { ...truncated, sessionSeq: 2 }, snapshotFacts(first.messages)(truncated))).toThrow(/order or ownership/)
+    expect(parseCanonicalSessionSnapshotFoldState(JSON.stringify({ ...state, messageCount: -1 }))).toBeNull()
+  })
+
+  it('keeps the durable snapshot cursor bounded by externalizing the stable-ID index facts', () => {
+    const messages = Array.from({ length: 128 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const, id: `message-${index}`, content: `body-${index}`
+    }))
+    const result = foldCanonicalSessionSnapshot(createCanonicalSessionSnapshotFoldState(), {
+      sessionId: 'large-session', invocationId: 'large-invocation', sessionSeq: 128, commitOrder: 128, messages,
+    }, snapshotFacts([])({ messages }))
+
+    expect(JSON.stringify(result.state).length).toBeLessThan(512)
+    expect(result.state.messageCount).toBe(128)
+    expect(result.operations).toHaveLength(128)
+  })
+
+  it('resumes stable-ID snapshot folding from a bounded checkpoint and external message index', () => {
+    const first = { sessionId: 'resume-session', invocationId: 'inv-1', sessionSeq: 1, commitOrder: 1,
+      messages: [{ role: 'user', id: 'u1', content: 'hello' }, { role: 'assistant', id: 'a1', content: 'world' }] } as const
+    const initial = createCanonicalSessionSnapshotFoldSession()
+    const delta = initial.fold(first)
+    const persisted = initial.stateJson()
+    const externalIndex = initial.indexJson()
+    expect(persisted.length).toBeLessThan(512)
+    expect(persisted).not.toContain('a1')
+    expect(JSON.parse(externalIndex)).toEqual({ formatVersion: 1, messageCount: 2,
+      entries: [{ id: 'u1', role: 'user', ordinal: 0 }, { id: 'a1', role: 'assistant', ordinal: 1 }] })
+
+    const resumed = createCanonicalSessionSnapshotFoldSession(persisted, initial.messages(), externalIndex)
+    const next = { sessionId: 'resume-session', invocationId: 'inv-2', sessionSeq: 2, commitOrder: 2,
+      messages: [{ role: 'user', id: 'u1', content: 'hello revised' }, { role: 'assistant', id: 'a1', content: 'world' },
+        { role: 'user', id: 'u2', content: 'next' }] } as const
+    expect(resumed.fold(next).map((operation) => operation.type)).toEqual(['upsert', 'upsert', 'append'])
+    expect(resumed.messages().map((message) => message.id)).toEqual(['u1', 'a1', 'u2'])
+    expect(() => createCanonicalSessionSnapshotFoldSession(persisted, [])).toThrow(/external message index/)
+    expect(() => createCanonicalSessionSnapshotFoldSession(persisted, initial.messages(), JSON.stringify({
+      formatVersion: 1, messageCount: 2, entries: [{ id: 'wrong', role: 'user', ordinal: 0 }, { id: 'a1', role: 'assistant', ordinal: 1 }]
+    }))).toThrow(/external message index/)
+    expect(parseCanonicalSessionSnapshotExternalIndex(JSON.stringify({ formatVersion: 1, messageCount: 2,
+      entries: [{ id: 'u1', role: 'user', ordinal: 0 }, { id: 'u1', role: 'assistant', ordinal: 1 }] }))).toBeNull()
+    expect(parseCanonicalSessionSnapshotExternalIndex(JSON.stringify({ formatVersion: 1, messageCount: 2,
+      entries: [{ id: 'u1', role: 'user', ordinal: 1 }, { id: 'a1', role: 'assistant', ordinal: 0 }] }))).toBeNull()
+  })
+
+  it('rejects malformed external identity facts before emitting snapshot deltas', () => {
+    const prior = { sessionId: 's', invocationId: 'i1', sessionSeq: 1, commitOrder: 1,
+      messages: [{ role: 'user', id: 'prior', content: 'old' }] } as const
+    const snapshot = { sessionId: 's', invocationId: 'i', sessionSeq: 2, commitOrder: 2,
+      messages: [{ role: 'user', id: 'prior', content: 'updated' }] } as const
+    const state = foldCanonicalSessionSnapshot(createCanonicalSessionSnapshotFoldState(), prior,
+      { messageCount: 0, existingMessages: [], tailMessageIds: [] }).state
+
+    expect(() => foldCanonicalSessionSnapshot(state, snapshot, {
+      messageCount: 1, existingMessages: [
+        { id: 'prior', role: 'user', ordinal: 0 }, { id: 'prior', role: 'user', ordinal: 0 }
+      ], tailMessageIds: ['prior']
+    })).toThrow(/index facts are invalid/)
+    expect(() => foldCanonicalSessionSnapshot(state, snapshot, {
+      messageCount: 1, existingMessages: [{ id: 'prior', role: 'user', ordinal: 1 }], tailMessageIds: ['prior']
+    })).toThrow(/index facts are invalid/)
+  })
+
   it('orders snapshots by session sequence and merges a truncated context by stable message identity', () => {
     const first = { id: 'm-1', role: 'user' as const, content: 'first' }
     const second = { id: 'm-2', role: 'assistant' as const, content: 'second' }

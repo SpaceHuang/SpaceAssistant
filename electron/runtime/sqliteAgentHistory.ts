@@ -14,11 +14,13 @@ import {
   type HistorySnapshot,
   type RebuiltInvocationState
 } from '../../packages/agent-sdk/src/history'
+import { foldCompactionEvents, type CompactionReplay } from '../../src/shared/compactionEvents'
 import { runInTransaction } from '../database/transaction'
 import { currentProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { buildCanonicalToolResultProjectionTargets } from '../sessionLedgerOutbox'
 import { commitSessionTranscriptInTransaction } from '../database/sessionTranscript'
+import { hasRejectedTranscriptParityStateInConnection } from '../sessionStorage/infrastructure/sqlite/sessionProjectionEligibility'
 import type { SessionTranscriptCommitIntent } from '../../packages/agent-sdk/src/history'
 import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
@@ -26,7 +28,7 @@ import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibilit
 import { decodeTerminalOutcome } from './terminalOutcome'
 import { classifySessionHistoryRepairFailure } from './sessionHistoryRecoveryDiagnostics'
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { canonicalSessionTranscriptEvents, foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
+import { canonicalSessionTranscriptEvents, createCanonicalSessionSnapshotFoldSession, foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
 import { isCanonicalProjectionWatermarkValid } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
@@ -34,8 +36,26 @@ import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
 import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
 import { sessionLedgerLocationIdentity } from '../sessionLedgerIdentity'
 import { withSessionLedgerLifecycleLocks } from '../sessionLedgerLifecycle'
+import { projectChatBodyV1 } from '../sessionStorage/domain/projectionSpec'
+import type { SessionHistoryLedgerLocation, SessionHistoryRecoveryOptions } from '../sessionStorage/public/ports'
+import type { CanonicalContextMeterEvent } from '../sessionStorage/public/model'
 
 const CANONICAL_SESSION_CACHE_VERSION = 1
+const SNAPSHOT_FOLD_CACHE_SUFFIX = ':snapshot-fold-v1'
+
+function snapshotFoldCacheKey(cacheKey: string): string { return `${cacheKey}${SNAPSHOT_FOLD_CACHE_SUFFIX}` }
+
+function createSnapshotFoldFromCache(input: Readonly<{ sessionId: string; sessionSeq: number; commitOrder: number;
+  watermarkInvocationId: string | null; messages: readonly ClaudeChatMessageWithBlocks[] }>) {
+  const fold = createCanonicalSessionSnapshotFoldSession()
+  if (input.sessionSeq === -1) {
+    if (input.commitOrder !== -1 || input.messages.length !== 0) throw new Error('canonical snapshot fold empty cache watermark is invalid')
+    return fold
+  }
+  fold.fold({ sessionId: input.sessionId, invocationId: input.watermarkInvocationId ?? 'cache-seed',
+    sessionSeq: input.sessionSeq, commitOrder: input.commitOrder, messages: input.messages })
+  return fold
+}
 
 function stableCanonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableCanonicalValue)
@@ -296,10 +316,9 @@ function sha256(value: string): string {
 export type CanonicalSessionTranscriptWithCacheRead =
   | Readonly<{ kind: 'matched'; source: 'L1' | 'L2'; messages: ClaudeChatMessageWithBlocks[]; replayedEvents: number; watermark: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> }>
   | Readonly<{ kind: 'unavailable'; reason: Extract<CanonicalSessionTranscriptRead, { kind: 'unavailable' }>['reason'] }>
-type CompactionLedgerLocation = { workDir: string; sessionId: string; createdAt: number }
-type CanonicalCompactionLedger = { location: CompactionLedgerLocation; start: Record<string, unknown>; summary: Record<string, unknown> }
-type CanonicalToolLedger = { location: CompactionLedgerLocation; stepId: string; result: Record<string, unknown>; requestId?: string; invocationRequestId?: string; lane?: string; turnId?: string }
-type CanonicalToolCallLedger = { location: CompactionLedgerLocation; stepId?: string; toolCalls?: Array<Record<string, unknown>>; requestUsage?: Record<string, unknown> }
+type CanonicalCompactionLedger = { location: SessionHistoryLedgerLocation; start: Record<string, unknown>; summary: Record<string, unknown> }
+type CanonicalToolLedger = { location: SessionHistoryLedgerLocation; stepId: string; result: Record<string, unknown>; requestId?: string; invocationRequestId?: string; lane?: string; turnId?: string }
+type CanonicalToolCallLedger = { location: SessionHistoryLedgerLocation; stepId?: string; toolCalls?: Array<Record<string, unknown>>; requestUsage?: Record<string, unknown> }
 
 type MirroredContentSegment = { content: string; startTime: number; endTime?: number }
 
@@ -347,6 +366,159 @@ export class SqliteAgentHistory implements HistoryPort {
   constructor(private readonly conn: DatabaseSync, private readonly schemaVersion = 1, private readonly now: () => number = Date.now, private readonly sessionId?: string, spillStore?: SpillStore) {
     this.spillStore = spillStore ?? createSpillStoreForDatabase(conn)
     this.processGeneration = currentProcessGeneration(conn)
+  }
+
+  /** Rebuilds the surface-compaction replay from committed, session-owned History facts. */
+  readCanonicalCompactionReplay(sessionId: string): CompactionReplay | undefined {
+    const rows = this.readValidatedSessionHistoryRows(sessionId)
+    if (!rows) return undefined
+
+    const events: Array<{ seq: number; type: 'compaction_start' | 'compaction_summary' | 'compaction_end'; payload: Record<string, unknown> }> = []
+    const rejected: CompactionReplay['rejected'] = []
+    rows.forEach((row, index) => {
+      if (row.kind !== 'transcript-compacted') return
+      const parsedPayload: unknown = JSON.parse(row.payload_json)
+      const historyPayload = isRecord(parsedPayload) ? parsedPayload : {}
+      const compactionId = typeof historyPayload.compactionId === 'string' ? historyPayload.compactionId : undefined
+      const ledger = historyPayload.sessionLedger
+      // Provider-overflow recovery replaces only the execution transcript; it has no surface replay ledger.
+      if (ledger === undefined) return
+      const location = isRecord(ledger) && isRecord(ledger.location) ? ledger.location : undefined
+      const start = isRecord(ledger) && isRecord(ledger.start) ? ledger.start : undefined
+      const summary = isRecord(ledger) && isRecord(ledger.summary) ? ledger.summary : undefined
+      if (!location || location.sessionId !== sessionId || typeof location.workDir !== 'string' || !location.workDir.trim() ||
+        !Number.isSafeInteger(location.createdAt) || !start || !summary) {
+        rejected.push({ ...(compactionId ? { compactionId } : {}), reason: 'canonical-session-ledger-missing-or-invalid' })
+        return
+      }
+      const seq = (index + 1) * 3
+      const startEvent = { seq, type: 'compaction_start' as const, payload: start }
+      const summaryEvent = { seq: seq + 1, type: 'compaction_summary' as const, payload: summary }
+      const outputWindowId = typeof summary.outputWindowId === 'string' ? summary.outputWindowId : undefined
+      const endWindowId = outputWindowId ?? (typeof start.windowId === 'string' ? start.windowId : undefined)
+      const inputSurfaceFingerprint = start.inputSurfaceFingerprint
+      const outputSurfaceFingerprint = summary.outputSurfaceFingerprint
+      const endEvent = { seq: seq + 2, type: 'compaction_end' as const, payload: {
+        ...(typeof summary.compactionId === 'string' ? { compactionId: summary.compactionId } : {}),
+        ...(endWindowId ? { windowId: endWindowId } : {}),
+        ...(typeof summary.inputWindowId === 'string' ? { inputWindowId: summary.inputWindowId } : {}),
+        ...(outputWindowId ? { outputWindowId } : {}),
+        ...(typeof start.turnId === 'string' ? { turnId: start.turnId } : {}),
+        status: 'committed', startSeq: startEvent.seq, summarySeq: summaryEvent.seq,
+        ...(typeof inputSurfaceFingerprint === 'string' ? { inputSurfaceFingerprint } : {}),
+        ...(typeof outputSurfaceFingerprint === 'string' ? { outputSurfaceFingerprint } : {}),
+        ...(typeof summary.summaryHash === 'string' ? { summaryHash: summary.summaryHash } : {})
+      } }
+      events.push(startEvent, summaryEvent, endEvent)
+    })
+    const replay = foldCompactionEvents(events)
+    return { committed: replay.committed, rejected: [...rejected, ...replay.rejected] }
+  }
+
+  /** Rebuilds the request facts consumed by ContextMeter from session-owned canonical History. */
+  readCanonicalContextMeterEvents(sessionId: string): readonly CanonicalContextMeterEvent[] | undefined {
+    const rows = this.readValidatedSessionHistoryRows(sessionId)
+    if (!rows) return undefined
+    const result: CanonicalContextMeterEvent[] = []
+    const add = (seq: number, type: CanonicalContextMeterEvent['type'], payload: Record<string, unknown>) => result.push({ seq, type, payload })
+    for (const row of rows) {
+      const raw: unknown = JSON.parse(row.payload_json)
+      if (!isRecord(raw)) continue
+      const ledger = raw.sessionLedger
+      if (!isRecord(ledger)) continue
+      const baseSeq = row.session_seq * 4
+      if (row.kind === 'model-request-started') {
+        const header = ledger.requestHeader
+        const context = ledger.requestContext
+        if (!isRecord(header) || !isRecord(context)) continue
+        const requestId = header.requestId
+        const attempt = header.attempt
+        if (typeof requestId !== 'string' || !Number.isInteger(attempt) || context.requestId !== requestId || context.attempt !== attempt) continue
+        add(baseSeq + 1, 'request_header', header)
+        add(baseSeq + 2, 'request_context', context)
+      } else if (row.kind === 'provider-retry-scheduled') {
+        const retry = ledger.requestRetry
+        if (isRecord(retry) && typeof retry.requestId === 'string' && Number.isInteger(retry.attempt)) add(baseSeq + 1, 'request_retry', retry)
+      } else if (row.kind === 'model-response-committed' || row.kind === 'model-attempt-discarded') {
+        const usage = ledger.requestUsage
+        if (isRecord(usage) && typeof usage.requestId === 'string') add(baseSeq + 1, 'request_usage', usage)
+        if (row.kind === 'model-response-committed' && isRecord(ledger.requestContext)) {
+          const context = ledger.requestContext
+          if (typeof context.requestId === 'string' && Number.isInteger(context.attempt)) {
+            add(baseSeq + 2, 'request_context', { ...context, projectionStage: 'final' })
+          }
+        }
+      }
+    }
+    return result
+  }
+
+  /** Retention proof: unknown or malformed History ownership must never imply no ledger dependency. */
+  hasCanonicalCompactionDependency(sessionId: string): boolean {
+    if (!sessionId.trim()) throw new HistoryBatchError('sessionId is required')
+    const rows = this.conn.prepare(`SELECT events.invocation_id,events.session_id AS event_session_id,
+        streams.session_id AS stream_session_id,events.payload_json
+      FROM agent_history_events events LEFT JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
+      WHERE events.kind='transcript-compacted'`).all() as Array<{
+        invocation_id: string; event_session_id: string | null; stream_session_id: string | null; payload_json: string
+      }>
+    for (const row of rows) {
+      let raw: unknown
+      try { raw = JSON.parse(row.payload_json) }
+      catch { throw new HistoryCorruptionError(row.invocation_id, 'canonical compaction History is corrupt') }
+      if (!isRecord(raw)) throw new HistoryCorruptionError(row.invocation_id, 'canonical compaction History payload is invalid')
+      const owners = [row.event_session_id, row.stream_session_id].filter((owner): owner is string => typeof owner === 'string' && owner.trim().length > 0)
+      if (owners.length === 2 && owners[0] !== owners[1]) throw new HistoryCorruptionError(row.invocation_id, 'canonical compaction History owner mismatch')
+      const owner = owners[0]
+      const ledger = raw.sessionLedger
+      if (ledger === undefined) {
+        // Provider recovery has no surface ledger. An unowned transcript-compacted event is ambiguous.
+        if (!owner) return true
+        continue
+      }
+      if (!isRecord(ledger)) throw new HistoryCorruptionError(row.invocation_id, 'canonical compaction History sidecar is invalid')
+      const location = ledger.location
+      if (!isRecord(location) || typeof location.sessionId !== 'string' || !location.sessionId.trim()) {
+        if (!owner || owner === sessionId) return true
+        throw new HistoryCorruptionError(row.invocation_id, 'canonical compaction History location is missing')
+      }
+      if (owner && owner !== location.sessionId) throw new HistoryCorruptionError(row.invocation_id, 'canonical compaction History location owner mismatch')
+      if (owner === sessionId || location.sessionId === sessionId) return true
+    }
+    return false
+  }
+
+  private readValidatedSessionHistoryRows(sessionId: string): OrderedSessionEventRow[] | undefined {
+    if (!sessionId.trim() || (this.sessionId && this.sessionId !== sessionId)) throw new HistoryBatchError('sessionId is required or does not match this History port')
+    if (!this.conn.prepare('SELECT 1 FROM sessions WHERE id=?').get(sessionId)) return undefined
+    const rows = this.conn.prepare(`SELECT events.invocation_id,events.sequence,events.event_id,events.idempotency_key,events.turn_id,
+        events.schema_version,events.kind,events.payload_json,events.session_seq,events.commit_order,events.session_id,events.created_at
+      FROM agent_history_events events JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
+      WHERE streams.session_id=? AND events.session_id=? ORDER BY events.session_seq,events.commit_order`).all(sessionId, sessionId) as OrderedSessionEventRow[]
+    if (rows.length === 0) {
+      const hasCanonicalStreams = this.conn.prepare('SELECT 1 FROM agent_history_streams WHERE session_id=? LIMIT 1').get(sessionId)
+      if (hasCanonicalStreams) throw new HistoryCorruptionError(sessionId, 'canonical session History streams have no owned events')
+      return undefined
+    }
+    if (!this.isGlobalCommitCursorContiguous()) throw new HistoryCorruptionError(sessionId, 'canonical session History has an invalid global commit cursor')
+    const cursor = this.conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId) as { next_seq: number } | undefined
+    if ((cursor?.next_seq ?? 0) !== rows.length || rows.some((row, index) => !Number.isSafeInteger(row.session_seq) || row.session_seq !== index + 1 ||
+      !Number.isSafeInteger(row.commit_order) || row.commit_order < 1 || row.session_id !== sessionId || (index > 0 && row.commit_order <= rows[index - 1]!.commit_order))) {
+      throw new HistoryCorruptionError(sessionId, 'canonical session History order is invalid')
+    }
+    const byInvocation = new Map<string, OrderedSessionEventRow[]>()
+    for (const row of rows) byInvocation.set(row.invocation_id, [...(byInvocation.get(row.invocation_id) ?? []), row])
+    for (const [invocationId, streamRows] of byInvocation) {
+      if (!this.isCanonicalSessionInvocationRowsValid(sessionId, invocationId, streamRows)) {
+        throw new HistoryCorruptionError(invocationId, 'canonical session History stream is invalid')
+      }
+      const events = streamRows.map((row) => ({ invocationId, sequence: row.sequence, eventId: row.event_id,
+        idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version,
+        kind: row.kind as HistoryEvent['kind'], payload: JSON.parse(row.payload_json) as unknown })) as HistoryEvent[]
+      try { validateHistoryTransition([], events) }
+      catch { throw new HistoryCorruptionError(invocationId, 'canonical session History transition is invalid') }
+    }
+    return rows
   }
 
   async appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
@@ -405,6 +577,13 @@ export class SqliteAgentHistory implements HistoryPort {
         if (cleanup && ['write-stopped', 'pending', 'complete'].includes(cleanup.cleanup_state)) {
           throw new HistoryBatchError('session message content writes are stopped for cleanup')
         }
+      }
+      if (transcriptCommit?.executionLease) {
+        const lease = transcriptCommit.executionLease
+        const terminal = events.length === 1 ? events[0] : undefined
+        if (!this.sessionId || lease.sessionId !== this.sessionId || lease.sessionId !== transcriptCommit.sessionId ||
+          !terminal || terminal.turnId !== lease.turnId || !Number.isSafeInteger(lease.generation) || lease.generation < 1 ||
+          !lease.ownerId.trim()) throw new HistoryBatchError('SESSION_EXECUTION_CLAIM_FENCED')
       }
       const writeFence = events.map((event) => event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
         ? (event.payload as Record<string, unknown>).canonicalWriteFence : undefined).find(Boolean) as {
@@ -597,6 +776,7 @@ export class SqliteAgentHistory implements HistoryPort {
       const committed = commitSessionTranscriptInTransaction(this.conn, {
         sessionId: transcriptCommit.sessionId, turnId: terminal.turnId, baseVersion: transcriptCommit.baseVersion,
         outcome: transcriptCommit.outcome, messages: transcriptCommit.messages,
+        ...(transcriptCommit.executionLease ? { executionLease: transcriptCommit.executionLease } : {}),
         ...(storedTranscriptJson ? { storedMessagesJson: storedTranscriptJson } : {}), now: this.now()
       })
       if (!committed.committed) throw new HistoryBatchError(`session transcript commit rejected: ${committed.reason}`)
@@ -646,18 +826,11 @@ export class SqliteAgentHistory implements HistoryPort {
       // re-adjudicated by the background revalidator yet. Re-granting eligibility here would
       // let the next read hit the warm L1 (whose merge does not compare legacy bodies) and
       // silently mask the divergence, so the write path stays out of the verdict's jurisdiction.
-      const rejection = this.conn.prepare('SELECT 1 FROM canonical_session_projection_rejections WHERE session_id=?')
-        .get(this.sessionId)
-      if (rejection) return
+      if (hasRejectedTranscriptParityStateInConnection(this.conn, this.sessionId)) return
       const canonical = this.readCanonicalSessionTranscriptWithCache(this.sessionId, 'transcript')
       if (canonical.kind !== 'matched') return
-      const generation = (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as
-        { generation: string } | undefined)?.generation
-      if (!generation) return
-      this.conn.prepare(`INSERT INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at)
-        VALUES(?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
-        session_generation=excluded.session_generation, validated_at=excluded.validated_at`)
-        .run(this.sessionId, generation, Date.now())
+      // Eligibility requires a complete canonical-vs-legacy parity proof. Incremental cache folding
+      // alone cannot publish that proof; the next full L2 reader does so through ProjectionService.
     } catch { /* 任何推进障碍都保持现状兜底：读路径缓存阶梯自行验证。 */ }
   }
 
@@ -720,21 +893,7 @@ export class SqliteAgentHistory implements HistoryPort {
       }
       const folded = foldClaudeSessionSnapshots(snapshots)
       const canonical = toCanonicalModelMessages(folded)
-      const eligibleLegacy = legacyMessages.map((message) => ({
-        id: message.id, role: message.role, content: message.content, timestamp: message.timestamp,
-        ...(message.thinking !== undefined ? { thinking: message.thinking } : {}),
-        ...(message.contentSegments !== undefined ? { contentSegments: message.contentSegments } : {}),
-        ...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}),
-        ...(message.toolUse !== undefined ? { toolUse: message.toolUse } : {}),
-        ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-        ...(message.status !== undefined ? { status: message.status } : {}),
-        ...(message.sequence !== undefined ? { sequence: message.sequence } : {}),
-        ...(message.imagesDeliveredToApi !== undefined ? { imagesDeliveredToApi: message.imagesDeliveredToApi } : {}),
-        ...(message.skillHints !== undefined ? { skillHints: message.skillHints } : {})
-      }))
-      const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
-        ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, stable(item)])) : value
-      if (JSON.stringify(stable(canonical)) !== JSON.stringify(stable(eligibleLegacy))) return { kind: 'unavailable', reason: 'legacy-mismatch' }
+      if (JSON.stringify(projectChatBodyV1(canonical as never)) !== JSON.stringify(projectChatBodyV1(legacyMessages as never))) return { kind: 'unavailable', reason: 'legacy-mismatch' }
       const watermark = rows.at(-1)!
       const anchor = this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id
         FROM agent_history_events WHERE session_id=? AND session_seq=?`).get(sessionId, watermark.session_seq) as
@@ -1118,6 +1277,35 @@ export class SqliteAgentHistory implements HistoryPort {
 
   /** Best-effort per-session canonical seed write; callers keep legacy as their authority on failure. */
   writeCanonicalSessionCache(input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & { cacheKey: string; value: string }): boolean {
+    if (input.cacheKey !== 'transcript') return this.writeCanonicalSessionCacheRow(input)
+    try {
+      const messages = JSON.parse(input.value) as ClaudeChatMessageWithBlocks[]
+      if (!Array.isArray(messages)) return false
+      const fold = createSnapshotFoldFromCache({ sessionId: input.sessionId, sessionSeq: input.sessionSeq,
+        commitOrder: input.commitOrder, watermarkInvocationId: input.watermarkInvocationId, messages })
+      return this.writeCanonicalSessionCacheWithSnapshotFold(input, fold.stateJson(), fold.indexJson())
+    } catch { return false }
+  }
+
+  private writeCanonicalSessionCacheWithSnapshotFold(
+    input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & { cacheKey: string; value: string },
+    stateJson: string,
+    indexJson: string
+  ): boolean {
+    try {
+      return runInTransaction(this.conn, () => this.writeCanonicalSessionCacheRow(input) &&
+        this.writeCanonicalSnapshotFoldCache({ ...input, cacheKey: snapshotFoldCacheKey(input.cacheKey), stateJson, indexJson }))
+    } catch { return false }
+  }
+
+  private writeCanonicalSnapshotFoldCache(input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & {
+    cacheKey: string; stateJson: string; indexJson: string
+  }): boolean {
+    return this.writeCanonicalSessionCacheRow({ ...input, value: JSON.stringify({ formatVersion: 1,
+      stateJson: input.stateJson, indexJson: input.indexJson }) })
+  }
+
+  private writeCanonicalSessionCacheRow(input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & { cacheKey: string; value: string }): boolean {
     try {
       JSON.parse(input.value)
       const valueSha256 = sha256(input.value)
@@ -1180,6 +1368,29 @@ export class SqliteAgentHistory implements HistoryPort {
         try {
           const seed = JSON.parse(cacheRow.value) as ClaudeChatMessageWithBlocks[]
           if (!Array.isArray(seed) || seed.some((message) => !message || !['user', 'assistant'].includes(message.role))) throw new Error('invalid cache seed')
+          const foldCheckpoint = this.readCanonicalSessionCache({ kind: 'matched', messages: seed, sessionId, sessionGeneration: cacheRow.session_generation,
+            sessionSeq: cacheRow.session_seq, commitOrder: cacheRow.commit_order, watermarkEventId: cacheRow.watermark_event_id,
+            watermarkInvocationId: cacheRow.watermark_invocation_id, eventCount: cacheRow.event_count,
+            cacheKey: snapshotFoldCacheKey(cacheKey) })
+          let snapshotFold = createSnapshotFoldFromCache({ sessionId, sessionSeq: cacheRow.session_seq,
+            commitOrder: cacheRow.commit_order, watermarkInvocationId: cacheRow.watermark_invocation_id, messages: seed })
+          if (foldCheckpoint.kind === 'hit') {
+            const persistedFold = JSON.parse(foldCheckpoint.value) as { formatVersion?: unknown; stateJson?: unknown; indexJson?: unknown }
+            if (persistedFold.formatVersion !== 1 || typeof persistedFold.stateJson !== 'string' || typeof persistedFold.indexJson !== 'string') {
+              throw new Error('canonical snapshot fold checkpoint is malformed')
+            }
+            snapshotFold = createCanonicalSessionSnapshotFoldSession(persistedFold.stateJson, seed, persistedFold.indexJson)
+            const persistedState = JSON.parse(persistedFold.stateJson) as { sessionId?: unknown; lastSessionSeq?: unknown; lastCommitOrder?: unknown; messageCount?: unknown }
+            if ((cacheRow.session_seq === -1 && (persistedState.sessionId !== null || persistedState.lastSessionSeq !== 0 ||
+              persistedState.lastCommitOrder !== 0 || persistedState.messageCount !== 0)) ||
+              (cacheRow.session_seq >= 1 && (persistedState.sessionId !== sessionId ||
+                !Number.isSafeInteger(persistedState.lastSessionSeq) || (persistedState.lastSessionSeq as number) < 1 ||
+                (persistedState.lastSessionSeq as number) > cacheRow.session_seq ||
+                (persistedState.lastSessionSeq === cacheRow.session_seq && (!Number.isSafeInteger(persistedState.lastCommitOrder) ||
+                  (persistedState.lastCommitOrder as number) > cacheRow.commit_order)) || persistedState.messageCount !== seed.length))) {
+              throw new Error('canonical snapshot fold checkpoint watermark mismatch')
+            }
+          }
           const tailRows = this.conn.prepare(`SELECT events.invocation_id, events.sequence, events.event_id, events.idempotency_key, events.turn_id,
             events.schema_version, events.kind, events.payload_json, events.session_seq, events.commit_order, events.session_id, events.created_at
             FROM agent_history_events events JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
@@ -1251,21 +1462,13 @@ export class SqliteAgentHistory implements HistoryPort {
               tailSnapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq,
                 commitOrder: last.commit_order, messages })
             }
-            const folded = tailSnapshots.length
-              ? foldClaudeSessionSnapshots([...(cacheRow.session_seq >= 1 ? [{ sessionId, invocationId: cacheRow.watermark_invocation_id ?? 'cache-seed',
-                  sessionSeq: cacheRow.session_seq, commitOrder: cacheRow.commit_order, messages: seed }] : []), ...tailSnapshots])
-              : seed
+            for (const snapshot of tailSnapshots.sort((left, right) => left.sessionSeq - right.sessionSeq || left.commitOrder - right.commitOrder)) {
+              snapshotFold.fold(snapshot)
+            }
+            const folded = snapshotFold.messages()
             const canonical = toCanonicalModelMessages(folded)
-            const legacyCanonical = legacyMessages?.map((message) => ({ id: message.id, role: message.role, content: message.content, timestamp: message.timestamp,
-              ...(message.thinking !== undefined ? { thinking: message.thinking } : {}), ...(message.contentSegments !== undefined ? { contentSegments: message.contentSegments } : {}),
-              ...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}), ...(message.toolUse !== undefined ? { toolUse: message.toolUse } : {}),
-              ...(message.attachments !== undefined ? { attachments: message.attachments } : {}), ...(message.status !== undefined ? { status: message.status } : {}),
-              ...(message.sequence !== undefined ? { sequence: message.sequence } : {}), ...(message.imagesDeliveredToApi !== undefined ? { imagesDeliveredToApi: message.imagesDeliveredToApi } : {}),
-              ...(message.skillHints !== undefined ? { skillHints: message.skillHints } : {}) }))
-            const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
-              ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)])) : value
-            const transcriptLegacy = legacyCanonical?.map(({ toolCalls: _toolCalls, toolUse: _toolUse, ...message }) => message)
-            if (legacyCanonical === undefined || JSON.stringify(stable(canonical)) === JSON.stringify(stable(transcriptLegacy))) {
+            const legacyBody = legacyMessages ? projectChatBodyV1(legacyMessages as never) : undefined
+            if (legacyBody === undefined || JSON.stringify(projectChatBodyV1(canonical as never)) === JSON.stringify(legacyBody)) {
               const lastTail = tailRows.at(-1)
               const watermarkEventId = lastTail?.event_id ?? cacheRow.watermark_event_id
               const watermarkInvocationId = lastTail?.invocation_id ?? cacheRow.watermark_invocation_id
@@ -1281,7 +1484,8 @@ export class SqliteAgentHistory implements HistoryPort {
                 sessionGeneration: liveSession!.generation, sessionSeq, commitOrder,
                 watermarkEventId, watermarkInvocationId, eventCount }
               const result = { kind: 'matched' as const, source: 'L1' as const, messages: folded, replayedEvents: tailRows.length, watermark }
-              this.writeCanonicalSessionCache({ ...watermark, cacheKey, value: JSON.stringify(folded) })
+              this.writeCanonicalSessionCacheWithSnapshotFold({ ...watermark, cacheKey, value: JSON.stringify(folded) },
+                snapshotFold.stateJson(), snapshotFold.indexJson())
               return result
             }
           }
@@ -1889,25 +2093,7 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   /** Persist fail-safe interruption markers for non-terminal invocation streams after process restart. */
-  async recoverInterruptedInvocations(options: {
-    resolveSessionLedgerLocation?: (sessionId: string) => Promise<CompactionLedgerLocation | undefined> | CompactionLedgerLocation | undefined
-    onSessionLocationResolveError?: (error: unknown, invocationId: string, sessionId: string) => void
-    repairCompaction?: (location: CompactionLedgerLocation, start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
-    repairToolLedger?: (location: CompactionLedgerLocation, result: Record<string, unknown>) => Promise<unknown>
-    repairToolCallLedger?: (location: CompactionLedgerLocation, toolCall: Record<string, unknown>) => Promise<unknown>
-    repairModelRequestLedger?: (location: CompactionLedgerLocation, projection: { requestHeader: Record<string, unknown>; requestContext: Record<string, unknown> }) => Promise<unknown>
-    repairProviderRetryLedger?: (location: CompactionLedgerLocation, retry: Record<string, unknown>) => Promise<unknown>
-    repairUsageLedger?: (location: CompactionLedgerLocation, requestUsage: Record<string, unknown>) => Promise<unknown>
-    repairFinalRequestContextLedger?: (location: CompactionLedgerLocation, requestContext: Record<string, unknown>) => Promise<unknown>
-    repairInvocationTerminal?: (location: CompactionLedgerLocation, terminal: Record<string, unknown>) => Promise<unknown>
-    onCompactionRepairError?: (error: unknown, invocationId: string, compactionId: string) => void
-    onToolLedgerRepairError?: (error: unknown, invocationId: string, toolCallId: string) => void
-    onModelRequestLedgerRepairError?: (error: unknown, invocationId: string, requestId: string) => void
-    onProviderRetryLedgerRepairError?: (error: unknown, invocationId: string, requestId: string) => void
-    onUsageLedgerRepairError?: (error: unknown, invocationId: string, requestId: string) => void
-    onFinalRequestContextLedgerRepairError?: (error: unknown, invocationId: string, requestId: string) => void
-    onInvocationTerminalRepairError?: (error: unknown, invocationId: string, turnId: string) => void
-  } = {}): Promise<RebuiltInvocationState[]> {
+  async recoverInterruptedInvocations(options: SessionHistoryRecoveryOptions = {}): Promise<RebuiltInvocationState[]> {
     const streams = this.listStartupRecoveryWorkset().map(({ invocationId, sessionId }) => ({
       invocation_id: invocationId, session_id: sessionId
     }))
@@ -1938,508 +2124,513 @@ export class SqliteAgentHistory implements HistoryPort {
     }
     const repairTargetById = new Map(dueRepairRows.map(({ repair_id, target_key }) => [repair_id, target_key]))
     for (const [invocationId, { sessionId: streamSessionId, repairIds }] of work) {
-      let snapshot = await this.read(invocationId)
-      let state = rebuildInvocationStates(snapshot).get(invocationId)
-      const blockedSessionLedgers = new Set<string>()
-      const canonicalToolCalls = new Map<string, { location: CompactionLedgerLocation; stepId: string }>()
-      const canonicalProposalById = new Map<string, { name: string; input: unknown }>()
-      const canonicalProposalIds = new Set<string>()
-      let sawCanonicalModelResponse = false
-      const ledgerKey = (location: CompactionLedgerLocation) => JSON.stringify([location.workDir, location.sessionId, location.createdAt])
-      const recoveryLocations = new Map<string, CompactionLedgerLocation>()
-      const requestIdsByTurn = new Map<string, string>()
-      // S4: keep the real callback error per repair so the governance classifier can see
-      // workspace-root-rejected / storage-access-denied categories; the boolean folding made
-      // the terminal categories unreachable for every repair kind except invocation-terminal.
-      const repairOutcomes = new Map<string, { ok: boolean; error?: unknown }>()
-      const unrepairableRepairIds = new Set<string>()
-      const repairLedgerKeys = new Map<string, string>()
-      const repairIdsByTarget = new Map<string, string[]>()
-      for (const repairId of repairIds) {
-        const targetKey = repairTargetById.get(repairId)
-        if (!targetKey) continue
-        repairIdsByTarget.set(targetKey, [...(repairIdsByTarget.get(targetKey) ?? []), repairId])
-      }
-      for (const event of snapshot.events) {
-        const location = (event.payload as { sessionLedger?: { location?: unknown } } | undefined)?.sessionLedger?.location
-        if (!location || typeof location !== 'object' || Array.isArray(location)) continue
-        const candidate = location as Partial<CompactionLedgerLocation>
-        if (typeof candidate.workDir !== 'string' || typeof candidate.sessionId !== 'string' || !Number.isFinite(candidate.createdAt)) continue
-        for (const repairId of repairIdsByTarget.get(event.eventId) ?? []) repairLedgerKeys.set(repairId, ledgerKey(candidate as CompactionLedgerLocation))
-      }
-      const flushRepairOutcomes = () => {
+      try {
+        let snapshot = await this.read(invocationId)
+        let state = rebuildInvocationStates(snapshot).get(invocationId)
+        const blockedSessionLedgers = new Set<string>()
+        const canonicalToolCalls = new Map<string, { location: SessionHistoryLedgerLocation; stepId: string }>()
+        const canonicalProposalById = new Map<string, { name: string; input: unknown }>()
+        const canonicalProposalIds = new Set<string>()
+        let sawCanonicalModelResponse = false
+        const ledgerKey = (location: SessionHistoryLedgerLocation) => JSON.stringify([location.workDir, location.sessionId, location.createdAt])
+        const recoveryLocations = new Map<string, SessionHistoryLedgerLocation>()
+        const requestIdsByTurn = new Map<string, string>()
+        // S4: keep the real callback error per repair so the governance classifier can see
+        // workspace-root-rejected / storage-access-denied categories; the boolean folding made
+        // the terminal categories unreachable for every repair kind except invocation-terminal.
+        const repairOutcomes = new Map<string, { ok: boolean; error?: unknown }>()
+        const unrepairableRepairIds = new Set<string>()
+        const repairLedgerKeys = new Map<string, string>()
+        const repairIdsByTarget = new Map<string, string[]>()
         for (const repairId of repairIds) {
-          const outcome = repairOutcomes.get(repairId)
-          const success = outcome?.ok === true && !unrepairableRepairIds.has(repairId) &&
-            !blockedSessionLedgers.has(repairLedgerKeys.get(repairId) ?? '')
-          this.recordProjectionRepairResult(repairId, success
-            ? { success: true }
-            : { success: false, error: outcome?.error ?? new Error('one or more canonical projections remain incomplete') })
+          const targetKey = repairTargetById.get(repairId)
+          if (!targetKey) continue
+          repairIdsByTarget.set(targetKey, [...(repairIdsByTarget.get(targetKey) ?? []), repairId])
         }
-      }
-      const markEventRepair = (eventId: string, success: boolean, error?: unknown) => {
-        for (const repairId of repairIdsByTarget.get(eventId) ?? []) repairOutcomes.set(repairId, { ok: success, error })
-      }
-      for (const event of snapshot.events) {
-        if (event.kind !== 'model-request-started') continue
-        const payload = event.payload as { modelTurn?: unknown; attempt?: unknown; sessionLedger?: { requestHeader?: unknown } } | undefined
-        const header = payload?.sessionLedger?.requestHeader
-        const requestId = header && typeof header === 'object' && !Array.isArray(header)
-          ? (header as Record<string, unknown>).requestId
-          : undefined
-        if (Number.isInteger(payload?.modelTurn) && Number.isInteger(payload?.attempt) && typeof requestId === 'string' && requestId.trim()) {
-          requestIdsByTurn.set(`${event.turnId}:${payload!.modelTurn}:${payload!.attempt}`, requestId)
+        for (const event of snapshot.events) {
+          const location = (event.payload as { sessionLedger?: { location?: unknown } } | undefined)?.sessionLedger?.location
+          if (!location || typeof location !== 'object' || Array.isArray(location)) continue
+          const candidate = location as Partial<SessionHistoryLedgerLocation>
+          if (typeof candidate.workDir !== 'string' || typeof candidate.sessionId !== 'string' || !Number.isFinite(candidate.createdAt)) continue
+          for (const repairId of repairIdsByTarget.get(event.eventId) ?? []) repairLedgerKeys.set(repairId, ledgerKey(candidate as SessionHistoryLedgerLocation))
         }
-      }
-      for (const event of snapshot.events) {
-        const location = (event.payload as { sessionLedger?: { location?: unknown } } | undefined)?.sessionLedger?.location
-        if (!location || typeof location !== 'object' || Array.isArray(location)) continue
-        const candidate = location as Partial<CompactionLedgerLocation>
-        if (typeof candidate.workDir !== 'string' || !candidate.workDir.trim() || typeof candidate.sessionId !== 'string' ||
-          !candidate.sessionId.trim() || !Number.isFinite(candidate.createdAt)) continue
-        recoveryLocations.set(ledgerKey(candidate as CompactionLedgerLocation), candidate as CompactionLedgerLocation)
-      }
-      for (const event of snapshot.events) {
-        if (!repairIdsByTarget.has(event.eventId)) continue
-        const payload = event.payload as { sessionLedger?: Record<string, unknown> } | undefined
-        const ledger = payload?.sessionLedger
-        const has = (field: string) => Boolean(ledger && Object.prototype.hasOwnProperty.call(ledger, field))
-        const hasToolCalls = has('toolCalls') && (!Array.isArray(ledger?.toolCalls) || ledger.toolCalls.length > 0)
-        const hasProjectionWork = event.kind === 'model-request-started' ? has('requestHeader') || has('requestContext')
-          : event.kind === 'provider-retry-scheduled' ? has('requestRetry')
-          : event.kind === 'model-response-committed' ? hasToolCalls || has('requestUsage') || has('requestContext')
-          : event.kind === 'model-attempt-discarded' ? has('requestUsage')
-          : event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' ? has('result')
-          : event.kind === 'transcript-compacted' ? has('start') || has('summary')
-          : ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)
-        const configured = !hasProjectionWork || (event.kind === 'model-request-started' ? Boolean(options.repairModelRequestLedger)
-          : event.kind === 'provider-retry-scheduled' ? Boolean(options.repairProviderRetryLedger)
-          : event.kind === 'model-response-committed' ?
-            (!hasToolCalls || Boolean(options.repairToolCallLedger)) &&
-            (!has('requestUsage') || Boolean(options.repairUsageLedger)) &&
-            (!has('requestContext') || Boolean(options.repairFinalRequestContextLedger))
-          : event.kind === 'model-attempt-discarded' ? (!has('requestUsage') || Boolean(options.repairUsageLedger))
-          : event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' ? Boolean(options.repairToolLedger)
-          : event.kind === 'transcript-compacted' ? Boolean(options.repairCompaction)
-          : ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind) ? Boolean(options.repairInvocationTerminal)
-          : false)
-        if (!hasProjectionWork) markEventRepair(event.eventId, true)
-        else if (!configured) {
-          for (const repairId of repairIdsByTarget.get(event.eventId) ?? []) unrepairableRepairIds.add(repairId)
-        }
-      }
-      for (const event of snapshot.events) {
-        if (['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind) && options.repairInvocationTerminal) {
-          const payload = event.payload as { status?: unknown; sessionLedger?: unknown }
-          const ledger = payload?.sessionLedger as { location?: unknown; turnId?: unknown; reason?: unknown } | undefined
-          const location = ledger?.location
-          const terminalState = event.kind === 'invocation-completed' ? 'completed' : event.kind === 'invocation-interrupted' ? 'interrupted' : 'failed'
-          if (location && typeof location === 'object' && !Array.isArray(location) &&
-            typeof (location as { workDir?: unknown }).workDir === 'string' && typeof (location as { sessionId?: unknown }).sessionId === 'string' &&
-            Number.isFinite((location as { createdAt?: unknown }).createdAt) && typeof ledger?.turnId === 'string' && ledger.turnId.trim() &&
-            ['completed', 'failed', 'interrupted', 'cancelled', 'denied'].includes(String(ledger.reason)) &&
-            ['completed', 'failed', 'interrupted', 'cancelled', 'denied'].includes(String(payload.status)) &&
-            ((terminalState === 'completed' && payload.status === 'completed' && ledger.reason === 'completed') ||
-              (terminalState === 'failed' && ['failed', 'denied'].includes(String(payload.status)) && ledger.reason === 'failed') ||
-              (terminalState === 'interrupted' && payload.status === 'interrupted' && ledger.reason === 'interrupted') ||
-              (terminalState === 'interrupted' && payload.status === 'cancelled' && ledger.reason === 'cancelled'))) {
-            const repairLocation = location as CompactionLedgerLocation
-            try {
-              const processRestart = event.kind === 'invocation-interrupted' && payload.status === 'interrupted' &&
-                (event.payload as { reason?: unknown }).reason === 'process-restart'
-              const toolUseIds = processRestart ? pendingInterruptedToolUseIds(snapshot.events) : []
-              await options.repairInvocationTerminal(repairLocation, {
-                status: payload.status as string, turnId: ledger.turnId, reason: ledger.reason,
-                ...(processRestart ? { canonicalTerminalEventId: event.eventId, toolUseIds } : {})
-              })
-              markEventRepair(event.eventId, true)
-            }
-            catch (error) {
-              markEventRepair(event.eventId, false, error)
-              try { options.onInvocationTerminalRepairError?.(error, invocationId, ledger.turnId) }
-              catch { /* Keep startup recovery moving while preserving the canonical terminal for retry. */ }
-            }
+        const flushRepairOutcomes = () => {
+          for (const repairId of repairIds) {
+            const outcome = repairOutcomes.get(repairId)
+            const success = outcome?.ok === true && !unrepairableRepairIds.has(repairId) &&
+              !blockedSessionLedgers.has(repairLedgerKeys.get(repairId) ?? '')
+            this.recordProjectionRepairResult(repairId, success
+              ? { success: true }
+              : { success: false, error: outcome?.error ?? new Error('one or more canonical projections remain incomplete') })
           }
         }
-        if (event.kind === 'model-response-committed') {
-          sawCanonicalModelResponse = true
-          const message = (event.payload as { message?: unknown }).message as { toolCalls?: unknown } | undefined
-          if (Array.isArray(message?.toolCalls)) {
-            for (const call of message.toolCalls) {
-              if (!call || typeof call !== 'object' || typeof (call as { id?: unknown }).id !== 'string') continue
-              const id = (call as { id: string }).id
-              canonicalProposalIds.add(id)
-              const proposal = call as { name?: unknown; input?: unknown }
-              if (typeof proposal.name === 'string') canonicalProposalById.set(id, { name: proposal.name, input: proposal.input })
-            }
+        const markEventRepair = (eventId: string, success: boolean, error?: unknown) => {
+          for (const repairId of repairIdsByTarget.get(eventId) ?? []) repairOutcomes.set(repairId, { ok: success, error })
+        }
+        for (const event of snapshot.events) {
+          if (event.kind !== 'model-request-started') continue
+          const payload = event.payload as { modelTurn?: unknown; attempt?: unknown; sessionLedger?: { requestHeader?: unknown } } | undefined
+          const header = payload?.sessionLedger?.requestHeader
+          const requestId = header && typeof header === 'object' && !Array.isArray(header)
+            ? (header as Record<string, unknown>).requestId
+            : undefined
+          if (Number.isInteger(payload?.modelTurn) && Number.isInteger(payload?.attempt) && typeof requestId === 'string' && requestId.trim()) {
+            requestIdsByTurn.set(`${event.turnId}:${payload!.modelTurn}:${payload!.attempt}`, requestId)
           }
         }
-        if (event.kind === 'model-request-started' && options.repairModelRequestLedger) {
-          const payload = event.payload as { requestId?: unknown; modelTurn?: unknown; attempt?: unknown; sessionLedger?: unknown }
-          const ledger = payload.sessionLedger as { location?: unknown; requestHeader?: unknown; requestContext?: unknown } | undefined
-          const location = ledger?.location
-          const requestId = typeof payload.requestId === 'string' ? payload.requestId : 'model-request'
-          if (location && typeof location === 'object' && typeof (location as { workDir?: unknown }).workDir === 'string' &&
-            typeof (location as { sessionId?: unknown }).sessionId === 'string' && Number.isFinite((location as { createdAt?: unknown }).createdAt)) {
-            const repairLocation = location as CompactionLedgerLocation
-            const key = ledgerKey(repairLocation)
-            const validModelTurn = Number.isInteger(payload.modelTurn) && (payload.modelTurn as number) > 0
-            const validAttempt = Number.isInteger(payload.attempt) && (payload.attempt as number) > 0
-            const requestHeader = ledger?.requestHeader
-            const requestContext = ledger?.requestContext
-            // The event's request ID owns its model round. The projection can retain
-            // a separate external request namespace, but must agree with itself and
-            // remain bound to this canonical turn.
-            const expectedRequestId = validModelTurn && typeof payload.requestId === 'string' && payload.requestId.endsWith(`:round:${payload.modelTurn}`)
-              ? payload.requestId
-              : undefined
-            const projectionRequestId = requestHeader && typeof requestHeader === 'object' && !Array.isArray(requestHeader)
-              ? (requestHeader as Record<string, unknown>).requestId
-              : undefined
-            const header = requestHeader && typeof requestHeader === 'object' && !Array.isArray(requestHeader)
-              ? requestHeader as Record<string, unknown>
-              : undefined
-            const context = requestContext && typeof requestContext === 'object' && !Array.isArray(requestContext)
-              ? requestContext as Record<string, unknown>
-              : undefined
-            const projectionIdentity = {
-              validModelTurn,
-              validAttempt,
-              payloadRequestIdMatchesExpected: requestId === expectedRequestId,
-              requestHeaderPresent: header !== undefined,
-              requestHeaderRequestIdMatchesPayload: typeof projectionRequestId === 'string' && projectionRequestId === requestId,
-              requestHeaderAttemptMatchesPayload: header?.attempt === payload.attempt,
-              requestHeaderTurnMatchesEvent: header?.turnId === undefined || header?.turnId === event.turnId,
-              requestContextPresent: context !== undefined,
-              requestContextRequestIdMatchesHeader: context?.requestId === projectionRequestId,
-              requestContextAttemptMatchesPayload: context?.attempt === payload.attempt,
-              requestContextTurnMatchesEvent: context?.turnId === undefined || context?.turnId === event.turnId
-            }
-            const validProjection = validModelTurn && validAttempt && requestId === expectedRequestId &&
-              header !== undefined && context !== undefined &&
-              typeof projectionRequestId === 'string' && projectionRequestId.endsWith(`:round:${payload.modelTurn}`) &&
-              header.attempt === payload.attempt &&
-              (header.turnId === undefined || header.turnId === event.turnId)
-            const validRequestContext = validProjection &&
-              context !== undefined && context.requestId === projectionRequestId && context.attempt === payload.attempt &&
-              (context.turnId === undefined || context.turnId === event.turnId)
-            if (!validRequestContext) {
-              blockedSessionLedgers.add(key)
-              try { options.onModelRequestLedgerRepairError?.(new Error(`canonical model request projection identity is invalid: ${JSON.stringify(projectionIdentity)}`), invocationId, requestId) }
-              catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-            } else if (!blockedSessionLedgers.has(key)) {
+        for (const event of snapshot.events) {
+          const location = (event.payload as { sessionLedger?: { location?: unknown } } | undefined)?.sessionLedger?.location
+          if (!location || typeof location !== 'object' || Array.isArray(location)) continue
+          const candidate = location as Partial<SessionHistoryLedgerLocation>
+          if (typeof candidate.workDir !== 'string' || !candidate.workDir.trim() || typeof candidate.sessionId !== 'string' ||
+            !candidate.sessionId.trim() || !Number.isFinite(candidate.createdAt)) continue
+          recoveryLocations.set(ledgerKey(candidate as SessionHistoryLedgerLocation), candidate as SessionHistoryLedgerLocation)
+        }
+        for (const event of snapshot.events) {
+          if (!repairIdsByTarget.has(event.eventId)) continue
+          const payload = event.payload as { sessionLedger?: Record<string, unknown> } | undefined
+          const ledger = payload?.sessionLedger
+          const has = (field: string) => Boolean(ledger && Object.prototype.hasOwnProperty.call(ledger, field))
+          const hasToolCalls = has('toolCalls') && (!Array.isArray(ledger?.toolCalls) || ledger.toolCalls.length > 0)
+          const hasProjectionWork = event.kind === 'model-request-started' ? has('requestHeader') || has('requestContext')
+            : event.kind === 'provider-retry-scheduled' ? has('requestRetry')
+            : event.kind === 'model-response-committed' ? hasToolCalls || has('requestUsage') || has('requestContext')
+            : event.kind === 'model-attempt-discarded' ? has('requestUsage')
+            : event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' ? has('result')
+            : event.kind === 'transcript-compacted' ? has('start') || has('summary')
+            : ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)
+          const configured = !hasProjectionWork || (event.kind === 'model-request-started' ? Boolean(options.repairModelRequestLedger)
+            : event.kind === 'provider-retry-scheduled' ? Boolean(options.repairProviderRetryLedger)
+            : event.kind === 'model-response-committed' ?
+              (!hasToolCalls || Boolean(options.repairToolCallLedger)) &&
+              (!has('requestUsage') || Boolean(options.repairUsageLedger)) &&
+              (!has('requestContext') || Boolean(options.repairFinalRequestContextLedger))
+            : event.kind === 'model-attempt-discarded' ? (!has('requestUsage') || Boolean(options.repairUsageLedger))
+            : event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' ? Boolean(options.repairToolLedger)
+            : event.kind === 'transcript-compacted' ? Boolean(options.repairCompaction)
+            : ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind) ? Boolean(options.repairInvocationTerminal)
+            : false)
+          if (!hasProjectionWork) markEventRepair(event.eventId, true)
+          else if (!configured) {
+            for (const repairId of repairIdsByTarget.get(event.eventId) ?? []) unrepairableRepairIds.add(repairId)
+          }
+        }
+        for (const event of snapshot.events) {
+          if (['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind) && options.repairInvocationTerminal) {
+            const payload = event.payload as { status?: unknown; sessionLedger?: unknown }
+            const ledger = payload?.sessionLedger as { location?: unknown; turnId?: unknown; reason?: unknown } | undefined
+            const location = ledger?.location
+            const terminalState = event.kind === 'invocation-completed' ? 'completed' : event.kind === 'invocation-interrupted' ? 'interrupted' : 'failed'
+            if (location && typeof location === 'object' && !Array.isArray(location) &&
+              typeof (location as { workDir?: unknown }).workDir === 'string' && typeof (location as { sessionId?: unknown }).sessionId === 'string' &&
+              Number.isFinite((location as { createdAt?: unknown }).createdAt) && typeof ledger?.turnId === 'string' && ledger.turnId.trim() &&
+              ['completed', 'failed', 'interrupted', 'cancelled', 'denied'].includes(String(ledger.reason)) &&
+              ['completed', 'failed', 'interrupted', 'cancelled', 'denied'].includes(String(payload.status)) &&
+              ((terminalState === 'completed' && payload.status === 'completed' && ledger.reason === 'completed') ||
+                (terminalState === 'failed' && ['failed', 'denied'].includes(String(payload.status)) && ledger.reason === 'failed') ||
+                (terminalState === 'interrupted' && payload.status === 'interrupted' && ledger.reason === 'interrupted') ||
+                (terminalState === 'interrupted' && payload.status === 'cancelled' && ledger.reason === 'cancelled'))) {
+              const repairLocation = location as SessionHistoryLedgerLocation
               try {
-                await options.repairModelRequestLedger(repairLocation, {
-                  requestHeader: requestHeader as Record<string, unknown>,
-                  requestContext: requestContext as Record<string, unknown>
+                const processRestart = event.kind === 'invocation-interrupted' && payload.status === 'interrupted' &&
+                  (event.payload as { reason?: unknown }).reason === 'process-restart'
+                const toolUseIds = processRestart ? pendingInterruptedToolUseIds(snapshot.events) : []
+                await options.repairInvocationTerminal(repairLocation, {
+                  status: payload.status as string, turnId: ledger.turnId, reason: ledger.reason,
+                  ...(processRestart ? { canonicalTerminalEventId: event.eventId, toolUseIds } : {})
+                })
+                markEventRepair(event.eventId, true)
+              }
+              catch (error) {
+                markEventRepair(event.eventId, false, error)
+                try { options.onInvocationTerminalRepairError?.(error, invocationId, ledger.turnId) }
+                catch { /* Keep startup recovery moving while preserving the canonical terminal for retry. */ }
+              }
+            }
+          }
+          if (event.kind === 'model-response-committed') {
+            sawCanonicalModelResponse = true
+            const message = (event.payload as { message?: unknown }).message as { toolCalls?: unknown } | undefined
+            if (Array.isArray(message?.toolCalls)) {
+              for (const call of message.toolCalls) {
+                if (!call || typeof call !== 'object' || typeof (call as { id?: unknown }).id !== 'string') continue
+                const id = (call as { id: string }).id
+                canonicalProposalIds.add(id)
+                const proposal = call as { name?: unknown; input?: unknown }
+                if (typeof proposal.name === 'string') canonicalProposalById.set(id, { name: proposal.name, input: proposal.input })
+              }
+            }
+          }
+          if (event.kind === 'model-request-started' && options.repairModelRequestLedger) {
+            const payload = event.payload as { requestId?: unknown; modelTurn?: unknown; attempt?: unknown; sessionLedger?: unknown }
+            const ledger = payload.sessionLedger as { location?: unknown; requestHeader?: unknown; requestContext?: unknown } | undefined
+            const location = ledger?.location
+            const requestId = typeof payload.requestId === 'string' ? payload.requestId : 'model-request'
+            if (location && typeof location === 'object' && typeof (location as { workDir?: unknown }).workDir === 'string' &&
+              typeof (location as { sessionId?: unknown }).sessionId === 'string' && Number.isFinite((location as { createdAt?: unknown }).createdAt)) {
+              const repairLocation = location as SessionHistoryLedgerLocation
+              const key = ledgerKey(repairLocation)
+              const validModelTurn = Number.isInteger(payload.modelTurn) && (payload.modelTurn as number) > 0
+              const validAttempt = Number.isInteger(payload.attempt) && (payload.attempt as number) > 0
+              const requestHeader = ledger?.requestHeader
+              const requestContext = ledger?.requestContext
+              // The event's request ID owns its model round. The projection can retain
+              // a separate external request namespace, but must agree with itself and
+              // remain bound to this canonical turn.
+              const expectedRequestId = validModelTurn && typeof payload.requestId === 'string' && payload.requestId.endsWith(`:round:${payload.modelTurn}`)
+                ? payload.requestId
+                : undefined
+              const projectionRequestId = requestHeader && typeof requestHeader === 'object' && !Array.isArray(requestHeader)
+                ? (requestHeader as Record<string, unknown>).requestId
+                : undefined
+              const header = requestHeader && typeof requestHeader === 'object' && !Array.isArray(requestHeader)
+                ? requestHeader as Record<string, unknown>
+                : undefined
+              const context = requestContext && typeof requestContext === 'object' && !Array.isArray(requestContext)
+                ? requestContext as Record<string, unknown>
+                : undefined
+              const projectionIdentity = {
+                validModelTurn,
+                validAttempt,
+                payloadRequestIdMatchesExpected: requestId === expectedRequestId,
+                requestHeaderPresent: header !== undefined,
+                requestHeaderRequestIdMatchesPayload: typeof projectionRequestId === 'string' && projectionRequestId === requestId,
+                requestHeaderAttemptMatchesPayload: header?.attempt === payload.attempt,
+                requestHeaderTurnMatchesEvent: header?.turnId === undefined || header?.turnId === event.turnId,
+                requestContextPresent: context !== undefined,
+                requestContextRequestIdMatchesHeader: context?.requestId === projectionRequestId,
+                requestContextAttemptMatchesPayload: context?.attempt === payload.attempt,
+                requestContextTurnMatchesEvent: context?.turnId === undefined || context?.turnId === event.turnId
+              }
+              const validProjection = validModelTurn && validAttempt && requestId === expectedRequestId &&
+                header !== undefined && context !== undefined &&
+                typeof projectionRequestId === 'string' && projectionRequestId.endsWith(`:round:${payload.modelTurn}`) &&
+                header.attempt === payload.attempt &&
+                (header.turnId === undefined || header.turnId === event.turnId)
+              const validRequestContext = validProjection &&
+                context !== undefined && context.requestId === projectionRequestId && context.attempt === payload.attempt &&
+                (context.turnId === undefined || context.turnId === event.turnId)
+              if (!validRequestContext) {
+                blockedSessionLedgers.add(key)
+                try { options.onModelRequestLedgerRepairError?.(new Error(`canonical model request projection identity is invalid: ${JSON.stringify(projectionIdentity)}`), invocationId, requestId) }
+                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+              } else if (!blockedSessionLedgers.has(key)) {
+                try {
+                  await options.repairModelRequestLedger(repairLocation, {
+                    requestHeader: requestHeader as Record<string, unknown>,
+                    requestContext: requestContext as Record<string, unknown>
+                  })
+                  markEventRepair(event.eventId, true)
+                } catch (error) {
+                  blockedSessionLedgers.add(key)
+                  markEventRepair(event.eventId, false, error)
+                  try { options.onModelRequestLedgerRepairError?.(error, invocationId, requestId) }
+                  catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                }
+              }
+            }
+          }
+          if (event.kind === 'provider-retry-scheduled' && options.repairProviderRetryLedger) {
+            const payload = event.payload as { requestId?: unknown; modelTurn?: unknown; retryAttempt?: unknown; routeId?: unknown; code?: unknown; backoffMs?: unknown; sessionLedger?: unknown }
+            const ledger = payload.sessionLedger as { location?: unknown; requestRetry?: unknown } | undefined
+            const location = ledger?.location
+            if (location && typeof location === 'object' && typeof (location as { workDir?: unknown }).workDir === 'string' &&
+              typeof (location as { sessionId?: unknown }).sessionId === 'string' && Number.isFinite((location as { createdAt?: unknown }).createdAt)) {
+              const repairLocation = location as SessionHistoryLedgerLocation
+              const key = ledgerKey(repairLocation)
+              const validRetry = Number.isInteger(payload.modelTurn) && (payload.modelTurn as number) > 0 &&
+                payload.requestId === `${invocationId}:round:${payload.modelTurn}` &&
+                Number.isInteger(payload.retryAttempt) && (payload.retryAttempt as number) > 0 &&
+                typeof payload.routeId === 'string' && payload.routeId.length > 0 &&
+                typeof payload.code === 'string' && /^[a-z0-9_]{1,64}$/.test(payload.code) &&
+                typeof payload.backoffMs === 'number' && Number.isFinite(payload.backoffMs) && payload.backoffMs >= 0 &&
+                ledger?.requestRetry && typeof ledger.requestRetry === 'object' && !Array.isArray(ledger.requestRetry)
+              const requestRetry = ledger?.requestRetry as Record<string, unknown> | undefined
+              if (!validRetry || requestRetry?.requestId !== payload.requestId || requestRetry?.attempt !== payload.retryAttempt || requestRetry?.code !== payload.code || requestRetry?.backoffMs !== payload.backoffMs ||
+                (requestRetry?.turnId !== undefined && requestRetry.turnId !== event.turnId)) {
+                blockedSessionLedgers.add(key)
+                try { options.onProviderRetryLedgerRepairError?.(new Error('canonical provider retry projection identity is invalid'), invocationId, typeof payload.requestId === 'string' ? payload.requestId : 'provider-retry') }
+                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+              } else if (!blockedSessionLedgers.has(key)) {
+                try { await options.repairProviderRetryLedger(repairLocation, requestRetry!); markEventRepair(event.eventId, true) }
+                catch (error) {
+                  blockedSessionLedgers.add(key)
+                  markEventRepair(event.eventId, false, error)
+                  try { options.onProviderRetryLedgerRepairError?.(error, invocationId, String(payload.requestId)) }
+                  catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                }
+              }
+            }
+          }
+          if ((event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') && (options.repairUsageLedger || (event.kind === 'model-response-committed' && options.repairFinalRequestContextLedger))) {
+            const ledger = (event.payload as { sessionLedger?: unknown }).sessionLedger as Partial<CanonicalToolCallLedger> | undefined
+            const location = ledger?.location
+            if (location && typeof location.workDir === 'string' && typeof location.sessionId === 'string' && Number.isFinite(location.createdAt)) {
+              const key = ledgerKey(location as SessionHistoryLedgerLocation)
+              const usagePayload = event.payload as { modelTurn?: unknown; attempt?: unknown }
+              const modelTurn = usagePayload.modelTurn
+              const attempt = usagePayload.attempt === undefined ? 1 : usagePayload.attempt
+              const expectedUsageRequestId = Number.isInteger(modelTurn) && (modelTurn as number) > 0 && Number.isInteger(attempt) && (attempt as number) > 0
+                ? requestIdsByTurn.get(`${event.turnId}:${modelTurn}:${attempt}`) ??
+                  `${invocationId}:round:${modelTurn}${(attempt as number) > 1 ? `:attempt:${attempt}` : ''}`
+                : undefined
+              if ((event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') && ledger.requestUsage && typeof ledger.requestUsage === 'object' && !Array.isArray(ledger.requestUsage)) {
+                const usage = ledger.requestUsage as Record<string, unknown>
+                if (!expectedUsageRequestId || typeof usage.requestId !== 'string' || usage.requestId !== expectedUsageRequestId || usage.turnId !== event.turnId) {
+                  blockedSessionLedgers.add(key)
+                  try {
+                    options.onUsageLedgerRepairError?.(
+                      new Error('canonical request usage identity does not match its History request, model turn, or turn'),
+                      invocationId,
+                      typeof usage.requestId === 'string' ? usage.requestId : 'request-usage'
+                    )
+                  } catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                } else {
+                  try {
+                    if (!blockedSessionLedgers.has(key) && options.repairUsageLedger) {
+                      await options.repairUsageLedger(location as SessionHistoryLedgerLocation, usage)
+                      markEventRepair(event.eventId, true)
+                    }
+                  }
+                  catch (error) {
+                    markEventRepair(event.eventId, false, error)
+                    blockedSessionLedgers.add(key)
+                    try { options.onUsageLedgerRepairError?.(error, invocationId, typeof usage.requestId === 'string' ? usage.requestId : 'request-usage') }
+                    catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                  }
+                }
+              }
+              if (event.kind === 'model-response-committed' && options.repairFinalRequestContextLedger && !blockedSessionLedgers.has(key)) {
+                const requestContext = (ledger as Partial<CanonicalToolCallLedger> & { requestContext?: unknown }).requestContext
+                if (requestContext !== undefined && (!requestContext || typeof requestContext !== 'object' || Array.isArray(requestContext))) {
+                  blockedSessionLedgers.add(key)
+                  try { options.onFinalRequestContextLedgerRepairError?.(new Error('canonical final request context is not an object'), invocationId, expectedUsageRequestId ?? 'final-request-context') }
+                  catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                } else if (requestContext && typeof requestContext === 'object' && !Array.isArray(requestContext)) {
+                  const finalContext = requestContext as Record<string, unknown>
+                  if (typeof finalContext.requestId !== 'string' || finalContext.requestId !== expectedUsageRequestId || finalContext.turnId !== event.turnId ||
+                    !Number.isInteger(finalContext.attempt) || (finalContext.attempt as number) <= 0 || !finalContext.contextUsage ||
+                    typeof finalContext.contextUsage !== 'object' || Array.isArray(finalContext.contextUsage)) {
+                    blockedSessionLedgers.add(key)
+                    try { options.onFinalRequestContextLedgerRepairError?.(new Error('canonical final request context identity or usage is invalid'), invocationId, expectedUsageRequestId ?? 'final-request-context') }
+                    catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                  } else {
+                      try { await options.repairFinalRequestContextLedger(location as SessionHistoryLedgerLocation, finalContext); markEventRepair(event.eventId, true) }
+                      catch (error) {
+                        blockedSessionLedgers.add(key)
+                        markEventRepair(event.eventId, false, error)
+                        try { options.onFinalRequestContextLedgerRepairError?.(error, invocationId, expectedUsageRequestId ?? "final-request-context") }
+                        catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                      }
+                  }
+                }
+              }
+            }
+          }
+          if (event.kind === 'model-response-committed') {
+            const ledger = (event.payload as { sessionLedger?: unknown }).sessionLedger as Partial<CanonicalToolCallLedger> | undefined
+            const location = ledger?.location
+            if (location && typeof location.workDir === 'string' && typeof location.sessionId === 'string' && Number.isFinite(location.createdAt) &&
+              typeof ledger.stepId === 'string' && Array.isArray(ledger.toolCalls)) {
+              const key = ledgerKey(location as SessionHistoryLedgerLocation)
+              if (blockedSessionLedgers.has(key)) continue
+              for (const toolCall of ledger.toolCalls) {
+                if (!toolCall || typeof toolCall !== 'object' || Array.isArray(toolCall) || typeof toolCall.toolUseId !== 'string' || typeof toolCall.name !== 'string' || !toolCall.args || typeof toolCall.args !== 'object' || Array.isArray(toolCall.args)) {
+                  blockedSessionLedgers.add(key)
+                  const toolCallId = toolCall && typeof toolCall === 'object' && typeof toolCall.toolUseId === 'string' ? toolCall.toolUseId : 'tool-proposal'
+                  try { options.onToolLedgerRepairError?.(new Error('canonical tool proposal sidecar is invalid'), invocationId, toolCallId) }
+                  catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                  break
+                }
+                if (!canonicalProposalIds.has(toolCall.toolUseId)) {
+                  blockedSessionLedgers.add(key)
+                  try { options.onToolLedgerRepairError?.(new Error('tool proposal sidecar identity is absent from canonical model response'), invocationId, toolCall.toolUseId) }
+                  catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                  break
+                }
+                const canonicalProposal = canonicalProposalById.get(toolCall.toolUseId)
+                const projectedName = canonicalProposal
+                  ? toolIdToOpenAiCompatibleApiToolName(normalizeExternalToolName(canonicalProposal.name).canonicalName)
+                  : undefined
+                const projectedArgs = canonicalProposal && (projectedName === 'toolkit_call' || projectedName === 'toolkit.call')
+                  ? sanitizeCapabilityParamsForDisplay(canonicalProposal.input)
+                  : canonicalProposal?.input
+                if (!canonicalProposal || projectedName !== toolCall.name || !isDeepStrictEqual(projectedArgs, toolCall.args)) {
+                  blockedSessionLedgers.add(key)
+                  try { options.onToolLedgerRepairError?.(new Error('canonical tool proposal sidecar does not match model response name or input'), invocationId, toolCall.toolUseId) }
+                  catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                  break
+                }
+                canonicalToolCalls.set(toolCall.toolUseId, { location: location as SessionHistoryLedgerLocation, stepId: ledger.stepId })
+                try { await options.repairToolCallLedger?.(location as SessionHistoryLedgerLocation, { ...toolCall, turnId: event.turnId, stepId: ledger.stepId }); markEventRepair(event.eventId, true) }
+                catch (error) {
+                  blockedSessionLedgers.add(key)
+                  markEventRepair(event.eventId, false, error)
+                  try { options.onToolLedgerRepairError?.(error, invocationId, toolCall.toolUseId) }
+                  catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                  break
+                }
+              }
+            }
+          } else if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && options.repairToolLedger) {
+            const payload = event.payload as { toolCallId?: unknown; reason?: unknown; result?: unknown; isError?: unknown; auditRef?: unknown; sessionLedger?: unknown }
+            const ledger = payload.sessionLedger as Partial<CanonicalToolLedger> | undefined
+            const location = ledger?.location
+            if (typeof payload.toolCallId === 'string' && location && typeof location.workDir === 'string' && typeof location.sessionId === 'string' && Number.isFinite(location.createdAt) &&
+              typeof ledger.stepId === 'string') {
+              const key = ledgerKey(location as SessionHistoryLedgerLocation)
+              if (!ledger.result || typeof ledger.result !== 'object' || Array.isArray(ledger.result)) {
+                blockedSessionLedgers.add(key)
+                try { options.onToolLedgerRepairError?.(new Error('canonical tool result sidecar is invalid'), invocationId, payload.toolCallId) }
+                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                continue
+              }
+              const proposal = canonicalToolCalls.get(payload.toolCallId)
+              if ((sawCanonicalModelResponse || event.kind === 'tool-call-not-dispatched') && !canonicalProposalIds.has(payload.toolCallId)) {
+                blockedSessionLedgers.add(key)
+                try { options.onToolLedgerRepairError?.(new Error('canonical tool result identity does not match a preceding model response proposal'), invocationId, payload.toolCallId) }
+                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                continue
+              }
+              if (proposal && (ledgerKey(proposal.location) !== key || proposal.stepId !== ledger.stepId)) {
+                blockedSessionLedgers.add(key)
+                try { options.onToolLedgerRepairError?.(new Error('canonical tool result step identity does not match its model response proposal'), invocationId, payload.toolCallId) }
+                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                continue
+              }
+              const canonicalProposal = canonicalProposalById.get(payload.toolCallId)
+              const toolName = canonicalProposal?.name
+              const expectedResult = event.kind === 'tool-call-finished' && isRecord(payload.result)
+                ? projectCanonicalToolResultForSessionLedger({
+                  rawResult: payload.result,
+                  isError: payload.isError === true,
+                  ...(toolName ? { toolName } : {}),
+                  ...(typeof payload.auditRef === 'string' ? { auditRef: payload.auditRef } : {}),
+                  deferredUnsurfaced: ledger.result.deferredUnsurfaced === true
+                })
+                : undefined
+              if (event.kind === 'tool-call-finished' && (!expectedResult || !isDeepStrictEqual(expectedResult, ledger.result))) {
+                blockedSessionLedgers.add(key)
+                try { options.onToolLedgerRepairError?.(new Error('canonical tool result sidecar does not match the committed completion result'), invocationId, payload.toolCallId) }
+                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                continue
+              }
+              if (blockedSessionLedgers.has(key)) continue
+              try {
+                await options.repairToolLedger(location as SessionHistoryLedgerLocation, {
+                  toolUseId: payload.toolCallId, turnId: ledger.turnId ?? event.turnId, stepId: ledger.stepId,
+                  ...(ledger.requestId !== undefined ? { requestId: ledger.requestId } : {}),
+                  ...(ledger.invocationRequestId !== undefined ? { invocationRequestId: ledger.invocationRequestId } : {}),
+                  ...(ledger.lane !== undefined ? { lane: ledger.lane } : {}), result: ledger.result
                 })
                 markEventRepair(event.eventId, true)
               } catch (error) {
                 blockedSessionLedgers.add(key)
                 markEventRepair(event.eventId, false, error)
-                try { options.onModelRequestLedgerRepairError?.(error, invocationId, requestId) }
+                try { options.onToolLedgerRepairError?.(error, invocationId, payload.toolCallId) }
                 catch { /* Diagnostics must not discard the canonical repair envelope. */ }
               }
             }
           }
         }
-        if (event.kind === 'provider-retry-scheduled' && options.repairProviderRetryLedger) {
-          const payload = event.payload as { requestId?: unknown; modelTurn?: unknown; retryAttempt?: unknown; routeId?: unknown; code?: unknown; backoffMs?: unknown; sessionLedger?: unknown }
-          const ledger = payload.sessionLedger as { location?: unknown; requestRetry?: unknown } | undefined
-          const location = ledger?.location
-          if (location && typeof location === 'object' && typeof (location as { workDir?: unknown }).workDir === 'string' &&
-            typeof (location as { sessionId?: unknown }).sessionId === 'string' && Number.isFinite((location as { createdAt?: unknown }).createdAt)) {
-            const repairLocation = location as CompactionLedgerLocation
-            const key = ledgerKey(repairLocation)
-            const validRetry = Number.isInteger(payload.modelTurn) && (payload.modelTurn as number) > 0 &&
-              payload.requestId === `${invocationId}:round:${payload.modelTurn}` &&
-              Number.isInteger(payload.retryAttempt) && (payload.retryAttempt as number) > 0 &&
-              typeof payload.routeId === 'string' && payload.routeId.length > 0 &&
-              typeof payload.code === 'string' && /^[a-z0-9_]{1,64}$/.test(payload.code) &&
-              typeof payload.backoffMs === 'number' && Number.isFinite(payload.backoffMs) && payload.backoffMs >= 0 &&
-              ledger?.requestRetry && typeof ledger.requestRetry === 'object' && !Array.isArray(ledger.requestRetry)
-            const requestRetry = ledger?.requestRetry as Record<string, unknown> | undefined
-            if (!validRetry || requestRetry?.requestId !== payload.requestId || requestRetry?.attempt !== payload.retryAttempt || requestRetry?.code !== payload.code || requestRetry?.backoffMs !== payload.backoffMs ||
-              (requestRetry?.turnId !== undefined && requestRetry.turnId !== event.turnId)) {
-              blockedSessionLedgers.add(key)
-              try { options.onProviderRetryLedgerRepairError?.(new Error('canonical provider retry projection identity is invalid'), invocationId, typeof payload.requestId === 'string' ? payload.requestId : 'provider-retry') }
-              catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-            } else if (!blockedSessionLedgers.has(key)) {
-              try { await options.repairProviderRetryLedger(repairLocation, requestRetry!); markEventRepair(event.eventId, true) }
-              catch (error) {
-                blockedSessionLedgers.add(key)
-                markEventRepair(event.eventId, false, error)
-                try { options.onProviderRetryLedgerRepairError?.(error, invocationId, String(payload.requestId)) }
-                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-              }
+        if (state && state.state !== 'interrupted') {
+          flushRepairOutcomes()
+          continue
+        }
+        if (options.repairCompaction) {
+          for (const event of snapshot.events) {
+            if (event.kind !== 'transcript-compacted') continue
+            const ledger = (event.payload as { sessionLedger?: unknown } | undefined)?.sessionLedger as Partial<CanonicalCompactionLedger> | undefined
+            const location = ledger?.location
+            const start = ledger?.start
+            const summary = ledger?.summary
+            if (!location || typeof location.workDir !== 'string' || typeof location.sessionId !== 'string' || !Number.isFinite(location.createdAt) || !start || !summary) continue
+            if (blockedSessionLedgers.has(ledgerKey(location as SessionHistoryLedgerLocation))) continue
+            const compactionId = typeof summary.compactionId === 'string' ? summary.compactionId : event.eventId
+            try { await options.repairCompaction(location as SessionHistoryLedgerLocation, start, summary); markEventRepair(event.eventId, true) }
+            catch (error) {
+              blockedSessionLedgers.add(ledgerKey(location as SessionHistoryLedgerLocation))
+              try { options.onCompactionRepairError?.(error, invocationId, compactionId) }
+              catch { /* A diagnostic sink must not abort recovery or discard the retryable canonical repair record. */ }
             }
           }
         }
-        if ((event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') && (options.repairUsageLedger || (event.kind === 'model-response-committed' && options.repairFinalRequestContextLedger))) {
-          const ledger = (event.payload as { sessionLedger?: unknown }).sessionLedger as Partial<CanonicalToolCallLedger> | undefined
-          const location = ledger?.location
-          if (location && typeof location.workDir === 'string' && typeof location.sessionId === 'string' && Number.isFinite(location.createdAt)) {
-            const key = ledgerKey(location as CompactionLedgerLocation)
-            const usagePayload = event.payload as { modelTurn?: unknown; attempt?: unknown }
-            const modelTurn = usagePayload.modelTurn
-            const attempt = usagePayload.attempt === undefined ? 1 : usagePayload.attempt
-            const expectedUsageRequestId = Number.isInteger(modelTurn) && (modelTurn as number) > 0 && Number.isInteger(attempt) && (attempt as number) > 0
-              ? requestIdsByTurn.get(`${event.turnId}:${modelTurn}:${attempt}`) ??
-                `${invocationId}:round:${modelTurn}${(attempt as number) > 1 ? `:attempt:${attempt}` : ''}`
+        if (snapshot.events.length > 0 && snapshot.events.at(-1)?.kind === 'tool-call-finished') {
+          const lastEvent = snapshot.events.at(-1)!
+          state = { invocationId, state: 'interrupted', lastEventId: lastEvent.eventId }
+        }
+        if (state?.state !== 'interrupted') {
+          flushRepairOutcomes()
+          continue
+        }
+        if (snapshot.events.at(-1)?.kind !== 'invocation-interrupted') {
+          const lastEvent = snapshot.events.at(-1)
+          if (!lastEvent) continue
+          const sequence = snapshot.version + 1
+          let recoveryLocation = recoveryLocations.size === 1 ? recoveryLocations.values().next().value as SessionHistoryLedgerLocation : undefined
+          if (recoveryLocations.size === 0 && options.resolveSessionLedgerLocation) {
+            const acceptedInputs = snapshot.events.filter(({ kind }) => kind === 'session-input-committed')
+            const first = snapshot.events[0]
+            const payload = first?.kind === 'session-input-committed' && first.payload && typeof first.payload === 'object'
+              ? first.payload as { sessionId?: unknown; role?: unknown; messageId?: unknown; inputFingerprint?: unknown }
               : undefined
-            if ((event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') && ledger.requestUsage && typeof ledger.requestUsage === 'object' && !Array.isArray(ledger.requestUsage)) {
-              const usage = ledger.requestUsage as Record<string, unknown>
-              if (!expectedUsageRequestId || typeof usage.requestId !== 'string' || usage.requestId !== expectedUsageRequestId || usage.turnId !== event.turnId) {
-                blockedSessionLedgers.add(key)
-                try {
-                  options.onUsageLedgerRepairError?.(
-                    new Error('canonical request usage identity does not match its History request, model turn, or turn'),
-                    invocationId,
-                    typeof usage.requestId === 'string' ? usage.requestId : 'request-usage'
-                  )
-                } catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-              } else {
-                try {
-                  if (!blockedSessionLedgers.has(key) && options.repairUsageLedger) {
-                    await options.repairUsageLedger(location as CompactionLedgerLocation, usage)
-                    markEventRepair(event.eventId, true)
-                  }
+            const acceptedSessionId = payload?.sessionId
+            const validAcceptedInput = acceptedInputs.length === 1 && first?.sequence === 1 &&
+              typeof acceptedSessionId === 'string' && acceptedSessionId.trim() &&
+              (!streamSessionId || acceptedSessionId === streamSessionId) && payload?.role === 'user' &&
+              typeof payload.messageId === 'string' && payload.messageId.trim() &&
+              typeof payload.inputFingerprint === 'string' && /^[a-f0-9]{64}$/.test(payload.inputFingerprint)
+            if (validAcceptedInput) {
+              try {
+                const candidate = await options.resolveSessionLedgerLocation(acceptedSessionId)
+                if (candidate && candidate.sessionId === acceptedSessionId && candidate.workDir.trim() && Number.isFinite(candidate.createdAt)) {
+                  recoveryLocation = candidate
                 }
-                catch (error) {
-                  markEventRepair(event.eventId, false, error)
-                  blockedSessionLedgers.add(key)
-                  try { options.onUsageLedgerRepairError?.(error, invocationId, typeof usage.requestId === 'string' ? usage.requestId : 'request-usage') }
-                  catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-                }
-              }
-            }
-            if (event.kind === 'model-response-committed' && options.repairFinalRequestContextLedger && !blockedSessionLedgers.has(key)) {
-              const requestContext = (ledger as Partial<CanonicalToolCallLedger> & { requestContext?: unknown }).requestContext
-              if (requestContext !== undefined && (!requestContext || typeof requestContext !== 'object' || Array.isArray(requestContext))) {
-                blockedSessionLedgers.add(key)
-                try { options.onFinalRequestContextLedgerRepairError?.(new Error('canonical final request context is not an object'), invocationId, expectedUsageRequestId ?? 'final-request-context') }
-                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-              } else if (requestContext && typeof requestContext === 'object' && !Array.isArray(requestContext)) {
-                const finalContext = requestContext as Record<string, unknown>
-                if (typeof finalContext.requestId !== 'string' || finalContext.requestId !== expectedUsageRequestId || finalContext.turnId !== event.turnId ||
-                  !Number.isInteger(finalContext.attempt) || (finalContext.attempt as number) <= 0 || !finalContext.contextUsage ||
-                  typeof finalContext.contextUsage !== 'object' || Array.isArray(finalContext.contextUsage)) {
-                  blockedSessionLedgers.add(key)
-                  try { options.onFinalRequestContextLedgerRepairError?.(new Error('canonical final request context identity or usage is invalid'), invocationId, expectedUsageRequestId ?? 'final-request-context') }
-                  catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-                } else {
-                    try { await options.repairFinalRequestContextLedger(location as CompactionLedgerLocation, finalContext); markEventRepair(event.eventId, true) }
-                    catch (error) {
-                      blockedSessionLedgers.add(key)
-                      markEventRepair(event.eventId, false, error)
-                      try { options.onFinalRequestContextLedgerRepairError?.(error, invocationId, expectedUsageRequestId ?? "final-request-context") }
-                      catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-                    }
-                }
+              } catch (error) {
+                try { options.onSessionLocationResolveError?.(error, invocationId, acceptedSessionId) }
+                catch { /* Location diagnostics cannot abort canonical process-restart recovery. */ }
               }
             }
           }
-        }
-        if (event.kind === 'model-response-committed') {
-          const ledger = (event.payload as { sessionLedger?: unknown }).sessionLedger as Partial<CanonicalToolCallLedger> | undefined
-          const location = ledger?.location
-          if (location && typeof location.workDir === 'string' && typeof location.sessionId === 'string' && Number.isFinite(location.createdAt) &&
-            typeof ledger.stepId === 'string' && Array.isArray(ledger.toolCalls)) {
-            const key = ledgerKey(location as CompactionLedgerLocation)
-            if (blockedSessionLedgers.has(key)) continue
-            for (const toolCall of ledger.toolCalls) {
-              if (!toolCall || typeof toolCall !== 'object' || Array.isArray(toolCall) || typeof toolCall.toolUseId !== 'string' || typeof toolCall.name !== 'string' || !toolCall.args || typeof toolCall.args !== 'object' || Array.isArray(toolCall.args)) {
-                blockedSessionLedgers.add(key)
-                const toolCallId = toolCall && typeof toolCall === 'object' && typeof toolCall.toolUseId === 'string' ? toolCall.toolUseId : 'tool-proposal'
-                try { options.onToolLedgerRepairError?.(new Error('canonical tool proposal sidecar is invalid'), invocationId, toolCallId) }
-                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-                break
-              }
-              if (!canonicalProposalIds.has(toolCall.toolUseId)) {
-                blockedSessionLedgers.add(key)
-                try { options.onToolLedgerRepairError?.(new Error('tool proposal sidecar identity is absent from canonical model response'), invocationId, toolCall.toolUseId) }
-                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-                break
-              }
-              const canonicalProposal = canonicalProposalById.get(toolCall.toolUseId)
-              const projectedName = canonicalProposal
-                ? toolIdToOpenAiCompatibleApiToolName(normalizeExternalToolName(canonicalProposal.name).canonicalName)
-                : undefined
-              const projectedArgs = canonicalProposal && (projectedName === 'toolkit_call' || projectedName === 'toolkit.call')
-                ? sanitizeCapabilityParamsForDisplay(canonicalProposal.input)
-                : canonicalProposal?.input
-              if (!canonicalProposal || projectedName !== toolCall.name || !isDeepStrictEqual(projectedArgs, toolCall.args)) {
-                blockedSessionLedgers.add(key)
-                try { options.onToolLedgerRepairError?.(new Error('canonical tool proposal sidecar does not match model response name or input'), invocationId, toolCall.toolUseId) }
-                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-                break
-              }
-              canonicalToolCalls.set(toolCall.toolUseId, { location: location as CompactionLedgerLocation, stepId: ledger.stepId })
-              try { await options.repairToolCallLedger?.(location as CompactionLedgerLocation, { ...toolCall, turnId: event.turnId, stepId: ledger.stepId }); markEventRepair(event.eventId, true) }
-              catch (error) {
-                blockedSessionLedgers.add(key)
-                markEventRepair(event.eventId, false, error)
-                try { options.onToolLedgerRepairError?.(error, invocationId, toolCall.toolUseId) }
-                catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-                break
-              }
+          const processRestartEventId = `${invocationId}:history:${sequence}`
+          const toolUseIds = pendingInterruptedToolUseIds(snapshot.events)
+          const terminal = { status: 'interrupted', turnId: lastEvent.turnId, reason: 'interrupted',
+            canonicalTerminalEventId: processRestartEventId, toolUseIds }
+          await this.appendBatch([{
+            invocationId,
+            turnId: lastEvent.turnId,
+            sequence,
+            schemaVersion: snapshot.schemaVersion,
+            eventId: processRestartEventId,
+            idempotencyKey: `${invocationId}:invocation-interrupted:${sequence}`,
+            kind: 'invocation-interrupted',
+            payload: {
+              status: 'interrupted', reason: 'process-restart',
+              ...(recoveryLocation ? { sessionLedger: { location: recoveryLocation, turnId: lastEvent.turnId, reason: terminal.reason } } : {})
             }
-          }
-        } else if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && options.repairToolLedger) {
-          const payload = event.payload as { toolCallId?: unknown; reason?: unknown; result?: unknown; isError?: unknown; auditRef?: unknown; sessionLedger?: unknown }
-          const ledger = payload.sessionLedger as Partial<CanonicalToolLedger> | undefined
-          const location = ledger?.location
-          if (typeof payload.toolCallId === 'string' && location && typeof location.workDir === 'string' && typeof location.sessionId === 'string' && Number.isFinite(location.createdAt) &&
-            typeof ledger.stepId === 'string') {
-            const key = ledgerKey(location as CompactionLedgerLocation)
-            if (!ledger.result || typeof ledger.result !== 'object' || Array.isArray(ledger.result)) {
-              blockedSessionLedgers.add(key)
-              try { options.onToolLedgerRepairError?.(new Error('canonical tool result sidecar is invalid'), invocationId, payload.toolCallId) }
-              catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-              continue
-            }
-            const proposal = canonicalToolCalls.get(payload.toolCallId)
-            if ((sawCanonicalModelResponse || event.kind === 'tool-call-not-dispatched') && !canonicalProposalIds.has(payload.toolCallId)) {
-              blockedSessionLedgers.add(key)
-              try { options.onToolLedgerRepairError?.(new Error('canonical tool result identity does not match a preceding model response proposal'), invocationId, payload.toolCallId) }
-              catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-              continue
-            }
-            if (proposal && (ledgerKey(proposal.location) !== key || proposal.stepId !== ledger.stepId)) {
-              blockedSessionLedgers.add(key)
-              try { options.onToolLedgerRepairError?.(new Error('canonical tool result step identity does not match its model response proposal'), invocationId, payload.toolCallId) }
-              catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-              continue
-            }
-            const canonicalProposal = canonicalProposalById.get(payload.toolCallId)
-            const toolName = canonicalProposal?.name
-            const expectedResult = event.kind === 'tool-call-finished' && isRecord(payload.result)
-              ? projectCanonicalToolResultForSessionLedger({
-                rawResult: payload.result,
-                isError: payload.isError === true,
-                ...(toolName ? { toolName } : {}),
-                ...(typeof payload.auditRef === 'string' ? { auditRef: payload.auditRef } : {}),
-                deferredUnsurfaced: ledger.result.deferredUnsurfaced === true
-              })
-              : undefined
-            if (event.kind === 'tool-call-finished' && (!expectedResult || !isDeepStrictEqual(expectedResult, ledger.result))) {
-              blockedSessionLedgers.add(key)
-              try { options.onToolLedgerRepairError?.(new Error('canonical tool result sidecar does not match the committed completion result'), invocationId, payload.toolCallId) }
-              catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-              continue
-            }
-            if (blockedSessionLedgers.has(key)) continue
+          }], snapshot.version)
+          if (recoveryLocation && options.repairInvocationTerminal) {
+            const recoveryTerminalEventId = processRestartEventId
+            const recoveryRepairId = `${invocationId}:invocation-projections:${recoveryTerminalEventId}`
             try {
-              await options.repairToolLedger(location as CompactionLedgerLocation, {
-                toolUseId: payload.toolCallId, turnId: ledger.turnId ?? event.turnId, stepId: ledger.stepId,
-                ...(ledger.requestId !== undefined ? { requestId: ledger.requestId } : {}),
-                ...(ledger.invocationRequestId !== undefined ? { invocationRequestId: ledger.invocationRequestId } : {}),
-                ...(ledger.lane !== undefined ? { lane: ledger.lane } : {}), result: ledger.result
-              })
-              markEventRepair(event.eventId, true)
-            } catch (error) {
-              blockedSessionLedgers.add(key)
-              markEventRepair(event.eventId, false, error)
-              try { options.onToolLedgerRepairError?.(error, invocationId, payload.toolCallId) }
-              catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+              await options.repairInvocationTerminal(recoveryLocation, terminal)
+              this.recordProjectionRepairResult(recoveryRepairId, { success: true })
+            }
+            catch (error) {
+              this.recordProjectionRepairResult(recoveryRepairId, { success: false, error })
+              try { options.onInvocationTerminalRepairError?.(error, invocationId, lastEvent.turnId) }
+              catch { /* Keep the canonical terminal sidecar for retry on the next startup. */ }
             }
           }
+          snapshot = await this.read(invocationId)
+          state = rebuildInvocationStates(snapshot).get(invocationId)
         }
-      }
-      if (state && state.state !== 'interrupted') {
+        if (state?.state === 'interrupted') recovered.push(state)
         flushRepairOutcomes()
-        continue
+      } catch (error) {
+        if (!(error instanceof HistoryCorruptionError)) throw error
+        options.onSessionRecoveryFailure?.(error, invocationId, streamSessionId)
       }
-      if (options.repairCompaction) {
-        for (const event of snapshot.events) {
-          if (event.kind !== 'transcript-compacted') continue
-          const ledger = (event.payload as { sessionLedger?: unknown } | undefined)?.sessionLedger as Partial<CanonicalCompactionLedger> | undefined
-          const location = ledger?.location
-          const start = ledger?.start
-          const summary = ledger?.summary
-          if (!location || typeof location.workDir !== 'string' || typeof location.sessionId !== 'string' || !Number.isFinite(location.createdAt) || !start || !summary) continue
-          if (blockedSessionLedgers.has(ledgerKey(location as CompactionLedgerLocation))) continue
-          const compactionId = typeof summary.compactionId === 'string' ? summary.compactionId : event.eventId
-          try { await options.repairCompaction(location as CompactionLedgerLocation, start, summary); markEventRepair(event.eventId, true) }
-          catch (error) {
-            blockedSessionLedgers.add(ledgerKey(location as CompactionLedgerLocation))
-            try { options.onCompactionRepairError?.(error, invocationId, compactionId) }
-            catch { /* A diagnostic sink must not abort recovery or discard the retryable canonical repair record. */ }
-          }
-        }
-      }
-      if (snapshot.events.length > 0 && snapshot.events.at(-1)?.kind === 'tool-call-finished') {
-        const lastEvent = snapshot.events.at(-1)!
-        state = { invocationId, state: 'interrupted', lastEventId: lastEvent.eventId }
-      }
-      if (state?.state !== 'interrupted') {
-        flushRepairOutcomes()
-        continue
-      }
-      if (snapshot.events.at(-1)?.kind !== 'invocation-interrupted') {
-        const lastEvent = snapshot.events.at(-1)
-        if (!lastEvent) continue
-        const sequence = snapshot.version + 1
-        let recoveryLocation = recoveryLocations.size === 1 ? recoveryLocations.values().next().value as CompactionLedgerLocation : undefined
-        if (recoveryLocations.size === 0 && options.resolveSessionLedgerLocation) {
-          const acceptedInputs = snapshot.events.filter(({ kind }) => kind === 'session-input-committed')
-          const first = snapshot.events[0]
-          const payload = first?.kind === 'session-input-committed' && first.payload && typeof first.payload === 'object'
-            ? first.payload as { sessionId?: unknown; role?: unknown; messageId?: unknown; inputFingerprint?: unknown }
-            : undefined
-          const acceptedSessionId = payload?.sessionId
-          const validAcceptedInput = acceptedInputs.length === 1 && first?.sequence === 1 &&
-            typeof acceptedSessionId === 'string' && acceptedSessionId.trim() &&
-            (!streamSessionId || acceptedSessionId === streamSessionId) && payload?.role === 'user' &&
-            typeof payload.messageId === 'string' && payload.messageId.trim() &&
-            typeof payload.inputFingerprint === 'string' && /^[a-f0-9]{64}$/.test(payload.inputFingerprint)
-          if (validAcceptedInput) {
-            try {
-              const candidate = await options.resolveSessionLedgerLocation(acceptedSessionId)
-              if (candidate && candidate.sessionId === acceptedSessionId && candidate.workDir.trim() && Number.isFinite(candidate.createdAt)) {
-                recoveryLocation = candidate
-              }
-            } catch (error) {
-              try { options.onSessionLocationResolveError?.(error, invocationId, acceptedSessionId) }
-              catch { /* Location diagnostics cannot abort canonical process-restart recovery. */ }
-            }
-          }
-        }
-        const processRestartEventId = `${invocationId}:history:${sequence}`
-        const toolUseIds = pendingInterruptedToolUseIds(snapshot.events)
-        const terminal = { status: 'interrupted', turnId: lastEvent.turnId, reason: 'interrupted',
-          canonicalTerminalEventId: processRestartEventId, toolUseIds }
-        await this.appendBatch([{
-          invocationId,
-          turnId: lastEvent.turnId,
-          sequence,
-          schemaVersion: snapshot.schemaVersion,
-          eventId: processRestartEventId,
-          idempotencyKey: `${invocationId}:invocation-interrupted:${sequence}`,
-          kind: 'invocation-interrupted',
-          payload: {
-            status: 'interrupted', reason: 'process-restart',
-            ...(recoveryLocation ? { sessionLedger: { location: recoveryLocation, turnId: lastEvent.turnId, reason: terminal.reason } } : {})
-          }
-        }], snapshot.version)
-        if (recoveryLocation && options.repairInvocationTerminal) {
-          const recoveryTerminalEventId = processRestartEventId
-          const recoveryRepairId = `${invocationId}:invocation-projections:${recoveryTerminalEventId}`
-          try {
-            await options.repairInvocationTerminal(recoveryLocation, terminal)
-            this.recordProjectionRepairResult(recoveryRepairId, { success: true })
-          }
-          catch (error) {
-            this.recordProjectionRepairResult(recoveryRepairId, { success: false, error })
-            try { options.onInvocationTerminalRepairError?.(error, invocationId, lastEvent.turnId) }
-            catch { /* Keep the canonical terminal sidecar for retry on the next startup. */ }
-          }
-        }
-        snapshot = await this.read(invocationId)
-        state = rebuildInvocationStates(snapshot).get(invocationId)
-      }
-      if (state?.state === 'interrupted') recovered.push(state)
-      flushRepairOutcomes()
     }
     return recovered
   }

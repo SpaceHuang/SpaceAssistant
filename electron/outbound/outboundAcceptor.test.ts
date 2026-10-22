@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createOutboundAcceptor as createSessionStorageOutboundAcceptor, decideOutbound, type OutboundAcceptorDeps, type OutboundSnapshot } from './outboundAcceptor'
+import { createOutboundAcceptor as createSessionStorageOutboundAcceptor, computeContextPressureWarnings, decideOutbound, type OutboundAcceptorDeps, type OutboundSnapshot } from './outboundAcceptor'
 import type { OutboundSubmitIntent } from '../../src/shared/outboundProtocol'
 import { summarizeFailedInvocation } from './outboundAcceptor'
 import { TransactionCommitUnknownError } from '../database/transaction'
 import { createHash } from 'node:crypto'
-import type { SessionQueries } from '../sessionStorage/contracts'
+import type { SessionQueries } from '../sessionStorage/public/ports'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import type { AppDatabase } from '../database'
 
@@ -71,6 +71,18 @@ const io = {
     copied: false
   }))
 }
+
+describe('computeContextPressureWarnings', () => {
+  it('prepares canonical chat bodies before selecting the history snapshot', async () => {
+    const events: string[] = []
+    const queries = { readSession: (sessionId: string) => { events.push(`select:${sessionId}`); return undefined } } as unknown as SessionQueries
+
+    await expect(computeContextPressureWarnings({} as AppDatabase, 'pressure-session', undefined, queries,
+      async ({ sessionId }) => { events.push(`ensure:${sessionId}`) })).resolves.toEqual([])
+
+    expect(events).toEqual(['ensure:pressure-session', 'select:pressure-session'])
+  })
+})
 
 describe('decideOutbound（出站决定矩阵）', () => {
   it.each(['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'])('recognizes exact continuation phrase %s', async (text) => {
@@ -242,7 +254,9 @@ describe('canonical History failure summary', () => {
 
   it('treats a completed invocation after a historical failure as a newer accepted task boundary', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, getDbConnection } = await import('../database')
+    const { createSession, appendMessage } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-boundary-')
     try {
@@ -288,7 +302,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('canonical-only accepted-turn 重试返回投影后的 assistant 正文', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, createPersistedTurn, getDbConnection } = await import('../database')
+    const { createSession, appendMessage, createPersistedTurn } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-accepted-canonical-only-')
     try {
@@ -329,7 +345,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('returns a typed checkpoint-started status and hides the internal continuation ID on retries', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, createPersistedTurn, getDbConnection, getMessages } = await import('../database')
+    const { createSession, appendMessage, createPersistedTurn, getMessages } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-started-status-')
     try {
@@ -375,7 +393,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('does not create an intent row for regular requests and keeps continuation routing request ID in the accepted turn', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, getDbConnection, getPersistedTurn } = await import('../database')
+    const { createSession, getPersistedTurn } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const temp = createTempDatabase('sa-continuation-intent-')
     try {
       const session = createSession(temp.db, { name: 'intent' })
@@ -405,7 +425,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('persists ambiguous source selection and returns the same request for explicit normal-turn fallback', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, getDbConnection } = await import('../database')
+    const { createSession, appendMessage } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const temp = createTempDatabase('sa-continuation-select-')
     try {
       const session = createSession(temp.db, { name: 'choose' })
@@ -436,7 +458,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('routes an explicit latest-source choice to the newest failed invocation', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, getDbConnection } = await import('../database')
+    const { createSession, appendMessage } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-latest-')
     try {
@@ -467,7 +491,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('does not attach an older failure after a newer user task has already been accepted', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, createPersistedTurn, getDbConnection } = await import('../database')
+    const { createSession, appendMessage, createPersistedTurn } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-stale-source-')
     try {
@@ -496,7 +522,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('keeps the failure summary and stable request id through queue claim into Turn config', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, getDbConnection, getNextQueuedMessage, claimQueuedTurnAtomically, getPersistedTurn, openDatabase } = await import('../database')
+    const { createSession, appendMessage, getNextQueuedMessage, claimQueuedTurnAtomically, getPersistedTurn } = await import('../database/operations')
+
+    const { getDbConnection, openDatabase } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-queued-context-')
     try {
@@ -546,7 +574,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('queues continuation input with attachments while the latest canonical History is still running', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, createPersistedTurn, getDbConnection, getNextQueuedMessage, claimQueuedTurnAtomically, getPersistedTurn } = await import('../database')
+    const { createSession, appendMessage, createPersistedTurn, getNextQueuedMessage, claimQueuedTurnAtomically, getPersistedTurn } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-running-history-')
     try {
@@ -583,6 +613,8 @@ describe('continuation intent acceptance persistence', () => {
       expect(queued.message.attachments).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'running-image' })]))
       expect(getDbConnection(temp.db).prepare('SELECT route,status,source_invocation_id,continuation_context_json FROM continuation_intents WHERE request_id=?').get(requestId)).toMatchObject({ route: 'ordinary-queue', status: 'queued', source_invocation_id: null, continuation_context_json: null })
       expect(history.readSync('active-invocation').events.at(-1)?.kind).toBe('model-request-started')
+      const { updatePersistedTurnState } = await import('../database/operations')
+      updatePersistedTurnState(temp.db, 'active-turn', 'terminal', { outcome: 'completed' })
       claimQueuedTurnAtomically(temp.db, { sessionId: session.id, userMessageId: queued.message.id, turnId: 'drained-turn', assistantMessageId: 'drained-assistant', requestId })
       expect(getPersistedTurn(temp.db, 'drained-turn')?.executionConfig?.continuationContext).toBeUndefined()
       expect(startTurn).not.toHaveBeenCalled()
@@ -591,7 +623,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('queues continuation with stable request id and attachments when the session becomes busy during start', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, createPersistedTurn, getDbConnection, getNextQueuedMessage } = await import('../database')
+    const { createSession, appendMessage, createPersistedTurn, getNextQueuedMessage } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-start-race-')
     try {
@@ -633,7 +667,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('queues continuation with stable request id and attachments when the session becomes busy during start', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, createPersistedTurn, getDbConnection, getNextQueuedMessage } = await import('../database')
+    const { createSession, appendMessage, createPersistedTurn, getNextQueuedMessage } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-start-race-')
     try {
@@ -674,7 +710,9 @@ describe('continuation intent acceptance persistence', () => {
 
   it('does not start a fallback Turn when checkpoint acceptance commit is uncertain', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, createPersistedTurn, getDbConnection } = await import('../database')
+    const { createSession, appendMessage, createPersistedTurn } = await import('../database/operations')
+
+    const { getDbConnection } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-commit-uncertain-')
     try {

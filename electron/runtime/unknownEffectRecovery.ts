@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { HistoryPort, HistorySnapshot } from '../../packages/agent-sdk/src/history'
+import { createSessionCommitService } from '../sessionStorage/application/sessionCommitService'
 
 export type UnknownEffectRecoveryState = Readonly<{
   targetInvocationId: string
@@ -72,27 +73,31 @@ export function isUnknownEffectDecisionCurrent(state: UnknownEffectRecoveryState
   return expected.length === accepted.length && expected.every((id, index) => id === accepted[index])
 }
 
-export async function recordUnknownEffectRiskAcceptance(input: { history: HistoryPort; targetInvocationId: string; acceptedIds: readonly string[]; now?: number }): Promise<void> {
+export async function recordUnknownEffectRiskAcceptance(input: { history: HistoryPort; sessionId: string; targetInvocationId: string; acceptedIds: readonly string[]; now?: number }): Promise<void> {
   const snapshot = await input.history.read(input.targetInvocationId)
   const state = readUnknownEffectRecoveryState(snapshot)
   if (!isUnknownEffectDecisionCurrent(state, input.targetInvocationId, input.acceptedIds)) throw new Error('UNKNOWN_EFFECT_DECISION_STALE_OR_INCOMPLETE')
+  const turnId = snapshot.events[0]?.turnId ?? input.targetInvocationId
   const sequence = snapshot.version + 1
-  await input.history.appendBatch([{
-    invocationId: input.targetInvocationId, turnId: snapshot.events[0]?.turnId ?? input.targetInvocationId, sequence,
+  const commitService = createSessionCommitService({ sessionId: input.sessionId, invocationId: input.targetInvocationId, turnId, history: input.history })
+  await commitService.commitHistory([{
+    invocationId: input.targetInvocationId, turnId, sequence,
     schemaVersion: snapshot.schemaVersion, eventId: `${input.targetInvocationId}:unknown-risk:${sequence}`,
     idempotencyKey: `${input.targetInvocationId}:unknown-risk:${sequence}`, kind: 'unknown-effect-risk-accepted',
     payload: { targetInvocationId: input.targetInvocationId, unresolvedEffectIds: [...new Set(input.acceptedIds)].sort(), acceptedAt: input.now ?? Date.now() }
   }], snapshot.version)
 }
 
-export async function approveOneTimeUnknownEffectRetry(input: { history: HistoryPort; targetInvocationId: string; unknownEffectId: string; now?: number }): Promise<void> {
+export async function approveOneTimeUnknownEffectRetry(input: { history: HistoryPort; sessionId: string; targetInvocationId: string; unknownEffectId: string; now?: number }): Promise<void> {
   const snapshot = await input.history.read(input.targetInvocationId)
   const state = readUnknownEffectRecoveryState(snapshot)
   const effect = state.unresolvedEffects.find(({ id }) => id === input.unknownEffectId)
   if (state.mode !== 'verify-only' || !effect?.toolName || !effect.inputHash) throw new Error('UNKNOWN_EFFECT_RETRY_UNAVAILABLE')
+  const turnId = snapshot.events[0]?.turnId ?? input.targetInvocationId
   const sequence = snapshot.version + 1
-  await input.history.appendBatch([{
-    invocationId: input.targetInvocationId, turnId: snapshot.events[0]?.turnId ?? input.targetInvocationId, sequence,
+  const commitService = createSessionCommitService({ sessionId: input.sessionId, invocationId: input.targetInvocationId, turnId, history: input.history })
+  await commitService.commitHistory([{
+    invocationId: input.targetInvocationId, turnId, sequence,
     schemaVersion: snapshot.schemaVersion, eventId: `${input.targetInvocationId}:unknown-retry-approved:${sequence}`,
     idempotencyKey: `${input.targetInvocationId}:unknown-retry-approved:${sequence}`, kind: 'unknown-effect-retry-approved',
     payload: { targetInvocationId: input.targetInvocationId, unknownEffectId: effect.id, toolName: effect.toolName, inputHash: effect.inputHash, approvedAt: input.now ?? Date.now() }

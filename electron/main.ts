@@ -42,21 +42,21 @@ import {
   registerWeChatIpcHandlers,
   shutdownWeChatServices
 } from './wechat/weChatIpc'
-import { getConfigValue, getDefaultDbPath, getMessageSkeleton, listPersistedTurns, openDatabase, setConfigValue } from './database'
+import { getConfigValue, getDefaultDbPath, openDatabase, setConfigValue } from './database'
 import { createHash, randomUUID } from 'node:crypto'
 import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
-import { createSqliteSessionStorageHost } from './sessionStorage/sqliteSessionStorage'
+import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sessionStorage/sqliteSessionStorage'
 import { createLifecycleTaskHandle } from './sessionStorage/lifecycle'
 import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
 import { flushPendingSessionBackups } from './sessionBackupShutdown'
-import type { SessionQueries } from './sessionStorage/contracts'
+import type { SessionStorage } from './sessionStorage/host/ports'
 import { signalChatCancel } from './chatCancelRegistry'
 import { cancelAllToolConfirmsForRequest } from './toolConfirmRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, withSessionEventWriterDrain, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, hasActiveSessionEventSink, reconcileInterruptedSessionEventLedger, setSessionEventCommitObserver } from './sessionEvents'
+import { beginSessionEventShutdown, withSessionEventWriterDrain, flushAllSessionEventSinks, getSessionEventSink, hasActiveSessionEventSink, setSessionEventCommitObserver } from './sessionEvents'
 import { createCanonicalSessionProjectionRetentionPreparer, createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
@@ -70,8 +70,9 @@ import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageSt
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
 import { getDbConnection } from './database/sqliteStore'
+import { getMessageSkeleton } from './database/operations'
 import { advanceProcessGeneration, currentProcessGeneration } from './database/processGeneration'
-import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { createSqliteStartupHistoryRecoveryBindings } from './sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost'
 import { classifySessionHistoryRepairFailure } from './runtime/sessionHistoryRecoveryDiagnostics'
 import { SessionProjectionMigrationApplication } from './runtime/sessionProjectionMigrationApplication'
 import { DB_SCHEMA_VERSION } from './database/schema'
@@ -79,7 +80,6 @@ import { createSessionStorageCleanupProductionBoundary } from './runtime/session
 import { SESSION_STORAGE_HISTORY_FORMAT_VERSION, SESSION_STORAGE_SPILL_FORMAT_VERSION } from './runtime/sessionStorageCleanupReleaseConfig'
 import { scheduleSessionMessageContentCleanupMaintenance } from './storage/sessionMessageContentCleanupMaintenance'
 import { scheduleSpillReferenceBackfill } from './storage/spillReferenceBackfillScheduler'
-import { getSessionLedgerRecoveryRoots, isSessionLedgerLocationAllowed, resolveSessionLedgerLocation as resolveAcceptedInputLedgerLocation, toSessionLedgerToolCallProjection, toSessionLedgerToolResultProjection } from './runtime/sessionLedgerRecovery'
 import { ensureSessionLedgerReady } from './sessionLedgerLifecycle'
 import { createProductionSessionLedgerLifecycleDependencies } from './runtime/sessionLedgerLifecycleProduction'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
@@ -278,7 +278,7 @@ function getTelemetryArtifactBuildId(): string | undefined {
 /** 模块级持有防抖备份管理器：退出流程 flush 挂起备份用（评审 2.2）。 */
 let sessionBackupManager: DebouncedSessionBackupManager | null = null
 /** Explicit process-level host reference used by shutdown tasks; cleared after shutdown settles. */
-let appSessionQueries: SessionQueries | null = null
+let appSessionStorage: SessionStorage | null = null
 
 // 进程级 unhandledRejection 安全网（评审 1.1/1.2 防御纵深）：逐点 .catch 是正解，
 // 本网兜住漏网点——只丢一条日志，不崩整个主进程。必须在任何业务代码执行前安装。
@@ -308,9 +308,9 @@ export async function runShutdownCleanup(pendingTasks?: Set<string>): Promise<Sh
       // 有界重试耗尽后记录失败，不让辅助备份阻止应用退出。
       const mgr = sessionBackupManager
       const db = appDb
-      const queries = appSessionQueries
-      if (!mgr || !db || !queries) return
-      await flushPendingSessionBackups(mgr, queries).catch((error) => {
+      const storage = appSessionStorage
+      if (!mgr || !db || !storage) return
+      await flushPendingSessionBackups(mgr, storage).catch((error) => {
         console.warn('[sessionBackup] flush on quit failed:', error instanceof Error ? error.message : String(error))
       })
     }],
@@ -496,6 +496,7 @@ app.whenReady().then(async () => {
   let sessionHistoryRepairFailureCount = 0
   let recoveredInvocationCount = 0
   let sessionLedgerRepairFailureCount = 0
+  let performCanonicalHistoryRecovery: () => Promise<{ interruptedCount: number; repairFailureCount: number; sessionFailures?: readonly { sessionId: string; invocationId: string; capability: 'execution' | 'ledger'; failureClass: 'history-stream-corrupt' | 'ledger-repair-failed' | 'ledger-repair-pending' }[] }> = async () => ({ interruptedCount: 0, repairFailureCount: 0 })
   const logSessionLedgerGateTrace = (trace: import('./sessionLedgerLifecycle').SessionLedgerLifecycleTrace) => {
     logAgentEvent('info', 'session.history.recovery', {
       kind: 'session-ledger-gate', phase: trace.operation, status: trace.status, durationMs: trace.durationMs,
@@ -505,7 +506,8 @@ app.whenReady().then(async () => {
   }
   let sessionHistoryRecoverySucceeded = false
   const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
-  const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
+  const ledgerRecovery = createSessionLedgerRecoveryBindings()
+  const recoveryWorkDirs = ledgerRecovery.getAllowedRoots({ configuredWorkDir: recoveryWorkDir, profilesJson: getConfigValue(db, 'config.workDirProfiles') })
   const sessionLedgerLifecycleDependencies = createProductionSessionLedgerLifecycleDependencies(getDbConnection(db))
   const processGeneration = currentProcessGeneration(getDbConnection(db))
   setSessionEventCommitObserver(async (location) => {
@@ -516,7 +518,7 @@ app.whenReady().then(async () => {
   let requestMcpArtifactCapacitySweep: (() => void) | undefined
   let requestAgentLogRetention: (() => void) | undefined
   const dailyRetentionTask = (taskId: string, policyFingerprint: () => string | Promise<string>, rootFingerprint: () => string | undefined,
-    run: (signal: AbortSignal) => Promise<number>, onStarted?: (handle: { request?(reason: import('./sessionStorage/contracts').MaintenanceReason): void }) => void) => {
+    run: (signal: AbortSignal) => Promise<number>, onStarted?: (handle: { request?(reason: import('./sessionStorage/host/ports').MaintenanceReason): void }) => void) => {
     const scheduler = createMaintenanceScheduler({
       watermarkPath: path.join(app.getPath('userData'), 'maintenance', `${taskId}.json`),
       policyFingerprint, rootFingerprint, algorithmVersion: 1,
@@ -533,9 +535,11 @@ app.whenReady().then(async () => {
     } }
   }
   const sessionStorageHost = createSqliteSessionStorageHost(db, {
+    ledgerRecovery,
     storage: {
     getTurnRuntime: () => turnRuntime,
     getUserDataDir: () => app.getPath('userData'),
+    projectionBlobRoot: path.join(app.getPath('userData'), 'session-projections'),
     ensureSessionLedgerReady: async ({ session, workDir }) => {
       const result = await ensureSessionLedgerReady({
         conn: getDbConnection(db),
@@ -565,10 +569,12 @@ app.whenReady().then(async () => {
     }
     },
     startup: {
-      recoverHistory: async () => ({ interruptedCount: recoveredInvocationCount, repairFailureCount: sessionHistoryRepairFailureCount + (safeDbMaintenanceRequested ? 1 : 0) }),
+      recoverHistory: () => performCanonicalHistoryRecovery(),
       recoverSessionLedgers: async () => ({ repairFailureCount: sessionLedgerRepairFailureCount })
     },
     maintenanceTasks: [
+      createSqliteProjectionBuildTask({ db, dbPath, blobRoot: path.join(app.getPath('userData'), 'session-projections'),
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now }),
       {
         taskId: 'spill-reference-index-backfill', category: 'derived-index',
         start: () => scheduleSpillReferenceBackfill(db, {
@@ -588,8 +594,13 @@ app.whenReady().then(async () => {
       ...recoveryWorkDirs.map((workDir) => dailyRetentionTask(`session-event-retention-${createHash('sha256').update(workDir).digest('hex').slice(0, 12)}`,
         () => JSON.stringify(resolveRetentionPolicyFromDb(db).sessionEventMaxSessions), () => workDir, async () => {
         const shouldRetain = createSessionLedgerCompactionDependencyGuard(db)
+        const prepareProjectionForRetention = createCanonicalSessionProjectionRetentionPreparer(db, async ({ sessionId }) => {
+          const ensureChatBodyV1 = sessionStorageHost.storage.ensureChatBodyV1
+          if (!ensureChatBodyV1) throw new Error('SESSION_PROJECTION_PREPARATION_UNAVAILABLE')
+          await ensureChatBodyV1({ sessionId })
+        })
         const result = await runSessionEventRetentionMaintenance(db, workDir, {
-          prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db), shouldRetainSessionDir: shouldRetain,
+          prepareProjectionForRetention, shouldRetainSessionDir: shouldRetain,
           withSessionLifecycleLock: async (sessionName, root, operation) => {
             const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1] ?? sessionName
             const session = sessionStorage.queries.readSession(sessionId)
@@ -711,7 +722,7 @@ app.whenReady().then(async () => {
     void measureStartupPhase('usage-stats-startup-maintenance', () => usageStatsStartupMaintenance?.())
     usageStatsStartupMaintenance = null
   }
-  appSessionQueries = sessionStorage.queries
+  appSessionStorage = sessionStorage
   storageLifecycleStop = async (deadlineMs) => {
     const [sessionStatus, profileStatus] = await Promise.all([
       sessionStorageHost.lifecycle.stop({ deadlineMs }),
@@ -740,166 +751,64 @@ app.whenReady().then(async () => {
       reasonCode: classifySessionHistoryRepairFailure(error)
     })
   }
-  if (safeDbMaintenanceRequested) {
-    console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
-  } else {
-  await showStartupStatus('正在加载，请稍候…')
-  try {
-    const startupHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, undefined, createSpillStore(path.join(app.getPath('userData'), 'spill')))
-    let recoveryStatusRequired = false
+  performCanonicalHistoryRecovery = async () => {
+    if (safeDbMaintenanceRequested) {
+      console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
+      return { interruptedCount: 0, repairFailureCount: 1 }
+    }
+    await showStartupStatus('正在加载，请稍候…')
+    let sessionFailures: readonly { sessionId: string; invocationId: string; capability: 'execution' | 'ledger'; failureClass: 'history-stream-corrupt' | 'ledger-repair-failed' | 'ledger-repair-pending' }[] = []
+    let historyRepairFailureCount = 0
     try {
-    const historyClassification = await measureStartupPhase('canonical-history.classification', () => startupHistory.classifyLegacyProjectionRepairs(100))
-      if (!historyClassification.complete) {
-        console.info('[agentHistory] legacy repair classification remains resumable', historyClassification)
+      const startupHistory = createSqliteStartupHistoryRecoveryBindings(db, createSpillStore(path.join(app.getPath('userData'), 'spill')))
+      let recoveryStatusRequired = false
+      try {
+        const historyClassification = await measureStartupPhase('canonical-history.classification', () => startupHistory.classifyLegacyProjectionRepairs(100))
+        if (!historyClassification.complete) {
+          console.info('[agentHistory] legacy repair classification remains resumable', historyClassification)
+          recoveryStatusRequired = true
+        }
+      } catch (error) {
+        console.warn('[agentHistory] legacy repair classification failed; using exhaustive recovery', error instanceof Error ? error.message : String(error))
         recoveryStatusRequired = true
       }
-    } catch (error) {
-      // Classification failure must retain the old exhaustive recovery path until its cursor completes.
-      console.warn('[agentHistory] legacy repair classification failed; using exhaustive recovery', error instanceof Error ? error.message : String(error))
-      recoveryStatusRequired = true
-    }
-    if (recoveryStatusRequired || startupHistory.getStartupRecoveryWorkSummary().hasWork) {
-      await showStartupStatus('正在整理历史会话数据，请稍候…')
-    }
-    const withAcceptedSessionLedger = async <T>(location: { workDir: string; sessionId: string; createdAt: number }, operation: () => Promise<T>): Promise<T> => {
-      if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) throw new Error('canonical session ledger location does not match a configured workspace root')
-      const session = sessionStorage.queries.readSession(location.sessionId)
-      if (!session) throw new Error('SESSION_LEDGER_SESSION_MISSING')
-      const ready = await ensureSessionLedgerReady({ conn: getDbConnection(db), location, sessionGeneration: session.generation,
-        processGeneration, retryBlocked: true, dependencies: sessionLedgerLifecycleDependencies, onTrace: logSessionLedgerGateTrace })
-      if (ready.status !== 'ready') throw new Error(`SESSION_LEDGER_BLOCKED:${ready.readiness.failureClass ?? 'unknown'}`)
-      return operation()
-    }
-    const interrupted = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocations({
-      resolveSessionLedgerLocation: (sessionId) => {
-        const session = sessionStorage.queries.readSession(sessionId)
-        if (!session) return undefined
-        const location = resolveAcceptedInputLedgerLocation({
-          sessionId,
-          createdAt: session.createdAt,
-          workDirProfileId: session.workDirProfileId,
-          activeProfileId: getConfigValue(db, 'config.activeWorkDirProfileId'),
-          configuredWorkDir: recoveryWorkDir,
-          profilesJson: getConfigValue(db, 'config.workDirProfiles')
-        })
-        return location && isSessionLedgerLocationAllowed(location, recoveryWorkDirs) ? location : undefined
-      },
-      onSessionLocationResolveError: (error, invocationId, sessionId) => {
-        sessionHistoryRepairFailureCount += 1
-        logAgentEvent('warn', 'tool.error', { requestId: invocationId, sessionId, toolName: 'history-session-location-recovery', message: error instanceof Error ? error.message : String(error) })
-      },
-      repairCompaction: async (location, start, summary) => {
-        await withAcceptedSessionLedger(location, async () => {
-          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-          try { await ensureCompactionTransaction(sink, start, summary) }
-          finally { await sink.close() }
-        })
-      },
-      repairToolLedger: async (location, result) => {
-        await withAcceptedSessionLedger(location, async () => {
-          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-          try { await ensureToolResultEvent(sink, toSessionLedgerToolResultProjection(result as { toolUseId: string; turnId?: string; stepId: string; result: Record<string, unknown> })) }
-          finally { await sink.close() }
-        })
-      },
-      repairInvocationTerminal: async (location, terminal) => {
-        await withAcceptedSessionLedger(location, async () => {
-          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-          try {
-            await ensureTurnStartEvent(sink, String(terminal.turnId))
-            await ensureTurnEndEvent(sink, String(terminal.turnId), String(terminal.reason))
-          }
-          finally { await sink.close() }
-          if (typeof terminal.canonicalTerminalEventId === 'string') await reconcileInterruptedSessionEventLedger({
-            ...location, turnId: String(terminal.turnId), canonicalTerminalEventId: terminal.canonicalTerminalEventId,
-            toolUseIds: Array.isArray(terminal.toolUseIds) ? terminal.toolUseIds.filter((value): value is string => typeof value === 'string') : []
-          })
-        })
-      },
-      repairToolCallLedger: async (location, toolCall) => {
-        await withAcceptedSessionLedger(location, async () => {
-          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-          try { await ensureToolCallEvent(sink, toSessionLedgerToolCallProjection(toolCall as { toolUseId: string; turnId?: string; stepId: string; name: string; args: Record<string, unknown> })) }
-          finally { await sink.close() }
-        })
-      },
-      repairModelRequestLedger: async (location, projection) => {
-        await withAcceptedSessionLedger(location, async () => {
-          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-          try { await ensureRequestProjectionEvents(sink, projection) }
-          finally { await sink.close() }
-        })
-      },
-      repairProviderRetryLedger: async (location, retry) => {
-        await withAcceptedSessionLedger(location, async () => {
-          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-          try { await ensureRequestRetryEvent(sink, retry) }
-          finally { await sink.close() }
-        })
-      },
-      repairUsageLedger: async (location, requestUsage) => {
-        await withAcceptedSessionLedger(location, async () => {
-          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-          try { await ensureRequestUsageEvent(sink, requestUsage) }
-          finally { await sink.close() }
-        })
-      },
-      repairFinalRequestContextLedger: async (location, requestContext) => {
-        await withAcceptedSessionLedger(location, async () => {
-          const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-          try { await ensureFinalRequestContextEvent(sink, requestContext) }
-          finally { await sink.close() }
-        })
-      },
-      onCompactionRepairError: (error, invocationId, compactionId) => {
-        void invocationId
-        void compactionId
-        reportSessionHistoryRepairFailure('compaction', error)
-      },
-      onToolLedgerRepairError: (error, invocationId, toolCallId) => {
-        void invocationId
-        void toolCallId
-        reportSessionHistoryRepairFailure('tool-ledger', error)
-      },
-      onModelRequestLedgerRepairError: (error, invocationId, requestId) => {
-        void invocationId
-        void requestId
-        reportSessionHistoryRepairFailure('model-request', error)
-      },
-      onProviderRetryLedgerRepairError: (error, invocationId, requestId) => {
-        void invocationId
-        void requestId
-        reportSessionHistoryRepairFailure('provider-retry', error)
-      },
-      onUsageLedgerRepairError: (error, invocationId, requestId) => {
-        void invocationId
-        void requestId
-        reportSessionHistoryRepairFailure('usage', error)
-      },
-      onFinalRequestContextLedgerRepairError: (error, invocationId, requestId) => {
-        void invocationId
-        void requestId
-        reportSessionHistoryRepairFailure('final-request-context', error)
-      },
-      onInvocationTerminalRepairError: (error, invocationId, turnId) => {
-        void invocationId
-        void turnId
-        reportSessionHistoryRepairFailure('invocation-terminal', error)
+      if (recoveryStatusRequired || startupHistory.getStartupRecoveryWorkSummary().hasWork) {
+        await showStartupStatus('正在整理历史会话数据，请稍候…')
       }
-    }))
-    recoveredInvocationCount = interrupted.length
-    pendingSessionHistoryRepairs = (getDbConnection(db).prepare(`SELECT COUNT(*) AS count
-      FROM canonical_projection_repairs repairs
-      LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-      WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
-        cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).get() as { count: number }).count
-    sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0 && pendingSessionHistoryRepairs === 0
-    if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
-  } catch (error) {
-    sessionHistoryRepairFailureCount += 1
-    console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
+      const profilesJson = getConfigValue(db, 'config.workDirProfiles')
+      const activeProfileId = getConfigValue(db, 'config.activeWorkDirProfileId')
+      const result = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocationsWithLedger({
+        ledgerRecovery,
+        allowedRoots: recoveryWorkDirs,
+        configuredWorkDir: recoveryWorkDir,
+        activeProfileId,
+        profilesJson,
+        ensureSessionLedgerReady: async ({ location, sessionGeneration }) => {
+          const readiness = await ensureSessionLedgerReady({ conn: getDbConnection(db), location, sessionGeneration,
+            processGeneration, retryBlocked: true, dependencies: sessionLedgerLifecycleDependencies, onTrace: logSessionLedgerGateTrace })
+          return readiness.status === 'ready'
+        },
+        onLocationResolveError: (error, invocationId, sessionId) => {
+          sessionHistoryRepairFailureCount += 1
+          logAgentEvent('warn', 'tool.error', { requestId: invocationId, sessionId, toolName: 'history-session-location-recovery', message: error instanceof Error ? error.message : String(error) })
+        },
+        onRepairFailure: reportSessionHistoryRepairFailure
+      }))
+      recoveredInvocationCount = result.interruptedCount
+      pendingSessionHistoryRepairs = result.pendingRepairCount
+      sessionFailures = result.sessionFailures
+      historyRepairFailureCount = result.repairFailureCount
+      if (result.interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', result.interrupted.map(({ invocationId }) => invocationId))
+    } catch (error) {
+      sessionHistoryRepairFailureCount += 1
+      historyRepairFailureCount = sessionHistoryRepairFailureCount
+      console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
+    }
+    sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0 && pendingSessionHistoryRepairs === 0 && sessionFailures.length === 0
+    return { interruptedCount: recoveredInvocationCount, repairFailureCount: historyRepairFailureCount + pendingSessionHistoryRepairs, sessionFailures }
   }
-  }
+  const historyPhase = await sessionStorage.recovery.recoverHistory()
+  sessionHistoryRecoverySucceeded = historyPhase.history.succeeded
   console.info('[startup]', JSON.stringify({
     phase: 'canonical-history.total',
     durationMs: Math.max(0, Math.round(performance.now() - sessionHistoryRecoveryStartedAt)),
@@ -919,7 +828,7 @@ app.whenReady().then(async () => {
   // 进程重启 cleanup 必须先于 Runtime recovery：仅对带 owner token 的本机 run_shell 执行校验，
   // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
   await measureStartupPhase('persisted-orphan-process-cleanup', () => cleanupPersistedOrphansOnStartup({
-    listTurns: () => listPersistedTurns(db),
+    listTurns: () => sessionStorage.execution.listStartupOrphanTurns(),
     // This recovery consumer reads only shell process identity from the authoritative message skeleton;
     // the assistant body may still be streaming and is deliberately not resolved from canonical History.
     getMessageSkeleton: (id) => getMessageSkeleton(db, id),
@@ -1081,8 +990,7 @@ app.whenReady().then(async () => {
   setInvalidationBroadcaster((scope, version) => {
     getMainWindow()?.webContents.send('scope:invalidated', { scope, version })
   })
-  turnRuntime = new TurnRuntime({
-    storage: sessionStorage.execution.coordinator,
+  turnRuntime = createSessionTurnRuntime(sessionStorage, {
     deps: { now: Date.now, id: randomUUID },
     onCancel: (turn) => {
       signalChatCancel(turn.turnId)
@@ -1628,7 +1536,7 @@ app.on('before-quit', (event) => {
       } else {
         console.warn('[shutdown] database flush/close skipped because storage work did not become quiescent')
       }
-      appSessionQueries = null
+      appSessionStorage = null
       quitCleanupDone = true
       app.quit()
     }

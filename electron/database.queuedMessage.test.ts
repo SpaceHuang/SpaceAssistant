@@ -1,12 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import {
-  appendMessage,
-  createSession,
-  deleteQueuedUserMessage,
-  getMessages,
-  getSession,
-  type AppDatabase
-} from './database'
+import type { AppDatabase } from './database'
+import { appendMessage, createSession, deleteQueuedUserMessage, getMessages, getSession } from './database/operations'
 import { createTempDatabase } from './database/testHelpers'
 
 describe('deleteQueuedUserMessage', () => {

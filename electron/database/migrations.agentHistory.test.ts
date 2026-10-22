@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { runMigrations } from './migrations'
+import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 import { DB_SCHEMA_VERSION } from './schema'
 
 describe('agent canonical history migration', () => {
@@ -171,7 +172,9 @@ describe('agent canonical history migration', () => {
   it('v49 installs recovery work triggers without scanning existing history during schema migration', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      CREATE TABLE sessions(id TEXT PRIMARY KEY NOT NULL);
       INSERT INTO schema_meta(key,value) VALUES('schema_version','49');
+      INSERT INTO sessions(id) VALUES('new-session'),('session-terminal');
       CREATE TABLE agent_history_streams(invocation_id TEXT PRIMARY KEY NOT NULL,version INTEGER NOT NULL,schema_version INTEGER NOT NULL,session_id TEXT);
       CREATE TABLE agent_history_events(invocation_id TEXT NOT NULL,sequence INTEGER NOT NULL,event_id TEXT NOT NULL,
         idempotency_key TEXT NOT NULL,turn_id TEXT NOT NULL,schema_version INTEGER NOT NULL,kind TEXT NOT NULL,
@@ -274,25 +277,30 @@ describe('agent canonical history migration', () => {
 
     runMigrations(conn)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
-    const markEligible = conn.prepare('INSERT OR REPLACE INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,?)')
-    expect(conn.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'invalidate_session_projection_after_message_%'`).all()).toHaveLength(3)
+    const parityScope = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
+    const markEligible = conn.prepare(`INSERT OR REPLACE INTO session_projection_state(session_id,scope_key,session_generation,status,
+      history_watermark_json,message_revision,payload_generation,payload_digest,validated_range_json,updated_at)
+      VALUES(?,?,?,'valid','{}',0,'generation','digest','{}',?)`)
+    expect(conn.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'invalidate_session_projection_after_message_%'`).all()).toHaveLength(0)
 
-    markEligible.run('s', 'generation-1', 1)
+    markEligible.run('s', parityScope, 'generation-1', 1)
     conn.prepare("UPDATE messages SET content='changed' WHERE id='m'").run()
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
-    markEligible.run('s', 'generation-1', 2)
+    expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get('s', parityScope)).toEqual({ status: 'invalid' })
+    markEligible.run('s', parityScope, 'generation-1', 2)
     conn.prepare("INSERT INTO messages(id,session_id,content) VALUES('m2','s','new')").run()
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
-    markEligible.run('s', 'generation-1', 3)
+    expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get('s', parityScope)).toEqual({ status: 'invalid' })
+    markEligible.run('s', parityScope, 'generation-1', 3)
     conn.prepare("DELETE FROM messages WHERE id='m2'").run()
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
+    expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get('s', parityScope)).toEqual({ status: 'invalid' })
     conn.close()
   })
 
   it('v41 invalidates detached transcript cache on direct History event or stream mutation', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+      CREATE TABLE sessions(id TEXT PRIMARY KEY NOT NULL);
       INSERT INTO schema_meta(key,value) VALUES('schema_version','41');
+      INSERT INTO sessions(id) VALUES('session-a'),('session-b');
       CREATE TABLE agent_history_streams (invocation_id TEXT PRIMARY KEY NOT NULL, session_id TEXT, version INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE agent_history_events (invocation_id TEXT NOT NULL, sequence INTEGER NOT NULL DEFAULT 1, event_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'input', session_id TEXT, payload_json TEXT NOT NULL);
       CREATE TABLE canonical_session_projection_cache (session_id TEXT NOT NULL, cache_key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(session_id,cache_key));

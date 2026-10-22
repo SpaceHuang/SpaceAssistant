@@ -40,6 +40,7 @@ import {
   estimateThinkingTokensFromMessage,
   estimateTokensFromImageAttachments
 } from '../../src/shared/contextUsageEstimate'
+import { sqlActiveTurnPredicate } from '../sessionStorage/domain/turnState'
 
 type SessionRow = {
   id: string
@@ -321,10 +322,6 @@ export function createSession(
       ) VALUES(?, 'transcript', 1, ?, -1, -1, NULL, NULL, 0, ?, ?, ?)`)
         .run(session.id, session.generation, emptyProjection, emptyProjectionSha256, now)
     } catch { /* Projection seed is disposable; session creation remains authoritative. */ }
-    try {
-      conn.prepare(`INSERT OR REPLACE INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at)
-        VALUES(?, ?, ?)`).run(session.id, session.generation, now)
-    } catch { /* Eligibility is disposable; an unseeded cache must go through L2 before use. */ }
     // 偏差 11:会话列表版本在同一事务内递增
     bumpScopeVersionInTx(db, 'session-list')
   })
@@ -425,7 +422,7 @@ export function deleteSession(db: AppDatabase, sessionId: string, options?: { fl
   const conn = getDbConnection(db)
   runInTransaction(conn, () => {
     const session = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
-    const activeTurn = conn.prepare("SELECT 1 FROM turns WHERE session_id=? AND state IN ('configuring','prepared','executing','waiting-confirm') LIMIT 1").get(sessionId)
+    const activeTurn = conn.prepare(`SELECT 1 FROM turns WHERE session_id=? AND ${sqlActiveTurnPredicate()} LIMIT 1`).get(sessionId)
     if (session && activeTurn) throw new Error('cannot delete a session with an active turn')
     if (session) {
       // Explicit whole-session deletion owns removal of its canonical History too.
@@ -939,7 +936,7 @@ export function claimQueuedTurnAtomicallyInScope(
   const conn = getDbConnection(db)
   const serializedScope = serializeQueueScope(input.queueScope)
   return runInTransaction(conn, () => {
-    const active = conn.prepare("SELECT 1 FROM turns WHERE session_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm') LIMIT 1").get(input.sessionId)
+    const active = conn.prepare(`SELECT 1 FROM turns WHERE session_id = ? AND ${sqlActiveTurnPredicate()} LIMIT 1`).get(input.sessionId)
     if (active) throw new Error('SESSION_TURN_BUSY')
     const boundary = (conn.prepare('SELECT MAX(sequence) AS sequence FROM messages WHERE session_id = ?').get(input.sessionId) as { sequence?: number | null }).sequence ?? -1
     const claimableStatus = input.queueScope.kind === 'im' ? "('queued','im-inbox-claimed')" : "('queued')"
@@ -1101,7 +1098,7 @@ export function listTurnErrorsByAssistantMessageIds(
 }
 
 export function hasActiveTurn(db: AppDatabase, sessionId: string): boolean {
-  const row = getDbConnection(db).prepare("SELECT 1 FROM turns WHERE session_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm') LIMIT 1").get(sessionId)
+  const row = getDbConnection(db).prepare(`SELECT 1 FROM turns WHERE session_id = ? AND ${sqlActiveTurnPredicate()} LIMIT 1`).get(sessionId)
   return Boolean(row)
 }
 
@@ -1147,7 +1144,7 @@ export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantM
 } = {}): boolean {
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
-    const turn = conn.prepare("SELECT version, state FROM turns WHERE turn_id = ? AND assistant_message_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm')").get(turnId, assistantMessageId) as { version: number; state: string } | undefined
+    const turn = conn.prepare(`SELECT version, state FROM turns WHERE turn_id = ? AND assistant_message_id = ? AND ${sqlActiveTurnPredicate()}`).get(turnId, assistantMessageId) as { version: number; state: string } | undefined
     if (!turn) return false
     const message = conn.prepare("SELECT status FROM messages WHERE id = ? AND status IN ('streaming', 'failed')").get(assistantMessageId)
     if (!message) return false
@@ -1190,7 +1187,7 @@ export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantM
         : (interruptedToolCalls ? { toolCalls: interruptedToolCalls } : {}))
     })
     if (!updated) return false
-    const result = conn.prepare("UPDATE turns SET state = 'terminal', outcome = ?, version = ?, usage_json = COALESCE(?, usage_json), updated_at = ? WHERE turn_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm')").run(
+    const result = conn.prepare(`UPDATE turns SET state = 'terminal', outcome = ?, version = ?, usage_json = COALESCE(?, usage_json), updated_at = ? WHERE turn_id = ? AND ${sqlActiveTurnPredicate()}`).run(
       outcome, turn.version + 1,
       completed && options.completedUsage !== undefined ? JSON.stringify(options.completedUsage) : null,
       Date.now(), turnId
@@ -1375,7 +1372,7 @@ export function prepareTurnAtomically(
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry } {
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
-    const active = conn.prepare("SELECT 1 FROM turns WHERE session_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm') LIMIT 1").get(input.turn.sessionId)
+    const active = conn.prepare(`SELECT 1 FROM turns WHERE session_id = ? AND ${sqlActiveTurnPredicate()} LIMIT 1`).get(input.turn.sessionId)
     if (active) throw new Error('SESSION_TURN_BUSY')
     const boundary = (conn.prepare('SELECT MAX(sequence) AS sequence FROM messages WHERE session_id = ?').get(input.turn.sessionId) as { sequence?: number | null }).sequence ?? -1
     const user = appendMessage(db, input.user)
@@ -1808,7 +1805,7 @@ export function updateQueuedUserMessageContentInScope(
     if (!row) return { ok: false, error: 'message_not_queued' }
     const content = input.content.trim()
     if (!content) return { ok: false, error: 'empty_content' }
-    const updated = updateMessageContent(db, input.messageId, { content })
+    const updated = updateMessageContentImpl(db, input.messageId, { content }, true)
     if (!updated) return { ok: false, error: 'message_not_queued' }
     conn.prepare('UPDATE queue_input_requests SET fingerprint = ?, updated_at = ? WHERE queued_message_id = ? AND session_id = ? AND queue_scope = ?')
       .run(queueInputFingerprint({ text: content, attachments: updated.message.attachments }), Date.now(), input.messageId, input.sessionId, serializedScope)
@@ -1831,7 +1828,7 @@ export type PersistedMessageEntry = {
   sequence: number
 }
 
-export function updateMessageContent(
+function updateMessageContentImpl(
   db: AppDatabase,
   messageId: string,
   patch: Partial<
@@ -1847,17 +1844,21 @@ export function updateMessageContent(
       | 'attachments'
       | 'imagesDeliveredToApi'
     >
-  >
+  >,
+  allowQueuedCanonicalEdit = false
 ): PersistedMessageEntry | null {
   const conn = getDbConnection(db)
   const row = conn.prepare('SELECT * FROM messages WHERE id = ?').get(messageId) as MessageRow | undefined
   if (!row) return null
 
   if (patch.content !== undefined) {
-    const writeMode = conn.prepare(`SELECT cutover.write_mode FROM messages
+    const writeMode = conn.prepare(`SELECT cutover.write_mode,messages.role,messages.status FROM messages
       JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
-      WHERE messages.id=?`).get(messageId) as { write_mode: string } | undefined
-    if (writeMode?.write_mode === 'canonical') {
+      WHERE messages.id=?`).get(messageId) as { write_mode: string; role: string; status: string } | undefined
+    // Pending queue bodies remain owned by the queue receipt until claim commits them to History.
+    // Only the queue-specific mutation path may update one while canonical write mode is active.
+    const queuedMessageEdit = allowQueuedCanonicalEdit && writeMode?.role === 'user' && writeMode.status === 'queued'
+    if (writeMode?.write_mode === 'canonical' && !queuedMessageEdit) {
       throw new Error('canonical write authority requires a canonical History append')
     }
   }
@@ -1909,6 +1910,27 @@ export function updateMessageContent(
   db.save()
   const updated = conn.prepare('SELECT * FROM messages WHERE id = ?').get(messageId) as MessageRow
   return { message: rowToStoredMessage(updated), sequence: updated.sequence }
+}
+
+export function updateMessageContent(
+  db: AppDatabase,
+  messageId: string,
+  patch: Partial<
+    Pick<
+      Message,
+      | 'content'
+      | 'status'
+      | 'toolUse'
+      | 'thinking'
+      | 'toolCalls'
+      | 'contentSegments'
+      | 'skillHints'
+      | 'attachments'
+      | 'imagesDeliveredToApi'
+    >
+  >
+): PersistedMessageEntry | null {
+  return updateMessageContentImpl(db, messageId, patch)
 }
 
 /** 仅允许更新仍处于 streaming 的消息，防止迟到 checkpoint 覆写终态。 */
@@ -2000,6 +2022,7 @@ export type MessageSearchHit = {
   sessionId: string
   content: string
   sessionName: string
+  requiresProjectionPreparation?: boolean
 }
 
 export function searchMessages(

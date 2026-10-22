@@ -4,6 +4,7 @@ import { getMessages } from '../database/operations'
 import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import { createSessionCommitService } from '../sessionStorage/application/sessionCommitService'
 
 export type LegacySessionProjectionBaselineResult =
   | Readonly<{ kind: 'migrated' | 'already-migrated'; messageCount: number }>
@@ -69,7 +70,8 @@ export async function backfillLegacySessionProjectionBaseline(
     } }
   }
   try {
-    await history.appendBatch([event], 0)
+    const commitService = createSessionCommitService({ sessionId, invocationId, turnId: event.turnId, history })
+    await commitService.commitHistory([event], 0)
   } catch (error) {
     if (error instanceof Error && error.message.includes('message skeleton revision')) {
       return { kind: 'rejected', reason: 'skeleton-changed' }

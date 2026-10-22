@@ -1,7 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
-import type { SessionQueries } from '../sessionStorage/contracts'
+import type { SessionQueries } from '../sessionStorage/public/ports'
 import { resolveSafeWorkDirPath } from '../pathSecurity'
 import { verifyDeferredWeChatAttachment } from './weChatAttachmentBinding'
 import type { WeChatBotService } from '../wechat/weChatBotService'

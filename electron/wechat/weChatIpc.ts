@@ -82,7 +82,7 @@ export function readWeChatConfigFromDb(db: AppDatabase): WeChatConfig {
 
 export function createWeChatBundle(deps: {
   db: AppDatabase
-  sessionStorage?: import('../sessionStorage/contracts').SessionStorage
+  sessionStorage?: import('../sessionStorage/host/ports').SessionStorage
   getUserDataPath: () => string
   getWorkDir: () => string
   workDirManager: WorkDirManager
@@ -412,7 +412,7 @@ export function registerWeChatIpcHandlers(
   ipcMain: IpcMain,
   deps: {
     db: AppDatabase
-    sessionStorage?: import('../sessionStorage/contracts').SessionStorage
+    sessionStorage?: import('../sessionStorage/host/ports').SessionStorage
     getUserDataPath: () => string
     getWorkDir: () => string
     workDirManager: WorkDirManager

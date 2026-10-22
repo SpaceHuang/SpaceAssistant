@@ -1,4 +1,4 @@
-import type { SessionCommands } from '../sessionStorage/contracts'
+import type { SessionCommands } from '../sessionStorage/public/ports'
 import { assertImOutboundAllowed, createHostImOutboundFacts, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuTextRaw, replyFeishuTextRawWithId } from './feishuReply'

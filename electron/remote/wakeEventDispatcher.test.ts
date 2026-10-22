@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { createSession } from '../database/operations'
 import { appendWakeEvent, continueWorkflow, listWakeEvents, readWakeEventRetryState, saveWakeEventRetryState } from '../database/wakeEvents'
@@ -233,6 +235,58 @@ describe('wake event dispatcher', () => {
     expect(listWakeEvents(reopened, sessionId).every(({ status }) => status === 'acked')).toBe(true)
     reopened.close()
     temp.cleanup()
+  })
+
+  it('settles later wake events independently and retries only the failed event after reopen', async () => {
+    const temp = createTempDatabase('wake-dispatch-event-isolation-')
+    let db = temp.db
+    const sessionId = createSession(db, { name: 'dispatcher-event-isolation' }).id
+    const first = appendWakeEvent(db, { sessionId, type: 'im-inbound', reasonKey: 'event-isolation-first',
+      payloadRef: { kind: 'im-inbox-message', messageId: 'event-isolation-first' } })
+    const second = appendWakeEvent(db, { sessionId, type: 'continuation', reasonKey: 'event-isolation-second',
+      payloadRef: { kind: 'continuation', continuationId: 'event-isolation-second' } })
+    getDbConnection(db).prepare('UPDATE wake_events SET created_at=?,updated_at=? WHERE event_id=?').run(10_001, 10_001, first.eventId)
+    getDbConnection(db).prepare('UPDATE wake_events SET created_at=?,updated_at=? WHERE event_id=?').run(10_002, 10_002, second.eventId)
+    let now = 10_000
+    const scheduled: Array<() => void> = []
+    const calls: string[][] = []
+    const firstAttempt = vi.fn(async (input: WakeEventLoopInput) => {
+      calls.push(input.eventIds)
+      if (input.eventIds[0] === first.eventId) throw new Error('first wake transient failure')
+    })
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: firstAttempt,
+      clock: createWakeEventRetryClock(() => now),
+      retryPolicy: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000, maxElapsedMs: 10_000, jitterRatio: 0, random: () => 0.5 },
+      scheduleRetry: (_delay, callback) => { scheduled.push(callback) } })
+    try {
+      await dispatcher.dispatchSession(sessionId)
+      expect(calls).toEqual([[first.eventId], [second.eventId]])
+      expect(listWakeEvents(db, sessionId).map(({ eventId, status }) => [eventId, status])).toEqual([
+        [first.eventId, 'pending'], [second.eventId, 'acked']
+      ])
+      expect(scheduled).toHaveLength(1)
+      await dispatcher.dispose()
+      db.close()
+      db = openDatabase(temp.dbPath)
+      now += 100
+      const replayCalls: string[][] = []
+      const reopened = createWakeEventDispatcher({ db, maxParallel: 2,
+        launchLoop: async (input) => { replayCalls.push(input.eventIds) }, clock: createWakeEventRetryClock(() => now) })
+      try {
+        await reopened.dispatchSession(sessionId)
+        expect(replayCalls).toEqual([[first.eventId]])
+        expect(listWakeEvents(db, sessionId).every(({ status }) => status === 'acked')).toBe(true)
+        expect(getDbConnection(db).prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' })
+      } finally {
+        await reopened.dispose()
+      }
+    } finally {
+      await dispatcher.dispose()
+      db.close()
+      for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${temp.dbPath}${suffix}`, { force: true })
+      fs.rmSync(path.dirname(temp.dbPath), { recursive: true, force: true })
+      resetRunningRemoteAgentRegistryForTests()
+    }
   })
 
   it('does not spin on a released pending Inbox message and wakes again only for a new event', async () => {

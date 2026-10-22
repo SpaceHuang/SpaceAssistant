@@ -1,4 +1,4 @@
-import type { SessionCommands } from '../sessionStorage/contracts'
+import type { SessionCommands } from '../sessionStorage/public/ports'
 import type { RemoteContext } from '../tools/types'
 import { touchRemoteSessionActivity } from './remoteSessionActivity'
 

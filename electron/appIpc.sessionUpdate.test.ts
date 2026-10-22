@@ -50,8 +50,6 @@ vi.mock('./database', () => ({
   updateMessageContent: vi.fn(),
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   getDbConnection: vi.fn(() => ({})),
 }))
 
@@ -128,6 +126,11 @@ function mockSessionUpdatePreferences(db: AppIpcContext['db'], input: { sessionI
 function makeCtx(): AppIpcContext {
   return {
     db: {} as AppIpcContext['db'],
+    turnRuntime: {
+      coordinator: {}, subscribe: () => () => undefined, listActive: () => [], listTerminals: () => [],
+      getTurn: () => undefined, checkpointStatus: () => undefined, cancel: () => false,
+      consume: () => { throw new Error('unexpected turn event') }, terminal: () => undefined, retryCheckpoint: () => undefined
+    } as unknown as NonNullable<AppIpcContext['turnRuntime']>,
     sessionStorage: {
       queries: { readSession: (sessionId: string) => mockGetSession(sessionId) } as AppIpcContext['sessionStorage'] extends infer T ? T extends { queries: infer Q } ? Q : never : never,
       commands: {

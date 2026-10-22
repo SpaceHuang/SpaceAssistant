@@ -1,7 +1,8 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
+import { createMemoryAppDb } from './database/testHelpers'
 
 vi.mock('electron', () => ({
   dialog: { showOpenDialog: vi.fn() }
@@ -22,8 +23,6 @@ vi.mock('./database', () => ({
   getConfigValue: mockGetConfigValue,
   deleteConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   setSessionUsage: vi.fn(),
   getSessionUsage: vi.fn(),
   deleteSessionUsage: vi.fn(),
@@ -85,9 +84,9 @@ const mockIpcMain = () => {
   }
 }
 
-function makeCtx(): AppIpcContext {
+function makeCtx(db: AppIpcContext['db']): AppIpcContext {
   return {
-    db: { save: vi.fn(), flushSave: vi.fn() } as unknown as AppIpcContext['db'],
+    db,
     backup: { schedule: vi.fn(), flush: vi.fn(), backupImmediate: vi.fn(), deleteBackup: vi.fn() } as unknown as AppIpcContext['backup'],
     workDirManager: {
       listProfiles: () => [],
@@ -119,12 +118,16 @@ function makeCtx(): AppIpcContext {
  */
 describe('tool:confirm-response 信任写入与 pending 确认挂钩（H1）', () => {
   let ipc: ReturnType<typeof mockIpcMain>
+  let db: ReturnType<typeof createMemoryAppDb>
 
   beforeEach(() => {
     vi.clearAllMocks()
+    db = createMemoryAppDb()
     ipc = mockIpcMain()
-    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx())
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx(db))
   })
+
+  afterEach(() => db.close())
 
   const invoke = (payload: Record<string, unknown>) =>
     ipc.getHandler('tool:confirm-response')?.(null, payload) as Promise<void>

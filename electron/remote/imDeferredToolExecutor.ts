@@ -1,6 +1,6 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import type { RemoteContext } from '../tools/types'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import type { TypedToolRegistry } from '../tools/plannedToolRegistry'
 import { assembleInvocation } from '../runtime/invocationAssembler'
 import type { WorkDirManager } from '../workDirManager'

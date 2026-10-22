@@ -100,6 +100,7 @@ const readCapability: CapabilityDescriptor = {
     if (!target || target.ownership === 'internal' || target.visibility === 'hidden') {
       return { error: 'session not found or not user-visible' }
     }
+    await ctx.ensureChatBodyV1?.({ sessionId: params.sessionId, signal: ctx.signal })
     const limit = Math.min(params.limit ?? 20, 50)
     const cursor = params.cursor ?? 0
     const page = queries.readExportPage({ sessionId: params.sessionId, fromSequence: cursor, pageSize: limit })

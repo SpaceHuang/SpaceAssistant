@@ -144,7 +144,7 @@ export class TurnCoordinator {
     const assistant = this.storage.append({ id: this.deps.id(), sessionId: intent.sessionId, role: 'assistant', content: '', timestamp: this.deps.now(), status: 'streaming' })
     const started = this.makeStarted(intent, userMessage, assistant.message, {
       ...(fixedIdentity ? { turnId: fixedIdentity.turnId, startToken: fixedIdentity.startToken } : {}),
-      contextBoundarySequence: assistant.sequence - 1,
+      contextBoundarySequence: intent.mode === 'reuse-user' ? intent.contextBoundarySequence ?? assistant.sequence - 1 : assistant.sequence - 1,
       state: initialState
     })
     this.turns.set(started.turnId, started)
@@ -186,7 +186,7 @@ export class TurnCoordinator {
   }
 
   private intentFingerprint(intent: TurnIntent): string {
-    return JSON.stringify({ mode: intent.mode, userMessageId: intent.mode === 'reuse-user' ? intent.userMessageId : undefined, input: intent.mode === 'create-user' ? canonicalQueueInput(intent.input) : undefined, excludeMessageIds: [...(intent.excludeMessageIds ?? [])].sort(), config: normalizeTurnExecutionConfig(intent.config) })
+    return JSON.stringify({ mode: intent.mode, userMessageId: intent.mode === 'reuse-user' ? intent.userMessageId : undefined, contextBoundarySequence: intent.mode === 'reuse-user' ? intent.contextBoundarySequence : undefined, input: intent.mode === 'create-user' ? canonicalQueueInput(intent.input) : undefined, excludeMessageIds: [...(intent.excludeMessageIds ?? [])].sort(), config: normalizeTurnExecutionConfig(intent.config) })
   }
 
   /** v11 及更早的 turn 没有执行快照；重放时只核对可持久验证的消息意图，不把当前设置当作原请求。 */

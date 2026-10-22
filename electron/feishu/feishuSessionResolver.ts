@@ -1,4 +1,4 @@
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { resolveImSession, truncateTitle } from '../remote/imSessionResolver'
 

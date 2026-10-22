@@ -7,8 +7,9 @@ import type { Message, Session } from '../src/shared/domainTypes'
 import type { AppLocale } from '../src/shared/locale'
 import { SESSION_TITLE_MAX_LENGTH } from '../src/shared/sessionDisplay'
 import { type AppDatabase } from './database'
-import type { SessionQueries, SessionCommands } from './sessionStorage/contracts'
+import type { SessionQueries, SessionCommands } from './sessionStorage/public/ports'
 import { logHistoryOversizedToolResult } from './oversizedToolResultLog'
+import { readChatMessagesAfterPreparation } from './sessionStorage/application/readChatMessages'
 
 export { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_USER_CUSTOM, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED } from './sessionMetadataKeys'
 import { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_USER_CUSTOM, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED } from './sessionMetadataKeys'
@@ -107,7 +108,7 @@ function normalizeSuggestedTitle(raw: string): string {
 
 export function scheduleSessionTitleSuggestion(args: {
   db: AppDatabase
-  sessionStorage: Pick<import('./sessionStorage/contracts').SessionStorage, 'queries' | 'commands'>
+  sessionStorage: Pick<import('./sessionStorage/host/ports').SessionStorage, 'queries' | 'commands'>
   /** 标题落库完成后的界面通知出口；不传即 no-op（落库照常）。 */
   onTitleGenerated?: (session: Session) => void
   sessionId: string
@@ -198,14 +199,14 @@ const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX
  * 则从 DB 拉消息并异步摘要；失败时清除 `titleOpenBackfillAttempted`，使后续打开可重试。
  * @returns 若写入了 metadata，返回更新后的 Session 供渲染进程合并
  */
-export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
+export async function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   db: AppDatabase
-  sessionStorage: Pick<import('./sessionStorage/contracts').SessionStorage, 'queries' | 'commands'>
+  sessionStorage: Pick<import('./sessionStorage/host/ports').SessionStorage, 'queries' | 'commands' | 'ensureChatBodyV1'>
   onTitleGenerated?: (session: Session) => void
   sessionId: string
   baseUrl?: string
   getApiKey: () => Promise<string | null>
-}): Session | undefined {
+}): Promise<Session | undefined> {
   const { db, onTitleGenerated, sessionId, baseUrl, getApiKey } = args
   const storage = args.sessionStorage
   const sessionQueries = storage.queries
@@ -219,7 +220,7 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   if (session.metadata?.[SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED] === true) return undefined
   if (inFlightSessionIds.has(sessionId)) return undefined
 
-  const rowMessages = sessionQueries.readMessages({ sessionId, limit: 10_000, offset: 0 })
+  const rowMessages = await readChatMessagesAfterPreparation(storage, { sessionId, limit: 10_000, offset: 0 })
   const convo = buildClaudeToolChatMessages(rowMessages.filter((message) => message.status !== 'streaming'), {
     onOversizedToolResult: (info) => {
       logHistoryOversizedToolResult({

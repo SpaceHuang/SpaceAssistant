@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { cleanupPersistedOrphansOnStartup } from './startupOrphanCleanup'
-import { appendMessage, createPersistedTurn, createSession, getDbConnection, getMessageSkeleton, openDatabase } from '../database'
+import { getDbConnection, openDatabase } from '../database'
+import { appendMessage, createPersistedTurn, createSession } from '../database/operations'
+import { getMessageSkeleton } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 

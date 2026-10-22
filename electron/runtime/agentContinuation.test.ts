@@ -8,7 +8,8 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { TurnRuntime } from '../turnRuntime'
-import { createSession, appendMessage, createPersistedTurn, openDatabase, getDbConnection } from '../database'
+import { createSession, appendMessage, createPersistedTurn } from '../database/operations'
+import { openDatabase, getDbConnection } from '../database'
 
 function event(sequence: number, kind: HistoryEvent['kind'], payload: unknown): HistoryEvent {
   return { invocationId: 'source-invocation', turnId: 'source-turn', sequence, schemaVersion: 1,

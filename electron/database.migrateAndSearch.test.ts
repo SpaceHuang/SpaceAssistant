@@ -2,16 +2,9 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  appendMessage,
-  createSession,
-  getConfigValue,
-  getMessages,
-  getSession,
-  listSearchHistory,
-  openDatabase,
-  searchMessages
-} from './database'
+import { getConfigValue, openDatabase } from './database'
+import { appendMessage, createSession, getMessages, getSession, searchMessages } from './database/operations'
+import { listSearchHistory } from './database/operations'
 import { migrateFromJsonIfNeeded } from './database/migrateFromJson'
 import { getDbConnection, getSchemaMeta, openSqliteDatabase } from './database/sqliteStore'
 import { SCHEMA_META_KEYS } from './database/schema'

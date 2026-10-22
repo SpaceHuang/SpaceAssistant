@@ -1,6 +1,6 @@
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import { assertImOutboundAllowed, createHostImOutboundFacts, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
-import type { SessionCommands } from '../sessionStorage/contracts'
+import type { SessionCommands } from '../sessionStorage/public/ports'
 import { formatRemoteOutboundMessage, sessionSuffixLength } from '../../src/shared/remoteOutboundFormat'
 import { maybeTouchOutboundActivity } from '../remote/imRemoteOutbound'
 import { formatWeChatSummary, type WeChatReplyBot } from './weChatReplyService'

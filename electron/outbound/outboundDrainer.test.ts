@@ -2,15 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createOutboundAcceptor as createSessionStorageOutboundAcceptor, createOutboundDrainer, type OutboundAcceptorDeps } from './outboundAcceptor'
 import type { OutboundSubmitIntent, OutboundSubmitResult } from '../../src/shared/outboundProtocol'
 import { DEFAULT_WIKI_CONFIG, type Message } from '../../src/shared/domainTypes'
-import {
-  claimQueuedTurnAtomically,
-  createSession,
-  deleteQueuedUserMessage,
-  enqueueQueuedUserMessage,
-  getMessages,
-  getNextQueuedMessage,
-  type AppDatabase
-} from '../database'
+import type { AppDatabase } from '../database'
+import { claimQueuedTurnAtomically, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getMessages, getNextQueuedMessage } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 

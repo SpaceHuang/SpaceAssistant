@@ -8,6 +8,7 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { consultProjectionRejection, clearProjectionRejection, computeLegacyProjectionDigest, readProjectionO1Metadata, recordProjectionRejection } from './sessionProjectionRejection'
 import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
 import { resolveSelectedMessageBodies } from '../sessionStorage/internal/messageBodyResolver'
+import { hasCurrentProjectionEligibility, publishTranscriptParityProof, refreshValidatedProjectionFastPath } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 import { selectRecentTurnRoutingMessages, selectTurnContext } from './sessionTranscriptSelector'
 
 export type SessionTranscriptProjectionRead =
@@ -40,20 +41,7 @@ function sqliteLikeContainsLiteral(value: string, query: string): boolean {
 }
 
 export function hasSessionProjectionEligibility(db: AppDatabase, sessionId: string): boolean {
-  try {
-    return getDbConnection(db).prepare(`SELECT 1 FROM canonical_session_projection_eligibility eligibility
-      JOIN sessions ON sessions.id=eligibility.session_id AND sessions.generation=eligibility.session_generation
-      WHERE eligibility.session_id=?`).get(sessionId) !== undefined
-  } catch { return false }
-}
-
-export function markSessionProjectionEligible(db: AppDatabase, sessionId: string, generation: string): boolean {
-  try {
-    const result = getDbConnection(db).prepare(`INSERT INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at)
-      VALUES(?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET session_generation=excluded.session_generation, validated_at=excluded.validated_at`)
-      .run(sessionId, generation, Date.now())
-    return Number(result.changes) > 0
-  } catch { return false }
+  return hasCurrentProjectionEligibility(db, sessionId)
 }
 
 /** Read the complete transcript through the cache staircase, falling back per session on any ambiguity. */
@@ -124,7 +112,7 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
       })))
       if (verified.kind !== 'matched') return verified
       if (history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })) {
-        markSessionProjectionEligible(db, sessionId, verified.sessionGeneration)
+        publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
       }
       return { kind: 'matched' as const, source: 'L2' as const, messages: verified.messages, replayedEvents: verified.eventCount, watermark: verified }
     })
@@ -394,46 +382,49 @@ export function searchProjectedMessages(db: AppDatabase, query: string, activePr
   const escaped = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
   const likePattern = `%${escaped}%`
   const conn = getDbConnection(db)
-  const candidates = conn.prepare(`SELECT m.id,m.session_id,m.content,m.content_storage_state,cutover.write_mode,
-      s.name AS session_name,m.timestamp
-    FROM messages m
-    JOIN sessions s ON s.id=m.session_id
-    LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=m.session_id
-    WHERE (m.content LIKE ? ESCAPE '\\' OR
-      m.content_storage_state IN ('canonical-backed-dual-write','canonical-backed-only'))
-      AND (s.work_dir_profile_id IS NULL OR s.work_dir_profile_id=?)
-    AND (s.ownership IS NULL OR s.ownership!='internal')
-    ORDER BY m.timestamp DESC`).iterate(likePattern, activeProfileId) as Iterable<{
-      id: string; session_id: string; content: string; content_storage_state: string; write_mode: string | null
-      session_name: string; timestamp: number
-    }>
-  const transcriptBySession = new Map<string, Map<string, Message>>()
-  const results: MessageSearchHit[] = []
-  for (const candidate of candidates) {
-    let content = candidate.content
-    let canonicalBacked = false
-    if (['canonical-backed-dual-write', 'canonical-backed-only'].includes(candidate.content_storage_state)) {
-      canonicalBacked = true
-      if (candidate.write_mode !== 'canonical') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-      let messagesById = transcriptBySession.get(candidate.session_id)
-      if (!messagesById) {
-        const transcript = readSessionTranscriptProjection(db, candidate.session_id)
-        if (transcript.source === 'legacy') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-        messagesById = new Map(transcript.messages.map((message) => [message.id, message]))
-        transcriptBySession.set(candidate.session_id, messagesById)
+  return runInTransaction(conn, () => {
+    const candidates = conn.prepare(`SELECT m.id,m.session_id,m.content,m.content_storage_state,cutover.write_mode,
+        s.name AS session_name,m.timestamp
+      FROM messages m
+      JOIN sessions s ON s.id=m.session_id
+      LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=m.session_id
+      WHERE (m.content LIKE ? ESCAPE '\\' OR
+        m.content_storage_state IN ('canonical-backed-dual-write','canonical-backed-only'))
+        AND (s.work_dir_profile_id IS NULL OR s.work_dir_profile_id=?)
+      AND (s.ownership IS NULL OR s.ownership!='internal')
+      ORDER BY m.timestamp DESC`).iterate(likePattern, activeProfileId) as Iterable<{
+        id: string; session_id: string; content: string; content_storage_state: string; write_mode: string | null
+        session_name: string; timestamp: number
+      }>
+    const transcriptBySession = new Map<string, Map<string, Message>>()
+    const results: MessageSearchHit[] = []
+    for (const candidate of candidates) {
+      let content = candidate.content
+      let canonicalBacked = false
+      if (['canonical-backed-dual-write', 'canonical-backed-only'].includes(candidate.content_storage_state)) {
+        canonicalBacked = true
+        if (candidate.write_mode !== 'canonical') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+        let messagesById = transcriptBySession.get(candidate.session_id)
+        if (!messagesById) {
+          const transcript = readSessionTranscriptProjection(db, candidate.session_id)
+          if (transcript.source === 'legacy') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+          messagesById = new Map(transcript.messages.map((message) => [message.id, message]))
+          transcriptBySession.set(candidate.session_id, messagesById)
+        }
+        const projected = messagesById.get(candidate.id)
+        if (!projected) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+        content = projected.content
       }
-      const projected = messagesById.get(candidate.id)
-      if (!projected) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-      content = projected.content
+      // Legacy candidates were already selected by SQLite LIKE above. Canonical bodies are in
+      // the detached transcript cache, so preserve SQLite's ASCII-only LIKE folding without
+      // binding each potentially multi-megabyte body back through SQLite once per hit.
+      if (canonicalBacked && !sqliteLikeContainsLiteral(content, q)) continue
+      results.push({ messageId: candidate.id, sessionId: candidate.session_id, content, sessionName: candidate.session_name,
+        ...(canonicalBacked ? { requiresProjectionPreparation: true } : {}) })
+      if (limit > 0 && results.length >= limit) break
     }
-    // Legacy candidates were already selected by SQLite LIKE above. Canonical bodies are in
-    // the detached transcript cache, so preserve SQLite's ASCII-only LIKE folding without
-    // binding each potentially multi-megabyte body back through SQLite once per hit.
-    if (canonicalBacked && !sqliteLikeContainsLiteral(content, q)) continue
-    results.push({ messageId: candidate.id, sessionId: candidate.session_id, content, sessionName: candidate.session_name })
-    if (limit > 0 && results.length >= limit) break
-  }
-  return results
+    return results
+  })
 }
 
 function mergeCanonicalBodies(canonicalMessages: readonly import('../../src/shared/api').ClaudeChatMessageWithBlocks[],
@@ -457,11 +448,7 @@ function mergeCanonicalBodies(canonicalMessages: readonly import('../../src/shar
  * an L2 full legacy scan; the terminal checkpoint and the explicit refresh build on it.
  */
 export function refreshSessionTranscriptProjectionFastPath(db: AppDatabase, sessionId: string): boolean {
-  const history = new SqliteAgentHistory(getDbConnection(db))
-  const canonical = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
-  const skeletons = getMessageSkeletons(db, sessionId)
-  return canonical.kind === 'matched' && hasSessionProjectionEligibility(db, sessionId) &&
-    mergeCanonicalBodies(canonical.messages, skeletons) !== undefined
+  return refreshValidatedProjectionFastPath(db, sessionId)
 }
 
 /** Best-effort explicit checkpoint; the turn-terminal path uses the queued checkpoint instead. */
@@ -491,7 +478,7 @@ export function refreshSessionTranscriptProjectionCache(db: AppDatabase, session
     const conn = getDbConnection(db)
     return runInTransaction(conn, () => {
       const cached = history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) }) &&
-        markSessionProjectionEligible(db, sessionId, verified.sessionGeneration)
+        publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
       if (cached) clearProjectionRejection(db, sessionId)
       return cached
     })

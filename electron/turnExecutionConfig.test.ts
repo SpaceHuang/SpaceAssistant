@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from './database/testHelpers'
-import { createSession, getSession, setConfigValue, type AppDatabase } from './database'
+import { createSession, getSession } from './database/operations'
+import { setConfigValue, type AppDatabase } from './database'
 import { resolveTrustedTurnExecutionConfig as resolveTrustedTurnExecutionConfigWithQueries, resolveThinkingEffort } from './turnExecutionConfig'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import type { ModelEntry } from '../src/shared/domainTypes'

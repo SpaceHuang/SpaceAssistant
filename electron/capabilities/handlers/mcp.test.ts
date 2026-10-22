@@ -7,6 +7,7 @@ import { listProfiles, saveProfiles, saveToolCache, updateServerStatus } from '.
 import { setSecret } from '../../mcp/mcpSecretStore'
 import type { McpServerWriteInput } from '../../../src/shared/mcpTypes'
 import { createMcpCapabilities } from './mcp'
+import { createMcpCapabilityConfigPort } from '../../mcp/mcpCapabilityConfigPort'
 import { callCapability } from '../callCapability'
 import { CapabilityRegistry } from '../registry'
 import type { CapabilityContext } from '../types'
@@ -71,7 +72,7 @@ function makeCtx(db: AppDatabase): CapabilityContext {
     sessionId: 's1',
     requestId: 'r1',
     signal: new AbortController().signal,
-    appDatabase: db
+    mcpConfig: createMcpCapabilityConfigPort(db)
   }
 }
 

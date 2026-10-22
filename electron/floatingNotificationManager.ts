@@ -6,7 +6,7 @@ import {
   pushDataToFloatingWindow,
   sendCloseToFloatingWindow
 } from './floatingNotification'
-import type { SessionQueries } from './sessionStorage/contracts'
+import type { SessionQueries } from './sessionStorage/public/ports'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 
 export type PendingConfirmEntry = {

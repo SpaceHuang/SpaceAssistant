@@ -46,7 +46,8 @@ describe('legacy session projection baseline', () => {
 
     expect(result).toEqual({ kind: 'rejected', reason: 'unsupported-role' })
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=?').get(session.id)).toMatchObject({ count: 0 })
-    expect(getDbConnection(db).prepare('SELECT 1 FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_projection_state WHERE session_id=? AND status='valid'").get(session.id))
+      .toEqual({ count: 0 })
     db.close()
   })
 
@@ -141,7 +142,8 @@ describe('legacy session projection baseline', () => {
     expect(await backfillLegacySessionProjectionBaseline(db, session.id, { now: 3 }))
       .toEqual({ kind: 'rejected', reason: 'history-conflict' })
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=?').get(session.id)).toMatchObject({ count: 1 })
-    expect(getDbConnection(db).prepare('SELECT 1 FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM session_projection_state WHERE session_id=? AND status='valid'").get(session.id))
+      .toEqual({ count: 0 })
     expect(getDbConnection(db).prepare('SELECT content FROM messages WHERE id=?').get('conflict-user')).toEqual({ content: 'legacy body' })
     db.close()
   })

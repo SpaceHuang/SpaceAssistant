@@ -9,6 +9,7 @@ import type { CapabilityContext } from './types'
 import { matchCapabilities } from './match'
 import { callCapability } from './callCapability'
 import { APP_PRODUCT_NAME } from '../../src/shared/appMeta'
+import { createMcpCapabilityConfigPort } from '../mcp/mcpCapabilityConfigPort'
 
 /**
  * toolkit.find / toolkit.call：模型面仅有的两个网关工具（需求 §3.1）。
@@ -50,8 +51,9 @@ export function buildCapabilityContext(ctx: ToolExecutionContext): CapabilityCon
       }
       return stagehandService.detectDependencies(force)
     },
-    appDatabase: ctx.appDatabase,
+    ...(ctx.appDatabase ? { mcpConfig: createMcpCapabilityConfigPort(ctx.appDatabase) } : {}),
     sessionQueries: ctx.sessionQueries,
+    ensureChatBodyV1: ctx.ensureChatBodyV1,
     workDirManager: ctx.workDirManager,
     workspaceSnapshot: ctx.workspaceSnapshot
   }

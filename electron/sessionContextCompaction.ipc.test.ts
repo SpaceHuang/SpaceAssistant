@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { appendMessagesAtomically, createSession } from './database/operations'
+import { appendMessagesAtomically, createPersistedTurn, createSession } from './database/operations'
 import { createMemoryAppDb } from './database/testHelpers'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { registerSessionIpc } from './ipc/sessionIpc'
@@ -38,10 +38,19 @@ describe('manual context compaction IPC ContextPort integration', () => {
       { id: 'ipc-a2', sessionId: session.id, role: 'assistant', content: 'Current assistant context '.repeat(120), timestamp: 4, status: 'completed' }
     ])
     const sink = { eventsPath: '/tmp/session-context-ipc', indexPath: '/tmp/session-context-ipc-index', appendCritical: vi.fn(), appendChunk: vi.fn(), waitForCapacity: vi.fn(), flush: vi.fn(), close: vi.fn() }
-    const storage = createSqliteSessionStorage(db, {
+    const baseStorage = createSqliteSessionStorage(db, {
       getWorkDirForSession: () => '/tmp', getUserDataDir: () => '/tmp',
       getSessionEventSink: () => sink as never, readCompactionReplay: async () => ({ committed: [], rejected: [] } as never)
     })
+    const projectionReadEvents: string[] = []
+    const storage = {
+      ...baseStorage,
+      ensureChatBodyV1: vi.fn(async () => { projectionReadEvents.push('ensure') }),
+      queries: { ...baseStorage.queries, readApiBaseline: vi.fn((input: { sessionId: string; limit?: number }) => {
+        projectionReadEvents.push('select')
+        return baseStorage.queries.readApiBaseline(input)
+      }) }
+    }
     const handlers = new Map<string, Handler>()
     const ipc = { handle: (channel: string, handler: Handler) => handlers.set(channel, handler) }
     const window = { isDestroyed: () => false, webContents: { id: 7 } }
@@ -56,11 +65,43 @@ describe('manual context compaction IPC ContextPort integration', () => {
     const result = await handlers.get('chat:compact-session-context')!({ sender: window.webContents }, { sessionId: session.id, requestId: 'ipc-compact-1' })
 
     expect(result).toMatchObject({ status: 'committed', windowId: expect.any(String), outputSurfaceFingerprint: expect.any(String) })
+    expect(projectionReadEvents[0]).toBe('ensure')
+    expect(projectionReadEvents.indexOf('ensure')).toBeLessThan(projectionReadEvents.indexOf('select'))
     expect(resolveLlmCredentialsForModel).toHaveBeenCalledOnce()
     expect(summarizeSessionContext).toHaveBeenCalledOnce()
     expect(appendCompactionTransaction).toHaveBeenCalledOnce()
     expect(appendCompactionTransaction).toHaveBeenCalledWith(sink, expect.objectContaining({ reason: 'user_compact' }), expect.objectContaining({ candidate: expect.objectContaining({ kind: 'summary' }) }))
     expect(storage.contexts).toMatchObject({ readCurrent: expect.any(Function), commitReplacement: expect.any(Function) })
+    await expect(handlers.get('chat:get-session-compaction-markers')!({ sender: window.webContents }, session.id)).resolves.toEqual([
+      { compactionId: (result as { compactionId: string }).compactionId, windowId: (result as { windowId: string }).windowId,
+        outputSurfaceFingerprint: (result as { outputSurfaceFingerprint: string }).outputSurfaceFingerprint }
+    ])
+  })
+
+
+  it('routes the active turn busy check through SessionStorage execution', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'busy compaction', model: 'test-model' })
+    appendMessagesAtomically(db, [{ id: 'busy-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' }])
+    createPersistedTurn(db, { turnId: 'busy-turn', requestId: 'busy-request', sessionId: session.id, assistantMessageId: 'busy-assistant', state: 'executing' })
+    const storageBase = createSqliteSessionStorage(db)
+    const hasActiveTurn = vi.fn((sessionId: string) => storageBase.execution.hasActiveTurn(sessionId))
+    const storage = { ...storageBase, execution: { ...storageBase.execution, hasActiveTurn } }
+    const handlers = new Map<string, Handler>()
+    const ipc = { handle: (channel: string, handler: Handler) => handlers.set(channel, handler) }
+    const window = { isDestroyed: () => false, webContents: { id: 7 } }
+    vi.mocked(getMainWindow).mockReturnValue(window as never)
+    registerSessionIpc(ipc as never, {
+      db, sessionStorage: storage, backup: {} as never,
+      workDirManager: { listProfiles: () => [], getActiveProfileId: () => 'default', getActiveWorkDir: () => '/tmp' } as never,
+      getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
+      getApiKey: async () => null, setApiKey: async () => undefined, getBrowserDetectContext: () => ({ isPackaged: false, appPath: '/tmp', devRoot: '/tmp' })
+    })
+
+    await expect(handlers.get('chat:compact-session-context')!({ sender: window.webContents }, { sessionId: session.id, requestId: 'busy-compact' }))
+      .resolves.toEqual({ status: 'busy' })
+    expect(hasActiveTurn).toHaveBeenCalledWith(session.id)
+    expect(summarizeSessionContext).not.toHaveBeenCalled()
   })
 
   it('reports a blocked ledger instead of presenting missing compaction markers as an empty history', async () => {

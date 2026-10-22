@@ -28,6 +28,13 @@ import {
   MIGRATION_V102_SESSION_LEDGER_OUTBOX_SQL,
   MIGRATION_V103_HISTORY_CURSOR_REVALIDATION_SQL,
   MIGRATION_V104_HISTORY_CURSOR_REVALIDATION_SQL,
+  MIGRATION_V108_SESSION_PROJECTION_STATE_SQL,
+  MIGRATION_V108_SESSION_PROJECTION_CONTENT_INVALIDATION_SQL,
+  MIGRATION_V108_SESSION_PROJECTION_HISTORY_INVALIDATION_SQL,
+  MIGRATION_V108_SESSION_PROJECTION_STREAM_INVALIDATION_SQL,
+  MIGRATION_V109_SESSION_PROJECTION_BUILD_CHECKPOINT_SQL,
+  MIGRATION_V110_SESSION_PROJECTION_BLOB_LENGTH_SQL,
+  MIGRATION_V111_SESSION_PROJECTION_REBUILDING_INDEX_SQL,
   MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL,
   MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
   MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
@@ -62,6 +69,34 @@ function hasTable(conn: DatabaseSync, tableName: string): boolean {
 function hasColumn(conn: DatabaseSync, tableName: string, columnName: string): boolean {
   if (!hasTable(conn, tableName)) return false
   return (conn.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).some(({ name }) => name === columnName)
+}
+
+/** Retire the legacy API fence and remove only its obsolete trigger statements. */
+function retireCanonicalApiContextEligibility(conn: DatabaseSync): void {
+  const rows = conn.prepare(`SELECT name,sql FROM sqlite_master WHERE type='trigger'
+    AND sql LIKE '%canonical_session_api_context_eligibility%'`).all() as Array<{ name: string; sql: string }>
+  for (const { name, sql } of rows) {
+    const rewritten = sql.replace(/\s*DELETE\s+FROM\s+canonical_session_api_context_eligibility\b[\s\S]*?;/gi, '')
+    conn.exec(`DROP TRIGGER IF EXISTS "${name.replace(/"/g, '""')}"`)
+    if (!/\bBEGIN\s*END\s*;?\s*$/i.test(rewritten)) conn.exec(rewritten)
+  }
+  conn.exec('DROP TABLE IF EXISTS canonical_session_api_context_eligibility')
+}
+
+/** Retire the pre-scope transcript eligibility and rejection tables. */
+function retireLegacySessionProjectionTables(conn: DatabaseSync): void {
+  const legacyTables = ['canonical_session_projection_eligibility', 'canonical_session_projection_rejections']
+  for (const table of legacyTables) {
+    const escapedTable = table.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const rows = conn.prepare(`SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql LIKE ?`).all(`%${table}%`) as
+      Array<{ name: string; sql: string }>
+    for (const { name, sql } of rows) {
+      const rewritten = sql.replace(new RegExp(`\\s*DELETE\\s+FROM\\s+${escapedTable}\\b[\\s\\S]*?;`, 'gi'), '')
+      conn.exec(`DROP TRIGGER IF EXISTS "${name.replace(/"/g, '""')}"`)
+      if (!/\bBEGIN\s*END\s*;?\s*$/i.test(rewritten)) conn.exec(rewritten)
+    }
+    conn.exec(`DROP TABLE IF EXISTS ${table}`)
+  }
 }
 
 /**
@@ -373,6 +408,28 @@ export function runMigrations(conn: DatabaseSync): void {
   }
   if (version > DB_SCHEMA_VERSION) {
     throw new DatabaseUpgradeRequiredError(version)
+  }
+  if (version < 112 && !hasTable(conn, 'canonical_session_api_context_eligibility')) {
+    // Historical migrations below v112 may still replay triggers that mention this temporary table.
+    conn.exec(`CREATE TABLE canonical_session_api_context_eligibility (
+      session_id TEXT PRIMARY KEY NOT NULL, session_generation TEXT NOT NULL, skeleton_revision INTEGER NOT NULL,
+      canonical_session_seq INTEGER NOT NULL, canonical_commit_order INTEGER NOT NULL, watermark_event_id TEXT,
+      watermark_invocation_id TEXT, validated_at INTEGER NOT NULL, protocol_version INTEGER NOT NULL)`)
+  }
+  if (version < 113 && !hasTable(conn, 'canonical_session_projection_eligibility')) {
+    // Historical migrations through v112 still create or reference this transitional table.
+    conn.exec(`CREATE TABLE canonical_session_projection_eligibility (
+      session_id TEXT PRIMARY KEY NOT NULL, session_generation TEXT NOT NULL, validated_at INTEGER NOT NULL)`)
+  }
+  if (version < 113 && !hasTable(conn, 'canonical_session_projection_rejections')) {
+    // Historical v84+ migrations and trigger replay require the legacy rejection shape until v113 retires it.
+    conn.exec(`CREATE TABLE canonical_session_projection_rejections (
+      session_id TEXT PRIMARY KEY NOT NULL, session_generation TEXT NOT NULL, fingerprint TEXT NOT NULL DEFAULT '',
+      watermark_event_id TEXT, watermark_invocation_id TEXT, event_count INTEGER NOT NULL DEFAULT 0,
+      legacy_message_count INTEGER NOT NULL DEFAULT 0, legacy_max_rowid INTEGER NOT NULL DEFAULT 0,
+      legacy_digest TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, retry_after INTEGER NOT NULL DEFAULT 0,
+      last_reason TEXT NOT NULL DEFAULT 'legacy-mismatch', permanent INTEGER NOT NULL DEFAULT 0,
+      stale_metadata INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)`)
   }
   const replayedV46Triggers = version < 46
     ? (conn.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name IN (
@@ -818,11 +875,12 @@ export function runMigrations(conn: DatabaseSync): void {
     const hasMessages = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").get() !== undefined
     if (hasMessages) conn.exec(MIGRATION_V46_CANONICAL_ONLY_MESSAGE_CONTENT_IMMUTABLE_SQL)
     const hasHistoryCursor = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_history_commit_cursor'").get() !== undefined
+    const hasHistoryEvents = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_history_events'").get() !== undefined
     const hasProjectionCache = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_cache'").get() !== undefined
     const hasProjectionEligibility = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_eligibility'").get() !== undefined
     const hasApiEligibility = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_api_context_eligibility'").get() !== undefined
     const hasCutover = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_content_cutover'").get() !== undefined
-    if (hasHistoryCursor && hasProjectionCache && hasProjectionEligibility && hasApiEligibility && hasCutover) {
+    if (hasHistoryCursor && hasHistoryEvents && hasProjectionCache && hasProjectionEligibility && hasApiEligibility && hasCutover) {
       conn.exec(MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_SQL)
     }
     version = 46
@@ -949,11 +1007,12 @@ export function runMigrations(conn: DatabaseSync): void {
         ON agent_history_events(session_id, commit_order);`)
     }
     const hasHistoryCursor = tableExists('agent_history_commit_cursor')
+    const hasHistoryEvents = tableExists('agent_history_events')
     const hasProjectionCache = tableExists('canonical_session_projection_cache')
     const hasProjectionEligibility = tableExists('canonical_session_projection_eligibility')
     const hasApiEligibility = tableExists('canonical_session_api_context_eligibility')
     const hasCutover = tableExists('session_message_content_cutover')
-    if (hasHistoryCursor && hasProjectionCache && hasProjectionEligibility && hasApiEligibility && hasCutover) {
+    if (hasHistoryCursor && hasHistoryEvents && hasProjectionCache && hasProjectionEligibility && hasApiEligibility && hasCutover) {
       conn.exec(MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_SQL)
     }
 
@@ -2056,6 +2115,58 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 107
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  // v107 → v108: establish empty scope-keyed projection state/cache namespaces.
+  if (version === 107) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V108_SESSION_PROJECTION_STATE_SQL)
+    if (hasTable(conn, 'session_message_content_cutover')) conn.exec(MIGRATION_V108_SESSION_PROJECTION_CONTENT_INVALIDATION_SQL)
+    if (hasTable(conn, 'agent_history_events') && hasColumn(conn, 'agent_history_events', 'session_id') &&
+      hasColumn(conn, 'agent_history_events', 'created_at')) {
+      conn.exec(MIGRATION_V108_SESSION_PROJECTION_HISTORY_INVALIDATION_SQL)
+    }
+    if (hasTable(conn, 'agent_history_streams') && hasColumn(conn, 'agent_history_streams', 'session_id')) {
+      conn.exec(MIGRATION_V108_SESSION_PROJECTION_STREAM_INVALIDATION_SQL)
+    }
+    version = 108
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v108 → v109: persist worker checkpoints beside their scope state and discard them on invalidation.
+  if (version === 108) runInTransaction(conn, () => {
+    if (!hasColumn(conn, 'session_projection_state', 'build_checkpoint_json')) {
+      conn.exec('ALTER TABLE session_projection_state ADD COLUMN build_checkpoint_json TEXT')
+    }
+    conn.exec(MIGRATION_V109_SESSION_PROJECTION_BUILD_CHECKPOINT_SQL)
+    version = 109
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v109 → v110: persist payload length with each published projection blob root.
+  if (version === 109) runInTransaction(conn, () => {
+    if (!hasColumn(conn, 'session_projection_cache', 'blob_byte_length')) {
+      conn.exec(MIGRATION_V110_SESSION_PROJECTION_BLOB_LENGTH_SQL)
+    }
+    version = 110
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v110 → v111: index old-process projection build takeover enumeration.
+  if (version === 110) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V111_SESSION_PROJECTION_REBUILDING_INDEX_SQL)
+    version = 111
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // v111 → v112: replace the persisted API eligibility row with paired scope state.
+  if (version === 111) runInTransaction(conn, () => {
+    retireCanonicalApiContextEligibility(conn)
+    version = 112
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // CREATE_TABLES_SQL runs before migrations and may recreate the transitional table on every open.
+  if (version >= 112) runInTransaction(conn, () => retireCanonicalApiContextEligibility(conn))
+  // v112 → v113: retire transcript eligibility/rejection rows after all runtime consumers moved to scopes.
+  if (version === 112) runInTransaction(conn, () => {
+    retireLegacySessionProjectionTables(conn)
+    version = 113
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version >= 113) runInTransaction(conn, () => retireLegacySessionProjectionTables(conn))
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {

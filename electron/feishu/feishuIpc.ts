@@ -45,7 +45,7 @@ import { authUrlHostOnly, FEISHU_CLI_LINE_PREVIEW_MAX, previewText } from './fei
 import { parseLarkCliError } from './larkCliErrors'
 import type { TurnRuntime } from '../turnRuntime'
 import { ensureRemoteImModelConfigMigrated } from '../remote/remoteImModelConfigDb'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 import {
   FeishuOwnerBindController,
   ownerAllowlistFromOpenId,

@@ -13,7 +13,7 @@ vi.mock('./anthropicClientFactory', () => ({
 
 import { SESSION_META_TITLE_GENERATED, scheduleSessionTitleSuggestion } from './sessionTitleSuggest'
 import { createMemoryAppDb } from './database/testHelpers'
-import { createSession } from './database'
+import { createSession, getSession } from './database/operations'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 describe('sessionTitleSuggest 出口化（偏差 1 评审 N1）', () => {
@@ -79,7 +79,6 @@ describe('sessionTitleSuggest 出口化（偏差 1 评审 N1）', () => {
       })
     ).not.toThrow()
     await vi.waitFor(async () => {
-      const { getSession } = await import('./database')
       const session = getSession(db, sessionId)
       expect(session?.metadata?.[SESSION_META_TITLE_GENERATED]).toBe(true)
     })

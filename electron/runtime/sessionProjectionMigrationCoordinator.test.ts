@@ -6,6 +6,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { SessionProjectionMigrationCoordinator } from './sessionProjectionMigrationCoordinator'
 import * as projectionModule from './sessionTranscriptProjection'
+import { hasCurrentProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 
 async function addEligibleSession(db: ReturnType<typeof createTempDatabase>['db'], name: string) {
   const session = createSession(db, { name, model: 'test' })
@@ -31,8 +32,7 @@ describe('session projection migration application coordinator', () => {
       await expect(coordinator.start()).rejects.toThrow('execution is disabled')
       expect(getDbConnection(temp.db).prepare('SELECT COUNT(*) AS count FROM session_projection_migration_runs').get())
         .toEqual({ count: 0 })
-      expect(getDbConnection(temp.db).prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility').get())
-        .toEqual({ count: 1 }) // P1-①：写路径授予的 eligibility 保持存在；migration 默认关闭不得触碰它
+      expect(hasCurrentProjectionEligibility(temp.db, session.id)).toBe(false) // 未执行 full parity validation 时不生成资格
     } finally {
       temp.cleanup()
     }
@@ -57,8 +57,7 @@ describe('session projection migration application coordinator', () => {
       expect(repeated.run.runId).toBe('coordinator-run')
       expect(repeated.processedCount).toBe(1)
       expect(repeated.run.status).toBe('completed')
-      expect([first.id, second.id].every((sessionId) => getDbConnection(temp.db)
-        .prepare('SELECT 1 FROM canonical_session_projection_eligibility WHERE session_id=?').get(sessionId))).toBe(true)
+      expect([first.id, second.id].every((sessionId) => hasCurrentProjectionEligibility(temp.db, sessionId))).toBe(true)
     } finally {
       temp.cleanup()
     }

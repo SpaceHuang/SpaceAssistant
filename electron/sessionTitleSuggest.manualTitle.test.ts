@@ -9,17 +9,17 @@ import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE } from '../src/sha
 import type { AppDatabase } from './database'
 
 const mockUpdateSession = vi.fn()
+const mockGetSession = vi.fn()
 const mockCreateAnthropicClient = vi.fn()
 const mockGetApiKey = vi.fn()
 
 vi.mock('./database', () => ({
   updateSession: (...args: unknown[]) => mockUpdateSession(...args),
-  getSession: vi.fn(),
+  getSession: (...args: unknown[]) => mockGetSession(...args),
   getMessages: vi.fn(() => []),
   getDbConnection: vi.fn(() => ({})),
 }))
 
-import { getSession } from './database'
 
 vi.mock('./anthropicClientFactory', () => ({
   createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
@@ -61,7 +61,7 @@ function makeOnTitleGenerated() {
 function makeSessionStorage(messages: Session[] = []) {
   return {
     queries: {
-      readSession: (sessionId: string) => vi.mocked(getSession)(sessionId),
+      readSession: (sessionId: string) => mockGetSession(sessionId),
       readMessages: () => messages
     },
     commands: {
@@ -88,7 +88,7 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
     const session = stubSession({
       metadata: { [SESSION_META_TITLE_USER_CUSTOM]: true }
     })
-    vi.mocked(getSession).mockReturnValue(session)
+    mockGetSession.mockReturnValue(session)
     const db = makeDb(session)
     const onTitleGenerated = makeOnTitleGenerated()
 
@@ -118,7 +118,7 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
 
   it('writes generated title when no user custom flag', async () => {
     const session = stubSession({ name: '', metadata: {} })
-    vi.mocked(getSession).mockReturnValue(session)
+    mockGetSession.mockReturnValue(session)
     const db = makeDb(session)
     const onTitleGenerated = makeOnTitleGenerated()
     const updated = stubSession({
@@ -162,7 +162,7 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
   it('打开补全摘要失败时不留下阻断标记，后续可再次触发', async () => {
     const session = stubSession()
     const db = makeDb(session)
-    vi.mocked(getSession).mockReturnValue(session)
+    mockGetSession.mockReturnValue(session)
     mockCreateAnthropicClient.mockReturnValue({ messages: { create: vi.fn().mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce({ content: [{ type: 'text', text: '自动标题' }] }) } })
     const { scheduleSessionTitleOpenBackfillIfNeeded } = await import('./sessionTitleSuggest')
     const messages = [
@@ -171,14 +171,42 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
       { id: 'u2', sessionId: session.id, role: 'user', content: '第三条', timestamp: 3, status: 'completed', schemaVersion: CURRENT_SCHEMA_VERSION }
     ] as never
     mockUpdateSession.mockClear()
-    scheduleSessionTitleOpenBackfillIfNeeded({ db, sessionStorage: makeSessionStorage(messages), sessionId: session.id, getApiKey: async () => 'key' })
-    vi.mocked(getSession).mockReturnValue(stubSession({ metadata: { titleOpenBackfillAttempted: true } }))
+    await scheduleSessionTitleOpenBackfillIfNeeded({ db, sessionStorage: makeSessionStorage(messages), sessionId: session.id, getApiKey: async () => 'key' })
+    mockGetSession.mockReturnValue(stubSession({ metadata: { titleOpenBackfillAttempted: true } }))
     await vi.waitFor(() => expect(mockCreateAnthropicClient).toHaveBeenCalled())
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(mockUpdateSession.mock.calls.at(-1)?.[2]).toEqual({ metadata: {} })
     const fresh = stubSession({ metadata: {} })
-    vi.mocked(getSession).mockReturnValue(fresh)
-    scheduleSessionTitleOpenBackfillIfNeeded({ db, sessionStorage: makeSessionStorage(messages), sessionId: session.id, getApiKey: async () => 'key' })
+    mockGetSession.mockReturnValue(fresh)
+    await scheduleSessionTitleOpenBackfillIfNeeded({ db, sessionStorage: makeSessionStorage(messages), sessionId: session.id, getApiKey: async () => 'key' })
     await vi.waitFor(() => expect(mockCreateAnthropicClient).toHaveBeenCalledTimes(2))
+  })
+
+  it('prepares canonical chat bodies before selecting messages for automatic title backfill', async () => {
+    const session = stubSession({ name: '', metadata: {} })
+    const db = makeDb(session)
+    mockGetSession.mockReturnValue(session)
+    mockUpdateSession.mockReturnValue(session)
+    const events: string[] = []
+    const messages = [
+      { id: 'u1', sessionId: session.id, role: 'user', content: 'first question', timestamp: 1, status: 'completed', schemaVersion: CURRENT_SCHEMA_VERSION },
+      { id: 'a1', sessionId: session.id, role: 'assistant', content: 'first answer', timestamp: 2, status: 'completed', schemaVersion: CURRENT_SCHEMA_VERSION },
+      { id: 'u2', sessionId: session.id, role: 'user', content: 'second question', timestamp: 3, status: 'completed', schemaVersion: CURRENT_SCHEMA_VERSION }
+    ] as never
+    const storage = {
+      ensureChatBodyV1: async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`) },
+      queries: {
+        readSession: (sessionId: string) => mockGetSession(sessionId),
+        readMessages: (input: { sessionId: string }) => { events.push(`select:${input.sessionId}`); return messages }
+      },
+      commands: {
+        updateTitleSuggestionState: (sessionId: string, state: { backfillAttempted?: boolean }) => mockUpdateSession(undefined, sessionId, { metadata: state.backfillAttempted ? { titleOpenBackfillAttempted: true } : {} })
+      }
+    } as never
+
+    const { scheduleSessionTitleOpenBackfillIfNeeded } = await import('./sessionTitleSuggest')
+    await scheduleSessionTitleOpenBackfillIfNeeded({ db, sessionStorage: storage, sessionId: session.id, getApiKey: async () => 'key' })
+
+    expect(events).toEqual([`ensure:${session.id}`, `select:${session.id}`])
   })
 })

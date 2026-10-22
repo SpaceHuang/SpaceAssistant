@@ -1,12 +1,11 @@
 import fs from 'fs/promises'
 import path from 'node:path'
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { readSessionEvents, type SessionRecoveryFailure } from '../sessionEvents'
+import { type SessionRecoveryFailure } from '../sessionEvents'
 import { resolveRetentionPolicyFromDb, type RetentionPolicy } from './retentionPolicy'
 import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database/sqliteStore'
-import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
-import { getProjectedMessages } from '../runtime/sessionTranscriptProjection'
+import { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer } from '../sessionStorage/infrastructure/sqlite/sessionEventRetentionAdapter'
+export { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer } from '../sessionStorage/infrastructure/sqlite/sessionEventRetentionAdapter'
 
 /**
  * 会话事件台账保留期(S3,偏差 24):自 sessionEvents.ts(Core 文件)归位 Storage。
@@ -32,59 +31,6 @@ export type SessionRetentionOptions = {
   ensureReadyBeforeDelete?(sessionName: string, workDir: string): boolean | Promise<boolean>
   /** Final readiness/outbox/writer recheck while the same lock is still held. */
   verifyReadyBeforeDelete?(sessionName: string, workDir: string): boolean | Promise<boolean>
-}
-
-/** Seed an eligible detached transcript projection before its workDir ledger becomes collectible. */
-export function createCanonicalSessionProjectionRetentionPreparer(db: AppDatabase): (sessionName: string, workDir: string) => Promise<void> {
-  const history = new SqliteAgentHistory(getDbConnection(db))
-  return async (sessionName) => {
-    const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1]
-    if (!sessionId) return
-    const messages = getProjectedMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
-    if (messages.length === 0 || messages.some(({ role }) => role !== 'user' && role !== 'assistant')) return
-    const legacyMessages = messages.map(({ id, role, content, timestamp, thinking, contentSegments, toolCalls, toolUse, attachments,
-      imagesDeliveredToApi, skillHints }) => ({
-      id, role: role as 'user' | 'assistant', content, timestamp,
-      ...(thinking !== undefined ? { thinking } : {}),
-      ...(contentSegments !== undefined ? { contentSegments } : {}),
-      ...(toolCalls !== undefined ? { toolCalls } : {}),
-      ...(toolUse !== undefined ? { toolUse } : {}),
-      ...(attachments !== undefined ? { attachments } : {}),
-      ...(imagesDeliveredToApi !== undefined ? { imagesDeliveredToApi } : {}),
-      ...(skillHints !== undefined ? { skillHints } : {})
-    }))
-    const folded = history.readCanonicalSessionTranscript(sessionId, legacyMessages)
-    if (folded.kind !== 'matched') return
-    if (!history.writeCanonicalSessionCache({ ...folded, cacheKey: 'transcript', value: JSON.stringify(folded.messages) })) {
-      throw new Error(`canonical transcript projection could not be persisted for session ${sessionId}`)
-    }
-  }
-}
-
-/** Preload canonical dependencies once, then guard candidates against canonical or ledger-only compaction facts. */
-export function createSessionLedgerCompactionDependencyGuard(db: AppDatabase): (sessionName: string, workDir: string) => Promise<boolean> {
-  const compactedRows = getDbConnection(db).prepare(`SELECT streams.session_id, events.payload_json
-    FROM agent_history_events events LEFT JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
-    WHERE events.kind='transcript-compacted'`).all() as Array<{ session_id: string | null; payload_json: string }>
-  const compactedSessionIds = new Set<string>()
-  for (const row of compactedRows) {
-    if (row.session_id) compactedSessionIds.add(row.session_id)
-    try {
-      const payload = JSON.parse(row.payload_json) as { sessionLedger?: { location?: { sessionId?: unknown } } }
-      const sessionId = payload.sessionLedger?.location?.sessionId
-      if (typeof sessionId === 'string' && sessionId.trim()) compactedSessionIds.add(sessionId)
-    } catch { /* Corrupt canonical payloads are handled by startup recovery; do not infer a dependency. */ }
-  }
-  return async (sessionName, workDir) => {
-    const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1]
-    // A session still present in the canonical session table can be resumed by the user;
-    // its event ledger remains a required lifecycle dependency even when the transcript is projected to SQLite.
-    if (sessionId && getDbConnection(db).prepare('SELECT 1 FROM sessions WHERE id=?').get(sessionId)) return true
-    if (sessionId && compactedSessionIds.has(sessionId)) return true
-    const eventsPath = path.join(workDir, 'sessions', sessionName, 'events.jsonl')
-    const events = await readSessionEvents(eventsPath)
-    return events.some(({ type }) => type === 'compaction_start' || type === 'compaction_summary' || type === 'compaction_end')
-  }
 }
 
 export async function enforceSessionEventRetention(workDir: string, maxSessions: number): Promise<number> {

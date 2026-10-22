@@ -3,7 +3,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { WebContents } from 'electron'
-import { appendMessage, createSession, createPersistedTurn, getConfigValue, getDbConnection, getSession, openDatabase, prepareTurnAtomically, setConfigValue, updateMessageContent, type AppDatabase } from '../database'
+import { appendMessage, createSession, createPersistedTurn, getSession, prepareTurnAtomically, updateMessageContent } from '../database/operations'
+import { getConfigValue, getDbConnection, openDatabase, setConfigValue, type AppDatabase } from '../database'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
@@ -1070,7 +1071,7 @@ describe('runImRemoteAgent', () => {
     const db = makeDb()
     const session = createSession(db, { name: 'remote-current-turn-input' })
     setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
-    const { prepareTurnAtomically, appendMessage } = await import('../database')
+    const { prepareTurnAtomically, appendMessage } = await import('../database/operations')
     prepareTurnAtomically(db, {
       user: { id: 'remote-accepted-user', sessionId: session.id, role: 'user', content: 'accepted remote input', timestamp: 1, status: 'sent' },
       assistant: { id: 'remote-accepted-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
@@ -1107,7 +1108,7 @@ describe('runImRemoteAgent', () => {
     const db = makeDb()
     const session = createSession(db, { name: 'remote-track-model-view' })
     setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
-    const { prepareTurnAtomically, appendMessage } = await import('../database')
+    const { prepareTurnAtomically, appendMessage } = await import('../database/operations')
     prepareTurnAtomically(db, {
       user: { id: 'track-a-user', sessionId: session.id, role: 'user', content: 'Track A input', timestamp: 1, status: 'sent' },
       assistant: { id: 'track-a-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
@@ -1176,7 +1177,7 @@ describe('runImRemoteAgent', () => {
     const origin = createSession(db, { name: 'remote-track-origin' })
     const current = createSession(db, { name: 'remote-track-current' })
     setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
-    const { prepareTurnAtomically, appendMessage } = await import('../database')
+    const { prepareTurnAtomically, appendMessage } = await import('../database/operations')
     appendMessage(db, { id: 'track-origin-user', sessionId: origin.id, role: 'user', content: 'original instruction', timestamp: 1, status: 'sent' })
     appendMessage(db, { id: 'track-origin-assistant', sessionId: origin.id, role: 'assistant', content: 'original result', timestamp: 2, status: 'sent' })
     prepareTurnAtomically(db, {
@@ -1245,7 +1246,8 @@ describe('runImRemoteAgent', () => {
   it('Hosted Remote fails closed if accepted user content changes before execution', async () => {
     const db = makeDb()
     const session = createSession(db, { name: 'remote-input-fingerprint' })
-    const { prepareTurnAtomically, getDbConnection } = await import('../database')
+    const { prepareTurnAtomically } = await import('../database/operations')
+    const { getDbConnection } = await import('../database')
     prepareTurnAtomically(db, {
       user: { id: 'remote-bound-user', sessionId: session.id, role: 'user', content: 'accepted remote input', timestamp: 1, status: 'sent' },
       assistant: { id: 'remote-bound-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
@@ -1262,7 +1264,8 @@ describe('runImRemoteAgent', () => {
   it('Hosted Remote fails closed if the input commitment belongs to a different turn', async () => {
     const db = makeDb()
     const session = createSession(db, { name: 'remote-input-turn-owner' })
-    const { prepareTurnAtomically, getDbConnection } = await import('../database')
+    const { prepareTurnAtomically } = await import('../database/operations')
+    const { getDbConnection } = await import('../database')
     prepareTurnAtomically(db, {
       user: { id: 'remote-turn-owner-user', sessionId: session.id, role: 'user', content: 'accepted remote input', timestamp: 1, status: 'sent' },
       assistant: { id: 'remote-turn-owner-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
@@ -3843,7 +3846,7 @@ describe('runImRemoteAgent', () => {
   it('用量统计的 llmServiceId 取实际解析出的 creds.serviceId，而非会话冻结配置（DIM3，评审 P1-2）', async () => {
     const db = makeDb()
     const session = createSession(db, { name: 'remote-usage-config' })
-    const { prepareTurnAtomically } = await import('../database')
+    const { prepareTurnAtomically } = await import('../database/operations')
     prepareTurnAtomically(db, {
       user: { id: 'remote-usage-user', sessionId: session.id, role: 'user', content: 'usage', timestamp: 1, status: 'sent' },
       assistant: { id: 'remote-usage-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },

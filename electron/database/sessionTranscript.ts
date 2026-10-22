@@ -32,7 +32,7 @@ export function readSessionTranscript(db: AppDatabase, sessionId: string): Sessi
   return { sessionId, version: row.version, ...(row.last_turn_id ? { lastTurnId: row.last_turn_id } : {}), status: row.status, messages }
 }
 
-export type CommitSessionTranscriptInput = { sessionId: string; turnId: string; baseVersion: number; outcome: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'; messages: readonly TranscriptMessage[]; storedMessagesJson?: string; now?: number }
+export type CommitSessionTranscriptInput = { sessionId: string; turnId: string; baseVersion: number; outcome: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'; messages: readonly TranscriptMessage[]; storedMessagesJson?: string; executionLease?: { sessionId: string; turnId: string; ownerId: string; generation: number }; now?: number }
 export type CommitSessionTranscriptResult = { committed: true; version: number } | { committed: false; reason: 'version-conflict' | 'commit-uncertain' | 'idempotency-conflict'; version: number }
 
 export function commitSessionTranscriptInTransaction(conn: DatabaseSync, input: CommitSessionTranscriptInput): CommitSessionTranscriptResult {
@@ -46,6 +46,22 @@ export function commitSessionTranscriptInTransaction(conn: DatabaseSync, input: 
     if (receipt) return receipt.payload_sha256 === payloadSha256
       ? { committed: true as const, version: receipt.next_version }
       : { committed: false as const, reason: 'idempotency-conflict' as const, version: receipt.next_version }
+    if (input.executionLease) {
+      const lease = input.executionLease
+      // final-check / invariant SYS-SESSIONLEASE-001: prove both durable owner records before this terminal commit.
+      const claim = conn.prepare(`SELECT owner_id,generation,status FROM session_execution_claims WHERE session_id=? AND turn_id=?`)
+        .get(input.sessionId, input.turnId) as { owner_id: string; generation: number; status: string } | undefined
+      const queue = conn.prepare(`SELECT owner_id,generation,status FROM session_execution_queue WHERE session_id=? AND turn_id=?`)
+        .get(input.sessionId, input.turnId) as { owner_id: string; generation: number; status: string } | undefined
+      const liveStatuses = ['claimed', 'executing']
+      if (lease.sessionId !== input.sessionId || lease.turnId !== input.turnId || !lease.ownerId.trim() ||
+        !Number.isSafeInteger(lease.generation) || lease.generation < 1 ||
+        !claim || claim.owner_id !== lease.ownerId || claim.generation !== lease.generation || !liveStatuses.includes(claim.status) ||
+        !queue || queue.owner_id !== lease.ownerId || queue.generation !== lease.generation || !liveStatuses.includes(queue.status) ||
+        claim.status !== queue.status) {
+        throw new Error('SESSION_EXECUTION_CLAIM_FENCED')
+      }
+    }
     const existing = conn.prepare('SELECT base_version,version,outcome,messages_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?').get(input.sessionId, input.turnId) as { base_version: number; version: number; outcome: string; messages_json: string } | undefined
     if (existing) {
       if (existing.outcome !== input.outcome || existing.messages_json !== storedMessagesJson) return { committed: false as const, reason: 'idempotency-conflict' as const, version: existing.version }
@@ -73,10 +89,21 @@ export function commitSessionTranscriptInTransaction(conn: DatabaseSync, input: 
       VALUES(?,?,?,?,?,?,?,?,?)`).run(input.sessionId, input.turnId, payloadSha256, input.baseVersion, nextVersion, input.outcome, eventRange?.event_start ?? null, eventRange?.event_end ?? null, now)
     conn.prepare(`INSERT INTO session_transcript_checkpoints(session_id,version,last_turn_id,status,updated_at) VALUES(?,?,?,'ready',?)
       ON CONFLICT(session_id) DO UPDATE SET version=excluded.version,last_turn_id=excluded.last_turn_id,status='ready',updated_at=excluded.updated_at`).run(input.sessionId, nextVersion, input.turnId, now)
-    conn.prepare(`UPDATE session_execution_claims SET status='transcript_committed',updated_at=?
-      WHERE session_id=? AND turn_id=? AND status IN ('claimed','executing')`).run(now, input.sessionId, input.turnId)
-    conn.prepare(`UPDATE session_execution_queue SET status='transcript_committed',updated_at=?
-      WHERE session_id=? AND turn_id=? AND status IN ('claimed','executing')`).run(now, input.sessionId, input.turnId)
+    if (input.executionLease) {
+      const lease = input.executionLease
+      const claimUpdated = conn.prepare(`UPDATE session_execution_claims SET status='transcript_committed',updated_at=?
+        WHERE session_id=? AND turn_id=? AND owner_id=? AND generation=? AND status IN ('claimed','executing')`)
+        .run(now, input.sessionId, input.turnId, lease.ownerId, lease.generation)
+      const queueUpdated = conn.prepare(`UPDATE session_execution_queue SET status='transcript_committed',updated_at=?
+        WHERE session_id=? AND turn_id=? AND owner_id=? AND generation=? AND status IN ('claimed','executing')`)
+        .run(now, input.sessionId, input.turnId, lease.ownerId, lease.generation)
+      if (Number(claimUpdated.changes) !== 1 || Number(queueUpdated.changes) !== 1) throw new Error('SESSION_EXECUTION_CLAIM_FENCED')
+    } else {
+      conn.prepare(`UPDATE session_execution_claims SET status='transcript_committed',updated_at=?
+        WHERE session_id=? AND turn_id=? AND status IN ('claimed','executing')`).run(now, input.sessionId, input.turnId)
+      conn.prepare(`UPDATE session_execution_queue SET status='transcript_committed',updated_at=?
+        WHERE session_id=? AND turn_id=? AND status IN ('claimed','executing')`).run(now, input.sessionId, input.turnId)
+    }
     return { committed: true as const, version: nextVersion }
   })
 }

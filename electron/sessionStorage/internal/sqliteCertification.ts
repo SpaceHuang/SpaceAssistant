@@ -1,4 +1,4 @@
-import type { AppDatabase } from '../../database'
+import type { AppDatabase } from '../../database/sqliteStore'
 import { getConfigValue, getRecentTurnRoutingMessages, getSessionMessageRevisionSnapshot, getTurnContext, setConfigValue } from '../../database/operations'
 import { getDbConnection } from '../../database/sqliteStore'
 import { runInTransaction } from '../../database/transaction'
@@ -6,6 +6,11 @@ import { SqliteAgentHistory } from '../../runtime/sqliteAgentHistory'
 import { fieldDifferences, readCanonicalTurnContextCandidate, shadowAcceptedTurnContext, shadowTurnRoutingInput,
   type CanonicalTurnContextCandidate, type TurnRouteInput } from '../../runtime/sessionStorageShadow'
 import { queueInputFingerprint } from '../../queueInputFingerprint'
+import { publishSqliteSessionApiRouteScopes } from '../infrastructure/sqlite/sessionApiRouteProjectionFence'
+import { readProjectionSourceIdentity } from '../infrastructure/sqlite/projectionSourceIdentity'
+import { createSqliteProjectionStateStore } from '../infrastructure/sqlite/sessionProjectionStateStore'
+import { encodeProjectionScopeKey } from '../domain/scopeKey'
+import { createSqliteSessionApiRouteProjectionFence } from '../infrastructure/sqlite/sessionApiRouteProjectionFence'
 
 const API_READ_PROTOCOL_VERSION = 1
 export const CANONICAL_API_READ_FEATURE_CONFIG_KEY = 'config.sessionStorageCanonicalApiRead'
@@ -16,13 +21,13 @@ type EligibilityRow = Readonly<{
   apiReadMode: string
   writeMode: string
   cleanupState: string
-  eligibleSessionGeneration: string
-  skeletonRevision: number
-  canonicalSessionSeq: number
-  canonicalCommitOrder: number
+  eligibleSessionGeneration: string | null
+  skeletonRevision: number | null
+  canonicalSessionSeq: number | null
+  canonicalCommitOrder: number | null
   watermarkEventId: string | null
   watermarkInvocationId: string | null
-  protocolVersion: number
+  protocolVersion: number | null
 }>
 
 type CanonicalWatermark = Readonly<{
@@ -52,7 +57,6 @@ export type CanonicalApiReadFence = Readonly<{
 }>
 function revokeEligibility(db: AppDatabase, sessionId: string): void {
   const conn = getDbConnection(db)
-  conn.prepare('DELETE FROM canonical_session_api_context_eligibility WHERE session_id=?').run(sessionId)
   conn.prepare(`UPDATE session_message_content_cutover SET
     api_read_mode=CASE WHEN api_read_mode='canonical' THEN 'revalidation-required' ELSE api_read_mode END,
     updated_at=? WHERE session_id=?`).run(Date.now(), sessionId)
@@ -65,7 +69,6 @@ function canonicalApiReadFeatureEnabled(db: AppDatabase): boolean {
 /** The global kill switch forces all per-session API reads back to the retained legacy copy. */
 function disableCanonicalReadForSession(db: AppDatabase, sessionId: string): void {
   const conn = getDbConnection(db)
-  conn.prepare('DELETE FROM canonical_session_api_context_eligibility WHERE session_id=?').run(sessionId)
   conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='legacy',updated_at=?
     WHERE session_id=?`).run(Date.now(), sessionId)
 }
@@ -75,7 +78,6 @@ export function setCanonicalApiReadFeatureEnabled(db: AppDatabase, enabled: bool
   runInTransaction(getDbConnection(db), () => {
     setConfigValue(db, CANONICAL_API_READ_FEATURE_CONFIG_KEY, enabled ? 'true' : 'false')
     if (!enabled) {
-      getDbConnection(db).prepare('DELETE FROM canonical_session_api_context_eligibility').run()
       getDbConnection(db).prepare(`UPDATE session_message_content_cutover SET api_read_mode='legacy',updated_at=?
         WHERE api_read_mode!='legacy'`).run(Date.now())
     }
@@ -83,20 +85,29 @@ export function setCanonicalApiReadFeatureEnabled(db: AppDatabase, enabled: bool
 }
 
 function readEligibility(db: AppDatabase, sessionId: string): EligibilityRow | undefined {
-  return getDbConnection(db).prepare(`SELECT sessions.generation AS sessionGeneration,
+  const row = getDbConnection(db).prepare(`SELECT sessions.generation AS sessionGeneration,
       cutover.message_revision AS messageRevision, cutover.api_read_mode AS apiReadMode,
-      cutover.write_mode AS writeMode, cutover.cleanup_state AS cleanupState,
-      eligibility.session_generation AS eligibleSessionGeneration,
-      eligibility.skeleton_revision AS skeletonRevision,
-      eligibility.canonical_session_seq AS canonicalSessionSeq,
-      eligibility.canonical_commit_order AS canonicalCommitOrder,
-      eligibility.watermark_event_id AS watermarkEventId,
-      eligibility.watermark_invocation_id AS watermarkInvocationId,
-      eligibility.protocol_version AS protocolVersion
+      cutover.write_mode AS writeMode, cutover.cleanup_state AS cleanupState
     FROM sessions
     JOIN session_message_content_cutover cutover ON cutover.session_id=sessions.id
-    LEFT JOIN canonical_session_api_context_eligibility eligibility ON eligibility.session_id=sessions.id
-    WHERE sessions.id=?`).get(sessionId) as EligibilityRow | undefined
+    WHERE sessions.id=?`).get(sessionId) as Omit<EligibilityRow, 'eligibleSessionGeneration' | 'skeletonRevision' | 'canonicalSessionSeq' |
+      'canonicalCommitOrder' | 'watermarkEventId' | 'watermarkInvocationId' | 'protocolVersion'> | undefined
+  if (!row) return undefined
+  const empty: EligibilityRow = { ...row, eligibleSessionGeneration: null, skeletonRevision: null,
+    canonicalSessionSeq: null, canonicalCommitOrder: null, watermarkEventId: null, watermarkInvocationId: null, protocolVersion: null }
+  const baseline = createSqliteProjectionStateStore(db).get(sessionId, encodeProjectionScopeKey({ scope: 'apiBaselineV1', specVersion: 1 }))
+  if (!baseline || baseline.status !== 'valid' || baseline.sessionGeneration !== row.sessionGeneration ||
+    baseline.messageRevision === null || baseline.historyWatermarkJson === null) return empty
+  let watermark: unknown
+  try { watermark = JSON.parse(baseline.historyWatermarkJson) } catch { return empty }
+  if (!Array.isArray(watermark) || watermark.length !== 4 || !Number.isSafeInteger(watermark[0]) ||
+    !Number.isSafeInteger(watermark[1]) || (watermark[2] !== null && typeof watermark[2] !== 'string') ||
+    (watermark[3] !== null && typeof watermark[3] !== 'string') ||
+    !createSqliteSessionApiRouteProjectionFence(db).isCurrent({ sessionId, sessionGeneration: row.sessionGeneration,
+      messageRevision: baseline.messageRevision, historyWatermarkJson: baseline.historyWatermarkJson })) return empty
+  return { ...empty, eligibleSessionGeneration: baseline.sessionGeneration, skeletonRevision: baseline.messageRevision,
+    canonicalSessionSeq: watermark[0] as number, canonicalCommitOrder: watermark[1] as number,
+    watermarkEventId: watermark[2] as string | null, watermarkInvocationId: watermark[3] as string | null, protocolVersion: 1 }
 }
 
 function readCanonicalState(db: AppDatabase, sessionId: string): Readonly<{ watermark?: CanonicalWatermark; cacheValidated: boolean }> {
@@ -130,7 +141,9 @@ function sameWatermark(a: CanonicalWatermark | undefined, b: CanonicalWatermark 
 }
 
 function eligibilityMatches(row: EligibilityRow | undefined, watermark: CanonicalWatermark | undefined): row is EligibilityRow {
-  return !!row && !!watermark && row.apiReadMode === 'canonical' && (row.writeMode === 'legacy' || row.writeMode === 'canonical') && row.cleanupState === 'retained' &&
+  return !!row && !!watermark && row.eligibleSessionGeneration !== null && row.skeletonRevision !== null &&
+    row.canonicalSessionSeq !== null && row.canonicalCommitOrder !== null && row.protocolVersion !== null &&
+    row.apiReadMode === 'canonical' && (row.writeMode === 'legacy' || row.writeMode === 'canonical') && row.cleanupState === 'retained' &&
     row.eligibleSessionGeneration === row.sessionGeneration && row.sessionGeneration === watermark.sessionGeneration &&
     row.skeletonRevision === row.messageRevision && row.canonicalSessionSeq === watermark.sessionSeq &&
     row.canonicalCommitOrder === watermark.commitOrder && row.watermarkEventId === watermark.watermarkEventId &&
@@ -202,16 +215,6 @@ export function certifyCanonicalSessionApiRead(db: AppDatabase, sessionId: strin
     }
 
     const now = Date.now()
-    getDbConnection(db).prepare(`INSERT INTO canonical_session_api_context_eligibility(
-      session_id,session_generation,skeleton_revision,canonical_session_seq,canonical_commit_order,
-      watermark_event_id,watermark_invocation_id,validated_at,protocol_version
-    ) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET
-      session_generation=excluded.session_generation,skeleton_revision=excluded.skeleton_revision,
-      canonical_session_seq=excluded.canonical_session_seq,canonical_commit_order=excluded.canonical_commit_order,
-      watermark_event_id=excluded.watermark_event_id,watermark_invocation_id=excluded.watermark_invocation_id,
-      validated_at=excluded.validated_at,protocol_version=excluded.protocol_version`)
-      .run(sessionId, initial.generation, initial.messageRevision, watermark.sessionSeq, watermark.commitOrder,
-        watermark.watermarkEventId, watermark.watermarkInvocationId, now, API_READ_PROTOCOL_VERSION)
     const changed = getDbConnection(db).prepare(`UPDATE session_message_content_cutover SET
       session_generation=?,api_read_mode='canonical',updated_at=?
       WHERE session_id=? AND session_generation=? AND message_revision=? AND write_mode IN ('legacy','canonical') AND cleanup_state='retained'`)
@@ -219,6 +222,20 @@ export function certifyCanonicalSessionApiRead(db: AppDatabase, sessionId: strin
     if (Number(changed.changes) !== 1) {
       revokeEligibility(db, sessionId)
       return { status: 'ineligible', reason: 'session-fence-changed', apiReadMode: 'revalidation-required',
+        apiDifferenceCount: apiShadow.differenceCount, routeDifferenceCount: routeShadow.differenceCount }
+    }
+    const sourceIdentityJson = readProjectionSourceIdentity(getDbConnection(db), sessionId, initial.generation)
+    let sourceIdentity: { messageRevision?: unknown; historyWatermark?: unknown } | undefined
+    try { if (sourceIdentityJson) sourceIdentity = JSON.parse(sourceIdentityJson) as { messageRevision?: unknown; historyWatermark?: unknown } }
+    catch { /* invalid source fence */ }
+    if (!sourceIdentity || sourceIdentity.messageRevision !== initial.messageRevision ||
+      !publishSqliteSessionApiRouteScopes(db, {
+        sessionId, sessionGeneration: initial.generation, messageRevision: initial.messageRevision,
+        historyWatermarkJson: JSON.stringify(sourceIdentity.historyWatermark ?? null),
+        apiBaseline: apiShadow.candidate, route: routeShadow.candidate
+      })) {
+      revokeEligibility(db, sessionId)
+      return { status: 'ineligible', reason: 'projection-scope-publish-failed', apiReadMode: 'revalidation-required',
         apiDifferenceCount: apiShadow.differenceCount, routeDifferenceCount: routeShadow.differenceCount }
     }
     return { status: 'eligible', apiReadMode: 'canonical', apiDifferenceCount: apiShadow.differenceCount,

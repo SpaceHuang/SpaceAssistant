@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 
 const { mockRunHostedAgentTurn, mockRunHostedAgentTurnWithParticipant, mockSessionParticipants } = vi.hoisted(() => {
   const mockRunHostedAgentTurn = vi.fn()
@@ -55,17 +57,32 @@ vi.mock('../agentLogger/agentLogger', () => ({ logAgentEvent: (...args: unknown[
 
 import { DatabaseSync } from 'node:sqlite'
 import { createHostedTurnHandoff as createComposedHostedTurnHandoff } from './hostedTurnHandoff'
-import { runMigrations } from '../database/migrations'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { createSpillStore, readCanonicalSpillReferences, reconcileSpillOrphansAgainstCanonicalHistory } from '../storage/spillStore'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
-import { appendMessage, createSession, getDbConnection, openDatabase } from '../database'
+import { appendMessage, createSession } from '../database/operations'
+import { getDbConnection, openDatabase } from '../database'
 import type { AppDatabase } from '../database/sqliteStore'
 import { claimSessionExecution, commitSessionTranscript, readSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
 import { reconcileStartupSessionTranscripts } from '../sessionStorage/recovery'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { getProjectedMessage, readSessionTranscriptProjection } from './sessionTranscriptProjection'
-import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
+import type { HistoryEvent, HistoryPort, SessionTranscriptCommitIntent } from '../../packages/agent-sdk/src/history'
+
+
+/** Use the production schema for History-only tests, with a stable owner session ID. */
+function createHistoryOnlyDatabase(sessionId: string): AppDatabase {
+  const db = createMemoryAppDb()
+  const session = createSession(db, { name: 'history-only', model: 'model' })
+  const conn = getDbConnection(db)
+  const row = conn.prepare('SELECT * FROM sessions WHERE id=?').get(session.id) as Record<string, unknown>
+  row.id = sessionId
+  const columns = Object.keys(row)
+  conn.prepare(`INSERT INTO sessions (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`)
+    .run(...columns.map((column) => row[column]))
+  return db
+}
 
 type HostedTurnHandoffFixtureInput = Omit<Parameters<typeof createComposedHostedTurnHandoff>[0], 'sessionDb'> & { sessionDb?: AppDatabase }
 function createHostedTurnHandoff(input: HostedTurnHandoffFixtureInput) {
@@ -178,10 +195,8 @@ describe('createHostedTurnHandoff', () => {
   })
 
   it('replaces the prior request transcript with latest completed session History before Hosted execution', async () => {
-    const conn = new DatabaseSync(':memory:')
-    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
-    conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '18')
-    runMigrations(conn)
+    const db = createHistoryOnlyDatabase('session-shadow')
+    const conn = getDbConnection(db)
     let now = 1
     const history = new SqliteAgentHistory(conn, 1, () => now++, 'session-shadow')
     const priorMessages = [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'hi' }]
@@ -218,7 +233,7 @@ describe('createHostedTurnHandoff', () => {
         { role: 'system', content: expect.stringMatching(/Continuation mode: context-fallback; fallback reason: UNKNOWN_SIDE_EFFECT[\s\S]*the prior tool result is unknown; do not assume it failed/) }] },
       requiredUserMessage: { id: 'current-user', message: currentMessage }
     })
-    await conn.close()
+    db.close()
   })
 
   it('preserves supplemental context when no prior canonical History exists', async () => {
@@ -257,10 +272,8 @@ describe('createHostedTurnHandoff', () => {
   })
 
   it('fails closed on request transcript drift before creating the Hosted runtime', async () => {
-    const conn = new DatabaseSync(':memory:')
-    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
-    conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '18')
-    runMigrations(conn)
+    const db = createHistoryOnlyDatabase('session-drift')
+    const conn = getDbConnection(db)
     const history = new SqliteAgentHistory(conn, 1, () => 1, 'session-drift')
     await history.appendBatch([
       { invocationId: 'prior', turnId: 'prior-turn', sequence: 1, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'canonical' }] } },
@@ -280,14 +293,12 @@ describe('createHostedTurnHandoff', () => {
       requestId: 'current', turnId: 'current-turn', sessionId: 'session-drift', reasonCode: 'transcript-mismatch',
       stage: 'match-current-message', outcome: 'rejected', historyStreamId: 'prior', previousTurnId: 'prior-turn', snapshotVersion: 2
     }))
-    await conn.close()
+    db.close()
   })
 
   it('fails closed when a prior session stream has no completed canonical transcript', async () => {
-    const conn = new DatabaseSync(':memory:')
-    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
-    conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '18')
-    runMigrations(conn)
+    const db = createHistoryOnlyDatabase('session-open')
+    const conn = getDbConnection(db)
     const history = new SqliteAgentHistory(conn, 1, () => 1, 'session-open')
     await history.appendBatch([
       { invocationId: 'prior', turnId: 'prior-turn', sequence: 1, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'hello' }] } }
@@ -302,14 +313,12 @@ describe('createHostedTurnHandoff', () => {
 
     expect(createHostedTurnRuntime).not.toHaveBeenCalled()
     expect(mockRunHostedAgentTurn).not.toHaveBeenCalled()
-    await conn.close()
+    db.close()
   })
 
   it('records the read-history failure stage without exposing transcript content', async () => {
-    const conn = new DatabaseSync(':memory:')
-    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
-    conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '18')
-    runMigrations(conn)
+    const db = createHistoryOnlyDatabase('session-read-failure')
+    const conn = getDbConnection(db)
     const history = new SqliteAgentHistory(conn, 1, () => 1, 'session-read-failure')
     vi.spyOn(history, 'readLatestInvocationForSession').mockRejectedValue(new Error('private transcript body'))
     const createHostedTurnRuntime = vi.fn()
@@ -327,14 +336,12 @@ describe('createHostedTurnHandoff', () => {
       stage: 'read-history', reasonCode: 'history-read-failed', outcome: 'rejected'
     }))
     expect(JSON.stringify(mockLogAgentEvent.mock.calls)).not.toContain('private')
-    await conn.close()
+    db.close()
   })
 
   it('records the select-snapshot stage and prior stream when the newest stream is unavailable', async () => {
-    const conn = new DatabaseSync(':memory:')
-    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
-    conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '18')
-    runMigrations(conn)
+    const db = createHistoryOnlyDatabase('session-unavailable')
+    const conn = getDbConnection(db)
     const history = new SqliteAgentHistory(conn, 1, () => 1, 'session-unavailable')
     await history.appendBatch([
       { invocationId: 'prior-open', turnId: 'prior-turn', sequence: 1, schemaVersion: 1, eventId: 'prior-context', idempotencyKey: 'prior-context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'private prior transcript' }] } },
@@ -356,7 +363,7 @@ describe('createHostedTurnHandoff', () => {
       historyStreamId: 'prior-open', previousTurnId: 'prior-turn', snapshotVersion: 2
     }))
     expect(JSON.stringify(mockLogAgentEvent.mock.calls)).not.toContain('private')
-    await conn.close()
+    db.close()
   })
 
   it('从纯 session-input + process-restart History 安全恢复已接受用户消息', async () => {
@@ -436,11 +443,13 @@ describe('createHostedTurnHandoff', () => {
         messages: [...hostedRequest.messages, { role: 'assistant', content: 'done' }] }
     })
     const baseQueries = createSqliteSessionStorage(db).queries
-    const readMessage = vi.fn(baseQueries.readMessage)
+    const events: string[] = []
+    const readMessage = vi.fn((input: Parameters<typeof baseQueries.readMessage>[0]) => { events.push(`select:${input.messageId}`); return baseQueries.readMessage(input) })
     const handoff = createHostedTurnHandoff({
       agentSdk: { createHostedTurnRuntime: vi.fn(() => ({ host: {}, dispose: async () => undefined })) },
       history, invocationId: 'restart-retry-invocation', turnId: 'restart-retry-turn', routeId: 'route',
       sessionId: session.id, sessionDb: db, sessionQueries: Object.freeze({ ...baseQueries, readMessage }),
+      ensureChatBodyV1: async ({ sessionId }) => { events.push(`ensure:${sessionId}`) },
       continuationContext: { mode: 'context-fallback', fallbackReason: 'UNKNOWN_SIDE_EFFECT', sourceInvocationId: 'failed-source',
         sourceTurnId: 'failed-source-turn', historySequence: 8, state: 'unknown', summary: 'a prior tool result remains unknown after restart' }
     })
@@ -451,6 +460,7 @@ describe('createHostedTurnHandoff', () => {
     }))
 
     expect(readMessage).toHaveBeenCalledWith({ sessionId: session.id, messageId: prior.id })
+    expect(events).toEqual([`ensure:${session.id}`, `select:${prior.id}`])
     expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0]).toMatchObject({ request: { messages: [
       { role: 'system', content: 'dynamic' }, ...earlierTranscript,
       { role: 'user', content: prior.content }, current,
@@ -571,10 +581,8 @@ describe('createHostedTurnHandoff', () => {
   })
 
   it('does not fall back to an older completed transcript when the newest session invocation was interrupted', async () => {
-    const conn = new DatabaseSync(':memory:')
-    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
-    conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '18')
-    runMigrations(conn)
+    const db = createHistoryOnlyDatabase('session-latest-interrupted')
+    const conn = getDbConnection(db)
     const history = new SqliteAgentHistory(conn, 1, () => 1, 'session-latest-interrupted')
     await history.appendBatch([
       { invocationId: 'older-completed', turnId: 'older-turn', sequence: 1, schemaVersion: 1, eventId: 'older-context', idempotencyKey: 'older-context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'older canonical transcript' }] } },
@@ -597,7 +605,7 @@ describe('createHostedTurnHandoff', () => {
 
     expect(createHostedTurnRuntime).not.toHaveBeenCalled()
     expect(mockRunHostedAgentTurn).not.toHaveBeenCalled()
-    await conn.close()
+    db.close()
   })
 
   it('classifies a cancelled canonical terminal without sessionLedger as cancelled', async () => {
@@ -1134,6 +1142,118 @@ describe('createHostedTurnHandoff', () => {
       expect(readSessionTranscript(reopened, session.id)).toMatchObject({ version: 0, status: 'commit_uncertain', messages: [] })
       expect(claimSessionExecution(reopened, { sessionId: session.id, turnId: 'retry-after-restart', ownerId: 'new-process' }))
         .toMatchObject({ acquired: false, reason: 'blocked' })
+    } finally {
+      reopened.close()
+      temp.cleanup()
+    }
+  })
+
+  it('拒绝已换代 execution lease 的 terminal participant，不得提交 History 或推进新 owner claim', async () => {
+    const temp = createTempDatabase('hosted-terminal-stale-lease-')
+    const db = temp.db
+    const session = createSession(db, { name: 'terminal-stale-lease', model: 'model' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    const first = claimSessionExecution(db, { sessionId: session.id, turnId: 'stale-lease-turn', ownerId: 'old-owner' })
+    if (!first.acquired) throw new Error('test setup could not claim old execution owner')
+    const staleLease = { sessionId: session.id, turnId: 'stale-lease-turn', ownerId: 'old-owner', generation: first.generation }
+    expect(releaseSessionExecution(db, staleLease)).toBe(true)
+    const replacement = claimSessionExecution(db, { sessionId: session.id, turnId: 'stale-lease-turn', ownerId: 'new-owner' })
+    if (!replacement.acquired) throw new Error('test setup could not claim replacement execution owner')
+    const terminal: HistoryEvent = { invocationId: 'stale-lease-invocation', turnId: staleLease.turnId, sequence: 1,
+      schemaVersion: 1, eventId: 'stale-lease-terminal-event', idempotencyKey: 'stale-lease-terminal-event',
+      kind: 'invocation-completed', payload: { status: 'completed' } }
+
+    const transcriptCommit: SessionTranscriptCommitIntent = {
+      sessionId: session.id, baseVersion: 0, outcome: 'completed', messages: [{ role: 'assistant', content: 'stale result' }],
+      executionLease: staleLease
+    }
+    await expect(history.appendBatch([terminal], 0, transcriptCommit)).rejects.toThrow('SESSION_EXECUTION_CLAIM_FENCED')
+
+    expect((await history.read('stale-lease-invocation')).events).toEqual([])
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(session.id))
+      .toEqual({ count: 0 })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get(session.id))
+      .toEqual({ count: 0 })
+    expect(getDbConnection(db).prepare('SELECT owner_id,generation,status FROM session_execution_claims WHERE session_id=?').get(session.id))
+      .toEqual({ owner_id: 'new-owner', generation: replacement.generation, status: 'claimed' })
+    db.close()
+    temp.cleanup()
+  })
+
+  it('Hosted terminal participant commit acknowledgement 丢失后重启按 durable receipt 对账且不重复提交', async () => {
+    const temp = createTempDatabase('hosted-terminal-commit-unknown-')
+    const db = temp.db
+    const session = createSession(db, { name: 'terminal-commit-unknown', model: 'model' })
+    const conn = getDbConnection(db)
+    let loseCommitAcknowledgement = true
+    const uncertainConn = {
+      prepare: conn.prepare.bind(conn),
+      exec(sql: string) {
+        conn.exec(sql)
+        if (sql === 'COMMIT' && loseCommitAcknowledgement) {
+          loseCommitAcknowledgement = false
+          throw new Error('terminal commit acknowledgement lost')
+        }
+      }
+    } as unknown as DatabaseSync
+    const history = new SqliteAgentHistory(uncertainConn, 1, Date.now, session.id)
+    const appendHistory = vi.spyOn(history, 'appendBatch')
+    const storage = createSqliteSessionStorage(db)
+    const user = { id: 'commit-unknown-user', role: 'user' as const, content: 'accepted exactly once' }
+    const assistant = { id: 'commit-unknown-assistant', role: 'assistant' as const, content: 'durable sidecar answer '.repeat(4_000) }
+    const outputText = 'durable terminal sidecar output '.repeat(4_000)
+    let hostedHistory: HistoryPort | undefined
+    mockRunHostedAgentTurn.mockImplementationOnce(async ({ invocationId }: { invocationId: string }) => {
+      await hostedHistory!.appendBatch([{
+        invocationId, turnId: 'commit-unknown-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'commit-unknown-terminal', idempotencyKey: 'commit-unknown-terminal', kind: 'invocation-completed',
+        payload: { status: 'completed', outputText }
+      }], 0, { sessionId: session.id, baseVersion: 0, outcome: 'completed', messages: [user, assistant] })
+      return { text: assistant.content, modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1 }, messages: [user, assistant] }
+    })
+    const handoff = createComposedHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: ({ hostHistory }) => {
+        hostedHistory = hostHistory
+        return { host: {}, dispose: async () => undefined }
+      } },
+      history, invocationId: 'commit-unknown-invocation', turnId: 'commit-unknown-turn', routeId: 'route', sessionId: session.id,
+      sessionQueries: storage.queries, sessionExecution: storage.execution
+    })
+
+    await expect(handoff({ request: { messages: [user] }, requiredUserMessage: { id: user.id, message: user } }))
+      .rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'commit-uncertain' })
+    const terminalCommit = appendHistory.mock.calls.find(([, , transcriptCommit]) => transcriptCommit !== undefined)?.[2]
+    expect(terminalCommit?.executionLease).toMatchObject({ sessionId: session.id, turnId: 'commit-unknown-turn', ownerId: expect.any(String), generation: 1 })
+    expect(mockRunHostedAgentTurn).toHaveBeenCalledOnce()
+    expect((await history.read('commit-unknown-invocation')).events).toHaveLength(1)
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 1, lastTurnId: 'commit-unknown-turn', status: 'commit_uncertain' })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'commit-unknown-turn')).toEqual({ count: 1 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'commit-unknown-turn')).toEqual({ count: 1 })
+    const terminalPayload = JSON.parse(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
+      .get('commit-unknown-terminal')!.payload_json as string) as { outputText: { __spaceassistant_spill_v1: { locator: string } } }
+    const transcriptPayload = JSON.parse(conn.prepare('SELECT messages_json FROM session_transcript_entries WHERE session_id=?')
+      .get(session.id)!.messages_json as string) as { __spaceassistant_session_transcript_spill_v1: { locator: string } }
+    const committedLocators = [terminalPayload.outputText.__spaceassistant_spill_v1.locator,
+      transcriptPayload.__spaceassistant_session_transcript_spill_v1.locator]
+    expect(new Set(committedLocators).size).toBe(2)
+    expect(readCanonicalSpillReferences(conn).referencedLocators).toEqual(new Set(committedLocators))
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    expect((await fs.readdir(spillRoot)).sort()).toEqual([...committedLocators].sort())
+    db.close()
+
+    const reopened = openDatabase(temp.dbPath)
+    try {
+      expect(reconcileStartupSessionTranscripts(reopened, { historyRecoverySucceeded: true, turnCoordinatorRecoverySucceeded: true }, 10_000))
+        .toMatchObject({ reconciled: 1 })
+      expect(readSessionTranscript(reopened, session.id)).toMatchObject({ version: 1, lastTurnId: 'commit-unknown-turn', status: 'ready', messages: [user, assistant] })
+      expect((await new SqliteAgentHistory(getDbConnection(reopened), 1, Date.now, session.id).readCompletedInvocationForSession('commit-unknown-invocation', session.id))?.outputText)
+        .toBe(outputText)
+      expect(await reconcileSpillOrphansAgainstCanonicalHistory(createSpillStore(spillRoot), getDbConnection(reopened))).toEqual([])
+      expect(claimSessionExecution(reopened, { sessionId: session.id, turnId: 'next-turn-after-reconcile', ownerId: 'new-process' }))
+        .toMatchObject({ acquired: true })
+      expect(mockRunHostedAgentTurn).toHaveBeenCalledOnce()
     } finally {
       reopened.close()
       temp.cleanup()

@@ -16,7 +16,7 @@ import { assertValidOptionalAnthropicBaseUrl } from '../claudeRequestGuards'
 import { clearDecisionCacheOnSessionDelete } from '../confirmation/cacheMaintenanceHooks'
 import { clearSessionToolResources } from '../toolChatLoop'
 import { dialectRetryBreaker } from '../shell/dialectRetryBreaker'
-import { deleteSessionUsage, getConfigValue, getSessionUsage, setSessionUsage } from '../database'
+import { getConfigValue } from '../database'
 import { deleteSessionChatAttachmentsWithRetry } from '../chatAttachmentManager'
 import { isRemoteAgentRunning } from '../remote/remoteAgentRegistry'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -28,14 +28,12 @@ import { probeReadPathFact } from '../confirmation/extractors/readPathFacts'
 import os from 'node:os'
 import { withSessionContextCompactionLock, registerSessionCompactionAdmissionBlocker } from '../sessionCompactionLock'
 import { compactSessionContext } from '../sessionContextCompaction'
-import { hasActiveTurn } from '../database'
 import { resolveWorkDirForSession } from '../workDirManager'
 import { readStoredModels } from '../llmServiceResolver'
 import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { summarizeSessionContext } from '../sessionContextSummary'
 import { resolveModelContextWindow } from '../../src/shared/llmModelConfig'
 import { readAppLocale } from './ipcShared'
-import { getSessionEventSink, readCompactionReplay } from '../sessionEvents'
 import { bindSessionStorageContextPort } from '../sessionStorage/contextPortRegistry'
 import { createBoundSessionContextAdapter } from '../sessionStorage/contextPortRegistry'
 import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
@@ -61,9 +59,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const workDir = resolveWorkDirForSession(sessionQueries, sessionId,
       () => ctx.workDirManager.listProfiles(), () => ctx.workDirManager.getActiveProfileId(), () => ctx.workDirManager.getActiveWorkDir())
     if (!workDir) return []
-    if (sessionStorage.ensureLedgerReady && !(await sessionStorage.ensureLedgerReady(sessionId))) throw new Error('SESSION_LEDGER_BLOCKED')
-    const sink = getSessionEventSink(workDir.workDir, session.id, session.createdAt)
-    const replay = await readCompactionReplay(sink.eventsPath)
+    const replay = await sessionStorage.readCompactionReplay({ sessionId, workDir: workDir.workDir })
     return replay.committed.flatMap(({ compactionId, start, summary, end }) => {
       const windowId = [end, summary, start].map((item) => item.payload.windowId).find((value): value is string => typeof value === 'string')
       const outputSurfaceFingerprint = end.payload.outputSurfaceFingerprint
@@ -79,8 +75,9 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     if (!session) return { status: 'session-not-found' as const }
     if (!isDesktopSession(session)) return { status: 'forbidden' as const }
     const locked = await withSessionContextCompactionLock(sessionId, async () => {
-      const busy = () => hasActiveTurn(ctx.db, sessionId) || Boolean(ctx.turnRuntime?.coordinator.listActive(sessionId).length) || isRemoteAgentRunning(sessionId)
+      const busy = () => sessionStorage.execution.hasActiveTurn(sessionId) || Boolean(ctx.turnRuntime?.coordinator.listActive(sessionId).length) || isRemoteAgentRunning(sessionId)
       if (busy()) return { status: 'busy' as const }
+      await sessionStorage.ensureChatBodyV1?.({ sessionId })
       const baseline = sessionQueries.readApiBaseline({ sessionId, limit: 500 })
       const initialMessages = baseline.entries.map((entry) => entry.message)
       if (initialMessages.length < 3) return { status: 'no-op' as const }
@@ -171,7 +168,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('session:list', (): Session[] => {
     const profileId = ctx.workDirManager.getActiveProfileId()
     // 偏差 7：用户可见视图（排除 internal/hidden；section 分区行透传给渲染端分组）
-    return stripAllSessionsAndPersist(ctx.db, sessionQueries, { view: 'user-visible' }).filter((s) => {
+    return stripAllSessionsAndPersist(ctx.db, sessionCommands, sessionQueries, { view: 'user-visible' }).filter((s) => {
       if (!s.workDirProfileId) return false
       return s.workDirProfileId === profileId
     })
@@ -208,7 +205,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('session:get', (_e, sessionId: string): Session | undefined => {
     const session = sessionQueries.readSession(sessionId)
     if (!session) return undefined
-    return stripSessionMetadataAndPersist(ctx.db, session)
+    return stripSessionMetadataAndPersist(sessionCommands, session)
   })
 
   ipcMain.handle(
@@ -218,7 +215,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       if (!sessionId) return undefined
       const baseUrlRaw = getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? undefined
       const baseUrl = assertValidOptionalAnthropicBaseUrl(baseUrlRaw)
-      const next = scheduleSessionTitleOpenBackfillIfNeeded({
+      const next = await scheduleSessionTitleOpenBackfillIfNeeded({
         db: ctx.db,
         sessionStorage,
         onTitleGenerated: (session) => event.sender.send('session:title-generated', { session }),
@@ -327,18 +324,18 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle(
     'usage:set',
     (_e, payload: { sessionId: string; usage: import('../../src/shared/sessionUsage').SessionUsage }): void => {
-      setSessionUsage(ctx.db, payload.sessionId, payload.usage)
+      sessionCommands.setSessionUsage(payload.sessionId, payload.usage)
     }
   )
 
   ipcMain.handle(
     'usage:get',
     (_e, sessionId: string): import('../../src/shared/sessionUsage').SessionUsage | undefined =>
-      getSessionUsage(ctx.db, sessionId)
+      sessionQueries.readSessionUsage(sessionId)
   )
 
   ipcMain.handle('usage:delete', (_e, sessionId: string): void => {
-    deleteSessionUsage(ctx.db, sessionId)
+    sessionCommands.deleteSessionUsage(sessionId)
     ctx.db.save()
   })
 

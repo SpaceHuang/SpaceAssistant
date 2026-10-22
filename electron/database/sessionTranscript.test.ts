@@ -3,6 +3,8 @@ import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { openDatabase } from './index'
 import { commitSessionTranscript, claimSessionExecution, releaseSessionExecution, readSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, reconcileCommittedSessionTranscripts, reconcileUncertainSessionTranscript } from './sessionTranscript'
+import { commitSessionTranscriptInTransaction } from './sessionTranscript'
+import { TransactionCommitUnknownError } from './transaction'
 
 describe('session transcript checkpoint and execution claim', () => {
   it('commits by session/turn idempotently and rejects stale base versions', () => {
@@ -40,6 +42,36 @@ describe('session transcript checkpoint and execution claim', () => {
 
     reopened.close()
     temp.cleanup()
+  })
+
+  it('reconciles a lost COMMIT acknowledgement by reading the durable receipt and retrying idempotently', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    let loseCommitAcknowledgement = true
+    const uncertainConn = {
+      prepare: conn.prepare.bind(conn),
+      exec(sql: string) {
+        conn.exec(sql)
+        if (sql === 'COMMIT' && loseCommitAcknowledgement) {
+          loseCommitAcknowledgement = false
+          throw new Error('commit acknowledgement lost after durable commit')
+        }
+      }
+    } as unknown as typeof conn
+    const input = {
+      sessionId: 'commit-unknown-session', turnId: 'commit-unknown-turn', baseVersion: 0,
+      outcome: 'completed' as const, messages: [{ role: 'user' as const, content: 'durably committed once' }]
+    }
+
+    expect(() => commitSessionTranscriptInTransaction(uncertainConn, input)).toThrow(TransactionCommitUnknownError)
+    expect(readSessionTranscript(db, input.sessionId)).toMatchObject({ version: 1, status: 'ready', lastTurnId: input.turnId, messages: input.messages })
+    expect(commitSessionTranscript(db, input)).toEqual({ committed: true, version: 1 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+      .get(input.sessionId, input.turnId)).toEqual({ count: 1 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?')
+      .get(input.sessionId, input.turnId)).toEqual({ count: 1 })
+    expect(readSessionTranscript(db, input.sessionId)).toMatchObject({ version: 1, status: 'ready', lastTurnId: input.turnId })
+    db.close()
   })
 
   it('persists a compact commit receipt with the session CAS result', () => {
@@ -126,6 +158,56 @@ describe('session transcript checkpoint and execution claim', () => {
     expect(claimSessionExecution(db, { sessionId: 'commit-owner', turnId: 'turn-2', ownerId: 'process-2' })).toMatchObject({ acquired: false, reason: 'owned' })
     expect(releaseSessionExecution(db, { sessionId: 'commit-owner', turnId: 'turn-1', ownerId: 'process-1', generation: 1 })).toBe(true)
     expect(claimSessionExecution(db, { sessionId: 'commit-owner', turnId: 'turn-2', ownerId: 'process-2' })).toMatchObject({ acquired: true, generation: 2 })
+    db.close()
+  })
+
+  it('拒绝 claim 与 queue 的 execution lease 身份不一致，且不写 transcript 或 receipt', () => {
+    const db = createMemoryAppDb()
+    const owner = claimSessionExecution(db, { sessionId: 'commit-lease-mismatch', turnId: 'turn-1', ownerId: 'process-1' })
+    if (!owner.acquired) throw new Error('test setup could not claim execution')
+    const conn = getDbConnection(db)
+    conn.prepare(`UPDATE session_execution_queue SET owner_id='replacement-owner' WHERE session_id=? AND turn_id=?`)
+      .run('commit-lease-mismatch', 'turn-1')
+
+    expect(() => commitSessionTranscript(db, {
+      sessionId: 'commit-lease-mismatch', turnId: 'turn-1', baseVersion: 0, outcome: 'completed',
+      messages: [{ role: 'assistant', content: 'must not commit' }],
+      executionLease: { sessionId: 'commit-lease-mismatch', turnId: 'turn-1', ownerId: 'process-1', generation: owner.generation }
+    })).toThrow('SESSION_EXECUTION_CLAIM_FENCED')
+
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get('commit-lease-mismatch'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get('commit-lease-mismatch'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT owner_id,generation,status FROM session_execution_claims WHERE session_id=?').get('commit-lease-mismatch'))
+      .toEqual({ owner_id: 'process-1', generation: owner.generation, status: 'claimed' })
+    expect(conn.prepare('SELECT owner_id,generation,status FROM session_execution_queue WHERE session_id=? AND turn_id=?')
+      .get('commit-lease-mismatch', 'turn-1')).toEqual({ owner_id: 'replacement-owner', generation: owner.generation, status: 'claimed' })
+    db.close()
+  })
+
+  it('拒绝 claim 与 queue 的 live status 不一致，且不写 transcript 或 receipt', () => {
+    const db = createMemoryAppDb()
+    const owner = claimSessionExecution(db, { sessionId: 'commit-lease-status-mismatch', turnId: 'turn-1', ownerId: 'process-1' })
+    if (!owner.acquired) throw new Error('test setup could not claim execution')
+    const conn = getDbConnection(db)
+    conn.prepare(`UPDATE session_execution_queue SET status='executing' WHERE session_id=? AND turn_id=?`)
+      .run('commit-lease-status-mismatch', 'turn-1')
+
+    expect(() => commitSessionTranscript(db, {
+      sessionId: 'commit-lease-status-mismatch', turnId: 'turn-1', baseVersion: 0, outcome: 'completed',
+      messages: [{ role: 'assistant', content: 'must not commit' }],
+      executionLease: { sessionId: 'commit-lease-status-mismatch', turnId: 'turn-1', ownerId: 'process-1', generation: owner.generation }
+    })).toThrow('SESSION_EXECUTION_CLAIM_FENCED')
+
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get('commit-lease-status-mismatch'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get('commit-lease-status-mismatch'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('commit-lease-status-mismatch'))
+      .toEqual({ status: 'claimed' })
+    expect(conn.prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?')
+      .get('commit-lease-status-mismatch', 'turn-1')).toEqual({ status: 'executing' })
     db.close()
   })
 

@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
+import { createMemoryAppDb } from './database/testHelpers'
 
 const mockFs = vi.hoisted(() => ({
   writeFile: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
@@ -27,7 +28,6 @@ vi.mock('./database', () => ({
   listPersistedTurns: vi.fn(() => []),
   createSession: vi.fn(),
   getSession: vi.fn(),
-  getTurnByRequestId: vi.fn(),
   getPersistedTurn: vi.fn(),
   setPersistedTurnExecutionConfig: vi.fn(() => true),
   failConfiguringTurn: vi.fn(() => true),
@@ -41,8 +41,6 @@ vi.mock('./database', () => ({
   updateMessageContent: vi.fn(),
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
-  appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => []),
   getDbConnection: vi.fn(() => ({})),
 }))
 
@@ -109,7 +107,7 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 
 function makeCtx(): AppIpcContext {
   return {
-    db: {} as AppIpcContext['db'],
+    db: TEST_DB,
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),
@@ -129,6 +127,9 @@ function makeCtx(): AppIpcContext {
     })
   }
 }
+
+const TEST_DB = createMemoryAppDb()
+afterAll(() => TEST_DB.close())
 
 describe('skill install IPC handlers', () => {
   let ipc: ReturnType<typeof mockIpcMain>

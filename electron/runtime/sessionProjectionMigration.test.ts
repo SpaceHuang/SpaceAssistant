@@ -9,6 +9,7 @@ import * as projectionModule from './sessionTranscriptProjection'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
 import { resolveImSession } from '../remote/imSessionResolver'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { hasCurrentProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 import {
   getSessionProjectionMigrationRun,
   listLegacyRequiredSessionProjections,
@@ -33,9 +34,9 @@ async function addEligibleSession(db: ReturnType<typeof createMemoryAppDb>, name
 }
 
 function connHasRow(db: ReturnType<typeof createMemoryAppDb>, table: string, sessionId: string): boolean {
-  const safeTable = table === 'canonical_session_projection_cache' || table === 'canonical_session_projection_eligibility'
-    ? table : (() => { throw new Error(`unexpected table ${table}`) })()
-  return getDbConnection(db).prepare(`SELECT 1 FROM ${safeTable} WHERE session_id=?`).get(sessionId) !== undefined
+  if (table === 'canonical_session_projection_eligibility') return hasCurrentProjectionEligibility(db, sessionId)
+  if (table !== 'canonical_session_projection_cache') throw new Error(`unexpected table ${table}`)
+  return getDbConnection(db).prepare(`SELECT 1 FROM ${table} WHERE session_id=?`).get(sessionId) !== undefined
 }
 
 async function appendSessionContext(db: ReturnType<typeof createMemoryAppDb>, sessionId: string, message: { id: string; role: 'user'; content: string; timestamp: number }) {
@@ -152,7 +153,7 @@ describe('session projection migration worker', () => {
       expect(reader).not.toHaveBeenCalled()
       // P1-①：写路径在 append 事务内授予的 eligibility 不受 fence 影响（scope UPDATE 无清除
       // 触发器）；fence 的实质保证是 reader 不被调用 + item 保持 retry 待重新入队。
-      expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toEqual({ count: 1 })
+      expect(hasCurrentProjectionEligibility(db, session.id)).toBe(false)
       expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id)).toBeUndefined()
       expect(conn.prepare('SELECT status,error,attempts FROM session_projection_migration_items WHERE run_id=? AND session_id=?')
         .get(run.runId, session.id)).toMatchObject({ status: 'pending', error: 'session-scope-changed:internal/hidden', attempts: 0 })
@@ -183,7 +184,7 @@ describe('session projection migration worker', () => {
       expect(conn.prepare('SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?').get(session.id, 'transcript')).toBeUndefined()
       // P1-①：写路径授予的 eligibility 在 certification 失败后保持原状（fence 不做清除，
       // scope 变更由 retry 队列消费）。
-      expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toEqual({ count: 1 })
+      expect(hasCurrentProjectionEligibility(db, session.id)).toBe(false)
     } finally {
       vi.restoreAllMocks()
       db.close()
@@ -245,8 +246,9 @@ describe('session projection migration worker', () => {
     for (const session of [remote, automation]) {
       expect(getDbConnection(db).prepare('SELECT ownership,visibility,metadata FROM sessions WHERE id=?').get(session.id))
         .toEqual(beforeMetadata.get(session.id))
-      expect(getDbConnection(db).prepare('SELECT session_generation FROM canonical_session_projection_eligibility WHERE session_id=?')
-        .get(session.id)).toMatchObject({ session_generation: session.generation })
+      expect(getDbConnection(db).prepare(`SELECT status FROM session_projection_state WHERE session_id=?
+        AND scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D'`).get(session.id))
+        .toMatchObject({ status: 'valid' })
     }
     const resolver = await resolveImSession({
       sessionQueries: createSqliteSessionStorage(db).queries, config: { remoteSessionIdleMinutes: 10 }, defaultModel: 'test', channel: 'feishu', identityKey: 'chat-worker',

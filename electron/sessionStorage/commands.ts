@@ -1,11 +1,13 @@
 import type { AppDatabase } from '../database/sqliteStore'
-import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getSession, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession } from '../database/operations'
+import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getSession, reorderQueuedUserMessages, updateQueuedUserMessageContent, updateSession, setSessionUsage, deleteSessionUsage } from '../database/operations'
 import { updateMessageContent } from '../database/operations'
-import { getDbConnection } from '../database'
+import { getDbConnection } from '../database/sqliteStore'
 import { getProjectedMessage } from '../runtime/sessionTranscriptProjection'
 import { writeCanonicalBackedMessageContent } from '../runtime/sessionContentWriteAuthority'
 import { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED, SESSION_META_TITLE_USER_CUSTOM } from '../sessionMetadataKeys'
-import type { SessionCommands } from './contracts'
+import type { SessionCommands } from './public/ports'
+import type { SessionUsage } from '../../src/shared/sessionUsage'
+import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../../src/shared/planTypes'
 
 export function createSessionCommands(db: AppDatabase): SessionCommands {
   const commands: SessionCommands = {
@@ -26,6 +28,13 @@ export function createSessionCommands(db: AppDatabase): SessionCommands {
     updateSettings: ({ sessionId, ...settings }) => {
       if (!getSession(db, sessionId)) return undefined
       return updateSession(db, sessionId, settings)
+    },
+    setSessionUsage: (sessionId, usage) => setSessionUsage(db, sessionId, usage),
+    deleteSessionUsage: (sessionId) => deleteSessionUsage(db, sessionId),
+    stripLegacyPlanMetadata: (sessionId) => {
+      const current = getSession(db, sessionId)
+      if (!current || !hasPlanMetadataKeys(current.metadata)) return current
+      return updateSession(db, sessionId, { metadata: stripPlanFieldsFromSessionMetadata(current.metadata) })
     },
     updateUserMetadata: (sessionId, metadataPatch) => {
       const current = getSession(db, sessionId)

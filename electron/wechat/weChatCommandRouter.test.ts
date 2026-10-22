@@ -1,3 +1,4 @@
+import { getTurnByRequestId } from '../database/operations'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import type { AppDatabase } from '../database'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
@@ -10,8 +11,9 @@ import fs from 'fs/promises'
 import fsSync from 'fs'
 import os from 'os'
 import path from 'path'
-import { openDatabase, createSession, getConfigValue, setConfigValue, getPersistedTurn, getSession, getTurnByRequestId, createPersistedTurn, appendMessage as mockedAppendMessage } from '../database'
-import { appendMessage as appendMessageOperation } from '../database/operations'
+import { createSession, getPersistedTurn, getSession, createPersistedTurn } from '../database/operations'
+import { openDatabase, getConfigValue, setConfigValue } from '../database'
+import { appendMessage } from '../database/operations'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TurnRuntime } from '../turnRuntime'
@@ -74,7 +76,6 @@ vi.mock('../database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../database')>()
   return {
     ...actual,
-    appendMessage: vi.fn(),
     updateMessageContent: vi.fn()
   }
 })
@@ -197,7 +198,6 @@ describe('WeChatCommandRouter', () => {
   })
 
   afterEach(() => {
-    mockedAppendMessage.mockReset()
     resetRunningRemoteAgentRegistryForTests()
     closeDb?.()
     if (tmpDir && fsSync.existsSync(tmpDir)) {
@@ -368,7 +368,7 @@ describe('WeChatCommandRouter', () => {
       channelMessageId: 'orphan-wechat-message', content: '上次中断的指令', contextToken: 'orphan-context' })
     let turnSequence = 0
     const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `orphan-wechat-turn-${++turnSequence}` } })
-    appendMessageOperation(db, { id: 'orphan-wechat-assistant', sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })
+    appendMessage(db, { id: 'orphan-wechat-assistant', sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })
     createPersistedTurn(db, { turnId: 'orphan-wechat-turn-existing', requestId: `wake:${orphan.eventId}`, sessionId,
       assistantMessageId: 'orphan-wechat-assistant', userMessageId: orphan.messageId, state: 'prepared' })
     getDbConnection(db).prepare("UPDATE messages SET status='sent' WHERE id=?").run(orphan.messageId)
@@ -410,7 +410,6 @@ describe('WeChatCommandRouter', () => {
   })
 
   it('recovers an unfinished deferred completion turn and does not replay it', async () => {
-    mockedAppendMessage.mockImplementation((_db, message) => appendMessageOperation(db, message as never))
     const session = getSession(db, sessionId)!
     const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'completion-context' } }
     getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
@@ -794,7 +793,7 @@ describe('WeChatCommandRouter', () => {
       channelMessageId: 'prepared-recovery-platform-message', content: '恢复原 accepted turn', contextToken: 'prepared-recovery-context' })
     const frozenConfig = { lane: 'wechat' as const, model: TEST_MODEL_NAME, llmServiceId: TEST_SERVICE_ID,
       thinkingEffort: 'low' as const, maximumContextTrusted: true, enableThinking: false }
-    appendMessageOperation(db, { id: 'prepared-recovery-assistant', sessionId, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    appendMessage(db, { id: 'prepared-recovery-assistant', sessionId, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
     createPersistedTurn(db, { turnId: 'prepared-recovery-turn', requestId: `wake:${inbox.eventId}`, sessionId,
       userMessageId: inbox.messageId, assistantMessageId: 'prepared-recovery-assistant', state: 'prepared',
       startToken: 'prepared-recovery-token', executionConfig: frozenConfig })
@@ -940,7 +939,7 @@ describe('WeChatCommandRouter', () => {
     getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
     const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
       channelMessageId: 'terminal-transcript-failure-message', content: '这条请求曾因历史状态异常失败', contextToken: 'blocked-context' })
-    appendMessageOperation(db, { id: 'failed-assistant-message', sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'failed' })
+    appendMessage(db, { id: 'failed-assistant-message', sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'failed' })
     createPersistedTurn(db, { turnId: 'terminal-transcript-failure-turn', requestId: `wake:${inbox.eventId}`, sessionId,
       userMessageId: inbox.messageId, assistantMessageId: 'failed-assistant-message', state: 'terminal', outcome: 'failed',
       error: { code: 'source-failed', message: 'SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED' } })

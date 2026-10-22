@@ -27,6 +27,29 @@ export class CanonicalFakeProvider implements ModelProvider {
   }
 }
 
+/** Reusable provider for host behavior tests that need to compare several actual model requests. */
+export class RecordingModelProvider implements ModelProvider {
+  readonly providerId = 'recording-model-provider'
+  readonly calls: PreparedModelCall[] = []
+
+  constructor(private readonly fixture: readonly StreamChunk[]) {}
+
+  async *stream(call: PreparedModelCall): AsyncIterable<StreamChunk> {
+    const snapshot: PreparedModelCall = Object.freeze({
+      route: Object.freeze(structuredClone(call.route)),
+      request: Object.freeze({
+        ...structuredClone(call.request),
+        messages: deepFreeze(structuredClone(call.request.messages))
+      })
+    })
+    this.calls.push(snapshot)
+    for (const chunk of this.fixture) {
+      if (call.request.signal?.aborted) throw new Error('fake stream aborted')
+      yield structuredClone(chunk)
+    }
+  }
+}
+
 /** Explicit canonical fake fixtures for both OpenAI protocols; no wire parser is involved. */
 export function createOpenAiProtocolFixtures(): Readonly<Record<'openai-chat-completions' | 'openai-responses', readonly StreamChunk[]>> {
   return Object.freeze({

@@ -16,6 +16,7 @@ import type { Worker } from 'node:worker_threads'
 import { COMPACT_SNAPSHOT_RETRY_LIMIT, reconcileInterruptedCompaction } from './sessionStorageMaintenance'
 import { spawnSessionMaintenanceSourceWorker } from './sessionStorageMaintenanceWorkerClient'
 import { activeSessionTurnCount, compactSessionDatabase, FULL_VACUUM_FREELIST_RATIO, verifySessionMaintenanceArchive } from './sessionStorageMaintenance'
+import { sqlActiveTurnPredicate } from '../sessionStorage/domain/turnState'
 import type { StorageMaintenanceProgress } from './sessionStorageMaintenance'
 import { pruneSessionArchives } from './sessionArchiveRetention'
 import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
@@ -91,13 +92,17 @@ describe('session storage maintenance', () => {
       VALUES('s','s','m',0.7,1,1,1,'{}','{}',1,'g')`).run()
     conn.exec(`INSERT INTO canonical_session_projection_cache(session_id,cache_key,cache_version,session_generation,session_seq,commit_order,watermark_event_id,watermark_invocation_id,event_count,value,updated_at)
       VALUES('s','transcript',1,'g',-1,-1,NULL,NULL,0,'[]',1);
-      INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES('s','g',1);
       INSERT INTO canonical_projection_repairs(repair_id,session_id,invocation_id,repair_kind,target_key,status,attempts,idempotency_key,updated_at)
       VALUES('r','s','i','invocation-projections','i','pending',0,'r',1);`)
+    conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
+      message_revision,payload_generation,payload_digest,validated_range_json,updated_at)
+      VALUES('s','transcriptParityV1','g','valid','{}',0,'payload','digest','{}',1)`).run()
 
     expect(clearSessionProjectionCaches(temp.db)).toEqual({ cacheRows: 1, eligibilityRows: 1 })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_cache').get()).toEqual({ count: 0 })
-    expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility').get()).toEqual({ count: 0 })
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_eligibility'").get()).toBeUndefined()
+    expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?')
+      .get('s', 'transcriptParityV1')).toEqual({ status: 'invalid' })
     expect(conn.prepare('SELECT status FROM canonical_projection_repairs WHERE repair_id=?').get('r')).toEqual({ status: 'pending' })
     temp.cleanup()
   })
@@ -629,7 +634,7 @@ describe('activeSessionTurnCount 不变量(mulberry32 随机操作序列 + 跨�
         WHERE status IN ('claimed','executing','transcript_committed','commit_uncertain')`).get() as { c: number }).c),
       queue: Number((conn.prepare('SELECT COUNT(*) AS c FROM session_execution_queue').get() as { c: number }).c),
       turns: Number((conn.prepare(`SELECT COUNT(*) AS c FROM turns
-        WHERE state IN ('configuring','prepared','executing','waiting-confirm')`).get() as { c: number }).c),
+        WHERE ${sqlActiveTurnPredicate()}`).get() as { c: number }).c),
       messages: Number((conn.prepare(`SELECT COUNT(*) AS c FROM messages WHERE status IN ('queued','streaming')`).get() as { c: number }).c)
     })
     const expectInvariants = () => {
@@ -1007,7 +1012,7 @@ describe('worker compaction orchestration', () => {
     vi.stubEnv('SPACEASSISTANT_IN_PROCESS_COMPACT', '1')
     const inProcess = await compactSessionDatabase(temp.db, userDataDir, undefined, { createWorker: unusedWorker as never })
     expect(inProcess.executionTarget).toBe('in-process')
-    expect(inProcess.vacuumMode).toBe('none')
+    expect(inProcess.vacuumMode).toBe('full')
     expect(unusedWorker).not.toHaveBeenCalled()
     vi.unstubAllEnvs()
 

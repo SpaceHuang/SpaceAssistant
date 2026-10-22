@@ -2,7 +2,7 @@ import fs from 'fs'
 
 import type { WorkspaceSnapshot } from '../src/shared/agent/workspace'
 import { normalizeWorkspaceRoot, workspacePathKey } from '../src/shared/agent/workspace'
-import type { SessionQueries } from './sessionStorage/contracts'
+import type { SessionQueries } from './sessionStorage/public/ports'
 import type { WorkDirManager } from './workDirManager'
 import { resolveWorkDirForSession } from './workDirManager'
 

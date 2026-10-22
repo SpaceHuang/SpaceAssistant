@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { executeRemoteTurn } from './turnExecutionAdapter'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { createSession, getPersistedTurn } from '../database'
+import { createSession, getPersistedTurn } from '../database/operations'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { TurnRuntime } from '../turnRuntime'
 import { HostedTurnFinalizedError } from '../runtime/hostedTurnFinalization'

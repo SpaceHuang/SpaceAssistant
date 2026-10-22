@@ -1,16 +1,21 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { appendMessage, createSession } from '../database/operations'
-import { createMemoryAppDb } from '../database/testHelpers'
+import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
+import { openDatabase as openPersistentDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { computeLegacyProjectionDigest, getProjectionRejection } from './sessionProjectionRejection'
+import { computeLegacyProjectionDigest, getProjectionRejection, listProjectionRejectionWork, markProjectionRejectionStale } from './sessionProjectionRejection'
 import { runDueSessionProjectionRevalidations } from './sessionProjectionRevalidation'
 import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
+import { publishTranscriptParityProof, readLegacyProjectionMessages, refreshValidatedProjectionFastPath, validateAndCacheCanonicalProjection } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
+import { hasSessionProjectionEligibility } from './sessionTranscriptProjection'
 import { readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache } from './sessionTranscriptProjection'
+import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 /** Build a mismatched session: legacy holds [A, B] while canonical History folds to [A]. */
-async function createMismatchedSession(label: string) {
-  const db = createMemoryAppDb()
+async function createMismatchedSession(label: string, db = createMemoryAppDb()) {
   const session = createSession(db, { name: `${label} revalidation`, model: 'test' })
   const conn = getDbConnection(db)
   appendMessage(db, { id: `${label}-user-a`, sessionId: session.id, role: 'user', content: 'legacy-a', timestamp: 1, status: 'sent' })
@@ -25,6 +30,59 @@ async function createMismatchedSession(label: string) {
 }
 
 describe('background projection revalidation queue (P0-③/④)', () => {
+  it('reads legacy projection messages through the SQLite facts adapter', async () => {
+    const { db, session } = await createMismatchedSession('facts-adapter')
+    expect(readLegacyProjectionMessages(db, session.id)).toEqual([
+      expect.objectContaining({ id: 'facts-adapter-user-a', role: 'user', content: 'legacy-a' }),
+      expect.objectContaining({ id: 'facts-adapter-user-b', role: 'user', content: 'legacy-b' })
+    ])
+    db.close()
+  })
+
+  it('does not publish projection eligibility from generation alone', async () => {
+    const { db, session } = await createMismatchedSession('eligibility-adapter')
+    const scopeKey = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
+    getDbConnection(db).prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,updated_at)
+      VALUES(?,?,?,'invalid',1)`).run(session.id, scopeKey, session.generation)
+    expect(hasSessionProjectionEligibility(db, session.id)).toBe(false)
+    expect(hasSessionProjectionEligibility(db, session.id)).toBe(false)
+    db.close()
+  })
+
+  it('reuses only a matched, currently eligible canonical cache in the fast path adapter', async () => {
+    const { db, session, history } = await createMismatchedSession('fast-path-adapter')
+    expect(refreshValidatedProjectionFastPath(db, session.id)).toBe(false)
+    getDbConnection(db).prepare("DELETE FROM messages WHERE id='fast-path-adapter-user-b'").run()
+    const verified = history.readCanonicalSessionTranscript(session.id, [
+      { id: 'fast-path-adapter-user-a', role: 'user', content: 'legacy-a', timestamp: 1 }
+    ])
+    expect(verified.kind).toBe('matched')
+    if (verified.kind === 'matched') {
+      expect(history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })).toBe(true)
+      expect(publishTranscriptParityProof(db, session.id, verified, computeLegacyProjectionDigest([
+        { id: 'fast-path-adapter-user-a', role: 'user', content: 'legacy-a', timestamp: 1 }
+      ]))).toBe(true)
+    }
+    expect(refreshValidatedProjectionFastPath(db, session.id)).toBe(true)
+    db.close()
+  })
+
+  it('validates and caches canonical transcript through the SQLite facts adapter', async () => {
+    const { db, session } = await createMismatchedSession('validate-cache-adapter')
+    const legacyMessages = readLegacyProjectionMessages(db, session.id)
+    const mismatch = validateAndCacheCanonicalProjection(db, session.id, legacyMessages.map(({ id, role, content, timestamp }) => ({
+      id, role: role as 'user' | 'assistant', content, timestamp
+    })))
+    expect(mismatch.verified).toMatchObject({ kind: 'unavailable', reason: 'legacy-mismatch' })
+    expect(mismatch.cacheWritten).toBe(false)
+
+    getDbConnection(db).prepare("DELETE FROM messages WHERE id='validate-cache-adapter-user-b'").run()
+    const matched = validateAndCacheCanonicalProjection(db, session.id, readLegacyProjectionMessages(db, session.id))
+    expect(matched.verified.kind).toBe('matched')
+    expect(matched.cacheWritten).toBe(true)
+    db.close()
+  })
+
   it('clears the persisted verdict and restores eligibility when a revalidation matches', async () => {
     const { db, session } = await createMismatchedSession('recover')
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
@@ -179,6 +237,89 @@ describe('background projection revalidation queue (P0-③/④)', () => {
 })
 
 describe('production revalidation drain (review S1/S2)', () => {
+  it('queries only due or stale rejection work and respects the per-tick batch limit', async () => {
+    const { db, session: first } = await createMismatchedSession('bounded-first')
+    const { session: second } = await createMismatchedSession('bounded-second', db)
+    const { session: third } = await createMismatchedSession('bounded-third', db)
+    readSessionTranscriptProjection(db, first.id)
+    readSessionTranscriptProjection(db, second.id)
+    readSessionTranscriptProjection(db, third.id)
+    const firstRejection = getProjectionRejection(db, first.id)!
+    markProjectionRejectionStale(db, second.id)
+
+    expect(listProjectionRejectionWork(db, firstRejection.retryAfter - 1, 1)).toEqual([{ sessionId: second.id, stale: true }])
+    const due = listProjectionRejectionWork(db, firstRejection.retryAfter + 1, 1)
+    expect(due).toHaveLength(1)
+    expect([first.id, second.id, third.id]).toContain(due[0]?.sessionId)
+    db.close()
+  })
+
+  it('restores persisted rejection work after reopen and consumes it only when its backoff expires', async () => {
+    const temp = createTempDatabase('projection-revalidation-reopen-')
+    let db = temp.db
+    const { session } = await createMismatchedSession('reopen-drain', db)
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
+    const persisted = getProjectionRejection(db, session.id)!
+    db.close()
+    db = openPersistentDatabase(temp.dbPath)
+
+    const { startSessionProjectionRevalidationDrain } = await import('./sessionProjectionRevalidation')
+    let now = persisted.retryAfter - 1
+    const handle = startSessionProjectionRevalidationDrain(db, 5, () => now)
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(getProjectionRejection(db, session.id)?.attempts).toBe(1)
+      now = persisted.retryAfter + 1
+      await vi.waitFor(() => expect(getProjectionRejection(db, session.id)?.attempts).toBe(2), { timeout: 100 })
+    } finally {
+      handle.stop()
+      db.close()
+      await fs.rm(path.dirname(temp.dbPath), { recursive: true, force: true })
+    }
+  })
+
+  it('consumes already-due persisted rejection work immediately after startup', async () => {
+    const temp = createTempDatabase('projection-revalidation-startup-due-')
+    let db = temp.db
+    const { session } = await createMismatchedSession('startup-due', db)
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
+    const rejection = getProjectionRejection(db, session.id)!
+    db.close()
+    db = openPersistentDatabase(temp.dbPath)
+
+    const { startSessionProjectionRevalidationDrain } = await import('./sessionProjectionRevalidation')
+    const handle = startSessionProjectionRevalidationDrain(db, 60_000, () => rejection.retryAfter + 1)
+    try {
+      await vi.waitFor(() => expect(getProjectionRejection(db, session.id)?.attempts).toBe(2), { timeout: 200 })
+    } finally {
+      handle.stop()
+      db.close()
+      await fs.rm(path.dirname(temp.dbPath), { recursive: true, force: true })
+    }
+  })
+
+  it('restores stale rejection metadata as immediate work after reopen', async () => {
+    const temp = createTempDatabase('projection-revalidation-stale-reopen-')
+    let db = temp.db
+    const { session } = await createMismatchedSession('stale-reopen-drain', db)
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
+    const rejection = getProjectionRejection(db, session.id)!
+    markProjectionRejectionStale(db, session.id)
+    db.close()
+    db = openPersistentDatabase(temp.dbPath)
+
+    const { startSessionProjectionRevalidationDrain } = await import('./sessionProjectionRevalidation')
+    const handle = startSessionProjectionRevalidationDrain(db, 5, () => rejection.retryAfter - 1)
+    try {
+      await vi.waitFor(() => expect(getProjectionRejection(db, session.id)?.attempts).toBe(2), { timeout: 100 })
+      expect(getProjectionRejection(db, session.id)?.staleMetadata).toBe(false)
+    } finally {
+      handle.stop()
+      db.close()
+      await fs.rm(path.dirname(temp.dbPath), { recursive: true, force: true })
+    }
+  })
+
   it('recovers a healed session through the resident drain without anyone calling runDue directly', async () => {
     const { startSessionProjectionRevalidationDrain } = await import('./sessionProjectionRevalidation')
     const { db, session } = await createMismatchedSession('resident')

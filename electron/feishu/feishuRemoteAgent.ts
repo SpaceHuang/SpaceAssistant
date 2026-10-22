@@ -12,7 +12,7 @@ import { runImRemoteAgent } from '../remote/imRemoteAgent'
 import type { WorkDirManager } from '../workDirManager'
 import type { AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
-import type { SessionStorage } from '../sessionStorage/contracts'
+import type { SessionStorage } from '../sessionStorage/host/ports'
 
 export async function runFeishuRemoteAgent(ctx: {
   db: AppDatabase

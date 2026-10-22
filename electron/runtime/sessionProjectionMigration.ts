@@ -3,10 +3,12 @@ import { isDeepStrictEqual } from 'node:util'
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
+import { sqlActiveTurnPredicate } from '../sessionStorage/domain/turnState'
 import { buildSessionProjectionMigrationInventory, classifySessionProjectionMigrationScope, type SessionProjectionMigrationInventory, type SessionProjectionMigrationInventoryEntry } from './sessionProjectionMigrationInventory'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
 import { backfillLegacySessionProjectionBaseline } from './sessionProjectionLegacyBaseline'
+import { hasCurrentProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 
 export type SessionProjectionMigrationRun = Readonly<{
   runId: string
@@ -263,7 +265,7 @@ export function cancelSessionProjectionMigration(db: AppDatabase, runId: string,
 function hasActiveWork(db: AppDatabase, sessionId: string): boolean {
   return getDbConnection(db).prepare(`SELECT 1 FROM session_execution_claims WHERE session_id=?
     UNION ALL SELECT 1 FROM session_execution_queue WHERE session_id=? AND status IN ('queued','claimed','executing','transcript_committed','commit_uncertain')
-    UNION ALL SELECT 1 FROM turns WHERE session_id=? AND state NOT IN ('completed','failed','cancelled','interrupted')
+    UNION ALL SELECT 1 FROM turns WHERE session_id=? AND ${sqlActiveTurnPredicate()}
     UNION ALL SELECT 1 FROM messages WHERE session_id=? AND status IN ('queued','streaming') LIMIT 1`)
     .get(sessionId, sessionId, sessionId, sessionId) !== undefined
 }
@@ -347,12 +349,9 @@ async function processItem(db: AppDatabase, runId: string, item: ItemRow, now: n
           if (cache.kind !== 'matched' || persistedCache?.kind !== 'hit' || !isDeepStrictEqual(persistedValue, cache.messages)) {
             return { kind: 'retry' as const, reason: 'projection-cache-not-durable-or-current' }
           }
-          conn.prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at)
-            VALUES(?,?,?) ON CONFLICT(session_id) DO UPDATE SET session_generation=excluded.session_generation,validated_at=excluded.validated_at`)
-            .run(item.session_id, item.session_generation, now)
-          const eligibility = conn.prepare('SELECT session_generation FROM canonical_session_projection_eligibility WHERE session_id=?')
-            .get(item.session_id) as { session_generation: string } | undefined
-          return eligibility?.session_generation === item.session_generation
+          const writeMode = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
+            .get(item.session_id) as { write_mode: string } | undefined
+          return (writeMode?.write_mode === 'canonical' || hasCurrentProjectionEligibility(db, item.session_id))
             ? { kind: 'migrated' as const }
             : { kind: 'retry' as const, reason: 'projection-eligibility-not-durable-or-current' }
         })
