@@ -11,6 +11,7 @@ import type { PolicyAction } from '../../src/shared/confirmation/types'
 import { LEGACY_IM_POLICY_MIGRATION_VERSION } from '../../src/shared/policy/legacyPolicyMigration'
 import '../capabilities/registerBuiltinCapabilities'
 import { capabilityRegistry } from '../capabilities/registry'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 type PolicyLane = 'desktop' | 'wechat' | 'feishu'
 
@@ -88,7 +89,7 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
       else delete snapshot.legacyRuleResetIds
     } else if (change.kind === 'rule-reset') {
       if (typeof change.ruleId !== 'string' || !change.ruleId) throw new Error('POLICY_RULE_ID_INVALID')
-      if (!DEFAULT_POLICY_RULES.some((rule) => rule.id === change.ruleId && !rule.locked)) throw new Error('POLICY_RULE_IMMUTABLE')
+      if (!DEFAULT_POLICY_RULES.some((rule) => rule.id === change.ruleId)) throw new Error('POLICY_RULE_UNKNOWN')
       const overrides = snapshot.ruleOverrides && typeof snapshot.ruleOverrides === 'object' && !Array.isArray(snapshot.ruleOverrides)
         ? snapshot.ruleOverrides as Record<string, unknown> : {}
       delete overrides[change.ruleId]
@@ -99,14 +100,6 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
         resetIds.add(change.ruleId)
         snapshot.legacyRuleResetIds = [...resetIds]
       }
-    } else if (change.kind === 'rule-enabled') {
-      const rule = DEFAULT_POLICY_RULES.find((entry) => entry.id === change.ruleId)
-      if (!rule?.locked || rule.action !== 'deny' || typeof change.enabled !== 'boolean') throw new Error('POLICY_RULE_ENABLE_INVALID')
-      const disabled = new Set(Array.isArray(snapshot.disabledRuleIds)
-        ? snapshot.disabledRuleIds.filter((id): id is string => typeof id === 'string') : [])
-      if (change.enabled) disabled.delete(rule.id)
-      else disabled.add(rule.id)
-      snapshot.disabledRuleIds = [...disabled]
     } else if (change.kind === 'capability-permission') {
       if (typeof change.capabilityId !== 'string' || !capabilityRegistry.get(change.capabilityId)) throw new Error('POLICY_CAPABILITY_UNKNOWN')
       if (change.permission !== 'deny' && change.permission !== 'ask' && change.permission !== 'allow') throw new Error('POLICY_PERMISSION_INVALID')
@@ -122,7 +115,12 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
       updatedAt: Date.now(),
       eventId: `policy-ipc:${randomUUID()}`,
       eventKind: 'policy-snapshot-updated',
-      auditMetadata: { lane: request.lane, changeKind: change.kind }
+      auditMetadata: { lane: request.lane, changeKind: change.kind },
+      onCommitted: () => {
+        const runtime = getDefaultAgentRuntime()
+        runtime.policyAuthorizationChanges.publish('wechat')
+        runtime.policyAuthorizationChanges.publish('feishu')
+      }
     })
     return result
   })

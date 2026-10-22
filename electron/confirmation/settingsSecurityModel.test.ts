@@ -63,6 +63,13 @@ describe('toRuleViews（规则合并视图）', () => {
     expect(views[2]).toMatchObject({ id: 'automation-default-confirm', enabled: true, locked: true })
   })
 
+  it('显式 user override 的 locked deny 保持启用并展示 allow 动作', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [{ id: 'remote-shell-disabled', when: 'invocation' as const, action: 'deny' as const, locked: true, reason: 'r' }]
+    expect(toRuleViews(rules, [{ ruleId: 'remote-shell-disabled', action: 'allow' }])[0])
+      .toMatchObject({ action: 'allow', enabled: true, overridden: true })
+  })
+
   it('projects matched tools and explicit toolkit capability ids for settings display', async () => {
     const { toRuleViews } = await import('./settingsSecurityModel')
     const rules = [{

@@ -1,12 +1,12 @@
 # 自定义安全策略完整可配置执行计划
 
 - **日期：** 2026-10-22
-- **状态：** Phase 0–1 已关闭；Phase 2–5 源码实施与验收进行中；T10 外部验收未开始
+- **状态：** Phase 0–2 已关闭；Phase 3–5 源码实施与验收进行中；T10 外部验收未开始
 - **方案真源：** [自定义安全策略完整可配置开发计划](./custom-policy-full-control-development-plan.md)
 - **验收与不变量真源：** 方案 INV-01–INV-10；产品行为 AC-1–AC-22 以需求稿为准
 - **代码基线：** `109a938404124235d632e4cdbd4f9e06eaa48728`
 
-本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 合并集合 15 文件 / 255 项通过、Phase 2 合并集合 7 文件 / 73 项通过。T5 合并集合 8 文件 / 101 项通过；T6 派发屏障集合 7 文件 / 186 项通过；新增策略 revision ask/allow 重入测试与 SDK fresh-ask Hosted 用例通过。此前的 `typecheck:shared`、renderer typecheck、Electron noEmit、i18n/system invariant/agent-sdk checks 与 incremental build 曾通过；由于本轮又修改 Agent SDK recheck，Phase 3 阶段收尾需重新跑完整 type/build 门禁。Phase 4 T7 检查与 Phase 5 T9 仍待关闭。T8 旧 rule-enabled shim 目前仍存在，计划在 T8 迁移所有 caller 后删除。
+本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。T5 合并集合 8 文件 / 101 项通过；T6 派发屏障集合 7 文件 / 186 项通过；新增策略 revision ask/allow 重入测试与 SDK fresh-ask Hosted 用例通过。此前的 Electron noEmit、i18n/system invariant/agent-sdk checks 与 incremental build 曾通过；由于本轮又修改 Agent SDK recheck，Phase 3 阶段收尾需重新跑完整 type/build 门禁。Phase 4 T7 检查与 Phase 5 T9 仍待关闭。T8 旧 rule-enabled shim 目前仍存在，按计划待 T8 迁移所有 caller 后删除。
 
 本轮计划评审（2026-10-22）处理：B1 全规则覆盖及消费点、B4 T4/T7/T8 的兼容接口顺序；B2/B3/B5 分别在 T6/T5/T4 按最小范围补充。负责人确认 ingress 消息须经批准后才进入处理，exposure 对象须经批准后才暴露；这是本期必做能力，见需求 AC-21/AC-22。
 
@@ -220,17 +220,18 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
 
 **阶段输入：** Phase 1 shared contract；T4。**阶段产出：** desktop/IM 都以动作覆盖表达配置，存量旧停用状态幂等迁移。**允许改动：** stores/runtime、IPC、迁移与边界测试；T7 前暂时保留旧 renderer API 合同。**移除兼容：** 去除 runtime disabled filtering；旧 API 改为短期兼容 shim，直到 T7 迁移 caller、T8 才删除。**失败回退：** 事务/迁移失败保留旧数据；回滚时连同 shim 版本一起恢复。
 
-- [ ] **T4 · 迁移旧停用规则并收敛 desktop/IM 写入合同**
+- [x] **T4 · 迁移旧停用规则并收敛 desktop/IM 写入合同**
   - **目标文件：** `electron/confirmation/policyRulesRuntime.ts`、`policyRuleStore.ts`、`imPolicyStore.ts`、policy migration 模块、`electron/ipc/securityIpc.ts`、`policyIpc.ts`、`electron/preload.ts`、`src/shared/api.ts`；对应 stores、IPC、renderer caller 与迁移 tests。旧 preload/API 保留兼容映射。
   - **产物：** 按域迁移函数、旧数据 fixture、revision 写入契约、兼容 shim 和调用方契约测试、审计语义测试。
   - **完成判据：** desktop/IM disabled IDs 同迁移为 `allow` override 并在同一提交清除；重复运行幂等，冲突覆盖不丢失；事务失败回滚；reset 恢复默认；runtime 不再读取 disabled 状态；旧 `securitySetRuleEnabled`/`rule-enabled` 调用仍有有效 handler，暂映射为旧 disabled→allow、旧 enabled→reset default 的兼容语义；新 action API 强制 expectedRevision；旧 toggle shim 在主进程读取当前 revision 并用同一写入路径提交，保证旧 caller 有效，T7 迁移后由 T8 删除 shim。兼容 caller contract tests 覆盖旧界面动作写入与恢复默认两种路径，确认新 API 的 expectedRevision 要求不影响尚未迁移调用；策略保存成功由持久化提交决定，异步审计失败不得反向报告保存失败。审计正常路径记录 before/after 与迁移来源，不含正文。
   - **验证命令：** `npm exec vitest run electron/confirmation/policyRulesRuntime.test.ts electron/confirmation/policyRuleStore.test.ts electron/confirmation/imPolicyStore.test.ts electron/ipc/policyIpc.test.ts electron/appIpc.securityRules.test.ts src/shared/policy/legacyPolicyMigration.test.ts src/renderer/components/Config/ToolsSecuritySettingsTab.test.tsx`；并执行 renderer typecheck，确认兼容 shim 阶段旧 UI 的动作写入与恢复默认均可用。
-  - **环境 / 状态：** 本机 / 未开始；完成 AC-7–AC-10、AC-19–AC-20，INV-04、INV-07。
+  - **阶段证据：** 定向集合 9 files / 89 tests passed；shared 与 renderer typecheck 通过。迁移覆盖旧 desktop config 与 IM snapshot 的 disabled→allow 原子迁移、已存在 override、重复启动/回滚与未知状态；旧 preload/API shim 在 T4/T7 留存，测试了 disabled→allow、enabled→reset default。
+  - **环境 / 状态：** 本机 / 已完成；完成 AC-7–AC-10、AC-19–AC-20，INV-04、INV-07。
 
-- [ ] **Phase 2 关闭门槛**
+- [x] **Phase 2 关闭门槛**
   - **证据来源：** T4 migration fixtures（旧桌面配置、旧 IM snapshot、已存在 override、部分失败、重复启动）；transaction rollback 与 revision conflict 测试。
   - **完成判据：** 每种来源数据迁移后唯一动作状态确定；迁移失败不删除旧值、不写部分快照；所有 runtime 不再读 disabled ID 作为策略动作；未知字段不导致忽略整个有效 snapshot。
-  - **阶段收尾：** T4 定向集通过并完成阶段提交后关闭；当前测试结果见本轮执行记录，提交完成前不关闭此门槛。
+  - **阶段收尾证据：** T4 定向集与 migration/startup fixtures 通过；旧 desktop disabled API shim 在计划窗口内维持可用，持久化写入已改为动作覆盖，runtime 不再以 disabled ID 决策。Phase 2 源码与状态随本阶段提交关闭。
 
 ### Phase 3：策略版本与执行派发边界
 

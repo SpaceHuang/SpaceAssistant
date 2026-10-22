@@ -1,12 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { AppDatabase } from '../database'
-import { getConfigValue } from '../database'
-import { getDbConnection } from '../database'
-import { commitImPolicySnapshot, readImPolicySnapshot } from './imPolicyStore'
+import { getConfigValue, getDbConnection } from '../database'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot, readPolicyBehaviorSnapshot } from './imPolicyStore'
 import { LEGACY_IM_POLICY_MIGRATION_VERSION, planLegacyImPolicyMigration } from '../../src/shared/policy/legacyPolicyMigration'
 import { PolicyRuleStore } from './policyRuleStore'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
-import { readDisabledPolicyRuleIds, readPolicyPackages } from './policyRulesRuntime'
+import { readDisabledPolicyRuleIds, readPolicyPackages, DISABLED_POLICY_RULE_IDS_CONFIG_KEY } from './policyRulesRuntime'
 
 const SUPPORTED_IM_POLICY_VERSIONS = ['im-v1.6', 'im-standard-v2'] as const
 const CHANNEL_POLICY_KEYS = [
@@ -31,7 +30,37 @@ function readRawChannelConfig(db: AppDatabase, key: string): Record<string, unkn
 
 /** Ensure legacy IM authorization settings are represented by the frozen snapshot before runtime dispatch starts. */
 export function ensureImPolicySnapshotAtStartup(db: AppDatabase): void {
+  migrateLegacyDesktopDisabledRules(db)
   migrateLegacyImConfigBeforeChannelWrite(db)
+}
+
+function migrateLegacyDesktopDisabledRules(db: AppDatabase): void {
+  const conn = getDbConnection(db)
+  let current: ReturnType<typeof readPolicyBehaviorSnapshot> | undefined
+  try { current = readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }) } catch { current = undefined }
+  const disabled = readDisabledPolicyRuleIds(db)
+  if (disabled.length === 0) return
+  const knownRuleIds = new Set(DEFAULT_POLICY_RULES.map((rule) => rule.id))
+  const unknownRule = disabled.find((ruleId) => !knownRuleIds.has(ruleId))
+  if (unknownRule) throw new Error(`unknown disabled policy rule: ${unknownRule}`)
+  const overrides = current?.snapshot.ruleOverrides && typeof current.snapshot.ruleOverrides === 'object' && !Array.isArray(current.snapshot.ruleOverrides)
+    ? { ...(current.snapshot.ruleOverrides as Record<string, unknown>) } : {}
+  // The legacy disabled bit represented an explicit allow override and wins over
+  // any partial/newer override written before migration completed.
+  for (const ruleId of disabled) overrides[ruleId] = 'allow'
+  const snapshot = { ...(current?.snapshot ?? {}), selectedPackage: current?.snapshot.selectedPackage ?? readPolicyPackages(db).desktop,
+    ruleOverrides: overrides }
+  commitDesktopPolicySnapshot(conn, {
+    expectedRevision: current?.revision ?? 0, policyBehaviorVersion: 'desktop-v1', snapshot, updatedAt: Date.now(),
+    eventId: randomUUID(), actor: 'migration', auditMetadata: { migration: 'disabled-rule-action-override' },
+    beforeSnapshot: () => {
+      const remaining = readDisabledPolicyRuleIds(db).filter((id) => !disabled.includes(id))
+      const now = Date.now()
+      conn.prepare(`INSERT INTO configs (key,value,created_at,updated_at) VALUES(?,?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`)
+        .run(DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify(remaining), now, now)
+    }
+  })
 }
 
 /** Migrate the raw channel policy exactly once, then remove policy-owned keys from its JSON projection. */
@@ -40,12 +69,26 @@ export function migrateLegacyImConfigBeforeChannelWrite(db: AppDatabase): void {
   const existing = conn.prepare("SELECT 1 FROM policy_behavior_snapshots WHERE domain='im'").get()
   if (existing) {
     const current = readImPolicySnapshot(conn, { supportedBehaviorVersions: SUPPORTED_IM_POLICY_VERSIONS })
-    if (current.policyBehaviorVersion === 'im-v1.6' && !isLegacyPolicyBackfillComplete(current.snapshot)) {
-      const ruleOverrides = mergeLegacyRuleOverrides(db, current.snapshot)
-      const disabledRuleIds = current.snapshot.disabledRuleIds === undefined ? readDisabledPolicyRuleIds(db) : current.snapshot.disabledRuleIds
+    const { snapshot: normalizedSnapshot } = migrateDisabledRulesInSnapshot(current.snapshot)
+    const disabledRuleIds = Array.isArray(current.snapshot.disabledRuleIds)
+      ? [...new Set(current.snapshot.disabledRuleIds.filter((id): id is string => typeof id === 'string'))] : []
+    const legacyConfigDisabled = current.snapshot.disabledRuleIds === undefined ? readDisabledPolicyRuleIds(db) : []
+    const disabledToMigrate = [...new Set([...disabledRuleIds, ...legacyConfigDisabled])]
+    const knownRuleIds = new Set(DEFAULT_POLICY_RULES.map((rule) => rule.id))
+    const unknownRule = disabledToMigrate.find((ruleId) => !knownRuleIds.has(ruleId))
+    if (unknownRule) throw new Error(`unknown disabled policy rule: ${unknownRule}`)
+    const needsDisabledMigration = disabledToMigrate.length > 0 ||
+      (Array.isArray(current.snapshot.disabledRuleIds) && current.snapshot.disabledRuleIds.length > 0)
+    const needsLegacyBackfill = current.policyBehaviorVersion === 'im-v1.6' && !isLegacyPolicyBackfillComplete(current.snapshot)
+    if (needsLegacyBackfill || needsDisabledMigration) {
+      const ruleOverrides = needsLegacyBackfill ? mergeLegacyRuleOverrides(db, current.snapshot) :
+        (current.snapshot.ruleOverrides && typeof current.snapshot.ruleOverrides === 'object' && !Array.isArray(current.snapshot.ruleOverrides)
+          ? current.snapshot.ruleOverrides as Record<string, string> : {})
+      const migratedOverrides = { ...ruleOverrides }
+      for (const id of disabledToMigrate) migratedOverrides[id] = 'allow'
       const legacySelectedPackages = current.snapshot.legacySelectedPackages === undefined
         ? readLegacySelectedPackages(db) : current.snapshot.legacySelectedPackages
-      const snapshot: Record<string, unknown> = { ...current.snapshot, ruleOverrides, disabledRuleIds, legacySelectedPackages,
+      const snapshot: Record<string, unknown> = { ...normalizedSnapshot, ruleOverrides: migratedOverrides, disabledRuleIds: [], legacySelectedPackages,
         legacyPolicyDataMigrated: true, legacyPolicyMigrationVersion: LEGACY_IM_POLICY_MIGRATION_VERSION }
       delete snapshot.legacyRuleResetIds
       const result = commitImPolicySnapshot(conn, {
@@ -53,6 +96,15 @@ export function migrateLegacyImConfigBeforeChannelWrite(db: AppDatabase): void {
         policyBehaviorVersion: current.policyBehaviorVersion,
         snapshot,
         updatedAt: Date.now(), eventId: randomUUID(), eventKind: 'legacy-policy-migrated', actor: 'migration',
+        beforeSnapshot: () => {
+          if (current.snapshot.disabledRuleIds === undefined) {
+            const remaining = readDisabledPolicyRuleIds(db).filter((id) => !legacyConfigDisabled.includes(id))
+            const now = Date.now()
+            conn.prepare(`INSERT INTO configs (key,value,created_at,updated_at) VALUES(?,?,?,?)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`)
+              .run(DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify(remaining), now, now)
+          }
+        },
         auditMetadata: { migration: 'legacy-custom-rules-backfill' }
       })
       if (result.status === 'conflict') throw new Error('IM policy migration revision conflict')
@@ -74,6 +126,12 @@ export function migrateLegacyImConfigBeforeChannelWrite(db: AppDatabase): void {
     eventKind: 'legacy-policy-migrated'
   })
   if (result.status === 'conflict') throw new Error('IM policy migration revision conflict')
+}
+
+function migrateDisabledRulesInSnapshot(snapshot: Record<string, unknown>): { snapshot: Record<string, unknown>; disabledRuleIds: string[] } {
+  const disabledRuleIds = Array.isArray(snapshot.disabledRuleIds)
+    ? [...new Set(snapshot.disabledRuleIds.filter((id): id is string => typeof id === 'string'))] : []
+  return { snapshot: { ...snapshot }, disabledRuleIds }
 }
 
 function readLegacyRuleOverrides(db: AppDatabase): Record<string, string> {

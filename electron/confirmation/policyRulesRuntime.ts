@@ -14,6 +14,7 @@ import { getConfigValue, setConfigValue, type AppDatabase } from '../database'
 import { getDbConnection } from '../database'
 import { PolicyRuleStore } from './policyRuleStore'
 import { readImPolicySnapshot } from './imPolicyStore'
+import { readPolicyBehaviorSnapshot } from './imPolicyStore'
 
 /** 套餐映射持久化 key（configs 表 key-value，JSON）。 */
 export const POLICY_PACKAGES_CONFIG_KEY = 'config.policyPackages'
@@ -24,27 +25,49 @@ export const DISABLED_POLICY_RULE_IDS_CONFIG_KEY = 'config.disabledPolicyRuleIds
 
 export const DEFAULT_SECURITY_AUDIT_RETENTION_DAYS = 180
 
+function desktopSnapshot(db: AppDatabase): import('./imPolicyStore').PolicyBehaviorSnapshot | null {
+  try {
+    return readPolicyBehaviorSnapshot(getDbConnection(db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] })
+  } catch { return null }
+}
+
 export function readPolicyPackages(db: AppDatabase): PolicyPackageMap {
   const raw = getConfigValue(db, POLICY_PACKAGES_CONFIG_KEY)
-  if (!raw) return { ...DEFAULT_POLICY_PACKAGES }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    const normalized = normalizePolicyPackages(parsed)
-    // M2 告警（评审低项）：伪造/不可用档位被收敛 standard 时留痕（shared 模块无日志依赖，告警在装配侧落）
-    for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
-      if (parsed[lane] !== undefined && parsed[lane] !== normalized[lane]) {
-        void import('../agentLogger/agentLogger').then((m) =>
-          m.logAgentEvent('warn', 'policy.package.normalized', {
-            detail: `policy package for lane ${lane} normalized: ${String(parsed[lane])} -> ${normalized[lane]}`,
-            timestamp: Date.now()
-          })
-        )
+  let normalized = { ...DEFAULT_POLICY_PACKAGES }
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      normalized = normalizePolicyPackages(parsed)
+      // M2 告警（评审低项）：伪造/不可用档位被收敛 standard 时留痕（shared 模块无日志依赖，告警在装配侧落）
+      for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
+        if (parsed[lane] !== undefined && parsed[lane] !== normalized[lane]) {
+          void import('../agentLogger/agentLogger').then((m) =>
+            m.logAgentEvent('warn', 'policy.package.normalized', {
+              detail: `policy package for lane ${lane} normalized: ${String(parsed[lane])} -> ${normalized[lane]}`,
+              timestamp: Date.now()
+            })
+          )
+        }
       }
-    }
-    return normalized
-  } catch {
-    return { ...DEFAULT_POLICY_PACKAGES }
+    } catch { /* invalid legacy package config falls back to defaults */ }
   }
+  const snapshot = desktopSnapshot(db)
+  if (snapshot && isPolicyPackage(snapshot.snapshot.selectedPackage)) normalized.desktop = snapshot.snapshot.selectedPackage
+  return normalized
+}
+
+export function readDesktopPolicyRevision(db: AppDatabase): number {
+  return desktopSnapshot(db)?.revision ?? 0
+}
+
+export function readDesktopPolicyOverrides(db: AppDatabase): Array<{ ruleId: string; action: PolicyRule['action'] }> {
+  const snapshot = desktopSnapshot(db)
+  const raw = snapshot?.snapshot.ruleOverrides
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+  return Object.entries(raw).flatMap(([ruleId, action]) => {
+    const validation = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, action, 'desktop')
+    return validation.ok ? [{ ruleId, action: action as PolicyRule['action'] }] : []
+  })
 }
 
 export function writePolicyPackages(db: AppDatabase, packages: PolicyPackageMap): void {
@@ -81,11 +104,6 @@ export function writeDisabledPolicyRuleIds(db: AppDatabase, ids: string[]): void
   setConfigValue(db, DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify(uniq))
 }
 
-/** 某条系统保护规则是否处于「不启用」状态。 */
-export function isPolicyRuleDisabled(db: AppDatabase, ruleId: string): boolean {
-  return readDisabledPolicyRuleIds(db).includes(ruleId)
-}
-
 /**
  * 按链路加载生效规则集 + 当前档位（toolCallGate 装配 deps.transform 用）。
  * desktop standard 的「自动」变换在此生效；恒等 lane（standard 无变换）返回 DEFAULT_POLICY_RULES 引用。
@@ -109,17 +127,27 @@ export function resolveEffectivePolicyRulesWithOrigin(
   lane: ExecutionLane
 ): { rules: PolicyRule[]; origins: Record<string, PolicyRuleOrigin>; disabledRuleIds: string[] } {
   const origins: Record<string, PolicyRuleOrigin> = {}
+  if (lane === 'desktop') {
+    const snapshot = desktopSnapshot(db)
+    if (snapshot) {
+      const rawOverrides = snapshot.snapshot.ruleOverrides && typeof snapshot.snapshot.ruleOverrides === 'object' && !Array.isArray(snapshot.snapshot.ruleOverrides)
+        ? snapshot.snapshot.ruleOverrides as Record<string, unknown> : {}
+      const overrides = Object.entries(rawOverrides).flatMap(([ruleId, action]) => {
+        const validation = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, action, 'desktop')
+        return validation.ok ? [{ ruleId, action: action as PolicyRule['action'] }] : []
+      })
+      const pkg = isPolicyPackage(snapshot.snapshot.selectedPackage) ? snapshot.snapshot.selectedPackage : 'standard'
+      const rules = resolvePolicyRules({ lane, packages: { desktop: pkg }, overrides: pkg === 'custom' ? overrides : [], rules: DEFAULT_POLICY_RULES })
+      for (const rule of rules) origins[rule.id] = overrides.some((override) => override.ruleId === rule.id) && pkg === 'custom'
+        ? { source: 'user-override' } : { source: 'builtin' }
+      return { rules, origins, disabledRuleIds: [] }
+    }
+  }
   if (lane === 'wechat' || lane === 'feishu') {
     try {
       const snapshot = readImPolicySnapshot(getDbConnection(db), { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
       if (snapshot.policyBehaviorVersion === 'im-standard-v2' || snapshot.policyBehaviorVersion === 'im-v1.6') {
-        const toggleableDenyIds = new Set(DEFAULT_POLICY_RULES
-          .filter((rule) => rule.locked && rule.action === 'deny').map((rule) => rule.id))
-        const imDisabledRuleIds = Array.isArray(snapshot.snapshot.disabledRuleIds)
-          ? [...new Set(snapshot.snapshot.disabledRuleIds.filter((id): id is string =>
-            typeof id === 'string' && toggleableDenyIds.has(id)))]
-          : []
-        const baseRules = DEFAULT_POLICY_RULES.filter((rule) => !imDisabledRuleIds.includes(rule.id)) as PolicyRule[]
+        const baseRules = DEFAULT_POLICY_RULES
         const legacyPackages = snapshot.snapshot.legacySelectedPackages && typeof snapshot.snapshot.legacySelectedPackages === 'object' &&
           !Array.isArray(snapshot.snapshot.legacySelectedPackages)
           ? snapshot.snapshot.legacySelectedPackages as Record<string, unknown> : {}
@@ -156,20 +184,15 @@ export function resolveEffectivePolicyRulesWithOrigin(
           if (!validation.ok) continue
           origins[ruleId] = { source: 'user-override', shadowed: [{ source: 'builtin' }] }
         }
-        return { rules, origins, disabledRuleIds: imDisabledRuleIds }
+        return { rules, origins, disabledRuleIds: [] }
       }
     } catch {
       // Legacy installations continue through the legacy policy sources below.
     }
   }
   const packages = readPolicyPackages(db)
-  const disabledRuleIds = readDisabledPolicyRuleIds(db)
-  const nonToggleableLockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked && rule.action !== 'deny').map((rule) => rule.id))
-  const safeDisabledRuleIds = disabledRuleIds.filter((id) => !nonToggleableLockedIds.has(id))
   const pkg = packages[lane] ?? 'standard'
-  const baseRules = safeDisabledRuleIds.length
-    ? (DEFAULT_POLICY_RULES.filter((r) => !safeDisabledRuleIds.includes(r.id)) as PolicyRule[])
-    : DEFAULT_POLICY_RULES
+  const baseRules = DEFAULT_POLICY_RULES
   const overrides = pkg === 'custom' ? new PolicyRuleStore(getDbConnection(db)).listOverrides() : []
   const resolved = resolvePolicyRules({ lane, packages, overrides, rules: baseRules })
   const overrideById = new Map(overrides.map((o) => [o.ruleId, o]))
@@ -186,19 +209,26 @@ export function resolveEffectivePolicyRulesWithOrigin(
       origins[rule.id] = { source: 'builtin' }
     }
   }
-  return { rules: resolvedWithUserOverrides, origins, disabledRuleIds: safeDisabledRuleIds }
+  return { rules: resolvedWithUserOverrides, origins, disabledRuleIds: [] }
 }
 
 export function loadLanePolicyContext(db: AppDatabase, lane: ExecutionLane): { rules: PolicyRule[]; pkg: PolicyPackage } {
+  if (lane === 'desktop') {
+    const snapshot = desktopSnapshot(db)
+    if (snapshot) {
+      const packages = { ...DEFAULT_POLICY_PACKAGES, desktop: isPolicyPackage(snapshot.snapshot.selectedPackage) ? snapshot.snapshot.selectedPackage : 'standard' }
+      const rawOverrides = snapshot.snapshot.ruleOverrides && typeof snapshot.snapshot.ruleOverrides === 'object' && !Array.isArray(snapshot.snapshot.ruleOverrides)
+        ? snapshot.snapshot.ruleOverrides as Record<string, unknown> : {}
+      const overrides = packages.desktop === 'custom' ? Object.entries(rawOverrides).flatMap(([ruleId, action]) => {
+        const validation = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, action, 'desktop')
+        return validation.ok ? [{ ruleId, action: action as PolicyRule['action'] }] : []
+      }) : []
+      return { rules: resolvePolicyRules({ lane, packages, overrides, rules: DEFAULT_POLICY_RULES }), pkg: packages.desktop }
+    }
+  }
   const packages = readPolicyPackages(db)
-  const disabledRuleIds = readDisabledPolicyRuleIds(db)
-  const nonToggleableLockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked && rule.action !== 'deny').map((rule) => rule.id))
-  const safeDisabledRuleIds = disabledRuleIds.filter((id) => !nonToggleableLockedIds.has(id))
-  if (safeDisabledRuleIds.length !== disabledRuleIds.length) writeDisabledPolicyRuleIds(db, safeDisabledRuleIds)
   const pkg = packages[lane] ?? 'standard'
-  const baseRules = safeDisabledRuleIds.length
-    ? (DEFAULT_POLICY_RULES.filter((r) => !safeDisabledRuleIds.includes(r.id)) as PolicyRule[])
-    : DEFAULT_POLICY_RULES
+  const baseRules = DEFAULT_POLICY_RULES
   const overrides = pkg === 'custom' ? new PolicyRuleStore(getDbConnection(db)).listOverrides() : []
   return { rules: resolvePolicyRules({ lane, packages, overrides, rules: baseRules }), pkg }
 }

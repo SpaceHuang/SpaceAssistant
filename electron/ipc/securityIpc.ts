@@ -1,5 +1,6 @@
 // Phase 2 拆分:本文件自 appIpc.ts 纯移动而来,通道名与行为不变(driver-authority-refactor Phase 2)。
 import path from 'path'
+import { randomUUID } from 'node:crypto'
 import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { ErrorCodes } from '../../src/shared/errorCodes'
@@ -140,11 +141,12 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     const tools = readToolsConfig(ctx.db)
     return model.buildSettingsSecurityModel({
       packages: runtime.readPolicyPackages(ctx.db),
+      policyRevisions: { desktop: runtime.readDesktopPolicyRevision(ctx.db) },
       deniedTools: tools.deniedTools,
       cache: new SqliteDecisionCache(conn).list(),
       rules: model.toRuleViews(
         DEFAULT_POLICY_RULES,
-        new PolicyRuleStore(conn).listOverrides(),
+        runtime.readDesktopPolicyOverrides(ctx.db),
         runtime.readDisabledPolicyRuleIds(ctx.db)
       ),
       retentionDays: runtime.readSecurityAuditRetentionDays(ctx.db),
@@ -154,7 +156,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
 
   ipcMain.handle(
     'security:set-policy-package',
-    async (_e, payload: { lane?: unknown; package?: unknown }) => {
+    async (_e, payload: { lane?: unknown; package?: unknown; expectedRevision?: unknown }) => {
       const { runtime, recordSettingsChange } = await securityDeps()
       const { isPolicyPackage } = await import('../../src/shared/policy/policyPackages')
       const lane = payload?.lane
@@ -168,6 +170,28 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       if (!isPackageAvailableForLane(lane, pkg)) {
         return { ok: false as const, error: `package ${String(pkg)} not available for lane ${lane}` }
       }
+      if (lane === 'desktop') {
+        if (!Number.isSafeInteger(payload?.expectedRevision) || (payload.expectedRevision as number) < 0) return { ok: false as const, error: 'POLICY_REVISION_INVALID' }
+        const { getDbConnection } = await import('../database')
+        const { commitDesktopPolicySnapshot, readPolicyBehaviorSnapshot } = await import('../confirmation/imPolicyStore')
+        const conn = getDbConnection(ctx.db)
+        let current: { revision: number; snapshot: Record<string, unknown> }
+        try { current = readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }) }
+        catch { current = { revision: 0, snapshot: { selectedPackage: 'standard', ruleOverrides: {} } } }
+        const before = current.snapshot.selectedPackage ?? 'standard'
+        const result = commitDesktopPolicySnapshot(conn, {
+          expectedRevision: current.revision, policyBehaviorVersion: 'desktop-v1',
+          snapshot: { ...current.snapshot, selectedPackage: pkg }, updatedAt: Date.now(),
+          eventId: `desktop-policy:${randomUUID()}`, auditMetadata: { lane, changeKind: 'package', before, after: pkg },
+          onCommitted: () => publishAuthorizationChange('desktop')
+        })
+        if (result.status === 'conflict') return { ok: false as const, error: 'POLICY_REVISION_CONFLICT', currentRevision: result.currentRevision }
+        ctx.db.flushSave()
+        await pushExposureToolsChanged('desktop')
+        try { recordSettingsChange(getSecurityAuditLog(), { kind: 'policy-change', lane: 'desktop', sessionId: 'settings',
+          key: 'policyPackage.desktop', before, after: pkg }) } catch { /* durable snapshot audit is authoritative */ }
+        return { ok: true as const, revision: result.revision }
+      }
       const packages = runtime.readPolicyPackages(ctx.db)
       const before = packages[lane]
       if (before === pkg) return { ok: true as const }
@@ -175,14 +199,14 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       runtime.writePolicyPackages(ctx.db, packages)
       ctx.db.flushSave()
       publishAuthorizationChange(lane)
-      recordSettingsChange(getSecurityAuditLog(), {
+      try { recordSettingsChange(getSecurityAuditLog(), {
         kind: 'policy-change',
         lane,
         sessionId: 'settings',
         key: `policyPackage.${lane}`,
         before,
         after: pkg
-      })
+      }) } catch { /* durable snapshot audit is authoritative */ }
       if (lane !== 'automation') await pushExposureToolsChanged(lane)
       return { ok: true as const }
     }
@@ -190,101 +214,126 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
 
   ipcMain.handle(
     'security:set-rule-override',
-    async (_e, payload: { ruleId?: unknown; action?: unknown; lane?: unknown; params?: unknown }) => {
-      const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
+    async (_e, payload: { ruleId?: unknown; action?: unknown; lane?: unknown; params?: unknown; expectedRevision?: unknown }) => {
+      const { DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
       const { validateRuleOverride } = await import('../../src/shared/policy/policyPackages')
       const { getDbConnection } = await import('../database')
+      const { commitDesktopPolicySnapshot, readPolicyBehaviorSnapshot } = await import('../confirmation/imPolicyStore')
       const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
       const lane =
         payload?.lane === 'desktop' || payload?.lane === 'wechat' || payload?.lane === 'feishu' || payload?.lane === 'automation'
           ? payload.lane
           : undefined
-      // 主进程侧强制校验：规则必须存在、非 locked、动作域按链路（B2：desktop 4 态 / 远程 3 态）
+      if (lane !== 'desktop') return { ok: false as const, error: 'DESKTOP_POLICY_LANE_REQUIRED' }
+      if (!Number.isSafeInteger(payload?.expectedRevision) || (payload?.expectedRevision as number) < 0) {
+        return { ok: false as const, error: 'POLICY_REVISION_INVALID' }
+      }
+      // 主进程侧强制校验：规则存在且动作在当前 lane 域内；locked 不缩减动作选项。
       const check = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, payload?.action, lane)
       if (!check.ok) return { ok: false as const, error: check.error }
       const params =
         payload?.params && typeof payload.params === 'object' && !Array.isArray(payload.params)
           ? (payload.params as Record<string, unknown>)
           : {}
-      const store = new PolicyRuleStore(getDbConnection(ctx.db))
-      const prev = store.getOverride(ruleId)
-      const before = prev?.action ?? check.rule.action
-      store.setOverride({ ruleId, action: payload!.action as never, params })
+      const snapshot = (() => {
+        try { return readPolicyBehaviorSnapshot(getDbConnection(ctx.db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }) }
+        catch { return { revision: 0, snapshot: { selectedPackage: 'standard', ruleOverrides: {} } } }
+      })()
+      const currentOverrides = snapshot.snapshot.ruleOverrides && typeof snapshot.snapshot.ruleOverrides === 'object' && !Array.isArray(snapshot.snapshot.ruleOverrides)
+        ? snapshot.snapshot.ruleOverrides as Record<string, unknown> : {}
+      const before = currentOverrides[ruleId] ?? check.rule.action
+      const nextOverrides = { ...currentOverrides, [ruleId]: payload!.action }
+      const result = commitDesktopPolicySnapshot(getDbConnection(ctx.db), {
+        expectedRevision: payload!.expectedRevision as number, policyBehaviorVersion: 'desktop-v1',
+        snapshot: { ...snapshot.snapshot, ruleOverrides: nextOverrides }, updatedAt: Date.now(), eventId: `desktop-policy:${randomUUID()}`,
+        auditMetadata: { lane, ruleId, beforeAction: before, afterAction: payload!.action },
+        onCommitted: () => publishAffectedPolicyLanes(check.rule)
+      })
+      if (result.status === 'conflict') return { ok: false as const, error: 'POLICY_REVISION_CONFLICT', currentRevision: result.currentRevision }
       ctx.db.flushSave()
-      publishAffectedPolicyLanes(check.rule)
-      recordSettingsChange(getSecurityAuditLog(), {
+      try { recordSettingsChange(getSecurityAuditLog(), {
         kind: 'policy-change',
         lane: 'desktop',
         sessionId: 'settings',
         key: ruleId,
         before,
         after: payload!.action
-      })
+      }) } catch { /* durable snapshot audit is authoritative */ }
       for (const l of ['desktop', 'wechat', 'feishu'] as const) await pushExposureToolsChanged(l)
       return { ok: true as const }
     }
   )
 
-  ipcMain.handle('security:remove-rule-override', async (_e, payload: { ruleId?: unknown }) => {
-    const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
+  ipcMain.handle('security:remove-rule-override', async (_e, payload: { ruleId?: unknown; expectedRevision?: unknown }) => {
+    const { DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
     const { getDbConnection } = await import('../database')
+    const { commitDesktopPolicySnapshot, readPolicyBehaviorSnapshot } = await import('../confirmation/imPolicyStore')
     const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
     const rule = DEFAULT_POLICY_RULES.find((r) => r.id === ruleId)
     if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
-    const store = new PolicyRuleStore(getDbConnection(ctx.db))
-    const prev = store.getOverride(ruleId)
-    const removed = store.removeOverride(ruleId)
+    if (!Number.isSafeInteger(payload?.expectedRevision) || (payload.expectedRevision as number) < 0) return { ok: false as const, error: 'POLICY_REVISION_INVALID' }
+    const conn = getDbConnection(ctx.db)
+    let current: { revision: number; snapshot: Record<string, unknown> }
+    try { current = readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }) }
+    catch { current = { revision: 0, snapshot: { selectedPackage: 'standard', ruleOverrides: {} } } }
+    if (current.revision !== payload.expectedRevision) return { ok: false as const, error: 'POLICY_REVISION_CONFLICT', currentRevision: current.revision }
+    const overrides = current.snapshot.ruleOverrides && typeof current.snapshot.ruleOverrides === 'object' && !Array.isArray(current.snapshot.ruleOverrides)
+      ? { ...(current.snapshot.ruleOverrides as Record<string, unknown>) } : {}
+    const prev = overrides[ruleId]
+    delete overrides[ruleId]
+    const result = commitDesktopPolicySnapshot(conn, {
+      expectedRevision: current.revision, policyBehaviorVersion: 'desktop-v1',
+      snapshot: { ...current.snapshot, ruleOverrides: overrides }, updatedAt: Date.now(), eventId: `desktop-policy:${randomUUID()}`,
+      auditMetadata: { lane: 'desktop', ruleId, beforeAction: prev ?? rule.action, afterAction: rule.action, reason: 'reset-to-default' },
+      onCommitted: () => { if (prev !== undefined) publishAffectedPolicyLanes(rule) }
+    })
+    if (result.status === 'conflict') return { ok: false as const, error: 'POLICY_REVISION_CONFLICT', currentRevision: result.currentRevision }
     ctx.db.flushSave()
-    if (removed > 0) {
-      publishAffectedPolicyLanes(rule)
-      recordSettingsChange(getSecurityAuditLog(), {
+    if (prev !== undefined) {
+      try { recordSettingsChange(getSecurityAuditLog(), {
         kind: 'policy-change',
         lane: 'desktop',
         sessionId: 'settings',
         key: ruleId,
-        before: prev?.action,
+        before: prev,
         after: rule.action,
         reason: 'reset-to-default'
-      })
+      }) } catch { /* durable snapshot audit is authoritative */ }
     }
-    return { ok: true as const, removed }
+    return { ok: true as const, removed: prev !== undefined ? 1 : 0, revision: result.revision }
   })
 
-  // 系统保护（禁止类）规则「启用/不启用」开关：启用=在策略链中生效（可作第 1 步硬拒），
-  // 不启用=从生效规则集剔除（不再硬拒，交还常规规则链）。仅 locked + deny 的保护规则可切换；
-  // fail-closed 的 locked ask 规则（lark-high-impact-ask 等）不可禁用——禁用等价调松兜底。
-
-  ipcMain.handle(
-    'security:set-rule-enabled',
-    async (_e, payload: { ruleId?: unknown; enabled?: unknown }) => {
-      const { runtime, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
-      const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
-      const rule = DEFAULT_POLICY_RULES.find((r) => r.id === ruleId)
-      if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
-      if (!rule.locked || rule.action !== 'deny') {
-        return { ok: false as const, error: `rule is not a protection rule: ${ruleId}` }
-      }
-      const enabled = payload?.enabled !== false
-      const disabledIds = runtime.readDisabledPolicyRuleIds(ctx.db)
-      const before = !disabledIds.includes(ruleId)
-      const nextDisabled = enabled
-        ? disabledIds.filter((id) => id !== ruleId)
-        : Array.from(new Set([...disabledIds, ruleId]))
-      runtime.writeDisabledPolicyRuleIds(ctx.db, nextDisabled)
-      ctx.db.flushSave()
-      publishAffectedPolicyLanes(rule)
-      recordSettingsChange(getSecurityAuditLog(), {
-        kind: 'policy-change',
-        lane: (rule.match?.lane?.[0] as 'desktop' | 'wechat' | 'feishu' | 'automation') ?? 'desktop',
-        sessionId: 'settings',
-        key: `policyRuleEnabled.${ruleId}`,
-        before,
-        after: enabled
-      })
-      for (const l of ['desktop', 'wechat', 'feishu'] as const) await pushExposureToolsChanged(l)
-      return { ok: true as const }
-    }
-  )
+  // Temporary compatibility shim until T8: old callers expressed disabled as
+  // an explicit allow and enabled as removal of the override (default action).
+  ipcMain.handle('security:set-rule-enabled', async (_e, payload: { ruleId?: unknown; enabled?: unknown }) => {
+    const { DEFAULT_POLICY_RULES } = await securityDeps()
+    const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
+    const rule = DEFAULT_POLICY_RULES.find((candidate) => candidate.id === ruleId)
+    if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
+    const { getDbConnection } = await import('../database')
+    const { commitDesktopPolicySnapshot, readPolicyBehaviorSnapshot } = await import('../confirmation/imPolicyStore')
+    const conn = getDbConnection(ctx.db)
+    let current: { revision: number; snapshot: Record<string, unknown> }
+    try { current = readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }) }
+    catch { current = { revision: 0, snapshot: { selectedPackage: 'standard', ruleOverrides: {} } } }
+    const overrides = current.snapshot.ruleOverrides && typeof current.snapshot.ruleOverrides === 'object' && !Array.isArray(current.snapshot.ruleOverrides)
+      ? { ...current.snapshot.ruleOverrides as Record<string, unknown> } : {}
+    const before = overrides[ruleId] ?? rule.action
+    const enabled = payload?.enabled !== false
+    if (enabled) delete overrides[ruleId]
+    else overrides[ruleId] = 'allow'
+    const result = commitDesktopPolicySnapshot(conn, {
+      expectedRevision: current.revision, policyBehaviorVersion: 'desktop-v1',
+      snapshot: { ...current.snapshot, ruleOverrides: overrides }, updatedAt: Date.now(),
+      eventId: `desktop-policy-legacy-toggle:${randomUUID()}`,
+      auditMetadata: { lane: 'desktop', changeKind: 'legacy-rule-enabled', ruleId, before, after: enabled ? rule.action : 'allow' },
+      onCommitted: () => publishAuthorizationChange('desktop')
+    })
+    if (result.status === 'conflict') return { ok: false as const, error: 'POLICY_REVISION_CONFLICT' }
+    ctx.db.flushSave()
+    await pushExposureToolsChanged('desktop')
+    return { ok: true as const }
+  })
 
   ipcMain.handle('security:list-cache', async () => {
     const { SqliteDecisionCache } = await securityDeps()

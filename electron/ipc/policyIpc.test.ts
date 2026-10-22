@@ -44,6 +44,9 @@ describe('policy domain read IPC contract', () => {
     setConfigValue(db, 'config.policyPackages', JSON.stringify({ desktop: 'standard', wechat: 'strict', feishu: 'strict', automation: 'standard' }))
     commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'runtime-snapshot-seed' })
     const write = handlers.get('policy:write')!
+    await expect(write({}, { lane: 'wechat', expectedRevision: 1,
+      change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: false } }))
+      .rejects.toThrow('POLICY_CHANGE_KIND_INVALID')
     let snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })
     await write({}, { lane: 'wechat', expectedRevision: snapshot.revision,
       change: { kind: 'rule-override', ruleId: 'mcp-tool-ask', action: 'deny' } })
@@ -58,15 +61,17 @@ describe('policy domain read IPC contract', () => {
     expect(resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat').rules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe('deny')
 
     await write({}, { lane: 'wechat', expectedRevision: 3,
-      change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: false } })
+      change: { kind: 'rule-override', ruleId: 'remote-shell-disabled', action: 'allow' } })
     let effective = resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat')
-    expect(effective.rules.some((rule) => rule.id === 'remote-shell-disabled')).toBe(false)
-    expect(effective.disabledRuleIds).toContain('remote-shell-disabled')
+    expect(effective.rules.find((rule) => rule.id === 'remote-shell-disabled')).toMatchObject({ action: 'allow', userOverride: true })
+    expect(effective.disabledRuleIds).not.toContain('remote-shell-disabled')
+    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] }).snapshot.ruleOverrides)
+      .toMatchObject({ 'remote-shell-disabled': 'allow' })
 
     await write({}, { lane: 'wechat', expectedRevision: 4,
-      change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: true } })
+      change: { kind: 'rule-reset', ruleId: 'remote-shell-disabled' } })
     effective = resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat')
-    expect(effective.rules.some((rule) => rule.id === 'remote-shell-disabled')).toBe(true)
+    expect(effective.rules.find((rule) => rule.id === 'remote-shell-disabled')?.action).toBe('deny')
     expect(effective.disabledRuleIds).not.toContain('remote-shell-disabled')
     db.close()
   })
@@ -110,18 +115,21 @@ describe('policy domain read IPC contract', () => {
     db.close()
   })
 
-  it('rejects invalid package and action enums plus immutable rule changes without writing', async () => {
+  it('rejects invalid package/action enums while allowing an explicit locked-rule override', async () => {
     const { db, handlers } = registeredHandlers()
     const conn = getDbConnection(db)
     commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { package: 'standard', ruleOverrides: {} }, updatedAt: 1, eventId: 'seed-write' })
     const write = handlers.get('policy:write')!
     const before = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })
     await expect(write({}, { lane: 'wechat', expectedRevision: before.revision, change: { kind: 'package', package: 'turbo' } })).rejects.toThrow('POLICY_PACKAGE_INVALID')
-    await expect(write({}, { lane: 'wechat', expectedRevision: before.revision, change: { kind: 'rule-override', ruleId: 'remote-outside-write-deny', action: 'allow' } })).rejects.toThrow('POLICY_RULE_IMMUTABLE')
-    await expect(write({}, { lane: 'wechat', expectedRevision: before.revision, change: { kind: 'rule-override', ruleId: 'script-unmodeled-path-ask', action: 'maybe' } })).rejects.toThrow('POLICY_ACTION_INVALID')
-    await expect(write({}, { lane: 'wechat', expectedRevision: before.revision, change: { kind: 'capability-permission', capabilityId: 'env.system', permission: 'superuser' } })).rejects.toThrow('POLICY_PERMISSION_INVALID')
-    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })).toEqual(before)
-    expect(conn.prepare('SELECT COUNT(*) AS count FROM policy_audit_events').get()).toEqual({ count: 1 })
+    const overridden = await write({}, { lane: 'wechat', expectedRevision: before.revision, change: { kind: 'rule-override', ruleId: 'remote-outside-write-deny', action: 'allow' } })
+    expect(overridden).toMatchObject({ status: 'committed', revision: 2 })
+    const afterOverride = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })
+    expect(afterOverride.snapshot.ruleOverrides).toMatchObject({ 'remote-outside-write-deny': 'allow' })
+    await expect(write({}, { lane: 'wechat', expectedRevision: afterOverride.revision, change: { kind: 'rule-override', ruleId: 'script-unmodeled-path-ask', action: 'maybe' } })).rejects.toThrow('POLICY_ACTION_INVALID')
+    await expect(write({}, { lane: 'wechat', expectedRevision: afterOverride.revision, change: { kind: 'capability-permission', capabilityId: 'env.system', permission: 'superuser' } })).rejects.toThrow('POLICY_PERMISSION_INVALID')
+    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })).toEqual(afterOverride)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM policy_audit_events').get()).toEqual({ count: 2 })
     db.close()
   })
 
@@ -197,7 +205,7 @@ describe('policy domain read IPC contract', () => {
     db.close()
   })
 
-  it('resets editable overrides and toggles only locked deny rules in the common snapshot', async () => {
+  it('resets both ordinary and locked rules to their defaults in the common snapshot', async () => {
     const { db, handlers } = registeredHandlers()
     const conn = getDbConnection(db)
     commitImPolicySnapshot(conn, {
@@ -207,13 +215,14 @@ describe('policy domain read IPC contract', () => {
     })
     const write = handlers.get('policy:write')!
     await write({}, { lane: 'wechat', expectedRevision: 1, change: { kind: 'rule-reset', ruleId: 'im-write-ask' } })
-    await write({}, { lane: 'feishu', expectedRevision: 2, change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: false } })
+    await write({}, { lane: 'feishu', expectedRevision: 2, change: { kind: 'rule-override', ruleId: 'remote-shell-disabled', action: 'allow' } })
     expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })).toMatchObject({
-      revision: 3, snapshot: { ruleOverrides: {}, disabledRuleIds: ['remote-shell-disabled'] }
+      revision: 3, snapshot: { ruleOverrides: { 'remote-shell-disabled': 'allow' }, disabledRuleIds: [] }
     })
-    await expect(write({}, {
-      lane: 'wechat', expectedRevision: 3, change: { kind: 'rule-enabled', ruleId: 'im-write-ask', enabled: false }
-    })).rejects.toThrow('POLICY_RULE_ENABLE_INVALID')
+    const lockedOverride = await write({}, {
+      lane: 'wechat', expectedRevision: 3, change: { kind: 'rule-override', ruleId: 'im-write-ask', action: 'allow' }
+    }) as { status: string }
+    expect(lockedOverride.status).toBe('committed')
     db.close()
   })
 })

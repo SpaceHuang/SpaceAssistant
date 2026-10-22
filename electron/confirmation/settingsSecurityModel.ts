@@ -23,6 +23,7 @@ export type SettingsSecurityModel = SecuritySettingsModelPayload
  */
 export function buildSettingsSecurityModel(args: {
   packages: Partial<Record<ExecutionLane, PolicyPackage>>
+  policyRevisions?: Partial<Record<'desktop' | 'im', number>>
   deniedTools: string[]
   cache: DecisionCacheEntry[]
   rules: SecuritySettingsRuleView[]
@@ -30,6 +31,7 @@ export function buildSettingsSecurityModel(args: {
   haveAuditLog: boolean
 }): SecuritySettingsModelPayload {
   return {
+    ...(args.policyRevisions ? { policyRevisions: args.policyRevisions } : {}),
     packages: {
       desktop: args.packages.desktop ?? DEFAULT_POLICY_PACKAGES.desktop,
       wechat: args.packages.wechat ?? DEFAULT_POLICY_PACKAGES.wechat,
