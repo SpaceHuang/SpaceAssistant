@@ -1,13 +1,59 @@
 import { describe, expect, it } from 'vitest'
 import {
+  authorizeImInboundMessage,
   evaluateImInboundGuard,
   revalidateImInboundGuard
 } from './imInboundGuard'
+import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { remoteAuthorizationRegistry } from './remoteAuthorizationRegistry'
 import type { AuditSink } from '../confirmation/audit'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 
 describe('imInboundGuard', () => {
+  it('uses the lane policy snapshot for ingress rules instead of silently falling back to built-ins', () => {
+    const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'ingress-direct-other-deny'
+      ? { ...rule, action: 'allow' as const, userOverride: true }
+      : rule)
+    const result = evaluateImInboundGuard({
+      channel: 'wechat', senderId: 'external',
+      getConfig: () => ({ enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['owner'] }),
+      getPolicyRules: () => rules
+    })
+    expect(result.ok).toBe(true)
+  })
+  it('keeps an ingress ask pending until an approval bound to the exact message is supplied', async () => {
+    const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'ingress-direct-other-deny'
+      ? { ...rule, action: 'ask' as const, userOverride: true }
+      : rule)
+    const base = {
+      channel: 'wechat' as const,
+      senderId: 'external',
+      messageId: 'platform-message-7',
+      getConfig: () => ({ enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['owner'] }),
+      getPolicyRules: () => rules
+    }
+    expect(evaluateImInboundGuard(base)).toMatchObject({ ok: false, reason: 'approval_required', ruleId: 'ingress-direct-other-deny' })
+    const approvedIngress = { channel: 'wechat' as const, senderId: 'external', messageId: 'platform-message-7', ruleId: 'ingress-direct-other-deny' }
+    const approved = evaluateImInboundGuard({ ...base, approvedIngress })
+    expect(approved.ok).toBe(true)
+    if (approved.ok) expect(approved.snapshot.ingressApproval).toEqual(approvedIngress)
+    expect(evaluateImInboundGuard({ ...base, messageId: 'different-message', approvedIngress }).ok).toBe(false)
+    const live = await authorizeImInboundMessage({ ...base, requestApproval: async () => true })
+    expect(live.ok).toBe(true)
+    if (live.ok) expect(revalidateImInboundGuard(live.snapshot, { getConfig: base.getConfig }).ok).toBe(true)
+    const rejected = await authorizeImInboundMessage({ ...base, requestApproval: async () => false })
+    expect(rejected).toMatchObject({ ok: false, reason: 'approval_rejected' })
+    let currentRules = rules
+    const stale = await authorizeImInboundMessage({
+      ...base,
+      getPolicyRules: () => currentRules,
+      requestApproval: async () => {
+        currentRules = DEFAULT_POLICY_RULES
+        return true
+      }
+    })
+    expect(stale).toMatchObject({ ok: false, reason: 'not_owner' })
+  })
   it('rejects non-owner and remote disabled', () => {
     expect(
       evaluateImInboundGuard({

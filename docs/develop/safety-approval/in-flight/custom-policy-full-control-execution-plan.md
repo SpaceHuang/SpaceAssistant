@@ -1,12 +1,12 @@
 # 自定义安全策略完整可配置执行计划
 
 - **日期：** 2026-10-22
-- **状态：** Phase 0 已关闭；Phase 1–5 源码实施与验收进行中；T10 外部验收未开始
+- **状态：** Phase 0–1 已关闭；Phase 2–5 源码实施与验收进行中；T10 外部验收未开始
 - **方案真源：** [自定义安全策略完整可配置开发计划](./custom-policy-full-control-development-plan.md)
 - **验收与不变量真源：** 方案 INV-01–INV-10；产品行为 AC-1–AC-22 以需求稿为准
 - **代码基线：** `109a938404124235d632e4cdbd4f9e06eaa48728`
 
-本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 合并集合 15 文件 / 255 项通过、Phase 2 合并集合 7 文件 / 73 项通过（源码门禁通过，阶段提交尚未完成）。T5 合并集合 8 文件 / 101 项通过；T6 派发屏障集合 7 文件 / 186 项通过；新增策略 revision ask/allow 重入测试与 SDK fresh-ask Hosted 用例通过。此前的 `typecheck:shared`、renderer typecheck、Electron noEmit、i18n/system invariant/agent-sdk checks 与 incremental build 曾通过；由于本轮又修改 Agent SDK recheck，Phase 3 阶段收尾需重新跑完整 type/build 门禁。Phase 4 T7 检查与 Phase 5 T9 仍待关闭。T8 旧 rule-enabled shim 目前仍存在，计划在 T8 迁移所有 caller 后删除。
+本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 合并集合 15 文件 / 255 项通过、Phase 2 合并集合 7 文件 / 73 项通过。T5 合并集合 8 文件 / 101 项通过；T6 派发屏障集合 7 文件 / 186 项通过；新增策略 revision ask/allow 重入测试与 SDK fresh-ask Hosted 用例通过。此前的 `typecheck:shared`、renderer typecheck、Electron noEmit、i18n/system invariant/agent-sdk checks 与 incremental build 曾通过；由于本轮又修改 Agent SDK recheck，Phase 3 阶段收尾需重新跑完整 type/build 门禁。Phase 4 T7 检查与 Phase 5 T9 仍待关闭。T8 旧 rule-enabled shim 目前仍存在，计划在 T8 迁移所有 caller 后删除。
 
 本轮计划评审（2026-10-22）处理：B1 全规则覆盖及消费点、B4 T4/T7/T8 的兼容接口顺序；B2/B3/B5 分别在 T6/T5/T4 按最小范围补充。负责人确认 ingress 消息须经批准后才进入处理，exposure 对象须经批准后才暴露；这是本期必做能力，见需求 AC-21/AC-22。
 
@@ -197,24 +197,24 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
 
 **阶段输入：** Phase 0 盘点；T2→T3。**阶段产出：** 规则覆盖校验开放且多规则结果固定。**允许改动：** shared policy/types、engine/runtime resolver、ingress/exposure 消费点与实际调用方、相关审批 adapter 及对应测试；不迁移持久化 disabled 数据。**移除兼容：** 本阶段暂不删除 `disabledRuleIds`，保证尚未迁移的用户状态仍有效。**失败回退：** 回退 Phase 1 policy changes，旧 persistence 与 IPC 保持原行为。
 
-- [ ] **T2 · 为全部展示规则开放 lane 动作校验并固定覆盖解析**
+- [x] **T2 · 为全部展示规则开放 lane 动作校验并固定覆盖解析**
   - **目标文件：** `src/shared/confirmation/types.ts`、`src/shared/policy/policyPackages.ts`、`src/shared/policy/laneProfiles.test.ts`、`policyPackages.test.ts`、`policyPackages.recovery.test.ts`、`policyPackages.scope.test.ts`、`defaultRules.contract.test.ts`；`src/shared/policy/policyFloor.ts`、`electron/confirmation/toolCallGate.ts` 与 floor tests 按决策合同一并修改。
   - **产物：** action × lane × when × policy rule 合同测试；locked rule 可覆盖/重置；`confirm-every-time` 映射；显式覆盖移除同规则默认门控测试。
   - **完成判据：** 设置页每条 desktop 规则支持四动作，每条 IM 规则支持三动作，包括 invocation、ingress、exposure；未知规则、错误 lane、非法动作仍拒绝；`automation` 仍不可用户配置；`locked`、`humanRequired`、默认 floor 不拒绝显式用户动作；保留规则身份/匹配结构校验及 automation 当前 floor；子调用 floor 不扩大父调用当前用户策略。该任务只验动作合同，消费者语义在 T3。
   - **验证命令：** `npm exec vitest run src/shared/policy/laneProfiles.test.ts src/shared/policy/policyPackages.test.ts src/shared/policy/policyPackages.recovery.test.ts src/shared/policy/policyPackages.scope.test.ts src/shared/policy/defaultRules.contract.test.ts electron/confirmation/policyFloor.test.ts electron/confirmation/policyRulesRuntime.test.ts`。
   - **环境 / 状态：** 本机 / 未开始；完成 AC-1、AC-2–AC-6 的动作域部分，INV-01、INV-02。
 
-- [ ] **T3 · 在 invocation、ingress、exposure 消费点落实动作语义**
+- [x] **T3 · 在 invocation、ingress、exposure 消费点落实动作语义**
   - **目标文件：** `src/shared/policy/policyEngine.ts`/decision tests；`electron/confirmation/ingress.ts` 与入口 caller；`electron/confirmation/exposure.ts`、`electron/toolsConfigRuntime.ts`、`electron/effectiveTools.ts` 与暴露 caller；相关审批 adapter、trace 和 caller tests。
   - **产物：** invocation 全命中动作集合及 trace；ingress ask 的待处理消息批准与批准后继续；exposure ask 的工具/能力对象批准与批准后暴露；各 when 至少一条真实消费者测试。
   - **完成判据：** invocation 任意规则排列结果相同并符合 deny > ask > auto > allow；入口 deny 阻断进入、allow 继续；ask 经人工批准才继续原消息；exposure deny 不暴露、allow 正常暴露、ask 经人工批准才暴露目标；旧审批/授权不得跨对象批准；缓存/自动审核不越过优先级。入口与暴露两类 ask 均须实现并通过需求 AC-21/AC-22。
   - **验证命令：** `npm exec vitest run src/shared/policy/policyEngine.test.ts src/shared/policy/policyDecision.test.ts src/shared/policy/memoryEligibility.test.ts src/shared/policy/imPolicyBehaviorResolvers.test.ts electron/confirmation/policyFloor.test.ts electron/confirmation/ingress.test.ts electron/confirmation/exposure.test.ts electron/toolsConfigRuntime.test.ts electron/effectiveTools.test.ts`。
   - **环境 / 状态：** 本机 / 未开始；完成 AC-1–AC-6、AC-10–AC-12、AC-21–AC-22，INV-01–INV-03。
 
-- [ ] **Phase 1 关闭门槛**
+- [x] **Phase 1 关闭门槛**
   - **证据来源：** T2 与 T3 的测试/决策 trace 断言；若改 `src/shared/confirmation/types.ts`，同时提供 `npm run typecheck:shared` 输出。
   - **完成判据：** T2/T3 测试通过；旧停用数据仍按兼容路径工作（T4 尚未启动）；每种展示规则类型的动作均有消费测试；automation 未意外开放。
-  - **阶段收尾：** T2、T3 合并集合通过后按仓库阶段纪律提交；当前测试结果见本轮执行记录，提交完成前不关闭此门槛。
+  - **阶段收尾证据：** `vitest run` Phase 1 合并集合 15 files / 255 tests passed；覆盖 policy action/lane contract、多规则优先级、ingress ask 的原消息对象、exposure ask 的精确工具对象，以及 automation floor。代码和阶段状态随本提交关闭。
 
 ### Phase 2：持久化、IPC 与存量迁移
 

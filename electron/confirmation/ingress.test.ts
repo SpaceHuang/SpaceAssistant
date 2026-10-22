@@ -21,6 +21,12 @@ describe('classifyImOrigin（白名单由分类器吸收）', () => {
 })
 
 describe('evaluateIngress（decideIngress 集成）', () => {
+  it('自定义 ask 在消息进入处理前保持阻断，并返回绑定消息所需的批准动作', () => {
+    const rules = [{ id: 'ask-owner', when: 'ingress' as const, match: { lane: ['wechat'], origin: 'direct-owner' as const }, action: 'ask' as const, userOverride: true as const, reason: 'r' }]
+    const result = evaluateIngress({ lane: 'wechat', origin: { kind: 'direct-owner', senderId: 'u1' } }, rules)
+    expect(result).toMatchObject({ allow: false, action: 'ask', ruleId: 'ask-owner', approvalRequired: true })
+  })
+
   it('飞书群聊默认拒绝（ingress-feishu-group-deny）', () => {
     const r = evaluateIngress({ lane: 'feishu', origin: { kind: 'group', senderId: 'u1' } }, DEFAULT_POLICY_RULES)
     expect(r.allow).toBe(false)

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { filterBuiltinToolsForApi, requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
+import { describe, expect, it, vi } from 'vitest'
+import { filterBuiltinToolsForApi, filterBuiltinToolsForApiWithApproval, requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
 import { MACOS_BASH_PROFILE } from './shell/shellProfiles'
 import { DEFAULT_SHELL_CONFIG, DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG } from '../src/shared/feishuTypes'
@@ -75,5 +75,36 @@ describe('飞书附件工具暴露范围', () => {
       required: ['attachmentId']
     })
     expect(JSON.stringify(tool?.input_schema)).not.toContain('/user/feishu-media')
+  })
+})
+
+describe('按对象批准 exposure ask', () => {
+  it('批准后只把明确的工具对象加入本次 IM 工具清单', async () => {
+    const requestApproval = vi.fn(async ({ toolName }: { toolName: string }) => toolName === 'wechat_send')
+    const tools = await filterBuiltinToolsForApiWithApproval({
+      cfg: { enabled: true, deniedTools: [], allowedTools: [] } as never,
+      wechat: { enabled: true } as never,
+      remoteContext: { source: 'wechat', messageId: 'm-1', confirmPolicy: 'im_confirm' },
+      rules: [{ id: 'im-no-wechat-send', when: 'exposure', match: { lane: ['wechat', 'feishu'], toolName: ['wechat_send', 'wechat_reply'] },
+        action: 'ask', userOverride: true, reason: 'require approval' } as never],
+      requestApproval
+    })
+    expect(requestApproval).toHaveBeenCalledWith({ lane: 'wechat', toolName: 'wechat_send', ruleId: 'im-no-wechat-send' })
+    expect(tools.map((tool) => tool.name)).toContain('wechat_send')
+    expect(tools.map((tool) => tool.name)).not.toContain('wechat_reply')
+  })
+
+  it('拒绝或批准异常都保持目标工具未暴露', async () => {
+    const args = {
+      cfg: { enabled: true, deniedTools: [], allowedTools: [] } as never,
+      wechat: { enabled: true } as never,
+      remoteContext: { source: 'wechat' as const, messageId: 'm-2', confirmPolicy: 'im_confirm' as const },
+      rules: [{ id: 'im-no-wechat-send', when: 'exposure' as const, match: { lane: ['wechat', 'feishu'], toolName: 'wechat_send' },
+        action: 'ask' as const, userOverride: true, reason: 'require approval' } as never]
+    }
+    const rejected = await filterBuiltinToolsForApiWithApproval({ ...args, requestApproval: async () => false })
+    expect(rejected.map((tool) => tool.name)).not.toContain('wechat_send')
+    const unavailable = await filterBuiltinToolsForApiWithApproval({ ...args, requestApproval: async () => { throw new Error('dialog unavailable') } })
+    expect(unavailable.map((tool) => tool.name)).not.toContain('wechat_send')
   })
 })

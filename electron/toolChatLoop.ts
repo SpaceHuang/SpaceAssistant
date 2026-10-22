@@ -93,7 +93,8 @@ import {
 import {
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
-import { computeDeferredPlan, computeEffectiveTools } from './effectiveTools'
+import { computeDeferredPlan, computeEffectiveToolsWithExposureApproval } from './effectiveTools'
+import { requestImExposureApproval } from './remote/imIngressApprovalPrompt'
 import { requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
 import { clearToolRevocationRequest, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildCommandRetryKey, normalizeFileToolIdentity, normalizeToolErrorClass, SemanticToolRetryTracker } from './toolErrorRetryPolicy'
@@ -906,7 +907,7 @@ async function runToolChatSessionInner(
     mode: deferredMode,
     thresholdBytes: deferredThresholdBytes
   })
-  const effectiveTools = computeEffectiveTools({
+  const effectiveTools = await computeEffectiveToolsWithExposureApproval({
     builtinConfig: toolsConfig,
     feishuConfig,
     browserConfig,
@@ -917,7 +918,7 @@ async function runToolChatSessionInner(
     mcpSnapshot,
     trim: toolsTrim,
     deferredPlan
-  })
+  }, requestImExposureApproval)
   const tools = effectiveLane === 'automation'
     ? requireAutomationShellWorkingDirectory(effectiveTools.tools)
     : effectiveTools.tools

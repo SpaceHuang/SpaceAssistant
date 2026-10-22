@@ -165,6 +165,8 @@ export interface ToolCallGateArgs {
   wechatConfig?: WeChatConfig
   /** Canonical shared IM policy snapshot loaded from the main-process policy store. */
   imPolicySnapshot?: import('../remote/remoteToolPolicy').RemoteSecurityPolicyConfig['policySnapshot']
+  /** Versioned authorization identity for the lane's persisted policy domain. */
+  policyBinding?: { domain: 'desktop' | 'im' | 'automation'; policyBehaviorVersion: string; revision: number; epoch: number }
   /** Host-resolved provenance for the MCP query/data scope; never read from model arguments. */
   mcpQuerySource?: 'public' | 'local-sensitive' | 'unknown'
   /** Host-resolved permission for the configured MCP account and referenced data scope. */
@@ -354,7 +356,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
 
   // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
   // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
-  const floorCheck = validatePolicyRulesFloor(args.effectiveRules, undefined, args.disabledPolicyRuleIds)
+  const floorCheck = validatePolicyRulesFloor(args.effectiveRules)
   if (!floorCheck.ok) {
     result.decision = {
       type: 'deny',
@@ -1292,7 +1294,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     completeness: reportedSnapshotCompleteness,
     evidenceReferences: [],
     environmentVersion: `${env.os}:${env.workDir}`,
-    policyVersion: args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
+    policyVersion: args.policyBinding?.policyBehaviorVersion ?? args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
     factsRevision: args.phase === 'recheck' ? 2 : 1,
     previousFactsRevision: 0
   })
@@ -1302,8 +1304,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     decision, invocationId: args.requestId ?? args.sessionId, toolUseId: args.toolUseId ?? args.requestId ?? args.sessionId,
     factsId: factsSnapshot.factId, factsDigest: factsSnapshot.factsHash, extractorVersion: factsSnapshot.extractorVersion,
     factsRevision: factsSnapshot.factsRevision, policyDomain, tier: lanePackage,
-    policyVersion: args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
-    policyRevision: args.imPolicySnapshot?.revision ?? 0, policyLane: lane, rules,
+    policyVersion: args.policyBinding?.policyBehaviorVersion ?? args.imPolicySnapshot?.policyBehaviorVersion ?? 'desktop-policy-v1',
+    policyRevision: args.policyBinding?.revision ?? args.imPolicySnapshot?.revision ?? 0, policyLane: lane, rules,
     dependencyRules: selectPolicyDependencyRules({
       rules,
       matchingRuleIds: rules.filter((rule) => rule.when === 'invocation' && ruleMatchesInvocation(rule,
@@ -1326,7 +1328,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         }
       } : {})
     }, migrationComplete: deps.migrationComplete,
-    disabledRuleIds: args.disabledPolicyRuleIds ?? []
+    disabledRuleIds: []
   })
   if (result.readExecutionPermit) {
     result.readExecutionPermit = buildReadExecutionPermit({
@@ -1341,7 +1343,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     event: 'policy.decision',
     lane,
     ...(lane === 'wechat' || lane === 'feishu' ? { policyDomain: 'im' as const } : { policyDomain: 'desktop' as const }),
-    ...(args.imPolicySnapshot ? { policyBehaviorVersion: args.imPolicySnapshot.policyBehaviorVersion, policyRevision: args.imPolicySnapshot.revision } : {}),
+    ...(args.policyBinding ? { policyDomain, policyBehaviorVersion: args.policyBinding.policyBehaviorVersion,
+      policyRevision: args.policyBinding.revision, policyEpoch: args.policyBinding.epoch } :
+      args.imPolicySnapshot ? { policyBehaviorVersion: args.imPolicySnapshot.policyBehaviorVersion, policyRevision: args.imPolicySnapshot.revision } : {}),
     factsCompleteness,
     factsSnapshotId: factsSnapshot.factId,
     extractorVersion: factsSnapshot.extractorVersion,

@@ -230,6 +230,16 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
     expect(event).not.toHaveProperty('dispatchKey')
   })
 
+  it('persists desktop policy revision and epoch in the decision fingerprint evidence', async () => {
+    const audit = auditSink()
+    const result = await evaluateToolCallGate(base({ audit, lane: 'desktop', policyBinding: {
+      domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 12, epoch: 4
+    } }))
+    const event = audit.events.find((entry) => entry.event === 'policy.decision')
+    expect(event).toMatchObject({ policyDomain: 'desktop', policyBehaviorVersion: 'desktop-v1', policyRevision: 12, policyEpoch: 4 })
+    expect(result.policyDecision).toMatchObject({ policyDomain: 'desktop', policyVersion: 'desktop-v1', policyRevision: 12 })
+  })
+
   it('records reported completeness from extracted MCP facts instead of assuming completeness', async () => {
     const audit = auditSink()
     await evaluateToolCallGate(base({ audit, toolName: 'mcp__server__read', toolInput: {}, lane: 'wechat',

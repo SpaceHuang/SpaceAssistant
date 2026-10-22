@@ -60,6 +60,78 @@ function deps(overrides: Partial<PolicyEngineDeps> = {}): PolicyEngineDeps {
 }
 
 describe('decide：脚本规则族（规范条目顺序）', () => {
+  it('显式 allow 覆盖同一规则的 locked、humanRequired 与逐次确认默认语义', () => {
+    const rules = [{ id: 'user-selected', when: 'invocation' as const, action: 'allow' as const,
+      userOverride: true as const, locked: true, humanRequired: true, reason: 'r' }]
+    const result = decide(mkFacts('write_file', 'write', [], 'high'), mkContext('desktop'), rules, deps())
+    expect(result).toMatchObject({ type: 'auto-allow', ruleId: 'user-selected' })
+  })
+
+  it('同一条多规则集合同时有 allow override 和普通 ask 时仍由 ask 优先', () => {
+    const rules = [
+      { id: 'user-allow', when: 'invocation' as const, action: 'allow' as const, userOverride: true as const, reason: 'r1' },
+      { id: 'independent-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r2' }
+    ]
+    expect(decide(mkFacts('write_file', 'write', [], 'high'), mkContext('desktop'), rules, deps()))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'independent-ask', answerer: 'user' })
+  })
+
+  it('多规则优先级：独立 deny 高于显式 ask override', () => {
+    const rules = [
+      { id: 'user-ask', when: 'invocation' as const, action: 'ask' as const, userOverride: true as const, reason: 'r1' },
+      { id: 'independent-deny', when: 'invocation' as const, action: 'deny' as const, reason: 'r2' }
+    ]
+    expect(decide(mkFacts('write_file', 'write', [], 'high'), mkContext('desktop'), rules, deps()))
+      .toMatchObject({ type: 'deny', ruleId: 'independent-deny' })
+  })
+
+  it('explicit allow override cannot bypass the deniedTools policy boundary', () => {
+    const allowOverride = { id: 'custom-allow', when: 'invocation' as const, action: 'allow' as const, userOverride: true as const, reason: 'custom allow' }
+    expect(decide(mkFacts('write_file', 'write', [], 'high'), mkContext('desktop'), [allowOverride],
+      deps({ config: { deniedTools: ['write_file'] } }))).toMatchObject({ type: 'deny', ruleId: 'denied-tools' })
+  })
+
+  it('independent ask outranks custom automatic review in either rule order', () => {
+    const facts = mkFacts('write_file', 'write', [], 'high')
+    const context = mkContext('desktop')
+    const automatic = { id: 'custom-auto', when: 'invocation' as const, action: 'auto-evaluator' as const, userOverride: true as const, reason: 'custom automatic review' }
+    const ask = { id: 'independent-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'independent ask' }
+    for (const rules of [[automatic, ask], [ask, automatic]]) {
+      expect(decide(facts, context, rules, deps())).toMatchObject({ type: 'require-confirm', ruleId: 'independent-ask', answerer: 'user' })
+    }
+
+    const allow = { id: 'custom-allow', when: 'invocation' as const, action: 'allow' as const, userOverride: true as const, reason: 'custom allow' }
+    const automaticIndependent = { id: 'independent-auto', when: 'invocation' as const, action: 'auto-evaluator' as const, reason: 'independent automatic review' }
+    for (const rules of [[allow, ask], [ask, allow]]) {
+      expect(decide(facts, context, rules, deps())).toMatchObject({ type: 'require-confirm', ruleId: 'independent-ask', answerer: 'user' })
+    }
+    for (const rules of [[allow, automaticIndependent], [automaticIndependent, allow]]) {
+      expect(decide(facts, context, rules, deps())).toMatchObject({ type: 'require-confirm', ruleId: 'independent-auto', answerer: 'agent' })
+    }
+  })
+
+  it('所有匹配规则统一按 deny > ask > auto > allow 裁决且不依赖排列顺序', () => {
+    const facts = mkFacts('write_file', 'write', [], 'high')
+    const context = mkContext('desktop')
+    const make = (id: string, action: PolicyAction) => ({ id, when: 'invocation' as const, action, userOverride: true as const, reason: id })
+    const cases: Array<[PolicyAction[], string, string]> = [
+      [['allow', 'deny'], 'deny', 'deny'],
+      [['allow', 'ask'], 'require-confirm', 'ask'],
+      [['auto-evaluator', 'ask'], 'require-confirm', 'ask'],
+      [['allow', 'auto-evaluator'], 'require-confirm', 'auto-evaluator']
+    ]
+    for (const [actions, type, ruleId] of cases) {
+      const rules = actions.map((action, index) => make(action === 'ask' ? 'ask' : action, action))
+      const expected = type === 'deny' ? { type, ruleId } : type === 'require-confirm'
+        ? { type, ruleId: ruleId === 'ask' ? 'ask' : 'auto-evaluator', answerer: ruleId === 'ask' ? 'user' : 'agent' }
+        : { type, ruleId }
+      expect(decide(facts, context, rules, deps()), actions.join(',')).toMatchObject(expected)
+      expect(decide(facts, context, [...rules].reverse(), deps()), actions.join(',')).toMatchObject(expected)
+    }
+    const tiedAsks = [make('ask-b', 'ask'), make('ask-a', 'ask')]
+    expect(decide(facts, context, tiedAsks, deps())).toMatchObject({ type: 'require-confirm', ruleId: 'ask-a' })
+    expect(decide(facts, context, [...tiedAsks].reverse(), deps())).toMatchObject({ type: 'require-confirm', ruleId: 'ask-a' })
+  })
   it('unmodeled-call 只提供同会话 exact-content 记忆；动态执行仍逐次真人确认', () => {
     const digest = 'a'.repeat(64)
     const unknownScript = mkFacts('run_script', 'execute', [

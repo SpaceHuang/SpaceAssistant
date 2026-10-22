@@ -20,7 +20,9 @@ import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { resolveClarificationControlMessage, type ClarificationResolverInput, type ClarificationResolverResult } from '../remote/clarificationInbound'
 import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSession, getRemoteAgentLease } from '../remote/remoteAgentRegistry'
-import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
+import { authorizeImInboundMessage, evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
+import { requestImIngressApproval } from '../remote/imIngressApprovalPrompt'
+import { loadEffectivePolicyRules } from '../confirmation/policyRulesRuntime'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
   buildDisambiguationReply,
@@ -195,10 +197,12 @@ export class RemoteCommandRouter {
       throw new Error('FEISHU_WAKE_SESSION_IDENTITY_INVALID')
     }
     const config = mergeFeishuConfig(this.deps.getFeishuConfig())
-    const guard = evaluateImInboundGuard({ channel: 'feishu', senderId: metadata.feishuSenderOpenId, getConfig: () => config })
+    const guard = evaluateImInboundGuard({ channel: 'feishu', senderId: metadata.feishuSenderOpenId, getConfig: () => config,
+      getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'feishu'), skipIngressPolicy: true })
     if (!guard.ok) throw new Error(`FEISHU_WAKE_AUTH_REJECTED:${guard.reason}`)
     const assertAuthorized = () => {
-      const revalidated = revalidateImInboundGuard(guard.snapshot, { getConfig: () => mergeFeishuConfig(this.deps.getFeishuConfig()) })
+      const revalidated = revalidateImInboundGuard(guard.snapshot, { getConfig: () => mergeFeishuConfig(this.deps.getFeishuConfig()),
+        getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'feishu') })
       if (!revalidated.ok) throw new Error(`FEISHU_WAKE_AUTH_REVOKED:${revalidated.reason}`)
     }
 
@@ -650,10 +654,13 @@ export class RemoteCommandRouter {
         remoteSenderAllowlist: c.remoteSenderAllowlist
       }
     }
-    const guard = evaluateImInboundGuard({
+    const guard = await authorizeImInboundMessage({
       channel: 'feishu',
       senderId: msg.senderOpenId,
-      getConfig: getGuardConfig
+      messageId: msg.messageId,
+      getConfig: getGuardConfig,
+      getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'feishu'),
+      requestApproval: (request) => requestImIngressApproval({ ...request, messageText: msg.content })
     })
     if (!guard.ok) {
       logFeishuCliEvent('warn', 'feishu.inbound.guard_reject', { reason: guard.reason })

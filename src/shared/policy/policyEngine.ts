@@ -484,6 +484,36 @@ export function decide(
     return ruleMatchesInvocation(r, policyFacts, context, deps)
   }
   const constraints = deriveInvocationPolicyConstraints(policyFacts, context, rules, deps)
+  // 第 1 步：拒绝列表是系统策略边界，任何自定义规则都不能绕过。
+  const deniedTools = deps.config.deniedTools
+  if (Array.isArray(deniedTools) && deniedTools.includes(facts.toolName)) {
+    return deny('denied-tools', `${facts.toolName} 已在禁用列表`)
+  }
+  const customActions = invocationRules.filter((rule) => rule.userOverride && matchedRule(rule))
+  const independentMatchedRules = invocationRules.filter((rule) => !rule.userOverride && matchedRule(rule))
+  const matchedCustomDeny = customActions.find((rule) => rule.action === 'deny')
+  const matchedIndependentDeny = independentMatchedRules.find((rule) => rule.action === 'deny')
+  if (matchedCustomDeny) return deny(matchedCustomDeny.id, matchedCustomDeny.reason)
+  if (matchedIndependentDeny) return deny(matchedIndependentDeny.id, matchedIndependentDeny.reason)
+  if (customActions.length) {
+    const independentRules = independentMatchedRules
+    const byAction = (action: PolicyRule['action']) => customActions
+      .filter((rule) => rule.action === action)
+      .sort((a, b) => a.id.localeCompare(b.id))[0]
+    const selectedDeny = byAction('deny')
+    if (selectedDeny) return deny(selectedDeny.id, selectedDeny.reason)
+    const selectedAsk = byAction('ask') ?? byAction('confirm-every-time') ?? independentRules
+      .filter((rule) => rule.action === 'ask' || rule.action === 'confirm-every-time' || rule.humanRequired)
+      .sort((a, b) => a.id.localeCompare(b.id))[0]
+    if (selectedAsk) return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints, 'user')
+    const selectedAuto = byAction('auto-evaluator')
+    if (selectedAuto) {
+      if (deps.autoEvaluator?.(facts, context).approve) return autoAllow(selectedAuto.id, facts)
+      return requireConfirm(selectedAuto, facts, context.sessionId, context.lane, undefined, 'agent')
+    }
+    const selectedAllow = byAction('allow')
+    if (selectedAllow && customActions.every((rule) => rule.action === 'allow') && independentRules.length === 0) return autoAllow(selectedAllow.id, facts)
+  }
   const larkMessageOutbound = facts.toolName === 'run_lark_cli' && facts.signals.some((signal) =>
     signal.kind === 'lark-subcommand' && signal.category === 'message'
   )
@@ -497,10 +527,6 @@ export function decide(
     !(facts.toolName === 'browser' || context.lane === 'desktop' && ['read_file', 'grep', 'list_directory'].includes(facts.toolName))
 
   // 第 1 步：拒绝规则（先于任何缓存查询，缓存信任不能覆盖明确拒绝）
-  const deniedTools = deps.config.deniedTools
-  if (Array.isArray(deniedTools) && deniedTools.includes(facts.toolName)) {
-    return deny('denied-tools', `${facts.toolName} 已在禁用列表`)
-  }
   const laneHardDeny = invocationRules.find(
     (r) => r.locked && r.action === 'deny' && matchedRule(r)
   )
@@ -622,7 +648,7 @@ export function decide(
 export function decideIngress(
   facts: IngressFacts,
   rules: PolicyRule[]
-): { action: 'allow' | 'deny'; ruleId: string; reason: string } {
+): { action: 'allow' | 'deny' | 'ask'; ruleId: string; reason: string } {
   const matches = (rule: PolicyRule): boolean => {
     if (rule.when !== 'ingress') return false
     const m = rule.match
@@ -632,7 +658,10 @@ export function decideIngress(
   }
   const denyRule = rules.find((rule) => rule.action === 'deny' && matches(rule))
   if (denyRule) return { action: 'deny', ruleId: denyRule.id, reason: denyRule.reason }
-  const allowRule = rules.find((rule) => matches(rule))
+  const matched = rules.filter(matches)
+  const askRule = matched.find((rule) => rule.action === 'ask' || rule.action === 'confirm-every-time' || (!rule.userOverride && rule.humanRequired))
+  if (askRule) return { action: 'ask', ruleId: askRule.id, reason: askRule.reason }
+  const allowRule = matched.find((rule) => rule.action === 'allow')
   if (allowRule) return { action: 'allow', ruleId: allowRule.id, reason: allowRule.reason }
   return { action: 'allow', ruleId: 'ingress-default-allow', reason: '默认放行' }
 }
