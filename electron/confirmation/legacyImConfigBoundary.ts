@@ -48,8 +48,13 @@ function migrateLegacyDesktopDisabledRules(db: AppDatabase): void {
   // The legacy disabled bit represented an explicit allow override and wins over
   // any partial/newer override written before migration completed.
   for (const ruleId of disabled) overrides[ruleId] = 'allow'
+  const migratedLegacyDisabledRuleIds = [...new Set([
+    ...(Array.isArray(current?.snapshot.migratedLegacyDisabledRuleIds)
+      ? current.snapshot.migratedLegacyDisabledRuleIds.filter((id): id is string => typeof id === 'string') : []),
+    ...disabled
+  ])]
   const snapshot = { ...(current?.snapshot ?? {}), selectedPackage: current?.snapshot.selectedPackage ?? readPolicyPackages(db).desktop,
-    ruleOverrides: overrides }
+    ruleOverrides: overrides, migratedLegacyDisabledRuleIds }
   commitDesktopPolicySnapshot(conn, {
     expectedRevision: current?.revision ?? 0, policyBehaviorVersion: 'desktop-v1', snapshot, updatedAt: Date.now(),
     eventId: randomUUID(), actor: 'migration', auditMetadata: { migration: 'disabled-rule-action-override' },
@@ -86,9 +91,15 @@ export function migrateLegacyImConfigBeforeChannelWrite(db: AppDatabase): void {
           ? current.snapshot.ruleOverrides as Record<string, string> : {})
       const migratedOverrides = { ...ruleOverrides }
       for (const id of disabledToMigrate) migratedOverrides[id] = 'allow'
+      const migratedLegacyDisabledRuleIds = [...new Set([
+        ...(Array.isArray(current.snapshot.migratedLegacyDisabledRuleIds)
+          ? current.snapshot.migratedLegacyDisabledRuleIds.filter((id): id is string => typeof id === 'string') : []),
+        ...disabledToMigrate
+      ])]
       const legacySelectedPackages = current.snapshot.legacySelectedPackages === undefined
         ? readLegacySelectedPackages(db) : current.snapshot.legacySelectedPackages
-      const snapshot: Record<string, unknown> = { ...normalizedSnapshot, ruleOverrides: migratedOverrides, disabledRuleIds: [], legacySelectedPackages,
+      const snapshot: Record<string, unknown> = { ...normalizedSnapshot, ruleOverrides: migratedOverrides, disabledRuleIds: [],
+        migratedLegacyDisabledRuleIds, legacySelectedPackages,
         legacyPolicyDataMigrated: true, legacyPolicyMigrationVersion: LEGACY_IM_POLICY_MIGRATION_VERSION }
       delete snapshot.legacyRuleResetIds
       const result = commitImPolicySnapshot(conn, {
@@ -123,7 +134,13 @@ export function migrateLegacyImConfigBeforeChannelWrite(db: AppDatabase): void {
     snapshot: { ...plan.snapshot, ...migrationData },
     updatedAt: Date.now(),
     eventId: randomUUID(),
-    eventKind: 'legacy-policy-migrated'
+    eventKind: 'legacy-policy-migrated',
+    beforeSnapshot: () => {
+      const now = Date.now()
+      conn.prepare(`INSERT INTO configs (key,value,created_at,updated_at) VALUES(?,?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`)
+        .run(DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify([]), now, now)
+    }
   })
   if (result.status === 'conflict') throw new Error('IM policy migration revision conflict')
 }
@@ -175,9 +192,16 @@ function mergeLegacyRuleOverrides(db: AppDatabase, snapshot: Record<string, unkn
 }
 
 function readLegacyPolicyData(db: AppDatabase): Record<string, unknown> {
+  const disabledRuleIds = readDisabledPolicyRuleIds(db)
+  const knownRuleIds = new Set(DEFAULT_POLICY_RULES.map((rule) => rule.id))
+  const unknownRule = disabledRuleIds.find((ruleId) => !knownRuleIds.has(ruleId))
+  if (unknownRule) throw new Error(`unknown disabled policy rule: ${unknownRule}`)
+  const ruleOverrides = readLegacyRuleOverrides(db)
+  for (const ruleId of disabledRuleIds) ruleOverrides[ruleId] = 'allow'
   return {
-    ruleOverrides: readLegacyRuleOverrides(db),
-    disabledRuleIds: readDisabledPolicyRuleIds(db),
+    ruleOverrides,
+    disabledRuleIds: [],
+    migratedLegacyDisabledRuleIds: disabledRuleIds,
     legacyPolicyDataMigrated: true,
     legacyPolicyMigrationVersion: LEGACY_IM_POLICY_MIGRATION_VERSION,
     legacySelectedPackages: readLegacySelectedPackages(db)

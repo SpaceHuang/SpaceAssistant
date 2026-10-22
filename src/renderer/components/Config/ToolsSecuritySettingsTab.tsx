@@ -67,6 +67,7 @@ function PolicyPackageSection({
   const [imPackageOverride, setImPackageOverride] = useState<PolicyPackage | null>(null)
   const [imPolicyVersion, setImPolicyVersion] = useState<string | null>(null)
   const [imRuleOverrides, setImRuleOverrides] = useState<Record<string, string>>({})
+  const [imMigratedLegacyDisabledRuleIds, setImMigratedLegacyDisabledRuleIds] = useState<string[]>([])
   const [savingRuleIds, setSavingRuleIds] = useState<Set<string>>(() => new Set())
 
   const actionLabel = (action: PolicyAction): string =>
@@ -90,6 +91,8 @@ function PolicyPackageSection({
     if (isPolicyPackage(snapshot.selectedPackage)) setImPackageOverride(snapshot.selectedPackage)
     setImRuleOverrides(snapshot.ruleOverrides && typeof snapshot.ruleOverrides === 'object' && !Array.isArray(snapshot.ruleOverrides)
       ? snapshot.ruleOverrides as Record<string, string> : {})
+    setImMigratedLegacyDisabledRuleIds(Array.isArray(snapshot.migratedLegacyDisabledRuleIds)
+      ? [...new Set(snapshot.migratedLegacyDisabledRuleIds.filter((id): id is string => typeof id === 'string'))] : [])
   }
 
   const refreshImPolicy = async () => {
@@ -174,6 +177,9 @@ function PolicyPackageSection({
       if (result.status !== 'committed' && result.status !== 'already-migrated') return false
       if (change.kind === 'package') setImPackageOverride(change.package)
       if (change.kind === 'rule-override') setImRuleOverrides((current) => ({ ...current, [change.ruleId]: change.action }))
+      if (change.kind === 'rule-override' || change.kind === 'rule-reset') {
+        setImMigratedLegacyDisabledRuleIds((current) => current.filter((id) => id !== change.ruleId))
+      }
       if (change.kind === 'rule-reset') setImRuleOverrides((current) => {
         const next = { ...current }
         delete next[change.ruleId]
@@ -347,6 +353,7 @@ function PolicyPackageSection({
         return {
           ...view,
           action: (imRuleOverrides[r.id] ?? view.action) as SecuritySettingsRuleView['action'],
+          migratedFromLegacyDisabled: imMigratedLegacyDisabledRuleIds.includes(r.id),
         }
       })
       .filter((r) => !r.lanes || r.lanes.includes(lane))
@@ -420,6 +427,7 @@ function PolicyPackageSection({
           width: 140,
           render: (_, r) => (
             <Space size={4}>
+              {r.migratedFromLegacyDisabled ? <Tag color="blue">{t('toolsSecurity.policy.migratedFromLegacyDisabled')}</Tag> : null}
               {r.overridden ? <Tag color="orange">{t('toolsSecurity.policy.overriddenTag')}</Tag> : null}
               {r.overridden ? (
                 <Button size="small" type="link" loading={savingRuleIds.has(r.id)} disabled={savingRuleIds.has(r.id)} onClick={() => resetRule(lane, r)}>

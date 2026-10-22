@@ -70,6 +70,13 @@ export function readDesktopPolicyOverrides(db: AppDatabase): Array<{ ruleId: str
   })
 }
 
+export function readDesktopMigratedLegacyDisabledRuleIds(db: AppDatabase): string[] {
+  const snapshot = desktopSnapshot(db)?.snapshot.migratedLegacyDisabledRuleIds
+  if (!Array.isArray(snapshot)) return []
+  const known = new Set(DEFAULT_POLICY_RULES.map((rule) => rule.id))
+  return [...new Set(snapshot.filter((id): id is string => typeof id === 'string' && known.has(id)))]
+}
+
 export function writePolicyPackages(db: AppDatabase, packages: PolicyPackageMap): void {
   setConfigValue(db, POLICY_PACKAGES_CONFIG_KEY, JSON.stringify(packages))
 }

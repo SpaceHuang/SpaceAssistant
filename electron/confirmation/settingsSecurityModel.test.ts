@@ -79,6 +79,12 @@ describe('toRuleViews（规则合并视图）', () => {
     expect(toRuleViews(rules, [])[0]?.capabilities).toEqual(['toolkit.call', 'run_lark_cli', 'action.mcp.add'])
   })
 
+  it('marks rules migrated from the legacy disabled list', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [{ id: 'legacy-rule', when: 'invocation' as const, action: 'deny' as const, reason: 'r' }]
+    expect(toRuleViews(rules, [], [], ['legacy-rule'])[0]).toMatchObject({ migratedFromLegacyDisabled: true })
+  })
+
   it('lanes 透传 match.lane（无 lane 限定的规则保持缺省=全链路通用）', async () => {
     const { toRuleViews } = await import('./settingsSecurityModel')
     const rules = [

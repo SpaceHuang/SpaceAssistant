@@ -12,6 +12,7 @@ import {
   loadEffectivePolicyRules,
   resolveEffectivePolicyRulesWithOrigin,
   readDisabledPolicyRuleIds,
+  readDesktopMigratedLegacyDisabledRuleIds,
   readPolicyPackages,
   readSecurityAuditRetentionDays,
   writeDisabledPolicyRuleIds,
@@ -157,6 +158,15 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
       expectedRevision: 0, policyBehaviorVersion: 'desktop-v1', snapshot: {}, updatedAt: 2, eventId: 'desktop-stale'
     })).toEqual({ status: 'conflict', currentRevision: 1 })
     expect(conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()).toEqual({ epoch: 1 })
+  })
+
+  it('desktop rule view exposes known migration source IDs from the snapshot', () => {
+    const d = db()
+    commitDesktopPolicySnapshot(getDbConnection(d), { policyBehaviorVersion: 'desktop-v1', snapshot: {
+      selectedPackage: 'custom', ruleOverrides: { 'remote-shell-disabled': 'allow' },
+      migratedLegacyDisabledRuleIds: ['remote-shell-disabled', 'unknown-future-rule']
+    }, updatedAt: 1, eventId: 'desktop-migration-source' })
+    expect(readDesktopMigratedLegacyDisabledRuleIds(d)).toEqual(['remote-shell-disabled'])
   })
 
   it('桌面快照启用后仍保留旧配置中的 IM package，直至 IM 自身快照迁移完成', () => {

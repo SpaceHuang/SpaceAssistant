@@ -190,7 +190,7 @@ setDefaultAgentRuntime(
   })
 )
 
-describe('legacy desktop rule toggle compatibility', () => {
+describe('legacy desktop rule toggle removal', () => {
   let ipc: ReturnType<typeof mockIpcMain>
 
   beforeEach(() => {
@@ -201,8 +201,8 @@ describe('legacy desktop rule toggle compatibility', () => {
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx())
   })
 
-  it('registers the old security:set-rule-enabled channel until T8', () => {
-    expect(ipc.getHandler('security:set-rule-enabled')).toBeDefined()
+  it('does not register the old security:set-rule-enabled channel', () => {
+    expect(ipc.getHandler('security:set-rule-enabled')).toBeUndefined()
   })
 
   it.each([

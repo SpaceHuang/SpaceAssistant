@@ -392,8 +392,6 @@ export type SpaceAssistantApi = {
     ruleId: string
     expectedRevision: number
   }) => Promise<{ ok: true; removed: number } | { ok: false; error: string }>
-  /** Temporary legacy toggle compatibility; disabled maps to allow, enabled resets to the default action. */
-  securitySetRuleEnabled: (payload: { ruleId: string; enabled: boolean }) => Promise<{ ok: true } | { ok: false; error: string }>
   /** 确认记忆管理：decision_cache 全量列表。 */
   securityListDecisionCache: () => Promise<DecisionCacheEntry[]>
   /** 清除确认记忆（单条带 key / 全部缺省），落 cache.clear 审计。 */

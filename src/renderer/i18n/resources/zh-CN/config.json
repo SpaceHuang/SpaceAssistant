@@ -818,6 +818,7 @@
       "defaultColumn": "默认",
       "stateColumn": "状态",
       "overriddenTag": "已覆盖",
+      "migratedFromLegacyDisabled": "由旧停用设置迁移",
       "lockedTag": "锁定",
       "reset": "恢复默认",
       "actionDeny": "禁止",

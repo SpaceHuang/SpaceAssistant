@@ -6,7 +6,7 @@
 - **验收与不变量真源：** 方案 INV-01–INV-10；产品行为 AC-1–AC-22 以需求稿为准
 - **代码基线：** `109a938404124235d632e4cdbd4f9e06eaa48728`
 
-本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 renderer 合并用例 21 项通过，i18n normal/strict 与 renderer typecheck 通过；Impeccable detector 返回 `[]`。Strict i18n 报出的 1713 条均位于测试文件（符合仓库例外），源码为 0。Phase 5 T8/T9 仍待关闭。T8 旧 rule-enabled shim 当前保留，待 T8 所有 caller 核验后删除。
+本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 renderer 合并用例 21 项通过，i18n normal/strict 与 renderer typecheck 通过；Impeccable detector 返回 `[]`。Phase 5 T8 已删除旧 rule-enabled shim，并完成 AC/INV 矩阵；跨域集合 40 文件 / 802 项通过。Strict i18n 报出的 1714 条均位于测试文件（符合仓库例外），源码为 0。T9 回滚证据与最终全仓验收进行中；T10 外部验收未开始。
 
 本轮计划评审（2026-10-22）处理：B1 全规则覆盖及消费点、B4 T4/T7/T8 的兼容接口顺序；B2/B3/B5 分别在 T6/T5/T4 按最小范围补充。负责人确认 ingress 消息须经批准后才进入处理，exposure 对象须经批准后才暴露；这是本期必做能力，见需求 AC-21/AC-22。
 
@@ -279,19 +279,63 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
 
 **阶段输入：** Phase 1–4 产物；T8→T9。**阶段产出：** 完整 AC/INV 映射、关闭证据、可执行回滚步骤。**允许改动：** 测试夹具、缺陷修复、文档证据与范围内代码；不新增产品行为。**移除兼容：** 删除 T8 已核验迁移的旧 rule-enabled shim 与剩余临时标记。**失败回退：** 源码可恢复；迁移数据按已演练步骤恢复。
 
-- [ ] **T8 · 移除旧接口并完成 AC × INV × 测试与安全审计矩阵**
+- [x] **T8 · 移除旧接口并完成 AC × INV × 测试与安全审计矩阵**
   - **目标文件：** 所有阶段相关 tests；方案验收映射；必要的 `src/shared/security/systemInvariantRegistry.ts`/boundary tests（仅当代码核查证明新增了真正不可配置系统 invariant）。
   - **产物：** 删除 `securitySetRuleEnabled`/`rule-enabled` shim 的变更与静态搜索记录；AC-1–AC-22 → 用例名 → 命令 → invocation/ingress/exposure、dispatch/audit evidence 矩阵；外部项单列。
   - **完成判据：** T7 已迁移所有 renderer caller；删除共享 API、preload、handler、旧 payload 后本任务可独立通过类型检查和相关测试；AC-1–AC-22 有可达证据（含真实 ingress/exposure ask 消费者），每个 INV 有边界测试；审计不落正文/secret；不以 registry 锁定普通策略。
   - **验证命令：** `rg -n "securitySetRuleEnabled|rule-enabled|set-rule-enabled" electron src` 确认无生产引用；运行相关定向测试、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run check:system-invariant-registry`；涉及 agent-sdk 协议时补 `npm run check:agent-sdk`。
-  - **环境 / 状态：** 本机 / 未开始；完成全部 AC/INV 映射。
+  - **环境 / 状态：** 本机 / 已完成；RED：旧接口不存在断言在 handler/API 仍存在时失败；GREEN：移除 `securityIpc` handler、preload 暴露与 shared API 类型后通过。`vitest run electron/ipc/securityIpc.policy.test.ts electron/appIpc.securityRules.test.ts electron/ipc/policyIpc.test.ts` 3 files / 18 tests；集成集合 40 files / 802 tests；`typecheck:renderer`、`typecheck:shared`、`check:system-invariant-registry`、`check:agent-sdk`、`build:electron:incremental`、`i18n:check`、`i18n:check:strict` 均通过。`rg -n 'securitySetRuleEnabled|rule-enabled|set-rule-enabled' electron src packages --glob '!**/*.test.*'` 无生产引用。AC/INV 证据见下表；Impeccable 静态 detector 为 `[]`。
 
-- [ ] **T9 · 演练数据迁移、事务失败与版本回滚并关闭源码阶段**
+#### AC 与测试证据映射
+
+自动化用例标题可在所列文件中检索；本次合并门禁 `npm exec vitest run <相关文件>` 共 40 files / 802 tests。
+
+| 需求 | 可复核用例与证据文件 |
+|---|---|
+| AC-1 | `laneProfiles.test.ts` 全规则/所有 lane 动作矩阵；`policyPackages.test.ts` 校验；`ToolsSecuritySettingsTab.test.tsx` 动作选项 |
+| AC-2 | `policyEngine.test.ts` 显式 allow 清除同规则 locked、humanRequired、confirm-every-time 门控 |
+| AC-3 | `policyEngine.test.ts` 用户动作优先于旧 human gate；`policyPackages.test.ts` 显式覆盖解析 |
+| AC-4 | `policyEngine.test.ts` 显式动作遵循旧逐次确认语义；`agentSdkSafetyPolicy.test.ts` gate re-entry |
+| AC-5 | `policyPackages.test.ts` locked invocation/ingress/exposure 可显式覆盖并剥离旧门控 |
+| AC-6 | `policyEngine.test.ts` 显式 deny 与组合裁决；`policyIpc.test.ts` deny 写入 |
+| AC-7 | `legacyImConfigBoundary.startup.test.ts` disabled→allow、原子清除与来源 marker；`ToolsSecuritySettingsTab.test.tsx` 迁移标签 |
+| AC-8 | `policyIpc.test.ts`、`securityIpc.policy.test.ts` reset；UI reset 测试 |
+| AC-9 | `policyPackages.test.ts`、`policyRulesRuntime.test.ts`、`policyIpc.test.ts` 套餐与覆盖保存/读取 |
+| AC-10 | `policyEngine.test.ts` deny > ask > auto > allow 混合裁决与排列稳定性 |
+| AC-11 | `policyEngine.test.ts` allow 与 ask 混合命中及 ask 胜出 |
+| AC-12 | `policyEngine.test.ts` ask 与 auto 混合命中及优先级 |
+| AC-13 | `agentSdkSafetyPolicy.test.ts` 策略变化后旧批准失效并重新进入 gate |
+| AC-14 | `packages/agent-sdk/test/turn.test.ts` 最终复核转 ask；`remote/deferredResumeCoordinator.test.ts` stale todo |
+| AC-15 | `packages/agent-sdk/test/executionAdmission.test.ts` admission 版本核验与未进入执行边界 |
+| AC-16 | `packages/agent-sdk/test/toolExecutionPort.test.ts` dispatch port 授权终检 |
+| AC-17 | `permitBoundCoordinatorDispatch.test.ts` prepared/claim 间版本漂移时 executor 零调用 |
+| AC-18 | `permitBoundCoordinatorDispatch.test.ts` permit consume 后 claim barrier 与 executor 已进入边界；Hosted policy-change 测试 |
+| AC-19 | `policyIpc.test.ts` revision conflict；`appIpc.securityRules.test.ts` expectedRevision；UI 冲突刷新且不误报成功 |
+| AC-20 | `settingsAudit.test.ts` before/after；`imPolicyStore.test.ts` revision/audit 原子性；`securityAuditLog.test.ts` 敏感值脱敏 |
+| AC-21 | `ingress.test.ts` ask 批准前阻止处理；`imIngressApprovalPrompt.test.ts` 一次性原消息批准；`imInboundGuard.test.ts` deny/allow/ask |
+| AC-22 | `exposure.test.ts` ask 批准前不暴露、批准后暴露；`toolsConfigRuntime.test.ts`、`effectiveTools.test.ts` |
+
+#### 不变量与边界测试映射
+
+| 不变量 | 边界证据 |
+|---|---|
+| INV-01 全规则×lane×动作并接真实消费者 | `laneProfiles.test.ts`、`policyIpc.test.ts`、`ingress.test.ts`、`exposure.test.ts` |
+| INV-02 每条规则只有用户最终动作来源 | `policyPackages.test.ts`、`policyEngine.test.ts`、`agentSdkSafetyPolicy.test.ts` |
+| INV-03 唯一稳定优先级与胜出规则 | `policyEngine.test.ts` 多规则组合/排列用例 |
+| INV-04 旧 disabled 迁移为普通 allow 且可幂等恢复 | `legacyImConfigBoundary.startup.test.ts`、`policyRulesRuntime.test.ts`、`policyPackages.test.ts` |
+| INV-05 策略 revision 变化使旧审批失效 | `imPolicyStore.test.ts`、`agentSdkSafetyPolicy.test.ts`、`deferredResumeCoordinator.test.ts` |
+| INV-06 final-check 只核验 permit/revision | `executionAdmission.test.ts`、`toolExecutionPort.test.ts`、`permitBoundCoordinatorDispatch.test.ts` |
+| INV-07 snapshot/revision/epoch/失效/audit 同事务 | `imPolicyStore.test.ts`、`policyIpc.test.ts`；Desktop writer 测试验证 revision 与审计元数据 |
+| INV-08 设置模型与 runtime 使用同一动作来源 | `settingsSecurityModel.test.ts`、`policyRulesRuntime.test.ts`、`ToolsSecuritySettingsTab.test.tsx` |
+| INV-09 审计不含消息正文或敏感参数 | `securityAuditLog.test.ts`、`settingsAudit.test.ts` |
+| INV-10 嵌套调用 floor 取父调用最新有效动作 | `agentSdkSafetyPolicy.test.ts`、`turn.test.ts` 父策略重建/重判用例 |
+
+- [～] **T9 · 演练数据迁移、事务失败与版本回滚并关闭源码阶段**
   - **目标文件：** `imPolicyStore.test.ts`、`policyRulesRuntime.test.ts`、迁移 tests、相关计划/结果记录。
   - **产物：** 旧 disabled fixtures 升级前后快照；迁移重复运行、事务中断、部分 invalid legacy IDs、并发 policy write conflict、代码回退前 pending permit invalidation 记录。
   - **完成判据：** 测试证明迁移前规则集与旧 disabled list 可恢复；迁移提交不可出现覆盖与 disabled 两种状态并存；失败迁移保留原始数据；回退步骤先停止 writer、失效 pending permit、恢复一致快照；阶段相关全量测试和全仓 `npm test` 只在阶段收尾/最终验收执行；必要 build/typecheck/i18n 门禁通过。
   - **验证命令：** migration/recovery 定向测试；阶段最终 `npm test`；`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run i18n:check`；`git diff --check`。
-  - **环境 / 状态：** 本机 / 未开始；源码关闭证据不等于外部验收完成。
+  - **环境 / 状态：** 本机 / 验收中。`legacyImConfigBoundary.startup.test.ts` 验证未知 ID 或 snapshot 持久化失败时旧 disabled 原值仍可读；成功迁移用例验证 allow override 与 disabled list 同事务切换。`imPolicyStore.test.ts` 验证 audit/持久化失败整体回滚，以及恢复经校验的历史快照会递增 revision/epoch、撤销旧 authorization 并失效 pending todo/resume request，dispatching 项不伪称取消；revision 冲突不覆盖胜者。继续执行阶段收尾全仓测试、完整 build 和类型/i18n 门禁后关闭。本次为隔离 SQLite fixture 演练，不代表真实存量数据库/发布包验收，后者保留在 T10。
 
 - [ ] **Phase 5 关闭门槛**
   - **证据来源：** T8 的 AC/INV 矩阵，T9 的迁移/回滚演练，Phase 0–4 测试结果。

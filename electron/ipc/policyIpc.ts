@@ -82,6 +82,8 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
         ? snapshot.ruleOverrides as Record<string, unknown> : {}
       overrides[change.ruleId] = change.action as PolicyAction
       snapshot.ruleOverrides = overrides
+      snapshot.migratedLegacyDisabledRuleIds = Array.isArray(snapshot.migratedLegacyDisabledRuleIds)
+        ? snapshot.migratedLegacyDisabledRuleIds.filter((id): id is string => typeof id === 'string' && id !== change.ruleId) : []
       const resetIds = new Set(Array.isArray(snapshot.legacyRuleResetIds)
         ? snapshot.legacyRuleResetIds.filter((id): id is string => typeof id === 'string') : [])
       resetIds.delete(change.ruleId)
@@ -94,6 +96,8 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
         ? snapshot.ruleOverrides as Record<string, unknown> : {}
       delete overrides[change.ruleId]
       snapshot.ruleOverrides = overrides
+      snapshot.migratedLegacyDisabledRuleIds = Array.isArray(snapshot.migratedLegacyDisabledRuleIds)
+        ? snapshot.migratedLegacyDisabledRuleIds.filter((id): id is string => typeof id === 'string' && id !== change.ruleId) : []
       if (snapshot.legacyPolicyMigrationVersion !== LEGACY_IM_POLICY_MIGRATION_VERSION) {
         const resetIds = new Set(Array.isArray(snapshot.legacyRuleResetIds)
           ? snapshot.legacyRuleResetIds.filter((id): id is string => typeof id === 'string') : [])

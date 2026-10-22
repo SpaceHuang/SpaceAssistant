@@ -332,7 +332,7 @@ describe('SecuritySettingsTab（§7 五区）', () => {
     })
     window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
       domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
-      snapshot: { selectedPackage: 'custom', ruleOverrides: {} }
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {}, migratedLegacyDisabledRuleIds: ['remote-shell-disabled'] }
     })
     renderTab()
     const panel = await openLaneTab('IM 远程')
@@ -341,6 +341,7 @@ describe('SecuritySettingsTab（§7 五区）', () => {
     const ruleRow = within(panel).getByText('remote-shell-disabled').closest('tr')!
     expect(ruleRow.querySelector('.ant-switch')).toBeNull()
     expect(within(ruleRow as HTMLElement).getByRole('combobox')).toBeTruthy()
+    expect(within(ruleRow as HTMLElement).getByText('由旧停用设置迁移')).toBeTruthy()
     // 桌面规则不出现在微信 Tab
     expect(within(panel).queryByText('script-clean-allow-desktop')).toBeNull()
   })

@@ -52,10 +52,12 @@ export function buildSettingsSecurityModel(args: {
 export function toRuleViews(
   rules: PolicyRule[],
   overrides: Array<{ ruleId: string; action: PolicyRule['action'] }>,
-  disabledRuleIds?: string[]
+  disabledRuleIds?: string[],
+  migratedLegacyDisabledRuleIds?: string[]
 ): SecuritySettingsRuleView[] {
   const byId = new Map(overrides.map((o) => [o.ruleId, o]))
   const disabled = new Set(disabledRuleIds ?? [])
+  const migrated = new Set(migratedLegacyDisabledRuleIds ?? [])
   return rules.map((rule) => {
     const o = byId.get(rule.id)
     return {
@@ -67,6 +69,7 @@ export function toRuleViews(
       locked: rule.locked === true,
       reason: rule.reason,
       overridden: o != null && o.action !== rule.action,
+      ...(migrated.has(rule.id) ? { migratedFromLegacyDisabled: true } : {}),
       ...(rule.match?.lane ? { lanes: rule.match.lane } : {}),
       ...(rule.match ? {
         capabilities: [...new Set([

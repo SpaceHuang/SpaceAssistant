@@ -26,6 +26,8 @@ export interface SecuritySettingsRuleView {
   locked: boolean
   reason: string
   overridden: boolean
+  /** True when this override was migrated from the removed legacy disabled list. */
+  migratedFromLegacyDisabled?: boolean
   /** 规则匹配的工具名和显式 toolkit capability id，供用户查看适用能力范围。 */
   capabilities?: string[]
   /** 规则适用链路（rule.match.lane）；缺省表示不限定链路、全链路通用。 */

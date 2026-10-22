@@ -133,6 +133,20 @@ describe('policy domain read IPC contract', () => {
     db.close()
   })
 
+  it('clears a migrated-source badge when the user explicitly edits that rule', async () => {
+    const { db, handlers } = registeredHandlers()
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: {
+      package: 'custom', ruleOverrides: { 'remote-outside-write-deny': 'allow' },
+      migratedLegacyDisabledRuleIds: ['remote-outside-write-deny']
+    }, updatedAt: 1, eventId: 'seed-migrated-source' })
+    const before = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })
+    await handlers.get('policy:write')!({}, { lane: 'wechat', expectedRevision: before.revision,
+      change: { kind: 'rule-override', ruleId: 'remote-outside-write-deny', action: 'ask' } })
+    expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] }).snapshot.migratedLegacyDisabledRuleIds).toEqual([])
+    db.close()
+  })
+
   it('returns a revision conflict without changing snapshot, authorization epoch, or audit', async () => {
     const { db, handlers } = registeredHandlers()
     const conn = getDbConnection(db)

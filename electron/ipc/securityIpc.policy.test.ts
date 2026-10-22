@@ -3,7 +3,7 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database'
 import { registerSecurityIpc } from './securityIpc'
 import type { AppIpcContext } from '../appIpc'
-import { readPolicyBehaviorSnapshot } from '../confirmation/imPolicyStore'
+import { commitDesktopPolicySnapshot, readPolicyBehaviorSnapshot } from '../confirmation/imPolicyStore'
 
 const dbs: ReturnType<typeof createMemoryAppDb>[] = []
 afterEach(() => dbs.splice(0).forEach((db) => db.close()))
@@ -20,21 +20,22 @@ function registerHandlers() {
 }
 
 describe('security policy action API compatibility contract', () => {
-  it('keeps the legacy toggle handler during T4/T7 compatibility window', () => {
+  it('does not expose the legacy toggle handler after renderer migration', () => {
     const { handlers } = registerHandlers()
-    expect(handlers.has('security:set-rule-enabled')).toBe(true)
+    expect(handlers.has('security:set-rule-enabled')).toBe(false)
   })
 
-  it('maps legacy disabled to allow and enabled to reset-default through policy snapshots', async () => {
+  it('clears a desktop migration badge after an explicit action update', async () => {
     const { db, handlers } = registerHandlers()
-    const toggle = handlers.get('security:set-rule-enabled')!
-    const ruleId = 'remote-outside-read-deny'
-    await toggle({}, { ruleId, enabled: false })
-    expect(readPolicyBehaviorSnapshot(getDbConnection(db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }).snapshot.ruleOverrides)
-      .toMatchObject({ [ruleId]: 'allow' })
-
-    await toggle({}, { ruleId, enabled: true })
-    expect(readPolicyBehaviorSnapshot(getDbConnection(db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }).snapshot.ruleOverrides)
-      .not.toHaveProperty(ruleId)
+    const conn = getDbConnection(db)
+    commitDesktopPolicySnapshot(conn, { policyBehaviorVersion: 'desktop-v1', snapshot: {
+      selectedPackage: 'custom', ruleOverrides: { 'remote-shell-disabled': 'allow' },
+      migratedLegacyDisabledRuleIds: ['remote-shell-disabled']
+    }, updatedAt: 1, eventId: 'desktop-migration-badge-seed' })
+    const result = await handlers.get('security:set-rule-override')!({}, {
+      ruleId: 'remote-shell-disabled', action: 'ask', lane: 'desktop', expectedRevision: 1
+    })
+    expect(result).toMatchObject({ ok: true })
+    expect(readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }).snapshot.migratedLegacyDisabledRuleIds).toEqual([])
   })
 })

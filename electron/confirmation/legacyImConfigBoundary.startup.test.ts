@@ -152,6 +152,7 @@ describe('legacy IM policy migration at startup', () => {
     expect(snapshot.snapshot.ruleOverrides).toMatchObject({
       'remote-shell-disabled': 'allow', 'script-network-deny-remote': 'allow'
     })
+    expect(snapshot.snapshot.migratedLegacyDisabledRuleIds).toEqual(['remote-shell-disabled', 'script-network-deny-remote'])
     expect(snapshot.snapshot.disabledRuleIds).toEqual([])
     expect(JSON.parse(getConfigValue(db, 'config.disabledPolicyRuleIds') ?? '[]')).toEqual([])
     db.close()
@@ -178,6 +179,8 @@ describe('legacy IM policy migration at startup', () => {
 
     expect(readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }).snapshot.ruleOverrides)
       .toEqual({ 'remote-shell-disabled': 'allow' })
+    expect(readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }).snapshot.migratedLegacyDisabledRuleIds)
+      .toEqual(['remote-shell-disabled'])
     expect(JSON.parse(getConfigValue(db, 'config.disabledPolicyRuleIds') ?? '[]')).toEqual([])
     db.close()
   })
