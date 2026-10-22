@@ -1,12 +1,12 @@
 # 自定义安全策略完整可配置执行计划
 
 - **日期：** 2026-10-22
-- **状态：** Phase 0–4 已关闭；Phase 5 源码集成与回滚验收进行中；T10 外部验收未开始
+- **状态：** Phase 0–5 源码阶段已关闭；Phase 6/T10 外部验收未开始
 - **方案真源：** [自定义安全策略完整可配置开发计划](./custom-policy-full-control-development-plan.md)
 - **验收与不变量真源：** 方案 INV-01–INV-10；产品行为 AC-1–AC-22 以需求稿为准
 - **代码基线：** `109a938404124235d632e4cdbd4f9e06eaa48728`
 
-本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 renderer 合并用例 21 项通过，i18n normal/strict 与 renderer typecheck 通过；Impeccable detector 返回 `[]`。Phase 5 T8 已删除旧 rule-enabled shim，并完成 AC/INV 矩阵；跨域集合 40 文件 / 802 项通过。Strict i18n 报出的 1714 条均位于测试文件（符合仓库例外），源码为 0。T9 回滚证据与最终全仓验收进行中；T10 外部验收未开始。
+本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 renderer 合并用例 21 项通过，i18n normal/strict 与 renderer typecheck 通过；Impeccable detector 返回 `[]`。Phase 5 T8 已删除旧 rule-enabled shim，并完成 AC/INV 矩阵；跨域集合 40 文件 / 802 项通过。Strict i18n 报出的 1714 条均位于测试文件（符合仓库例外），源码为 0。T9 隔离 SQLite 回滚演练与全仓最终验收已完成；T10 外部验收未开始。
 
 本轮计划评审（2026-10-22）处理：B1 全规则覆盖及消费点、B4 T4/T7/T8 的兼容接口顺序；B2/B3/B5 分别在 T6/T5/T4 按最小范围补充。负责人确认 ingress 消息须经批准后才进入处理，exposure 对象须经批准后才暴露；这是本期必做能力，见需求 AC-21/AC-22。
 
@@ -202,14 +202,14 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
   - **产物：** action × lane × when × policy rule 合同测试；locked rule 可覆盖/重置；`confirm-every-time` 映射；显式覆盖移除同规则默认门控测试。
   - **完成判据：** 设置页每条 desktop 规则支持四动作，每条 IM 规则支持三动作，包括 invocation、ingress、exposure；未知规则、错误 lane、非法动作仍拒绝；`automation` 仍不可用户配置；`locked`、`humanRequired`、默认 floor 不拒绝显式用户动作；保留规则身份/匹配结构校验及 automation 当前 floor；子调用 floor 不扩大父调用当前用户策略。该任务只验动作合同，消费者语义在 T3。
   - **验证命令：** `npm exec vitest run src/shared/policy/laneProfiles.test.ts src/shared/policy/policyPackages.test.ts src/shared/policy/policyPackages.recovery.test.ts src/shared/policy/policyPackages.scope.test.ts src/shared/policy/defaultRules.contract.test.ts electron/confirmation/policyFloor.test.ts electron/confirmation/policyRulesRuntime.test.ts`。
-  - **环境 / 状态：** 本机 / 未开始；完成 AC-1、AC-2–AC-6 的动作域部分，INV-01、INV-02。
+  - **环境 / 状态：** 本机 / 已完成；完成 AC-1、AC-2–AC-6 的动作域部分，INV-01、INV-02。
 
 - [x] **T3 · 在 invocation、ingress、exposure 消费点落实动作语义**
   - **目标文件：** `src/shared/policy/policyEngine.ts`/decision tests；`electron/confirmation/ingress.ts` 与入口 caller；`electron/confirmation/exposure.ts`、`electron/toolsConfigRuntime.ts`、`electron/effectiveTools.ts` 与暴露 caller；相关审批 adapter、trace 和 caller tests。
   - **产物：** invocation 全命中动作集合及 trace；ingress ask 的待处理消息批准与批准后继续；exposure ask 的工具/能力对象批准与批准后暴露；各 when 至少一条真实消费者测试。
   - **完成判据：** invocation 任意规则排列结果相同并符合 deny > ask > auto > allow；入口 deny 阻断进入、allow 继续；ask 经人工批准才继续原消息；exposure deny 不暴露、allow 正常暴露、ask 经人工批准才暴露目标；旧审批/授权不得跨对象批准；缓存/自动审核不越过优先级。入口与暴露两类 ask 均须实现并通过需求 AC-21/AC-22。
   - **验证命令：** `npm exec vitest run src/shared/policy/policyEngine.test.ts src/shared/policy/policyDecision.test.ts src/shared/policy/memoryEligibility.test.ts src/shared/policy/imPolicyBehaviorResolvers.test.ts electron/confirmation/policyFloor.test.ts electron/confirmation/ingress.test.ts electron/confirmation/exposure.test.ts electron/toolsConfigRuntime.test.ts electron/effectiveTools.test.ts`。
-  - **环境 / 状态：** 本机 / 未开始；完成 AC-1–AC-6、AC-10–AC-12、AC-21–AC-22，INV-01–INV-03。
+  - **环境 / 状态：** 本机 / 已完成；完成 AC-1–AC-6、AC-10–AC-12、AC-21–AC-22，INV-01–INV-03。
 
 - [x] **Phase 1 关闭门槛**
   - **证据来源：** T2 与 T3 的测试/决策 trace 断言；若改 `src/shared/confirmation/types.ts`，同时提供 `npm run typecheck:shared` 输出。
@@ -330,16 +330,16 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
 | INV-09 审计不含消息正文或敏感参数 | `securityAuditLog.test.ts`、`settingsAudit.test.ts` |
 | INV-10 嵌套调用 floor 取父调用最新有效动作 | `agentSdkSafetyPolicy.test.ts`、`turn.test.ts` 父策略重建/重判用例 |
 
-- [～] **T9 · 演练数据迁移、事务失败与版本回滚并关闭源码阶段**
+- [x] **T9 · 演练数据迁移、事务失败与版本回滚并关闭源码阶段**
   - **目标文件：** `imPolicyStore.test.ts`、`policyRulesRuntime.test.ts`、迁移 tests、相关计划/结果记录。
   - **产物：** 旧 disabled fixtures 升级前后快照；迁移重复运行、事务中断、部分 invalid legacy IDs、并发 policy write conflict、代码回退前 pending permit invalidation 记录。
   - **完成判据：** 测试证明迁移前规则集与旧 disabled list 可恢复；迁移提交不可出现覆盖与 disabled 两种状态并存；失败迁移保留原始数据；回退步骤先停止 writer、失效 pending permit、恢复一致快照；阶段相关全量测试和全仓 `npm test` 只在阶段收尾/最终验收执行；必要 build/typecheck/i18n 门禁通过。
   - **验证命令：** migration/recovery 定向测试；阶段最终 `npm test`；`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run i18n:check`；`git diff --check`。
-  - **环境 / 状态：** 本机 / 验收中。`legacyImConfigBoundary.startup.test.ts` 验证未知 ID 或 snapshot 持久化失败时旧 disabled 原值仍可读；成功迁移用例验证 allow override 与 disabled list 同事务切换。`imPolicyStore.test.ts` 验证 audit/持久化失败整体回滚，以及恢复经校验的历史快照会递增 revision/epoch、撤销旧 authorization 并失效 pending todo/resume request，dispatching 项不伪称取消；revision 冲突不覆盖胜者。继续执行阶段收尾全仓测试、完整 build 和类型/i18n 门禁后关闭。本次为隔离 SQLite fixture 演练，不代表真实存量数据库/发布包验收，后者保留在 T10。
+  - **环境 / 状态：** 本机 / 已完成。`legacyImConfigBoundary.startup.test.ts` 验证未知 ID 或 snapshot 持久化失败时旧 disabled 原值仍可读；成功迁移用例验证 allow override 与 disabled list 同事务切换。`imPolicyStore.test.ts` 验证 audit/持久化失败整体回滚，以及恢复经校验的历史快照会递增 revision/epoch、撤销旧 authorization 并失效 pending todo/resume request，dispatching 项不伪称取消；revision 冲突不覆盖胜者。旧 automation disabled-list 夹具已替换/移除：automation lane 不支持 custom policy，Hosted policy-change claim 屏障由 Desktop Hosted 集成用例覆盖。RED：全量 `npm test` 初次发现 2 个依赖已废弃 disabled runtime 语义的 `approvalAgent.test.ts` 用例失败；GREEN：更新夹具/移除 automation 不可配置 lane 的伪策略变化后，`npm exec vitest run electron/confirmation/approvalAgent.test.ts electron/claudeStreamHandlers.hostedIntegration.test.ts` 2 files / 168 tests 通过。最终 `npm test` 1102 files passed / 1 skipped，10,688 tests passed / 112 skipped；`npm run build`、`typecheck:renderer`、`typecheck:shared`、`i18n:check`、`i18n:check:strict`、`check:system-invariant-registry`、`check:agent-sdk`、`check:no-nul`、`git diff --check` 均通过。i18n strict 发现 1714 个中文命中，全部位于测试文件，源码 0。全量构建有既存 Vite ineffective dynamic import 与大 chunk 警告，但构建通过。演练基于隔离 SQLite fixtures；真实存量数据库/发布包验收保留在 T10。
 
-- [ ] **Phase 5 关闭门槛**
+- [x] **Phase 5 关闭门槛**
   - **证据来源：** T8 的 AC/INV 矩阵，T9 的迁移/回滚演练，Phase 0–4 测试结果。
-  - **完成判据：** AC-1–AC-22 无未归属项；所有当前可运行门禁通过；任何环境缺失项标为外部待验收，不作已通过表述；回滚证据早于任何启用/发布动作。
+  - **完成判据：** AC-1–AC-22 均有本机证据映射；所有当前可运行门禁通过；外部环境项继续标为待验收，不作已通过表述；SQLite 回滚证据与 Phase 5 源码验收完成，T10 启用/发布前置条件未被声称满足。
 
 ### Phase 6：外部验收与启用
 
