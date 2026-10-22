@@ -6,7 +6,7 @@
 - **验收与不变量真源：** 方案 INV-01–INV-10；产品行为 AC-1–AC-22 以需求稿为准
 - **代码基线：** `109a938404124235d632e4cdbd4f9e06eaa48728`
 
-本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。T5 合并集合 8 文件 / 101 项通过；T6 派发屏障集合 7 文件 / 186 项通过；新增策略 revision ask/allow 重入测试与 SDK fresh-ask Hosted 用例通过。此前的 Electron noEmit、i18n/system invariant/agent-sdk checks 与 incremental build 曾通过；由于本轮又修改 Agent SDK recheck，Phase 3 阶段收尾需重新跑完整 type/build 门禁。Phase 4 T7 检查与 Phase 5 T9 仍待关闭。T8 旧 rule-enabled shim 目前仍存在，按计划待 T8 迁移所有 caller 后删除。
+本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 T7 与 Phase 5 T9 仍待关闭。T8 旧 rule-enabled shim 目前仍存在，按计划待 T8 迁移所有 caller 后删除。
 
 本轮计划评审（2026-10-22）处理：B1 全规则覆盖及消费点、B4 T4/T7/T8 的兼容接口顺序；B2/B3/B5 分别在 T6/T5/T4 按最小范围补充。负责人确认 ingress 消息须经批准后才进入处理，exposure 对象须经批准后才暴露；这是本期必做能力，见需求 AC-21/AC-22。
 
@@ -237,24 +237,26 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
 
 **阶段输入：** Phase 2 revision-aware writes；T5→T6。**阶段产出：** 策略变化时旧待审批结果失效并由现有调用路径重入 gate；执行器进入边界拒绝过期策略。**允许改动：** safety policy、deferred resume coordinator/caller、registered tools/runtime assembler 与 lifecycle tests。**失败回退：** revision 不可判定时不沿用旧授权；回退时沿用当前授权撤销路径。
 
-- [ ] **T5 · 使审批、审核及已批准待执行调用绑定策略 revision**
+- [x] **T5 · 使审批、审核及已批准待执行调用绑定策略 revision**
   - **目标文件：** `electron/confirmation/imPolicyStore.ts`、`deferredTodoStore.ts`、`deferredResumeRequestStore.ts`、`electron/remote/deferredResumeCoordinator.ts`、`deferredApprovalAdapter.ts`、`agentSdkSafetyPolicy.ts`、`agentSdkTurnDispatch.ts`、`electron/runtime/invocationAssembler.ts`、必要的 desktop epoch/change publisher 与对应 tests。
   - **产物：** desktop epoch 与 IM revision/epoch；审批对象绑定策略域/revision/调用事实；明确由 `deferredResumeCoordinator`（IM deferred）及 T0 盘点出的对应 desktop caller 接收策略变化并重入 gate；新 gate 结果替换旧等待状态。
   - **完成判据：** 等待人工批准或自动审核时保存策略，旧结果不可恢复；正常运行中原调用由具体变化通知接收者重新送入 facts/policy gate：新动作 deny 收束调用，allow/direct 进入后续派发，ask 创建新的审批，auto 使用新策略审核；原请求标识与一次性 resume 防止同一调用重复 dispatch；迟到旧批准稳定返回 stale；不新增本期未要求的持久化恢复队列；桌面/IM 域不串扰；嵌套 floor 由最新父策略重建。
   - **验证命令：** `npm exec vitest run electron/confirmation/imPolicyStore.test.ts electron/confirmation/deferredTodoStore.test.ts electron/confirmation/deferredResumeRequestStore.test.ts electron/remote/deferredResumeCoordinator.test.ts electron/confirmation/deferredApprovalAdapter.test.ts electron/confirmation/agentSdkSafetyPolicy.test.ts electron/confirmation/policyFloor.test.ts electron/tools/agentSdkTurnDispatch.test.ts`。
-  - **环境 / 状态：** 本机 / 未开始；完成 AC-13、AC-14、AC-18、AC-19，INV-05、INV-07。
+  - **阶段证据：** 合并集合覆盖 revision 变化后的 gate 重入、ask/allow/deny 新结果、迟到批准与单次 resume；IM deferred coordinator 及 Desktop Hosted caller 均有边界测试。
+  - **环境 / 状态：** 本机 / 已完成；完成 AC-13、AC-14、AC-18、AC-19，INV-05、INV-07。
 
-- [ ] **T6 · 覆盖 claim 后到 executor 进入前的策略变化窗口**
+- [x] **T6 · 覆盖 claim 后到 executor 进入前的策略变化窗口**
   - **目标文件：** `packages/agent-sdk/src/executionAdmission.ts`、`toolExecutionPort.ts`、`electron/tools/registeredAgentTurnTools.ts`、`permitBoundCoordinatorDispatch.ts`、`electron/runtime/invocationAssembler.ts`、remote/desktop caller adapters 及相应 caller tests。
   - **产物：** 现有 revision/失效通知在 `onDispatchClaimed` 异步窗口后的最终检查位置；两种顺序的 barrier tests 与 executor spy。
   - **完成判据：** `claim` 后暂停 `onDispatchClaimed`，保存新策略再恢复时，executor 零调用且调用返回 T5 gate/recheck；executor 已进入后保存时不伪称撤销；异步 validatePrepared 窗口同样检查当前 revision；无 revision 或检查失败不使用旧授权。不得把 claim 当作 executor 已开始；final-check 只核验批准对象、permit、材料与版本，不重新计算业务风险。若实现引入锁/等待，记录实际锁持有边界并确保锁内不等待审批、长执行或回调。
   - **验证命令：** `npm exec vitest run packages/agent-sdk/test/executionAdmission.test.ts packages/agent-sdk/test/toolExecutionPort.test.ts electron/confirmation/agentSdkSafetyPolicy.test.ts electron/confirmation/policyFloor.test.ts electron/tools/permitBoundCoordinatorDispatch.test.ts electron/tools/registeredAgentTurnTools.test.ts electron/runtime/hostedAgentTurnHost.test.ts`；屏障测试断言保存与派发两种顺序均可完成。
-  - **环境 / 状态：** 本机 / 未开始；完成 AC-15–AC-18，INV-05、INV-06。
+  - **阶段证据：** claim/`onDispatchClaimed` 与 validatePrepared 异步屏障用例断言策略失效时 executor 不进入；executor 已进入后的 Hosted policy-change 用例验证只中断运行，不报告未派发。
+  - **环境 / 状态：** 本机 / 已完成；完成 AC-15–AC-18，INV-05、INV-06。
 
-- [ ] **Phase 3 关闭门槛**
+- [x] **Phase 3 关闭门槛**
   - **证据来源：** T5 revision invalidation tests；T6 barriers 与 executor spy；每个生产 caller 的 caller-level test 证据。
   - **完成判据：** T5 证明策略变化通知可驱动原调用重新过 gate；T6 证明 claim 后异步窗口出现策略变化时旧 executor 不进入；desktop Hosted、direct registered tools、IM synchronous、IM deferred/resume 实际入口均覆盖。无锁实现不要求假想死锁测试；若实现引入锁，则按实际持有范围验证。
-  - **阶段收尾：** 运行 T5/T6 已列目标的一次合并测试；Electron incremental build 与 `typecheck:shared` 各至多一次；通过后提交。
+  - **阶段收尾证据：** T5/T6 合并集合 15 files / 471 tests passed；Desktop Hosted policy-change 回归 1 项通过；`typecheck:shared` 通过；`npm run build:electron:incremental` 通过。Phase 3 源码与阶段状态随本阶段提交关闭。
 
 ### Phase 4：设置 UI 与本地化
 

@@ -18,7 +18,7 @@ import { readStoredModels } from '../llmServiceResolver'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { AppDatabase } from '../database'
 import { readRemoteTrackFeatureGates } from '../remote/remoteTrackFeatureGates'
-import { readImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { readImPolicySnapshot, readPolicyBehaviorSnapshot } from '../confirmation/imPolicyStore'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsRecorder'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
@@ -548,6 +548,19 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       return { invalid: true as const }
     }
   }
+  const currentPolicyBinding = (): { domain: 'desktop' | 'im'; policyBehaviorVersion: string; revision: number; epoch: number } | undefined => {
+    if (!db) return undefined
+    if (materialsLane === 'automation') return undefined
+    const domain: 'desktop' | 'im' = materialsLane === 'wechat' || materialsLane === 'feishu' ? 'im' : 'desktop'
+    try {
+      const snapshot = readPolicyBehaviorSnapshot(getDbConnection(db), domain, {
+        supportedBehaviorVersions: domain === 'im' ? ['im-v1.6', 'im-standard-v2'] : ['desktop-v1']
+      })
+      const epochRow = getDbConnection(db).prepare('SELECT epoch FROM policy_authorization_epochs WHERE domain=?').get(domain) as { epoch: number } | undefined
+      if (!epochRow || !Number.isSafeInteger(epochRow.epoch)) return undefined
+      return { domain, policyBehaviorVersion: snapshot.policyBehaviorVersion, revision: snapshot.revision, epoch: epochRow.epoch }
+    } catch { return undefined }
+  }
   const resolveLanePackage = () => {
     const legacyPackage = db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard'
     if (materialsLane !== 'wechat' && materialsLane !== 'feishu') return legacyPackage
@@ -570,7 +583,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       effectiveRules: currentRules,
       lanePackage: currentLanePackage,
       policyOrigins: currentOrigin.origins,
-      imPolicyBinding: currentImPolicyBinding()
+      policyBinding: currentPolicyBinding()
     })).digest('hex')
     return { effectiveRules: currentRules, lanePackage: currentLanePackage, policyOrigins: currentOrigin.origins, disabledRuleIds: currentOrigin.disabledRuleIds, authorizationVersion: version }
   }
@@ -810,6 +823,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(materials.feishuConfig !== undefined ? { feishuConfig: materials.feishuConfig } : {}),
       ...(materials.wechatConfig !== undefined ? { wechatConfig: materials.wechatConfig } : {}),
       ...(imPolicySnapshot ? { imPolicySnapshot } : {}),
+      ...(currentPolicyBinding() ? { policyBinding: currentPolicyBinding() } : {}),
       ...(currentWikiConfig !== undefined ? { wikiConfig: currentWikiConfig } : {}),
       effectiveRules: current.effectiveRules,
       disabledPolicyRuleIds: current.disabledRuleIds,

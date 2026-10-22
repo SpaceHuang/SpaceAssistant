@@ -126,6 +126,23 @@ export function createAgentSdkSafetyPolicy(input: {
           const sameConfirmedDecision = previous.confirmed &&
             (decision.type === 'auto-allow' || decision.type === 'require-confirm') &&
             sameConfirmedDecisionRule && sameFacts
+          const sameExecutionMaterials = sameFacts && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget &&
+            sameScriptApprovalBinding && sameWriteApprovalConfiguration
+          if (previous.confirmed && !samePolicyDependencies && sameExecutionMaterials) {
+            // A policy revision changes the decision authority, even when host facts and
+            // execution targets are identical. Apply the new action now; never carry the
+            // old confirmation across the changed dependency fingerprint.
+            initial.delete(key)
+            if (decision.type === 'auto-allow') {
+              await input.onInitialGateResult?.(structuredClone(binding), structuredClone(result), gateArgs)
+              return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
+            }
+            if (decision.type === 'require-confirm') {
+              initial.set(key, { binding: structuredClone(binding), result: structuredClone(result), args: gateArgs, confirmed: false })
+              return ask(binding, result, gateArgs)
+            }
+            return { kind: 'deny', reasonCode: 'POLICY_DENY' }
+          }
           const recheckAllowed = samePolicyDependencies && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget && sameScriptApprovalBinding && sameWriteApprovalConfiguration &&
             (previous.confirmed ? sameConfirmedDecision : decision.type === 'auto-allow')
           initial.delete(key)

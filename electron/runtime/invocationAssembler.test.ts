@@ -28,7 +28,7 @@ import { ImChannel } from '../confirmation/imChannel'
 import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
 import { buildMappedToolDescriptors, hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { executeToolSearch } from '../tools/toolSearchTool'
-import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { AgentChannel } from '../confirmation/agentChannel'
 import { RunShellPlanError } from '../tools/runShellPlan'
@@ -522,6 +522,22 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: 'tool', toolName: 'probe-tool', input: {} })
     expect(args.imPolicySnapshot).toEqual(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] }))
     expect(args.lanePackage).toBe('strict')
+    db.close()
+  })
+
+  it('binds the live desktop snapshot revision and epoch into Hosted gate args', async () => {
+    const db = createMemoryAppDb('desktop-policy-assembly')
+    const conn = getDbConnection(db)
+    commitDesktopPolicySnapshot(conn, { expectedRevision: 0, policyBehaviorVersion: 'desktop-v1',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {} }, updatedAt: 1, eventId: 'desktop-policy-seed' })
+    const { agentSdk } = assembleInvocation({ requestId: 'desktop-policy-assembly', sessionId: 'desktop-policy-session',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const binding = { requestId: 'desktop-policy-assembly', turnId: 'desktop-policy-turn', invocationId: 'desktop-policy-assembly',
+      toolCallId: 'probe', capabilityId: 'probe-tool', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: 'probe', toolName: 'probe-tool', input: {} })
+    expect(args.policyBinding).toEqual({ domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 1, epoch: 1 })
     db.close()
   })
 

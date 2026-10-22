@@ -1395,7 +1395,12 @@ describe('runAgentTurn', () => {
       } }),
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
         capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
-      toolExecution: toolExecutionPort(permits, async () => executor()), confirmation
+      toolExecution: createPermitBoundToolExecutionPort({
+        permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+        resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+          capabilityId: call.toolName, authorizationVersion: prepareCount > 1 ? 'policy-v2' : 'policy-v1', phase: 'recheck' }),
+        execute: async () => executor()
+      }), confirmation
     })
 
     expect(result).toMatchObject({ parked: true, parkedTodoId: 'fresh-human-todo' })
@@ -1404,6 +1409,56 @@ describe('runAgentTurn', () => {
       context: { decision: { disposition: 'human-required' } } })
     expect(executor).not.toHaveBeenCalled()
     expect((await history.read(invocationId)).events.map(({ kind }) => kind)).toContain('approval-deferred')
+  })
+
+  it('re-confirms a changed policy ask raised by final recheck before dispatch', async () => {
+    const registry = new ModelProviderRegistry()
+    let modelCall = 0
+    registry.register(route, { providerId: 'recheck-policy-reask', stream: () => {
+      modelCall += 1
+      return modelCall === 1
+        ? stream(
+          { type: 'tool-call', toolCallId: 'policy-reask-tool', toolName: 'write_file', input: { path: 'report.md', content: 'content' } },
+          { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+        )
+        : stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    } })
+    const invocationId = 'recheck-policy-reask-invocation'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['write_file'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const executor = vi.fn(async () => ({ output: 'written' }))
+    const confirmation = vi.fn(async () => ({ kind: 'approved' as const, receipt: 'fresh-user-receipt', answerer: 'user' as const }))
+    let prepareCount = 0
+
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'write report' }], maxTokens: 32 }, maxModelTurns: 2,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => {
+        if (binding.phase === 'initial-compat') return { kind: 'allow' as const, authorizationVersion: 'policy-v1' }
+        if (prepareCount < 2) return { kind: 'ask' as const, confirmationId: 'changed-policy-approval', answerer: 'agent' as const,
+          reasonCode: 'POLICY_CHANGED_TO_ASK', context: { decision: { disposition: 'auto-eligible' } } }
+        return { kind: 'allow' as const, authorizationVersion: 'policy-v2' }
+      } } }),
+      prepareTool: async (call, stage) => {
+        if (stage.kind === 'recheck') prepareCount += 1
+        return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+          capabilityId: call.toolName, authorizationVersion: stage.kind === 'initial' ? 'policy-v1' : 'policy-v2',
+          phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }
+      },
+      toolExecution: createPermitBoundToolExecutionPort({
+        permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+        resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+          capabilityId: call.toolName, authorizationVersion: prepareCount > 1 ? 'policy-v2' : 'policy-v1', phase: 'recheck' }),
+        execute: async () => executor()
+      }), confirmation
+    })
+
+    expect(confirmation).toHaveBeenCalledTimes(1)
+    expect(confirmation.mock.calls[0]?.[0]).toMatchObject({ answerer: 'agent', reasonCode: 'POLICY_CHANGED_TO_ASK' })
+    expect(executor).toHaveBeenCalledTimes(1)
+    expect((await history.read(invocationId)).events.map(({ kind }) => kind)).toContain('approval-resolved')
   })
 
   it('projects canonical assistant text blocks into the failed terminal message mirror', async () => {

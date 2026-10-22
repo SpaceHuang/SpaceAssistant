@@ -1842,9 +1842,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           const askContext = authorization.context && typeof authorization.context === 'object'
             ? authorization.context as { decision?: { disposition?: unknown } }
             : undefined
-          if (authorization.answerer !== 'user' || askContext?.decision?.disposition !== 'human-required' || !input.confirmation) {
-            const reason = authorization.answerer !== 'user' || askContext?.decision?.disposition !== 'human-required'
-              ? 'RECHECK_REQUIRES_CONFIRMATION' : 'CONFIRMATION_REQUIRED'
+          if (!input.confirmation) {
+            const reason = askContext?.decision?.disposition === 'human-required' ? 'CONFIRMATION_REQUIRED' : 'RECHECK_REQUIRES_CONFIRMATION'
             await markNotDispatched(tool, reason)
             throw new ToolDeniedError(reason)
           }
