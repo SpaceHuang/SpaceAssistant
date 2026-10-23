@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { Message } from '../../../../src/shared/domainTypes'
-import type { ClaudeChatMessageWithBlocks } from '../../../../src/shared/api'
-import { getMessageSkeletons, getMessages } from '../../../database/operations'
+import { getMessages } from '../../../database/operations'
 import type { AppDatabase } from '../../../database/sqliteStore'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
@@ -85,27 +83,9 @@ export function hasCurrentProjectionEligibility(db: AppDatabase, sessionId: stri
   } catch { return false }
 }
 
-function mergeCanonicalBodies(canonicalMessages: readonly ClaudeChatMessageWithBlocks[],
-  skeletons: ReadonlyArray<Omit<Message, 'content'>>): Message[] | undefined {
-  if (canonicalMessages.length !== skeletons.length) return undefined
-  const canonicalById = new Map(canonicalMessages.map((message) => [message.id, message]))
-  const projected: Message[] = []
-  for (const legacy of skeletons) {
-    const message = canonicalById.get(legacy.id)
-    if (!message || message.id !== legacy.id || message.role !== legacy.role || typeof message.content !== 'string' ||
-      typeof message.timestamp !== 'number') return undefined
-    projected.push({ ...legacy, id: message.id, role: message.role, content: message.content, timestamp: message.timestamp })
-  }
-  return projected
-}
-
 /** Cheap L1 fast path shared by revalidation and the terminal checkpoint, without a legacy full scan. */
 export function refreshValidatedProjectionFastPath(db: AppDatabase, sessionId: string): boolean {
-  const history = new SqliteAgentHistory(getDbConnection(db))
-  const canonical = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
-  const skeletons = getMessageSkeletons(db, sessionId)
-  return canonical.kind === 'matched' && hasCurrentProjectionEligibility(db, sessionId) &&
-    mergeCanonicalBodies(canonical.messages, skeletons) !== undefined
+  return hasCurrentProjectionEligibility(db, sessionId)
 }
 
 /** Compare the supplied validated legacy transcript and cache only a canonical match. */

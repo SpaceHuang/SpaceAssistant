@@ -49,7 +49,7 @@ describe('background projection revalidation queue (P0-③/④)', () => {
     db.close()
   })
 
-  it('reuses only a matched, currently eligible canonical cache in the fast path adapter', async () => {
+  it('uses a matched parity proof in the fast path without requiring the legacy transcript cache', async () => {
     const { db, session, history } = await createMismatchedSession('fast-path-adapter')
     expect(refreshValidatedProjectionFastPath(db, session.id)).toBe(false)
     getDbConnection(db).prepare("DELETE FROM messages WHERE id='fast-path-adapter-user-b'").run()
@@ -63,6 +63,8 @@ describe('background projection revalidation queue (P0-③/④)', () => {
         { id: 'fast-path-adapter-user-a', role: 'user', content: 'legacy-a', timestamp: 1 }
       ]))).toBe(true)
     }
+    getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
+      .run(session.id)
     expect(refreshValidatedProjectionFastPath(db, session.id)).toBe(true)
     db.close()
   })
