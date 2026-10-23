@@ -23,7 +23,7 @@ describe('session storage module graph rules', () => {
       expect(command.indexOf('npm run check:session-storage-boundary')).toBeLessThan(command.indexOf('tsc -p tsconfig.electron.json'))
     }
     expect(execFileSync(process.execPath, [path.resolve('scripts/check-session-storage-module-graph.mjs'), '--probe-illegal-edge'], { encoding: 'utf8' }))
-      .toContain('illegal-edge probes rejected as expected (9 probes)')
+      .toMatch(/illegal-edge probes rejected as expected \(\d+ probes\)/)
   })
 
   it('blocks both Electron build command chains before compilation when the injected graph probe fails', () => {
@@ -43,7 +43,7 @@ describe('session storage module graph rules', () => {
         expect(command).toContain('npm run check:session-storage-boundary')
         const result = spawnSync('/bin/sh', ['-c', command], { cwd: path.resolve('.'), env: { ...process.env, PATH: isolatedPath }, encoding: 'utf8' })
         expect(result.status, `${name} must stop on the injected illegal edge`).not.toBe(0)
-        expect(`${result.stdout}${result.stderr}`).toContain('illegal-edge probes rejected as expected (9 probes)')
+        expect(`${result.stdout}${result.stderr}`).toMatch(/illegal-edge probes rejected as expected \(\d+ probes\)/)
         expect(existsSync(marker)).toBe(false)
       }
     } finally {

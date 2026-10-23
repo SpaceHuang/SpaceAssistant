@@ -278,6 +278,9 @@ export async function runProjectionBuildSlice(input: Readonly<{
         ? await input.reduceChunk(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey, !result.hasMore, input.signal)
         : input.historyReducer.fold(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey)
     } catch (error) {
+      if (input.signal?.aborted || (error instanceof Error && /WORKER_ABORTED$/.test(error.message))) {
+        return { kind: 'checkpointed', checkpoint }
+      }
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'HISTORY_REDUCER_REJECTED_CHUNK', input.now, input.retryAfter)
       return { kind: 'chunk-invalid', reason: error instanceof Error ? error.message : 'history-reducer-rejected-chunk' }
     }

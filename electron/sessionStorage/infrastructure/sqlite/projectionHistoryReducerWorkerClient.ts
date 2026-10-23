@@ -59,14 +59,15 @@ export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducer
     return new Promise((resolve, reject) => {
       let settled = false
       let abortRequested = false
+    let candidateError: Error | undefined
+    let candidateResult: ProjectionHistoryChunkReduction | undefined
       const timer = setTimeout(() => {
         void worker.terminate().then(() => finish(new Error('PROJECTION_REDUCER_WORKER_TIMEOUT')),
           () => finish(new Error('PROJECTION_REDUCER_WORKER_TERMINATION_FAILED')))
       }, MAX_REDUCER_WORKER_MS)
       const onAbort = () => {
         abortRequested = true
-        void worker.terminate().then(() => finish(new Error('PROJECTION_REDUCER_WORKER_ABORTED')),
-          () => finish(new Error('PROJECTION_REDUCER_WORKER_ABORT_FAILED')))
+      void worker.terminate().catch(() => { candidateError = new Error('PROJECTION_REDUCER_WORKER_ABORT_FAILED') })
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       const finish = (error?: Error, result?: ProjectionHistoryChunkReduction) => {
@@ -74,24 +75,29 @@ export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducer
         settled = true
         clearTimeout(timer)
         signal?.removeEventListener('abort', onAbort)
-        error ? reject(error) : resolve(result!)
+      error ? reject(error) : resolve(result!)
       }
+    const stopWithError = (error: Error) => {
+      candidateError ??= error
+      void worker.terminate().catch(() => { candidateError = new Error('PROJECTION_REDUCER_WORKER_TERMINATION_FAILED') })
+    }
       worker.once('message', (message: { requestId?: string; error?: string; result?: ProjectionHistoryChunkReduction }) => {
-        if (message.requestId !== requestId) { finish(new Error('PROJECTION_REDUCER_WORKER_PROTOCOL_MISMATCH')); return }
-        if (message.error) { finish(new Error(message.error)); return }
+      if (message.requestId !== requestId) { stopWithError(new Error('PROJECTION_REDUCER_WORKER_PROTOCOL_MISMATCH')); return }
+      if (message.error) { stopWithError(new Error(message.error)); return }
         if (!message.result || typeof message.result.stateJson !== 'string' || !Array.isArray(message.result.outputOperations) ||
           (message.result.finalizedOutputOperations !== undefined && !Array.isArray(message.result.finalizedOutputOperations)) ||
           !Number.isSafeInteger(message.result.workerThreadId) || message.result.workerThreadId! <= 0) {
-          finish(new Error('PROJECTION_REDUCER_WORKER_RESULT_INVALID'))
+          stopWithError(new Error('PROJECTION_REDUCER_WORKER_RESULT_INVALID'))
           return
         }
-        finish(undefined, message.result)
+        candidateResult = message.result
       })
-      worker.once('error', (error) => finish(error))
+      worker.once('error', (error) => { candidateError ??= error })
       worker.once('exit', (code) => {
-        if (!settled) finish(new Error(abortRequested ? 'PROJECTION_REDUCER_WORKER_ABORTED' : `PROJECTION_REDUCER_WORKER_EXIT:${code}`))
+        if (!settled) finish(candidateError ?? (abortRequested ? new Error('PROJECTION_REDUCER_WORKER_ABORTED') :
+          candidateResult && code === 0 ? undefined : new Error(`PROJECTION_REDUCER_WORKER_EXIT:${code}`)), candidateResult)
       })
       try { worker.postMessage({ requestId, stateJson, events, messageFacts, scopeKey, finalize }) }
-      catch (error) { finish(error instanceof Error ? error : new Error('PROJECTION_REDUCER_WORKER_POST_FAILED')) }
+      catch (error) { stopWithError(error instanceof Error ? error : new Error('PROJECTION_REDUCER_WORKER_POST_FAILED')) }
     })
   }

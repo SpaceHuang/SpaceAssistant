@@ -68,14 +68,15 @@ export function materializeProjectionFinalViewInWorker(input: Readonly<{
   return new Promise((resolve, reject) => {
     let settled = false
     let abortRequested = false
+    let candidateError: Error | undefined
+    let candidateResult: ProjectionFinalViewPayload | undefined
     const timer = setTimeout(() => {
-      void worker.terminate().then(() => finish(new Error('PROJECTION_FINAL_VIEW_WORKER_TIMEOUT')),
-        () => finish(new Error('PROJECTION_FINAL_VIEW_WORKER_TERMINATION_FAILED')))
+      candidateError = new Error('PROJECTION_FINAL_VIEW_WORKER_TIMEOUT')
+      void worker.terminate().catch(() => { candidateError = new Error('PROJECTION_FINAL_VIEW_WORKER_TERMINATION_FAILED') })
     }, MAX_MATERIALIZATION_MS)
     const onAbort = () => {
       abortRequested = true
-      void worker.terminate().then(() => finish(new Error('PROJECTION_FINAL_VIEW_WORKER_ABORTED')),
-        () => finish(new Error('PROJECTION_FINAL_VIEW_WORKER_ABORT_FAILED')))
+      void worker.terminate().catch(() => { candidateError = new Error('PROJECTION_FINAL_VIEW_WORKER_ABORT_FAILED') })
     }
     input.signal?.addEventListener('abort', onAbort, { once: true })
     const finish = (error?: Error, result?: ProjectionFinalViewPayload) => {
@@ -85,24 +86,29 @@ export function materializeProjectionFinalViewInWorker(input: Readonly<{
       input.signal?.removeEventListener('abort', onAbort)
       error ? reject(error) : resolve(result!)
     }
+    const stopWithError = (error: Error) => {
+      candidateError ??= error
+      void worker.terminate().catch(() => { candidateError = new Error('PROJECTION_FINAL_VIEW_WORKER_TERMINATION_FAILED') })
+    }
     worker.once('message', (message: { requestId?: string; error?: string; result?: ProjectionFinalViewPayload }) => {
-      if (message.requestId !== requestId) { finish(new Error('PROJECTION_FINAL_VIEW_WORKER_PROTOCOL_MISMATCH')); return }
+      if (message.requestId !== requestId) { stopWithError(new Error('PROJECTION_FINAL_VIEW_WORKER_PROTOCOL_MISMATCH')); return }
       const result = message.result
-      if (message.error) { finish(new Error(message.error)); return }
+      if (message.error) { stopWithError(new Error(message.error)); return }
       if (!result || !Number.isSafeInteger(result.byteLength) || result.byteLength < 0 || !/^[a-f0-9]{64}$/.test(result.payloadDigest) ||
         (typeof result.payload === 'string' && (result.payload.length === 0 || result.byteLength !== Buffer.byteLength(result.payload) || result.stagedBlob !== undefined)) ||
         (result.payload === undefined && (!result.stagedBlob || !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(result.stagedBlob.tempLocator) ||
           result.stagedBlob.byteLength !== result.byteLength || result.stagedBlob.payloadDigest !== result.payloadDigest)) ||
         !Number.isSafeInteger(result.workerThreadId) || result.workerThreadId <= 0) {
-        finish(new Error('PROJECTION_FINAL_VIEW_WORKER_RESULT_INVALID'))
+        stopWithError(new Error('PROJECTION_FINAL_VIEW_WORKER_RESULT_INVALID'))
         return
       }
-      finish(undefined, result)
+      candidateResult = result
     })
-    worker.once('error', (error) => finish(error))
-    worker.once('exit', (code) => { if (!settled) finish(new Error(abortRequested ? 'PROJECTION_FINAL_VIEW_WORKER_ABORTED' : `PROJECTION_FINAL_VIEW_WORKER_EXIT:${code}`)) })
+    worker.once('error', (error) => { candidateError ??= error })
+    worker.once('exit', (code) => { if (!settled) finish(candidateError ?? (abortRequested ? new Error('PROJECTION_FINAL_VIEW_WORKER_ABORTED') :
+      candidateResult && code === 0 ? undefined : new Error(`PROJECTION_FINAL_VIEW_WORKER_EXIT:${code}`)), candidateResult) })
     try { worker.postMessage({ requestId, root: input.root, output: input.output, identity: input.identity,
       payloadIdentity: { formatVersion: 1, historyWatermarkJson: input.historyWatermarkJson } }) }
-    catch (error) { finish(error instanceof Error ? error : new Error('PROJECTION_FINAL_VIEW_WORKER_POST_FAILED')) }
+    catch (error) { stopWithError(error instanceof Error ? error : new Error('PROJECTION_FINAL_VIEW_WORKER_POST_FAILED')) }
   })
 }
