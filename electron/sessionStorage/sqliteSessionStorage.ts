@@ -31,10 +31,11 @@ import { createProjectionService } from './application/projectionService'
 import { CHAT_BODY_PROJECTION_SPEC_VERSION, projectionScopeKind, projectionScopeSpecVersion } from './domain/scopeKey'
 import { createProjectionBuildLifecycleTask } from './host/projectionBuildTask'
 import { createEnsureView } from './application/ensureView'
-import { readProjectionChatBodyCache } from './application/projectionChatBodyCacheReader'
+import { invalidatePreparedChatBodyView, preparedChatBodyViewFromSnapshot, readProjectionChatBodyCacheManifest } from './application/projectionChatBodyCacheReader'
 import { encodeProjectionScopeKey } from './domain/scopeKey'
 import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
+import { readPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
 export { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
 
 /** Host composition binds the private SQLite TurnStorage to the process TurnRuntime. */
@@ -94,17 +95,19 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       const snapshot = cacheStore.readSnapshot(sessionId, bodyScopeKey)
       return snapshot?.sessionGeneration === sessionGeneration && snapshot.currentSessionGeneration === sessionGeneration
         ? snapshot.currentSourceIdentityJson ?? undefined : undefined
-    }
+    },
+    readBodies: (view, messageIds) => readPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', view, messageIds }),
+    invalidate: (view) => invalidatePreparedChatBodyView(view, cacheStore)
   })
   const ensureView = createEnsureView()
   const ensureChatBodyV1: NonNullable<SessionStorage['ensureChatBodyV1']> = ({ sessionId, signal }) => {
     if (!options.prepareProjection) return Promise.reject(new Error('PROJECTION_PREPARATION_UNAVAILABLE'))
     return ensureView<PreparedChatBodyView>({ sessionId, scopeKey: bodyScopeKey, signal,
       read: async () => {
-        const result = await readProjectionChatBodyCache({ sessionId, scopeKey: bodyScopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }, cacheStore, cacheBlobs)
-        return result.kind === 'ready'
-          ? { ready: true as const, value: { messages: result.messages, sourceIdentityJson: result.sourceIdentityJson, sessionGeneration: result.sessionGeneration } }
-          : { ready: false as const }
+        const result = readProjectionChatBodyCacheManifest({ sessionId, scopeKey: bodyScopeKey,
+          specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }, cacheStore)
+        const value = result.kind === 'ready' ? preparedChatBodyViewFromSnapshot(result.snapshot) : undefined
+        return value ? { ready: true as const, value } : { ready: false as const }
       },
       prepare: () => options.prepareProjection!({ sessionId, scopeKey: bodyScopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }) })
   }

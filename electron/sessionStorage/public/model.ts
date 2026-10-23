@@ -3,9 +3,22 @@ import type { HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 
 export type MessageEntry = Readonly<{ message: Message; sequence: number }>
 export type PreparedChatBodyView = Readonly<{
-  messages: readonly Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>[]
   sourceIdentityJson: string
   sessionGeneration: string
+  sessionId: string
+  scopeKey: string
+  specVersion: number
+  payloadGeneration: string
+  payloadDigest: string
+  inlinePayload?: string
+  blobLocator?: string
+  blobByteLength?: number
+  validatedRangeJson: string
+  cachePresent: boolean
+  stateSourceIdentityJson: string
+  statePayloadGeneration: string
+  statePayloadDigest: string
+  stateValidatedRangeJson: string
 }>
 export type QueuedSessionMessage = Readonly<{ message: Message; sequence: number; requestId?: string }>
 export type ApiContextBaseline = Readonly<{ sessionId: string; entries: readonly MessageEntry[] }>

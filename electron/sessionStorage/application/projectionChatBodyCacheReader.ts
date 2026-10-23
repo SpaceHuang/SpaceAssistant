@@ -1,6 +1,7 @@
 import { projectionPayloadDigest } from '../domain/projectionBuild'
 import { PROJECTION_SPECS } from '../domain/projectionSpec'
 import { projectionScopeKind } from '../domain/scopeKey'
+import type { PreparedChatBodyView } from '../public/model'
 
 export type ProjectionChatBodyMessage = Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>
 export type ProjectionChatBodyCacheSnapshot = Readonly<{
@@ -40,6 +41,9 @@ export type ProjectionChatBodyBlobReader = Readonly<{
 }>
 export type ProjectionChatBodyCacheResult = Readonly<{
   kind: 'ready'; messages: readonly ProjectionChatBodyMessage[]; sourceIdentityJson: string; sessionGeneration: string
+}> | Readonly<{ kind: 'miss' }>
+export type ProjectionChatBodyCacheManifestResult = Readonly<{
+  kind: 'ready'; snapshot: ProjectionChatBodyCacheSnapshot
 }> | Readonly<{ kind: 'miss' }>
 
 function samePublication(left: ProjectionChatBodyCacheSnapshot, right: ProjectionChatBodyCacheSnapshot): boolean {
@@ -94,7 +98,8 @@ function validManifest(snapshot: ProjectionChatBodyCacheSnapshot): boolean {
   return range.formatVersion === 1 && range.specVersion === snapshot.specVersion && range.sourceIdentityJson === snapshot.sourceIdentityJson &&
     range.fromSequence === 0 && Number.isSafeInteger(range.nextSequence) && (range.nextSequence as number) >= 0 &&
     range.payloadDigest === snapshot.payloadDigest && Number.isSafeInteger(range.blobByteLength) && (range.blobByteLength as number) > 0 &&
-    (snapshot.inlinePayload === undefined || new TextEncoder().encode(snapshot.inlinePayload).byteLength === range.blobByteLength) &&
+    (snapshot.inlinePayload === undefined || (new TextEncoder().encode(snapshot.inlinePayload).byteLength <= 256 * 1024 &&
+      new TextEncoder().encode(snapshot.inlinePayload).byteLength === range.blobByteLength)) &&
     (snapshot.blobByteLength === undefined || snapshot.blobByteLength === range.blobByteLength) &&
     snapshot.payloadGeneration === `projection-${snapshot.payloadDigest}`
 }
@@ -109,6 +114,49 @@ function invalidateObserved(snapshot: ProjectionChatBodyCacheSnapshot, store: Pr
     validatedRangeJson: snapshot.validatedRangeJson, stateSourceIdentityJson: snapshot.stateSourceIdentityJson,
     statePayloadGeneration: snapshot.statePayloadGeneration, statePayloadDigest: snapshot.statePayloadDigest,
     stateValidatedRangeJson: snapshot.stateValidatedRangeJson })
+}
+
+export function invalidateProjectionChatBodyCacheSnapshot(snapshot: ProjectionChatBodyCacheSnapshot, store: ProjectionChatBodyCacheReadStore): void {
+  invalidateObserved(snapshot, store)
+}
+
+export function preparedChatBodyViewFromSnapshot(snapshot: ProjectionChatBodyCacheSnapshot): PreparedChatBodyView | undefined {
+  if (!snapshot.sourceIdentityJson || !snapshot.payloadGeneration || !snapshot.payloadDigest || !snapshot.validatedRangeJson ||
+    !snapshot.stateSourceIdentityJson || !snapshot.statePayloadGeneration || !snapshot.statePayloadDigest || !snapshot.stateValidatedRangeJson ||
+    (snapshot.inlinePayload === undefined) === (snapshot.blobLocator === undefined)) return undefined
+  return Object.freeze({ sessionId: snapshot.sessionId, sessionGeneration: snapshot.sessionGeneration, scopeKey: snapshot.scopeKey,
+    specVersion: snapshot.specVersion, sourceIdentityJson: snapshot.sourceIdentityJson, payloadGeneration: snapshot.payloadGeneration,
+    payloadDigest: snapshot.payloadDigest, validatedRangeJson: snapshot.validatedRangeJson,
+    cachePresent: snapshot.cachePresent, stateSourceIdentityJson: snapshot.stateSourceIdentityJson,
+    statePayloadGeneration: snapshot.statePayloadGeneration, statePayloadDigest: snapshot.statePayloadDigest,
+    stateValidatedRangeJson: snapshot.stateValidatedRangeJson,
+    ...(snapshot.inlinePayload !== undefined ? { inlinePayload: snapshot.inlinePayload } : {}),
+    ...(snapshot.blobLocator !== undefined ? { blobLocator: snapshot.blobLocator, blobByteLength: snapshot.blobByteLength } : {}) })
+}
+
+export function invalidatePreparedChatBodyView(view: PreparedChatBodyView, store: ProjectionChatBodyCacheReadStore): void {
+  store.invalidateObserved({ sessionId: view.sessionId, scopeKey: view.scopeKey, sessionGeneration: view.sessionGeneration,
+    cachePresent: view.cachePresent, sourceIdentityJson: view.sourceIdentityJson, payloadGeneration: view.payloadGeneration,
+    payloadDigest: view.payloadDigest, validatedRangeJson: view.validatedRangeJson,
+    stateSourceIdentityJson: view.stateSourceIdentityJson, statePayloadGeneration: view.statePayloadGeneration,
+    statePayloadDigest: view.statePayloadDigest, stateValidatedRangeJson: view.stateValidatedRangeJson })
+}
+
+/** Validate the durable publication/source fence without reading or parsing a blob on the main thread. */
+export function readProjectionChatBodyCacheManifest(
+  input: Readonly<{ sessionId: string; sessionGeneration?: string; scopeKey: string; specVersion: number }>,
+  store: ProjectionChatBodyCacheReadStore
+): ProjectionChatBodyCacheManifestResult {
+  if (projectionScopeKind(input.scopeKey) !== 'chatBodyV1') throw new Error('PROJECTION_SPEC_UNSUPPORTED')
+  const initial = store.readSnapshot(input.sessionId, input.scopeKey)
+  if (!initial || initial.sessionId !== input.sessionId || initial.sessionGeneration !== initial.currentSessionGeneration ||
+    (input.sessionGeneration !== undefined && initial.currentSessionGeneration !== input.sessionGeneration) ||
+    initial.scopeKey !== input.scopeKey || initial.specVersion !== input.specVersion || initial.status !== 'valid') return { kind: 'miss' }
+  if (!validManifest(initial)) { invalidateObserved(initial, store); return { kind: 'miss' } }
+  const fresh = store.readSnapshot(input.sessionId, input.scopeKey)
+  if (!fresh || fresh.currentSessionGeneration !== fresh.sessionGeneration || !samePublication(initial, fresh) ||
+    fresh.currentSourceIdentityJson !== initial.sourceIdentityJson) return { kind: 'miss' }
+  return Object.freeze({ kind: 'ready', snapshot: initial })
 }
 
 export async function readProjectionChatBodyCache(

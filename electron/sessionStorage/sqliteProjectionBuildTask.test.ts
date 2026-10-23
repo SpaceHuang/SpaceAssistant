@@ -63,8 +63,8 @@ describe('SQLite projection build task composition', () => {
       })
       try {
         const ensured = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
-        expect(ensured).toMatchObject({ messages: [{ id: 'projection-chat-body-user', role: 'user', content: 'same body', timestamp: 11 }],
-          sourceIdentityJson: expect.any(String), sessionGeneration: session.generation })
+        expect(ensured).toMatchObject({ sessionId: session.id, sourceIdentityJson: expect.any(String), sessionGeneration: session.generation,
+          payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
         expect(createSqliteProjectionStateStore(db).get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
         const cache = getDbConnection(db).prepare('SELECT inline_payload FROM session_projection_cache WHERE session_id=? AND scope_key=?')
           .get(session.id, scopeKey) as { inline_payload: string }
@@ -77,8 +77,13 @@ describe('SQLite projection build task composition', () => {
           .resolves.toMatchObject({ kind: 'ready', messages: published.messages, sessionGeneration: session.generation })
         await expect(readChatMessagesAfterPreparation(host.storage, { sessionId: session.id }))
           .resolves.toMatchObject([{ id: 'projection-chat-body-user', content: 'same body' }])
+        getDbConnection(db).prepare(`UPDATE session_projection_cache SET inline_payload=replace(inline_payload,'same body','evil body')
+          WHERE session_id=? AND scope_key=?`).run(session.id, scopeKey)
+        await expect(readChatMessagesAfterPreparation(host.storage, { sessionId: session.id }))
+          .resolves.toMatchObject([{ id: 'projection-chat-body-user', content: 'same body' }])
+        expect(createSqliteProjectionStateStore(db).get(session.id, scopeKey)?.status).toBe('invalid')
         appendMessage(db, { id: 'projection-chat-body-new-source', sessionId: session.id, role: 'user', content: 'new source', timestamp: 12, status: 'sent' })
-        expect(host.storage.queries.readPreparedMessages?.({ sessionId: session.id, prepared: ensured })).toBeUndefined()
+        await expect(host.storage.queries.readPreparedMessages?.({ sessionId: session.id, prepared: ensured })).resolves.toBeUndefined()
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
     } finally { db.close(); temp.cleanup() }
   })

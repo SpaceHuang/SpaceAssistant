@@ -119,7 +119,7 @@ export interface SessionQueries {
   readMessage(ref: MessageRef): Message | undefined
   readMessages(input: { sessionId: string; limit?: number; offset?: number }): Message[]
   /** Async chat-body cache lookup; undefined means selection must use the existing authority reader. */
-  readPreparedMessages?(input: { sessionId: string; limit?: number; offset?: number; prepared?: PreparedChatBodyView }): Message[] | undefined
+  readPreparedMessages?(input: { sessionId: string; limit?: number; offset?: number; prepared?: PreparedChatBodyView }): Promise<Message[] | undefined>
   readChatPage(input: { sessionId: string; beforeSequence?: number | null; limit?: number }): ChatMessagePage
   readTurnContext(input: { sessionId: string; boundarySequence?: number; requiredUserMessageId?: string; excludeMessageIds?: string[] }): Message[]
   readApiBaseline(input: { sessionId: string; limit?: number }): ApiContextBaseline

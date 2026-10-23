@@ -8,6 +8,7 @@ import { advanceProcessGeneration } from '../database/processGeneration'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
+import { readChatMessagesAfterPreparation } from './application/readChatMessages'
 
 for (const scenario of ['image', 'tool'] as const) {
   it(`recovers chat body projection: ${scenario}`, async () => {
@@ -42,7 +43,7 @@ for (const scenario of ['image', 'tool'] as const) {
       })
 
       const expected = [{ id: 'a', role: 'assistant', content: body, timestamp: 2 }]
-      expect((await host.storage.ensureChatBodyV1!({ sessionId: session.id })).messages).toEqual(expected)
+      expect(await readChatMessagesAfterPreparation(host.storage, { sessionId: session.id })).toMatchObject(expected)
 
     } finally {
       await host?.lifecycle.stop({ deadlineMs: 5_000 })

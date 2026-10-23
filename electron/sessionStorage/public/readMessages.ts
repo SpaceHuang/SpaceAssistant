@@ -5,7 +5,7 @@ type ChatMessageReadStorage = Readonly<{
   ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
   queries: Readonly<{
     readMessages(input: Readonly<{ sessionId: string; limit?: number; offset?: number }>): Message[]
-    readPreparedMessages?(input: Readonly<{ sessionId: string; limit?: number; offset?: number; prepared?: unknown }>): Message[] | undefined
+    readPreparedMessages?(input: Readonly<{ sessionId: string; limit?: number; offset?: number; prepared?: unknown }>): Promise<Message[] | undefined>
   }>
 }>
 
@@ -15,7 +15,7 @@ export async function readChatMessagesAfterPreparation(
   input: Readonly<{ sessionId: string; limit?: number; offset?: number }>
 ): Promise<Message[]> {
   const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
-  const prepared = storage.queries.readPreparedMessages?.({ ...input, prepared: preparedView })
+  const prepared = await storage.queries.readPreparedMessages?.({ ...input, prepared: preparedView })
   if (prepared) return prepared
   return storage.queries.readMessages(input)
 }
