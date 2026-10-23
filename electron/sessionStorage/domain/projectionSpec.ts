@@ -19,6 +19,12 @@ export type ProjectionScopeV1 = keyof typeof PROJECTION_SPECS
 export type MessageProjectionScopeV1 = 'chatMessageV1' | 'exportMessageV1' | 'searchCorpusV1' | 'apiBaselineV1'
 export type ScopeProjectionV1 = ChatBodyV1 | Readonly<{ message: Message; sequence?: number }>
 
+export function isAnonymousToolResultMessage(message: Readonly<{ id?: string; role: string; content?: unknown }>): boolean {
+  return !message.id?.trim() && message.role === 'user' && Array.isArray(message.content) && message.content.length > 0 &&
+    message.content.every((block) => !!block && typeof block === 'object' && !Array.isArray(block) &&
+      (block as { type?: unknown }).type === 'tool_result')
+}
+
 const CHAT_BODY_OUTPUT_FIELDS = PROJECTION_SPECS.chatBodyV1.outputFields satisfies readonly (keyof Message)[]
 
 function pickMessageFields<K extends keyof Message>(message: Message, fields: readonly K[]): Pick<Message, K> {
@@ -67,8 +73,7 @@ export function projectCanonicalChatBodyV1(
   let previousSequence = afterSequence
   for (const canonical of canonicalMessages) {
     if (!canonical.id?.trim()) {
-      if (canonical.role === 'user' && Array.isArray(canonical.content) && canonical.content.length > 0 &&
-        canonical.content.every((block) => !!block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')) continue
+      if (isAnonymousToolResultMessage(canonical)) continue
       throw new Error('CHAT_BODY_MESSAGE_ID_MISSING')
     }
     const fact = factsById.get(canonical.id)

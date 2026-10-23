@@ -130,4 +130,32 @@ describe('ProjectionSpec.chatBodyV1 reducer', () => {
       content: 'partial', timestamp: 2 }] }])
     expect(() => reducer.finalize(folded.stateJson)).toThrow('CHAT_BODY_AUTHORITY_MISMATCH')
   })
+
+  it('keeps assistant chunk continuity across anonymous tool results', () => {
+    const reducer = createProjectionChatBodyReducer()
+    const event = (sequence: number, kind: string, payload: unknown): ProjectionHistoryChunkEvent => ({
+      invocationId: 'tool-chunk-inv', turnId: 'tool-chunk-turn', sequence, eventId: `tool-chunk-${sequence}`,
+      idempotencyKey: `tool-chunk-${sequence}`, schemaVersion: 1, kind, sessionSequence: sequence,
+      commitOrder: sequence, createdAt: sequence, payloadJson: JSON.stringify(payload),
+    })
+    for (const storage of [
+      { contentStorageState: 'canonical-backed-only' as const, storedContent: '' },
+      { contentStorageState: 'canonical-backed-dual-write' as const, storedContent: 'partial response' },
+    ]) {
+      const facts: ProjectionMessageFact[] = [{ id: 'tool-chunk-assistant', role: 'assistant', timestamp: 2, sequence: 0,
+        queueScope: 'desktop', ...storage, writeMode: 'canonical' }]
+      const first = reducer.fold(reducer.createState(), [event(1, 'model-response-committed', { message: {
+        id: 'tool-chunk-assistant', role: 'assistant', content: [{ type: 'text', text: 'partial' }],
+        toolCalls: [{ id: 'tool-chunk-call', name: 'lookup', input: {} }],
+      } })], facts)
+      const second = reducer.fold(first.stateJson, [
+        event(2, 'tool-call-finished', { toolCallId: 'tool-chunk-call', replayContent: 'done' }),
+        event(3, 'model-response-committed', { message: { id: 'tool-chunk-assistant', role: 'assistant',
+          content: [{ type: 'text', text: ' response' }] } }),
+      ], facts)
+      expect(second.outputOperations).toEqual([{ type: 'appendText', updates: [{ id: 'tool-chunk-assistant', role: 'assistant',
+        text: ' response' }] }])
+      expect(reducer.finalize(second.stateJson).outputOperations).toEqual([])
+    }
+  })
 })

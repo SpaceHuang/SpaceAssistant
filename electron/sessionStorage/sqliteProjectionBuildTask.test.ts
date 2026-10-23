@@ -155,12 +155,18 @@ describe('SQLite projection build task composition', () => {
         { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 2, schemaVersion: 1,
           eventId: 'split-assistant-first', idempotencyKey: 'split-assistant-first', kind: 'model-response-committed',
           payload: { message: { id: 'split-assistant', role: 'assistant', timestamp: 2,
-            content: [{ type: 'text', text: 'partial' }] } } },
+            content: [{ type: 'text', text: 'partial' }], toolCalls: [{ id: 'split-assistant-tool', name: 'lookup', input: {} }] } } },
         { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 3, schemaVersion: 1,
+          eventId: 'split-assistant-tool-started', idempotencyKey: 'split-assistant-tool-started', kind: 'tool-call-started',
+          payload: { toolCallId: 'split-assistant-tool', toolName: 'lookup' } },
+        { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 4, schemaVersion: 1,
+          eventId: 'split-assistant-tool-finished', idempotencyKey: 'split-assistant-tool-finished', kind: 'tool-call-finished',
+          payload: { toolCallId: 'split-assistant-tool', success: true, replayContent: 'lookup result', result: { success: true, data: 'lookup result' } } },
+        { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 5, schemaVersion: 1,
           eventId: 'split-assistant-second', idempotencyKey: 'split-assistant-second', kind: 'model-response-committed',
           payload: { message: { id: 'split-assistant', role: 'assistant', timestamp: 2,
             content: [{ type: 'text', text: ' response' }] } } },
-        { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 4, schemaVersion: 1,
+        { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 6, schemaVersion: 1,
           eventId: 'split-assistant-terminal', idempotencyKey: 'split-assistant-terminal', kind: 'invocation-completed',
           payload: { status: 'completed' } },
       ], 0)
@@ -175,7 +181,7 @@ describe('SQLite projection build task composition', () => {
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3,
         limits: { maxRows: 1, maxBytes: 8192 }, maxChunksPerSlice: 1,
         onResult: (_item, result) => {
-          if (result.kind === 'checkpointed' && result.checkpoint.nextSequence === 3) {
+          if (result.kind === 'checkpointed' && result.checkpoint.nextSequence === 5) {
             observePendingCheckpoint()
             firstHandle?.stop()
           }
@@ -184,7 +190,7 @@ describe('SQLite projection build task composition', () => {
       try {
         await pendingCheckpoint
         await firstHandle.quiesce()
-        expect(JSON.parse(stateStore.readCheckpoint(session.id, scopeKey)!)).toMatchObject({ nextSequence: 3,
+        expect(JSON.parse(stateStore.readCheckpoint(session.id, scopeKey)!)).toMatchObject({ nextSequence: 5,
           historyReducerStateJson: expect.stringContaining('"contentOffset":16') })
         db.close()
 

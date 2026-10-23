@@ -1,5 +1,5 @@
 import type { ClaudeChatMessageWithBlocks } from '../../../../src/shared/api'
-import { projectCanonicalChatBodyV1 } from '../../domain/projectionSpec'
+import { isAnonymousToolResultMessage, projectCanonicalChatBodyV1 } from '../../domain/projectionSpec'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
 import type { ProjectionHistoryReducerPort } from '../../application/projectionBuildCoordinator'
 import { createProjectionCanonicalHistoryReducer } from './projectionCanonicalHistoryReducer'
@@ -48,6 +48,7 @@ export function createProjectionChatBodyReducer(): ProjectionHistoryReducerPort 
         }
         for (const message of notYetProjected) {
           const fact = message.id ? facts.find((candidate) => candidate.id === message.id) : undefined
+          if (isAnonymousToolResultMessage(message)) continue
           if (message.role === 'assistant' && message.id && chunkedAssistantIds.has(message.id) && fact &&
             (fact.contentStorageState === 'canonical-backed-only' || fact.contentStorageState === 'canonical-backed-dual-write')) {
             if (fact.writeMode !== 'canonical' || (fact.contentStorageState === 'canonical-backed-only' && fact.storedContent !== '')) {
