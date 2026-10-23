@@ -541,6 +541,41 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     db.close()
   })
 
+  it.each([
+    { override: 'ask' as const, expected: { type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'user' } },
+    { override: 'allow' as const, expected: { type: 'auto-allow', ruleId: 'mcp-tool-ask' } },
+    { override: 'deny' as const, expected: { type: 'deny', ruleId: 'mcp-tool-ask' } }
+  ])('applies persisted desktop MCP $override override from snapshot through assembler into the real gate', async ({ override, expected }) => {
+    const db = createMemoryAppDb(`desktop-policy-mcp-${override}-override`)
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `desktop-mcp-${override}-override-`))
+    const schema = { type: 'object', properties: { body: { type: 'string' } } }
+    const entry = buildMappedToolDescriptors(`desktop-mcp-${override}-server`, 'Desktop MCP Server', [{
+      name: 'create_record', description: 'Create a record', inputSchema: schema
+    }]).descriptors[0]!
+    commitDesktopPolicySnapshot(getDbConnection(db), { expectedRevision: 0, policyBehaviorVersion: 'desktop-v1',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': override } }, updatedAt: 1,
+      eventId: `desktop-policy-mcp-${override}-override` })
+    const { agentSdk } = assembleInvocation({ requestId: `desktop-policy-mcp-${override}-override`,
+      sessionId: `desktop-mcp-${override}-session`, model: 'test-model', locale: 'zh-CN', messages: [],
+      toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: path.join(workDir, '.userdata'),
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const binding = { requestId: `desktop-policy-mcp-${override}-override`, turnId: `desktop-mcp-${override}-turn`,
+      invocationId: `desktop-policy-mcp-${override}-override`, toolCallId: `desktop-mcp-${override}-call`,
+      capabilityId: entry.mappedName, inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts',
+      authorizationVersion: 'auth', phase: 'initial-compat' as const }
+    try {
+      const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+        toolName: entry.mappedName, input: { body: 'record' } })
+      args.mcpEntry = { ...entry, serverName: 'Desktop MCP Server' }
+      expect(args.effectiveRules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe(override)
+      expect(args.effectiveRules.find((rule) => rule.id === 'mcp-tool-ask')?.userOverride).toBe(true)
+      await expect(evaluateToolCallGate(args)).resolves.toMatchObject({ decision: expected })
+    } finally {
+      db.close()
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
   it('carries the current versioned IM package from assembler into the real gate decision without a release switch', async () => {
     const db = createImPolicyTestDb('zh-CN')
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-v2-agent-workdir-'))
