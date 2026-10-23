@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'crypto'
+import { randomUUID } from 'crypto'
 import type { Message, MessageStatus, Session } from '../../src/shared/domainTypes'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import type { SessionOwnership, SessionVisibility } from '../../src/shared/sessionOwnership'
@@ -314,15 +314,6 @@ export function createSession(
         identity.key, identity.workDirIdentity, session.createdAt, session.id, session.generation, randomUUID(), now
       )
     }
-    try {
-      const emptyProjection = '[]'
-      const emptyProjectionSha256 = createHash('sha256').update(emptyProjection, 'utf8').digest('hex')
-      conn.prepare(`INSERT OR REPLACE INTO canonical_session_projection_cache(
-        session_id, cache_key, cache_version, session_generation, session_seq, commit_order,
-        watermark_event_id, watermark_invocation_id, event_count, value, value_sha256, updated_at
-      ) VALUES(?, 'transcript', 1, ?, -1, -1, NULL, NULL, 0, ?, ?, ?)`)
-        .run(session.id, session.generation, emptyProjection, emptyProjectionSha256, now)
-    } catch { /* Projection seed is disposable; session creation remains authoritative. */ }
     // 偏差 11:会话列表版本在同一事务内递增
     bumpScopeVersionInTx(db, 'session-list')
   })

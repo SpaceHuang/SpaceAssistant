@@ -95,14 +95,14 @@ describe('session transcript projection P2 read path', () => {
     db.close()
   })
 
-  it('seeds the canonical empty-session projection at creation with the persisted generation', () => {
+  it('reads a new empty session from History without seeding the retired transcript cache', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'empty projection seed', model: 'test' })
     const conn = getDbConnection(db)
     const persisted = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
     expect(session.generation).toBe(persisted.generation)
-    expect(conn.prepare("SELECT session_generation,session_seq,commit_order,event_count,value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
-      .toEqual({ session_generation: persisted.generation, session_seq: -1, commit_order: -1, event_count: 0, value: '[]' })
+    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
+      .toBeUndefined()
     expect(conn.prepare(`SELECT status FROM session_projection_state WHERE session_id=?
       AND scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D'`).get(session.id)).toBeUndefined()
     expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2', messages: [] })
