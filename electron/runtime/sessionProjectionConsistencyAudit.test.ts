@@ -51,7 +51,7 @@ describe('session projection consistency audit', () => {
       expect.objectContaining({ sessionId: second.id, status: 'consistent', legacyComparison: 'exact' })
     ]))
     const auditedFirst = report.sessions.find(({ sessionId }) => sessionId === first.id)!
-    expect(auditedFirst.cacheWatermark).toEqual(auditedFirst.canonicalWatermark)
+    expect(auditedFirst).not.toHaveProperty('cacheWatermark')
     expect(Number((conn.prepare('SELECT total_changes() AS n').get() as { n: number }).n)).toBe(changesBefore)
     expect(conn.prepare('SELECT session_id,value_sha256 FROM canonical_session_projection_cache ORDER BY session_id').all()).toEqual(cacheRowsBefore)
     db.close()
@@ -147,8 +147,9 @@ describe('session projection consistency audit', () => {
       legacyCensusCount: 1, legacyQueuedCount: 1, legacyQueueReconciled: true })
     expect(report.sessions).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: migrated.id, status: 'consistent' }),
-      expect.objectContaining({ sessionId: legacy.id, status: 'legacy_exception', reason: 'field-not-eligible', dormantProjectionCache: true })
+      expect.objectContaining({ sessionId: legacy.id, status: 'legacy_exception', reason: 'field-not-eligible' })
     ]))
+    expect(report.sessions.find(({ sessionId }) => sessionId === legacy.id)).not.toHaveProperty('dormantProjectionCache')
     expect(getDbConnection(db).prepare('SELECT content FROM messages WHERE id=?').get('audit-legacy-body')).toEqual({ content: 'kept old body' })
     db.close()
   })

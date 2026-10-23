@@ -21,18 +21,9 @@ export type SessionProjectionConsistencySession = Readonly<{
   reason?: string
   legacyOwner?: string
   legacyDecision?: string
-  dormantProjectionCache?: boolean
   legacyComparison: SessionProjectionLegacyComparison
   issues: readonly string[]
   canonicalWatermark?: Readonly<{
-    generation: string
-    sessionSeq: number
-    commitOrder: number
-    eventId: string | null
-    invocationId: string | null
-    eventCount: number
-  }>
-  cacheWatermark?: Readonly<{
     generation: string
     sessionSeq: number
     commitOrder: number
@@ -87,11 +78,6 @@ type AuditItemRow = {
   legacy_owner: string | null; legacy_decision: string | null
 }
 type SessionRow = { id: string; generation: string; ownership: string | null; visibility: string | null }
-type CacheRow = {
-  session_generation: string; session_seq: number; commit_order: number; watermark_event_id: string | null
-  watermark_invocation_id: string | null; event_count: number
-}
-
 function legacyProjectionMatches(
   canonicalMessages: readonly { id?: unknown; role: string; content?: unknown; timestamp?: unknown }[],
   legacyMessages: readonly { id: string; role: string; content: string; timestamp: number }[]
@@ -123,9 +109,6 @@ function readLegacyRequiredException(
   session: SessionRow
 ): SessionProjectionConsistencySession {
   const conn = getDbConnection(db)
-  getMessages(db, session.id, Number.MAX_SAFE_INTEGER)
-  const projectionCache = conn.prepare(`SELECT 1 AS present FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'`)
-    .get(session.id)
   const cutover = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
     .get(session.id) as { write_mode: string } | undefined
   const issues: string[] = []
@@ -139,7 +122,6 @@ function readLegacyRequiredException(
     sessionId: session.id, status: issues.length === 0 ? 'legacy_exception' : 'difference',
     sourceDisposition: item.source_disposition, migrationStatus: item.status, generation: session.generation,
     reason: item.reason ?? undefined, legacyOwner: item.legacy_owner ?? undefined, legacyDecision: item.legacy_decision ?? undefined,
-    dormantProjectionCache: projectionCache !== undefined,
     legacyComparison: 'legacy-exception', issues
   }
 }
@@ -210,16 +192,10 @@ function auditOneSession(
     issues.push('source-spill-invalid')
   }
 
-  const cacheRow = conn.prepare(`SELECT session_generation,session_seq,commit_order,watermark_event_id,watermark_invocation_id,event_count
-    FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'`).get(session.id) as CacheRow | undefined
-  const cacheWatermark = cacheRow ? {
-    generation: cacheRow.session_generation, sessionSeq: cacheRow.session_seq, commitOrder: cacheRow.commit_order,
-    eventId: cacheRow.watermark_event_id, invocationId: cacheRow.watermark_invocation_id, eventCount: cacheRow.event_count
-  } : undefined
   return {
     sessionId: session.id, status: issues.length === 0 ? 'consistent' : 'difference',
     sourceDisposition: item.source_disposition, migrationStatus: item.status, generation: session.generation,
-    legacyComparison, issues, canonicalWatermark, ...(cacheWatermark ? { cacheWatermark } : {})
+    legacyComparison, issues, canonicalWatermark
   }
 }
 
