@@ -73,7 +73,7 @@ import { listProfiles } from '../mcp/mcpConfigStore'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
 import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
-import type { ContinuationIntentAcceptance, ContinuationSourceRef } from '../sessionStorage/public/model'
+import type { ContinuationIntentAcceptance, ContinuationSourceRef, PreparedChatBodyView } from '../sessionStorage/public/model'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
@@ -391,8 +391,11 @@ export async function readLatestRetrySourceAfterProjection<T>(input: Readonly<{
   sessionId: string
   ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
   readLatestRetryTarget(sessionId: string): T
+  readPreparedRetryTarget?(input: Readonly<{ sessionId: string; prepared?: unknown }>): Promise<T | undefined>
 }>): Promise<T> {
-  await prepareChatBodyForRead(input.ensureChatBodyV1, input.sessionId)
+  const preparedView = await prepareChatBodyForRead(input.ensureChatBodyV1, input.sessionId)
+  const prepared = await input.readPreparedRetryTarget?.({ sessionId: input.sessionId, prepared: preparedView })
+  if (prepared !== undefined) return prepared
   return input.readLatestRetryTarget(input.sessionId)
 }
 
@@ -1055,6 +1058,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       if (attachments?.length || !['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(text.trim())) return undefined
       const target = await readLatestRetrySourceAfterProjection({ sessionId,
         ensureChatBodyV1: sessionStorage.ensureChatBodyV1,
+        readPreparedRetryTarget: async (input) => sessionQueries.readPreparedRetryTarget
+          ? sessionQueries.readPreparedRetryTarget({ sessionId: input.sessionId, prepared: input.prepared as PreparedChatBodyView | undefined })
+          : undefined,
         readLatestRetryTarget: sessionQueries.readLatestRetryTarget })
       return target ? { assistantMessageId: target.failedAssistant.message.id, sourceInvocationId: target.sourceInvocationId ?? '' } : undefined
     },

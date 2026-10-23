@@ -13,11 +13,12 @@ describe('chat:get-messages projection preparation', () => {
     const events: string[] = []
     const result = await readLatestRetrySourceAfterProjection({
       sessionId: 'retry-session',
-      ensureChatBodyV1: async ({ sessionId }) => { events.push(`ensure:${sessionId}`) },
+      ensureChatBodyV1: async ({ sessionId }) => { events.push(`ensure:${sessionId}`); return 'prepared-view' },
+      readPreparedRetryTarget: async ({ sessionId, prepared }) => { events.push(`prepared:${sessionId}:${prepared}`); return { assistantMessageId: 'prepared-failed' } },
       readLatestRetryTarget: (sessionId) => { events.push(`read:${sessionId}`); return { assistantMessageId: 'failed' } }
     })
-    expect(result).toEqual({ assistantMessageId: 'failed' })
-    expect(events).toEqual(['ensure:retry-session', 'read:retry-session'])
+    expect(result).toEqual({ assistantMessageId: 'prepared-failed' })
+    expect(events).toEqual(['ensure:retry-session', 'prepared:retry-session:prepared-view'])
   })
 
   it('awaits chatBodyV1 preparation before rerunning the synchronous query', async () => {
