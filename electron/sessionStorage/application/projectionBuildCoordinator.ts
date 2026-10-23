@@ -3,7 +3,8 @@ import {
   projectionPayloadDigest, takeoverProjectionBuildCheckpoint, type ProjectionBuildCheckpoint, type ProjectionBuildChunkReceipt, type ProjectionBuildLimits,
 } from '../domain/projectionBuild'
 import type { SessionProjectionService, ProjectionRebuildLease } from './projectionService'
-import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact } from '../domain/projectionSource'
+import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact,
+  ProjectionWorkerSample } from '../domain/projectionSource'
 import { materializeProjectionOutputManifest, type ProjectionOutputBlobReader, type ProjectionOutputIdentity } from './projectionOutputManifest'
 
 export type ProjectionBuildBlobPort = Readonly<{
@@ -38,6 +39,7 @@ export type ProjectionHistoryChunkReduction = Readonly<{
   resetOutput: boolean
   finalizedOutputOperations?: readonly unknown[]
   workerThreadId?: number
+  workerSample?: ProjectionWorkerSample
 }>
 export type ProjectionHistoryChunkReducerPort = (
   stateJson: string,

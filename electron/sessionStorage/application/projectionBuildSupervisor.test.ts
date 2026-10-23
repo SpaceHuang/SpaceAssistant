@@ -24,7 +24,9 @@ describe('projection build supervisor', () => {
       const work = { sessionId: session.id, sessionGeneration: session.generation, scopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }
       let reads = 0
       let clock = 0
-      const slices: Array<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean }> = []
+      const slices: Array<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean;
+        sourceRows: number; sourceBytes: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
+        maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null; workerSamples: number }> = []
       const stored = new Map<string, string>()
       const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => store.listDueWork(1), dbPath: db.filePath,
         readChunk: async (permit, input) => {
@@ -33,11 +35,15 @@ describe('projection build supervisor', () => {
           const event = { invocationId: 'cooperative-inv', sequence: 1, eventId: 'cooperative-event', idempotencyKey: 'cooperative-key',
             turnId: 'cooperative-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
           return { kind: 'chunk', permit, afterSessionSequence: 0, nextSessionSequence: 1, events: [event], messageFacts: [],
-            byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: true }
+            byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: true,
+            workerSample: { durationMs: 2, heapUsedBytesAtExit: 30, processRssBytesAtExit: 100 } }
         },
         historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', resetOutput: false,
           outputOperations: [{ type: 'append', messages: [{ id: 'cooperative-message', role: 'user', content: 'kept' }] }] }),
           finalize: () => ({ outputOperations: [] }) },
+        reduceChunk: async () => ({ stateJson: '{}', resetOutput: false,
+          outputOperations: [{ type: 'append', messages: [{ id: 'cooperative-message', role: 'user', content: 'kept' }] }],
+          workerSample: { durationMs: 4, heapUsedBytesAtExit: 50, processRssBytesAtExit: 200 } }),
         blobs: { write: async (payload) => { const locator = `cooperative-${stored.size}.blob`; stored.set(locator, payload)
           return { locator, byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined } },
           readVerified: async ({ locator }) => stored.get(locator)! },
@@ -48,6 +54,11 @@ describe('projection build supervisor', () => {
       expect(result.kind).toBe('published')
       expect(reads).toBe(2)
       expect(slices[0]).toMatchObject({ nextSequence: 1, yielded: true })
+      expect(slices[0]).toMatchObject({ sourceRows: 1, sourceBytes: Buffer.byteLength(JSON.stringify({
+        invocationId: 'cooperative-inv', sequence: 1, eventId: 'cooperative-event', idempotencyKey: 'cooperative-key',
+        turnId: 'cooperative-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1,
+        commitOrder: 1, createdAt: 1 })), sourceWorkerDurationMs: 2, reducerWorkerDurationMs: 4,
+        maxWorkerHeapUsedBytesAtExit: 50, maxProcessRssBytesAtExit: 200, workerSamples: 2 })
       expect(service.get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
       handle.stop()
       await handle.quiesce()

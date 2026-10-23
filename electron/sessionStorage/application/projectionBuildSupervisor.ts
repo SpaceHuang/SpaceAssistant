@@ -3,6 +3,7 @@ import type { ProjectionBuildBlobPort, ProjectionHistoryChunkReaderPort, Project
 import { runProjectionBuildSlice } from './projectionBuildCoordinator'
 import type { ProjectionRebuildLease, SessionProjectionService } from './projectionService'
 import type { ProjectionPreparationRequest } from '../public/ports'
+import type { ProjectionWorkerSample } from '../domain/projectionSource'
 
 export type ProjectionBuildWorkItem = Readonly<{ sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number }>
 const MIN_PREPARATION_RETRY_MS = 1_000
@@ -23,7 +24,9 @@ export type ProjectionBuildSupervisorOptions = Readonly<{
   /** Cooperative wall-clock budget; one synchronous chunk cannot be preempted, so it is measured then yielded. */
   sliceBudgetMs?: number
   monotonicNow?(): number
-  onSlice?(input: Readonly<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean }>): void
+  onSlice?(input: Readonly<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean;
+    sourceRows: number; sourceBytes: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
+    maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null; workerSamples: number }>): void
   now(): number
   retryAfter?(): number
   onResult?(item: ProjectionBuildWorkItem, result: Awaited<ReturnType<typeof runProjectionBuildSlice>>): void
@@ -199,10 +202,36 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         claimFailures.delete(key)
         while (!stopped && !controller.signal.aborted) {
           const sliceStartedAt = options.monotonicNow?.() ?? performance.now()
+          const sliceMetrics = { sourceRows: 0, sourceBytes: 0, sourceWorkerDurationMs: 0, reducerWorkerDurationMs: 0,
+            maxWorkerHeapUsedBytesAtExit: null as number | null, maxProcessRssBytesAtExit: null as number | null, workerSamples: 0 }
+          const collectSample = (sample: ProjectionWorkerSample | undefined, owner: 'source' | 'reducer') => {
+            if (!isWorkerSample(sample)) return
+            if (owner === 'source') sliceMetrics.sourceWorkerDurationMs += sample.durationMs
+            else sliceMetrics.reducerWorkerDurationMs += sample.durationMs
+            sliceMetrics.maxWorkerHeapUsedBytesAtExit = Math.max(sliceMetrics.maxWorkerHeapUsedBytesAtExit ?? 0, sample.heapUsedBytesAtExit)
+            sliceMetrics.maxProcessRssBytesAtExit = Math.max(sliceMetrics.maxProcessRssBytesAtExit ?? 0, sample.processRssBytesAtExit)
+            sliceMetrics.workerSamples += 1
+          }
+          const readChunk: ProjectionHistoryChunkReaderPort = async (permit, readInput) => {
+            const result = await options.readChunk(permit, readInput)
+            if (result.kind === 'chunk') {
+              sliceMetrics.sourceRows += result.events.length
+              sliceMetrics.sourceBytes += result.byteLength
+              collectSample(result.workerSample, 'source')
+            }
+            return result
+          }
+          const reduceChunk: ProjectionHistoryChunkReducerPort | undefined = options.reduceChunk
+            ? async (...args) => {
+              const result = await options.reduceChunk!(...args)
+              collectSample(result.workerSample, 'reducer')
+              return result
+            }
+            : undefined
           try {
             const result = await runProjectionBuildSlice({ service: options.service, lease, specVersion: item.specVersion,
-              dbPath: options.dbPath, readChunk: options.readChunk, historyReducer: options.historyReducer,
-              reduceChunk: options.reduceChunk,
+              dbPath: options.dbPath, readChunk, historyReducer: options.historyReducer,
+              reduceChunk,
               blobs: options.blobs, limits: options.limits, maxChunksPerSlice: options.maxChunksPerSlice,
               now: options.now, retryAfter: options.retryAfter, signal: controller.signal })
             try { options.onResult?.(item, result) } catch { /* Observability must not own the worker lifecycle. */ }
@@ -210,7 +239,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             const nextSequence = result.kind === 'checkpointed' || result.kind === 'published' ? result.checkpoint.nextSequence : null
             const sliceBudgetMs = options.sliceBudgetMs ?? Number.POSITIVE_INFINITY
             const yielded = result.kind === 'checkpointed' && sliceDurationMs >= sliceBudgetMs
-            try { options.onSlice?.({ durationMs: sliceDurationMs, nextSequence, outcome: result.kind, yielded }) }
+            try { options.onSlice?.({ durationMs: sliceDurationMs, nextSequence, outcome: result.kind, yielded, ...sliceMetrics }) }
             catch { /* Metrics are observational and cannot own projection progress. */ }
             if (result.kind === 'publish-unknown') {
               scheduleRetry(item, lease)
@@ -322,6 +351,12 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       return handle
     }
   })
+}
+
+function isWorkerSample(sample: ProjectionWorkerSample | undefined): sample is ProjectionWorkerSample {
+  return !!sample && Number.isFinite(sample.durationMs) && sample.durationMs >= 0 &&
+    Number.isSafeInteger(sample.heapUsedBytesAtExit) && sample.heapUsedBytesAtExit >= 0 &&
+    Number.isSafeInteger(sample.processRssBytesAtExit) && sample.processRssBytesAtExit >= 0
 }
 
 function readFailureCaseId(value: string | null): string | undefined {

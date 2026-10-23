@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
-import type { ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult } from '../../domain/projectionSource'
+import type { ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionWorkerSample } from '../../domain/projectionSource'
 
 export type ProjectionHistoryWorkerOptions = Readonly<{
   signal?: AbortSignal
@@ -76,9 +76,9 @@ export function readProjectionHistoryChunkInWorker(
     }
     const onAbort = () => stop(signal?.reason instanceof Error ? signal.reason : new Error('PROJECTION_WORKER_CANCELLED'))
     signal?.addEventListener('abort', onAbort, { once: true })
-    worker.on('message', (message: { requestId?: string; result?: ProjectionHistoryChunkResult }) => {
+    worker.on('message', (message: { requestId?: string; result?: ProjectionHistoryChunkResult; workerSample?: ProjectionWorkerSample }) => {
       if (message.requestId !== requestId || !message.result) { stop(new Error('PROJECTION_WORKER_PROTOCOL_MISMATCH')); return }
-      result = message.result
+      result = { ...message.result, ...(isWorkerSample(message.workerSample) ? { workerSample: message.workerSample } : {}) }
     })
     worker.once('error', (error) => stop(error))
     worker.once('exit', (code) => {
@@ -92,4 +92,12 @@ export function readProjectionHistoryChunkInWorker(
     try { worker.postMessage({ requestId, permit, input }) }
     catch (error) { stop(error instanceof Error ? error : new Error('PROJECTION_WORKER_POST_FAILED')) }
   })
+}
+
+function isWorkerSample(value: unknown): value is ProjectionWorkerSample {
+  if (!value || typeof value !== 'object') return false
+  const sample = value as Partial<ProjectionWorkerSample>
+  return Number.isFinite(sample.durationMs) && sample.durationMs! >= 0 &&
+    Number.isSafeInteger(sample.heapUsedBytesAtExit) && sample.heapUsedBytesAtExit! >= 0 &&
+    Number.isSafeInteger(sample.processRssBytesAtExit) && sample.processRssBytesAtExit! >= 0
 }

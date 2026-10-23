@@ -5,6 +5,7 @@ import type { Worker } from 'node:worker_threads'
 import { createSession } from '../../../database/operations'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { getDbConnection } from '../../../database/sqliteStore'
+import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
 import { readProjectionHistoryChunkInWorker } from './projectionHistoryChunkWorkerClient'
 import type { ProjectionHistoryChunkPermit } from './projectionHistoryChunkReader'
@@ -71,13 +72,18 @@ describe('projection history chunk worker client', () => {
     const temp = createTempDatabase('projection-real-worker-')
     try {
       const session = createSession(temp.db, { name: 'projection real worker' })
+      const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 10, session.id)
+      await history.appendBatch([{ invocationId: 'worker-sample-inv', turnId: 'worker-sample-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'worker-sample-event', idempotencyKey: 'worker-sample-event', kind: 'invocation-context-committed',
+        payload: { messages: [] } }], 0)
       const sourceIdentityJson = readProjectionSourceIdentity(getDbConnection(temp.db), session.id, session.generation)!
       const result = await readProjectionHistoryChunkInWorker({ dbPath: temp.dbPath, sessionId: session.id,
         sessionGeneration: session.generation, scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson,
         connectionEpoch: 1, processGeneration: 1, rebuildToken: 'worker-token' }, { afterSessionSequence: 0, maxRows: 2, maxBytes: 2048 }, {
         workerPath: path.join(process.cwd(), 'electron/sessionStorage/infrastructure/sqlite/projectionHistoryChunkWorker.ts'), timeoutMs: 5000,
       })
-      expect(result).toMatchObject({ kind: 'complete', afterSessionSequence: 0 })
+      expect(result).toMatchObject({ kind: 'chunk', afterSessionSequence: 0,
+        workerSample: { durationMs: expect.any(Number), heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number) } })
     } finally { temp.cleanup() }
   }, 15_000)
 })

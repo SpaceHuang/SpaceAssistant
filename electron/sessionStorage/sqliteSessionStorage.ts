@@ -286,7 +286,7 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
   now(): number
   limits?: ProjectionBuildSupervisorOptions['limits']
   maxChunksPerSlice?: number
-  onSlice?(input: Readonly<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean }>): void
+  onSlice?: ProjectionBuildSupervisorOptions['onSlice']
   onResult?: ProjectionBuildSupervisorOptions['onResult']
   onFailure?: ProjectionBuildSupervisorOptions['onFailure']
 }>): LifecycleTaskRegistration {
