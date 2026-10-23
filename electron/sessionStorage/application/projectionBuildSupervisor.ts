@@ -1,7 +1,7 @@
 import type { ProjectionBuildLimits } from '../domain/projectionBuild'
 import type { ProjectionBuildBlobPort, ProjectionHistoryChunkReaderPort, ProjectionHistoryReducerPort } from './projectionBuildCoordinator'
 import { runProjectionBuildSlice } from './projectionBuildCoordinator'
-import type { SessionProjectionService } from './projectionService'
+import type { ProjectionRebuildLease, SessionProjectionService } from './projectionService'
 import type { ProjectionPreparationRequest } from '../public/ports'
 
 export type ProjectionBuildWorkItem = Readonly<{ sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number }>
@@ -29,6 +29,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
 }> {
   let active: Readonly<{ handle: ProjectionBuildTaskHandle; wake(reason: MaintenanceReason): void }> | undefined
   const requests = new Map<string, { item: ProjectionBuildWorkItem; resolve(value: Awaited<ReturnType<typeof runProjectionBuildSlice>>): void; reject(error: unknown): void }>()
+  const suspendedLeases = new Map<string, ProjectionRebuildLease>()
   const keyOf = (item: ProjectionBuildWorkItem) => JSON.stringify([item.sessionId, item.scopeKey])
   return Object.freeze({
     prepare(item) {
@@ -58,14 +59,23 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       const nextWake = () => new Promise<void>((resolve) => { wakeResolve = resolve })
       const runItem = async (item: ProjectionBuildWorkItem): Promise<boolean> => {
         const key = keyOf(item)
-        let lease
-        try {
-          lease = options.service.beginRebuild({ sessionId: item.sessionId,
-            sessionGeneration: item.sessionGeneration, scopeKey: item.scopeKey })
-        } catch {
-          requests.get(key)?.reject(new Error('PROJECTION_BUILD_CLAIM_FAILED'))
-          requests.delete(key)
-          return false
+        let lease = suspendedLeases.get(key)
+        if (lease) {
+          const state = options.service.get(item.sessionId, item.scopeKey)
+          if (state?.status !== 'rebuilding' || state.sessionGeneration !== item.sessionGeneration ||
+            state.processGeneration !== lease.processGeneration || state.rebuildToken !== lease.rebuildToken) lease = undefined
+        }
+        if (lease) {
+          suspendedLeases.delete(key)
+        } else {
+          try {
+            lease = options.service.beginRebuild({ sessionId: item.sessionId,
+              sessionGeneration: item.sessionGeneration, scopeKey: item.scopeKey }) ?? undefined
+          } catch {
+            requests.get(key)?.reject(new Error('PROJECTION_BUILD_CLAIM_FAILED'))
+            requests.delete(key)
+            return false
+          }
         }
         if (!lease) {
           const state = typeof options.service.get === 'function' ? options.service.get(item.sessionId, item.scopeKey) : null
@@ -101,6 +111,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             return false
           }
         }
+        if (stopped || controller.signal.aborted) suspendedLeases.set(key, lease)
         requests.get(key)?.reject(controller.signal.reason ?? new Error('PROJECTION_BUILD_STOPPED'))
         requests.delete(key)
         return true

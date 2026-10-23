@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { createSession } from '../../database/operations'
 import { createMemoryAppDb } from '../../database/testHelpers'
+import { getDbConnection } from '../../database/sqliteStore'
 import { createSqliteProjectionStateStore } from '../infrastructure/sqlite/sessionProjectionStateStore'
 import { createProjectionService } from './projectionService'
 import { createProjectionBuildSupervisor } from './projectionBuildSupervisor'
@@ -126,7 +127,7 @@ describe('projection build supervisor', () => {
     } finally { db.close() }
   })
 
-  it('does not report quiescent until the active read worker has exited and preserves the prior checkpoint', async () => {
+  it('preserves the stopped lease and checkpoint after worker quiescence', async () => {
     const db = createMemoryAppDb()
     try {
       const session = createSession(db, { name: 'projection supervisor quiesce', model: 'test' })
@@ -138,6 +139,7 @@ describe('projection build supervisor', () => {
       const workerStarted = new Promise<void>((resolve) => { started = resolve })
       let exited!: () => void
       const workerExited = new Promise<void>((resolve) => { exited = resolve })
+      const blobPayloads = new Map<string, string>()
       let work: readonly [{ sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number }] | readonly [] = [
         { sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-a', specVersion: 1 },
       ]
@@ -151,11 +153,19 @@ describe('projection build supervisor', () => {
         return { kind: 'complete', permit: _permit, afterSessionSequence: input.afterSessionSequence }
       }
       const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => work, dbPath: db.filePath,
-        readChunk, historyReducer, blobs: { write: async (payload) => ({ locator: 'projection-00000000-0000-4000-8000-000000000001.blob',
-          byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }) },
+        readChunk, historyReducer, blobs: { write: async (payload) => {
+          const locator = `projection-00000000-0000-4000-8000-${String(blobPayloads.size + 1).padStart(12, '0')}.blob`
+          blobPayloads.set(locator, payload)
+          return { locator, byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }
+        }, readVerified: async ({ locator, byteLength, payloadDigest }) => {
+          const payload = blobPayloads.get(locator)
+          if (payload === undefined || Buffer.byteLength(payload) !== byteLength || createHash('sha256').update(payload).digest('hex') !== payloadDigest) throw new Error('blob mismatch')
+          return payload
+        } },
         limits: { maxRows: 2, maxBytes: 4096 }, maxChunksPerSlice: 1, now: () => 1 })
       const handle = supervisor.start()
       await workerStarted
+      expect(service.readCheckpoint(session.id, 'scope-a')).not.toBeNull()
       handle.stop()
       let quiesced = false
       const quiescence = handle.quiesce().then(() => { quiesced = true })
@@ -164,8 +174,16 @@ describe('projection build supervisor', () => {
       exited()
       await quiescence
       expect(quiesced).toBe(true)
-      expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rebuilding' })
-      expect(service.readCheckpoint(session.id, 'scope-a')).not.toBeNull()
+      expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rebuilding', rebuildToken: 'supervisor-1' })
+      expect(getDbConnection(db).prepare('SELECT build_checkpoint_json FROM session_projection_state WHERE session_id=? AND scope_key=?')
+        .get(session.id, 'scope-a')).toMatchObject({ build_checkpoint_json: expect.any(String) })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const resumedHandle = supervisor.start()
+      const resumed = await supervisor.prepare({ sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-a', specVersion: 1 })
+      expect(resumed.kind).toBe('published')
+      expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'valid' })
+      resumedHandle.stop()
+      await resumedHandle.quiesce()
       work = []
     } finally { db.close() }
   })
