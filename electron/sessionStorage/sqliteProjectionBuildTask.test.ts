@@ -75,6 +75,30 @@ describe('SQLite projection build task composition', () => {
     } finally { db.close(); temp.cleanup() }
   })
 
+  it('keeps legacy authority readable when projection preparation is deferred for an oversized History event', async () => {
+    const temp = createTempDatabase('sqlite-projection-deferred-legacy-')
+    const db = temp.db
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-deferred-legacy-blobs-'))
+    try {
+      const session = createSession(db, { name: 'deferred projection legacy authority', model: 'test' })
+      appendMessage(db, { id: 'deferred-legacy-user', sessionId: session.id, role: 'user', content: 'keep-serving-legacy', timestamp: 1, status: 'sent' })
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id)
+      await history.appendBatch([{ invocationId: 'deferred-large-inv', turnId: 'deferred-large-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'deferred-large-event', idempotencyKey: 'deferred-large-event', kind: 'invocation-context-committed',
+        payload: { messages: [{ id: 'deferred-legacy-user', role: 'user', content: 'keep-serving-legacy', timestamp: 1 }], extraLargeFact: 'x'.repeat(400_000) } }], 0)
+      const processGeneration = advanceProcessGeneration(getDbConnection(db))
+      const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }), recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
+        maintenanceTasks: [task] })
+      try {
+        await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).rejects.toThrow('PROJECTION_PREPARATION_DEFERRED_LARGE')
+        expect(host.storage.queries.readMessages({ sessionId: session.id })).toMatchObject([{ id: 'deferred-legacy-user', content: 'keep-serving-legacy' }])
+      } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
+    } finally { db.close(); temp.cleanup() }
+  })
+
   it('reopens a file-backed checkpoint under a newer process and publishes the resumed projection', async () => {
     const temp = createTempDatabase('sqlite-projection-task-reopen-')
     let currentDb = temp.db

@@ -241,6 +241,28 @@ describe('projection build coordinator', () => {
       .toEqual([230 * 1024, 30 * 1024])
   })
 
+  it('preserves a committed checkpoint result when staged blob release throws', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection blob release after publish', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'release-after-publish-token', now: () => 5 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-release', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-release', sessionGeneration: session.generation })!
+    const reader: ProjectionHistoryChunkReaderPort = async (permit, input) => {
+      const event = { invocationId: 'release-inv', sequence: 1, eventId: 'release-event', idempotencyKey: 'release-key', turnId: 'release-turn',
+        schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+      return { kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence, nextSessionSequence: 1, events: [event],
+        messageFacts: [], byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: true }
+    }
+    const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath, readChunk: reader,
+      historyReducer: { ...historyReducer, createState: () => '{}', finalize: () => ({ outputOperations: [{ type: 'append', messages: [] }] }) },
+      blobs: { write: async (payload) => ({ locator: 'release-after-publish.blob', byteLength: Buffer.byteLength(payload),
+        payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => { throw new Error('cleanup failed') } }) },
+      limits: { maxRows: 1, maxBytes: 512 }, maxChunksPerSlice: 1, now: () => 5 })
+    expect(result).toMatchObject({ kind: 'checkpointed' })
+    expect(service.get(session.id, 'scope-release')).toMatchObject({ status: 'rebuilding' })
+  })
+
   it('finalizes one invocation before folding the next invocation in the same bounded source chunk', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection invocation boundary', model: 'test' })

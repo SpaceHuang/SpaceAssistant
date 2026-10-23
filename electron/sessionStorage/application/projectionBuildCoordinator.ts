@@ -167,7 +167,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
       }
       const payloadDigest = await projectionPayloadDigest(payload)
       if (finalBlob && (finalBlob.byteLength !== payloadByteLength || finalBlob.payloadDigest !== payloadDigest || !finalBlob.locator.trim())) {
-        await finalBlob.release()
+        await releaseBlob(finalBlob)
         rejectBuild(service, lease, 'VIEW_REJECTED', 'FINAL_VIEW_BLOB_VERIFICATION_FAILED', input.now, input.retryAfter)
         return { kind: 'blob-write-failed', reason: 'final-view-blob-verification-failed' }
       }
@@ -191,7 +191,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
           reconciled.validatedRangeJson === validatedRangeJson) return { kind: 'published', checkpoint, state: reconciled }
         return { kind: 'publish-unknown', checkpoint }
       } finally {
-        await finalBlob?.release()
+        if (finalBlob) await releaseBlob(finalBlob)
       }
     }
     if (result.kind !== 'chunk') return { kind: 'source-unavailable', reason: 'unknown-worker-result' }
@@ -255,7 +255,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
       } else staged = [await input.blobs.write(payload)]
     }
     catch (error) {
-      await Promise.all(staged.map((entry) => entry.release()))
+      await releaseBlobs(staged)
       rejectBuild(service, lease, 'VIEW_REJECTED', 'DERIVED_BLOB_WRITE_FAILED', input.now, input.retryAfter)
       return { kind: 'blob-write-failed', reason: error instanceof Error ? error.message : 'blob-write-failed' }
     }
@@ -295,10 +295,19 @@ export async function runProjectionBuildSlice(input: Readonly<{
       if (!service.saveCheckpoint(lease, JSON.stringify(advanced))) return { kind: 'lease-lost' }
       checkpoint = advanced
     } finally {
-      await Promise.all(staged.map((entry) => entry.release()))
+      await releaseBlobs(staged)
     }
   }
   return { kind: 'checkpointed', checkpoint }
+}
+
+/** Temporary blob cleanup is best-effort; it must never replace the durable CAS outcome. */
+async function releaseBlob(blob: Readonly<{ release(): Promise<void> }>): Promise<void> {
+  try { await blob.release() } catch { /* Unreferenced staging is reclaimed by blob maintenance. */ }
+}
+
+async function releaseBlobs(blobs: readonly Readonly<{ release(): Promise<void> }>[]): Promise<void> {
+  await Promise.all(blobs.map(releaseBlob))
 }
 
 function samePermit(left: ProjectionHistoryChunkPermit, right: ProjectionHistoryChunkPermit): boolean {

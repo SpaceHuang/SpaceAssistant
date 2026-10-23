@@ -32,6 +32,8 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
   const keyOf = (item: ProjectionBuildWorkItem) => JSON.stringify([item.sessionId, item.scopeKey])
   return Object.freeze({
     prepare(item) {
+      const handle = active?.handle
+      if (!handle) return Promise.reject(new Error('PROJECTION_BUILD_TASK_NOT_RUNNING'))
       const key = keyOf(item)
       const existing = requests.get(key)
       if (existing) return new Promise((resolve, reject) => {
@@ -43,8 +45,6 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       const promise = new Promise<Awaited<ReturnType<typeof runProjectionBuildSlice>>>((resolve, reject) => {
         requests.set(key, { item, resolve, reject })
       })
-      const handle = active?.handle
-      if (!handle) return Promise.reject(new Error('PROJECTION_BUILD_TASK_NOT_RUNNING'))
       handle.request?.('scope-changed')
       return promise
     },
@@ -58,23 +58,47 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       const nextWake = () => new Promise<void>((resolve) => { wakeResolve = resolve })
       const runItem = async (item: ProjectionBuildWorkItem): Promise<boolean> => {
         const key = keyOf(item)
-        const lease = options.service.beginRebuild({ sessionId: item.sessionId,
-          sessionGeneration: item.sessionGeneration, scopeKey: item.scopeKey })
+        let lease
+        try {
+          lease = options.service.beginRebuild({ sessionId: item.sessionId,
+            sessionGeneration: item.sessionGeneration, scopeKey: item.scopeKey })
+        } catch {
+          requests.get(key)?.reject(new Error('PROJECTION_BUILD_CLAIM_FAILED'))
+          requests.delete(key)
+          return false
+        }
         if (!lease) {
-          requests.get(key)?.reject(new Error('PROJECTION_BUILD_CLAIM_UNAVAILABLE'))
+          const state = typeof options.service.get === 'function' ? options.service.get(item.sessionId, item.scopeKey) : null
+          const error = state?.sessionGeneration === item.sessionGeneration && state.status === 'rejected' &&
+            state.retryAfter !== null && state.retryAfter > options.now()
+            ? new Error(`PROJECTION_BUILD_DEFERRED:${readFailureCaseId(state.failureCaseJson) ?? 'REJECTED'}`)
+            : new Error('PROJECTION_BUILD_CLAIM_UNAVAILABLE')
+          requests.get(key)?.reject(error)
           requests.delete(key)
           return false
         }
         while (!stopped && !controller.signal.aborted) {
-          const result = await runProjectionBuildSlice({ service: options.service, lease, specVersion: item.specVersion,
-            dbPath: options.dbPath, readChunk: options.readChunk, historyReducer: options.historyReducer,
-            blobs: options.blobs, limits: options.limits, maxChunksPerSlice: options.maxChunksPerSlice,
-            now: options.now, retryAfter: options.retryAfter, signal: controller.signal })
-          options.onResult?.(item, result)
-          if (result.kind !== 'checkpointed') {
-            requests.get(key)?.resolve(result)
+          try {
+            const result = await runProjectionBuildSlice({ service: options.service, lease, specVersion: item.specVersion,
+              dbPath: options.dbPath, readChunk: options.readChunk, historyReducer: options.historyReducer,
+              blobs: options.blobs, limits: options.limits, maxChunksPerSlice: options.maxChunksPerSlice,
+              now: options.now, retryAfter: options.retryAfter, signal: controller.signal })
+            try { options.onResult?.(item, result) } catch { /* Observability must not own the worker lifecycle. */ }
+            if (result.kind !== 'checkpointed') {
+              requests.get(key)?.resolve(result)
+              requests.delete(key)
+              return true
+            }
+          } catch {
+            if (controller.signal.aborted) break
+            try {
+              const current = options.service.get(item.sessionId, item.scopeKey)
+              options.service.reject(lease, { failureCaseJson: JSON.stringify({ case: 'CONTENT_UNAVAILABLE', caseId: 'SUPERVISOR_FAILED' }),
+                attempts: (current?.attempts ?? 0) + 1, retryAfter: options.retryAfter?.() ?? options.now() + 60_000 })
+            } catch { /* A storage failure must not strand or crash the in-memory request queue. */ }
+            requests.get(key)?.reject(new Error('PROJECTION_BUILD_SUPERVISOR_FAILED'))
             requests.delete(key)
-            return true
+            return false
           }
         }
         requests.get(key)?.reject(controller.signal.reason ?? new Error('PROJECTION_BUILD_STOPPED'))
@@ -114,4 +138,14 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       return handle
     }
   })
+}
+
+function readFailureCaseId(value: string | null): string | undefined {
+  if (!value) return undefined
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+    const caseId = (parsed as { caseId?: unknown }).caseId
+    return typeof caseId === 'string' && /^[A-Z0-9_]{1,80}$/.test(caseId) ? caseId : undefined
+  } catch { return undefined }
 }
