@@ -22,8 +22,10 @@ type FenceInput = Readonly<{
 
 /** Read the paired durable API/route proof only when both scope payloads match the live source fence. */
 export function createSqliteSessionApiRouteProjectionFence(db: AppDatabase) {
-  const conn = getDbConnection(db)
   const isCurrent = (input: FenceInput): boolean => {
+    // The fence can outlive database compaction; prepare statements from the active handle
+    // per call so a same-object close/reopen does not retain the retired connection.
+    const conn = getDbConnection(db)
     if (!Number.isSafeInteger(input.messageRevision) || input.messageRevision < 0) return false
     const sourceIdentityJson = readProjectionSourceIdentity(conn, input.sessionId, input.sessionGeneration)
     if (!sourceIdentityJson) return false

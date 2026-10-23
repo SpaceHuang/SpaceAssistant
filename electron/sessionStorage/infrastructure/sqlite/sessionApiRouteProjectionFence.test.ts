@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createSession } from '../../../database/operations'
-import { createMemoryAppDb } from '../../../database/testHelpers'
-import { getDbConnection } from '../../../database/sqliteStore'
+import { createMemoryAppDb, createTempDatabase } from '../../../database/testHelpers'
+import { getDbConnection, reopenDatabaseConnection } from '../../../database/sqliteStore'
 import { encodeProjectionScopeKey } from '../../domain/scopeKey'
 import { createSqliteProjectionStateStore } from './sessionProjectionStateStore'
 import { createSqliteSessionApiRouteProjectionFence, publishSqliteSessionApiRouteScopes } from './sessionApiRouteProjectionFence'
@@ -9,6 +9,23 @@ import { createSqliteSessionApiRouteProjectionFence, publishSqliteSessionApiRout
 describe('SQLite API and route projection fence', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
   afterEach(() => { db?.close(); db = undefined })
+
+  it('resolves the active connection after same-object database reopen', () => {
+    const temp = createTempDatabase('api-route-fence-reopen-')
+    try {
+      const session = createSession(temp.db, { name: 'API route fence reopen', model: 'test' })
+      const sourceIdentityJson = createSqliteProjectionStateStore(temp.db).readSourceIdentity(session.id, session.generation)!
+      const historyWatermarkJson = JSON.stringify((JSON.parse(sourceIdentityJson) as { historyWatermark: unknown }).historyWatermark)
+      const fence = createSqliteSessionApiRouteProjectionFence(temp.db)
+      temp.db.close()
+      reopenDatabaseConnection(temp.db)
+
+      expect(() => fence.isCurrent({ sessionId: session.id, sessionGeneration: session.generation,
+        messageRevision: 0, historyWatermarkJson })).not.toThrow()
+    } finally {
+      temp.cleanup()
+    }
+  })
 
   it('requires both valid scope manifests to match current generation, revision, source and history watermark', () => {
     db = createMemoryAppDb()

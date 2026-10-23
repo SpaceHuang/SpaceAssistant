@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createTempDatabase } from '../database/testHelpers'
-import { getDbConnection, reopenDatabaseConnection, type AppDatabase } from '../database/sqliteStore'
+import { getDbConnection, getDbConnectionEpoch, reopenDatabaseConnection, type AppDatabase } from '../database/sqliteStore'
 import { appendMessagesAtomically, createSession } from '../database/operations'
 import { createSessionExecutionStore } from './execution'
 import { createTurnCoordinatorStorage } from './coordinator'
@@ -52,6 +52,20 @@ const trustedTodo = {
 }
 
 describe('压缩换入后复用 store 跨 reopen（闭包连接现取化回归）', () => {
+  it('connection epoch advances across close and same-object reopen', () => {
+    const temp = createTempDatabase('session-connection-epoch')
+    try {
+      const before = getDbConnectionEpoch(temp.db)
+      temp.db.close()
+      expect(getDbConnectionEpoch(temp.db)).toBeGreaterThan(before)
+      const closed = getDbConnectionEpoch(temp.db)
+      reopenDatabaseConnection(temp.db)
+      expect(getDbConnectionEpoch(temp.db)).toBeGreaterThan(closed)
+    } finally {
+      temp.cleanup()
+    }
+  })
+
   it('execution store：复用同一实例跨换入后 continuation 意图读写不抛 database is not open', () => {
     const { db, cleanup } = createTempDatabase('exec-swap-reopen-')
     try {

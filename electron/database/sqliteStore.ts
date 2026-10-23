@@ -27,6 +27,7 @@ export type AppDatabase = {
 }
 
 const connMap = new WeakMap<AppDatabase, DatabaseSync>()
+const connectionEpochMap = new WeakMap<AppDatabase, number>()
 type DbSaveHandle = { schedule: () => void; flushNow: () => void; setSuspended: (value: boolean) => void }
 const saveHandleMap = new WeakMap<AppDatabase, DbSaveHandle>()
 
@@ -34,6 +35,17 @@ export function getDbConnection(db: AppDatabase): DatabaseSync {
   const conn = connMap.get(db)
   if (!conn) throw new Error('Database connection is closed')
   return conn
+}
+
+/** Monotonic in-process fence for asynchronous work tied to a specific SQLite handle. */
+export function getDbConnectionEpoch(db: AppDatabase): number {
+  return connectionEpochMap.get(db) ?? 0
+}
+
+function advanceDbConnectionEpoch(db: AppDatabase): void {
+  const current = getDbConnectionEpoch(db)
+  if (current >= Number.MAX_SAFE_INTEGER) throw new Error('DATABASE_CONNECTION_EPOCH_EXHAUSTED')
+  connectionEpochMap.set(db, current + 1)
 }
 
 /**
@@ -99,12 +111,14 @@ export function openSqliteDatabase(dbPath: string, options?: OpenSqliteDatabaseO
       checkpoint(true)
       armClosedConnectionSentinel(conn)
       conn.close()
+      advanceDbConnectionEpoch(db)
       connMap.delete(db)
       saveHandleMap.delete(db)
     }
   }
 
   connMap.set(db, conn)
+  advanceDbConnectionEpoch(db)
   saveHandleMap.set(db, { schedule: saveHandle.schedule, flushNow: saveHandle.flushNow, setSuspended: saveHandle.setSuspended })
   return db
 }
@@ -142,6 +156,7 @@ export function reopenDatabaseConnection(db: AppDatabase): AppDatabase {
     }
   })
   connMap.set(db, conn)
+  advanceDbConnectionEpoch(db)
   saveHandleMap.set(db, { schedule: saveHandle.schedule, flushNow: saveHandle.flushNow, setSuspended: saveHandle.setSuspended })
   return db
 }
@@ -155,10 +170,12 @@ export function openSqliteDatabaseReadOnly(dbPath: string): AppDatabase {
     flushSave: () => undefined,
     close: () => {
       conn.close()
+      advanceDbConnectionEpoch(db)
       connMap.delete(db)
     }
   }
   connMap.set(db, conn)
+  advanceDbConnectionEpoch(db)
   return db
 }
 

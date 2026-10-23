@@ -69,7 +69,7 @@ import { archiveLegacyDatabaseJsonBackup } from './storage/legacyDatabaseBackup'
 import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
-import { getDbConnection } from './database/sqliteStore'
+import { getDbConnection, getDbConnectionEpoch } from './database/sqliteStore'
 import { getMessageSkeleton } from './database/operations'
 import { advanceProcessGeneration, currentProcessGeneration } from './database/processGeneration'
 import { createSqliteStartupHistoryRecoveryBindings } from './sessionStorage/sqliteRuntimeBindings'
@@ -574,7 +574,7 @@ app.whenReady().then(async () => {
     },
     maintenanceTasks: [
       createSqliteProjectionBuildTask({ db, dbPath, blobRoot: path.join(app.getPath('userData'), 'session-projections'),
-        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now,
+        processGeneration: () => processGeneration, connectionEpoch: () => getDbConnectionEpoch(db), now: Date.now,
         onFailure: (code) => console.warn(`[storage] ${code}`),
         onResult: (_item, result) => {
           if (result.kind !== 'checkpointed' && result.kind !== 'published') {
