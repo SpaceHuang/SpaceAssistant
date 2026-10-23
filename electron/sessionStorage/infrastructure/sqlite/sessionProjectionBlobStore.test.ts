@@ -1,17 +1,30 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSession } from '../../../database/operations'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { acceptProjectionBuildChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint } from '../../domain/projectionBuild'
 
+const lockState = vi.hoisted(() => ({ failRelease: false }))
+vi.mock('proper-lockfile', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('proper-lockfile')>()
+  return { ...actual, lock: async (...args: Parameters<typeof actual.lock>) => {
+    const release = await actual.lock(...args)
+    return async () => {
+      await release()
+      if (lockState.failRelease) throw new Error('injected lock release failure')
+    }
+  } }
+})
+
 describe('session projection derived blob store', () => {
   let temp: ReturnType<typeof createTempDatabase> | undefined
   let root: string | undefined
   afterEach(async () => {
+    lockState.failRelease = false
     temp?.cleanup(); temp = undefined
     if (root) await fs.rm(root, { recursive: true, force: true })
     root = undefined
@@ -190,5 +203,15 @@ describe('session projection derived blob store', () => {
     await staged.release()
     await fs.writeFile(path.join(root, staged.locator), 'modified payload')
     await expect(blobs.readVerified(staged)).rejects.toMatchObject({ code: 'PROJECTION_BLOB_CORRUPT' })
+  })
+
+  it('preserves the primary blob error when releasing the shared fence also fails', async () => {
+    temp = createTempDatabase('projection-blob-release-error-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    lockState.failRelease = true
+    await expect(blobs.readVerified({ locator: 'projection-00000000-0000-4000-8000-000000000099.blob', byteLength: 1,
+      payloadDigest: '0'.repeat(64) })).rejects.toMatchObject({ code: 'PROJECTION_BLOB_MISSING' })
+    lockState.failRelease = false
   })
 })

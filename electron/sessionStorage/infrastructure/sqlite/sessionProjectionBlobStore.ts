@@ -57,6 +57,7 @@ export function createSessionProjectionBlobStore(root: string) {
       const handedOff = new Set<string>()
       let released = false
       let handedOffToCaller = false
+      let operationFailed = false
       try {
         for (const blob of staged) {
           const file = await fs.open(blob.tempPath, 'wx', 0o600)
@@ -74,19 +75,24 @@ export function createSessionProjectionBlobStore(root: string) {
           payloadDigest: digest(blob.bytes), async release() { if (!released) { released = true; await releaseFence() } } })))
         handedOffToCaller = true
         return result
+      } catch (error) {
+        operationFailed = true
+        throw error
       } finally {
         for (const blob of staged) {
           await fs.rm(blob.tempPath, { force: true }).catch(() => undefined)
           if (!handedOffToCaller || !handedOff.has(blob.locator)) await fs.rm(blob.finalPath, { force: true }).catch(() => undefined)
         }
         if (!handedOffToCaller) {
-          await releaseFence()
+          try { await releaseFence() }
+          catch (error) { if (!operationFailed) throw error }
         }
       }
     },
     async readVerified(input: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>): Promise<string> {
       const locator = assertLocator(input.locator)
       const releaseFence = await acquireFence()
+      let operationFailed = false
       try {
         let content: Buffer
         try { content = await fs.readFile(path.join(root, locator)) }
@@ -98,10 +104,17 @@ export function createSessionProjectionBlobStore(root: string) {
           throw blobError('PROJECTION_BLOB_CORRUPT', 'projection blob length or digest mismatch')
         }
         return content.toString('utf8')
-      } finally { await releaseFence() }
+      } catch (error) {
+        operationFailed = true
+        throw error
+      } finally {
+        try { await releaseFence() }
+        catch (error) { if (!operationFailed) throw error }
+      }
     },
     async collectGarbage(conn: DatabaseSync): Promise<Readonly<{ removedCount: number; removedBytes: number }>> {
       const releaseFence = await acquireFence()
+      let operationFailed = false
       try {
         const roots = runInTransaction(conn, () => {
           const locators = new Set<string>()
@@ -146,7 +159,13 @@ export function createSessionProjectionBlobStore(root: string) {
         }
         if (removedCount > 0) await syncDirectory(root)
         return Object.freeze({ removedCount, removedBytes })
-      } finally { await releaseFence() }
+      } catch (error) {
+        operationFailed = true
+        throw error
+      } finally {
+        try { await releaseFence() }
+        catch (error) { if (!operationFailed) throw error }
+      }
     }
   }
 }
