@@ -378,7 +378,7 @@ export type SpaceAssistantApi = {
     package: PolicyPackage
     expectedRevision: number
   }) => Promise<{ ok: true } | { ok: false; error: string }>
-  /** 自定义套餐规则覆盖（主进程强制校验：locked 只读、不可增删、顺序不可改；
+  /** 自定义套餐规则覆盖（主进程强制校验：locked 可改动作，不可增删规则或修改顺序/匹配条件；
    *  默认动作即 auto-evaluator 的规则额外允许覆盖回 auto-evaluator）。 */
   securitySetRuleOverride: (payload: {
     ruleId: string

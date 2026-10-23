@@ -509,7 +509,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const db = createMemoryAppDb(`im-policy-assembly-${lane}`)
     const conn = getDbConnection(db)
     commitImPolicySnapshot(conn, {
-      policyBehaviorVersion: 'im-standard-v2', snapshot: { denyOutbound: true, selectedPackage: 'strict' }, updatedAt: 1, eventId: `assembly-${lane}`
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { denyOutbound: true, selectedPackage: 'custom' }, updatedAt: 1, eventId: `assembly-${lane}`
     })
     const { agentSdk } = assembleInvocation({
       requestId: `assembly-${lane}`, sessionId: `session-${lane}`, lane, model: 'test-model', locale: 'zh-CN',
@@ -521,7 +521,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       capabilityId: 'probe-tool', inputSnapshotHash: 'hash', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' as const }
     const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: 'tool', toolName: 'probe-tool', input: {} })
     expect(args.imPolicySnapshot).toEqual(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] }))
-    expect(args.lanePackage).toBe('strict')
+    expect(args.lanePackage).toBe('custom')
     db.close()
   })
 
@@ -720,7 +720,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const db = createImPolicyTestDb('im-standard-v2-user-ask-override')
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-user-ask-override-'))
     commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
-      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'im-time-query-review': 'ask' } },
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'im-time-query-review': 'ask' } },
       updatedAt: 1, eventId: 'im-standard-v2-user-ask-override' })
     const { agentSdk } = assembleInvocation({ requestId: 'im-standard-v2-user-ask-override', sessionId: 'im-user-ask-session', lane: 'wechat',
       model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
@@ -749,7 +749,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       name: 'create_record', description: 'Create a record', inputSchema: schema
     }]).descriptors[0]!
     commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
-      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'mcp-tool-ask': override } }, updatedAt: 1,
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': override } }, updatedAt: 1,
       eventId: `im-standard-v2-mcp-${override}-override` })
     const { agentSdk } = assembleInvocation({ requestId: `im-standard-v2-mcp-${override}-override`,
       sessionId: `im-mcp-${override}-session`, lane: 'wechat', model: 'test-model', locale: 'zh-CN', messages: [],

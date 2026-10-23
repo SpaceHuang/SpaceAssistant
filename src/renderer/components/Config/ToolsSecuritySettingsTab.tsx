@@ -81,6 +81,20 @@ function PolicyPackageSection({
             ? t('toolsSecurity.policy.actionConfirmEveryTime')
             : t('toolsSecurity.policy.actionAsk')
 
+  const ruleReason = (rule: SecuritySettingsRuleView): string => {
+    switch (rule.id) {
+      case 'mcp-account-unauthorized-deny':
+        return t('toolsSecurity.policy.mcpAccountUnauthorizedReason')
+      case 'remote-browser-disabled':
+        return t('toolsSecurity.policy.remoteBrowserDisabledReason')
+      case 'remote-outbound-budget-pause-wechat':
+      case 'remote-outbound-budget-pause-lark':
+        return t('toolsSecurity.policy.remoteOutboundBudgetExhaustedReason')
+      default:
+        return rule.reason
+    }
+  }
+
   const effectiveImAction = (
     pkg: PolicyPackage,
     rule: Pick<PolicyRule, 'id' | 'action' | 'locked'>,
@@ -373,7 +387,7 @@ function PolicyPackageSection({
           render: (_, r) => (
             <span>
               <code className="config-tool-row__id">{r.id}</code>
-              <div className="config-field__hint">{r.reason}</div>
+              <div className="config-field__hint">{ruleReason(r)}</div>
               {r.capabilities?.length ? (
                 <div className="config-field__hint">
                   {t('toolsSecurity.policy.applicableCapabilities')}: {r.capabilities.join(', ')}
@@ -408,14 +422,14 @@ function PolicyPackageSection({
               // 非 custom 档只读：展示当前档位下的生效动作
               return <span>{actionLabel(imAction ?? effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}</span>
             }
-            // confirm-every-time 是固定真人确认底线，不属于用户可编辑动作集合；显示本地化名称并保持只读。
-            if (r.action === 'confirm-every-time') return <span>{actionLabel(r.action)}</span>
             // 自定义档：动作域按 lane（desktop 4 态，IM 3 态），含原锁定规则。
-            const options = LANE_PROFILES[lane].availableActions.filter((v) => v !== 'confirm-every-time')
+            // 默认 confirm-every-time 在 UI 动作域中映射为 ask；用户显式覆盖后由有效动作取代逐次确认默认值。
+            const editableAction = r.action === 'confirm-every-time' ? 'ask' : r.action
+            const options = LANE_PROFILES[lane].availableActions
             return (
               <Select
                 size="small"
-                value={r.action}
+                value={editableAction}
                 style={{ width: '100%' }}
                 classNames={configModalSelectPopupClassNames}
                 options={options.map((v) => ({ value: v, label: actionLabel(v) }))}
@@ -453,9 +467,11 @@ function PolicyPackageSection({
           const pkg = lane === 'wechat'
             ? imPackageOverride ?? model?.packages.wechat ?? 'standard'
             : model?.packages[lane] ?? 'standard'
-          const hint = lane === 'wechat' && imPolicyVersion === 'im-standard-v2'
-            ? t('toolsSecurity.policy.imStandardHint')
-            : packageHint(pkg)
+          const hint = lane !== 'wechat'
+            ? packageHint(pkg)
+            : imPolicyVersion === 'im-standard-v2'
+              ? t('toolsSecurity.policy.imStandardHint')
+              : t('toolsSecurity.policy.imLegacyHint')
           return {
             key: lane,
             label: laneLabel(lane),

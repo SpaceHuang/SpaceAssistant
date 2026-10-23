@@ -168,7 +168,7 @@ describe('IM standard policy override is final at the gate', () => {
     const db = openDb()
     commitImPolicySnapshot(getDbConnection(db), {
       policyBehaviorVersion: 'im-standard-v2',
-      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'im-time-query-review': 'ask' } },
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'im-time-query-review': 'ask' } },
       updatedAt: 1,
       eventId: 'time-query-user-ask-override'
     })
@@ -1477,6 +1477,23 @@ describe('evaluateToolCallGate', () => {
     expect(unsupported.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'unknown', status: 'unverified' })
     expect(unsupported.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: expect.any(String) }))
     expect(unsupported.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
+  })
+
+  it.each([
+    { action: 'deny' as const, expected: { type: 'deny', ruleId: 'script-unverified-language-confirm' } },
+    { action: 'allow' as const, expected: { type: 'auto-allow', ruleId: 'script-unverified-language-confirm' } },
+    { action: 'ask' as const, expected: { type: 'require-confirm', ruleId: 'script-unverified-language-confirm', answerer: 'user' } }
+  ])('custom desktop override $action replaces the unverified-language default confirmation', async ({ action, expected }) => {
+    const effectiveRules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'script-unverified-language-confirm'
+      ? { ...rule, action, userOverride: true as const }
+      : rule)
+    const gate = await evaluateToolCallGate(base({
+      toolName: 'run_script',
+      toolInput: { language: 'javascript', code: "console.log('hello')" },
+      lanePackage: 'custom',
+      effectiveRules
+    }))
+    expect(gate.decision).toMatchObject(expected)
   })
 
   it('T4-1 自定义敏感前缀由 gate facts 和策略环境读取同一 shellConfig', async () => {

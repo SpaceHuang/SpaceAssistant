@@ -8,6 +8,8 @@ import configReducer from '../../store/configSlice'
 import { changeAppLocale } from '../../i18n/localeSync'
 import type { SecuritySettingsModelPayload } from '../../../shared/confirmation/settingsCenter'
 import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_POLICY_RULES } from '../../../shared/policy/defaultRules'
+import { LANE_PROFILES } from '../../../shared/policy/policyPackages'
 
 const MODEL: SecuritySettingsModelPayload = {
   packages: { desktop: 'standard', wechat: 'standard', feishu: 'standard', automation: 'standard' },
@@ -488,10 +490,12 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
   })
 
   it.each([
-    { locale: 'zh-CN', label: '真人逐次确认' },
-    { locale: 'en-US', label: 'Human confirmation every time' }
-  ])('自定义套餐桌面：confirm-every-time 在 $locale 显示本地化名称，不泄漏内部值', { timeout: 20000 }, async ({ locale, label }) => {
+    { locale: 'zh-CN', askLabel: '人工批准', allowLabel: '直接执行' },
+    { locale: 'en-US', askLabel: 'Manual approval', allowLabel: 'Execute directly' }
+  ])('自定义套餐桌面：confirm-every-time 在 $locale 映射为可编辑动作并保存', { timeout: 20000 }, async ({ locale, askLabel, allowLabel }) => {
     await changeAppLocale(locale)
+    const setRuleOverride = vi.fn().mockResolvedValue({ ok: true })
+    window.api.securitySetRuleOverride = setRuleOverride
     const humanConfirmRule = {
       id: 'desktop-human-confirm-label',
       when: 'invocation',
@@ -508,11 +512,115 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
       packages: { ...MODEL.packages, desktop: 'custom' },
       rules: [...MODEL.rules, humanConfirmRule]
     })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 5, snapshot: { selectedPackage: 'custom' }
+    })
     renderTab()
     const panel = await screen.findByRole('tabpanel')
     const row = (await within(panel).findByText('desktop-human-confirm-label')).closest('tr')!
-    expect(within(row as HTMLElement).getByText(label)).toBeTruthy()
+    const select = within(row as HTMLElement).getByRole('combobox')
+    expect(within(row as HTMLElement).getByText(askLabel)).toBeTruthy()
     expect(within(row as HTMLElement).queryByText(/^confirm-every-time$/)).toBeNull()
-    expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
+    fireEvent.mouseDown(select)
+    fireEvent.click((await within(document.body).findAllByText(allowLabel)).at(-1)!)
+    await waitFor(() => {
+      expect(setRuleOverride).toHaveBeenCalledWith({
+        ruleId: 'desktop-human-confirm-label', action: 'allow', lane: 'desktop', expectedRevision: 5
+      })
+    })
+  })
+
+  it('自定义套餐逐条覆盖：适用的每条默认规则均可编辑且显示完整动作域', { timeout: 30000 }, async () => {
+    const rules = DEFAULT_POLICY_RULES.filter((rule) => !rule.match?.lane || rule.match.lane.includes('desktop')).map((rule) => ({
+      id: rule.id,
+      when: rule.when,
+      action: rule.action,
+      defaultAction: rule.action,
+      enabled: true,
+      locked: rule.locked === true,
+      reason: rule.reason,
+      overridden: false,
+      ...(rule.match?.lane ? { lanes: rule.match.lane } : {})
+    }))
+
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, desktop: 'custom' },
+      rules
+    })
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    for (const rule of rules) {
+      const row = (await within(panel).findByText(rule.id)).closest('tr')!
+      if (rule.id === 'mcp-account-unauthorized-deny') {
+        expect(within(row as HTMLElement).getByText('MCP 账户未获授权访问请求的数据范围')).toBeTruthy()
+      }
+      const selector = within(row as HTMLElement).getByRole('combobox')
+      expect(selector.closest('.ant-select')!.className, rule.id).not.toContain('ant-select-disabled')
+      expect(within(row as HTMLElement).getAllByText(/^(禁止|直接执行|人工批准|自动审核)$/).length).toBeGreaterThan(0)
+      fireEvent.mouseDown(selector.closest('.ant-select-selector')!)
+      await waitFor(() => {
+        const optionLabels = Array.from(document.querySelectorAll('.ant-select-item-option-content')).map((option) => option.textContent?.trim()).slice(-4)
+        expect(optionLabels).toEqual(['禁止', '直接执行', '人工批准', '自动审核'])
+      })
+      fireEvent.mouseDown(selector.closest('.ant-select-selector')!)
+    }
+    expect(within(panel).getAllByRole('combobox')).toHaveLength(rules.length + 1) // 套餐选择器 + 每条适用规则
+    expect(LANE_PROFILES.desktop.availableActions).toEqual(['deny', 'allow', 'ask', 'auto-evaluator'])
+  })
+
+  it('IM 自定义套餐逐条覆盖：适用的每条默认规则均可编辑且显示完整动作域', { timeout: 30000 }, async () => {
+    const rules = DEFAULT_POLICY_RULES.filter((rule) => !rule.match?.lane || rule.match.lane.includes('wechat')).map((rule) => ({
+      id: rule.id,
+      when: rule.when,
+      action: rule.action,
+      defaultAction: rule.action,
+      enabled: true,
+      locked: rule.locked === true,
+      reason: rule.reason,
+      overridden: false,
+      ...(rule.match?.lane ? { lanes: rule.match.lane } : {})
+    }))
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, wechat: 'custom' },
+      rules
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {} }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    for (const rule of rules) {
+      const row = (await within(panel).findByText(rule.id)).closest('tr')!
+      if (rule.id === 'remote-browser-disabled') {
+        expect(within(row as HTMLElement).getByText('远程会话未启用浏览器工具')).toBeTruthy()
+      }
+      if (rule.id === 'remote-outbound-budget-pause-wechat') {
+        expect(within(row as HTMLElement).getByText('远程出站消息发送预算已用尽')).toBeTruthy()
+      }
+      const selector = within(row as HTMLElement).getByRole('combobox')
+      expect(selector.closest('.ant-select')!.className, rule.id).not.toContain('ant-select-disabled')
+      fireEvent.mouseDown(selector.closest('.ant-select-selector')!)
+      await waitFor(() => {
+        const optionLabels = Array.from(document.querySelectorAll('.ant-select-item-option-content')).map((option) => option.textContent?.trim()).slice(-3)
+        expect(optionLabels).toEqual(['禁止', '直接执行', '人工批准'])
+      })
+      fireEvent.mouseDown(selector.closest('.ant-select-selector')!)
+    }
+    expect(within(panel).getAllByRole('combobox')).toHaveLength(rules.length + 1)
+    expect(LANE_PROFILES.wechat.availableActions).toEqual(['deny', 'allow', 'ask'])
+  })
+
+  it('旧版 IM 策略显示 IM 专属说明，不复用桌面标准套餐文案', async () => {
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1,
+      snapshot: { selectedPackage: 'standard' }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    expect(within(panel).getByText('当前 IM 远程仍保留升级前的策略行为；查看上方规则变化后，可选择切换到新版标准策略。')).toBeTruthy()
+    expect(within(panel).queryByText(/标准：桌面普通出站/)).toBeNull()
   })
 })

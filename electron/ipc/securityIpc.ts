@@ -12,6 +12,7 @@ import { readToolsConfig } from './ipcShared'
 import { revokeAllLegacyTrust, revokeLegacyTrustForCacheKey } from '../confirmation/legacyTrustRevocation'
 import { shell } from 'electron'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { ensureLegacyDesktopPolicySnapshot } from '../confirmation/legacyImConfigBoundary'
 
 export function registerSecurityIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 const recordSettings = makeRecordSettings(ctx)
@@ -173,6 +174,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       }
       if (lane === 'desktop') {
         if (!Number.isSafeInteger(payload?.expectedRevision) || (payload.expectedRevision as number) < 0) return { ok: false as const, error: 'POLICY_REVISION_INVALID' }
+        ensureLegacyDesktopPolicySnapshot(ctx.db)
         const { getDbConnection } = await import('../database')
         const { commitDesktopPolicySnapshot, readPolicyBehaviorSnapshot } = await import('../confirmation/imPolicyStore')
         const conn = getDbConnection(ctx.db)
@@ -181,8 +183,8 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         catch { current = { revision: 0, snapshot: { selectedPackage: 'standard', ruleOverrides: {} } } }
         const before = current.snapshot.selectedPackage ?? 'standard'
         const result = commitDesktopPolicySnapshot(conn, {
-          expectedRevision: current.revision, policyBehaviorVersion: 'desktop-v1',
-          snapshot: { ...current.snapshot, selectedPackage: pkg }, updatedAt: Date.now(),
+          expectedRevision: payload.expectedRevision as number, policyBehaviorVersion: 'desktop-v1',
+          snapshot: { ...current.snapshot, selectedPackage: pkg, legacyDesktopPolicyDataMigrated: true }, updatedAt: Date.now(),
           eventId: `desktop-policy:${randomUUID()}`, auditMetadata: { lane, changeKind: 'package', before, after: pkg },
           onCommitted: () => publishAuthorizationChange('desktop')
         })
@@ -236,6 +238,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         payload?.params && typeof payload.params === 'object' && !Array.isArray(payload.params)
           ? (payload.params as Record<string, unknown>)
           : {}
+      ensureLegacyDesktopPolicySnapshot(ctx.db)
       const snapshot: { revision: number; snapshot: Record<string, unknown> } = (() => {
         try { return readPolicyBehaviorSnapshot(getDbConnection(ctx.db), 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }) }
         catch { return { revision: 0, snapshot: { selectedPackage: 'standard', ruleOverrides: {} } } }
@@ -248,7 +251,8 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         ? snapshot.snapshot.migratedLegacyDisabledRuleIds.filter((id): id is string => typeof id === 'string' && id !== ruleId) : []
       const result = commitDesktopPolicySnapshot(getDbConnection(ctx.db), {
         expectedRevision: payload!.expectedRevision as number, policyBehaviorVersion: 'desktop-v1',
-        snapshot: { ...snapshot.snapshot, ruleOverrides: nextOverrides, migratedLegacyDisabledRuleIds: migratedIds }, updatedAt: Date.now(), eventId: `desktop-policy:${randomUUID()}`,
+        snapshot: { ...snapshot.snapshot, ruleOverrides: nextOverrides, migratedLegacyDisabledRuleIds: migratedIds,
+          legacyDesktopPolicyDataMigrated: true }, updatedAt: Date.now(), eventId: `desktop-policy:${randomUUID()}`,
         auditMetadata: { lane, ruleId, beforeAction: before, afterAction: payload!.action },
         onCommitted: () => publishAffectedPolicyLanes(check.rule)
       })
@@ -275,6 +279,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     const rule = DEFAULT_POLICY_RULES.find((r) => r.id === ruleId)
     if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
     if (!Number.isSafeInteger(payload?.expectedRevision) || (payload.expectedRevision as number) < 0) return { ok: false as const, error: 'POLICY_REVISION_INVALID' }
+    ensureLegacyDesktopPolicySnapshot(ctx.db)
     const conn = getDbConnection(ctx.db)
     let current: { revision: number; snapshot: Record<string, unknown> }
     try { current = readPolicyBehaviorSnapshot(conn, 'desktop', { supportedBehaviorVersions: ['desktop-v1'] }) }
@@ -288,7 +293,8 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       ? current.snapshot.migratedLegacyDisabledRuleIds.filter((id): id is string => typeof id === 'string' && id !== ruleId) : []
     const result = commitDesktopPolicySnapshot(conn, {
       expectedRevision: current.revision, policyBehaviorVersion: 'desktop-v1',
-      snapshot: { ...current.snapshot, ruleOverrides: overrides, migratedLegacyDisabledRuleIds: migratedIds }, updatedAt: Date.now(), eventId: `desktop-policy:${randomUUID()}`,
+    snapshot: { ...current.snapshot, ruleOverrides: overrides, migratedLegacyDisabledRuleIds: migratedIds,
+      legacyDesktopPolicyDataMigrated: true }, updatedAt: Date.now(), eventId: `desktop-policy:${randomUUID()}`,
       auditMetadata: { lane: 'desktop', ruleId, beforeAction: prev ?? rule.action, afterAction: rule.action, reason: 'reset-to-default' },
       onCommitted: () => { if (prev !== undefined) publishAffectedPolicyLanes(rule) }
     })

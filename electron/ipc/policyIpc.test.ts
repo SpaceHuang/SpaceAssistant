@@ -41,8 +41,8 @@ describe('policy domain read IPC contract', () => {
   it('executes the unified IM snapshot overrides and package selection written through policy IPC', async () => {
     const { db, handlers } = registeredHandlers()
     const conn = getDbConnection(db)
-    setConfigValue(db, 'config.policyPackages', JSON.stringify({ desktop: 'standard', wechat: 'strict', feishu: 'strict', automation: 'standard' }))
-    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'runtime-snapshot-seed' })
+    setConfigValue(db, 'config.policyPackages', JSON.stringify({ desktop: 'standard', wechat: 'custom', feishu: 'custom', automation: 'standard' }))
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'custom' }, updatedAt: 1, eventId: 'runtime-snapshot-seed' })
     const write = handlers.get('policy:write')!
     await expect(write({}, { lane: 'wechat', expectedRevision: 1,
       change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: false } }))
@@ -53,7 +53,7 @@ describe('policy domain read IPC contract', () => {
     let rules = resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat')
     expect(rules.rules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe('deny')
     expect(rules.origins['mcp-tool-ask']?.source).toBe('user-override')
-    expect(rules.rules.find((rule) => rule.id === 'im-low-risk-create')?.action).toBe('auto-evaluator')
+    expect(rules.rules.find((rule) => rule.id === 'im-low-risk-create')?.action).toBe('ask')
 
     snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })
     await write({}, { lane: 'wechat', expectedRevision: snapshot.revision,
@@ -79,16 +79,14 @@ describe('policy domain read IPC contract', () => {
   it('applies the same explicit IM deny override to a legacy behavior snapshot', async () => {
     const { db, handlers } = registeredHandlers()
     const conn = getDbConnection(db)
-    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'legacy-runtime-seed' })
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'custom' }, updatedAt: 1, eventId: 'legacy-runtime-seed' })
     const write = handlers.get('policy:write')!
     await write({}, { lane: 'wechat', expectedRevision: 1,
-      change: { kind: 'package', package: 'loose' } })
-    await write({}, { lane: 'wechat', expectedRevision: 2,
       change: { kind: 'rule-override', ruleId: 'mcp-tool-ask', action: 'deny' } })
 
     const rules = resolveEffectivePolicyRulesWithOrigin(db as never, 'wechat')
     expect(rules.rules.find((rule) => rule.id === 'mcp-tool-ask')?.action).toBe('deny')
-    expect(rules.rules.find((rule) => rule.id === 'scope-loose-browser-navigate-ask-remote')?.action).toBe('allow')
+    expect(rules.rules.find((rule) => rule.id === 'scope-loose-browser-navigate-ask-remote')?.action).toBeUndefined()
     expect(rules.origins['mcp-tool-ask']?.source).toBe('user-override')
     db.close()
   })

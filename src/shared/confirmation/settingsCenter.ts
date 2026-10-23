@@ -13,7 +13,7 @@ import type {
  * 主进程装配（electron/confirmation/settingsSecurityModel.ts），渲染端只读消费。
  */
 
-/** 策略规则展示视图：默认规则 + 用户覆盖合并（locked 条目只读）。 */
+/** 策略规则展示视图：默认规则 + 用户覆盖合并；custom 套餐可覆盖 locked 规则的动作，不可改规则结构。 */
 export interface SecuritySettingsRuleView {
   id: string
   when: PolicyWhen
