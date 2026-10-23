@@ -14,7 +14,7 @@ import { advanceProcessGeneration } from '../database/processGeneration'
 import { getDbConnection } from '../database/sqliteStore'
 import { openDatabase } from '../database'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
-import { readApiBaselineAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readExportPageAfterPreparation } from './application/readChatMessages'
+import { readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readExportPageAfterPreparation } from './application/readChatMessages'
 
 describe('SQLite projection build task composition', () => {
   let root: string | undefined
@@ -121,6 +121,8 @@ describe('SQLite projection build task composition', () => {
             currentUser: { message: { id: 'projection-chat-body-user', content: 'same body' } },
             sourceInvocationId: 'projection-chat-body-failed-invocation', sourceTurnId: 'projection-chat-body-failed-turn',
           })
+        await expect(readChatMessageAfterPreparation(host.storage, { sessionId: session.id, messageId: 'projection-chat-body-assistant' }))
+          .resolves.toMatchObject({ id: 'projection-chat-body-assistant', content: 'assistant body' })
         const authorityCorpus = host.storage.queries.readSearchCorpusPage({ sessionId: session.id, fromSequence: 0, pageSize: 50 })
         expect(authorityCorpus.entries.map(({ message }) => message.id)).toEqual(['projection-chat-body-user', 'projection-chat-body-assistant'])
         const corpusPage = await host.storage.queries.readPreparedSearchCorpusPage?.({ sessionId: session.id, fromSequence: 0, pageSize: 50, prepared: ensured })

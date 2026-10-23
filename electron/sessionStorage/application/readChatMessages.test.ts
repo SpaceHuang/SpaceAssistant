@@ -78,6 +78,19 @@ describe('readChatMessagesAfterPreparation', () => {
     expect(events).toEqual(['ensure:s', 'select:s:m'])
   })
 
+  it('uses a prepared single message body before falling back to authority', async () => {
+    const events: string[] = []
+    const message = { id: 'prepared-message', content: 'canonical body' }
+    await expect(readChatMessageAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); return 'view' },
+      queries: {
+        readPreparedMessage: async (input) => { events.push(`prepared:${input.messageId}:${input.prepared}`); return message as never },
+        readMessage: () => { events.push('authority'); return undefined }
+      }
+    }, { sessionId: 's', messageId: 'prepared-message' })).resolves.toBe(message)
+    expect(events).toEqual(['ensure', 'prepared:prepared-message:view'])
+  })
+
   it('prepares each cross-session source once in stable order', async () => {
     const sessions: string[] = []
     await prepareChatBodiesForSessions({ ensureChatBodyV1: async ({ sessionId }) => { sessions.push(sessionId) } }, ['b', 'a', 'b'])

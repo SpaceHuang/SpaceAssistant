@@ -8,6 +8,8 @@ import {
   getTurnByRequestId,
   listTurnErrorsByAssistantMessageIds,
   getMessages,
+  getMessage,
+  getMessageSkeleton,
   getChatMessagePage,
   getApiContextBaseline,
 } from '../database/operations'
@@ -115,6 +117,32 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         const latest = getMessages(db, sessionId, limit ?? 500, offset ?? 0)
         if (latest.length !== selected.messages.length || latest.some((message, index) => message.id !== selected.messages[index]?.id)) return undefined
         return overlayPreparedBodies(latest, selected.canonicalIds, bodies)
+      })
+    } } : {}),
+    ...(preparedChatBody ? { readPreparedMessage: async ({ sessionId, messageId, prepared }) => {
+      const view = prepared as PreparedChatBodyView | undefined
+      if (!view) return undefined
+      const selected = runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const skeleton = getMessageSkeleton(db, messageId)
+        if (!skeleton || skeleton.sessionId !== sessionId) return { skeleton: undefined, canonicalIds: [] as string[] }
+        return { skeleton, canonicalIds: canonicalBodyMessageIds(db, sessionId, [skeleton as Message]) }
+      })
+      if (!selected) return undefined
+      if (!selected.skeleton) return undefined
+      if (selected.canonicalIds.length === 0) return getMessage(db, messageId)
+      let bodies: PreparedChatBodySelection
+      try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
+      catch {
+        preparedChatBody.invalidate(view)
+        return undefined
+      }
+      return runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const latest = getMessageSkeleton(db, messageId)
+        if (!latest || latest.sessionId !== sessionId || latest.id !== selected.skeleton!.id ||
+          latest.role !== selected.skeleton!.role || latest.timestamp !== selected.skeleton!.timestamp || latest.status !== selected.skeleton!.status) return undefined
+        return overlayPreparedBodies([latest as Message], selected.canonicalIds, bodies)[0]
       })
     } } : {}),
     ...(preparedChatBody ? { readPreparedChatPage: async ({ sessionId, beforeSequence, limit, prepared }) => {

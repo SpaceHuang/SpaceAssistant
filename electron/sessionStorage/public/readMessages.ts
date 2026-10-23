@@ -102,11 +102,16 @@ export async function readRetryTargetAfterPreparation(
 
 export async function readChatMessageAfterPreparation(
   storage: Pick<ChatMessageReadStorage, 'ensureChatBodyV1'> & Readonly<{
-    queries: Readonly<{ readMessage(input: Readonly<{ sessionId: string; messageId: string }>): Message | undefined }>
+    queries: Readonly<{
+      readMessage(input: Readonly<{ sessionId: string; messageId: string }>): Message | undefined
+      readPreparedMessage?(input: Readonly<{ sessionId: string; messageId: string; prepared?: unknown }>): Promise<Message | undefined>
+    }>
   }>,
   input: Readonly<{ sessionId: string; messageId: string }>
 ) {
-  await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
+  const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
+  const prepared = await storage.queries.readPreparedMessage?.({ ...input, prepared: preparedView })
+  if (prepared) return prepared
   return storage.queries.readMessage(input)
 }
 

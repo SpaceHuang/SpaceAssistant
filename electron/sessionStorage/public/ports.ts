@@ -120,6 +120,8 @@ export interface SessionQueries {
   readMessages(input: { sessionId: string; limit?: number; offset?: number }): Message[]
   /** Async chat-body cache lookup; undefined means selection must use the existing authority reader. */
   readPreparedMessages?(input: { sessionId: string; limit?: number; offset?: number; prepared?: PreparedChatBodyView }): Promise<Message[] | undefined>
+  /** Async single message body lookup; undefined means selection must use the existing authority reader. */
+  readPreparedMessage?(input: { sessionId: string; messageId: string; prepared?: PreparedChatBodyView }): Promise<Message | undefined>
   /** Async sequence-page lookup; undefined means selection must use the existing authority reader. */
   readPreparedChatPage?(input: { sessionId: string; beforeSequence?: number | null; limit?: number; prepared?: PreparedChatBodyView }): Promise<ChatMessagePage | undefined>
   /** Async latest-window API baseline lookup; undefined means selection must use the existing authority reader. */
