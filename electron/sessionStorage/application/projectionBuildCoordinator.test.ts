@@ -231,6 +231,29 @@ describe('projection build coordinator', () => {
     expect(service.readCheckpoint(session.id, 'scope-a')).toBeNull()
   })
 
+  it('clears a checkpoint with no reducer state so the scope can restart cleanly', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection reducer state missing', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'missing-reducer-state-token', now: () => 2 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    const checkpoint = createProjectionBuildCheckpoint({ sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration,
+      scopeKey: lease.scopeKey, specVersion: 1, sourceIdentityJson: lease.sourceIdentityJson,
+      processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken, startSequence: 0, historyReducerStateJson: null })
+    expect(service.saveCheckpoint(lease, JSON.stringify(checkpoint))).toBe(true)
+    const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath,
+      readChunk: async (permit, input) => ({ kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence,
+        nextSessionSequence: 1, events: [{ invocationId: 'missing-state-inv', sequence: 1, eventId: 'missing-state-event',
+          idempotencyKey: 'missing-state-key', turnId: 'missing-state-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}',
+          sessionSequence: 1, commitOrder: 1, createdAt: 1 }], messageFacts: [], byteLength: 128, hasMore: false }), historyReducer,
+      blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 512 },
+      maxChunksPerSlice: 1, now: () => 2 })
+    expect(result).toEqual({ kind: 'checkpoint-invalid' })
+    expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'invalid', rebuildToken: null })
+    expect(service.readCheckpoint(session.id, 'scope-a')).toBeNull()
+  })
+
   it('rejects a missing output blob reader instead of leaving the lease rebuilding', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection output reader missing', model: 'test' })

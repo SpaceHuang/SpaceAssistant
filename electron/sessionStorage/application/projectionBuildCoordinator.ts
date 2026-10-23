@@ -167,6 +167,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
           return { kind: 'source-unavailable', reason: error instanceof Error ? error.message : 'final-view-root-retain-failed' }
         }
       }
+      const payloadDigest = await projectionPayloadDigest(payload)
       let finalBlob: Awaited<ReturnType<ProjectionBuildBlobPort['write']>> | undefined
       if (inlinePayload === undefined) {
         try { finalBlob = await input.blobs.write(payload) }
@@ -175,7 +176,6 @@ export async function runProjectionBuildSlice(input: Readonly<{
           return { kind: 'blob-write-failed', reason: error instanceof Error ? error.message : 'final-view-blob-write-failed' }
         }
       }
-      const payloadDigest = await projectionPayloadDigest(payload)
       if (finalBlob && (finalBlob.byteLength !== payloadByteLength || finalBlob.payloadDigest !== payloadDigest || !finalBlob.locator.trim())) {
         await releaseBlob(finalBlob)
         rejectBuild(service, lease, 'VIEW_REJECTED', 'FINAL_VIEW_BLOB_VERIFICATION_FAILED', input.now, input.retryAfter)
@@ -221,8 +221,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
       return { kind: 'chunk-invalid', reason: 'worker-chunk-content-invalid' }
     }
     if (!checkpoint.historyReducerStateJson) {
-      rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'HISTORY_REDUCER_CHECKPOINT_INVALID', input.now, input.retryAfter)
-      return { kind: 'checkpoint-invalid' }
+      return invalidateInvalidCheckpoint()
     }
     let folded: Readonly<{ stateJson: string; outputOperations: readonly unknown[]; resetOutput: boolean }>
     try {
