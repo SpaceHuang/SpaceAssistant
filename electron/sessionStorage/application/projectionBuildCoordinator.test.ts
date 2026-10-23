@@ -333,6 +333,42 @@ describe('projection build coordinator', () => {
     expect(service.readCheckpoint(session.id, 'scope-a')).toBeNull()
   })
 
+  it('passes reducer state blob references to the worker without reading large state in the coordinator', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection worker state read', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'worker-state-read-token', now: () => 2 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    const initial = createProjectionBuildCheckpoint({ sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration,
+      scopeKey: lease.scopeKey, specVersion: 1, sourceIdentityJson: lease.sourceIdentityJson,
+      processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken, startSequence: 0, historyReducerStateJson: null })
+    const stateRef = { locator: 'projection-00000000-0000-4000-8000-000000000099.blob', byteLength: 80 * 1024,
+      payloadDigest: 'a'.repeat(64), sessionId: lease.sessionId, scopeKey: lease.scopeKey, sourceIdentityJson: lease.sourceIdentityJson }
+    expect(service.saveCheckpoint(lease, JSON.stringify({ ...initial, historyReducerStateBlob: stateRef }))).toBe(true)
+    let receivedStateReference: unknown
+    const event = { invocationId: 'worker-state-inv', sequence: 1, eventId: 'worker-state-event',
+      idempotencyKey: 'worker-state-key', turnId: 'worker-state-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}',
+      sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+    const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath,
+      readChunk: async (permit, input) => ({ kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence,
+        nextSessionSequence: 1, events: [event], messageFacts: [], byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: true }),
+      historyReducer, reduceChunk: async (_state, _events, _facts, _scope, _finalize, _signal, _stagedChunk, staging) => {
+        receivedStateReference = staging?.context.priorReducerState
+        return { stateJson: '{"lastSequence":1}', outputOperations: [{ type: 'append', messages: [] }], resetOutput: false }
+      },
+      blobs: { root: '/projection-artifacts', withWorkerStaging: async (run) => run(async () => {
+        throw new Error('inline reducer result should not promote artifacts')
+      }, { root: '/projection-artifacts', tempLocator: '.projection-00000000-0000-4000-8000-000000000098.tmp',
+        allocate: (count) => Array.from({ length: count }, (_, index) => `.projection-00000000-0000-4000-8000-${String(index).padStart(12, '0')}.tmp`) }),
+      readVerified: async () => { throw new Error('coordinator must not read reducer state blob') },
+      write: async (payload) => ({ locator: 'projection-00000000-0000-4000-8000-000000000100.blob',
+        byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }) },
+      limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, now: () => 2 })
+    expect(result).toMatchObject({ kind: 'checkpointed', checkpoint: { nextSequence: 1 } })
+    expect(receivedStateReference).toEqual(stateRef)
+  })
+
   it('rejects a missing output blob reader instead of leaving the lease rebuilding', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection output reader missing', model: 'test' })

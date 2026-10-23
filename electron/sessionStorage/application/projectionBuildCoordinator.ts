@@ -72,6 +72,7 @@ export type ProjectionReducerArtifactStaging = Readonly<{
     sourceIdentityJson: string
     parentOutputManifest: ProjectionBuildCheckpoint['outputManifest']
     priorStableIdIndex: ProjectionBuildCheckpoint['stableIdIndexManifest']
+    priorReducerState: ProjectionBuildCheckpoint['historyReducerStateBlob']
   }>
 }>
 
@@ -143,14 +144,17 @@ export async function runProjectionBuildSlice(input: Readonly<{
 
   let reducerStateJson = checkpoint.historyReducerStateJson
   if (!reducerStateJson && checkpoint.historyReducerStateBlob) {
-    if (!input.blobs.readVerified) return invalidateInvalidCheckpoint()
-    try {
-      const ref = checkpoint.historyReducerStateBlob
-      const restored = await input.blobs.readVerified(ref)
-      if (Buffer.byteLength(restored) !== ref.byteLength || await projectionPayloadDigest(restored) !== ref.payloadDigest ||
-        !isJsonString(restored)) return invalidateInvalidCheckpoint()
-      reducerStateJson = restored
-    } catch { return invalidateInvalidCheckpoint() }
+    const workerCanReadState = Boolean(input.reduceChunk && input.blobs.withWorkerStaging && input.blobs.root)
+    if (!workerCanReadState) {
+      if (!input.blobs.readVerified) return invalidateInvalidCheckpoint()
+      try {
+        const ref = checkpoint.historyReducerStateBlob
+        const restored = await input.blobs.readVerified(ref)
+        if (Buffer.byteLength(restored) !== ref.byteLength || await projectionPayloadDigest(restored) !== ref.payloadDigest ||
+          !isJsonString(restored)) return invalidateInvalidCheckpoint()
+        reducerStateJson = restored
+      } catch { return invalidateInvalidCheckpoint() }
+    }
   }
 
   for (let index = 0; index < input.maxChunksPerSlice; index += 1) {
@@ -352,10 +356,10 @@ export async function runProjectionBuildSlice(input: Readonly<{
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'WORKER_CHUNK_CONTENT_INVALID', input.now, input.retryAfter)
       return { kind: 'chunk-invalid', reason: 'worker-chunk-content-invalid' }
     }
-    if (!reducerStateJson) {
+    if (!reducerStateJson && !checkpoint.historyReducerStateBlob) {
       return invalidateInvalidCheckpoint()
     }
-    const currentReducerStateJson = reducerStateJson
+    const currentReducerStateJson = reducerStateJson ?? ''
     let folded: ProjectionHistoryChunkReduction
     let promotedReducerArtifacts: Readonly<{
       outputManifest: Awaited<ReturnType<ProjectionBuildBlobPort['write']>>
@@ -384,6 +388,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
                 sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration, scopeKey: lease.scopeKey,
                 specVersion: input.specVersion, sourceIdentityJson: lease.sourceIdentityJson,
                 parentOutputManifest: checkpoint.outputManifest, priorStableIdIndex: checkpoint.stableIdIndexManifest,
+                priorReducerState: checkpoint.historyReducerStateBlob,
               } })
           if (!('stagedArtifacts' in reduction)) return reduction
           const artifacts = reduction.stagedArtifacts
@@ -414,6 +419,9 @@ export async function runProjectionBuildSlice(input: Readonly<{
         return invalidateInvalidCheckpoint()
       }
       if (/^PROJECTION_STABLE_ID_INDEX_INVALID$/.test(reason)) return invalidateInvalidCheckpoint()
+      if (/^PROJECTION_REDUCER_STATE_(?:REFERENCE_INVALID|UNAVAILABLE|DIGEST_MISMATCH|INVALID_JSON)$/.test(reason)) {
+        return invalidateInvalidCheckpoint()
+      }
       if (isRecoverableReducerWorkerFailure(reason)) {
         rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'WORKER_FAILED', input.now, input.retryAfter)
         return { kind: 'source-unavailable', reason }

@@ -23,6 +23,26 @@ parentPort.once('message', (message: {
   void (async () => {
     const startedAt = performance.now()
     const reducer = createProjectionScopeHistoryReducer()
+    let stateJson = message.stateJson
+    const priorReducerState = message.staging?.context.priorReducerState
+    if (priorReducerState) {
+      if (priorReducerState.sessionId !== message.staging!.context.sessionId ||
+        priorReducerState.scopeKey !== message.scopeKey ||
+        priorReducerState.sourceIdentityJson !== message.staging!.context.sourceIdentityJson ||
+        !/^projection-[0-9a-f-]{36}\.blob$/.test(priorReducerState.locator) ||
+        path.basename(priorReducerState.locator) !== priorReducerState.locator) {
+        throw new Error('PROJECTION_REDUCER_STATE_REFERENCE_INVALID')
+      }
+      let bytes: Buffer
+      try { bytes = await fs.readFile(path.join(path.resolve(message.staging!.root), priorReducerState.locator)) }
+      catch { throw new Error('PROJECTION_REDUCER_STATE_UNAVAILABLE') }
+      if (bytes.byteLength !== priorReducerState.byteLength ||
+        createHash('sha256').update(bytes).digest('hex') !== priorReducerState.payloadDigest) {
+        throw new Error('PROJECTION_REDUCER_STATE_DIGEST_MISMATCH')
+      }
+      stateJson = bytes.toString('utf8')
+      try { JSON.parse(stateJson) } catch { throw new Error('PROJECTION_REDUCER_STATE_INVALID_JSON') }
+    }
     let events = message.events
     let messageFacts = message.messageFacts
     if (message.stagedChunk) {
@@ -47,7 +67,7 @@ parentPort.once('message', (message: {
       events = payload.events as ProjectionHistoryChunkEvent[]
       messageFacts = payload.messageFacts as ProjectionMessageFact[]
     }
-    const folded = reducer.fold(message.stateJson, events, messageFacts, message.scopeKey)
+    const folded = reducer.fold(stateJson, events, messageFacts, message.scopeKey)
     const finalizedOutputOperations = message.finalize
       ? reducer.finalize(folded.stateJson, message.scopeKey).outputOperations
       : undefined

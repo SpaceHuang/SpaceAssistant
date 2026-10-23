@@ -95,7 +95,8 @@ describe('projection History reducer worker client', () => {
       const result = await reduceProjectionHistoryChunkInWorker(reducer.createState(scopeKey), events, facts, scopeKey, true,
         undefined, undefined, { root, outputManifestTempLocator: locator(), stableIdIndexTempLocator: locator(),
           reducerStateTempLocator: locator(), context: { sessionId: 'artifact-session', sessionGeneration: 'generation-1',
-            scopeKey, specVersion: 3, sourceIdentityJson: '{"source":1}', parentOutputManifest: null, priorStableIdIndex: null } })
+            scopeKey, specVersion: 3, sourceIdentityJson: '{"source":1}', parentOutputManifest: null, priorStableIdIndex: null,
+            priorReducerState: null } })
 
       expect('stagedArtifacts' in result).toBe(true)
       if (!('stagedArtifacts' in result)) throw new Error('expected staged reducer artifacts')
@@ -109,6 +110,39 @@ describe('projection History reducer worker client', () => {
         outputManifest: { operations: [{ type: 'replace', messages: [{ id: 'artifact-user', content }] }] } })
       const indexBytes = await fs.readFile(path.join(root, result.stagedArtifacts.stableIdIndex.tempLocator))
       expect(JSON.parse(indexBytes.toString('utf8'))).toMatchObject({ ids: ['artifact-user'] })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('restores and re-externalizes a large reducer state inside the worker', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'projection-reducer-state-ref-'))
+    try {
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 3 })
+      const reducer = createProjectionScopeHistoryReducer()
+      const state = JSON.parse(reducer.createState(scopeKey)) as Record<string, unknown>
+      state.chunkedAssistant = { id: 'large-state-id'.repeat(6_000), expectedContentLength: null, contentOffset: 0 }
+      const statePayload = JSON.stringify(state)
+      const stateBytes = Buffer.from(statePayload)
+      const stateLocator = `projection-${randomUUID()}.blob`
+      await fs.writeFile(path.join(root, stateLocator), stateBytes, { mode: 0o600 })
+      const priorReducerState = { locator: stateLocator, byteLength: stateBytes.byteLength,
+        payloadDigest: createHash('sha256').update(stateBytes).digest('hex'), sessionId: 'state-session', scopeKey,
+        sourceIdentityJson: '{"source":1}' }
+      const locator = () => `.projection-${randomUUID()}.tmp`
+      const staging = { root, outputManifestTempLocator: locator(), stableIdIndexTempLocator: locator(), reducerStateTempLocator: locator(),
+        context: { sessionId: 'state-session', sessionGeneration: 'generation-1', scopeKey, specVersion: 3,
+          sourceIdentityJson: '{"source":1}', parentOutputManifest: null, priorStableIdIndex: null, priorReducerState } }
+
+      const result = await reduceProjectionHistoryChunkInWorker('', [], [], scopeKey, false, undefined, undefined, staging)
+      expect('stagedArtifacts' in result).toBe(true)
+      if (!('stagedArtifacts' in result)) throw new Error('expected staged reducer state')
+      expect(result.stateJson).toBeUndefined()
+      expect(result.stagedArtifacts.reducerState?.byteLength).toBeGreaterThan(64 * 1024)
+      const restoredBytes = await fs.readFile(path.join(root, result.stagedArtifacts.reducerState!.tempLocator))
+      expect(restoredBytes.toString('utf8')).toBe(statePayload)
+
+      await expect(reduceProjectionHistoryChunkInWorker('', [], [], scopeKey, false, undefined, undefined, { ...staging,
+        context: { ...staging.context, priorReducerState: { ...priorReducerState, payloadDigest: '0'.repeat(64) } } }))
+        .rejects.toThrow('PROJECTION_REDUCER_STATE_DIGEST_MISMATCH')
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
