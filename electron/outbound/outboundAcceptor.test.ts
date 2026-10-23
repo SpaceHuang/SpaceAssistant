@@ -73,14 +73,14 @@ const io = {
 }
 
 describe('computeContextPressureWarnings', () => {
-  it('prepares canonical chat bodies before selecting the history snapshot', async () => {
+  it('skips body preparation when the session metadata is missing', async () => {
     const events: string[] = []
     const queries = { readSession: (sessionId: string) => { events.push(`select:${sessionId}`); return undefined } } as unknown as SessionQueries
 
     await expect(computeContextPressureWarnings({} as AppDatabase, 'pressure-session', undefined, queries,
       async ({ sessionId }) => { events.push(`ensure:${sessionId}`) })).resolves.toEqual([])
 
-    expect(events).toEqual(['ensure:pressure-session', 'select:pressure-session'])
+    expect(events).toEqual(['select:pressure-session'])
   })
 })
 

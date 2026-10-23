@@ -16,7 +16,7 @@ import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import type { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
 import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'
-import { readApiBaselineAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readRetryTargetAfterPreparation } from '../sessionStorage/public/readMessages'
+import { readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readRetryTargetAfterPreparation } from '../sessionStorage/public/readMessages'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
@@ -1215,8 +1215,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       if ('content' in payload.patch && typeof payload.patch.content === 'string') {
         const edited = await sessionCommands.editMessage({ sessionId: payload.sessionId, messageId: payload.messageId, content: payload.patch.content })
         if (!edited) return null
-        await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
-        const message = sessionQueries.readMessage({ sessionId: payload.sessionId, messageId: payload.messageId })
+        const message = await readChatMessageAfterPreparation(sessionStorage, { sessionId: payload.sessionId, messageId: payload.messageId })
         const sequence = sessionQueries.readMessageSequence({ sessionId: payload.sessionId, messageId: payload.messageId })
         entry = message && sequence !== null ? { message, sequence } : null
       } else if ('toolCalls' in payload.patch && Array.isArray(payload.patch.toolCalls)) {
