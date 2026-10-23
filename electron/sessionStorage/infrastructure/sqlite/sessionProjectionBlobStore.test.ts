@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSession } from '../../../database/operations'
 import { createTempDatabase } from '../../../database/testHelpers'
@@ -28,6 +29,24 @@ describe('session projection derived blob store', () => {
     temp?.cleanup(); temp = undefined
     if (root) await fs.rm(root, { recursive: true, force: true })
     root = undefined
+  })
+
+  it('promotes a worker staged file under the blob fence without reading its payload into the main thread', async () => {
+    temp = createTempDatabase('projection-worker-stage-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const payload = 'large output '.repeat(30_000)
+    const tempLocator = `.projection-123e4567-e89b-12d3-a456-426614174000.tmp`
+    await fs.mkdir(root, { recursive: true })
+    await fs.writeFile(path.join(root, tempLocator), payload, { mode: 0o600 })
+
+    const promoted = await blobs.withWorkerStaging(async (promote) => promote({ tempLocator,
+      byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex') }))
+
+    expect(promoted.locator).toMatch(/^projection-[0-9a-f-]{36}\.blob$/)
+    await expect(fs.stat(path.join(root, tempLocator))).rejects.toMatchObject({ code: 'ENOENT' })
+    await promoted.release()
+    expect(await blobs.readVerified(promoted)).toBe(payload)
   })
 
   it('holds garbage collection behind the shared batch fence until output and index are checkpointable', async () => {

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parentPort, threadId } from 'node:worker_threads'
@@ -41,7 +41,25 @@ parentPort.once('message', async (message: {
       sourceIdentityJson: message.identity.sourceIdentityJson,
       historyWatermarkJson: message.payloadIdentity.historyWatermarkJson, messages })
     const byteLength = Buffer.byteLength(payload)
-    parentPort!.postMessage({ requestId: message.requestId, result: { payload, byteLength, payloadDigest: digest(payload), workerThreadId: threadId } })
+    const payloadDigest = digest(payload)
+    if (byteLength <= 256 * 1024) {
+      parentPort!.postMessage({ requestId: message.requestId, result: { payload, byteLength, payloadDigest, workerThreadId: threadId } })
+    } else {
+      const tempLocator = `.projection-${randomUUID()}.tmp`
+      const filePath = path.join(path.resolve(message.root), `projection-${randomUUID()}.blob`)
+      const tempPath = path.join(path.resolve(message.root), tempLocator)
+      if (path.dirname(filePath) !== path.resolve(message.root) || path.dirname(tempPath) !== path.resolve(message.root)) {
+        throw new Error('PROJECTION_FINAL_VIEW_ROOT_INVALID')
+      }
+      const handle = await fs.open(tempPath, 'wx', 0o600)
+      try {
+        await handle.writeFile(payload, 'utf8')
+        await handle.sync()
+      } finally { await handle.close() }
+      parentPort!.postMessage({ requestId: message.requestId, result: {
+        stagedBlob: { tempLocator, byteLength, payloadDigest }, byteLength, payloadDigest, workerThreadId: threadId
+      } })
+    }
   } catch (error) {
     parentPort!.postMessage({ requestId: message.requestId, error: error instanceof Error ? error.message : 'PROJECTION_FINAL_VIEW_FAILED' })
   } finally {

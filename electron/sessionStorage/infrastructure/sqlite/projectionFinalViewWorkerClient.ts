@@ -8,7 +8,13 @@ import { Worker } from 'node:worker_threads'
 import type { ProjectionOutputIdentity } from '../../application/projectionOutputManifest'
 import type { ProjectionBuildOutputManifestRef } from '../../domain/projectionBuild'
 
-export type ProjectionFinalViewPayload = Readonly<{ payload: string; byteLength: number; payloadDigest: string; workerThreadId: number }>
+export type ProjectionFinalViewPayload = Readonly<{
+  payload?: string
+  stagedBlob?: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>
+  byteLength: number
+  payloadDigest: string
+  workerThreadId: number
+}>
 const MAX_MATERIALIZATION_MS = 30_000
 
 function resolveWorkerPath(): string | undefined {
@@ -70,8 +76,10 @@ export function materializeProjectionFinalViewInWorker(input: Readonly<{
       if (message.requestId !== requestId) { finish(new Error('PROJECTION_FINAL_VIEW_WORKER_PROTOCOL_MISMATCH')); return }
       const result = message.result
       if (message.error) { finish(new Error(message.error)); return }
-      if (!result || typeof result.payload !== 'string' || !Number.isSafeInteger(result.byteLength) ||
-        result.byteLength !== Buffer.byteLength(result.payload) || !/^[a-f0-9]{64}$/.test(result.payloadDigest) ||
+      if (!result || !Number.isSafeInteger(result.byteLength) || result.byteLength < 0 || !/^[a-f0-9]{64}$/.test(result.payloadDigest) ||
+        (typeof result.payload === 'string' && (result.payload.length === 0 || result.byteLength !== Buffer.byteLength(result.payload) || result.stagedBlob !== undefined)) ||
+        (result.payload === undefined && (!result.stagedBlob || !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(result.stagedBlob.tempLocator) ||
+          result.stagedBlob.byteLength !== result.byteLength || result.stagedBlob.payloadDigest !== result.payloadDigest)) ||
         !Number.isSafeInteger(result.workerThreadId) || result.workerThreadId <= 0) {
         finish(new Error('PROJECTION_FINAL_VIEW_WORKER_RESULT_INVALID'))
         return

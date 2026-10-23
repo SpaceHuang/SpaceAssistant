@@ -39,6 +39,37 @@ export function createSessionProjectionBlobStore(root: string) {
 
   return {
     root,
+    async withWorkerStaging<T>(run: (promote: (input: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>) => Promise<StagedProjectionBlob>) => Promise<T>): Promise<T> {
+      const releaseFence = await acquireFence()
+      let handedOff = false
+      let released = false
+      let runSucceeded = false
+      try {
+        const result = await run(async (input) => {
+          if (!/^\.projection-[0-9a-f-]{36}\.tmp$/.test(input.tempLocator) || path.basename(input.tempLocator) !== input.tempLocator ||
+            !Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || !/^[a-f0-9]{64}$/.test(input.payloadDigest)) {
+            throw blobError('PROJECTION_WORKER_BLOB_REFERENCE_INVALID', 'worker staging reference is invalid')
+          }
+          const tempPath = path.join(root, input.tempLocator)
+          const stat = await fs.lstat(tempPath)
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== input.byteLength) {
+            throw blobError('PROJECTION_WORKER_BLOB_INVALID', 'worker staging file is invalid')
+          }
+          const locator = `projection-${randomUUID()}.blob`
+          const finalPath = path.join(root, locator)
+          await fs.rename(tempPath, finalPath)
+          await fs.chmod(finalPath, 0o600)
+          await syncDirectory(root)
+          handedOff = true
+          return Object.freeze({ locator, byteLength: input.byteLength, payloadDigest: input.payloadDigest,
+            async release() { if (!released) { released = true; await releaseFence() } } })
+        })
+        runSucceeded = true
+        return result
+      } finally {
+        if ((!handedOff || !runSucceeded) && !released) { released = true; await releaseFence() }
+      }
+    },
     async write(payload: string): Promise<StagedProjectionBlob> {
       const [blob] = await this.writeMany([payload])
       return blob!

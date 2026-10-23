@@ -11,7 +11,12 @@ export type ProjectionBuildBlobPort = Readonly<{
   writeMany?(payloads: readonly string[]): Promise<readonly Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }> []>
   readVerified?(input: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>): Promise<string>
   materializeFinalView?(output: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>,
-    identity: ProjectionOutputIdentity, historyWatermarkJson: unknown): Promise<Readonly<{ payload: string; byteLength: number; payloadDigest: string }>>
+    identity: ProjectionOutputIdentity, historyWatermarkJson: unknown): Promise<Readonly<{
+      payload?: string
+      blob?: Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }>
+      byteLength: number
+      payloadDigest: string
+    }>>
 }>
 const MAX_DERIVED_CHUNK_BLOB_BYTES = 256 * 1024 * 1024
 const DEFAULT_PROJECTION_RETRY_DELAY_MS = 60_000
@@ -153,6 +158,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
       let payload: string
       let payloadByteLength: number
       let payloadDigest: string
+      let workerFinalBlob: Awaited<ReturnType<NonNullable<ProjectionBuildBlobPort['materializeFinalView']>>>['blob']
       if (output) {
         const identity = { sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration, scopeKey: lease.scopeKey,
           specVersion: input.specVersion, sourceIdentityJson: lease.sourceIdentityJson }
@@ -160,9 +166,12 @@ export async function runProjectionBuildSlice(input: Readonly<{
         if (input.blobs.materializeFinalView) {
           try {
             const materialized = await input.blobs.materializeFinalView(output, identity, historyWatermarkJson)
-            payload = materialized.payload
+            payload = materialized.payload ?? ''
             payloadByteLength = materialized.byteLength
             payloadDigest = materialized.payloadDigest
+            workerFinalBlob = materialized.blob
+            if (workerFinalBlob && materialized.payload !== undefined) throw new Error('PROJECTION_FINAL_VIEW_RESULT_AMBIGUOUS')
+            if (!workerFinalBlob && typeof materialized.payload !== 'string') throw new Error('PROJECTION_FINAL_VIEW_RESULT_INVALID')
           } catch (error) {
             rejectBuild(service, lease, 'VIEW_REJECTED', 'FINAL_VIEW_MATERIALIZATION_FAILED', input.now, input.retryAfter)
             return { kind: 'source-unavailable', reason: error instanceof Error ? error.message : 'final-view-materialization-failed' }
@@ -191,8 +200,8 @@ export async function runProjectionBuildSlice(input: Readonly<{
         payloadByteLength = new TextEncoder().encode(payload).byteLength
         payloadDigest = await projectionPayloadDigest(payload)
       }
-      const inlinePayload = payloadByteLength <= 256 * 1024 ? payload : undefined
-      if (inlinePayload === undefined && output) {
+      const inlinePayload = !workerFinalBlob && payloadByteLength <= 256 * 1024 ? payload : undefined
+      if (inlinePayload === undefined && output && !workerFinalBlob) {
         if (!input.blobs.readVerified) {
           rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'PROJECTION_OUTPUT_ROOT_READER_UNAVAILABLE', input.now, input.retryAfter)
           return { kind: 'source-unavailable', reason: 'projection-output-reader-unavailable' }
@@ -209,7 +218,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
       }
       let finalBlob: Awaited<ReturnType<ProjectionBuildBlobPort['write']>> | undefined
       if (inlinePayload === undefined) {
-        try { finalBlob = await input.blobs.write(payload) }
+        try { finalBlob = workerFinalBlob ?? await input.blobs.write(payload) }
         catch (error) {
           rejectBuild(service, lease, 'VIEW_REJECTED', 'FINAL_VIEW_BLOB_WRITE_FAILED', input.now, input.retryAfter)
           return { kind: 'blob-write-failed', reason: error instanceof Error ? error.message : 'final-view-blob-write-failed' }

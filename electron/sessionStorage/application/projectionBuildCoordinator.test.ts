@@ -287,8 +287,10 @@ describe('projection build coordinator', () => {
     service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
     const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
     const persisted = new Map<string, string>()
+    let blobWrites = 0
     const blobs: ProjectionBuildBlobPort = {
       write: async (payload) => {
+        blobWrites += 1
         const locator = `projection-00000000-0000-4000-8000-${String(persisted.size + 1).padStart(12, '0')}.blob`
         persisted.set(locator, payload)
         return { locator, byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => { throw new Error('staging cleanup failed') } }
@@ -297,6 +299,19 @@ describe('projection build coordinator', () => {
         const payload = persisted.get(locator)
         if (!payload || Buffer.byteLength(payload) !== byteLength || createHash('sha256').update(payload).digest('hex') !== payloadDigest) throw new Error('blob mismatch')
         return payload
+      },
+      materializeFinalView: async (_output, identity, historyWatermarkJson) => {
+        const payload = JSON.stringify({ formatVersion: 1, scopeKey: identity.scopeKey, specVersion: identity.specVersion,
+          sessionId: identity.sessionId, sessionGeneration: identity.sessionGeneration, sourceIdentityJson: identity.sourceIdentityJson,
+          historyWatermarkJson, messages: [
+            { role: 'user', id: 'large', content: 'x'.repeat(230 * 1024) },
+            { role: 'assistant', id: 'large-final', content: 'y'.repeat(30 * 1024) },
+          ] })
+        const locator = `projection-00000000-0000-4000-8000-${String(persisted.size + 1).padStart(12, '0')}.blob`
+        const payloadDigest = createHash('sha256').update(payload).digest('hex')
+        persisted.set(locator, payload)
+        return { byteLength: Buffer.byteLength(payload), payloadDigest, blob: { locator, byteLength: Buffer.byteLength(payload),
+          payloadDigest, release: async () => { throw new Error('staging cleanup failed') } } }
       },
     }
     const largeReducer: ProjectionHistoryReducerPort = { ...historyReducer, fold: (_state, events) => ({
@@ -313,8 +328,10 @@ describe('projection build coordinator', () => {
     const built = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath, readChunk: chunk, historyReducer: largeReducer,
       blobs, limits: { maxRows: 1, maxBytes: 256 * 1024 }, maxChunksPerSlice: 1, now: () => 3 })
     if (built.kind !== 'checkpointed') throw new Error(JSON.stringify(built))
+    const writesBeforeFinalView = blobWrites
     const published = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath, readChunk: chunk, historyReducer: largeReducer,
       blobs, limits: { maxRows: 1, maxBytes: 256 * 1024 }, maxChunksPerSlice: 1, now: () => 3 })
+    expect(blobWrites).toBe(writesBeforeFinalView)
     expect(published).toMatchObject({ kind: 'published' })
     const state = service.get(session.id, 'scope-a')
     expect(state).toMatchObject({ status: 'valid' })

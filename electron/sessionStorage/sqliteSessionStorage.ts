@@ -285,7 +285,12 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
   const blobs = Object.freeze({ ...blobStore,
     materializeFinalView: (output: Parameters<NonNullable<ProjectionBuildSupervisorOptions['blobs']['materializeFinalView']>>[0],
       identity: Parameters<NonNullable<ProjectionBuildSupervisorOptions['blobs']['materializeFinalView']>>[1], historyWatermarkJson: unknown) =>
-      materializeProjectionFinalViewInWorker({ root: blobStore.root, output, identity, historyWatermarkJson }) })
+      blobStore.withWorkerStaging(async (promote) => {
+        const result = await materializeProjectionFinalViewInWorker({ root: blobStore.root, output, identity, historyWatermarkJson })
+        if (!result.stagedBlob) return result
+        const blob = await promote(result.stagedBlob)
+        return { byteLength: result.byteLength, payloadDigest: result.payloadDigest, blob }
+      }) })
   return createProjectionBuildLifecycleTask({ service,
     listDueWork: () => stateStore.listDueWork(input.now(), 64, input.processGeneration()), dbPath: input.dbPath,
     nextRetryAt: () => stateStore.nextRetryAt(input.now()),
