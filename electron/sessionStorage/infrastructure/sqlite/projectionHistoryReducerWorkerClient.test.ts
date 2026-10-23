@@ -76,6 +76,42 @@ describe('projection History reducer worker client', () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
+  it('stages reducer manifest and stable-ID index on disk without returning large operations over IPC', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'projection-reducer-artifacts-'))
+    try {
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 3 })
+      const reducer = createProjectionScopeHistoryReducer()
+      const content = 'large-canonical-output'.repeat(16 * 1024)
+      const events: ProjectionHistoryChunkEvent[] = [{ invocationId: 'artifact-invocation', sequence: 1,
+        eventId: 'artifact-context', idempotencyKey: 'artifact-context', turnId: 'artifact-turn', schemaVersion: 1,
+        kind: 'invocation-context-committed', sessionSequence: 1, commitOrder: 1, createdAt: 1,
+        payloadJson: JSON.stringify({ messages: [{ id: 'artifact-user', role: 'user', content, timestamp: 1 }] }) },
+      { invocationId: 'artifact-invocation', sequence: 2, eventId: 'artifact-terminal', idempotencyKey: 'artifact-terminal',
+        turnId: 'artifact-turn', schemaVersion: 1, kind: 'invocation-completed', sessionSequence: 2, commitOrder: 2,
+        createdAt: 2, payloadJson: JSON.stringify({ status: 'completed' }) }]
+      const locator = () => `.projection-${randomUUID()}.tmp`
+      const facts: ProjectionMessageFact[] = [{ id: 'artifact-user', role: 'user', timestamp: 1, sequence: 0,
+        queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: content }]
+      const result = await reduceProjectionHistoryChunkInWorker(reducer.createState(scopeKey), events, facts, scopeKey, true,
+        undefined, undefined, { root, outputManifestTempLocator: locator(), stableIdIndexTempLocator: locator(),
+          reducerStateTempLocator: locator(), context: { sessionId: 'artifact-session', sessionGeneration: 'generation-1',
+            scopeKey, specVersion: 3, sourceIdentityJson: '{"source":1}', parentOutputManifest: null, priorStableIdIndex: null } })
+
+      expect('stagedArtifacts' in result).toBe(true)
+      if (!('stagedArtifacts' in result)) throw new Error('expected staged reducer artifacts')
+      expect('outputOperations' in result).toBe(false)
+      const manifest = result.stagedArtifacts.outputManifest
+      const bytes = await fs.readFile(path.join(root, manifest.tempLocator))
+      expect(bytes.byteLength).toBe(manifest.byteLength)
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(manifest.payloadDigest)
+      expect(bytes.byteLength).toBeGreaterThan(256 * 1024)
+      expect(JSON.parse(bytes.toString('utf8'))).toMatchObject({ sessionId: 'artifact-session',
+        outputManifest: { operations: [{ type: 'replace', messages: [{ id: 'artifact-user', content }] }] } })
+      const indexBytes = await fs.readFile(path.join(root, result.stagedArtifacts.stableIdIndex.tempLocator))
+      expect(JSON.parse(indexBytes.toString('utf8'))).toMatchObject({ ids: ['artifact-user'] })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
   it('terminates the worker and waits for exit when the maintenance signal aborts', async () => {
     const controller = new AbortController()
     const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 3 })

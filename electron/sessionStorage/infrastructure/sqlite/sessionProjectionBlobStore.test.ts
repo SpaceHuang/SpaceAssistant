@@ -49,6 +49,31 @@ describe('session projection derived blob store', () => {
     expect(await blobs.readVerified(promoted)).toBe(payload)
   })
 
+  it('allocates and promotes multiple worker artifacts while retaining the fence until checkpoint release', async () => {
+    temp = createTempDatabase('projection-worker-stage-batch-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const payloads = ['manifest payload', 'stable index payload', 'reducer state payload']
+    const promoted = await blobs.withWorkerStaging(async (promote, stage) => {
+      const locators = stage.allocate(payloads.length)
+      const outputs = []
+      for (const [index, locator] of locators.entries()) {
+        const payload = payloads[index]!
+        await fs.writeFile(path.join(stage.root, locator!), payload, { mode: 0o600 })
+        outputs.push(await promote({ tempLocator: locator!, byteLength: Buffer.byteLength(payload),
+          payloadDigest: createHash('sha256').update(payload).digest('hex') }))
+      }
+      return outputs
+    })
+    let gcSettled = false
+    const gc = blobs.collectGarbage(getDbConnection(temp.db)).then((result) => { gcSettled = true; return result })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(gcSettled).toBe(false)
+    expect(await Promise.all(promoted.map((blob) => fs.readFile(path.join(root!, blob.locator), 'utf8')))).toEqual(payloads)
+    await Promise.all(promoted.map((blob) => blob.release()))
+    expect(await gc).toMatchObject({ removedCount: promoted.length })
+  })
+
   it('holds the blob fence for a transient worker input and removes it before release', async () => {
     temp = createTempDatabase('projection-worker-transient-stage-')
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')

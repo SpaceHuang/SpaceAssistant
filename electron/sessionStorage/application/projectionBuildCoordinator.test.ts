@@ -312,6 +312,27 @@ describe('projection build coordinator', () => {
     expect(service.readCheckpoint(session.id, 'scope-a')).toBeNull()
   })
 
+  it('invalidates a checkpoint when the reducer worker detects a corrupt stable-ID index', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection corrupt stable index', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'corrupt-stable-index-token', now: () => 2 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    const event = { invocationId: 'corrupt-index-inv', sequence: 1, eventId: 'corrupt-index-event',
+      idempotencyKey: 'corrupt-index-key', turnId: 'corrupt-index-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}',
+      sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+    const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath,
+      readChunk: async (permit, input) => ({ kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence,
+        nextSessionSequence: 1, events: [event], messageFacts: [], byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: false }),
+      historyReducer, reduceChunk: async () => { throw new Error('PROJECTION_STABLE_ID_INDEX_INVALID') },
+      blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 4096 },
+      maxChunksPerSlice: 1, now: () => 2 })
+    expect(result).toEqual({ kind: 'checkpoint-invalid' })
+    expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'invalid', rebuildToken: null })
+    expect(service.readCheckpoint(session.id, 'scope-a')).toBeNull()
+  })
+
   it('rejects a missing output blob reader instead of leaving the lease rebuilding', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection output reader missing', model: 'test' })
