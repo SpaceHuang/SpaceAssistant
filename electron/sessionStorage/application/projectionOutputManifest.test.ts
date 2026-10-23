@@ -27,6 +27,20 @@ describe('projection output manifest materializer', () => {
     expect(result).toEqual([{ role: 'user', id: 'u2', content: 'compacted' }, { role: 'assistant', id: 'a2', content: 'new answer' }])
   })
 
+  it('appends assistant text chunks to an existing stable message identity', async () => {
+    const first = blob('chunk-first', null, [{ type: 'append', messages: [{ role: 'assistant', id: 'a1', content: 'partial' }] }])
+    const second = blob('chunk-second', { locator: first.locator, byteLength: first.byteLength, payloadDigest: first.payloadDigest }, [
+      { type: 'appendText', updates: [{ role: 'assistant', id: 'a1', text: ' response' }] },
+    ])
+    await expect(materializeProjectionOutputManifest(second, identity, { readVerified: async ({ locator }) =>
+      locator === 'chunk-first' ? first.payload : second.payload })).resolves.toEqual([
+      { role: 'assistant', id: 'a1', content: 'partial response' },
+    ])
+    const invalid = blob('chunk-invalid', null, [{ type: 'appendText', updates: [{ role: 'assistant', id: 'missing', text: 'x' }] }])
+    await expect(materializeProjectionOutputManifest(invalid, identity, { readVerified: async () => invalid.payload }))
+      .rejects.toThrow('PROJECTION_OUTPUT_TEXT_APPEND_TARGET_INVALID')
+  })
+
   it('rejects cross-source, cyclic, and malformed operation chains', async () => {
     const wrongSource = blob('wrong', null, [])
     const forged = wrongSource.payload.replace('"sourceIdentityJson":"{\\"revision\\":1}"', '"sourceIdentityJson":"{\\"revision\\":2}"')

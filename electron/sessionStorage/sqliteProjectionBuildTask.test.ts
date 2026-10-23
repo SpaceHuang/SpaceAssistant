@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
-import { appendMessage, createSession } from '../database/operations'
+import { appendMessage, createPersistedTurn, createSession } from '../database/operations'
 import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
 import { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { createSqliteProjectionChatBodyCacheStore } from './infrastructure/sqlite/sessionProjectionStateStore'
@@ -12,6 +12,7 @@ import { CHAT_BODY_PROJECTION_SPEC_VERSION, encodeProjectionScopeKey } from './d
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { advanceProcessGeneration } from '../database/processGeneration'
 import { getDbConnection } from '../database/sqliteStore'
+import { openDatabase } from '../database'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
 import { readChatMessagesAfterPreparation } from './application/readChatMessages'
 
@@ -131,6 +132,84 @@ describe('SQLite projection build task composition', () => {
           .resolves.toMatchObject([{ id: 'deferred-facts-user', content: body }])
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
     } finally { db.close(); temp.cleanup() }
+  })
+
+  it('publishes the complete canonical-only assistant body when response chunks cross worker slices', async () => {
+    const temp = createTempDatabase('sqlite-projection-assistant-chunks-')
+    let db = temp.db
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-assistant-chunks-blobs-'))
+    try {
+      const session = createSession(db, { name: 'canonical-only split assistant', model: 'test' })
+      appendMessage(db, { id: 'split-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
+      appendMessage(db, { id: 'split-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+      createPersistedTurn(db, { turnId: 'split-assistant-turn', requestId: 'split-assistant-request', sessionId: session.id,
+        userMessageId: 'split-user', assistantMessageId: 'split-assistant', state: 'executing' })
+      getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run('split-assistant')
+      const processGeneration = advanceProcessGeneration(getDbConnection(db))
+      const history = new SqliteAgentHistory(getDbConnection(db), processGeneration, () => 3, session.id)
+      await history.appendBatch([
+        { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'split-assistant-context', idempotencyKey: 'split-assistant-context', kind: 'invocation-context-committed',
+          payload: { messages: [{ id: 'split-user', role: 'user', timestamp: 1, content: 'question' }] } },
+        { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'split-assistant-first', idempotencyKey: 'split-assistant-first', kind: 'model-response-committed',
+          payload: { message: { id: 'split-assistant', role: 'assistant', timestamp: 2,
+            content: [{ type: 'text', text: 'partial' }] } } },
+        { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 3, schemaVersion: 1,
+          eventId: 'split-assistant-second', idempotencyKey: 'split-assistant-second', kind: 'model-response-committed',
+          payload: { message: { id: 'split-assistant', role: 'assistant', timestamp: 2,
+            content: [{ type: 'text', text: ' response' }] } } },
+        { invocationId: 'split-assistant-inv', turnId: 'split-assistant-turn', sequence: 4, schemaVersion: 1,
+          eventId: 'split-assistant-terminal', idempotencyKey: 'split-assistant-terminal', kind: 'invocation-completed',
+          payload: { status: 'completed' } },
+      ], 0)
+
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
+      const stateStore = createSqliteProjectionStateStore(db)
+      stateStore.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation, now: 3 })
+      let firstHandle: ReturnType<ReturnType<typeof createSqliteProjectionBuildTask>['start']>
+      let observePendingCheckpoint!: () => void
+      const pendingCheckpoint = new Promise<void>((resolve) => { observePendingCheckpoint = resolve })
+      const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3,
+        limits: { maxRows: 1, maxBytes: 8192 }, maxChunksPerSlice: 1,
+        onResult: (_item, result) => {
+          if (result.kind === 'checkpointed' && result.checkpoint.nextSequence === 3) {
+            observePendingCheckpoint()
+            firstHandle?.stop()
+          }
+        } })
+      firstHandle = task.start()!
+      try {
+        await pendingCheckpoint
+        await firstHandle.quiesce()
+        expect(JSON.parse(stateStore.readCheckpoint(session.id, scopeKey)!)).toMatchObject({ nextSequence: 3,
+          historyReducerStateJson: expect.stringContaining('"contentOffset":16') })
+        db.close()
+
+        db = openDatabase(temp.dbPath)
+        const nextProcessGeneration = advanceProcessGeneration(getDbConnection(db))
+        const reopenedStateStore = createSqliteProjectionStateStore(db)
+        const resumedTask = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
+          processGeneration: () => nextProcessGeneration, connectionEpoch: () => nextProcessGeneration, now: () => 10,
+          limits: { maxRows: 1, maxBytes: 8192 }, maxChunksPerSlice: 1 })
+        const resumedHandle = resumedTask.start()!
+        const publishDeadline = Date.now() + 8_000
+        while (reopenedStateStore.get(session.id, scopeKey)?.status !== 'valid' && Date.now() < publishDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        expect(reopenedStateStore.get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
+        const cache = getDbConnection(db).prepare('SELECT inline_payload FROM session_projection_cache WHERE session_id=? AND scope_key=?')
+          .get(session.id, scopeKey) as { inline_payload: string }
+        expect(JSON.parse(cache.inline_payload)).toMatchObject({ messages: [
+          { id: 'split-user', role: 'user', content: 'question', timestamp: 1 },
+          { id: 'split-assistant', role: 'assistant', content: 'partial response', timestamp: 2 },
+        ] })
+        resumedHandle.stop()
+        await resumedHandle.quiesce()
+      } finally { if (db === temp.db) await firstHandle.quiesce(); db.close(); temp.cleanup() }
+    } finally { await fs.rm(root, { recursive: true, force: true }); root = undefined }
   })
 
   it('reopens a file-backed checkpoint under a newer process and publishes the resumed projection', async () => {

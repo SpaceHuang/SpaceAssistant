@@ -48,7 +48,22 @@ export async function materializeProjectionOutputManifest(
   for (const node of chain.reverse()) {
     for (const candidate of node.outputManifest.operations) {
       if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new Error('PROJECTION_OUTPUT_OPERATION_INVALID')
-      const operation = candidate as { type?: unknown; messages?: unknown }
+      const operation = candidate as { type?: unknown; messages?: unknown; updates?: unknown }
+      if (operation.type === 'appendText') {
+        if (!Array.isArray(operation.updates) || operation.updates.some((update) => !update || typeof update !== 'object' || Array.isArray(update) ||
+          typeof (update as { id?: unknown }).id !== 'string' || !(update as { id: string }).id.trim() ||
+          (update as { role?: unknown }).role !== 'assistant' || typeof (update as { text?: unknown }).text !== 'string')) {
+          throw new Error('PROJECTION_OUTPUT_OPERATION_INVALID')
+        }
+        for (const update of operation.updates as Array<{ id: string; role: 'assistant'; text: string }>) {
+          const index = messages.findIndex((message) => message.id === update.id)
+          if (index < 0 || messages[index]!.role !== update.role || typeof messages[index]!.content !== 'string') {
+            throw new Error('PROJECTION_OUTPUT_TEXT_APPEND_TARGET_INVALID')
+          }
+          messages[index] = { ...messages[index]!, content: messages[index]!.content as string + update.text }
+        }
+        continue
+      }
       if ((operation.type !== 'append' && operation.type !== 'replace') || !Array.isArray(operation.messages) ||
         operation.messages.some((message) => !message || typeof message !== 'object' || Array.isArray(message) ||
           typeof (message as ProjectionMaterializedMessage).role !== 'string' || !Object.hasOwn(message, 'content'))) {

@@ -354,7 +354,20 @@ async function stableIdIndexPayload(input: Readonly<{ checkpoint: ProjectionBuil
   }
   for (const raw of operations) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('PROJECTION_STABLE_ID_OUTPUT_OPERATION_INVALID')
-    const operation = raw as { type?: unknown; messages?: unknown }
+    const operation = raw as { type?: unknown; messages?: unknown; updates?: unknown }
+    if (operation.type === 'appendText') {
+      if (!Array.isArray(operation.updates)) throw new Error('PROJECTION_STABLE_ID_OUTPUT_OPERATION_INVALID')
+      for (const rawUpdate of operation.updates) {
+        if (!rawUpdate || typeof rawUpdate !== 'object' || Array.isArray(rawUpdate)) throw new Error('PROJECTION_STABLE_ID_OUTPUT_OPERATION_INVALID')
+        const update = rawUpdate as { id?: unknown; role?: unknown; text?: unknown }
+        if (typeof update.id !== 'string' || !update.id.trim() || update.role !== 'assistant' || typeof update.text !== 'string') {
+          throw new Error('PROJECTION_STABLE_ID_OUTPUT_OPERATION_INVALID')
+        }
+        const existing = entries.find((entry) => entry.id === update.id)
+        if (!existing || existing.role !== update.role) throw new Error('PROJECTION_STABLE_ID_TEXT_APPEND_TARGET_INVALID')
+      }
+      continue
+    }
     if ((operation.type !== 'append' && operation.type !== 'replace') || !Array.isArray(operation.messages)) throw new Error('PROJECTION_STABLE_ID_OUTPUT_OPERATION_INVALID')
     if (operation.type === 'replace') entries = []
     for (const message of operation.messages) {

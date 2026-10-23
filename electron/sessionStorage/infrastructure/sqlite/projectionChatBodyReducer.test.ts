@@ -82,4 +82,52 @@ describe('ProjectionSpec.chatBodyV1 reducer', () => {
     const secondSlice = reducer.fold(firstSlice.stateJson, [second], facts)
     expect(secondSlice.outputOperations).toEqual([])
   })
+
+  it('preserves canonical-backed assistant chunks across serialized read checkpoints', () => {
+    const reducer = createProjectionChatBodyReducer()
+    const event = (sequence: number, text: string): ProjectionHistoryChunkEvent => ({
+      invocationId: 'canonical-split-inv', turnId: 'canonical-split-turn', sequence,
+      eventId: `canonical-split-${sequence}`, idempotencyKey: `canonical-split-${sequence}`,
+      schemaVersion: 1, kind: 'model-response-committed', sessionSequence: sequence,
+      commitOrder: sequence, createdAt: sequence,
+      payloadJson: JSON.stringify({ message: { id: 'canonical-split-assistant', role: 'assistant',
+        content: [{ type: 'text', text }] } }),
+    })
+
+    for (const storage of [
+      { contentStorageState: 'canonical-backed-only' as const, storedContent: '' },
+      { contentStorageState: 'canonical-backed-dual-write' as const, storedContent: 'partial response' },
+    ]) {
+      const facts: ProjectionMessageFact[] = [{ id: 'canonical-split-assistant', role: 'assistant', timestamp: 2,
+        sequence: 0, queueScope: 'desktop', ...storage, writeMode: 'canonical' }]
+      const first = reducer.fold(reducer.createState(), [event(1, 'partial')], facts)
+      expect(first.outputOperations).toEqual([{ type: 'append', messages: [{ id: 'canonical-split-assistant',
+        role: 'assistant', content: 'partial', timestamp: 2 }] }])
+
+      // The JSON round trip models the durable checkpoint loaded by the next worker slice/process.
+      const second = reducer.fold(JSON.parse(JSON.stringify(first)).stateJson, [event(2, ' response')], facts)
+      expect(second.outputOperations).toEqual([{ type: 'appendText', updates: [{ id: 'canonical-split-assistant',
+        role: 'assistant', text: ' response' }] }])
+      expect(reducer.finalize(second.stateJson).outputOperations).toEqual([])
+
+      const singleSlice = reducer.fold(reducer.createState(), [event(1, 'partial'), event(2, ' response')], facts)
+      expect(singleSlice.outputOperations).toEqual([{ type: 'append', messages: [{ id: 'canonical-split-assistant',
+        role: 'assistant', content: 'partial response', timestamp: 2 }] }])
+    }
+  })
+
+  it('rejects a dual-write assistant response that ends before its canonical mirror is complete', () => {
+    const reducer = createProjectionChatBodyReducer()
+    const event: ProjectionHistoryChunkEvent = { invocationId: 'incomplete-inv', turnId: 'incomplete-turn', sequence: 1,
+      eventId: 'incomplete-response', idempotencyKey: 'incomplete-response', schemaVersion: 1,
+      kind: 'model-response-committed', sessionSequence: 1, commitOrder: 1, createdAt: 1,
+      payloadJson: JSON.stringify({ message: { id: 'incomplete-assistant', role: 'assistant',
+        content: [{ type: 'text', text: 'partial' }] } }) }
+    const facts: ProjectionMessageFact[] = [{ id: 'incomplete-assistant', role: 'assistant', timestamp: 2, sequence: 0,
+      queueScope: 'desktop', contentStorageState: 'canonical-backed-dual-write', writeMode: 'canonical', storedContent: 'partial response' }]
+    const folded = reducer.fold(reducer.createState(), [event], facts)
+    expect(folded.outputOperations).toEqual([{ type: 'append', messages: [{ id: 'incomplete-assistant', role: 'assistant',
+      content: 'partial', timestamp: 2 }] }])
+    expect(() => reducer.finalize(folded.stateJson)).toThrow('CHAT_BODY_AUTHORITY_MISMATCH')
+  })
 })

@@ -5,8 +5,8 @@ export const PROJECTION_SCOPE_KINDS = [
 
 export type ProjectionScopeKeyKind = typeof PROJECTION_SCOPE_KINDS[number]
 
-/** Bumped when chat body reduction learns to replay previously rejected canonical History content. */
-export const CHAT_BODY_PROJECTION_SPEC_VERSION = 2
+/** Bumped when chat body reduction changes canonical assistant chunk materialization. */
+export const CHAT_BODY_PROJECTION_SPEC_VERSION = 3
 
 export interface ProjectionScopeDescriptor {
   scope: ProjectionScopeKeyKind
