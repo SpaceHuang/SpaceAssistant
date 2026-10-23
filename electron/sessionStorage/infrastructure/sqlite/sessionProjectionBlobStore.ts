@@ -70,6 +70,34 @@ export function createSessionProjectionBlobStore(root: string) {
         if ((!handedOff || !runSucceeded) && !released) { released = true; await releaseFence() }
       }
     },
+    async withWorkerTransientStaging<T>(run: (stage: Readonly<{ root: string; tempLocator: string }>) => Promise<T>): Promise<T> {
+      const releaseFence = await acquireFence()
+      const tempLocator = `.projection-${randomUUID()}.tmp`
+      let runFailed = false
+      try {
+        return await run(Object.freeze({ root, tempLocator }))
+      } catch (error) {
+        runFailed = true
+        throw error
+      } finally {
+        let cleanupError: unknown
+        try {
+          const tempPath = path.join(root, tempLocator)
+          const stat = await fs.lstat(tempPath).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === 'ENOENT') return undefined
+            throw error
+          })
+          if (stat && (!stat.isFile() || stat.isSymbolicLink())) {
+            throw blobError('PROJECTION_WORKER_TRANSIENT_STAGE_INVALID', 'worker transient staging file is invalid')
+          }
+          await fs.rm(tempPath, { force: true })
+          if (stat) await syncDirectory(root)
+        } catch (error) { cleanupError = error }
+        try { await releaseFence() }
+        catch (error) { cleanupError ??= error }
+        if (!runFailed && cleanupError) throw cleanupError
+      }
+    },
     async write(payload: string): Promise<StagedProjectionBlob> {
       const [blob] = await this.writeMany([payload])
       return blob!

@@ -49,6 +49,42 @@ describe('session projection derived blob store', () => {
     expect(await blobs.readVerified(promoted)).toBe(payload)
   })
 
+  it('holds the blob fence for a transient worker input and removes it before release', async () => {
+    temp = createTempDatabase('projection-worker-transient-stage-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    let entered!: (stage: { root: string; tempLocator: string }) => void
+    let continueWork!: () => void
+    const stageReady = new Promise<{ root: string; tempLocator: string }>((resolve) => { entered = resolve })
+    const workGate = new Promise<void>((resolve) => { continueWork = resolve })
+    const work = blobs.withWorkerTransientStaging(async (stage) => {
+      await fs.writeFile(path.join(stage.root, stage.tempLocator), 'source chunk', { mode: 0o600 })
+      entered(stage)
+      await workGate
+    })
+    const stage = await stageReady
+    let gcSettled = false
+    const gc = blobs.collectGarbage(getDbConnection(temp.db)).then((result) => { gcSettled = true; return result })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(gcSettled).toBe(false)
+    expect((await fs.stat(path.join(stage.root, stage.tempLocator)).then((stat) => stat.mode & 0o777))).toBe(0o600)
+    continueWork()
+    await work
+    await expect(fs.stat(path.join(stage.root, stage.tempLocator))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await gc).toMatchObject({ removedCount: 0 })
+  }, 10_000)
+
+  it('removes a transient worker input when the consumer fails', async () => {
+    temp = createTempDatabase('projection-worker-transient-failure-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    await expect(blobs.withWorkerTransientStaging(async (stage) => {
+      await fs.writeFile(path.join(stage.root, stage.tempLocator), 'failed source chunk', { mode: 0o600 })
+      throw new Error('reducer failed')
+    })).rejects.toThrow('reducer failed')
+    expect((await fs.readdir(root)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
   it('holds garbage collection behind the shared batch fence until output and index are checkpointable', async () => {
     temp = createTempDatabase('projection-blob-batch-')
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')
