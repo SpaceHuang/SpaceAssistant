@@ -39,21 +39,6 @@ export function enableCanonicalSessionWriteAuthority(db: AppDatabase, sessionId:
         messageRevision: state.message_revision, historyWatermarkJson: JSON.stringify([
           transcript.sessionSeq, transcript.commitOrder, transcript.watermarkEventId, transcript.watermarkInvocationId
         ]) })) return ineligible('read-fence-not-current')
-    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
-    const cache = history.readCanonicalSessionCache({ ...transcript, cacheKey: 'transcript' })
-    let cacheMatches = false
-    if (cache.kind === 'hit') {
-      try {
-        const cached = JSON.parse(cache.value) as typeof transcript.messages
-        cacheMatches = Array.isArray(cached) && cached.length === transcript.messages.length && cached.every((message, index) => {
-          const folded = transcript.messages[index]
-          return !!folded && !!message && message.id === folded.id && message.role === folded.role &&
-            message.timestamp === folded.timestamp && message.content === folded.content
-        })
-      } catch { /* Invalid cache cannot authorize writes. */ }
-    }
-    if (!cacheMatches) return ineligible('canonical-transcript-mismatch')
-
     const rows = conn.prepare(`SELECT id,role,content,status,timestamp,content_storage_state FROM messages
       WHERE session_id=? ORDER BY sequence,id`).all(sessionId) as Array<{
         id: string; role: string; content: string; status: string; timestamp: number; content_storage_state: string

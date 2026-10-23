@@ -68,7 +68,6 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_projection_cache WHERE session_id=?').get(session.id))
       .toEqual({ count: 2 })
 
-    getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
     expect(readCanonicalApiContextIfEligible(db, session.id, undefined, undefined, [])).toMatchObject({ status: 'available', messages: expectedApi })
     expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
       .toEqual({ api_read_mode: 'canonical' })
@@ -297,6 +296,8 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       { id: 'write-eligible-assistant', role: 'assistant', content: 'answer', timestamp: 2 }
     ])
     expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
+    getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
+      .run(session.id)
     expectRetiredApiEligibilityTable(db)
     const { enableCanonicalSessionWriteAuthority } = await import('./sessionContentWriteAuthority')
     expect(enableCanonicalSessionWriteAuthority(db, session.id)).toMatchObject({ status: 'enabled', migratedMessageCount: 2 })
@@ -386,6 +387,8 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       { id: 'write-stop-uncovered', role: 'assistant', content: 'uncovered', timestamp: 2 }
     ])
     expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
+    getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
+      .run(session.id)
     const { enableCanonicalSessionWriteAuthority } = await import('./sessionContentWriteAuthority')
     // Prove the successful control before introducing a storage-state inconsistency.
     expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
