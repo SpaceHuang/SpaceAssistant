@@ -1,6 +1,7 @@
 import {
   acceptProjectionBuildChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint, parseProjectionBuildCheckpoint,
-  projectionPayloadDigest, takeoverProjectionBuildCheckpoint, type ProjectionBuildCheckpoint, type ProjectionBuildChunkReceipt, type ProjectionBuildLimits,
+  projectionPayloadDigest, takeoverProjectionBuildCheckpoint, type ProjectionBuildCheckpoint, type ProjectionBuildChunkReceipt,
+  type ProjectionBuildLimits, type ProjectionBuildReducerStateManifestRef,
 } from '../domain/projectionBuild'
 import type { SessionProjectionService, ProjectionRebuildLease } from './projectionService'
 import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact,
@@ -114,6 +115,18 @@ export async function runProjectionBuildSlice(input: Readonly<{
       processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken, startSequence: 0,
       historyReducerStateJson: initialStateJson })
     if (!service.saveCheckpoint(lease, JSON.stringify(checkpoint))) return { kind: 'lease-lost' }
+  }
+
+  let reducerStateJson = checkpoint.historyReducerStateJson
+  if (!reducerStateJson && checkpoint.historyReducerStateBlob) {
+    if (!input.blobs.readVerified) return invalidateInvalidCheckpoint()
+    try {
+      const ref = checkpoint.historyReducerStateBlob
+      const restored = await input.blobs.readVerified(ref)
+      if (Buffer.byteLength(restored) !== ref.byteLength || await projectionPayloadDigest(restored) !== ref.payloadDigest ||
+        !isJsonString(restored)) return invalidateInvalidCheckpoint()
+      reducerStateJson = restored
+    } catch { return invalidateInvalidCheckpoint() }
   }
 
   for (let index = 0; index < input.maxChunksPerSlice; index += 1) {
@@ -271,14 +284,14 @@ export async function runProjectionBuildSlice(input: Readonly<{
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'WORKER_CHUNK_CONTENT_INVALID', input.now, input.retryAfter)
       return { kind: 'chunk-invalid', reason: 'worker-chunk-content-invalid' }
     }
-    if (!checkpoint.historyReducerStateJson) {
+    if (!reducerStateJson) {
       return invalidateInvalidCheckpoint()
     }
     let folded: ProjectionHistoryChunkReduction
     try {
       folded = input.reduceChunk
-        ? await input.reduceChunk(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey, !result.hasMore, input.signal)
-        : input.historyReducer.fold(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey)
+        ? await input.reduceChunk(reducerStateJson, result.events, result.messageFacts, lease.scopeKey, !result.hasMore, input.signal)
+        : input.historyReducer.fold(reducerStateJson, result.events, result.messageFacts, lease.scopeKey)
     } catch (error) {
       if (input.signal?.aborted || (error instanceof Error && /WORKER_ABORTED$/.test(error.message))) {
         return { kind: 'checkpointed', checkpoint }
@@ -302,10 +315,8 @@ export async function runProjectionBuildSlice(input: Readonly<{
       }
     }
     const nextReducerStateJson = folded.stateJson
-    if (new TextEncoder().encode(nextReducerStateJson).byteLength > 64 * 1024) {
-      rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'HISTORY_REDUCER_STATE_TOO_LARGE', input.now, input.retryAfter)
-      return { kind: 'deferred-large' }
-    }
+    const nextReducerStateByteLength = Buffer.byteLength(nextReducerStateJson)
+    const externalizeReducerState = nextReducerStateByteLength > 64 * 1024
     try {
       JSON.parse(nextReducerStateJson)
       if (typeof JSON.stringify(outputOperations) !== 'string') throw new Error('non-json reducer output')
@@ -322,19 +333,24 @@ export async function runProjectionBuildSlice(input: Readonly<{
       sourceComplete: !result.hasMore, historyReducerStateJson: nextReducerStateJson })
     let staged: Awaited<ReturnType<ProjectionBuildBlobPort['write']>>[] = []
     let stableIndex: Readonly<{ payload: string; itemCount: number }> | undefined
+    let reducerStateBlob: ProjectionBuildReducerStateManifestRef | null = null
     try {
       if (input.blobs.writeMany) {
         stableIndex = await stableIdIndexPayload({ checkpoint, operations: outputOperations, blobs: input.blobs })
-        staged = [...await input.blobs.writeMany([payload, stableIndex.payload])]
-        if (staged.length !== 2) throw new Error('PROJECTION_BLOB_BATCH_INCOMPLETE')
-      } else staged = [await input.blobs.write(payload)]
+        const payloads = [payload, stableIndex.payload, ...(externalizeReducerState ? [nextReducerStateJson] : [])]
+        staged = [...await input.blobs.writeMany(payloads)]
+        if (staged.length !== payloads.length) throw new Error('PROJECTION_BLOB_BATCH_INCOMPLETE')
+      } else {
+        staged = [await input.blobs.write(payload)]
+        if (externalizeReducerState) staged.push(await input.blobs.write(nextReducerStateJson))
+      }
     }
     catch (error) {
       await releaseBlobs(staged)
       rejectBuild(service, lease, 'VIEW_REJECTED', 'DERIVED_BLOB_WRITE_FAILED', input.now, input.retryAfter)
       return { kind: 'blob-write-failed', reason: error instanceof Error ? error.message : 'blob-write-failed' }
     }
-    const [blob, stableIndexBlob] = staged
+    const [blob, stableIndexBlob, reducerStateStagedBlob] = staged
     try {
       const expectedDigest = await projectionPayloadDigest(payload)
       if (blob.byteLength > MAX_DERIVED_CHUNK_BLOB_BYTES || blob.byteLength < 1 || blob.payloadDigest !== expectedDigest || !blob.locator.trim()) {
@@ -360,7 +376,18 @@ export async function runProjectionBuildSlice(input: Readonly<{
           payloadDigest: stableDigest, itemCount: stableIndex.itemCount, sessionId: lease.sessionId,
           scopeKey: lease.scopeKey, sourceIdentityJson: lease.sourceIdentityJson }
       }
-      const advancedBase = acceptProjectionBuildChunk(checkpoint, receipt, limits, nextReducerStateJson, stableIdIndexManifest, blob.byteLength)
+      if (externalizeReducerState) {
+        const stateBlob = input.blobs.writeMany ? reducerStateStagedBlob : staged[1]
+        if (!stateBlob || stateBlob.byteLength !== nextReducerStateByteLength ||
+          stateBlob.payloadDigest !== await projectionPayloadDigest(nextReducerStateJson) || !stateBlob.locator.trim()) {
+          rejectBuild(service, lease, 'VIEW_REJECTED', 'REDUCER_STATE_BLOB_VERIFICATION_FAILED', input.now, input.retryAfter)
+          return { kind: 'blob-write-failed', reason: 'reducer-state-blob-verification-failed' }
+        }
+        reducerStateBlob = { locator: stateBlob.locator, byteLength: stateBlob.byteLength, payloadDigest: stateBlob.payloadDigest,
+          sessionId: lease.sessionId, scopeKey: lease.scopeKey, sourceIdentityJson: lease.sourceIdentityJson }
+      }
+      const advancedBase = acceptProjectionBuildChunk(checkpoint, receipt, limits,
+        externalizeReducerState ? null : nextReducerStateJson, stableIdIndexManifest, blob.byteLength, reducerStateBlob)
       const advanced = advancedBase && stableIdIndexManifest
         ? attachProjectionStableIdIndexManifest(advancedBase, stableIdIndexManifest) : advancedBase
       if (!advanced) {
@@ -369,6 +396,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
       }
       if (!service.saveCheckpoint(lease, JSON.stringify(advanced))) return { kind: 'lease-lost' }
       checkpoint = advanced
+      reducerStateJson = nextReducerStateJson
     } finally {
       await releaseBlobs(staged)
     }
@@ -471,4 +499,8 @@ function rejectBuild(
 
 function isRecoverableReducerWorkerFailure(reason: string): boolean {
   return /^PROJECTION_REDUCER_WORKER_(?:ENTRY_UNAVAILABLE|SPAWN_FAILED|TIMEOUT|TERMINATION_FAILED|ABORT_FAILED|EXIT(?::|$)|PROTOCOL_MISMATCH|RESULT_INVALID|POST_FAILED|RUNTIME_FAILED)(?:$|:)/.test(reason)
+}
+
+function isJsonString(value: string): boolean {
+  try { JSON.parse(value); return true } catch { return false }
 }

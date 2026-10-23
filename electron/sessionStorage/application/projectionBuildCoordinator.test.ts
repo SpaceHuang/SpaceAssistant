@@ -114,6 +114,60 @@ describe('projection build coordinator', () => {
     expect(firstService.saveCheckpoint(firstLease, JSON.stringify({}))).toBe(false)
   })
 
+  it('externalizes oversized reducer state and restores it from the checkpoint blob after takeover', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection large reducer checkpoint', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'large-state-token', now: () => 1 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    const stored = new Map<string, string>()
+    const verifiedReads: string[] = []
+    let sequence = 0
+    const blobs: ProjectionBuildBlobPort = {
+      write: async (payload) => {
+        const bytes = Buffer.from(payload)
+        const locator = `projection-00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}.blob`
+        const payloadDigest = createHash('sha256').update(bytes).digest('hex')
+        stored.set(locator, payload)
+        return { locator, byteLength: bytes.byteLength, payloadDigest, release: async () => undefined }
+      },
+      readVerified: async ({ locator, byteLength, payloadDigest }) => {
+        const payload = stored.get(locator)
+        if (!payload || Buffer.byteLength(payload) !== byteLength || createHash('sha256').update(payload).digest('hex') !== payloadDigest) {
+          throw new Error('blob verification failed')
+        }
+        verifiedReads.push(payload)
+        return payload
+      },
+    }
+    const oversizedState = JSON.stringify({ body: 'x'.repeat(70 * 1024) })
+    const reducer: ProjectionHistoryReducerPort = { createState: () => '{}',
+      fold: () => ({ stateJson: oversizedState, outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) }
+    const read: ProjectionHistoryChunkReaderPort = async (permit, input) => ({ kind: 'chunk', permit,
+      afterSessionSequence: input.afterSessionSequence, nextSessionSequence: 1,
+      events: [{ sessionSequence: 1, eventId: 'large-state-event', eventType: 'test', payloadJson: '{}', commitOrder: 1, createdAt: 1 }],
+      messageFacts: [], byteLength: 64, hasMore: true })
+
+    const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath,
+      readChunk: read, historyReducer: reducer, blobs, limits: { maxRows: 2, maxBytes: 32 * 1024 }, maxChunksPerSlice: 1, now: () => 1 })
+    expect(result).toMatchObject({ kind: 'checkpointed', checkpoint: { nextSequence: 1, historyReducerStateJson: null,
+      historyReducerStateBlob: { byteLength: Buffer.byteLength(oversizedState), payloadDigest: expect.any(String),
+        sessionId: session.id, scopeKey: 'scope-a' } } })
+
+    const finish: ProjectionHistoryChunkReaderPort = async (permit, input) => {
+      expect(input.afterSessionSequence).toBe(1)
+      return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+    }
+    const resumedService = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 2,
+      connectionEpoch: () => 2, createToken: () => 'large-state-token-2', now: () => 2 })
+    const resumedLease = resumedService.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    const resumed = await runProjectionBuildSlice({ service: resumedService, lease: resumedLease, specVersion: 1,
+      dbPath: db.filePath, readChunk: finish, historyReducer: reducer, blobs, limits: { maxRows: 2, maxBytes: 32 * 1024 }, maxChunksPerSlice: 1, now: () => 2 })
+    expect(resumed).toMatchObject({ kind: 'published' })
+    expect(verifiedReads).toContain(oversizedState)
+  })
+
   it('writes stable message identity facts to a blob and binds the manifest to the same checkpoint CAS', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection stable ID index', model: 'test' })
