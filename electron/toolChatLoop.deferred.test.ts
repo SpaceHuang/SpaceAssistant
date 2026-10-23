@@ -89,6 +89,7 @@ import { DEFAULT_WIKI_CONFIG } from '../src/shared/domainTypes'
 import { getDbConnection } from './database'
 import { commitImPolicySnapshot } from './confirmation/imPolicyStore'
 import { createWikiFileStore } from './wiki/wikiFileStore'
+import { importRawFromWorkDir } from './wiki/wikiImport'
 import type { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
 import type { McpConnectionManager } from './mcp/mcpConnectionManager'
 
@@ -339,6 +340,39 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
       expect(toolResults).toContain('p-1')
       expect(toolResults).toContain('Space Assistant')
       expect(toolResults).not.toContain('wiki/private-location.md')
+    } finally {
+      fs.rmSync(userDataDir, { recursive: true, force: true })
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('经 memory 发现的 memory.wiki_read_source 可按 sourceId 与 revision 执行', async () => {
+    const routeId = 'route-wiki-read-source-roundtrip'
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-read-source-loop-'))
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-read-source-loop-wd-'))
+    try {
+      await initWikiStructure(workDir, DEFAULT_WIKI_CONFIG, { userDataPath: userDataDir, installSkill: false })
+      fs.writeFileSync(path.join(workDir, 'AGENTS.md'), 'Bound source content for the Wiki agent.', 'utf8')
+      const imported = await importRawFromWorkDir(workDir, DEFAULT_WIKI_CONFIG, 'AGENTS.md', { userDataPath: userDataDir })
+      expect(imported.ok).toBe(true)
+      if (!imported.ok || !imported.sourceId) return
+      const { providerCalls } = registerProvider(routeId, [
+        { calls: [{ toolName: 'memory', input: { query: 'read source', limit: 5 } }] },
+        { calls: [{ toolName: 'memory_wiki_read_source', input: { sourceId: imported.sourceId, sourceRevision: 1 } }] },
+        { calls: [] }
+      ])
+      const { result } = await runWith(baseMaterials({
+        providerRouteId: routeId,
+        userDataDir,
+        wikiConfig: DEFAULT_WIKI_CONFIG,
+        toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'always' }
+      }), { snapshot: { entries: new Map(), budgetDropped: [] } })
+      expect(result.ok).toBe(true)
+      expect(providerCalls[0]!.request.tools.map((tool) => tool.name)).not.toContain('memory_wiki_read_source')
+      expect(providerCalls[1]!.request.tools.map((tool) => tool.name)).toContain('memory_wiki_read_source')
+      const toolResult = JSON.stringify(providerCalls[2]!.request.messages.filter((message) => message.role === 'tool'))
+      expect(toolResult).toContain('Bound source content for the Wiki agent.')
+      expect(toolResult).not.toContain(path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath))
     } finally {
       fs.rmSync(userDataDir, { recursive: true, force: true })
       fs.rmSync(workDir, { recursive: true, force: true })
