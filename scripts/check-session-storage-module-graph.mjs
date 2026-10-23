@@ -67,6 +67,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
       return edge.resolved.startsWith('src/shared/') ||
         edge.resolved.startsWith('electron/sessionStorage/domain/') ||
         ['electron/sessionStorage/public/model', 'electron/sessionStorage/public/readPreparation'].includes(edge.resolved) ||
+        (edge.resolved === 'electron/sessionStorage/public/ports' && edge.typeOnly && edge.symbols.length === 1 && edge.symbols[0] === 'SessionHistoryPort') ||
         edge.resolved.startsWith('packages/agent-sdk/')
     }
     if (category === 'application') {

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { HistoryPort, HistorySnapshot } from '../../packages/agent-sdk/src/history'
-import { createSessionCommitService } from '../sessionStorage/application/sessionCommitService'
+import { createSessionCommitService } from '../sessionStorage/host/sessionCommitService'
 
 export type UnknownEffectRecoveryState = Readonly<{
   targetInvocationId: string

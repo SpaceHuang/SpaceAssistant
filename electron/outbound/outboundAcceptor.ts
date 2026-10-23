@@ -22,7 +22,7 @@ import { createHash } from 'node:crypto'
 export { summarizeFailedInvocation } from '../runtime/continuationSummary'
 import type { SessionCommands, SessionQueries } from '../sessionStorage/public/ports'
 import type { ContinuationSourceRef } from '../sessionStorage/public/model'
-import type { SessionExecutionStore } from '../sessionStorage/application/ports'
+import type { SessionExecutionStore } from '../sessionStorage/public/execution'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TransactionCommitUnknownError } from '../database/transaction'
 

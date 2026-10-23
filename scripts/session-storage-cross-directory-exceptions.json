@@ -12,66 +12,6 @@
     "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
   },
   {
-    "source": "electron/outbound/outboundAcceptor.ts",
-    "target": "electron/sessionStorage/application/ports",
-    "owner": "outbound",
-    "reason": "应用端口类型待移入 public contract",
-    "exitStage": "P5",
-    "symbols": [
-      "SessionExecutionStore"
-    ],
-    "typeOnly": true,
-    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
-  },
-  {
-    "source": "electron/runtime/acceptedTurnContext.ts",
-    "target": "electron/sessionStorage/application/ports",
-    "owner": "runtime",
-    "reason": "应用端口类型待移入 public contract",
-    "exitStage": "P5",
-    "symbols": [
-      "SessionExecutionStore"
-    ],
-    "typeOnly": true,
-    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
-  },
-  {
-    "source": "electron/runtime/hostedTurnHandoff.ts",
-    "target": "electron/sessionStorage/application/ports",
-    "owner": "runtime",
-    "reason": "应用端口类型待移入 public contract",
-    "exitStage": "P5",
-    "symbols": [
-      "SessionExecutionStore"
-    ],
-    "typeOnly": true,
-    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
-  },
-  {
-    "source": "electron/runtime/hostedTurnHandoff.ts",
-    "target": "electron/sessionStorage/application/sessionCommitService",
-    "owner": "runtime",
-    "reason": "提交协调需经 public host binding",
-    "exitStage": "P5",
-    "symbols": [
-      "createSessionCommitService"
-    ],
-    "typeOnly": false,
-    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
-  },
-  {
-    "source": "electron/runtime/sessionContentWriteAuthority.ts",
-    "target": "electron/sessionStorage/application/sessionCommitService",
-    "owner": "session-content",
-    "reason": "提交协调需经 public host binding",
-    "exitStage": "P5",
-    "symbols": [
-      "createSessionCommitService"
-    ],
-    "typeOnly": false,
-    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
-  },
-  {
     "source": "electron/runtime/sessionContentWriteAuthority.ts",
     "target": "electron/sessionStorage/infrastructure/sqlite/sessionApiRouteProjectionFence",
     "owner": "session-content",
@@ -91,18 +31,6 @@
     "exitStage": "P5",
     "symbols": [
       "hasCurrentProjectionEligibility"
-    ],
-    "typeOnly": false,
-    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
-  },
-  {
-    "source": "electron/runtime/sessionProjectionLegacyBaseline.ts",
-    "target": "electron/sessionStorage/application/sessionCommitService",
-    "owner": "projection",
-    "reason": "提交协调需经 public host binding",
-    "exitStage": "P5",
-    "symbols": [
-      "createSessionCommitService"
     ],
     "typeOnly": false,
     "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
@@ -205,18 +133,6 @@
     "exitStage": "P5",
     "symbols": [
       "hasRejectedTranscriptParityStateInConnection"
-    ],
-    "typeOnly": false,
-    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
-  },
-  {
-    "source": "electron/runtime/unknownEffectRecovery.ts",
-    "target": "electron/sessionStorage/application/sessionCommitService",
-    "owner": "runtime-recovery",
-    "reason": "提交协调需经 public host binding",
-    "exitStage": "P5",
-    "symbols": [
-      "createSessionCommitService"
     ],
     "typeOnly": false,
     "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."

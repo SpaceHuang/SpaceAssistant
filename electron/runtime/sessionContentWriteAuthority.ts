@@ -4,7 +4,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { toCanonicalModelMessages } from './canonicalHistory'
-import { createSessionCommitService } from '../sessionStorage/application/sessionCommitService'
+import { createSessionCommitService } from '../sessionStorage/host/sessionCommitService'
 import { createSqliteSessionApiRouteProjectionFence } from '../sessionStorage/infrastructure/sqlite/sessionApiRouteProjectionFence'
 
 export type CanonicalWriteAuthorityResult = Readonly<{

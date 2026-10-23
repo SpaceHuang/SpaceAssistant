@@ -4,7 +4,7 @@ import { getMessages } from '../database/operations'
 import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
-import { createSessionCommitService } from '../sessionStorage/application/sessionCommitService'
+import { createSessionCommitService } from '../sessionStorage/host/sessionCommitService'
 
 export type LegacySessionProjectionBaselineResult =
   | Readonly<{ kind: 'migrated' | 'already-migrated'; messageCount: number }>

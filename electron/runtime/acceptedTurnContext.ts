@@ -2,7 +2,7 @@ import type { Message } from '../../src/shared/domainTypes'
 import type { PersistedTurn } from '../database/operations'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { TurnExecutionConfig } from '../../src/shared/assistantFactAggregator'
-import type { SessionExecutionStore } from '../sessionStorage/application/ports'
+import type { SessionExecutionStore } from '../sessionStorage/public/execution'
 
 /** Compatibility adapter: acceptance identity and transcript CAS are owned by SessionExecutionStore. */
 export function createAcceptedTurnFromPrepared(

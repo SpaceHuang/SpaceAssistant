@@ -185,11 +185,21 @@ describe('session storage module graph rules', () => {
     `)).toHaveLength(1)
   })
 
+  it('publishes the execution capability from the public contract module', () => {
+    const publicExecution = readFileSync(path.resolve('electron/sessionStorage/public/execution.ts'), 'utf8')
+    const applicationPorts = readFileSync(path.resolve('electron/sessionStorage/application/ports.ts'), 'utf8')
+    expect(publicExecution).toMatch(/export interface SessionExecutionStore/)
+    expect(applicationPorts).not.toMatch(/export interface SessionExecutionStore/)
+    expect(findSessionStorageModuleViolations('electron/runtime/acceptedTurnContext.ts', `
+      import type { SessionExecutionStore } from '../sessionStorage/public/execution'
+    `)).toEqual([])
+  })
+
   it('keeps every cross-directory exception precise and reviewable', () => {
     const entries = JSON.parse(readFileSync(path.resolve('scripts/session-storage-cross-directory-exceptions.json'), 'utf8')) as Array<{
       source: string; target: string; symbols: string[]; typeOnly: boolean; owner: string; reason: string; exitStage: string; evidence: string
     }>
-    expect(entries).toHaveLength(21)
+    expect(entries).toHaveLength(14)
     for (const entry of entries) {
       expect(entry.source).toMatch(/^electron\//)
       expect(entry.target).toMatch(/^electron\/sessionStorage\/(application|infrastructure|internal)\//)

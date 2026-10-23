@@ -1,6 +1,7 @@
 import type { ContextPort } from '../../../packages/agent-sdk/src/context'
 import type { SessionCommands, SessionQueries } from '../public/ports'
-import type { SessionAvailabilityPort, SessionExecutionStore, SessionRecoveryPort } from '../application/ports'
+import type { SessionExecutionStore } from '../public/execution'
+import type { SessionAvailabilityPort, SessionRecoveryPort } from '../application/ports'
 import type { CompactionReplay } from '../../../src/shared/compactionEvents'
 import type { CanonicalContextMeterEvent } from '../public/model'
 import type { ProjectionPreparationRequest } from '../public/ports'
