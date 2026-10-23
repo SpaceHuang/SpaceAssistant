@@ -154,6 +154,10 @@ describe('projection build coordinator', () => {
     expect(result).toMatchObject({ kind: 'checkpointed', checkpoint: { nextSequence: 1, historyReducerStateJson: null,
       historyReducerStateBlob: { byteLength: Buffer.byteLength(oversizedState), payloadDigest: expect.any(String),
         sessionId: session.id, scopeKey: 'scope-a' } } })
+    const chunkPayload = [...stored.values()].map((payload) => JSON.parse(payload) as Record<string, unknown>)
+      .find((payload) => payload.formatVersion === 2)
+    expect(chunkPayload).toBeDefined()
+    expect(chunkPayload).not.toHaveProperty('historyReducerStateJson')
 
     const finish: ProjectionHistoryChunkReaderPort = async (permit, input) => {
       expect(input.afterSessionSequence).toBe(1)

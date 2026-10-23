@@ -330,7 +330,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
       scopeKey: lease.scopeKey, specVersion: input.specVersion, sourceIdentityJson: lease.sourceIdentityJson,
       fromSequence: result.afterSessionSequence, nextSequence: result.nextSessionSequence, events: result.events,
       outputManifest: { formatVersion: 1, parent: parentOutputManifest, operations: outputOperations },
-      sourceComplete: !result.hasMore, historyReducerStateJson: nextReducerStateJson })
+      sourceComplete: !result.hasMore })
     let staged: Awaited<ReturnType<ProjectionBuildBlobPort['write']>>[] = []
     let stableIndex: Readonly<{ payload: string; itemCount: number }> | undefined
     let reducerStateBlob: ProjectionBuildReducerStateManifestRef | null = null
