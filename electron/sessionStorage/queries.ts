@@ -8,6 +8,7 @@ import {
   getTurnByRequestId,
   listTurnErrorsByAssistantMessageIds,
   getMessages,
+  getChatMessagePage,
 } from '../database/operations'
 import {
   getProjectedApiContextBaseline,
@@ -102,6 +103,61 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
           }
           return { ...message, content: canonical.content }
         })
+      })
+    } } : {}),
+    ...(preparedChatBody ? { readPreparedChatPage: async ({ sessionId, beforeSequence, limit, prepared }) => {
+      const view = prepared as PreparedChatBodyView | undefined
+      if (!view) return undefined
+      const selected = runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const page = getChatMessagePage(db, sessionId, beforeSequence, limit)
+        if (page.entries.length === 0) return { page, canonicalIds: [] as string[] }
+        const ids = page.entries.map(({ message }) => message.id)
+        const states = getDbConnection(db).prepare(`SELECT messages.id,messages.content_storage_state,cutover.write_mode
+          FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
+          WHERE messages.session_id=? AND messages.id IN (${ids.map(() => '?').join(',')})`).all(sessionId, ...ids) as
+          Array<{ id: string; content_storage_state: string; write_mode: string | null }>
+        const stateById = new Map(states.map((row) => [row.id, row]))
+        const canonicalIds: string[] = []
+        for (const { message } of page.entries) {
+          const state = stateById.get(message.id)
+          if (!state) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+          if (state.content_storage_state === 'legacy') continue
+          if (!['canonical-backed-dual-write', 'canonical-backed-only'].includes(state.content_storage_state) || state.write_mode !== 'canonical') {
+            throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+          }
+          canonicalIds.push(message.id)
+        }
+        return { page, canonicalIds }
+      })
+      if (!selected) return undefined
+      if (selected.canonicalIds.length === 0) return { ...selected.page,
+        entries: projectMessageEntriesV1('chatMessageV1', selected.page.entries) }
+      let bodies: PreparedChatBodySelection
+      try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
+      catch {
+        preparedChatBody.invalidate(view)
+        return undefined
+      }
+      return runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const latest = getChatMessagePage(db, sessionId, beforeSequence, limit)
+        if (latest.oldestSequence !== selected.page.oldestSequence || latest.hasMoreBefore !== selected.page.hasMoreBefore ||
+          latest.entries.length !== selected.page.entries.length || latest.entries.some((entry, index) => {
+            const prior = selected.page.entries[index]
+            return !prior || entry.sequence !== prior.sequence || entry.message.id !== prior.message.id ||
+              entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
+          })) return undefined
+        const bodyById = new Map(bodies.messages.map((message) => [message.id, message]))
+        const entries = latest.entries.map((entry) => {
+          if (!selected.canonicalIds.includes(entry.message.id)) return entry
+          const canonical = bodyById.get(entry.message.id)
+          if (!canonical || canonical.role !== entry.message.role || canonical.timestamp !== entry.message.timestamp) {
+            throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+          }
+          return { ...entry, message: { ...entry.message, content: canonical.content } }
+        })
+        return { ...latest, entries: projectMessageEntriesV1('chatMessageV1', entries) }
       })
     } } : {}),
     readChatPage: ({ sessionId, beforeSequence, limit }) => {

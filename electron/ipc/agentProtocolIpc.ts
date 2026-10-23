@@ -16,6 +16,7 @@ import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import type { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
 import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'
+import { readChatMessagesAfterPreparation, readChatPageAfterPreparation } from '../sessionStorage/public/readMessages'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
@@ -706,8 +707,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:get-messages',
     async (_e, payload: { sessionId: string; limit?: number; offset?: number }): Promise<Message[]> => {
-      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
-      return sessionQueries.readMessages(payload)
+      return readChatMessagesAfterPreparation(sessionStorage, payload)
     }
   )
 
@@ -725,14 +725,12 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       _e,
       payload: { sessionId: string; beforeSequence?: number; limit?: number }
     ) => {
-      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
-      return sessionQueries.readChatPage(payload)
+      return readChatPageAfterPreparation(sessionStorage, payload)
     }
   )
 
   ipcMain.handle('chat:get-display-message-page', async (_e, payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
-    await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
-    const page = sessionQueries.readChatPage(payload)
+    const page = await readChatPageAfterPreparation(sessionStorage, payload)
     return { ...page, entries: page.entries.filter(({ message }) => message.role === 'assistant').map(({ message, sequence }) => ({ display: turnToDisplay({ turnId: message.id, requestId: '', version: 0, assistantMessage: message }), sequence })) }
   })
 

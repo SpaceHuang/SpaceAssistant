@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { prepareChatBodiesForSessions, readChatMessageAfterPreparation, readChatMessagesAfterPreparation } from './readChatMessages'
+import { prepareChatBodiesForSessions, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation } from './readChatMessages'
 
 describe('readChatMessagesAfterPreparation', () => {
   it('prepares the chat body view and reruns the complete synchronous selection', async () => {
@@ -82,5 +82,36 @@ describe('readChatMessagesAfterPreparation', () => {
     const sessions: string[] = []
     await prepareChatBodiesForSessions({ ensureChatBodyV1: async ({ sessionId }) => { sessions.push(sessionId) } }, ['b', 'a', 'b'])
     expect(sessions).toEqual(['b', 'a'])
+  })
+})
+
+describe('readChatPageAfterPreparation', () => {
+  it('passes the prepared view into sequence-page selection and uses the verified result', async () => {
+    const events: string[] = []
+    const prepared = { sourceIdentityJson: 'fresh-source' }
+    const page = { entries: [{ sequence: 4, message: { id: 'canonical-page-body', content: 'body' } }], oldestSequence: 4, hasMoreBefore: true }
+    const result = await readChatPageAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); return prepared },
+      queries: {
+        readPreparedChatPage: async (input) => { events.push(`prepared:${input.beforeSequence ?? 'tail'}`); expect(input.prepared).toBe(prepared); return page as never },
+        readChatPage: () => { events.push('authority'); return { entries: [], oldestSequence: null, hasMoreBefore: false } }
+      }
+    }, { sessionId: 'page-session', beforeSequence: 10, limit: 20 })
+    expect(result).toBe(page)
+    expect(events).toEqual(['ensure', 'prepared:10'])
+  })
+
+  it('falls back to the authority page reader when preparation or the prepared lookup misses', async () => {
+    const events: string[] = []
+    const page = { entries: [], oldestSequence: null, hasMoreBefore: false }
+    const result = await readChatPageAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); throw new Error('PROJECTION_PREPARATION_DEFERRED_LARGE') },
+      queries: {
+        readPreparedChatPage: async () => { events.push('prepared-miss'); return undefined },
+        readChatPage: () => { events.push('authority'); return page }
+      }
+    }, { sessionId: 'large-page-session' })
+    expect(result).toBe(page)
+    expect(events).toEqual(['ensure', 'prepared-miss', 'authority'])
   })
 })

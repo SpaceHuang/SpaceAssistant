@@ -1,4 +1,5 @@
 import type { Message } from '../../../src/shared/domainTypes'
+import type { ChatMessagePage } from './model'
 import { prepareChatBodyForRead } from './readPreparation'
 
 type ChatMessageReadStorage = Readonly<{
@@ -18,6 +19,21 @@ export async function readChatMessagesAfterPreparation(
   const prepared = await storage.queries.readPreparedMessages?.({ ...input, prepared: preparedView })
   if (prepared) return prepared
   return storage.queries.readMessages(input)
+}
+
+export async function readChatPageAfterPreparation(
+  storage: Readonly<{
+    ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
+    queries: Readonly<{
+      readChatPage(input: Readonly<{ sessionId: string; beforeSequence?: number | null; limit?: number }>): ChatMessagePage
+      readPreparedChatPage?(input: Readonly<{ sessionId: string; beforeSequence?: number | null; limit?: number; prepared?: unknown }>): Promise<ChatMessagePage | undefined>
+    }>
+  }>,
+  input: Readonly<{ sessionId: string; beforeSequence?: number | null; limit?: number }>
+): Promise<ChatMessagePage> {
+  const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
+  const prepared = await storage.queries.readPreparedChatPage?.({ ...input, prepared: preparedView })
+  return prepared ?? storage.queries.readChatPage(input)
 }
 
 export async function readChatMessageAfterPreparation(
