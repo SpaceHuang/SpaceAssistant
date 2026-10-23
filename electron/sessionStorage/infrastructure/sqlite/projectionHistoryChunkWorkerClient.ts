@@ -119,5 +119,8 @@ function isWorkerSample(value: unknown): value is ProjectionWorkerSample {
   const sample = value as Partial<ProjectionWorkerSample>
   return Number.isFinite(sample.durationMs) && sample.durationMs! >= 0 &&
     Number.isSafeInteger(sample.heapUsedBytesAtExit) && sample.heapUsedBytesAtExit! >= 0 &&
-    Number.isSafeInteger(sample.processRssBytesAtExit) && sample.processRssBytesAtExit! >= 0
+    Number.isSafeInteger(sample.processRssBytesAtExit) && sample.processRssBytesAtExit! >= 0 &&
+    Number.isSafeInteger(sample.heapUsedBytesPeakSampled) && sample.heapUsedBytesPeakSampled! >= sample.heapUsedBytesAtExit! &&
+    Number.isSafeInteger(sample.processRssBytesPeakSampled) && sample.processRssBytesPeakSampled! >= sample.processRssBytesAtExit! &&
+    sample.memorySampleIntervalMs === 10
 }

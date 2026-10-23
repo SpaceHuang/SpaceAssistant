@@ -102,7 +102,7 @@ export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducer
           result !== undefined && !('outputOperations' in result) && !('finalizedOutputOperations' in result)
         if (!result || (!hasInline && !hasStaged) || typeof result.resetOutput !== 'boolean' && hasStaged ||
           ('finalizedOutputOperations' in result && result.finalizedOutputOperations !== undefined && !Array.isArray(result.finalizedOutputOperations)) ||
-          !Number.isSafeInteger(result.workerThreadId) || result.workerThreadId! <= 0) {
+          !Number.isSafeInteger(result.workerThreadId) || result.workerThreadId! <= 0 || !isWorkerSample(result.workerSample)) {
           stopWithError(new Error('PROJECTION_REDUCER_WORKER_RESULT_INVALID'))
           return
         }
@@ -125,4 +125,15 @@ function isStagedArtifact(value: unknown): value is Readonly<{ tempLocator: stri
     (value as { locator?: string }).locator === `${((value as { tempLocator: string }).tempLocator).slice(1, -4)}.blob` &&
     Number.isSafeInteger((value as { byteLength?: number }).byteLength) && (value as { byteLength: number }).byteLength > 0 &&
     /^[a-f0-9]{64}$/.test((value as { payloadDigest?: string }).payloadDigest ?? ''))
+}
+
+function isWorkerSample(value: unknown): value is NonNullable<ProjectionHistoryChunkReduction['workerSample']> {
+  if (!value || typeof value !== 'object') return false
+  const sample = value as Partial<NonNullable<ProjectionHistoryChunkReduction['workerSample']>>
+  return Number.isFinite(sample.durationMs) && sample.durationMs! >= 0 &&
+    Number.isSafeInteger(sample.heapUsedBytesAtExit) && sample.heapUsedBytesAtExit! >= 0 &&
+    Number.isSafeInteger(sample.processRssBytesAtExit) && sample.processRssBytesAtExit! >= 0 &&
+    Number.isSafeInteger(sample.heapUsedBytesPeakSampled) && sample.heapUsedBytesPeakSampled! >= sample.heapUsedBytesAtExit! &&
+    Number.isSafeInteger(sample.processRssBytesPeakSampled) && sample.processRssBytesPeakSampled! >= sample.processRssBytesAtExit! &&
+    sample.memorySampleIntervalMs === 10
 }

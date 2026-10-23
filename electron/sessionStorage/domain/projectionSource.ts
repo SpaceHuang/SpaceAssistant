@@ -15,6 +15,9 @@ export type ProjectionWorkerSample = Readonly<{
   durationMs: number
   heapUsedBytesAtExit: number
   processRssBytesAtExit: number
+  heapUsedBytesPeakSampled: number
+  processRssBytesPeakSampled: number
+  memorySampleIntervalMs: number
 }>
 
 export type ProjectionHistoryChunkEvent = Readonly<{

@@ -255,7 +255,9 @@ describe('SQLite projection build task composition', () => {
       getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
       const processGeneration = advanceProcessGeneration(getDbConnection(db))
       const sliceSamples: Array<{ sourceBytes: number; sourceWorkerDurationMs: number; outcome: string; yielded: boolean; reducerWorkerDurationMs: number;
-        maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null; workerSamples: number }> = []
+        maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null;
+        maxWorkerHeapUsedBytesPeakSampled: number | null; maxProcessRssBytesPeakSampled: number | null;
+        memorySampleIntervalMs: number | null; workerSamples: number }> = []
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3,
         onSlice: (sample) => sliceSamples.push(sample) })
@@ -268,7 +270,9 @@ describe('SQLite projection build task composition', () => {
         expect(sliceSamples.some((sample) => sample.sourceBytes >= 16 * 1024 * 1024 &&
           sample.sourceWorkerDurationMs > 0 && sample.outcome === 'checkpointed' && sample.yielded)).toBe(true)
         expect(sliceSamples.some((sample) => sample.reducerWorkerDurationMs > 0 &&
-          sample.maxWorkerHeapUsedBytesAtExit !== null && sample.maxProcessRssBytesAtExit !== null && sample.workerSamples >= 3)).toBe(true)
+          sample.maxWorkerHeapUsedBytesAtExit !== null && sample.maxProcessRssBytesAtExit !== null &&
+          sample.maxWorkerHeapUsedBytesPeakSampled !== null && sample.maxProcessRssBytesPeakSampled !== null &&
+          sample.memorySampleIntervalMs === 10 && sample.workerSamples >= 3)).toBe(true)
         expect(messages.map((message) => ({ id: message.id, length: String(message.content).length,
           digest: createHash('sha256').update(String(message.content)).digest('hex') }))).toEqual([
           { id: 'segmented-first', length: firstBody.length, digest: createHash('sha256').update(firstBody).digest('hex') },

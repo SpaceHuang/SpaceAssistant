@@ -1,5 +1,4 @@
 import { parentPort, threadId } from 'node:worker_threads'
-import { getHeapStatistics } from 'node:v8'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -7,8 +6,10 @@ import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../d
 import type { ProjectionPendingHistoryChunkManifestRef } from '../../domain/projectionBuild'
 import type { ProjectionReducerArtifactStaging } from '../../application/projectionBuildCoordinator'
 import { createProjectionScopeHistoryReducer } from './projectionScopeHistoryReducer'
+import { createProjectionWorkerMemorySampler } from './projectionWorkerMemorySampler'
 
 if (!parentPort) throw new Error('projection history reducer worker requires a parent port')
+const memorySampler = createProjectionWorkerMemorySampler()
 const MAX_OUTPUT_MANIFEST_SEGMENT_BYTES = 16 * 1024 * 1024
 
 parentPort.once('message', (message: {
@@ -73,9 +74,7 @@ parentPort.once('message', (message: {
       ? reducer.finalize(folded.stateJson, message.scopeKey).outputOperations
       : undefined
     let result: Record<string, unknown> = { ...folded,
-      ...(finalizedOutputOperations ? { finalizedOutputOperations } : {}), workerThreadId: threadId,
-      workerSample: { durationMs: Math.max(0, performance.now() - startedAt),
-        heapUsedBytesAtExit: getHeapStatistics().used_heap_size, processRssBytesAtExit: process.memoryUsage.rss() } }
+      ...(finalizedOutputOperations ? { finalizedOutputOperations } : {}), workerThreadId: threadId }
     if (message.staging) {
       const { root, context } = message.staging
       const writeArtifact = async (locator: string, payload: string) => {
@@ -124,13 +123,13 @@ parentPort.once('message', (message: {
       result = { resetOutput: folded.resetOutput,
         ...(reducerState ? {} : { stateJson: folded.stateJson }),
         stagedArtifacts: { outputManifests, stableIdIndex: { ...stableIdIndex, itemCount: stableIndex.itemCount },
-          ...(reducerState ? { reducerState } : {}) }, workerThreadId: threadId,
-        workerSample: { durationMs: Math.max(0, performance.now() - startedAt),
-          heapUsedBytesAtExit: getHeapStatistics().used_heap_size, processRssBytesAtExit: process.memoryUsage.rss() } }
+          ...(reducerState ? { reducerState } : {}) }, workerThreadId: threadId }
     }
+    result.workerSample = { durationMs: Math.max(0, performance.now() - startedAt), ...memorySampler.finish() }
     parentPort!.postMessage({ requestId: message.requestId, result })
     parentPort!.close()
   })().catch((error) => {
+    memorySampler.finish()
     parentPort!.postMessage({ requestId: message.requestId, error: error instanceof Error ? error.message : 'PROJECTION_REDUCER_FAILED' })
     parentPort!.close()
   })

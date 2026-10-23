@@ -86,7 +86,8 @@ describe('projection history chunk worker client', () => {
         workerPath: path.join(process.cwd(), 'electron/sessionStorage/infrastructure/sqlite/projectionHistoryChunkWorker.ts'), timeoutMs: 5000,
       })
       expect(result).toMatchObject({ kind: 'chunk', afterSessionSequence: 0,
-        workerSample: { durationMs: expect.any(Number), heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number) } })
+        workerSample: { durationMs: expect.any(Number), heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number),
+          heapUsedBytesPeakSampled: expect.any(Number), processRssBytesPeakSampled: expect.any(Number), memorySampleIntervalMs: 10 } })
       await history.appendBatch([{ invocationId: 'worker-sample-inv', turnId: 'worker-sample-turn', sequence: 2, schemaVersion: 1,
         eventId: 'worker-large-event', idempotencyKey: 'worker-large-event', kind: 'invocation-context-committed',
         payload: { messages: [{ id: 'large-worker-message', role: 'user', content: 'x'.repeat(4096) }] } }], 1)
@@ -98,7 +99,8 @@ describe('projection history chunk worker client', () => {
       })
       expect(deferred).toMatchObject({ kind: 'deferred-large', observedEventRows: 1, observedByteLength: expect.any(Number),
         snapshotDurationMs: expect.any(Number), workerSample: { durationMs: expect.any(Number),
-          heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number) } })
+          heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number),
+          heapUsedBytesPeakSampled: expect.any(Number), processRssBytesPeakSampled: expect.any(Number), memorySampleIntervalMs: 10 } })
       const stageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'projection-history-stage-'))
       try {
         const tempLocator = `.projection-${randomUUID()}.tmp`

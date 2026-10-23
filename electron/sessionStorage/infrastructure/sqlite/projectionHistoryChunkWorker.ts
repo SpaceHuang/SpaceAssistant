@@ -1,11 +1,12 @@
 import { parentPort } from 'node:worker_threads'
-import { getHeapStatistics } from 'node:v8'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { readProjectionHistoryChunk, type ProjectionHistoryChunkPermit } from './projectionHistoryChunkReader'
+import { createProjectionWorkerMemorySampler } from './projectionWorkerMemorySampler'
 
 if (!parentPort) throw new Error('projection history worker requires a parent port')
+const memorySampler = createProjectionWorkerMemorySampler()
 
 parentPort.once('message', (message: {
   requestId: string
@@ -36,11 +37,11 @@ parentPort.once('message', (message: {
         hasMore: result.hasMore, stagedBlob: { tempLocator, byteLength: bytes.byteLength, payloadDigest } }
       }
     }
-    const workerSample = { durationMs: Math.max(0, performance.now() - startedAt),
-      heapUsedBytesAtExit: getHeapStatistics().used_heap_size, processRssBytesAtExit: process.memoryUsage.rss() }
+    const workerSample = { durationMs: Math.max(0, performance.now() - startedAt), ...memorySampler.finish() }
     parentPort!.postMessage({ requestId: message.requestId, result, workerSample })
     parentPort!.close()
   })().catch((error) => {
+    memorySampler.finish()
     parentPort!.postMessage({ requestId: message.requestId, error: error instanceof Error ? error.message : 'PROJECTION_HISTORY_WORKER_FAILED' })
     parentPort!.close()
   })

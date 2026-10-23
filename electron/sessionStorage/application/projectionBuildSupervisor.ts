@@ -26,7 +26,9 @@ export type ProjectionBuildSupervisorOptions = Readonly<{
   monotonicNow?(): number
   onSlice?(input: Readonly<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean;
     sourceRows: number; sourceBytes: number; sourceSnapshotDurationMs: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
-    maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null; workerSamples: number }>): void
+    maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null;
+    maxWorkerHeapUsedBytesPeakSampled: number | null; maxProcessRssBytesPeakSampled: number | null;
+    memorySampleIntervalMs: number | null; workerSamples: number }>): void
   now(): number
   retryAfter?(): number
   onResult?(item: ProjectionBuildWorkItem, result: Awaited<ReturnType<typeof runProjectionBuildSlice>>): void
@@ -203,13 +205,18 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         while (!stopped && !controller.signal.aborted) {
           const sliceStartedAt = options.monotonicNow?.() ?? performance.now()
           const sliceMetrics = { sourceRows: 0, sourceBytes: 0, sourceSnapshotDurationMs: 0, sourceWorkerDurationMs: 0, reducerWorkerDurationMs: 0,
-            maxWorkerHeapUsedBytesAtExit: null as number | null, maxProcessRssBytesAtExit: null as number | null, workerSamples: 0 }
+            maxWorkerHeapUsedBytesAtExit: null as number | null, maxProcessRssBytesAtExit: null as number | null,
+            maxWorkerHeapUsedBytesPeakSampled: null as number | null, maxProcessRssBytesPeakSampled: null as number | null,
+            memorySampleIntervalMs: null as number | null, workerSamples: 0 }
           const collectSample = (sample: ProjectionWorkerSample | undefined, owner: 'source' | 'reducer') => {
             if (!isWorkerSample(sample)) return
             if (owner === 'source') sliceMetrics.sourceWorkerDurationMs += sample.durationMs
             else sliceMetrics.reducerWorkerDurationMs += sample.durationMs
             sliceMetrics.maxWorkerHeapUsedBytesAtExit = Math.max(sliceMetrics.maxWorkerHeapUsedBytesAtExit ?? 0, sample.heapUsedBytesAtExit)
             sliceMetrics.maxProcessRssBytesAtExit = Math.max(sliceMetrics.maxProcessRssBytesAtExit ?? 0, sample.processRssBytesAtExit)
+            sliceMetrics.maxWorkerHeapUsedBytesPeakSampled = Math.max(sliceMetrics.maxWorkerHeapUsedBytesPeakSampled ?? 0, sample.heapUsedBytesPeakSampled)
+            sliceMetrics.maxProcessRssBytesPeakSampled = Math.max(sliceMetrics.maxProcessRssBytesPeakSampled ?? 0, sample.processRssBytesPeakSampled)
+            sliceMetrics.memorySampleIntervalMs = sample.memorySampleIntervalMs
             sliceMetrics.workerSamples += 1
           }
           const readChunk: ProjectionHistoryChunkReaderPort = async (permit, readInput) => {
@@ -363,7 +370,10 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
 function isWorkerSample(sample: ProjectionWorkerSample | undefined): sample is ProjectionWorkerSample {
   return !!sample && Number.isFinite(sample.durationMs) && sample.durationMs >= 0 &&
     Number.isSafeInteger(sample.heapUsedBytesAtExit) && sample.heapUsedBytesAtExit >= 0 &&
-    Number.isSafeInteger(sample.processRssBytesAtExit) && sample.processRssBytesAtExit >= 0
+    Number.isSafeInteger(sample.processRssBytesAtExit) && sample.processRssBytesAtExit >= 0 &&
+    Number.isSafeInteger(sample.heapUsedBytesPeakSampled) && sample.heapUsedBytesPeakSampled >= sample.heapUsedBytesAtExit &&
+    Number.isSafeInteger(sample.processRssBytesPeakSampled) && sample.processRssBytesPeakSampled >= sample.processRssBytesAtExit &&
+    sample.memorySampleIntervalMs === 10
 }
 
 function readFailureCaseId(value: string | null): string | undefined {

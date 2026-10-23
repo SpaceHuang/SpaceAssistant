@@ -31,7 +31,8 @@ describe('projection History reducer worker client', () => {
     expect(result.workerThreadId).toBeGreaterThan(0)
     expect(result.workerThreadId).not.toBe(threadId)
     expect(result.workerSample).toEqual(expect.objectContaining({ durationMs: expect.any(Number),
-      heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number) }))
+      heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number),
+      heapUsedBytesPeakSampled: expect.any(Number), processRssBytesPeakSampled: expect.any(Number), memorySampleIntervalMs: 10 }))
     expect(result.outputOperations).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'replace' })]))
     expect(result.finalizedOutputOperations).toEqual(expect.any(Array))
   })
