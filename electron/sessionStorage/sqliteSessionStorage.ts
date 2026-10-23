@@ -26,7 +26,7 @@ import { readProjectionHistoryChunkInWorker } from './infrastructure/sqlite/proj
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
 import { createProjectionScopeHistoryReducer } from './infrastructure/sqlite/projectionScopeHistoryReducer'
 import { createProjectionService } from './application/projectionService'
-import { projectionScopeKind, projectionScopeSpecVersion } from './domain/scopeKey'
+import { CHAT_BODY_PROJECTION_SPEC_VERSION, projectionScopeKind, projectionScopeSpecVersion } from './domain/scopeKey'
 import { createProjectionBuildLifecycleTask } from './host/projectionBuildTask'
 import { createEnsureView } from './application/ensureView'
 import { readProjectionChatBodyCache, type ProjectionChatBodyMessage } from './application/projectionChatBodyCacheReader'
@@ -85,7 +85,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const hasLegacyOnlyFacts = fileEvents.some((event) => !identities.has(contextMeterEventIdentity(event)))
     return hasLegacyOnlyFacts ? fileEvents : canonicalEvents
   }
-  const bodyScopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 1 })
+  const bodyScopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
   const cacheStore = createSqliteProjectionChatBodyCacheStore(db)
   const cacheBlobs = options.projectionBlobRoot ? createSessionProjectionBlobStore(options.projectionBlobRoot) : undefined
   const ensureView = createEnsureView()
@@ -93,10 +93,10 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     if (!options.prepareProjection) return Promise.reject(new Error('PROJECTION_PREPARATION_UNAVAILABLE'))
     return ensureView<readonly ProjectionChatBodyMessage[]>({ sessionId, scopeKey: bodyScopeKey, signal,
       read: async () => {
-        const result = await readProjectionChatBodyCache({ sessionId, scopeKey: bodyScopeKey, specVersion: 1 }, cacheStore, cacheBlobs)
+        const result = await readProjectionChatBodyCache({ sessionId, scopeKey: bodyScopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }, cacheStore, cacheBlobs)
         return result.kind === 'ready' ? { ready: true as const, value: result.messages } : { ready: false as const }
       },
-      prepare: () => options.prepareProjection!({ sessionId, scopeKey: bodyScopeKey, specVersion: 1 }) })
+      prepare: () => options.prepareProjection!({ sessionId, scopeKey: bodyScopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }) })
   }
   const execution = createSessionExecutionStore(db, queries, options)
   const contexts = createSessionStorageContextRouter(async ({ sessionId, isBusy }) => {

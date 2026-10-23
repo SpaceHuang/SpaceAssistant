@@ -8,7 +8,7 @@ import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from 
 import { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { createSqliteProjectionChatBodyCacheStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { readProjectionChatBodyCache } from './application/projectionChatBodyCacheReader'
-import { encodeProjectionScopeKey } from './domain/scopeKey'
+import { CHAT_BODY_PROJECTION_SPEC_VERSION, encodeProjectionScopeKey } from './domain/scopeKey'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { advanceProcessGeneration } from '../database/processGeneration'
 import { getDbConnection } from '../database/sqliteStore'
@@ -48,7 +48,7 @@ describe('SQLite projection build task composition', () => {
           eventId: 'projection-chat-body-terminal', idempotencyKey: 'projection-chat-body-terminal', kind: 'invocation-completed',
           payload: { status: 'completed' } },
       ], 0)
-      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 1 })
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
       const host = createSqliteSessionStorageHost(db, {
@@ -67,7 +67,7 @@ describe('SQLite projection build task composition', () => {
         expect(published.messages).toEqual([{ id: 'projection-chat-body-user', role: 'user', content: 'same body', timestamp: 11 }])
         expect(Object.keys(published.messages[0]!).sort()).toEqual(['content', 'id', 'role', 'timestamp'])
         const cacheStore = createSqliteProjectionChatBodyCacheStore(db)
-        await expect(readProjectionChatBodyCache({ sessionId: session.id, sessionGeneration: session.generation, scopeKey, specVersion: 1 },
+        await expect(readProjectionChatBodyCache({ sessionId: session.id, sessionGeneration: session.generation, scopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION },
           cacheStore, createSessionProjectionBlobStore(root)))
           .resolves.toEqual({ kind: 'ready', messages: published.messages })
         expect(ensured).toEqual(published.messages)

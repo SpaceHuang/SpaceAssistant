@@ -58,6 +58,7 @@ export function projectCanonicalChatBodyV1(
   messageFacts: readonly Readonly<{ id: string; role: string; timestamp: number; sequence: number; queueScope: string;
     contentStorageState: 'legacy' | 'canonical-backed-dual-write' | 'canonical-backed-only'; writeMode: string | null; storedContent: string }>[],
   afterSequence = -1,
+  options: Readonly<{ allowLegacyBodyMismatch?: boolean }> = {},
 ): ChatBodyV1[] {
   const factsById = new Map(messageFacts.map((fact) => [fact.id, fact]))
   if (factsById.size !== messageFacts.length) throw new Error('CHAT_BODY_SOURCE_FACT_DUPLICATE')
@@ -74,7 +75,7 @@ export function projectCanonicalChatBodyV1(
     if (!fact) throw new Error('CHAT_BODY_SOURCE_FACT_MISSING')
     if (fact.queueScope !== 'desktop') continue
     if (seenIds.has(fact.id) || !Number.isSafeInteger(fact.sequence) || fact.sequence <= previousSequence ||
-      canonical.role !== fact.role || canonical.timestamp !== fact.timestamp || !Number.isSafeInteger(fact.timestamp) ||
+      canonical.role !== fact.role || (canonical.timestamp !== undefined && canonical.timestamp !== fact.timestamp) || !Number.isSafeInteger(fact.timestamp) ||
       (canonical.role !== 'user' && canonical.role !== 'assistant')) {
       throw new Error('CHAT_BODY_IDENTITY_MISMATCH')
     }
@@ -86,7 +87,7 @@ export function projectCanonicalChatBodyV1(
       (fact.writeMode !== 'canonical' || projectedContent !== fact.storedContent)) {
       throw new Error('CHAT_BODY_AUTHORITY_MISMATCH')
     }
-    if (fact.contentStorageState === 'legacy' && projectedContent !== fact.storedContent) {
+    if (fact.contentStorageState === 'legacy' && projectedContent !== fact.storedContent && !options.allowLegacyBodyMismatch) {
       throw new Error('CHAT_BODY_AUTHORITY_MISMATCH')
     }
     result.push({ id: fact.id, role: fact.role as Message['role'],

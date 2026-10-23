@@ -26,6 +26,13 @@ describe('ProjectionSpec.chatBodyV1', () => {
     expect(() => projectCanonicalChatBodyV1([{ ...canonical[1]!, role: 'user' as const }], facts)).toThrow('CHAT_BODY_IDENTITY_MISMATCH')
   })
 
+  it('uses the same-snapshot message timestamp when canonical History omits it', () => {
+    const fact: ProjectionMessageFact = { id: 'history-message', role: 'user', timestamp: 11, sequence: 0, queueScope: 'desktop',
+      contentStorageState: 'legacy', writeMode: null, storedContent: 'body' }
+    expect(projectCanonicalChatBodyV1([{ id: fact.id, role: fact.role, content: 'body' }], [fact]))
+      .toEqual([{ id: fact.id, role: fact.role, content: 'body', timestamp: fact.timestamp }])
+  })
+
   it('projects canonical model content blocks using the chat display text rules', () => {
     const facts: ProjectionMessageFact[] = [
       { id: 'blocks', role: 'assistant', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'hello' },

@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { encodeProjectionScopeKey, projectionScopeSpecVersion, PROJECTION_SCOPE_KINDS, type ProjectionScopeDescriptor } from './scopeKey'
+import { CHAT_BODY_PROJECTION_SPEC_VERSION, encodeProjectionScopeKey, projectionScopeSpecVersion, PROJECTION_SCOPE_KINDS, type ProjectionScopeDescriptor } from './scopeKey'
 import { PROJECTION_SPECS } from './projectionSpec'
 
 describe('projection scope key codec', () => {
   it('stays aligned with the registered ProjectionSpec kinds', () => {
     expect([...PROJECTION_SCOPE_KINDS].sort()).toEqual(Object.keys(PROJECTION_SPECS).sort())
+  })
+
+  it('uses a fresh durable scope for the corrected chat body reducer', () => {
+    expect(projectionScopeSpecVersion(encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }))).toBe(2)
   })
 
   it('encodes only the view kind/spec and its declared track/window dimensions', () => {
