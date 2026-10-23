@@ -44,6 +44,6 @@ export type ProjectionMessageFact = Readonly<{
 }>
 
 export type ProjectionHistoryChunkResult =
-  | Readonly<{ kind: 'chunk'; permit: ProjectionHistoryChunkPermit; afterSessionSequence: number; nextSessionSequence: number; events: readonly ProjectionHistoryChunkEvent[]; messageFacts: readonly ProjectionMessageFact[]; byteLength: number; hasMore: boolean; workerSample?: ProjectionWorkerSample }>
+  | Readonly<{ kind: 'chunk'; permit: ProjectionHistoryChunkPermit; afterSessionSequence: number; nextSessionSequence: number; events: readonly ProjectionHistoryChunkEvent[]; messageFacts: readonly ProjectionMessageFact[]; byteLength: number; hasMore: boolean; snapshotDurationMs?: number; workerSample?: ProjectionWorkerSample }>
   | Readonly<{ kind: 'complete'; permit: ProjectionHistoryChunkPermit; afterSessionSequence: number }>
   | Readonly<{ kind: 'source-drift' | 'cursor-invalid' | 'deferred-large' | 'unavailable'; permit: ProjectionHistoryChunkPermit; afterSessionSequence: number; eventSequence?: number; reason?: string }>

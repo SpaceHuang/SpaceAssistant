@@ -25,7 +25,7 @@ describe('projection build supervisor', () => {
       let reads = 0
       let clock = 0
       const slices: Array<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean;
-        sourceRows: number; sourceBytes: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
+        sourceRows: number; sourceBytes: number; sourceSnapshotDurationMs: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
         maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null; workerSamples: number }> = []
       const stored = new Map<string, string>()
       const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => store.listDueWork(1), dbPath: db.filePath,
@@ -36,6 +36,7 @@ describe('projection build supervisor', () => {
             turnId: 'cooperative-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
           return { kind: 'chunk', permit, afterSessionSequence: 0, nextSessionSequence: 1, events: [event], messageFacts: [],
             byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: true,
+            snapshotDurationMs: 1,
             workerSample: { durationMs: 2, heapUsedBytesAtExit: 30, processRssBytesAtExit: 100 } }
         },
         historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', resetOutput: false,
@@ -57,7 +58,7 @@ describe('projection build supervisor', () => {
       expect(slices[0]).toMatchObject({ sourceRows: 1, sourceBytes: Buffer.byteLength(JSON.stringify({
         invocationId: 'cooperative-inv', sequence: 1, eventId: 'cooperative-event', idempotencyKey: 'cooperative-key',
         turnId: 'cooperative-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1,
-        commitOrder: 1, createdAt: 1 })), sourceWorkerDurationMs: 2, reducerWorkerDurationMs: 4,
+        commitOrder: 1, createdAt: 1 })), sourceSnapshotDurationMs: 1, sourceWorkerDurationMs: 2, reducerWorkerDurationMs: 4,
         maxWorkerHeapUsedBytesAtExit: 50, maxProcessRssBytesAtExit: 200, workerSamples: 2 })
       expect(service.get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
       handle.stop()

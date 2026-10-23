@@ -28,6 +28,8 @@ describe('projection read-only History chunk source', () => {
     if (page.kind !== 'chunk') throw new Error('expected a bounded event chunk')
     expect(page.events[0]).toMatchObject({ invocationId: 'chunk-invocation', eventId: 'chunk-event-1', sessionSequence: 1 })
     expect(page.byteLength).toBeLessThanOrEqual(32 * 1024)
+    expect(page.snapshotDurationMs).toEqual(expect.any(Number))
+    expect(page.snapshotDurationMs).toBeGreaterThanOrEqual(0)
     expect(readProjectionHistoryChunk(permit, { afterSessionSequence: page.nextSessionSequence, maxRows: 1, maxBytes: 32 * 1024 }))
       .toMatchObject({ kind: 'complete', afterSessionSequence: 1 })
     expect(readProjectionHistoryChunk(permit, { afterSessionSequence: 2, maxRows: 1, maxBytes: 32 * 1024 }))

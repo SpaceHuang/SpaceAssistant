@@ -25,7 +25,7 @@ export type ProjectionBuildSupervisorOptions = Readonly<{
   sliceBudgetMs?: number
   monotonicNow?(): number
   onSlice?(input: Readonly<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean;
-    sourceRows: number; sourceBytes: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
+    sourceRows: number; sourceBytes: number; sourceSnapshotDurationMs: number; sourceWorkerDurationMs: number; reducerWorkerDurationMs: number;
     maxWorkerHeapUsedBytesAtExit: number | null; maxProcessRssBytesAtExit: number | null; workerSamples: number }>): void
   now(): number
   retryAfter?(): number
@@ -202,7 +202,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         claimFailures.delete(key)
         while (!stopped && !controller.signal.aborted) {
           const sliceStartedAt = options.monotonicNow?.() ?? performance.now()
-          const sliceMetrics = { sourceRows: 0, sourceBytes: 0, sourceWorkerDurationMs: 0, reducerWorkerDurationMs: 0,
+          const sliceMetrics = { sourceRows: 0, sourceBytes: 0, sourceSnapshotDurationMs: 0, sourceWorkerDurationMs: 0, reducerWorkerDurationMs: 0,
             maxWorkerHeapUsedBytesAtExit: null as number | null, maxProcessRssBytesAtExit: null as number | null, workerSamples: 0 }
           const collectSample = (sample: ProjectionWorkerSample | undefined, owner: 'source' | 'reducer') => {
             if (!isWorkerSample(sample)) return
@@ -217,6 +217,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             if (result.kind === 'chunk') {
               sliceMetrics.sourceRows += result.events.length
               sliceMetrics.sourceBytes += result.byteLength
+              sliceMetrics.sourceSnapshotDurationMs += result.snapshotDurationMs ?? 0
               collectSample(result.workerSample, 'source')
             }
             return result

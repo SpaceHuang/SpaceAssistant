@@ -39,7 +39,8 @@ export function readProjectionHistoryChunk(
   try {
     db = openSqliteDatabaseReadOnly(permit.dbPath)
     const conn = getDbConnection(db)
-    return runInTransaction(conn, () => {
+    const snapshotStartedAt = performance.now()
+    const result: ProjectionHistoryChunkResult = runInTransaction(conn, () => {
       const sourceIdentityJson = readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration)
       if (sourceIdentityJson !== permit.sourceIdentityJson) return { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
       let source: { historyWatermark?: unknown }
@@ -110,6 +111,7 @@ export function readProjectionHistoryChunk(
       return { kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence,
         nextSessionSequence, events: Object.freeze(events), messageFacts: Object.freeze(messageFacts), byteLength: totalBytes, hasMore }
     })
+    return result.kind === 'chunk' ? { ...result, snapshotDurationMs: Math.max(0, performance.now() - snapshotStartedAt) } : result
   } catch (error) {
     return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence,
       reason: error instanceof Error ? error.message : 'projection-source-read-failed' }
