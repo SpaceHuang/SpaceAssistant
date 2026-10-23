@@ -3,12 +3,13 @@ export async function prepareChatBodyForRead(
   ensureChatBodyV1: ((input: Readonly<{ sessionId: string; signal?: AbortSignal }>) => Promise<unknown>) | undefined,
   sessionId: string,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<unknown> {
   try {
-    await ensureChatBodyV1?.({ sessionId, ...(signal ? { signal } : {}) })
+    return await ensureChatBodyV1?.({ sessionId, ...(signal ? { signal } : {}) })
   } catch (error) {
     const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
     if (signal?.aborted || message === 'PROJECTION_VIEW_CANCELLED' || !isProjectionPreparationFailure(message)) throw error
+    return undefined
   }
 }
 

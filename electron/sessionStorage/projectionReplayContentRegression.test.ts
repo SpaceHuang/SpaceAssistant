@@ -42,7 +42,7 @@ for (const scenario of ['image', 'tool'] as const) {
       })
 
       const expected = [{ id: 'a', role: 'assistant', content: body, timestamp: 2 }]
-      expect(await host.storage.ensureChatBodyV1!({ sessionId: session.id })).toEqual(expected)
+      expect((await host.storage.ensureChatBodyV1!({ sessionId: session.id })).messages).toEqual(expected)
 
     } finally {
       await host?.lifecycle.stop({ deadlineMs: 5_000 })

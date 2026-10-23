@@ -6,6 +6,7 @@ import type { SessionUsage } from '../../../src/shared/sessionUsage'
 import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, ContinuationSourceInspection,
   ContinuationRecoveryFacts, MessageRef, ChatMessagePage, ApiContextBaseline, ContextHistorySummaryBaseline, CanonicalContextMeterEvent,
   RoutingRead, RouteInput, SelectionFence, ExportPage, SearchCorpusPage, MessageSearchHit, RetryContextTarget,
+  PreparedChatBodyView,
 } from './model'
 import type { HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../../packages/agent-sdk/src/model'
@@ -117,6 +118,8 @@ export interface SessionQueries {
   listSessions(options?: { view?: 'all' | 'user-visible' }): Session[]
   readMessage(ref: MessageRef): Message | undefined
   readMessages(input: { sessionId: string; limit?: number; offset?: number }): Message[]
+  /** Async chat-body cache lookup; undefined means selection must use the existing authority reader. */
+  readPreparedMessages?(input: { sessionId: string; limit?: number; offset?: number; prepared?: PreparedChatBodyView }): Message[] | undefined
   readChatPage(input: { sessionId: string; beforeSequence?: number | null; limit?: number }): ChatMessagePage
   readTurnContext(input: { sessionId: string; boundarySequence?: number; requiredUserMessageId?: string; excludeMessageIds?: string[] }): Message[]
   readApiBaseline(input: { sessionId: string; limit?: number }): ApiContextBaseline

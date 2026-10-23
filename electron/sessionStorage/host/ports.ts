@@ -3,9 +3,8 @@ import type { SessionCommands, SessionQueries } from '../public/ports'
 import type { SessionExecutionStore } from '../public/execution'
 import type { SessionAvailabilityPort, SessionRecoveryPort } from '../application/ports'
 import type { CompactionReplay } from '../../../src/shared/compactionEvents'
-import type { CanonicalContextMeterEvent } from '../public/model'
+import type { CanonicalContextMeterEvent, PreparedChatBodyView } from '../public/model'
 import type { ProjectionPreparationRequest } from '../public/ports'
-import type { Message } from '../../../src/shared/domainTypes'
 export type { ProjectionPreparationRequest } from '../public/ports'
 
 export type MaintenanceReason = 'startup' | 'window-ready' | 'policy-changed' | 'scope-changed' | 'capacity-pressure' | 'retry'
@@ -79,7 +78,7 @@ export interface SessionStorage {
   readContextMeterEvents(input: Readonly<{ sessionId: string; workDir: string }>): Promise<readonly CanonicalContextMeterEvent[]>
   ensureLedgerReady?(sessionId: string): Promise<boolean>
   prepareProjection?(input: ProjectionPreparationRequest): Promise<void>
-  ensureChatBodyV1?(input: Readonly<{ sessionId: string; signal?: AbortSignal }>): Promise<readonly Pick<Message, 'id' | 'role' | 'content' | 'timestamp'>[]>
+  ensureChatBodyV1?(input: Readonly<{ sessionId: string; signal?: AbortSignal }>): Promise<PreparedChatBodyView>
 }
 
 export type LifecycleTaskHandle = Readonly<{

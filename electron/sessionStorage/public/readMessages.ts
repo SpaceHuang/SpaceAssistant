@@ -3,7 +3,10 @@ import { prepareChatBodyForRead } from './readPreparation'
 
 type ChatMessageReadStorage = Readonly<{
   ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
-  queries: Readonly<{ readMessages(input: Readonly<{ sessionId: string; limit?: number; offset?: number }>): Message[] }>
+  queries: Readonly<{
+    readMessages(input: Readonly<{ sessionId: string; limit?: number; offset?: number }>): Message[]
+    readPreparedMessages?(input: Readonly<{ sessionId: string; limit?: number; offset?: number; prepared?: unknown }>): Message[] | undefined
+  }>
 }>
 
 /** Prepare the derived view when possible, then execute the same authoritative query. */
@@ -11,7 +14,9 @@ export async function readChatMessagesAfterPreparation(
   storage: ChatMessageReadStorage,
   input: Readonly<{ sessionId: string; limit?: number; offset?: number }>
 ): Promise<Message[]> {
-  await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
+  const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
+  const prepared = storage.queries.readPreparedMessages?.({ ...input, prepared: preparedView })
+  if (prepared) return prepared
   return storage.queries.readMessages(input)
 }
 

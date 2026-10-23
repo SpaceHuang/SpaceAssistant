@@ -23,7 +23,7 @@ describe('verified chatBodyV1 cache reader', () => {
     const current = snapshot()
     const store = { readSnapshot: vi.fn().mockReturnValue(current), invalidateObserved: vi.fn() }
     await expect(readProjectionChatBodyCache({ sessionId: 's1', sessionGeneration: 'g1', scopeKey, specVersion: 1 }, store))
-      .resolves.toEqual({ kind: 'ready', messages })
+      .resolves.toMatchObject({ kind: 'ready', messages, sourceIdentityJson, sessionGeneration: 'g1' })
     expect(store.readSnapshot).toHaveBeenCalledTimes(2)
     expect(store.invalidateObserved).not.toHaveBeenCalled()
   })

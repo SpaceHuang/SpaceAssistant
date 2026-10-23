@@ -10,7 +10,7 @@ import { createSessionCommitService } from './application/sessionCommitService'
 import { createSessionStorageContextRouter } from './contextPortRegistry'
 import { getSessionEventSink, readCompactionReplay, readSessionEvents } from '../sessionEvents'
 import type { CompactionReplay } from '../../src/shared/compactionEvents'
-import type { CanonicalContextMeterEvent } from './public/model'
+import type { CanonicalContextMeterEvent, PreparedChatBodyView } from './public/model'
 import { createStorageSessionContextAdapter } from './contextAdapter'
 import { createSqliteSessionRecoveryPort, type SessionRecoveryDependencies } from './recovery'
 import { createStorageLifecycleControl } from './lifecycle'
@@ -31,7 +31,7 @@ import { createProjectionService } from './application/projectionService'
 import { CHAT_BODY_PROJECTION_SPEC_VERSION, projectionScopeKind, projectionScopeSpecVersion } from './domain/scopeKey'
 import { createProjectionBuildLifecycleTask } from './host/projectionBuildTask'
 import { createEnsureView } from './application/ensureView'
-import { readProjectionChatBodyCache, type ProjectionChatBodyMessage } from './application/projectionChatBodyCacheReader'
+import { readProjectionChatBodyCache } from './application/projectionChatBodyCacheReader'
 import { encodeProjectionScopeKey } from './domain/scopeKey'
 import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
@@ -55,7 +55,6 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   inspectMaintenance?: () => readonly MaintenanceState[]
   recoveryStages?: Partial<Pick<SessionRecoveryDependencies, 'history' | 'snapshots' | 'coordinator' | 'reconcile' | 'continuations' | 'ledgerRepairs'>>
 } = {}): SessionStorage {
-  const queries = createSessionQueries(db)
   const readCompactionReplayForLocation = async (sessionId: string, workDir: string): Promise<{ replay: CompactionReplay; sink: ReturnType<typeof getSessionEventSink> }> => {
     const session = queries.readSession(sessionId)
     if (!session) throw new Error('SESSION_NOT_FOUND')
@@ -90,13 +89,22 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const bodyScopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
   const cacheStore = createSqliteProjectionChatBodyCacheStore(db)
   const cacheBlobs = options.projectionBlobRoot ? createSessionProjectionBlobStore(options.projectionBlobRoot) : undefined
+  const queries = createSessionQueries(db, {
+    currentSourceIdentity: (sessionId, sessionGeneration) => {
+      const snapshot = cacheStore.readSnapshot(sessionId, bodyScopeKey)
+      return snapshot?.sessionGeneration === sessionGeneration && snapshot.currentSessionGeneration === sessionGeneration
+        ? snapshot.currentSourceIdentityJson ?? undefined : undefined
+    }
+  })
   const ensureView = createEnsureView()
   const ensureChatBodyV1: NonNullable<SessionStorage['ensureChatBodyV1']> = ({ sessionId, signal }) => {
     if (!options.prepareProjection) return Promise.reject(new Error('PROJECTION_PREPARATION_UNAVAILABLE'))
-    return ensureView<readonly ProjectionChatBodyMessage[]>({ sessionId, scopeKey: bodyScopeKey, signal,
+    return ensureView<PreparedChatBodyView>({ sessionId, scopeKey: bodyScopeKey, signal,
       read: async () => {
         const result = await readProjectionChatBodyCache({ sessionId, scopeKey: bodyScopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }, cacheStore, cacheBlobs)
-        return result.kind === 'ready' ? { ready: true as const, value: result.messages } : { ready: false as const }
+        return result.kind === 'ready'
+          ? { ready: true as const, value: { messages: result.messages, sourceIdentityJson: result.sourceIdentityJson, sessionGeneration: result.sessionGeneration } }
+          : { ready: false as const }
       },
       prepare: () => options.prepareProjection!({ sessionId, scopeKey: bodyScopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }) })
   }

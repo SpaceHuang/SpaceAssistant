@@ -42,10 +42,10 @@ for (const scenario of ['text-block', 'spilled-text', 'missing-cache'] as const)
       })
 
       const expected = [{ id: 'a', role: 'assistant', content: body, timestamp: 2 }]
-      expect(await host.storage.ensureChatBodyV1!({ sessionId: session.id })).toEqual(expected)
+      expect((await host.storage.ensureChatBodyV1!({ sessionId: session.id })).messages).toEqual(expected)
       if (scenario === 'missing-cache') {
         getDbConnection(db).prepare('DELETE FROM session_projection_cache WHERE session_id=?').run(session.id)
-        expect(await host.storage.ensureChatBodyV1!({ sessionId: session.id })).toEqual(expected)
+        expect((await host.storage.ensureChatBodyV1!({ sessionId: session.id })).messages).toEqual(expected)
       }
     } finally {
       await host?.lifecycle.stop({ deadlineMs: 5_000 })

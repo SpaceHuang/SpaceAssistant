@@ -14,6 +14,34 @@ describe('readChatMessagesAfterPreparation', () => {
     expect(events).toEqual(['ensure:chat-session', 'select:chat-session'])
   })
 
+  it('uses the freshly validated prepared cache query after preparation', async () => {
+    const events: string[] = []
+    const prepared = [{ id: 'fresh-body', content: 'cache body' }]
+    const result = await readChatMessagesAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); return prepared },
+      queries: {
+        readMessages: () => { events.push('legacy-read'); return [] as never },
+        readPreparedMessages: (input) => { events.push(`prepared-read:${input.sessionId}`); expect(input.prepared).toBe(prepared); return prepared as never }
+      }
+    }, { sessionId: 'prepared-session', limit: 20 })
+    expect(result).toBe(prepared)
+    expect(events).toEqual(['ensure', 'prepared-read:prepared-session'])
+  })
+
+  it('falls back to the authority reader when the prepared cache misses at selection time', async () => {
+    const events: string[] = []
+    const messages = [{ id: 'authority', content: 'history checked' }]
+    const result = await readChatMessagesAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); return [] },
+      queries: {
+        readMessages: () => { events.push('legacy-read'); return messages as never },
+        readPreparedMessages: () => { events.push('cache-miss'); return undefined }
+      }
+    }, { sessionId: 'cache-miss-session' })
+    expect(result).toBe(messages)
+    expect(events).toEqual(['ensure', 'cache-miss', 'legacy-read'])
+  })
+
   it('falls back to the authoritative message reader when projection preparation is unavailable', async () => {
     const events: string[] = []
     const messages = [{ id: 'canonical-reader-result' }]

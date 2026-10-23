@@ -2,6 +2,11 @@ import type { Message, Session } from '../../../src/shared/domainTypes'
 import type { HistorySnapshot } from '../../../packages/agent-sdk/src/history'
 
 export type MessageEntry = Readonly<{ message: Message; sequence: number }>
+export type PreparedChatBodyView = Readonly<{
+  messages: readonly Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>[]
+  sourceIdentityJson: string
+  sessionGeneration: string
+}>
 export type QueuedSessionMessage = Readonly<{ message: Message; sequence: number; requestId?: string }>
 export type ApiContextBaseline = Readonly<{ sessionId: string; entries: readonly MessageEntry[] }>
 export type ChatMessagePage = Readonly<{ entries: readonly MessageEntry[]; oldestSequence: number | null; hasMoreBefore: boolean }>

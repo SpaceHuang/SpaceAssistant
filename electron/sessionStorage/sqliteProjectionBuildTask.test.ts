@@ -50,6 +50,8 @@ describe('SQLite projection build task composition', () => {
           eventId: 'projection-chat-body-terminal', idempotencyKey: 'projection-chat-body-terminal', kind: 'invocation-completed',
           payload: { status: 'completed' } },
       ], 0)
+      getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run('projection-chat-body-user')
       const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
@@ -61,7 +63,8 @@ describe('SQLite projection build task composition', () => {
       })
       try {
         const ensured = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
-        expect(ensured).toEqual([{ id: 'projection-chat-body-user', role: 'user', content: 'same body', timestamp: 11 }])
+        expect(ensured).toMatchObject({ messages: [{ id: 'projection-chat-body-user', role: 'user', content: 'same body', timestamp: 11 }],
+          sourceIdentityJson: expect.any(String), sessionGeneration: session.generation })
         expect(createSqliteProjectionStateStore(db).get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
         const cache = getDbConnection(db).prepare('SELECT inline_payload FROM session_projection_cache WHERE session_id=? AND scope_key=?')
           .get(session.id, scopeKey) as { inline_payload: string }
@@ -71,8 +74,11 @@ describe('SQLite projection build task composition', () => {
         const cacheStore = createSqliteProjectionChatBodyCacheStore(db)
         await expect(readProjectionChatBodyCache({ sessionId: session.id, sessionGeneration: session.generation, scopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION },
           cacheStore, createSessionProjectionBlobStore(root)))
-          .resolves.toEqual({ kind: 'ready', messages: published.messages })
-        expect(ensured).toEqual(published.messages)
+          .resolves.toMatchObject({ kind: 'ready', messages: published.messages, sessionGeneration: session.generation })
+        await expect(readChatMessagesAfterPreparation(host.storage, { sessionId: session.id }))
+          .resolves.toMatchObject([{ id: 'projection-chat-body-user', content: 'same body' }])
+        appendMessage(db, { id: 'projection-chat-body-new-source', sessionId: session.id, role: 'user', content: 'new source', timestamp: 12, status: 'sent' })
+        expect(host.storage.queries.readPreparedMessages?.({ sessionId: session.id, prepared: ensured })).toBeUndefined()
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
     } finally { db.close(); temp.cleanup() }
   })

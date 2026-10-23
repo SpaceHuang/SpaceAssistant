@@ -38,7 +38,9 @@ export type ProjectionChatBodyCacheReadStore = Readonly<{
 export type ProjectionChatBodyBlobReader = Readonly<{
   readVerified(input: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>): Promise<string>
 }>
-export type ProjectionChatBodyCacheResult = Readonly<{ kind: 'ready'; messages: readonly ProjectionChatBodyMessage[] }> | Readonly<{ kind: 'miss' }>
+export type ProjectionChatBodyCacheResult = Readonly<{
+  kind: 'ready'; messages: readonly ProjectionChatBodyMessage[]; sourceIdentityJson: string; sessionGeneration: string
+}> | Readonly<{ kind: 'miss' }>
 
 function samePublication(left: ProjectionChatBodyCacheSnapshot, right: ProjectionChatBodyCacheSnapshot): boolean {
   return left.sessionId === right.sessionId && left.sessionGeneration === right.sessionGeneration &&
@@ -141,5 +143,5 @@ export async function readProjectionChatBodyCache(
   const fresh = store.readSnapshot(input.sessionId, input.scopeKey)
   if (!fresh || fresh.currentSessionGeneration !== fresh.sessionGeneration || !samePublication(initial, fresh) ||
     fresh.currentSourceIdentityJson !== initial.sourceIdentityJson) return { kind: 'miss' }
-  return Object.freeze({ kind: 'ready', messages })
+  return Object.freeze({ kind: 'ready', messages, sourceIdentityJson: initial.sourceIdentityJson!, sessionGeneration: initial.sessionGeneration })
 }
