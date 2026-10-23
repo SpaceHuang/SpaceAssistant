@@ -56,12 +56,69 @@ function moduleEdges(sourceFile) {
   return edges
 }
 
+function nonStaticModuleLoads(sourceFile) {
+  const loads = []
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && node.arguments.length === 1 &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+      const argument = node.arguments[0]
+      if (!ts.isStringLiteral(argument) && !ts.isNoSubstitutionTemplateLiteral(argument)) {
+        loads.push({ line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+          kind: node.expression.kind === ts.SyntaxKind.ImportKeyword ? 'import()' : 'require()' })
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return loads
+}
+
 /** Resolve imports using the repository TypeScript configuration and enforce categorized module rules. */
 export function findSessionStorageModuleViolations(filePath, source) {
   const category = categoryFor(filePath)
   if (!category) return []
   const sourceFile = ts.createSourceFile(path.resolve(root, filePath), source, ts.ScriptTarget.Latest, true)
+  const normalizedFile = filePath.replaceAll('\\', '/')
+  const rawSessionMessageReads = new Set(['getMessage', 'getMessages', 'getMessageSkeletons', 'getChatMessagePage',
+    'getMessagesPageWithSequence', 'getSearchCorpusPage', 'searchMessages', 'getApiContextBaseline', 'getTurnContext', 'resolveRetryContext'])
+  // These are the remaining runtime host adapters that implement the compatibility
+  // staircase itself. Keep their raw reads explicit and symbol-scoped; new consumers
+  // must go through the session-storage public query surface.
+  const runtimeDatabaseAdapters = new Map([
+    ['electron/runtime/sessionProjectionConsistencyAudit.ts', new Set(['getMessages'])],
+    ['electron/runtime/sessionProjectionLegacyBaseline.ts', new Set(['getMessages'])],
+    ['electron/runtime/sessionProjectionMigrationInventory.ts', new Set(['getMessages'])],
+    ['electron/runtime/sessionStorageShadow.ts', new Set(['getMessages', 'getTurnContextSkeleton', 'iterateRecentTurnRoutingSkeletons', 'StoredMessageSkeleton'])],
+    ['electron/runtime/sessionTranscriptProjection.ts', new Set(['getApiContextBaseline', 'getChatMessagePage', 'getMessage', 'getMessageSkeletons',
+      'getMessages', 'getMessagesPageWithSequence', 'getSearchCorpusPage', 'resolveRetryContext', 'ApiContextBaselineResult',
+      'ChatMessagePage', 'MessageSearchHit', 'MessagesPageWithSequence', 'RetryContextTarget', 'SearchCorpusPage'])],
+    ['electron/runtime/sessionTranscriptSelector.ts', new Set(['getTurnContext', 'iterateRecentTurnRoutingMessageCandidates', 'RecentTurnRoutingMessageCandidate'])],
+  ])
+  const runtimeBindingCallers = new Map([
+    ['electron/main.ts', new Set(['createSqliteStartupHistoryRecoveryBindings'])],
+    ['electron/runtime/sessionProjectionConsistencyAudit.ts', new Set(['hasCurrentProjectionEligibility'])],
+    ['electron/runtime/sessionProjectionRejection.ts', new Set(['createProjectionService', 'createSqliteProjectionStateStore'])],
+    ['electron/runtime/sqliteAgentHistory.ts', new Set(['hasRejectedTranscriptParityStateInConnection'])],
+    ['electron/runtime/sessionProjectionMigration.ts', new Set(['hasCurrentProjectionEligibility'])],
+    ['electron/runtime/sessionContentWriteAuthority.ts', new Set(['createSqliteSessionApiRouteProjectionFence'])],
+    ['electron/runtime/sessionTranscriptProjection.ts', new Set(['resolveSelectedMessageBodies', 'hasCurrentProjectionEligibility',
+      'publishTranscriptParityProof', 'refreshValidatedProjectionFastPath'])],
+    ['electron/runtime/sessionProjectionMigrationInventory.ts', new Set(['hasCurrentProjectionEligibility'])],
+    ['electron/runtime/sessionProjectionRevalidation.ts', new Set(['computeCanonicalProjectionFingerprint', 'publishTranscriptParityProof',
+      'readLegacyProjectionMessages', 'refreshValidatedProjectionFastPath', 'validateAndCacheCanonicalProjection'])],
+    ['electron/storage/sessionEventRetention.ts', new Set(['createSessionLedgerCompactionDependencyGuard', 'createCanonicalSessionProjectionRetentionPreparer'])],
+    ['electron/storage/sessionProjectionCacheMaintenance.ts', new Set(['createSqliteProjectionStateStore', 'createProjectionService'])],
+  ])
   const allowed = (edge) => {
+    if (category === 'external-electron' && edge.resolved === 'electron/database/operations' &&
+      edge.symbols.some((symbol) => rawSessionMessageReads.has(symbol))) {
+      const approved = runtimeDatabaseAdapters.get(normalizedFile)
+      return !!approved && edge.symbols.length > 0 && edge.symbols.every((symbol) => approved.has(symbol))
+    }
+    if (category === 'external-electron' && edge.resolved === 'electron/sessionStorage/sqliteRuntimeBindings') {
+      const approved = runtimeBindingCallers.get(normalizedFile)
+      return !!approved && !edge.typeOnly && edge.symbols.length > 0 && edge.symbols.every((symbol) => approved.has(symbol))
+    }
     if (category === 'external-electron') return !/^electron\/sessionStorage\/(?:application|infrastructure|internal)\//.test(edge.resolved)
     if (category === 'domain') return edge.resolved === 'src/shared/domainTypes'
     if (category === 'public') {
@@ -136,7 +193,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
     }
     return false
   }
-  return moduleEdges(sourceFile).filter((edge) => {
+  const violations = moduleEdges(sourceFile).filter((edge) => {
     if (allowed(edge)) return false
     if (category === 'external-electron') {
       const exceptionKey = `${filePath.replaceAll('\\', '/')}|${edge.resolved}|${edge.symbols.join(',')}|${edge.typeOnly}`
@@ -147,6 +204,10 @@ export function findSessionStorageModuleViolations(filePath, source) {
     }
     return true
   }).map(({ specifier, resolved }) => ({ category, specifier, resolved }))
+  for (const load of nonStaticModuleLoads(sourceFile)) {
+    violations.push({ category, specifier: `${load.kind}@${load.line}:<non-static>`, resolved: '<dynamic-module-load>' })
+  }
+  return violations
 }
 
 /** Find implementation-only types reachable from exported declarations in the public port category. */
@@ -233,6 +294,12 @@ function main() {
       ['maintenance unapproved implementation edge', 'electron/sessionStorage/maintenance.ts', `export * from './application/unregisteredService'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['SQLite host binding unregistered edge', 'electron/sessionStorage/sqliteRuntimeBindings.ts', `export { unregistered } from './infrastructure/sqlite/unregistered'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['external raw session message read', 'electron/ipc/__gate_probe__.ts', `import { getMessages } from '../database/operations'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['external implementation binding import', 'electron/ipc/__gate_probe__.ts', `import { createProjectionService, createSqliteProjectionStateStore } from '../sessionStorage/sqliteRuntimeBindings'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['non-static dynamic module load', 'electron/ipc/__gate_probe__.ts', `const modulePath = '../sessionStorage/infrastructure/sqlite/sessionProjectionStateStore'; import(modulePath)`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0]
     ]
     const missed = probes.filter(([, file, source, rejects]) => !rejects(file, source))
