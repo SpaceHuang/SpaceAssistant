@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database'
-import { prepareChatBodiesForSessions, readChatMessagesAfterPreparation } from '../sessionStorage/public/readMessages'
+import { prepareChatBodiesForSessions, readChatMessageAfterPreparation, readChatMessagesAfterPreparation } from '../sessionStorage/public/readMessages'
 import { getConfigValue, getDbConnection } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation, type AgentInvocationMaterials } from '../runtime/invocationAssembler'
@@ -277,16 +277,16 @@ export async function runImRemoteAgent(args: {
       }
       await prepareChatBodiesForSessions(storage, [args.sessionId, ...persistedView.includedSessionIds])
       const acceptedSnapshotMessage = rawMessages.find((message) => message.id === acceptedUserMessageId)
-      const acceptedPersistedMessage = storage.queries.readMessage({ sessionId: args.sessionId, messageId: acceptedUserMessageId })
+      const acceptedPersistedMessage = await readChatMessageAfterPreparation(storage, { sessionId: args.sessionId, messageId: acceptedUserMessageId })
       if (!acceptedSnapshotMessage || !acceptedPersistedMessage || acceptedSnapshotMessage.sessionId !== acceptedPersistedMessage.sessionId ||
         acceptedSnapshotMessage.role !== acceptedPersistedMessage.role || acceptedSnapshotMessage.content !== acceptedPersistedMessage.content) {
         throw new Error('TRACK_ACCEPTED_INPUT_SNAPSHOT_MISMATCH')
       }
-      const trackMessages = persistedView.includedMessageIds.map((messageId) => {
+      const trackMessages = await Promise.all(persistedView.includedMessageIds.map((messageId) => {
         const sourceSessionId = persistedView.messageSessionMap[messageId]
         if (!sourceSessionId || !persistedView.includedSessionIds.includes(sourceSessionId)) return undefined
-        return storage.queries.readMessage({ sessionId: sourceSessionId, messageId })
-      })
+        return readChatMessageAfterPreparation(storage, { sessionId: sourceSessionId, messageId })
+      }))
       if (trackMessages.some((message) => !message)) throw new Error('TRACK_MODEL_INPUT_MESSAGE_MISSING')
       rawMessages = filterTrackModelInputMessages(trackMessages as import('../../src/shared/domainTypes').Message[], persistedView, acceptedUserMessageId)
       // Hosted's current turn is durably bound to Track by turnId, while the loop first
