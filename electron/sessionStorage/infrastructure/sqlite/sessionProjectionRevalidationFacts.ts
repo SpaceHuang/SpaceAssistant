@@ -88,13 +88,10 @@ export function refreshValidatedProjectionFastPath(db: AppDatabase, sessionId: s
   return hasCurrentProjectionEligibility(db, sessionId)
 }
 
-/** Compare the supplied validated legacy transcript and cache only a canonical match. */
-export function validateAndCacheCanonicalProjection(db: AppDatabase, sessionId: string,
+/** Compare the supplied legacy transcript against canonical History without creating a legacy cache. */
+export function validateCanonicalProjection(db: AppDatabase, sessionId: string,
   legacyMessages: ReadonlyArray<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>) {
   const history = new SqliteAgentHistory(getDbConnection(db))
   const verified = history.readCanonicalSessionTranscript(sessionId, legacyMessages)
-  const cacheWritten = verified.kind === 'matched' && history.writeCanonicalSessionCache({
-    ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages)
-  })
-  return { verified, cacheWritten }
+  return { verified }
 }

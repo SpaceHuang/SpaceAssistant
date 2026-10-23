@@ -11,7 +11,7 @@ import {
   publishTranscriptParityProof,
   readLegacyProjectionMessages,
   refreshValidatedProjectionFastPath,
-  validateAndCacheCanonicalProjection
+  validateCanonicalProjection
 } from '../sessionStorage/sqliteRuntimeBindings'
 
 /**
@@ -50,11 +50,11 @@ function revalidateSession(db: AppDatabase, sessionId: string): string {
     clearProjectionRejection(db, sessionId)
     return 'other'
   }
-  const { verified, cacheWritten } = validateAndCacheCanonicalProjection(db, sessionId, legacyMessages.map(({ id, role, content, timestamp }) => ({
+  const { verified } = validateCanonicalProjection(db, sessionId, legacyMessages.map(({ id, role, content, timestamp }) => ({
     id, role: role as 'user' | 'assistant', content, timestamp
   })))
   if (verified.kind === 'matched') {
-    if (cacheWritten) publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
+    publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
     clearProjectionRejection(db, sessionId)
     return 'matched'
   }

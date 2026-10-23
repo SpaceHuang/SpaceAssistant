@@ -9,7 +9,7 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { computeLegacyProjectionDigest, getProjectionRejection, listProjectionRejectionWork, markProjectionRejectionStale } from './sessionProjectionRejection'
 import { runDueSessionProjectionRevalidations } from './sessionProjectionRevalidation'
 import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
-import { publishTranscriptParityProof, readLegacyProjectionMessages, refreshValidatedProjectionFastPath, validateAndCacheCanonicalProjection } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
+import { publishTranscriptParityProof, readLegacyProjectionMessages, refreshValidatedProjectionFastPath, validateCanonicalProjection } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 import { hasSessionProjectionEligibility } from './sessionTranscriptProjection'
 import { readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache } from './sessionTranscriptProjection'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
@@ -69,19 +69,39 @@ describe('background projection revalidation queue (P0-③/④)', () => {
     db.close()
   })
 
-  it('validates and caches canonical transcript through the SQLite facts adapter', async () => {
+  it('validates canonical transcript through the SQLite facts adapter without writing the legacy cache', async () => {
     const { db, session } = await createMismatchedSession('validate-cache-adapter')
     const legacyMessages = readLegacyProjectionMessages(db, session.id)
-    const mismatch = validateAndCacheCanonicalProjection(db, session.id, legacyMessages.map(({ id, role, content, timestamp }) => ({
+    const mismatch = validateCanonicalProjection(db, session.id, legacyMessages.map(({ id, role, content, timestamp }) => ({
       id, role: role as 'user' | 'assistant', content, timestamp
     })))
     expect(mismatch.verified).toMatchObject({ kind: 'unavailable', reason: 'legacy-mismatch' })
-    expect(mismatch.cacheWritten).toBe(false)
 
     getDbConnection(db).prepare("DELETE FROM messages WHERE id='validate-cache-adapter-user-b'").run()
-    const matched = validateAndCacheCanonicalProjection(db, session.id, readLegacyProjectionMessages(db, session.id))
+    getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+    const matched = validateCanonicalProjection(db, session.id, readLegacyProjectionMessages(db, session.id))
     expect(matched.verified.kind).toBe('matched')
-    expect(matched.cacheWritten).toBe(true)
+    expect(getDbConnection(db).prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
+      .toBeUndefined()
+    db.close()
+  })
+
+  it('publishes a matched parity proof when the retired cache producer is unavailable', async () => {
+    const { db, conn, session, history } = await createMismatchedSession('proof-without-cache')
+    conn.prepare("DELETE FROM messages WHERE id='proof-without-cache-user-b'").run()
+    const verified = history.readCanonicalSessionTranscript(session.id, readLegacyProjectionMessages(db, session.id))
+    expect(verified.kind).toBe('matched')
+    conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+    conn.exec(`CREATE TRIGGER reject_retired_transcript_cache_insert BEFORE INSERT ON canonical_session_projection_cache
+      BEGIN SELECT RAISE(ABORT,'retired transcript cache unavailable'); END`)
+    enqueueSessionProjectionRevalidation(db, session.id)
+
+    const result = await runDueSessionProjectionRevalidations(db)
+
+    expect(result).toMatchObject({ revalidated: 1, deferred: 0 })
+    expect(hasSessionProjectionEligibility(db, session.id)).toBe(true)
+    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
+      .toBeUndefined()
     db.close()
   })
 

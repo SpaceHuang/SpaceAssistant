@@ -124,9 +124,7 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
         id, role: role as 'user' | 'assistant', content, timestamp
       })))
       if (verified.kind !== 'matched') return verified
-      if (history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })) {
-        publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
-      }
+      publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
       return { kind: 'matched' as const, source: 'L2' as const, messages: verified.messages, replayedEvents: verified.eventCount, watermark: verified }
     })
   } catch {
@@ -490,10 +488,10 @@ export function refreshSessionTranscriptProjectionCache(db: AppDatabase, session
     }
     const conn = getDbConnection(db)
     return runInTransaction(conn, () => {
-      const cached = history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) }) &&
-        publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
-      if (cached) clearProjectionRejection(db, sessionId)
-      return cached
+      history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })
+      const published = publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
+      if (published) clearProjectionRejection(db, sessionId)
+      return published
     })
   } catch {
     return false

@@ -69,6 +69,32 @@ describe('session transcript projection P2 read path', () => {
     db.close()
   })
 
+  it('returns a matched History projection and publishes parity when the legacy cache cannot be written', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection without legacy cache', model: 'test' })
+    const message = { id: 'projection-without-cache-user', role: 'user' as const, content: 'question', timestamp: 1 }
+    appendMessage(db, { ...message, sessionId: session.id, status: 'sent' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'projection-without-cache-invocation', turnId: 'projection-without-cache-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'projection-without-cache-context', idempotencyKey: 'projection-without-cache-context',
+      kind: 'invocation-context-committed', payload: { messages: [message] }
+    }], 0)
+    const conn = getDbConnection(db)
+    conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+    conn.exec(`CREATE TRIGGER reject_retired_transcript_cache_insert BEFORE INSERT ON canonical_session_projection_cache
+      BEGIN SELECT RAISE(ABORT,'retired transcript cache unavailable'); END`)
+
+    const result = readSessionTranscriptProjection(db, session.id)
+
+    expect(result).toMatchObject({ source: 'canonical:L2', messages: [expect.objectContaining({ id: message.id, content: message.content })] })
+    expect(getDbConnection(db).prepare(`SELECT status FROM session_projection_state WHERE session_id=?
+      AND scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D'`).get(session.id)).toMatchObject({ status: 'valid' })
+    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
+      .toBeUndefined()
+    db.close()
+  })
+
   it('seeds the canonical empty-session projection at creation with the persisted generation', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'empty projection seed', model: 'test' })
