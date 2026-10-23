@@ -14,7 +14,7 @@ import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from 
 import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import { publishTranscriptParityProof } from '../sessionStorage/sqliteRuntimeBindings'
 import * as agentLogger from '../agentLogger/agentLogger'
-import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
+import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, hasSessionProjectionEligibility, readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
 
 const runStoragePerf = process.env.SPACEASSISTANT_RUN_STORAGE_PERF === '1'
 
@@ -51,6 +51,31 @@ describe('session transcript projection P2 read path', () => {
     } finally {
       cleanup()
     }
+  })
+
+  it('rejects a self-consistent legacy cache body that disagrees with History and legacy rows', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'forged dual-write cache', model: 'test' })
+    const message = { id: 'forged-dual-user', role: 'user' as const, content: 'source truth', timestamp: 1 }
+    appendMessage(db, { ...message, sessionId: session.id, status: 'sent' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'forged-dual-invocation', turnId: 'forged-dual-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'forged-dual-context', idempotencyKey: 'forged-dual-context', kind: 'invocation-context-committed',
+      payload: { messages: [message] }
+    }], 0)
+    expect(readSessionTranscriptProjection(db, session.id).messages[0]?.content).toBe(message.content)
+    expect(hasSessionProjectionEligibility(db, session.id)).toBe(true)
+    const conn = getDbConnection(db)
+    const forgedValue = JSON.stringify([{ ...message, content: 'forged cache body' }])
+    conn.prepare(`UPDATE canonical_session_projection_cache SET value=?,value_sha256=?
+      WHERE session_id=? AND cache_key='transcript'`).run(forgedValue,
+      createHash('sha256').update(forgedValue, 'utf8').digest('hex'), session.id)
+
+    const result = readSessionTranscriptProjection(db, session.id)
+
+    expect(result).toMatchObject({ source: 'canonical:L2', messages: [expect.objectContaining({ id: message.id, content: message.content })] })
+    db.close()
   })
 
   it('records canonical read owner and elapsed time without changing the returned transcript', () => {
