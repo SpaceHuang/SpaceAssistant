@@ -1,5 +1,5 @@
 import type { Message } from '../../../src/shared/domainTypes'
-import type { ApiContextBaseline, ChatMessagePage } from './model'
+import type { ApiContextBaseline, ChatMessagePage, SearchCorpusPage } from './model'
 import { prepareChatBodyForRead } from './readPreparation'
 
 type ChatMessageReadStorage = Readonly<{
@@ -49,6 +49,21 @@ export async function readApiBaselineAfterPreparation(
   const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
   const prepared = await storage.queries.readPreparedApiBaseline?.({ ...input, prepared: preparedView })
   return prepared ?? storage.queries.readApiBaseline(input)
+}
+
+export async function readSearchCorpusPageAfterPreparation(
+  storage: Readonly<{
+    ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
+    queries: Readonly<{
+      readSearchCorpusPage(input: Readonly<{ sessionId: string; fromSequence: number; pageSize?: number }>): SearchCorpusPage
+      readPreparedSearchCorpusPage?(input: Readonly<{ sessionId: string; fromSequence: number; pageSize?: number; prepared?: unknown }>): Promise<SearchCorpusPage | undefined>
+    }>
+  }>,
+  input: Readonly<{ sessionId: string; fromSequence: number; pageSize?: number }>
+): Promise<SearchCorpusPage> {
+  const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
+  const prepared = await storage.queries.readPreparedSearchCorpusPage?.({ ...input, prepared: preparedView })
+  return prepared ?? storage.queries.readSearchCorpusPage(input)
 }
 
 export async function readChatMessageAfterPreparation(

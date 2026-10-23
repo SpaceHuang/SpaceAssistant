@@ -124,6 +124,8 @@ export interface SessionQueries {
   readPreparedChatPage?(input: { sessionId: string; beforeSequence?: number | null; limit?: number; prepared?: PreparedChatBodyView }): Promise<ChatMessagePage | undefined>
   /** Async latest-window API baseline lookup; undefined means selection must use the existing authority reader. */
   readPreparedApiBaseline?(input: { sessionId: string; limit?: number; prepared?: PreparedChatBodyView }): Promise<ApiContextBaseline | undefined>
+  /** Async ASC search corpus page lookup; undefined means selection must use the existing authority reader. */
+  readPreparedSearchCorpusPage?(input: { sessionId: string; fromSequence: number; pageSize?: number; prepared?: PreparedChatBodyView }): Promise<SearchCorpusPage | undefined>
   readChatPage(input: { sessionId: string; beforeSequence?: number | null; limit?: number }): ChatMessagePage
   readTurnContext(input: { sessionId: string; boundarySequence?: number; requiredUserMessageId?: string; excludeMessageIds?: string[] }): Message[]
   readApiBaseline(input: { sessionId: string; limit?: number }): ApiContextBaseline

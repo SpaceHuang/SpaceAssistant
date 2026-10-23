@@ -211,10 +211,16 @@ describe('chat:get-messages projection preparation', () => {
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure') }),
-      queries: { ...base.queries, readSearchCorpusPage: vi.fn((input: { sessionId: string; fromSequence?: number; pageSize?: number }) => {
-        events.push('select')
-        return base.queries.readSearchCorpusPage(input)
-      }) },
+      queries: { ...base.queries,
+        readPreparedSearchCorpusPage: vi.fn(async (input: { sessionId: string; fromSequence: number; pageSize?: number; prepared?: unknown }) => {
+          events.push('prepared-select')
+          expect(input.prepared).toBeUndefined()
+          return undefined
+        }),
+        readSearchCorpusPage: vi.fn((input: { sessionId: string; fromSequence?: number; pageSize?: number }) => {
+          events.push('authority-select')
+          return base.queries.readSearchCorpusPage(input)
+        }) },
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
@@ -224,7 +230,7 @@ describe('chat:get-messages projection preparation', () => {
     })
 
     await expect(Promise.resolve(handlers.get('chat:get-search-corpus-page')!(null, { sessionId: session.id }))).resolves.toMatchObject({ entries: [] })
-    expect(events).toEqual(['ensure', 'select'])
+    expect(events).toEqual(['ensure', 'prepared-select', 'authority-select'])
     expect(sessionStorage.ensureChatBodyV1).toHaveBeenCalledWith({ sessionId: session.id })
   })
 

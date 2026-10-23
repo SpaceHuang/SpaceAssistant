@@ -16,7 +16,7 @@ import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import type { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
 import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'
-import { readApiBaselineAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation } from '../sessionStorage/public/readMessages'
+import { readApiBaselineAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation } from '../sessionStorage/public/readMessages'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
@@ -744,8 +744,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       _e,
       payload: { sessionId: string; fromSequence?: number; limit?: number }
     ) => {
-      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
-      return sessionQueries.readSearchCorpusPage({ sessionId: payload.sessionId, fromSequence: payload.fromSequence ?? 0, pageSize: payload.limit })
+      return readSearchCorpusPageAfterPreparation(sessionStorage, { sessionId: payload.sessionId, fromSequence: payload.fromSequence ?? 0, pageSize: payload.limit })
     }
   )
 

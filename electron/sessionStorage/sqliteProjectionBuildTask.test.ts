@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
-import { appendMessage, createPersistedTurn, createSession } from '../database/operations'
+import { appendMessage, createPersistedTurn, createSession, enqueueQueuedUserMessage } from '../database/operations'
 import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
 import { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { createSqliteProjectionChatBodyCacheStore } from './infrastructure/sqlite/sessionProjectionStateStore'
@@ -14,7 +14,7 @@ import { advanceProcessGeneration } from '../database/processGeneration'
 import { getDbConnection } from '../database/sqliteStore'
 import { openDatabase } from '../database'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
-import { readApiBaselineAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation } from './application/readChatMessages'
+import { readApiBaselineAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation } from './application/readChatMessages'
 
 describe('SQLite projection build task composition', () => {
   let root: string | undefined
@@ -41,11 +41,17 @@ describe('SQLite projection build task composition', () => {
       const session = createSession(db, { name: 'projection chat body', model: 'test' })
       const processGeneration = advanceProcessGeneration(getDbConnection(db))
       appendMessage(db, { id: 'projection-chat-body-user', sessionId: session.id, role: 'user', content: 'same body', timestamp: 11, status: 'sent' })
+      appendMessage(db, { id: 'projection-chat-body-assistant', sessionId: session.id, role: 'assistant', content: 'assistant body', timestamp: 12, status: 'completed' })
+      const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'projection-chat-body-queued', content: 'queued body' })
       const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id)
       await history.appendBatch([
         { invocationId: 'projection-chat-body-inv', turnId: 'projection-chat-body-turn', sequence: 1, schemaVersion: 1,
           eventId: 'projection-chat-body-context', idempotencyKey: 'projection-chat-body-context', kind: 'invocation-context-committed',
-          payload: { messages: [{ id: 'projection-chat-body-user', role: 'user', content: 'same body', timestamp: 11 }] } },
+          payload: { messages: [
+            { id: 'projection-chat-body-user', role: 'user', content: 'same body', timestamp: 11 },
+            { id: 'projection-chat-body-assistant', role: 'assistant', content: 'assistant body', timestamp: 12 },
+            { id: queued.persisted.message.id, role: 'user', content: 'queued body', timestamp: queued.persisted.message.timestamp },
+          ] } },
         { invocationId: 'projection-chat-body-inv', turnId: 'projection-chat-body-turn', sequence: 2, schemaVersion: 1,
           eventId: 'projection-chat-body-terminal', idempotencyKey: 'projection-chat-body-terminal', kind: 'invocation-completed',
           payload: { status: 'completed' } },
@@ -69,25 +75,64 @@ describe('SQLite projection build task composition', () => {
         const cache = getDbConnection(db).prepare('SELECT inline_payload FROM session_projection_cache WHERE session_id=? AND scope_key=?')
           .get(session.id, scopeKey) as { inline_payload: string }
         const published = JSON.parse(cache.inline_payload) as { messages: Array<Record<string, unknown>> }
-        expect(published.messages).toEqual([{ id: 'projection-chat-body-user', role: 'user', content: 'same body', timestamp: 11 }])
+        expect(published.messages).toEqual([
+          { id: 'projection-chat-body-user', role: 'user', content: 'same body', timestamp: 11 },
+          { id: 'projection-chat-body-assistant', role: 'assistant', content: 'assistant body', timestamp: 12 },
+          { id: queued.persisted.message.id, role: 'user', content: 'queued body', timestamp: queued.persisted.message.timestamp },
+        ])
         expect(Object.keys(published.messages[0]!).sort()).toEqual(['content', 'id', 'role', 'timestamp'])
         const cacheStore = createSqliteProjectionChatBodyCacheStore(db)
         await expect(readProjectionChatBodyCache({ sessionId: session.id, sessionGeneration: session.generation, scopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION },
           cacheStore, createSessionProjectionBlobStore(root)))
           .resolves.toMatchObject({ kind: 'ready', messages: published.messages, sessionGeneration: session.generation })
         await expect(readChatMessagesAfterPreparation(host.storage, { sessionId: session.id }))
-          .resolves.toMatchObject([{ id: 'projection-chat-body-user', content: 'same body' }])
+          .resolves.toMatchObject([
+            { id: 'projection-chat-body-user', content: 'same body' },
+            { id: 'projection-chat-body-assistant', content: 'assistant body' },
+            { id: queued.persisted.message.id, content: 'queued body' },
+          ])
         await expect(host.storage.queries.readPreparedChatPage?.({ sessionId: session.id, prepared: ensured }))
-          .resolves.toMatchObject({ entries: [{ sequence: expect.any(Number), message: { id: 'projection-chat-body-user', content: 'same body' } }] })
+          .resolves.toMatchObject({ entries: [
+            { sequence: expect.any(Number), message: { id: 'projection-chat-body-user', content: 'same body' } },
+            { sequence: expect.any(Number), message: { id: 'projection-chat-body-assistant', content: 'assistant body' } },
+            { sequence: expect.any(Number), message: { id: queued.persisted.message.id, content: 'queued body' } },
+          ] })
         await expect(readChatPageAfterPreparation(host.storage, { sessionId: session.id }))
-          .resolves.toMatchObject({ entries: [{ message: { id: 'projection-chat-body-user', content: 'same body' } }] })
+          .resolves.toMatchObject({ entries: [
+            { message: { id: 'projection-chat-body-user', content: 'same body' } },
+            { message: { id: 'projection-chat-body-assistant', content: 'assistant body' } },
+            { message: { id: queued.persisted.message.id, content: 'queued body' } },
+          ] })
         await expect(readApiBaselineAfterPreparation(host.storage, { sessionId: session.id, limit: 20 }))
-          .resolves.toMatchObject({ sessionId: session.id,
-            entries: [{ sequence: expect.any(Number), message: { id: 'projection-chat-body-user', content: 'same body' } }] })
+          .resolves.toMatchObject({ sessionId: session.id, entries: [
+            { sequence: expect.any(Number), message: { id: 'projection-chat-body-user', content: 'same body' } },
+            { sequence: expect.any(Number), message: { id: 'projection-chat-body-assistant', content: 'assistant body' } },
+            { sequence: expect.any(Number), message: { id: queued.persisted.message.id, content: 'queued body' } },
+          ] })
+        const authorityCorpus = host.storage.queries.readSearchCorpusPage({ sessionId: session.id, fromSequence: 0, pageSize: 50 })
+        expect(authorityCorpus.entries.map(({ message }) => message.id)).toEqual(['projection-chat-body-user', 'projection-chat-body-assistant'])
+        const corpusPage = await host.storage.queries.readPreparedSearchCorpusPage?.({ sessionId: session.id, fromSequence: 0, pageSize: 50, prepared: ensured })
+        expect(corpusPage).toEqual(authorityCorpus)
+        expect(corpusPage).toMatchObject({ entries: [
+          { sequence: expect.any(Number), message: { id: 'projection-chat-body-user', content: 'same body' } },
+          { sequence: expect.any(Number), message: { id: 'projection-chat-body-assistant', content: 'assistant body' } },
+        ], hasMore: false })
         getDbConnection(db).prepare(`UPDATE session_projection_cache SET inline_payload=replace(inline_payload,'same body','evil body')
           WHERE session_id=? AND scope_key=?`).run(session.id, scopeKey)
         await expect(readChatPageAfterPreparation(host.storage, { sessionId: session.id }))
-          .resolves.toMatchObject({ entries: [{ message: { id: 'projection-chat-body-user', content: 'same body' } }] })
+          .resolves.toMatchObject({ entries: [
+            { message: { id: 'projection-chat-body-user', content: 'same body' } },
+            { message: { id: 'projection-chat-body-assistant', content: 'assistant body' } },
+            { message: { id: queued.persisted.message.id, content: 'queued body' } },
+          ] })
+        const searchPrepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
+        getDbConnection(db).prepare(`UPDATE session_projection_cache SET inline_payload=replace(inline_payload,'same body','evil body')
+          WHERE session_id=? AND scope_key=?`).run(session.id, scopeKey)
+        await expect(readSearchCorpusPageAfterPreparation(host.storage, { sessionId: session.id, fromSequence: 0, pageSize: 50, prepared: searchPrepared }))
+          .resolves.toMatchObject({ entries: [
+            { message: { id: 'projection-chat-body-user', content: 'same body' } },
+            { message: { id: 'projection-chat-body-assistant', content: 'assistant body' } },
+          ], hasMore: false })
         expect(createSqliteProjectionStateStore(db).get(session.id, scopeKey)?.status).toBe('invalid')
         appendMessage(db, { id: 'projection-chat-body-new-source', sessionId: session.id, role: 'user', content: 'new source', timestamp: 12, status: 'sent' })
         await expect(host.storage.queries.readPreparedMessages?.({ sessionId: session.id, prepared: ensured })).resolves.toBeUndefined()

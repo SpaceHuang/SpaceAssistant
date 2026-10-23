@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { prepareChatBodiesForSessions, readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation } from './readChatMessages'
+import { prepareChatBodiesForSessions, readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation } from './readChatMessages'
 
 describe('readChatMessagesAfterPreparation', () => {
   it('prepares the chat body view and reruns the complete synchronous selection', async () => {
@@ -144,5 +144,23 @@ describe('readApiBaselineAfterPreparation', () => {
     }, { sessionId: 'api-session' })
     expect(result).toBe(baseline)
     expect(events).toEqual(['ensure', 'prepared-miss', 'authority'])
+  })
+})
+
+
+describe('readSearchCorpusPageAfterPreparation', () => {
+  it('passes the ASC cursor and page size to the prepared reader and preserves its cursor metadata', async () => {
+    const events: string[] = []
+    const prepared = { sourceIdentityJson: 'search-source' }
+    const page = { entries: [{ sequence: 17, message: { id: 'search-body', content: 'canonical' } }], nextSequence: 18, hasMore: true }
+    const result = await readSearchCorpusPageAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); return prepared },
+      queries: {
+        readPreparedSearchCorpusPage: async (input) => { events.push(`prepared:${input.fromSequence}:${input.pageSize}`); expect(input.prepared).toBe(prepared); return page as never },
+        readSearchCorpusPage: () => { events.push('authority'); return { entries: [], nextSequence: 0, hasMore: false } }
+      }
+    }, { sessionId: 'search-session', fromSequence: 17, pageSize: 50 })
+    expect(result).toBe(page)
+    expect(events).toEqual(['ensure', 'prepared:17:50'])
   })
 })
