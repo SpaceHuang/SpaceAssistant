@@ -68,6 +68,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
         edge.resolved.startsWith('electron/sessionStorage/domain/') ||
         edge.resolved.startsWith('electron/sessionStorage/internal/') ||
         edge.resolved === 'electron/storage/sessionLedgerRoots' ||
+        edge.resolved === 'electron/storage/spillProtocol' ||
         edge.resolved === 'electron/sessionLedgerIdentity' ||
         ['electron/sessionEvents', 'electron/queueInputFingerprint', 'electron/runtime/sqliteAgentHistory',
           'electron/runtime/sessionStorageShadow', 'electron/runtime/sessionTranscriptProjection',

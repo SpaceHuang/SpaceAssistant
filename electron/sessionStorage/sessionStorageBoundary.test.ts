@@ -131,6 +131,12 @@ describe('session storage module graph rules', () => {
     expect(findSessionStorageModuleViolations('electron/sessionStorage/infrastructure/sqlite/sessionLedgerAvailabilityReader.ts', `
       import { sessionLedgerLocationIdentity } from '../../../sessionLedgerIdentity'
     `)).toEqual([])
+    expect(findSessionStorageModuleViolations('electron/sessionStorage/infrastructure/sqlite/projectionHistoryChunkReader.ts', `
+      import { collectSpillDescriptorsStrict, readSourceTruthSpillSync, type SpillDescriptor } from '../../../storage/spillProtocol'
+    `)).toEqual([])
+    expect(findSessionStorageModuleViolations('electron/sessionStorage/infrastructure/sqlite/projectionHistoryChunkReader.ts', `
+      import { createSpillStore } from '../../../storage/spillStore'
+    `)).toEqual([{ category: 'infrastructure/sqlite', specifier: '../../../storage/spillStore', resolved: 'electron/storage/spillStore' }])
   })
 
   it('automatically protects new production modules added at the sessionStorage root', () => {
