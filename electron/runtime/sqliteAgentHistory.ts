@@ -822,6 +822,11 @@ export class SqliteAgentHistory implements HistoryPort {
   private advanceProjectionCacheAfterAppend(): void {
     if (!this.sessionId) return
     try {
+      const cutover = this.conn.prepare(`SELECT write_mode FROM session_message_content_cutover WHERE session_id=?`)
+        .get(this.sessionId) as { write_mode: string } | undefined
+      // Canonical-only consumers replay History or use the scoped chatBody projection. Keep the
+      // legacy transcript cache owner confined to legacy/dual-write sessions after cutover.
+      if (cutover?.write_mode === 'canonical') return
       // S6: a persisted rejection verdict means the canonical-vs-legacy divergence has not been
       // re-adjudicated by the background revalidator yet. Re-granting eligibility here would
       // let the next read hit the warm L1 (whose merge does not compare legacy bodies) and

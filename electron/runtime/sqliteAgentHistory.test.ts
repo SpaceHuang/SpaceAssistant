@@ -48,6 +48,31 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it('does not advance the legacy transcript cache after canonical write mode begins', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'canonical cache retirement', model: 'test' })
+    const conn = getDbConnection(db)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, session.id)
+    await history.appendBatch([{ ...event('canonical-cache-base', 1), invocationId: 'canonical-cache-base-invocation',
+      kind: 'invocation-context-committed', payload: { messages: [{ id: 'canonical-cache-user', role: 'user', content: 'question', timestamp: 1 }] } }], 0)
+    const baseline = history.readCanonicalSessionTranscriptForShadow(session.id)
+    if (baseline.kind !== 'matched') throw new Error('expected canonical transcript baseline')
+    expect(history.writeCanonicalSessionCache({ ...baseline, cacheKey: 'transcript', value: JSON.stringify(baseline.messages) })).toBe(true)
+    const before = conn.prepare(`SELECT session_seq,event_count,value,value_sha256 FROM canonical_session_projection_cache
+      WHERE session_id=? AND cache_key='transcript'`).get(session.id)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+
+    await history.appendBatch([{ ...event('canonical-cache-tail', 1), invocationId: 'canonical-cache-tail-invocation',
+      kind: 'invocation-context-committed', payload: { messages: [
+        { id: 'canonical-cache-user', role: 'user', content: 'question', timestamp: 1 },
+        { id: 'canonical-cache-assistant', role: 'assistant', content: 'answer', timestamp: 2 }
+      ] } }], 0)
+
+    expect(conn.prepare(`SELECT session_seq,event_count,value,value_sha256 FROM canonical_session_projection_cache
+      WHERE session_id=? AND cache_key='transcript'`).get(session.id)).toEqual(before)
+    db.close()
+  })
+
   it('accepts surviving cursor gaps and unsequenced legacy rows while rejecting pending allocations', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
