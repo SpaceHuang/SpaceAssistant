@@ -263,6 +263,48 @@ describe('projection build coordinator', () => {
     expect(service.get(session.id, 'scope-release')).toMatchObject({ status: 'rebuilding' })
   })
 
+  it('reconciles an unknown publish commit to published when the durable state proves success', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection unknown publish committed', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'unknown-publish-committed', now: () => 6 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-unknown', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-unknown', sessionGeneration: session.generation })!
+    const uncertainService: SessionProjectionService = { ...service, publish: (candidate, output) => {
+      service.publish(candidate, output)
+      const error = new Error('commit result unknown')
+      error.name = 'TransactionCommitUnknownError'
+      throw error
+    } }
+    const result = await runProjectionBuildSlice({ service: uncertainService, lease, specVersion: 1, dbPath: db.filePath,
+      readChunk: async (permit, input) => ({ kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }),
+      historyReducer: { ...historyReducer, createState: () => '{}', finalize: () => ({ outputOperations: [] }) },
+      blobs: { write: async () => { throw new Error('inline result should not write blob') } },
+      limits: { maxRows: 1, maxBytes: 512 }, maxChunksPerSlice: 1, now: () => 6 })
+    expect(result).toMatchObject({ kind: 'published', state: { status: 'valid' } })
+  })
+
+  it('returns publish-unknown when commit outcome cannot be proven from durable state', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection unknown publish unresolved', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'unknown-publish-unresolved', now: () => 6 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-unknown', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-unknown', sessionGeneration: session.generation })!
+    const uncertainService: SessionProjectionService = { ...service, publish: () => {
+      const error = new Error('commit result unknown')
+      error.name = 'TransactionCommitUnknownError'
+      throw error
+    } }
+    const result = await runProjectionBuildSlice({ service: uncertainService, lease, specVersion: 1, dbPath: db.filePath,
+      readChunk: async (permit, input) => ({ kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }),
+      historyReducer: { ...historyReducer, createState: () => '{}', finalize: () => ({ outputOperations: [] }) },
+      blobs: { write: async () => { throw new Error('inline result should not write blob') } },
+      limits: { maxRows: 1, maxBytes: 512 }, maxChunksPerSlice: 1, now: () => 6 })
+    expect(result).toMatchObject({ kind: 'publish-unknown' })
+    expect(service.get(session.id, 'scope-unknown')).toMatchObject({ status: 'rebuilding', rebuildToken: lease.rebuildToken })
+  })
+
   it('finalizes one invocation before folding the next invocation in the same bounded source chunk', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection invocation boundary', model: 'test' })

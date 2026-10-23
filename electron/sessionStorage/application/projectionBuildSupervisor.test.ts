@@ -32,6 +32,34 @@ describe('projection build supervisor', () => {
     } finally { db.close() }
   })
 
+  it('retries a failed due-work scan and resumes once storage recovers', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+        connectionEpoch: () => 1, createToken: () => 'due-scan-error-token', now: () => 1 })
+      const session = createSession(db, { name: 'projection due scan recovery', model: 'test' })
+      let scans = 0
+      let reads = 0
+      const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => {
+        scans += 1
+        if (scans === 1) throw new Error('sqlite busy')
+        return [{ sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-scan-recovery', specVersion: 1 }]
+      }, dbPath: db.filePath,
+        readChunk: async (permit, input) => { reads += 1; return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence } },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 1024 },
+        maxChunksPerSlice: 1, now: () => 1 })
+      const handle = supervisor.start()
+      for (let i = 0; i < 750 && reads === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+      expect(scans).toBeGreaterThan(1)
+      expect(reads).toBeGreaterThan(0)
+      for (let i = 0; i < 50 && service.get(session.id, 'scope-scan-recovery')?.status !== 'valid'; i += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+      expect(service.get(session.id, 'scope-scan-recovery')).toMatchObject({ status: 'valid' })
+      handle.stop()
+      await expect(handle.quiesce()).resolves.toBeUndefined()
+    } finally { db.close() }
+  })
+
   it('does not retain or later execute a prepare request when the worker is not running', async () => {
     const db = createMemoryAppDb()
     try {
@@ -101,6 +129,26 @@ describe('projection build supervisor', () => {
       const handle = supervisor.start()
       await expect(supervisor.prepare({ sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-owned', specVersion: 1 }))
         .rejects.toThrow('PROJECTION_BUILD_DEFERRED:DEFERRED_LARGE')
+      handle.stop()
+      await handle.quiesce()
+    } finally { db.close() }
+  })
+
+  it('settles a foreground request when claim reconciliation cannot read durable state', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'projection claim reconciliation failure', model: 'test' })
+      const base = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+        connectionEpoch: () => 1, createToken: () => 'claim-reconcile-error', now: () => 1 })
+      const service = { ...base, beginRebuild: () => null, get: () => { throw new Error('sqlite unavailable') } }
+      const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => [], dbPath: db.filePath,
+        readChunk: async () => { throw new Error('must not read without a lease') },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async () => { throw new Error('must not write without a lease') } }, limits: { maxRows: 1, maxBytes: 1024 },
+        maxChunksPerSlice: 1, now: () => 1 })
+      const handle = supervisor.start()
+      await expect(supervisor.prepare({ sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-reconcile', specVersion: 1 }))
+        .rejects.toThrow('PROJECTION_BUILD_STATE_UNAVAILABLE')
       handle.stop()
       await handle.quiesce()
     } finally { db.close() }

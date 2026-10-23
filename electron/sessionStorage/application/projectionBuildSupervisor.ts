@@ -55,10 +55,36 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       let stopped = false
       let wakeResolve: (() => void) | undefined
       let loopPromise: Promise<void>
+      let dueScanFailed = false
       const wake = (_reason: MaintenanceReason = 'startup') => { wakeResolve?.(); wakeResolve = undefined }
       const nextWake = () => new Promise<void>((resolve) => { wakeResolve = resolve })
+      const waitForWorkOrRetry = async () => {
+        if (requests.size > 0) return
+        if (!dueScanFailed) await nextWake()
+        else await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 1_000)
+          wakeResolve = () => { clearTimeout(timer); resolve() }
+        })
+        wakeResolve = undefined
+      }
+      const readDueWork = () => {
+        try { dueScanFailed = false; return options.listDueWork() }
+        catch { dueScanFailed = true; return [] }
+      }
       const runItem = async (item: ProjectionBuildWorkItem): Promise<boolean> => {
         const key = keyOf(item)
+        const settleUnexpectedFailure = (error: unknown) => {
+          try {
+            const current = options.service.get(item.sessionId, item.scopeKey)
+            const lease = suspendedLeases.get(key)
+            if (lease) options.service.reject(lease, { failureCaseJson: JSON.stringify({ case: 'CONTENT_UNAVAILABLE', caseId: 'SUPERVISOR_FAILED' }),
+              attempts: (current?.attempts ?? 0) + 1, retryAfter: options.retryAfter?.() ?? options.now() + 60_000 })
+          } catch { /* Preserve the request outcome when durable failure recording is unavailable. */ }
+          requests.get(key)?.reject(error)
+          requests.delete(key)
+          return false
+        }
+        try {
         let lease = suspendedLeases.get(key)
         if (lease) {
           const state = options.service.get(item.sessionId, item.scopeKey)
@@ -78,7 +104,9 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
           }
         }
         if (!lease) {
-          const state = typeof options.service.get === 'function' ? options.service.get(item.sessionId, item.scopeKey) : null
+          let state
+          try { state = options.service.get(item.sessionId, item.scopeKey) }
+          catch { return settleUnexpectedFailure(new Error('PROJECTION_BUILD_STATE_UNAVAILABLE')) }
           const error = state?.sessionGeneration === item.sessionGeneration && state.status === 'rejected' &&
             state.retryAfter !== null && state.retryAfter > options.now()
             ? new Error(`PROJECTION_BUILD_DEFERRED:${readFailureCaseId(state.failureCaseJson) ?? 'REJECTED'}`)
@@ -115,13 +143,19 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         requests.get(key)?.reject(controller.signal.reason ?? new Error('PROJECTION_BUILD_STOPPED'))
         requests.delete(key)
         return true
+        } catch {
+          return settleUnexpectedFailure(new Error('PROJECTION_BUILD_SUPERVISOR_FAILED'))
+        }
       }
       loopPromise = (async () => {
         while (!stopped) {
           const requested = requests.values().next().value as { item: ProjectionBuildWorkItem } | undefined
           if (requested) { await runItem(requested.item); continue }
-          const work = options.listDueWork()
-          if (!work.length) { await nextWake(); continue }
+          const work = readDueWork()
+          if (!work.length) {
+            await waitForWorkOrRetry()
+            continue
+          }
           let claimedAny = false
           for (const item of work) {
             if (stopped) break
@@ -129,7 +163,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             claimedAny = await runItem(item) || claimedAny
           }
           if (!stopped && requests.size > 0) continue
-          if (!stopped && (!claimedAny || options.listDueWork().length === 0)) await nextWake()
+          if (!stopped && (!claimedAny || readDueWork().length === 0)) await waitForWorkOrRetry()
         }
       })()
       const handle: ProjectionBuildTaskHandle = Object.freeze({
