@@ -76,7 +76,12 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         wakeResolve = undefined
       }
       const readDueWork = () => {
-        try { dueScanFailed = false; return options.listDueWork() }
+        try {
+          const work = options.listDueWork()
+          if (!Array.isArray(work)) throw new Error('PROJECTION_BUILD_DUE_WORK_INVALID')
+          dueScanFailed = false
+          return work
+        }
         catch {
           if (!dueScanFailed) reportFailure('PROJECTION_BUILD_DUE_WORK_SCAN_FAILED')
           dueScanFailed = true
@@ -135,6 +140,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
               sessionGeneration: item.sessionGeneration, scopeKey: item.scopeKey }) ?? undefined
           } catch {
             reportFailure('PROJECTION_BUILD_CLAIM_FAILED')
+            scheduleRetry(item)
             requests.get(key)?.reject(new Error('PROJECTION_BUILD_CLAIM_FAILED'))
             requests.delete(key)
             return false
@@ -145,6 +151,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
           try { state = options.service.get(item.sessionId, item.scopeKey) }
           catch {
             reportFailure('PROJECTION_BUILD_STATE_UNAVAILABLE')
+            scheduleRetry(item)
             return settleUnexpectedFailure(new Error('PROJECTION_BUILD_STATE_UNAVAILABLE'))
           }
           const error = state?.sessionGeneration === item.sessionGeneration && state.status === 'rejected' &&
@@ -237,7 +244,8 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         request: wake,
       })
       active = { handle, wake }
-      void loopPromise.finally(() => { if (active?.handle === handle) active = undefined })
+      const clearActive = () => { if (active?.handle === handle) active = undefined }
+      void loopPromise.then(clearActive, clearActive)
       return handle
     }
   })

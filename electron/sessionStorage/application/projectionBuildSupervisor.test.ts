@@ -63,6 +63,33 @@ describe('projection build supervisor', () => {
     } finally { db.close() }
   })
 
+  it('retries a transient claim failure without waiting for another external wake', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'projection transient claim failure', model: 'test' })
+      const base = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+        connectionEpoch: () => 1, createToken: () => 'transient-claim-token', now: () => 1 })
+      let claims = 0
+      const service = { ...base, beginRebuild: (...args: Parameters<typeof base.beginRebuild>) => {
+        claims += 1
+        if (claims === 1) throw new Error('temporary sqlite busy')
+        return base.beginRebuild(...args)
+      } }
+      const work = { sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-transient-claim', specVersion: 1 }
+      const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => [work], dbPath: db.filePath,
+        readChunk: async (permit, input) => ({ kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }),
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async () => { throw new Error('inline result should not write blob') } }, limits: { maxRows: 1, maxBytes: 1024 },
+        maxChunksPerSlice: 1, now: () => 1 })
+      const handle = supervisor.start()
+      for (let i = 0; i < 750 && service.get(session.id, work.scopeKey)?.status !== 'valid'; i += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+      expect(claims).toBeGreaterThan(1)
+      expect(service.get(session.id, work.scopeKey)).toMatchObject({ status: 'valid' })
+      handle.stop()
+      await handle.quiesce()
+    } finally { db.close() }
+  })
+
   it('does not retain or later execute a prepare request when the worker is not running', async () => {
     const db = createMemoryAppDb()
     try {
