@@ -824,6 +824,7 @@
       "actionDeny": "Forbidden",
       "actionAllow": "Execute directly",
       "actionAsk": "Manual approval",
+      "actionConfirmEveryTime": "Human confirmation every time",
       "actionAutoEvaluator": "Auto evaluator",
       "whenInvocation": "Invocation",
       "whenExposure": "Exposure",

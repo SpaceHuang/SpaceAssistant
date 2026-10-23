@@ -77,7 +77,9 @@ function PolicyPackageSection({
         ? t('toolsSecurity.policy.actionAllow')
         : action === 'auto-evaluator'
           ? t('toolsSecurity.policy.actionAutoShort')
-          : t('toolsSecurity.policy.actionAsk')
+          : action === 'confirm-every-time'
+            ? t('toolsSecurity.policy.actionConfirmEveryTime')
+            : t('toolsSecurity.policy.actionAsk')
 
   const effectiveImAction = (
     pkg: PolicyPackage,
@@ -406,6 +408,8 @@ function PolicyPackageSection({
               // 非 custom 档只读：展示当前档位下的生效动作
               return <span>{actionLabel(imAction ?? effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}</span>
             }
+            // confirm-every-time 是固定真人确认底线，不属于用户可编辑动作集合；显示本地化名称并保持只读。
+            if (r.action === 'confirm-every-time') return <span>{actionLabel(r.action)}</span>
             // 自定义档：动作域按 lane（desktop 4 态，IM 3 态），含原锁定规则。
             const options = LANE_PROFILES[lane].availableActions.filter((v) => v !== 'confirm-every-time')
             return (

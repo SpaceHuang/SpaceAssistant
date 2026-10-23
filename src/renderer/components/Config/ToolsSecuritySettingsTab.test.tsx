@@ -486,4 +486,33 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     expect(select.closest('.ant-select')!.className).not.toContain('ant-select-disabled')
     expect(within(row as HTMLElement).getByText(/自动审核|Automatic review/)).toBeTruthy()
   })
+
+  it.each([
+    { locale: 'zh-CN', label: '真人逐次确认' },
+    { locale: 'en-US', label: 'Human confirmation every time' }
+  ])('自定义套餐桌面：confirm-every-time 在 $locale 显示本地化名称，不泄漏内部值', { timeout: 20000 }, async ({ locale, label }) => {
+    await changeAppLocale(locale)
+    const humanConfirmRule = {
+      id: 'desktop-human-confirm-label',
+      when: 'invocation',
+      action: 'confirm-every-time',
+      defaultAction: 'confirm-every-time',
+      enabled: true,
+      locked: true,
+      reason: '需要真人逐次确认',
+      overridden: false,
+      lanes: ['desktop']
+    } as unknown as SecuritySettingsModelPayload['rules'][number]
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, desktop: 'custom' },
+      rules: [...MODEL.rules, humanConfirmRule]
+    })
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('desktop-human-confirm-label')).closest('tr')!
+    expect(within(row as HTMLElement).getByText(label)).toBeTruthy()
+    expect(within(row as HTMLElement).queryByText(/^confirm-every-time$/)).toBeNull()
+    expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
+  })
 })
