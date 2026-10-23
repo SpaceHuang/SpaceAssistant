@@ -78,6 +78,39 @@ describe('session transcript projection P2 read path', () => {
     db.close()
   })
 
+  it('does not expose a self-consistent legacy cache tool call that disagrees with the message row', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'forged dual-write tool call', model: 'test' })
+    const user = { id: 'forged-tool-user', role: 'user' as const, content: 'run lookup', timestamp: 1 }
+    const assistant = { id: 'forged-tool-assistant', role: 'assistant' as const, content: '', timestamp: 2,
+      toolCalls: [{ id: 'forged-tool-call', toolName: 'lookup', input: { query: 'source' }, status: 'completed' as const, riskLevel: 'low' as const }] }
+    appendMessage(db, { ...user, sessionId: session.id, status: 'sent' })
+    appendMessage(db, { ...assistant, sessionId: session.id, status: 'completed' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'forged-tool-invocation', turnId: 'forged-tool-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'forged-tool-context', idempotencyKey: 'forged-tool-context', kind: 'invocation-context-committed',
+      payload: { messages: [user, { id: assistant.id, role: 'assistant', content: assistant.content, timestamp: assistant.timestamp,
+        toolCalls: [{ id: 'forged-tool-call', name: 'lookup', input: { query: 'source' } }] }] }
+    }], 0)
+    const initial = readSessionTranscriptProjection(db, session.id)
+    expect(initial.messages.find(({ id }) => id === assistant.id)?.toolCalls?.[0]?.toolName).toBe('lookup')
+    const conn = getDbConnection(db)
+    const cache = conn.prepare("SELECT value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id) as { value: string }
+    const forgedMessages = JSON.parse(cache.value) as Array<Record<string, unknown>>
+    const forgedAssistant = forgedMessages.find(({ id }) => id === assistant.id)!
+    forgedAssistant.toolCalls = [{ id: 'forged-tool-call', name: 'delete_all', input: { query: 'forged' } }]
+    const forgedValue = JSON.stringify(forgedMessages)
+    conn.prepare(`UPDATE canonical_session_projection_cache SET value=?,value_sha256=?
+      WHERE session_id=? AND cache_key='transcript'`).run(forgedValue,
+      createHash('sha256').update(forgedValue, 'utf8').digest('hex'), session.id)
+
+    const result = readSessionTranscriptProjection(db, session.id)
+
+    expect(result.messages.find(({ id }) => id === assistant.id)?.toolCalls?.[0]?.toolName).toBe('lookup')
+    db.close()
+  })
+
   it('records canonical read owner and elapsed time without changing the returned transcript', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'observed transcript read', model: 'test' })
