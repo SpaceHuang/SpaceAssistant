@@ -60,6 +60,9 @@ describe('session projection migration worker', () => {
       const inventory = buildSessionProjectionMigrationInventory(db)
       expect(inventory.sessions).toContainEqual(expect.objectContaining({ sessionId: session.id, disposition: 'projection_migrated' }))
       const run = startSessionProjectionMigration(db, inventory, { runId: 'canonical-owner-no-cache', now: 1 })
+      // A run created by an older inventory may still have an eligible/pending item for this owner.
+      conn.prepare("UPDATE session_projection_migration_items SET status='pending' WHERE run_id=? AND session_id=?")
+        .run(run.runId, session.id)
       await runSessionProjectionMigrationBatch(db, run.runId, { batchSize: 1, rateLimitMs: 0, now: 2 })
 
       expect(getSessionProjectionMigrationRun(db, run.runId)).toMatchObject({ status: 'completed', migratedCount: 1 })

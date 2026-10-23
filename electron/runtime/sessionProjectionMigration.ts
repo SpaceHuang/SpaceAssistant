@@ -340,6 +340,11 @@ async function processItem(db: AppDatabase, runId: string, item: ItemRow, now: n
             throw new SessionProjectionScopeChangedError('session scope changed during canonical certification')
           }
           if (projection.source === 'legacy') return { kind: 'legacy' as const, reason: projection.reason }
+          const writeMode = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
+            .get(item.session_id) as { write_mode: string } | undefined
+          // Canonical-backed readers replay History and validate message skeletons. Recovered runs
+          // must not wait for the retired transcript cache to be recreated.
+          if (writeMode?.write_mode === 'canonical') return { kind: 'migrated' as const }
           const history = new SqliteAgentHistory(conn)
           const cache = history.readCanonicalSessionTranscriptWithCache(item.session_id, 'transcript')
           const persistedCache = cache.kind === 'matched'
@@ -349,9 +354,7 @@ async function processItem(db: AppDatabase, runId: string, item: ItemRow, now: n
           if (cache.kind !== 'matched' || persistedCache?.kind !== 'hit' || !isDeepStrictEqual(persistedValue, cache.messages)) {
             return { kind: 'retry' as const, reason: 'projection-cache-not-durable-or-current' }
           }
-          const writeMode = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
-            .get(item.session_id) as { write_mode: string } | undefined
-          return (writeMode?.write_mode === 'canonical' || hasCurrentProjectionEligibility(db, item.session_id))
+          return hasCurrentProjectionEligibility(db, item.session_id)
             ? { kind: 'migrated' as const }
             : { kind: 'retry' as const, reason: 'projection-eligibility-not-durable-or-current' }
         })
