@@ -13,6 +13,7 @@ import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { advanceProcessGeneration } from '../database/processGeneration'
 import { getDbConnection } from '../database/sqliteStore'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
+import { readChatMessagesAfterPreparation } from './application/readChatMessages'
 
 describe('SQLite projection build task composition', () => {
   let root: string | undefined
@@ -94,7 +95,40 @@ describe('SQLite projection build task composition', () => {
         maintenanceTasks: [task] })
       try {
         await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).rejects.toThrow('PROJECTION_PREPARATION_DEFERRED_LARGE')
-        expect(host.storage.queries.readMessages({ sessionId: session.id })).toMatchObject([{ id: 'deferred-legacy-user', content: 'keep-serving-legacy' }])
+        expect(await readChatMessagesAfterPreparation(host.storage, { sessionId: session.id }))
+          .toMatchObject([{ id: 'deferred-legacy-user', content: 'keep-serving-legacy' }])
+      } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
+    } finally { db.close(); temp.cleanup() }
+  })
+
+  it('keeps canonical-only message bodies readable when one chunk of message facts exceeds the projection budget', async () => {
+    const temp = createTempDatabase('sqlite-projection-deferred-facts-')
+    const db = temp.db
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-deferred-facts-blobs-'))
+    try {
+      const session = createSession(db, { name: 'deferred projection canonical only', model: 'test' })
+      const body = 'x'.repeat(300 * 1024)
+      appendMessage(db, { id: 'deferred-facts-user', sessionId: session.id, role: 'user', content: body, timestamp: 1, status: 'sent' })
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id)
+      await history.appendBatch([
+        { invocationId: 'deferred-facts-inv', turnId: 'deferred-facts-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'deferred-facts-context', idempotencyKey: 'deferred-facts-context', kind: 'invocation-context-committed',
+          payload: { messages: [{ id: 'deferred-facts-user', role: 'user', content: body, timestamp: 1 }] } },
+        { invocationId: 'deferred-facts-inv', turnId: 'deferred-facts-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'deferred-facts-terminal', idempotencyKey: 'deferred-facts-terminal', kind: 'invocation-completed', payload: { status: 'completed' } },
+      ], 0)
+      getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run('deferred-facts-user')
+      const processGeneration = advanceProcessGeneration(getDbConnection(db))
+      const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }), recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
+        maintenanceTasks: [task] })
+      try {
+        await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).rejects.toThrow('PROJECTION_PREPARATION_DEFERRED_LARGE')
+        await expect(readChatMessagesAfterPreparation(host.storage, { sessionId: session.id }))
+          .resolves.toMatchObject([{ id: 'deferred-facts-user', content: body }])
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
     } finally { db.close(); temp.cleanup() }
   })
@@ -131,8 +165,8 @@ describe('SQLite projection build task composition', () => {
       const checkpointJson = await savedCheckpoint
       expect(JSON.parse(checkpointJson)).toMatchObject({ nextSequence: 1, processGeneration: firstProcessGeneration })
       await firstHandle.quiesce()
-      expect(stateStore.get(session.id, scopeKey)).toMatchObject({ status: 'rebuilding', processGeneration: firstProcessGeneration })
-      expect(stateStore.readCheckpoint(session.id, scopeKey)).toBe(checkpointJson)
+      expect(stateStore.get(session.id, scopeKey)).toMatchObject({ status: 'rebuilding', processGeneration: firstProcessGeneration - 1 })
+      expect(JSON.parse(stateStore.readCheckpoint(session.id, scopeKey)!)).toMatchObject({ processGeneration: firstProcessGeneration - 1 })
       currentDb.close()
 
       currentDb = await import('../database').then(({ openDatabase }) => openDatabase(temp.dbPath))

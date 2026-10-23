@@ -281,6 +281,7 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
     connectionEpoch: input.connectionEpoch, createToken: randomUUID, now: input.now })
   return createProjectionBuildLifecycleTask({ service,
     listDueWork: () => stateStore.listDueWork(input.now(), 64, input.processGeneration()), dbPath: input.dbPath,
+    nextRetryAt: () => stateStore.nextRetryAt(input.now()),
     resolveWorkItem: ({ sessionId, scopeKey, specVersion }) => {
       if (projectionScopeKind(scopeKey) !== 'chatBodyV1' || projectionScopeSpecVersion(scopeKey) !== specVersion) return undefined
       const session = getSession(input.db, sessionId)

@@ -9,7 +9,7 @@ import { SESSION_TITLE_MAX_LENGTH } from '../src/shared/sessionDisplay'
 import { type AppDatabase } from './database'
 import type { SessionQueries, SessionCommands } from './sessionStorage/public/ports'
 import { logHistoryOversizedToolResult } from './oversizedToolResultLog'
-import { readChatMessagesAfterPreparation } from './sessionStorage/application/readChatMessages'
+import { readChatMessagesAfterPreparation } from './sessionStorage/public/readMessages'
 
 export { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_USER_CUSTOM, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED } from './sessionMetadataKeys'
 import { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_USER_CUSTOM, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED } from './sessionMetadataKeys'

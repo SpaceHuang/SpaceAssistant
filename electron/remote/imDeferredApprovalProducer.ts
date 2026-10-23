@@ -17,6 +17,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import type { ConfirmationPort, ToolConfirmationResult } from '../../packages/agent-sdk/src/turn'
 import type { GateConfirmationContext } from '../confirmation/agentSdkConfirmationPort'
+import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 
 /** Resolve the authenticated inbound message by ID across its IM queue scope. */
 export async function resolveImTaskDigest(
@@ -26,7 +27,7 @@ export async function resolveImTaskDigest(
   const sessionId = remoteContext.originSessionId
   const messageId = remoteContext.currentUserMessageId
   if (!sessionStorage || !sessionId || !messageId) return undefined
-  await sessionStorage.ensureChatBodyV1?.({ sessionId })
+  await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, sessionId)
   const message = sessionStorage.queries.readMessage({ sessionId, messageId })
   return message?.role === 'user' && typeof message.content === 'string' ? message.content : undefined
 }

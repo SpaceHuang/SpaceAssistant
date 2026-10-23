@@ -479,7 +479,8 @@ describe('projection build coordinator', () => {
     const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath, readChunk: reader,
       historyReducer, blobs, limits: { maxRows: 1, maxBytes: 512 }, maxChunksPerSlice: 2, now: () => 5, retryAfter: () => 60 })
     expect(result).toMatchObject({ kind: 'deferred-large', eventSequence: 7 })
-    expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rejected', failureCaseJson: expect.stringContaining('DEFERRED_LARGE') })
+    expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rejected', retryAfter: Number.MAX_SAFE_INTEGER,
+      failureCaseJson: expect.stringContaining('DEFERRED_LARGE') })
     expect(service.readCheckpoint(session.id, 'scope-a')).toBeNull()
   })
 

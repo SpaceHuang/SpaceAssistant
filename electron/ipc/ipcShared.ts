@@ -28,6 +28,7 @@ import { type Dirent } from 'fs'
 import { type MessagePageReader } from '../sessionBackupManager'
 import type { AuditSink } from '../confirmation/channels'
 import type { SessionCommands, SessionQueries } from '../sessionStorage/public/ports'
+import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 
 export async function searchFilesUnder(
   absRoot: string,
@@ -209,7 +210,7 @@ export function backupPageReader(ctx: AppIpcContext, sessionId: string): Message
 export async function loadBackupPayload(ctx: AppIpcContext, sessionId: string) {
   const storage = ctx.sessionStorage
   if (!storage) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
-  await storage.ensureChatBodyV1?.({ sessionId })
+  await prepareChatBodyForRead(storage.ensureChatBodyV1, sessionId)
   const queries = ctx.sessionStorage?.queries
   if (!queries) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
   const s = queries.readSession(sessionId)

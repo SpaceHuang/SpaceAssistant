@@ -5,11 +5,14 @@ import type { ProjectionRebuildLease, SessionProjectionService } from './project
 import type { ProjectionPreparationRequest } from '../public/ports'
 
 export type ProjectionBuildWorkItem = Readonly<{ sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number }>
+const MIN_PREPARATION_RETRY_MS = 1_000
 type MaintenanceReason = 'startup' | 'window-ready' | 'policy-changed' | 'scope-changed' | 'capacity-pressure' | 'retry'
 export type ProjectionBuildTaskHandle = Readonly<{ stop(): void; quiesce(): Promise<void>; request?(reason: MaintenanceReason): void }>
 export type ProjectionBuildSupervisorOptions = Readonly<{
   service: SessionProjectionService
   listDueWork(): readonly ProjectionBuildWorkItem[]
+  /** Earliest durable rejected retry deadline, or null when none is pending. */
+  nextRetryAt?(): number | null
   dbPath: string
   readChunk: ProjectionHistoryChunkReaderPort
   historyReducer: ProjectionHistoryReducerPort
@@ -20,7 +23,7 @@ export type ProjectionBuildSupervisorOptions = Readonly<{
   retryAfter?(): number
   onResult?(item: ProjectionBuildWorkItem, result: Awaited<ReturnType<typeof runProjectionBuildSlice>>): void
   onFailure?(code: 'PROJECTION_BUILD_DUE_WORK_SCAN_FAILED' | 'PROJECTION_BUILD_CLAIM_FAILED' |
-    'PROJECTION_BUILD_STATE_UNAVAILABLE' | 'PROJECTION_BUILD_SUPERVISOR_FAILED'): void
+    'PROJECTION_BUILD_STATE_UNAVAILABLE' | 'PROJECTION_BUILD_SUPERVISOR_FAILED' | 'PROJECTION_BUILD_STOP_CLEANUP_FAILED'): void
   resolveWorkItem?(input: ProjectionPreparationRequest): ProjectionBuildWorkItem | undefined
 }>
 
@@ -34,11 +37,14 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
   const suspendedLeases = new Map<string, ProjectionRebuildLease>()
   const suspendedItems = new Map<string, ProjectionBuildWorkItem>()
   const retryWorkItems = new Map<string, ProjectionBuildWorkItem>()
+  const delayedRetryKeys = new Set<string>()
   const keyOf = (item: ProjectionBuildWorkItem) => JSON.stringify([item.sessionId, item.scopeKey])
   return Object.freeze({
     prepare(item) {
       const handle = active?.handle
-      if (!handle) return Promise.reject(new Error('PROJECTION_BUILD_TASK_NOT_RUNNING'))
+      if (!handle) return Promise.reject(Object.assign(new Error('PROJECTION_PREPARATION_UNAVAILABLE'), {
+        code: 'PROJECTION_PREPARATION_UNAVAILABLE' as const, retryAfter: options.now() + MIN_PREPARATION_RETRY_MS,
+      }))
       const key = keyOf(item)
       const existing = requests.get(key)
       if (existing) return new Promise((resolve, reject) => {
@@ -60,6 +66,10 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       let wakeResolve: (() => void) | undefined
       let loopPromise: Promise<void>
       let dueScanFailed = false
+      let retryWakeTimer: ReturnType<typeof setTimeout> | undefined
+      const claimFailures = new Map<string, number>()
+      const MIN_CLAIM_RETRY_MS = 1_000
+      const MAX_CLAIM_RETRY_MS = 60_000
       const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
       const reportFailure = (code: Parameters<NonNullable<typeof options.onFailure>>[0]) => {
         try { options.onFailure?.(code) } catch { /* Failure reporting must not own the worker lifecycle. */ }
@@ -68,11 +78,23 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       const nextWake = () => new Promise<void>((resolve) => { wakeResolve = resolve })
       const waitForWorkOrRetry = async () => {
         if (requests.size > 0) return
-        if (!dueScanFailed) await nextWake()
-        else await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 1_000)
-          wakeResolve = () => { clearTimeout(timer); resolve() }
-        })
+        let retryAt: number | null
+        if (dueScanFailed) retryAt = options.now() + 1_000
+        else {
+          try { retryAt = options.nextRetryAt?.() ?? null }
+          catch {
+            if (!dueScanFailed) reportFailure('PROJECTION_BUILD_DUE_WORK_SCAN_FAILED')
+            dueScanFailed = true
+            retryAt = options.now() + 1_000
+          }
+        }
+        if (retryWakeTimer) clearTimeout(retryWakeTimer)
+        if (retryAt !== null) {
+          await new Promise<void>((resolve) => {
+            retryWakeTimer = setTimeout(() => { retryWakeTimer = undefined; resolve() }, Math.max(0, retryAt - options.now()))
+            wakeResolve = () => { if (retryWakeTimer) clearTimeout(retryWakeTimer); retryWakeTimer = undefined; resolve() }
+          })
+        } else await nextWake()
         wakeResolve = undefined
       }
       const readDueWork = () => {
@@ -93,11 +115,16 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         if (lease) suspendedLeases.set(key, lease)
         suspendedItems.set(key, item)
         if (retryTimers.has(key)) return
+        const failures = (claimFailures.get(key) ?? 0) + 1
+        claimFailures.set(key, failures)
+        const delay = Math.min(MAX_CLAIM_RETRY_MS, MIN_CLAIM_RETRY_MS * 2 ** Math.min(failures - 1, 16))
+        delayedRetryKeys.add(key)
         retryTimers.set(key, setTimeout(() => {
           retryTimers.delete(key)
+          delayedRetryKeys.delete(key)
           retryWorkItems.set(key, item)
           wake('retry')
-        }, 1_000))
+        }, delay))
       }
       for (const [key, item] of suspendedItems) retryWorkItems.set(key, item)
       const runItem = async (item: ProjectionBuildWorkItem): Promise<boolean> => {
@@ -156,12 +183,15 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
           }
           const error = state?.sessionGeneration === item.sessionGeneration && state.status === 'rejected' &&
             state.retryAfter !== null && state.retryAfter > options.now()
-            ? new Error(`PROJECTION_BUILD_DEFERRED:${readFailureCaseId(state.failureCaseJson) ?? 'REJECTED'}`)
+            ? Object.assign(new Error(`PROJECTION_BUILD_DEFERRED:${readFailureCaseId(state.failureCaseJson) ?? 'REJECTED'}`), {
+              code: 'PROJECTION_BUILD_DEFERRED' as const, retryAfter: state.retryAfter,
+            })
             : new Error('PROJECTION_BUILD_CLAIM_UNAVAILABLE')
           requests.get(key)?.reject(error)
           requests.delete(key)
           return false
         }
+        claimFailures.delete(key)
         while (!stopped && !controller.signal.aborted) {
           try {
             const result = await runProjectionBuildSlice({ service: options.service, lease, specVersion: item.specVersion,
@@ -214,7 +244,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
           if (requested) { await runItem(requested.item); continue }
           const retryItem = retryWorkItems.values().next().value as ProjectionBuildWorkItem | undefined
           if (retryItem) { retryWorkItems.delete(keyOf(retryItem)); await runItem(retryItem); continue }
-          const work = readDueWork()
+          const work = readDueWork().filter((item) => !delayedRetryKeys.has(keyOf(item)))
           if (!work.length) {
             await waitForWorkOrRetry()
             continue
@@ -236,11 +266,31 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
           controller.abort(error)
           for (const timer of retryTimers.values()) clearTimeout(timer)
           retryTimers.clear()
+          delayedRetryKeys.clear()
+          if (retryWakeTimer) clearTimeout(retryWakeTimer)
+          retryWakeTimer = undefined
           for (const request of requests.values()) request.reject(error)
           requests.clear()
           wakeResolve?.(); wakeResolve = undefined
         },
-        quiesce: async () => { await loopPromise },
+        quiesce: async () => {
+          await loopPromise
+          for (const [key, lease] of suspendedLeases) {
+            try {
+              if (!options.service.releaseLease(lease)) continue
+              suspendedLeases.delete(key)
+              suspendedItems.delete(key)
+              retryWorkItems.delete(key)
+            } catch {
+              reportFailure('PROJECTION_BUILD_STOP_CLEANUP_FAILED')
+            }
+          }
+          for (const key of suspendedItems.keys()) {
+            if (suspendedLeases.has(key)) continue
+            suspendedItems.delete(key)
+            retryWorkItems.delete(key)
+          }
+        },
         request: wake,
       })
       active = { handle, wake }

@@ -16,6 +16,7 @@ import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import type { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
 import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'
+import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
 import { WikiConfig, WikiStatus } from '../../src/shared/domainTypes'
@@ -390,7 +391,7 @@ export async function readLatestRetrySourceAfterProjection<T>(input: Readonly<{
   ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
   readLatestRetryTarget(sessionId: string): T
 }>): Promise<T> {
-  await input.ensureChatBodyV1?.({ sessionId: input.sessionId })
+  await prepareChatBodyForRead(input.ensureChatBodyV1, input.sessionId)
   return input.readLatestRetryTarget(input.sessionId)
 }
 
@@ -705,7 +706,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:get-messages',
     async (_e, payload: { sessionId: string; limit?: number; offset?: number }): Promise<Message[]> => {
-      await sessionStorage.ensureChatBodyV1?.({ sessionId: payload.sessionId })
+      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
       return sessionQueries.readMessages(payload)
     }
   )
@@ -713,7 +714,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:get-api-context-baseline',
     async (_e, payload: { sessionId: string }) => {
-      await sessionStorage.ensureChatBodyV1?.({ sessionId: payload.sessionId })
+      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
       return sessionQueries.readApiBaseline(payload)
     }
   )
@@ -724,13 +725,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       _e,
       payload: { sessionId: string; beforeSequence?: number; limit?: number }
     ) => {
-      await sessionStorage.ensureChatBodyV1?.({ sessionId: payload.sessionId })
+      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
       return sessionQueries.readChatPage(payload)
     }
   )
 
   ipcMain.handle('chat:get-display-message-page', async (_e, payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
-    await sessionStorage.ensureChatBodyV1?.({ sessionId: payload.sessionId })
+    await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
     const page = sessionQueries.readChatPage(payload)
     return { ...page, entries: page.entries.filter(({ message }) => message.role === 'assistant').map(({ message, sequence }) => ({ display: turnToDisplay({ turnId: message.id, requestId: '', version: 0, assistantMessage: message }), sequence })) }
   })
@@ -746,7 +747,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       _e,
       payload: { sessionId: string; fromSequence?: number; limit?: number }
     ) => {
-      await sessionStorage.ensureChatBodyV1?.({ sessionId: payload.sessionId })
+      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
       return sessionQueries.readSearchCorpusPage({ sessionId: payload.sessionId, fromSequence: payload.fromSequence ?? 0, pageSize: payload.limit })
     }
   )
@@ -762,7 +763,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:resolve-retry-context',
     async (_e, payload: { sessionId: string; failedAssistantMessageId: string }) => {
-      await sessionStorage.ensureChatBodyV1?.({ sessionId: payload.sessionId })
+      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
       return sessionQueries.readRetryTarget(payload)
     }
   )
@@ -806,7 +807,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       const { executionConfig: _executionConfig, ...prepared } = turnCoordinator.prepare({ ...intent, config: existing.executionConfig ?? {} })
       return prepared
     }
-    await sessionStorage.ensureChatBodyV1?.({ sessionId: intent.sessionId })
+    await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, intent.sessionId)
     // A retry must fail closed on a missing canonical body before reporting an unrelated
     // admission conflict. This read is side-effect free and does not claim the session.
     if (intent.mode === 'reuse-user') sessionQueries.readMessage({ sessionId: intent.sessionId, messageId: intent.userMessageId })
@@ -1213,7 +1214,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       if ('content' in payload.patch && typeof payload.patch.content === 'string') {
         const edited = await sessionCommands.editMessage({ sessionId: payload.sessionId, messageId: payload.messageId, content: payload.patch.content })
         if (!edited) return null
-        await sessionStorage.ensureChatBodyV1?.({ sessionId: payload.sessionId })
+        await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
         const message = sessionQueries.readMessage({ sessionId: payload.sessionId, messageId: payload.messageId })
         const sequence = sessionQueries.readMessageSequence({ sessionId: payload.sessionId, messageId: payload.messageId })
         entry = message && sequence !== null ? { message, sequence } : null

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { CapabilityDescriptor, CapabilityContext } from '../types'
 import { isSessionActiveStream } from '../../chatActiveStreams'
+import { prepareChatBodyForRead } from '../../sessionStorage/public/readPreparation'
 
 /**
  * action.session.* 功能执行系列（需求 §4.2，risk=read 免确认）。
@@ -100,7 +101,7 @@ const readCapability: CapabilityDescriptor = {
     if (!target || target.ownership === 'internal' || target.visibility === 'hidden') {
       return { error: 'session not found or not user-visible' }
     }
-    await ctx.ensureChatBodyV1?.({ sessionId: params.sessionId, signal: ctx.signal })
+    await prepareChatBodyForRead(ctx.ensureChatBodyV1, params.sessionId, ctx.signal)
     const limit = Math.min(params.limit ?? 20, 50)
     const cursor = params.cursor ?? 0
     const page = queries.readExportPage({ sessionId: params.sessionId, fromSequence: cursor, pageSize: limit })

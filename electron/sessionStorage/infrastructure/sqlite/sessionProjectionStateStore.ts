@@ -96,6 +96,16 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
     }).slice(0, limit))
   }
 
+  const nextRetryAt = (now: number): number | null => {
+    if (!Number.isSafeInteger(now)) return null
+    const row = conn.prepare(`SELECT MIN(state.retry_after) AS retry_after
+      FROM session_projection_state state JOIN sessions ON sessions.id=state.session_id AND sessions.generation=state.session_generation
+      WHERE state.status='rejected' AND state.retry_after>? AND state.retry_after<? AND state.scope_key LIKE 'session-projection:%'`)
+      .get(now, Number.MAX_SAFE_INTEGER) as
+      { retry_after: number | null }
+    return row?.retry_after ?? null
+  }
+
   const readCheckpoint = (sessionId: string, scopeKey: string): string | null => {
     const row = conn.prepare('SELECT build_checkpoint_json FROM session_projection_state WHERE session_id=? AND scope_key=?')
       .get(sessionId, scopeKey) as { build_checkpoint_json: string | null } | undefined
@@ -108,6 +118,20 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
         AND source_identity_json=? AND process_generation=? AND rebuild_token=?`)
       .run(input.checkpointJson, input.now, input.sessionId, input.scopeKey, input.sessionGeneration,
         input.sourceIdentityJson, input.processGeneration, input.rebuildToken)
+    return changesToNumber(result.changes) === 1
+  }
+
+  const releaseLease = (input: Parameters<ProjectionStateStore['releaseLease']>[0]): boolean => {
+    const result = conn.prepare(`UPDATE session_projection_state SET process_generation=process_generation-1,
+        build_checkpoint_json=CASE WHEN json_valid(build_checkpoint_json)
+          AND json_extract(build_checkpoint_json,'$.processGeneration')=process_generation
+          AND json_extract(build_checkpoint_json,'$.rebuildToken')=rebuild_token
+          THEN json_set(build_checkpoint_json,'$.processGeneration',process_generation-1)
+          ELSE build_checkpoint_json END,
+        updated_at=?
+      WHERE session_id=? AND scope_key=? AND session_generation=? AND status='rebuilding'
+        AND process_generation=? AND rebuild_token=? AND process_generation>0`)
+      .run(input.now, input.sessionId, input.scopeKey, input.sessionGeneration, input.processGeneration, input.rebuildToken)
     return changesToNumber(result.changes) === 1
   }
 
@@ -170,7 +194,7 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
   const invalidateInTransaction = (input: Readonly<{ sessionId: string; scopeKey: string; sessionGeneration: string; now: number }>): ProjectionStateRecord | null =>
     transition({ ...input, command: { type: 'invalidate', sessionGeneration: input.sessionGeneration, now: input.now } })
 
-  return Object.freeze({ get, listDueWork, readCheckpoint, saveCheckpoint, ensureInvalid, readSourceIdentity, transition, invalidateInTransaction })
+  return Object.freeze({ get, listDueWork, nextRetryAt, readCheckpoint, saveCheckpoint, releaseLease, ensureInvalid, readSourceIdentity, transition, invalidateInTransaction })
 }
 
 /** Read and CAS-invalidate a final cache publication against a fresh source identity. */

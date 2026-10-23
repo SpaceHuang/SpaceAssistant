@@ -1,0 +1,261 @@
+[
+  {
+    "source": "electron/main.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost",
+    "owner": "session-storage-host",
+    "reason": "启动组合仍直接构造恢复 host",
+    "exitStage": "P5",
+    "symbols": [
+      "createSqliteStartupHistoryRecoveryBindings"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/outbound/outboundAcceptor.ts",
+    "target": "electron/sessionStorage/application/ports",
+    "owner": "outbound",
+    "reason": "应用端口类型待移入 public contract",
+    "exitStage": "P5",
+    "symbols": [
+      "SessionExecutionStore"
+    ],
+    "typeOnly": true,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/acceptedTurnContext.ts",
+    "target": "electron/sessionStorage/application/ports",
+    "owner": "runtime",
+    "reason": "应用端口类型待移入 public contract",
+    "exitStage": "P5",
+    "symbols": [
+      "SessionExecutionStore"
+    ],
+    "typeOnly": true,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/hostedTurnHandoff.ts",
+    "target": "electron/sessionStorage/application/ports",
+    "owner": "runtime",
+    "reason": "应用端口类型待移入 public contract",
+    "exitStage": "P5",
+    "symbols": [
+      "SessionExecutionStore"
+    ],
+    "typeOnly": true,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/hostedTurnHandoff.ts",
+    "target": "electron/sessionStorage/application/sessionCommitService",
+    "owner": "runtime",
+    "reason": "提交协调需经 public host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createSessionCommitService"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionContentWriteAuthority.ts",
+    "target": "electron/sessionStorage/application/sessionCommitService",
+    "owner": "session-content",
+    "reason": "提交协调需经 public host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createSessionCommitService"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionContentWriteAuthority.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionApiRouteProjectionFence",
+    "owner": "session-content",
+    "reason": "SQLite fence 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createSqliteSessionApiRouteProjectionFence"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionProjectionConsistencyAudit.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts",
+    "owner": "projection",
+    "reason": "SQLite facts reader 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "hasCurrentProjectionEligibility"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionProjectionLegacyBaseline.ts",
+    "target": "electron/sessionStorage/application/sessionCommitService",
+    "owner": "projection",
+    "reason": "提交协调需经 public host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createSessionCommitService"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionProjectionMigration.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts",
+    "owner": "projection",
+    "reason": "SQLite facts reader 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "hasCurrentProjectionEligibility"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionProjectionMigrationInventory.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts",
+    "owner": "projection",
+    "reason": "SQLite facts reader 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "hasCurrentProjectionEligibility"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionProjectionRejection.ts",
+    "target": "electron/sessionStorage/application/projectionService",
+    "owner": "projection",
+    "reason": "projection service 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createProjectionService"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionProjectionRejection.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionProjectionStateStore",
+    "owner": "projection",
+    "reason": "SQLite state store 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createSqliteProjectionStateStore"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionProjectionRevalidation.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts",
+    "owner": "projection",
+    "reason": "SQLite facts reader 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "computeCanonicalProjectionFingerprint",
+      "publishTranscriptParityProof",
+      "readLegacyProjectionMessages",
+      "refreshValidatedProjectionFastPath",
+      "validateAndCacheCanonicalProjection"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionTranscriptProjection.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts",
+    "owner": "transcript",
+    "reason": "SQLite facts reader 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "hasCurrentProjectionEligibility",
+      "publishTranscriptParityProof",
+      "refreshValidatedProjectionFastPath"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sessionTranscriptProjection.ts",
+    "target": "electron/sessionStorage/internal/messageBodyResolver",
+    "owner": "transcript",
+    "reason": "internal body resolver 需暴露为 public reader contract",
+    "exitStage": "P5",
+    "symbols": [
+      "resolveSelectedMessageBodies"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/sqliteAgentHistory.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionProjectionEligibility",
+    "owner": "history",
+    "reason": "SQLite eligibility reader 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "hasRejectedTranscriptParityStateInConnection"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/runtime/unknownEffectRecovery.ts",
+    "target": "electron/sessionStorage/application/sessionCommitService",
+    "owner": "runtime-recovery",
+    "reason": "提交协调需经 public host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createSessionCommitService"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/storage/sessionEventRetention.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionEventRetentionAdapter",
+    "owner": "retention",
+    "reason": "SQLite adapter 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createSessionLedgerCompactionDependencyGuard",
+      "createCanonicalSessionProjectionRetentionPreparer"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/storage/sessionProjectionCacheMaintenance.ts",
+    "target": "electron/sessionStorage/application/projectionService",
+    "owner": "projection-maintenance",
+    "reason": "projection service 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createProjectionService"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  },
+  {
+    "source": "electron/storage/sessionProjectionCacheMaintenance.ts",
+    "target": "electron/sessionStorage/infrastructure/sqlite/sessionProjectionStateStore",
+    "owner": "projection-maintenance",
+    "reason": "SQLite state store 需经 host binding",
+    "exitStage": "P5",
+    "symbols": [
+      "createSqliteProjectionStateStore"
+    ],
+    "typeOnly": false,
+    "evidence": "AST dependency observed in the v4 review follow-up scan; removal requires a source migration or host binding and a clean gate run."
+  }
+]

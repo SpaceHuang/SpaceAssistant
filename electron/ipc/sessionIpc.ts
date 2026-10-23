@@ -28,6 +28,7 @@ import { probeReadPathFact } from '../confirmation/extractors/readPathFacts'
 import os from 'node:os'
 import { withSessionContextCompactionLock, registerSessionCompactionAdmissionBlocker } from '../sessionCompactionLock'
 import { compactSessionContext } from '../sessionContextCompaction'
+import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { resolveWorkDirForSession } from '../workDirManager'
 import { readStoredModels } from '../llmServiceResolver'
 import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
@@ -77,7 +78,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const locked = await withSessionContextCompactionLock(sessionId, async () => {
       const busy = () => sessionStorage.execution.hasActiveTurn(sessionId) || Boolean(ctx.turnRuntime?.coordinator.listActive(sessionId).length) || isRemoteAgentRunning(sessionId)
       if (busy()) return { status: 'busy' as const }
-      await sessionStorage.ensureChatBodyV1?.({ sessionId })
+      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, sessionId)
       const baseline = sessionQueries.readApiBaseline({ sessionId, limit: 500 })
       const initialMessages = baseline.entries.map((entry) => entry.message)
       if (initialMessages.length < 3) return { status: 'no-op' as const }

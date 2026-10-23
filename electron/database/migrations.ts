@@ -71,12 +71,54 @@ function hasColumn(conn: DatabaseSync, tableName: string, columnName: string): b
   return (conn.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).some(({ name }) => name === columnName)
 }
 
+/** Split a trigger body into SQL statements without treating quoted/comment semicolons as delimiters. */
+function removeTriggerDeleteStatements(sql: string, tableNames: readonly string[]): string {
+  const begin = /\bBEGIN\b/i.exec(sql)
+  const endPattern = /\bEND\s*;?\s*$/i
+  const end = endPattern.exec(sql)
+  if (!begin || !end || end.index <= begin.index + begin[0].length) return sql
+  const bodyStart = begin.index + begin[0].length
+  const bodyEnd = end.index
+  const body = sql.slice(bodyStart, bodyEnd)
+  const statements: string[] = []
+  let start = 0
+  let quote: string | undefined
+  let lineComment = false
+  let blockComment = false
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index]
+    const next = body[index + 1]
+    if (lineComment) { if (char === '\n') lineComment = false; continue }
+    if (blockComment) { if (char === '*' && next === '/') { blockComment = false; index += 1 }; continue }
+    if (quote) {
+      if (char === quote) {
+        if (next === quote && quote !== ']') index += 1
+        else quote = undefined
+      } else if (quote === ']' && char === ']') quote = undefined
+      continue
+    }
+    if (char === '-' && next === '-') { lineComment = true; index += 1; continue }
+    if (char === '/' && next === '*') { blockComment = true; index += 1; continue }
+    if (char === "'" || char === '"' || char === '`') { quote = char; continue }
+    if (char === '[') { quote = ']'; continue }
+    if (char === ';') { statements.push(body.slice(start, index)); start = index + 1 }
+  }
+  const tail = body.slice(start)
+  if (tail.trim()) statements.push(tail)
+  const escaped = tableNames.map((table) => table.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const obsoleteDelete = new RegExp(`^\\s*DELETE\\s+FROM\\s+(?:[\\"'\\x60\\[])?(?:main\\.)?(?:${escaped.join('|')})(?:[\\"'\\x60\\]]|\\b)`, 'i')
+  const retained = statements.filter((statement) => !obsoleteDelete.test(statement))
+  const retainedStatements = retained.map((statement) => statement.trim()).filter(Boolean)
+  const retainedBody = retainedStatements.length ? `${retainedStatements.join('; ')};` : ''
+  return `${sql.slice(0, bodyStart)} ${retainedBody} ${sql.slice(bodyEnd)}`
+}
+
 /** Retire the legacy API fence and remove only its obsolete trigger statements. */
 function retireCanonicalApiContextEligibility(conn: DatabaseSync): void {
   const rows = conn.prepare(`SELECT name,sql FROM sqlite_master WHERE type='trigger'
     AND sql LIKE '%canonical_session_api_context_eligibility%'`).all() as Array<{ name: string; sql: string }>
   for (const { name, sql } of rows) {
-    const rewritten = sql.replace(/\s*DELETE\s+FROM\s+canonical_session_api_context_eligibility\b[\s\S]*?;/gi, '')
+    const rewritten = removeTriggerDeleteStatements(sql, ['canonical_session_api_context_eligibility'])
     conn.exec(`DROP TRIGGER IF EXISTS "${name.replace(/"/g, '""')}"`)
     if (!/\bBEGIN\s*END\s*;?\s*$/i.test(rewritten)) conn.exec(rewritten)
   }
@@ -87,11 +129,10 @@ function retireCanonicalApiContextEligibility(conn: DatabaseSync): void {
 function retireLegacySessionProjectionTables(conn: DatabaseSync): void {
   const legacyTables = ['canonical_session_projection_eligibility', 'canonical_session_projection_rejections']
   for (const table of legacyTables) {
-    const escapedTable = table.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const rows = conn.prepare(`SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql LIKE ?`).all(`%${table}%`) as
       Array<{ name: string; sql: string }>
     for (const { name, sql } of rows) {
-      const rewritten = sql.replace(new RegExp(`\\s*DELETE\\s+FROM\\s+${escapedTable}\\b[\\s\\S]*?;`, 'gi'), '')
+      const rewritten = removeTriggerDeleteStatements(sql, [table])
       conn.exec(`DROP TRIGGER IF EXISTS "${name.replace(/"/g, '""')}"`)
       if (!/\bBEGIN\s*END\s*;?\s*$/i.test(rewritten)) conn.exec(rewritten)
     }

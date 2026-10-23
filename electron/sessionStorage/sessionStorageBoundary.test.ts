@@ -23,7 +23,7 @@ describe('session storage module graph rules', () => {
       expect(command.indexOf('npm run check:session-storage-boundary')).toBeLessThan(command.indexOf('tsc -p tsconfig.electron.json'))
     }
     expect(execFileSync(process.execPath, [path.resolve('scripts/check-session-storage-module-graph.mjs'), '--probe-illegal-edge'], { encoding: 'utf8' }))
-      .toContain('illegal-edge probes rejected as expected (4 probes)')
+      .toContain('illegal-edge probes rejected as expected (8 probes)')
   })
 
   it('blocks both Electron build command chains before compilation when the injected graph probe fails', () => {
@@ -43,7 +43,7 @@ describe('session storage module graph rules', () => {
         expect(command).toContain('npm run check:session-storage-boundary')
         const result = spawnSync('/bin/sh', ['-c', command], { cwd: path.resolve('.'), env: { ...process.env, PATH: isolatedPath }, encoding: 'utf8' })
         expect(result.status, `${name} must stop on the injected illegal edge`).not.toBe(0)
-        expect(`${result.stdout}${result.stderr}`).toContain('illegal-edge probes rejected as expected (4 probes)')
+        expect(`${result.stdout}${result.stderr}`).toContain('illegal-edge probes rejected as expected (8 probes)')
         expect(existsSync(marker)).toBe(false)
       }
     } finally {
@@ -142,7 +142,7 @@ describe('session storage module graph rules', () => {
   it('automatically protects new production modules added at the sessionStorage root', () => {
     expect(findSessionStorageModuleViolations('electron/sessionStorage/newPersistenceAdapter.ts', `
       import { sendFeishuTextToTarget } from '../feishu/feishuReply'
-    `)).toEqual([{ category: 'infrastructure/sqlite', specifier: '../feishu/feishuReply', resolved: 'electron/feishu/feishuReply' }])
+    `)).toEqual([{ category: 'composition', specifier: '../feishu/feishuReply', resolved: 'electron/feishu/feishuReply' }])
   })
 
   it('allows application ports to use shared contracts and rejects runtime or database dependencies', () => {
@@ -168,6 +168,38 @@ describe('session storage module graph rules', () => {
     expect(findSessionStorageModuleViolations('electron/sessionStorage/host/example.ts', `
       import type { AppDatabase } from '../../database'
     `)).toEqual([{ category: 'host', specifier: '../../database', resolved: 'electron/database' }])
+  })
+
+  it('rejects external business dependencies on application, infrastructure and internal implementations', () => {
+    expect(findSessionStorageModuleViolations('electron/remote/evilConsumer.ts', `
+      import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
+      import { createSqliteProjectionStateStore } from '../sessionStorage/infrastructure/sqlite/sessionProjectionStateStore'
+      import { resolveSelectedMessageBodies } from '../sessionStorage/internal/messageBodyResolver'
+    `)).toHaveLength(3)
+    expect(findSessionStorageModuleViolations('electron/remote/validConsumer.ts', `
+      import type { SessionStorage } from '../sessionStorage/host/ports'
+      import type { SessionQueries } from '../sessionStorage/public/ports'
+    `)).toEqual([])
+    expect(findSessionStorageModuleViolations('electron/runtime/sessionProjectionRejection.ts', `
+      import { someNewSymbol } from '../sessionStorage/application/projectionService'
+    `)).toHaveLength(1)
+  })
+
+  it('keeps every cross-directory exception precise and reviewable', () => {
+    const entries = JSON.parse(readFileSync(path.resolve('scripts/session-storage-cross-directory-exceptions.json'), 'utf8')) as Array<{
+      source: string; target: string; symbols: string[]; typeOnly: boolean; owner: string; reason: string; exitStage: string; evidence: string
+    }>
+    expect(entries).toHaveLength(21)
+    for (const entry of entries) {
+      expect(entry.source).toMatch(/^electron\//)
+      expect(entry.target).toMatch(/^electron\/sessionStorage\/(application|infrastructure|internal)\//)
+      expect(entry.symbols.length).toBeGreaterThan(0)
+      expect(typeof entry.typeOnly).toBe('boolean')
+      expect(entry.owner.trim()).not.toBe('')
+      expect(entry.reason.trim()).not.toBe('')
+      expect(entry.exitStage).toBe('P5')
+      expect(entry.evidence.trim()).not.toBe('')
+    }
   })
 
   it('catches re-exports and dynamic low-level imports in the domain category', () => {

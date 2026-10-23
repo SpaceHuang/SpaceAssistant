@@ -25,6 +25,7 @@ export interface ProjectionStateStore {
     sessionId: string; scopeKey: string; sessionGeneration: string; sourceIdentityJson: string
     processGeneration: number; rebuildToken: string; checkpointJson: string; now: number
   }>): boolean
+  releaseLease(input: Readonly<{ sessionId: string; scopeKey: string; sessionGeneration: string; processGeneration: number; rebuildToken: string; now: number }>): boolean
   ensureInvalid(input: Readonly<{ sessionId: string; scopeKey: string; sessionGeneration: string; now: number }>): ProjectionStateRecord | null
   readSourceIdentity(sessionId: string, sessionGeneration: string): string | null
   transition(input: Readonly<{

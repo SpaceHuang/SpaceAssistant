@@ -95,6 +95,30 @@ describe('chat:get-messages projection preparation', () => {
     expect(sessionStorage.ensureChatBodyV1).toHaveBeenCalledWith({ sessionId: session.id })
   })
 
+  it('keeps chat:get-message-page readable when projection preparation is deferred', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection page fallback IPC', model: 'test' })
+    const events: string[] = []
+    const base = createSqliteSessionStorage(db)
+    const sessionStorage = {
+      ...base,
+      ensureChatBodyV1: vi.fn(async () => { events.push('ensure'); throw new Error('PROJECTION_PREPARATION_DEFERRED_LARGE') }),
+      queries: { ...base.queries, readChatPage: vi.fn((input: { sessionId: string; beforeSequence?: number | null; limit?: number }) => {
+        events.push('authoritative-read')
+        return base.queries.readChatPage(input)
+      }) },
+    }
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
+      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
+    })
+
+    await expect(handlers.get('chat:get-message-page')!(null, { sessionId: session.id })).resolves.toMatchObject({ entries: [] })
+    expect(events).toEqual(['ensure', 'authoritative-read'])
+  })
+
   it('prepares chatBodyV1 before the display page selects its source page', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection display page IPC ensure', model: 'test' })

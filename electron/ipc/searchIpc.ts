@@ -4,6 +4,7 @@ import type { IpcMain } from 'electron'
 import { SearchResult } from '../../src/shared/domainTypes'
 import { appendSearchHistory, listSearchHistory } from '../database/operations'
 import { searchFilesUnder } from './ipcShared'
+import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 
 export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 
@@ -19,7 +20,7 @@ export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     if (storage.ensureChatBodyV1) {
       const sessionIds = [...new Set(hits.filter((hit) => hit.requiresProjectionPreparation).map(({ sessionId }) => sessionId))]
       if (sessionIds.length) {
-        for (const sessionId of sessionIds) await storage.ensureChatBodyV1({ sessionId })
+        for (const sessionId of sessionIds) await prepareChatBodyForRead(storage.ensureChatBodyV1, sessionId)
         // Cross-session preparation may change a source between reads; rerun the full query
         // so final candidates, body authority, ordering, and limit share a fresh SQLite snapshot.
         hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })

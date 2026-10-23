@@ -16,7 +16,7 @@ import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit
 import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 import type { TurnRuntime } from '../turnRuntime'
 import type { SessionStorage } from '../sessionStorage/host/ports'
-import { readChatMessageAfterPreparation } from '../sessionStorage/application/readChatMessages'
+import { readChatMessageAfterPreparation } from '../sessionStorage/public/readMessages'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { resolveClarificationControlMessage, type ClarificationResolverInput, type ClarificationResolverResult } from '../remote/clarificationInbound'

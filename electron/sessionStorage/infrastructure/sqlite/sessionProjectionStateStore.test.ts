@@ -18,15 +18,19 @@ describe('SQLite session projection state store', () => {
     const chatScope = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 3 })
     const searchScope = encodeProjectionScopeKey({ scope: 'searchCorpusV1', specVersion: 2 })
     const baselineScope = encodeProjectionScopeKey({ scope: 'apiBaselineV1', specVersion: 1 })
+    const permanentScope = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
     store.ensureInvalid({ sessionId: first.id, scopeKey: chatScope, sessionGeneration: first.generation, now: 1 })
     store.ensureInvalid({ sessionId: second.id, scopeKey: searchScope, sessionGeneration: second.generation, now: 1 })
     store.ensureInvalid({ sessionId: first.id, scopeKey: baselineScope, sessionGeneration: first.generation, now: 1 })
+    store.ensureInvalid({ sessionId: second.id, scopeKey: permanentScope, sessionGeneration: second.generation, now: 1 })
     store.ensureInvalid({ sessionId: first.id, scopeKey: 'legacy-arbitrary-scope', sessionGeneration: first.generation, now: 1 })
     const conn = getDbConnection(db)
     conn.prepare("UPDATE session_projection_state SET status='rejected',failure_case_json='{}',attempts=1,retry_after=50 WHERE session_id=? AND scope_key=?")
       .run(second.id, searchScope)
     conn.prepare("UPDATE session_projection_state SET status='rejected',failure_case_json='{}',attempts=1,retry_after=101 WHERE session_id=? AND scope_key=?")
       .run(first.id, chatScope)
+    conn.prepare("UPDATE session_projection_state SET status='rejected',failure_case_json='{}',attempts=1,retry_after=? WHERE session_id=? AND scope_key=?")
+      .run(Number.MAX_SAFE_INTEGER, second.id, permanentScope)
 
     expect(store.listDueWork(49)).toEqual([
       { sessionId: first.id, sessionGeneration: first.generation, scopeKey: baselineScope, specVersion: 1 },
@@ -37,6 +41,8 @@ describe('SQLite session projection state store', () => {
     ])
     expect(store.listDueWork(200, 1)).toHaveLength(1)
     expect(store.listDueWork(200, 0)).toEqual([])
+    expect(store.nextRetryAt(50)).toBe(101)
+    expect(store.nextRetryAt(101)).toBeNull()
   })
 
   it('offers old-process rebuilding checkpoints for takeover while excluding the current process owner', () => {

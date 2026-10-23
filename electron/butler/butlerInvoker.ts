@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database'
-import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
+import { readChatMessagesAfterPreparation } from '../sessionStorage/public/readMessages'
 import path from 'node:path'
 import { getConfigValue } from '../database'
 import { runToolChatSession } from '../toolChatLoop'

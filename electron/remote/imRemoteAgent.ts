@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database'
-import { prepareChatBodiesForSessions, readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
+import { prepareChatBodiesForSessions, readChatMessagesAfterPreparation } from '../sessionStorage/public/readMessages'
 import { getConfigValue, getDbConnection } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation, type AgentInvocationMaterials } from '../runtime/invocationAssembler'

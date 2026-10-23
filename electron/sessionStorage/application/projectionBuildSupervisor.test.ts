@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSession } from '../../database/operations'
-import { createMemoryAppDb } from '../../database/testHelpers'
+import { createMemoryAppDb, createTempDatabase } from '../../database/testHelpers'
+import { openDatabase } from '../../database'
 import { getDbConnection } from '../../database/sqliteStore'
 import { createSqliteProjectionStateStore } from '../infrastructure/sqlite/sessionProjectionStateStore'
 import { createProjectionService } from './projectionService'
 import { createProjectionBuildSupervisor } from './projectionBuildSupervisor'
+import { CHAT_BODY_PROJECTION_SPEC_VERSION, encodeProjectionScopeKey } from '../domain/scopeKey'
 import type { ProjectionHistoryChunkReaderPort, ProjectionHistoryReducerPort } from './projectionBuildCoordinator'
 
 describe('projection build supervisor', () => {
+  afterEach(() => { vi.useRealTimers() })
   it('sleeps without due work and wakes only when explicitly requested', async () => {
     const db = createMemoryAppDb()
     try {
@@ -90,6 +93,127 @@ describe('projection build supervisor', () => {
     } finally { db.close() }
   })
 
+  it('consumes a rejected scope at retryAfter without another external request', async () => {
+    const temp = createTempDatabase('projection-due-retry-reopen-')
+    let db = temp.db
+    try {
+      const retryAfter = Date.now() + 100
+      const session = createSession(db, { name: 'projection due retry', model: 'test' })
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
+      const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+        connectionEpoch: () => 1, createToken: () => 'due-retry-token', now: Date.now })
+      service.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })
+      const lease = service.beginRebuild({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })!
+      service.reject(lease, { failureCaseJson: '{"case":"CONTENT_UNAVAILABLE","caseId":"TEMPORARY"}', attempts: 1, retryAfter })
+      db.close()
+      db = openDatabase(temp.dbPath)
+      const reopenedStore = createSqliteProjectionStateStore(db)
+      const restartedService = createProjectionService(reopenedStore, { processGeneration: () => 2,
+        connectionEpoch: () => 2, createToken: () => 'restarted-due-retry-token', now: Date.now })
+      let reads = 0
+      const supervisor = createProjectionBuildSupervisor({ service: restartedService,
+        listDueWork: () => reopenedStore.listDueWork(Date.now(), 64, 2),
+        nextRetryAt: () => reopenedStore.nextRetryAt(Date.now()), dbPath: temp.dbPath,
+        readChunk: async (permit, input) => { reads += 1; return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence } },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 1024 },
+        maxChunksPerSlice: 1, now: Date.now })
+      const handle = supervisor.start()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(reads).toBe(0)
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      expect(reads).toBeGreaterThan(0)
+      for (let attempts = 0; attempts < 20 && restartedService.get(session.id, scopeKey)?.status !== 'valid'; attempts += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2))
+      }
+      expect(restartedService.get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
+      handle.stop()
+      await handle.quiesce()
+    } finally { temp.cleanup() }
+  })
+
+  it('backs off repeated claim failures and caps the delay', async () => {
+    vi.useFakeTimers()
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'projection bounded retry', model: 'test' })
+      const base = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+        connectionEpoch: () => 1, createToken: () => 'bounded-retry-token', now: () => 1 })
+      let claims = 0
+      const service = { ...base, beginRebuild: (...args: Parameters<typeof base.beginRebuild>) => {
+        claims += 1
+        throw new Error('sqlite unavailable')
+      } }
+      const work = { sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-bounded-retry', specVersion: 1 }
+      const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => [work], dbPath: db.filePath,
+        readChunk: async () => { throw new Error('no source reads expected') },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 1024 },
+        maxChunksPerSlice: 1, now: () => 1 })
+      const handle = supervisor.start()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(claims).toBe(1)
+      await vi.advanceTimersByTimeAsync(999)
+      expect(claims).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(claims).toBe(2)
+      await vi.advanceTimersByTimeAsync(1_999)
+      expect(claims).toBe(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(claims).toBe(3)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(claims).toBeLessThanOrEqual(20)
+      handle.stop()
+      await handle.quiesce()
+    } finally { db.close() }
+  })
+
+  it('survives a retry-deadline scan failure and later consumes due work', async () => {
+    const temp = createTempDatabase('projection-retry-deadline-scan-failure-')
+    const db = temp.db
+    try {
+      let now = Date.now()
+      const session = createSession(db, { name: 'projection retry deadline scan failure', model: 'test' })
+      const store = createSqliteProjectionStateStore(db)
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
+      const service = createProjectionService(store, { processGeneration: () => 1, connectionEpoch: () => 1,
+        createToken: () => 'retry-deadline-recovery', now: () => now })
+      service.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })
+      const lease = service.beginRebuild({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })!
+      service.reject(lease, { failureCaseJson: '{"case":"CONTENT_UNAVAILABLE","caseId":"TEMPORARY"}', attempts: 1, retryAfter: now + 100 })
+      let deadlineScans = 0
+      let reads = 0
+      const failures: string[] = []
+      const supervisor = createProjectionBuildSupervisor({ service,
+        listDueWork: () => store.listDueWork(now, 64, 1), nextRetryAt: () => {
+          deadlineScans += 1
+          if (deadlineScans === 1) throw new Error('sqlite busy')
+          return store.nextRetryAt(now)
+        }, onFailure: (code) => { failures.push(code) }, dbPath: db.filePath,
+        readChunk: async (permit, input) => { reads += 1; return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence } },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 1024 },
+        maxChunksPerSlice: 1, now: () => now })
+      const handle = supervisor.start()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(failures).toEqual(['PROJECTION_BUILD_DUE_WORK_SCAN_FAILED'])
+      await new Promise<void>((resolve, reject) => {
+        const deadline = Date.now() + 2_000
+        const poll = () => {
+          now = Date.now()
+          if (service.get(session.id, scopeKey)?.status === 'valid') { resolve(); return }
+          if (Date.now() >= deadline) { reject(new Error('projection retry did not publish before timeout')); return }
+          setTimeout(poll, 5)
+        }
+        poll()
+      })
+      expect(reads).toBeGreaterThan(0)
+      expect(service.get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
+      handle.stop()
+      await handle.quiesce()
+    } finally { temp.cleanup() }
+  })
+
   it('does not retain or later execute a prepare request when the worker is not running', async () => {
     const db = createMemoryAppDb()
     try {
@@ -105,7 +229,7 @@ describe('projection build supervisor', () => {
           payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }) },
         limits: { maxRows: 1, maxBytes: 1024 }, maxChunksPerSlice: 1, now: () => 1 })
       await expect(supervisor.prepare({ sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-not-running', specVersion: 1 }))
-        .rejects.toThrow('PROJECTION_BUILD_TASK_NOT_RUNNING')
+        .rejects.toMatchObject({ message: 'PROJECTION_PREPARATION_UNAVAILABLE', code: 'PROJECTION_PREPARATION_UNAVAILABLE', retryAfter: 1_001 })
       const handle = supervisor.start()
       await new Promise((resolve) => setTimeout(resolve, 0))
       expect(reads).toBe(0)
@@ -157,8 +281,12 @@ describe('projection build supervisor', () => {
         blobs: { write: async () => { throw new Error('must not write without lease') } }, limits: { maxRows: 1, maxBytes: 1024 },
         maxChunksPerSlice: 1, now: () => 2 })
       const handle = supervisor.start()
-      await expect(supervisor.prepare({ sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-owned', specVersion: 1 }))
-        .rejects.toThrow('PROJECTION_BUILD_DEFERRED:DEFERRED_LARGE')
+      try {
+        await supervisor.prepare({ sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-owned', specVersion: 1 })
+        throw new Error('expected persisted rejection')
+      } catch (error) {
+        expect(error).toMatchObject({ message: 'PROJECTION_BUILD_DEFERRED:DEFERRED_LARGE', code: 'PROJECTION_BUILD_DEFERRED', retryAfter: 1_000 })
+      }
       handle.stop()
       await handle.quiesce()
     } finally { db.close() }
@@ -274,7 +402,7 @@ describe('projection build supervisor', () => {
     } finally { db.close() }
   })
 
-  it('preserves the stopped lease and checkpoint after worker quiescence', async () => {
+  it('releases the stopped lease after worker quiescence so a later start can claim safely', async () => {
     const db = createMemoryAppDb()
     try {
       const session = createSession(db, { name: 'projection supervisor quiesce', model: 'test' })
@@ -321,7 +449,7 @@ describe('projection build supervisor', () => {
       exited()
       await quiescence
       expect(quiesced).toBe(true)
-      expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rebuilding', rebuildToken: 'supervisor-1' })
+      expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rebuilding', processGeneration: 0, rebuildToken: expect.any(String) })
       expect(getDbConnection(db).prepare('SELECT build_checkpoint_json FROM session_projection_state WHERE session_id=? AND scope_key=?')
         .get(session.id, 'scope-a')).toMatchObject({ build_checkpoint_json: expect.any(String) })
       await new Promise((resolve) => setTimeout(resolve, 0))

@@ -27,6 +27,7 @@ export interface SessionProjectionService {
   readCheckpoint(sessionId: string, scopeKey: string): string | null
   saveCheckpoint(lease: ProjectionRebuildLease, checkpointJson: string): boolean
   invalidateLease(lease: ProjectionRebuildLease): boolean
+  releaseLease(lease: ProjectionRebuildLease): boolean
   ensureInvalid(input: Readonly<{ sessionId: string; scopeKey: string; sessionGeneration: string }>): ProjectionStateRecord | null
   beginRebuild(input: Readonly<{ sessionId: string; scopeKey: string; sessionGeneration: string }>): ProjectionRebuildLease | null
   publish(lease: ProjectionRebuildLease, output: ProjectionBuildOutput): ProjectionStateRecord | null
@@ -139,9 +140,18 @@ export function createProjectionService(store: ProjectionStateStore, options: Re
       command: { type: 'invalidate', sessionGeneration: lease.sessionGeneration, now: options.now() } })?.status === 'invalid'
   }
 
+  const releaseLease: SessionProjectionService['releaseLease'] = (lease) => {
+    if (!ownsLease(lease) || lease.processGeneration < 1) return false
+    const current = store.get(lease.sessionId, lease.scopeKey)
+    if (!current || current.status !== 'rebuilding' || current.sessionGeneration !== lease.sessionGeneration ||
+      current.processGeneration !== lease.processGeneration || current.rebuildToken !== lease.rebuildToken) return false
+    return store.releaseLease({ sessionId: lease.sessionId, scopeKey: lease.scopeKey, sessionGeneration: lease.sessionGeneration,
+      processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken, now: options.now() })
+  }
+
   const invalidateInTransaction: SessionProjectionService['invalidateInTransaction'] = (input) =>
     store.invalidateInTransaction({ ...input, now: options.now() })
 
-  return Object.freeze({ get, readCheckpoint, saveCheckpoint, invalidateLease, ensureInvalid, beginRebuild, publish, reject,
+  return Object.freeze({ get, readCheckpoint, saveCheckpoint, invalidateLease, releaseLease, ensureInvalid, beginRebuild, publish, reject,
     scheduleRejectedRetry, invalidateInTransaction })
 }

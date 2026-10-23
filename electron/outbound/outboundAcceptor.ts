@@ -23,6 +23,7 @@ export { summarizeFailedInvocation } from '../runtime/continuationSummary'
 import type { SessionCommands, SessionQueries } from '../sessionStorage/public/ports'
 import type { ContinuationSourceRef } from '../sessionStorage/public/model'
 import type { SessionExecutionStore } from '../sessionStorage/application/ports'
+import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TransactionCommitUnknownError } from '../database/transaction'
 
 /** 出站受理时的主进程状态快照（全部由主进程权威源构建，渲染端不再提供其中任何一项） */
@@ -628,7 +629,7 @@ export async function computeContextPressureWarnings(
   sessionQueries: SessionQueries,
   ensureChatBodyV1?: (input: { sessionId: string }) => Promise<unknown>
 ): Promise<string[]> {
-  await ensureChatBodyV1?.({ sessionId })
+  await prepareChatBodyForRead(ensureChatBodyV1, sessionId)
   const session = sessionQueries.readSession(sessionId)
   if (!session) return []
   const messages = sessionQueries.readMessages({ sessionId })

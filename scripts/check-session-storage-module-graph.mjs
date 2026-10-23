@@ -7,29 +7,48 @@ import ts from 'typescript'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const compilerConfig = ts.readConfigFile(path.join(root, 'tsconfig.json'), ts.sys.readFile)
 const compilerOptions = compilerConfig.error ? {} : ts.parseJsonConfigFileContent(compilerConfig.config, ts.sys, root).options
+const exceptionEntries = JSON.parse(readFileSync(path.join(root, 'scripts/session-storage-cross-directory-exceptions.json'), 'utf8'))
+const crossDirectoryExceptions = new Map(exceptionEntries.map((entry) => [
+  `${entry.source}|${entry.target}|${entry.symbols.join(',')}|${entry.typeOnly}`, entry]))
+const observedCrossDirectoryExceptions = new Set()
 
 function categoryFor(filePath) {
   const normalized = filePath.replaceAll('\\', '/')
+  if (/^electron\//.test(normalized) && !normalized.startsWith('electron/sessionStorage/')) return 'external-electron'
+  if (normalized === 'electron/sessionStorage/maintenance.ts') return 'maintenance'
   if (normalized.startsWith('electron/sessionStorage/internal/')) return 'infrastructure/sqlite'
   const match = /^electron\/sessionStorage\/(domain|public|application|infrastructure(?:\/[^/]+)?|host|maintenance)\//.exec(normalized)
   if (match) return match[1]
-  return /^electron\/sessionStorage\/[^/]+\.(?:ts|tsx|mts|cts)$/u.test(normalized) ? 'infrastructure/sqlite' : undefined
+  if (/^electron\/sessionStorage\/[^/]+\.(?:ts|tsx|mts|cts)$/u.test(normalized)) return 'composition'
+  return undefined
 }
 
 function moduleEdges(sourceFile) {
   const edges = []
-  const add = (specifier) => {
+  const add = (specifier, symbols = ['*'], typeOnly = false) => {
     const resolvedModule = ts.resolveModuleName(specifier, sourceFile.fileName, compilerOptions, ts.sys).resolvedModule
     const resolved = resolvedModule
       ? path.relative(root, resolvedModule.resolvedFileName).replaceAll('\\', '/').replace(/\.(?:tsx?|mts|cts|jsx?)$/u, '')
       : specifier
-    edges.push({ specifier, resolved })
+    edges.push({ specifier, resolved, symbols, typeOnly })
   }
   const visit = (node) => {
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) add(node.moduleSpecifier.text)
-    else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) add(node.argument.literal.text)
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = ts.isImportDeclaration(node) ? node.importClause : node.exportClause
+      const typeOnly = ts.isImportDeclaration(node) ? !!node.importClause?.isTypeOnly : !!node.isTypeOnly
+      const symbols = []
+      if (ts.isImportDeclaration(node) && node.importClause) {
+        if (node.importClause.name) symbols.push('default')
+        const bindings = node.importClause.namedBindings
+        if (bindings && ts.isNamespaceImport(bindings)) symbols.push('*')
+        else if (bindings && ts.isNamedImports(bindings)) symbols.push(...bindings.elements.map((element) => element.propertyName?.text ?? element.name.text))
+      } else if (clause && ts.isNamedExports(clause)) symbols.push(...clause.elements.map((element) => element.propertyName?.text ?? element.name.text))
+      else if (clause && ts.isNamespaceExport(clause)) symbols.push('*')
+      add(node.moduleSpecifier.text, symbols.length ? symbols : ['*'], typeOnly)
+    }
+    else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) add(node.argument.literal.text, ['*'], true)
     else if (ts.isCallExpression(node) && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]) &&
-      (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) add(node.arguments[0].text)
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) add(node.arguments[0].text, ['*'], false)
     ts.forEachChild(node, visit)
   }
   visit(sourceFile)
@@ -42,11 +61,12 @@ export function findSessionStorageModuleViolations(filePath, source) {
   if (!category) return []
   const sourceFile = ts.createSourceFile(path.resolve(root, filePath), source, ts.ScriptTarget.Latest, true)
   const allowed = (edge) => {
+    if (category === 'external-electron') return !/^electron\/sessionStorage\/(?:application|infrastructure|internal)\//.test(edge.resolved)
     if (category === 'domain') return edge.resolved === 'src/shared/domainTypes'
     if (category === 'public') {
       return edge.resolved.startsWith('src/shared/') ||
         edge.resolved.startsWith('electron/sessionStorage/domain/') ||
-        edge.resolved === 'electron/sessionStorage/public/model' ||
+        ['electron/sessionStorage/public/model', 'electron/sessionStorage/public/readPreparation'].includes(edge.resolved) ||
         edge.resolved.startsWith('packages/agent-sdk/')
     }
     if (category === 'application') {
@@ -62,11 +82,27 @@ export function findSessionStorageModuleViolations(filePath, source) {
         edge.resolved.startsWith('electron/sessionStorage/application/') ||
         edge.resolved.startsWith('electron/sessionStorage/host/')
     }
+    if (category === 'maintenance') {
+      return edge.resolved === 'electron/sessionStorage/internal/sqliteCleanup'
+    }
+    if (category === 'composition') {
+      return edge.resolved.startsWith('electron/sessionStorage/') || edge.resolved.startsWith('electron/database/') ||
+        edge.resolved === 'electron/database' || edge.resolved.startsWith('electron/storage/') ||
+        edge.resolved.startsWith('electron/runtime/') || edge.resolved.startsWith('electron/queue/') ||
+        ['electron/sessionMetadataKeys', 'electron/chatMessageBuild', 'electron/sessionContextCompaction',
+          'electron/sessionEvents', 'electron/queueInputFingerprint', 'electron/turnRuntime'].includes(edge.resolved) ||
+        edge.resolved.startsWith('src/shared/') || edge.resolved.startsWith('packages/agent-sdk/') || edge.resolved.startsWith('node:')
+    }
     if (category === 'infrastructure/sqlite') {
       return edge.resolved.startsWith('electron/database/') || edge.resolved === 'electron/database' ||
-        edge.resolved.startsWith('electron/sessionStorage/') ||
         edge.resolved.startsWith('electron/sessionStorage/domain/') ||
         edge.resolved.startsWith('electron/sessionStorage/internal/') ||
+        edge.resolved.startsWith('electron/sessionStorage/infrastructure/') ||
+        /^electron\/sessionStorage\/[^/]+$/.test(edge.resolved) ||
+        ['electron/sessionStorage/application/ports', 'electron/sessionStorage/application/projectionBuildCoordinator',
+          'electron/sessionStorage/application/projectionService', 'electron/sessionStorage/application/projectionChatBodyCacheReader',
+          'electron/sessionStorage/host/ports'].includes(edge.resolved) ||
+        edge.resolved.startsWith('electron/sessionStorage/public/') ||
         edge.resolved === 'electron/storage/sessionLedgerRoots' ||
         edge.resolved === 'electron/storage/spillProtocol' ||
         edge.resolved === 'electron/sessionLedgerIdentity' ||
@@ -81,7 +117,17 @@ export function findSessionStorageModuleViolations(filePath, source) {
     }
     return false
   }
-  return moduleEdges(sourceFile).filter((edge) => !allowed(edge)).map((edge) => ({ category, ...edge }))
+  return moduleEdges(sourceFile).filter((edge) => {
+    if (allowed(edge)) return false
+    if (category === 'external-electron') {
+      const exceptionKey = `${filePath.replaceAll('\\', '/')}|${edge.resolved}|${edge.symbols.join(',')}|${edge.typeOnly}`
+      if (crossDirectoryExceptions.has(exceptionKey)) {
+        observedCrossDirectoryExceptions.add(exceptionKey)
+        return false
+      }
+    }
+    return true
+  }).map(({ specifier, resolved }) => ({ category, specifier, resolved }))
 }
 
 /** Find implementation-only types reachable from exported declarations in the public port category. */
@@ -158,6 +204,14 @@ function main() {
       ['public implementation type leak', 'electron/sessionStorage/public/__gate_probe__.ts', `import type { DatabaseSync } from 'node:sqlite'; export type ProbeDto = { db: DatabaseSync }`,
         (file, source) => findSessionStoragePublicTypeLeaks(file, source).includes('DatabaseSync')],
       ['new root implementation file', 'electron/sessionStorage/__gate_probe__.ts', `import { sendFeishuTextToTarget } from '../feishu/feishuReply'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['external application edge', 'electron/remote/__gate_probe__.ts', `import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['external internal edge', 'electron/storage/__gate_probe__.ts', `import { resolveSelectedMessageBodies } from '../sessionStorage/internal/messageBodyResolver'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['infrastructure reverse application edge', 'electron/sessionStorage/infrastructure/sqlite/__gate_probe__.ts', `import { runProjectionBuildSlice } from '../../../application/unregisteredService'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['maintenance unapproved implementation edge', 'electron/sessionStorage/maintenance.ts', `export * from './application/unregisteredService'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0]
     ]
     const missed = probes.filter(([, file, source, rejects]) => !rejects(file, source))
@@ -171,7 +225,10 @@ function main() {
     return
   }
   const sourceRoot = path.join(root, 'electron/sessionStorage')
-  const files = [...rootProductionFiles(sourceRoot), ...['domain', 'public', 'application', 'infrastructure', 'host', 'maintenance', 'internal'].flatMap((category) => filesUnder(path.join(sourceRoot, category)))]
+  observedCrossDirectoryExceptions.clear()
+  const files = [...rootProductionFiles(sourceRoot), ...['domain', 'public', 'application', 'infrastructure', 'host', 'maintenance', 'internal'].flatMap((category) => filesUnder(path.join(sourceRoot, category))),
+    ...ts.sys.readDirectory(path.join(root, 'electron'), ['.ts', '.tsx', '.mts', '.cts'], ['**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts', '**/*.spec.tsx'], undefined)
+      .filter((file) => !path.relative(root, file).replaceAll('\\', '/').startsWith('electron/sessionStorage/'))]
   const violations = []
   for (const file of files) {
     const relative = path.relative(root, file).replaceAll('\\', '/')
@@ -188,7 +245,14 @@ function main() {
     process.exitCode = 1
     return
   }
-  console.log(`[check:session-storage-module-graph] OK: categorized session-storage modules (${files.length} files)`)
+  const staleExceptions = [...crossDirectoryExceptions.keys()].filter((key) => !observedCrossDirectoryExceptions.has(key))
+  if (staleExceptions.length) {
+    console.error('[check:session-storage-module-graph] stale cross-directory exceptions:')
+    for (const key of staleExceptions) console.error(`  - ${key}`)
+    process.exitCode = 1
+    return
+  }
+  console.log(`[check:session-storage-module-graph] OK: categorized session-storage modules (${files.length} files); pending cross-directory exceptions (${crossDirectoryExceptions.size})`)
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()

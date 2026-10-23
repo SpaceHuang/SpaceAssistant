@@ -389,5 +389,6 @@ function rejectBuild(
   const current = service.get(lease.sessionId, lease.scopeKey)
   service.reject(lease, { failureCaseJson: JSON.stringify({ case: code, caseId, ...(details ?? {}) }),
     attempts: (current?.attempts ?? 0) + 1,
-    retryAfter: code === 'SPEC_UNSUPPORTED' ? Number.MAX_SAFE_INTEGER : retryAfter?.() ?? now() + DEFAULT_PROJECTION_RETRY_DELAY_MS, })
+    retryAfter: code === 'SPEC_UNSUPPORTED' || caseId === 'DEFERRED_LARGE'
+      ? Number.MAX_SAFE_INTEGER : retryAfter?.() ?? now() + DEFAULT_PROJECTION_RETRY_DELAY_MS, })
 }

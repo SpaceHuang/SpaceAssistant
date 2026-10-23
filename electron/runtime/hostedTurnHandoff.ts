@@ -15,7 +15,7 @@ import { decodeTerminalOutcome } from './terminalOutcome'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { ContinuationContext } from '../../src/shared/assistantFactAggregator'
 import { queueInputFingerprint } from '../queueInputFingerprint'
-import { readChatMessageAfterPreparation } from '../sessionStorage/application/readChatMessages'
+import { readChatMessageAfterPreparation } from '../sessionStorage/public/readMessages'
 import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
 

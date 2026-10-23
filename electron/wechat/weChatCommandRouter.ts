@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import { readChatMessageAfterPreparation } from '../sessionStorage/application/readChatMessages'
+import { readChatMessageAfterPreparation } from '../sessionStorage/public/readMessages'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import type { ToolsConfig } from '../../src/shared/domainTypes'
