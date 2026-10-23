@@ -117,16 +117,6 @@ export function markSessionMessageContentWriteStopped(db: AppDatabase, sessionId
     const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
     const transcript = history.readCanonicalSessionTranscriptForShadow(sessionId)
     if (transcript.kind !== 'matched' || transcript.sessionGeneration !== eligible.generation || transcript.eventCount === 0) return false
-    const cache = history.readCanonicalSessionCache({ ...transcript, cacheKey: 'transcript' })
-    if (cache.kind !== 'hit') return false
-    try {
-      const cached = JSON.parse(cache.value) as typeof transcript.messages
-      if (!Array.isArray(cached) || cached.length !== transcript.messages.length || cached.some((message, index) => {
-        const folded = transcript.messages[index]
-        return !folded || !message || message.id !== folded.id || message.role !== folded.role ||
-          message.timestamp !== folded.timestamp || message.content !== folded.content
-      })) return false
-    } catch { return false }
 
     const rows = conn.prepare(`SELECT id,role,content,status,timestamp,content_storage_state FROM messages
       WHERE session_id=? ORDER BY sequence,id`).all(sessionId) as Array<{

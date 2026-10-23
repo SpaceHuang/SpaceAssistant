@@ -359,7 +359,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     db.close()
   })
 
-  it('enters write-stopped only for a sealed canonical-write session and preserves every body byte', async () => {
+  it('enters write-stopped from sealed History without requiring the retired transcript cache', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'write-stop eligible session', model: 'test' })
     appendMessage(db, { id: 'write-stop-sealed-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
@@ -368,6 +368,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     const { enableCanonicalSessionWriteAuthority } = await import('./sessionContentWriteAuthority')
     expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
     const conn = getDbConnection(db)
+    conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
     expect(markSessionMessageContentWriteStopped(db, session.id)).toBe(true)
     const progress = conn.prepare('SELECT * FROM session_message_content_cleanup_progress WHERE session_id=?').get(session.id)
     expect(progress).toMatchObject({ session_generation: session.generation, session_message_revision: 3,
