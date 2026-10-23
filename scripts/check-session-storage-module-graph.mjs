@@ -177,6 +177,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
         /^electron\/sessionStorage\/[^/]+$/.test(edge.resolved) ||
         ['electron/sessionStorage/application/ports', 'electron/sessionStorage/application/projectionBuildCoordinator',
           'electron/sessionStorage/application/projectionService', 'electron/sessionStorage/application/projectionChatBodyCacheReader',
+          'electron/sessionStorage/application/projectionOutputManifest',
           'electron/sessionStorage/host/ports'].includes(edge.resolved) ||
         edge.resolved.startsWith('electron/sessionStorage/public/') ||
         edge.resolved === 'electron/storage/sessionLedgerRoots' ||

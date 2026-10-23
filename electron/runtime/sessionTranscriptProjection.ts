@@ -50,27 +50,35 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     .get(sessionId) as { write_mode: string } | undefined
   const hasCanonicalBackedRows = getDbConnection(db).prepare(`SELECT 1 FROM messages
     WHERE session_id=? AND content_storage_state IN ('canonical-backed-dual-write','canonical-backed-only') LIMIT 1`).get(sessionId) !== undefined
-  let canonical: ReturnType<SqliteAgentHistory['readCanonicalSessionTranscriptWithCache']>
+  let canonical: ReturnType<SqliteAgentHistory['readCanonicalSessionTranscriptWithCache']> |
+    ReturnType<SqliteAgentHistory['readCanonicalSessionTranscriptForShadow']>
   try {
     const history = new SqliteAgentHistory(getDbConnection(db))
     // Once message bodies are canonical-only, the legacy projection cache is not an authority
     // source: its value can be self-consistent while disagreeing with History. Replay source
     // truth directly until the scoped projection reader owns this route.
-    canonical = hasCanonicalBackedRows && cutover?.write_mode === 'canonical'
-      ? history.readCanonicalSessionTranscriptForShadow(sessionId)
-      : history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
+    if (hasCanonicalBackedRows && cutover?.write_mode === 'canonical') {
+      canonical = history.readCanonicalSessionTranscriptForShadow(sessionId)
+    } else {
+      const legacyMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+      canonical = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript', legacyMessages.map(({ id, role, content, timestamp }) => ({
+        id, role: role as 'user' | 'assistant', content, timestamp
+      })))
+    }
     const canonicalSource = 'source' in canonical ? canonical.source : 'L2'
+    const replayedEvents = canonical.kind !== 'matched' ? 0 :
+      ('replayedEvents' in canonical ? canonical.replayedEvents : canonical.eventCount)
     if (canonical.kind === 'matched' && cutover?.write_mode === 'canonical') {
       history.validateCanonicalSessionSourceTruthSpills(sessionId)
       const projected = mergeCanonicalBackedBodies(db, sessionId, canonical.messages)
-      if (projected) return { source: `canonical:${canonicalSource}`, messages: projected, replayedEvents: canonical.replayedEvents }
+      if (projected) return { source: `canonical:${canonicalSource}`, messages: projected, replayedEvents }
       if (hasCanonicalBackedRows) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
       return { source: 'legacy', messages: getMessages(db, sessionId, Number.MAX_SAFE_INTEGER), reason: 'canonical-backed-identity-mismatch' }
     }
     if (canonical.kind === 'matched' && hasSessionProjectionEligibility(db, sessionId)) {
       const skeletons = getMessageSkeletons(db, sessionId)
       const projected = mergeCanonicalBodies(canonical.messages, skeletons)
-      if (projected) return { source: `canonical:${canonicalSource}`, messages: projected, replayedEvents: canonical.replayedEvents }
+      if (projected) return { source: `canonical:${canonicalSource}`, messages: projected, replayedEvents }
     }
   } catch (error) {
     if (error instanceof Error && error.message === 'CANONICAL_SESSION_CONTENT_UNAVAILABLE') throw error

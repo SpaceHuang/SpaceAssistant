@@ -4,12 +4,14 @@ import {
 } from '../domain/projectionBuild'
 import type { SessionProjectionService, ProjectionRebuildLease } from './projectionService'
 import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact } from '../domain/projectionSource'
-import { materializeProjectionOutputManifest, type ProjectionOutputBlobReader } from './projectionOutputManifest'
+import { materializeProjectionOutputManifest, type ProjectionOutputBlobReader, type ProjectionOutputIdentity } from './projectionOutputManifest'
 
 export type ProjectionBuildBlobPort = Readonly<{
   write(payload: string): Promise<Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }>>
   writeMany?(payloads: readonly string[]): Promise<readonly Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }> []>
   readVerified?(input: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>): Promise<string>
+  materializeFinalView?(output: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>,
+    identity: ProjectionOutputIdentity, historyWatermarkJson: unknown): Promise<Readonly<{ payload: string; byteLength: number; payloadDigest: string }>>
 }>
 const MAX_DERIVED_CHUNK_BLOB_BYTES = 256 * 1024 * 1024
 const DEFAULT_PROJECTION_RETRY_DELAY_MS = 60_000
@@ -24,6 +26,21 @@ export type ProjectionHistoryReducerPort = Readonly<{
   fold(stateJson: string, events: readonly ProjectionHistoryChunkEvent[], messageFacts?: readonly ProjectionMessageFact[], scopeKey?: string): Readonly<{ stateJson: string; outputOperations: readonly unknown[]; resetOutput: boolean }>
   finalize(stateJson: string, scopeKey?: string): Readonly<{ outputOperations: readonly unknown[] }>
 }>
+
+export type ProjectionHistoryChunkReduction = Readonly<{
+  stateJson: string
+  outputOperations: readonly unknown[]
+  resetOutput: boolean
+  finalizedOutputOperations?: readonly unknown[]
+  workerThreadId?: number
+}>
+export type ProjectionHistoryChunkReducerPort = (
+  stateJson: string,
+  events: readonly ProjectionHistoryChunkEvent[],
+  messageFacts: readonly ProjectionMessageFact[],
+  scopeKey: string,
+  finalize: boolean
+) => Promise<ProjectionHistoryChunkReduction>
 
 export type ProjectionBuildSliceResult =
   | Readonly<{ kind: 'checkpointed'; checkpoint: ProjectionBuildCheckpoint }>
@@ -40,6 +57,8 @@ export async function runProjectionBuildSlice(input: Readonly<{
   dbPath: string
   readChunk: ProjectionHistoryChunkReaderPort
   historyReducer: ProjectionHistoryReducerPort
+  /** Production supplies the worker-backed reducer; synchronous reducer remains for deterministic unit ports. */
+  reduceChunk?: ProjectionHistoryChunkReducerPort
   blobs: ProjectionBuildBlobPort
   limits: ProjectionBuildLimits
   maxChunksPerSlice: number
@@ -131,26 +150,47 @@ export async function runProjectionBuildSlice(input: Readonly<{
     if (result.kind === 'complete') {
       const output = checkpoint.outputManifest
       if (checkpoint.nextSequence > 0 && !output) return invalidateInvalidCheckpoint()
-      let materializedMessages: readonly Readonly<{ role: string; content: unknown; id?: string }>[] = []
+      let payload: string
+      let payloadByteLength: number
+      let payloadDigest: string
       if (output) {
-        if (!input.blobs.readVerified) {
+        const identity = { sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration, scopeKey: lease.scopeKey,
+          specVersion: input.specVersion, sourceIdentityJson: lease.sourceIdentityJson }
+        const historyWatermarkJson = (JSON.parse(lease.sourceIdentityJson) as { historyWatermark?: unknown }).historyWatermark ?? null
+        if (input.blobs.materializeFinalView) {
+          try {
+            const materialized = await input.blobs.materializeFinalView(output, identity, historyWatermarkJson)
+            payload = materialized.payload
+            payloadByteLength = materialized.byteLength
+            payloadDigest = materialized.payloadDigest
+          } catch (error) {
+            rejectBuild(service, lease, 'VIEW_REJECTED', 'FINAL_VIEW_MATERIALIZATION_FAILED', input.now, input.retryAfter)
+            return { kind: 'source-unavailable', reason: error instanceof Error ? error.message : 'final-view-materialization-failed' }
+          }
+        } else if (!input.blobs.readVerified) {
           rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'PROJECTION_OUTPUT_READER_UNAVAILABLE', input.now, input.retryAfter)
           return { kind: 'source-unavailable', reason: 'projection-output-reader-unavailable' }
+        } else {
+          try {
+            const materializedMessages = await materializeProjectionOutputManifest(output, identity, input.blobs as ProjectionOutputBlobReader)
+            payload = JSON.stringify({ formatVersion: 1, scopeKey: lease.scopeKey, specVersion: input.specVersion,
+              sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration, sourceIdentityJson: lease.sourceIdentityJson,
+              historyWatermarkJson, messages: materializedMessages })
+            payloadByteLength = new TextEncoder().encode(payload).byteLength
+            payloadDigest = await projectionPayloadDigest(payload)
+          } catch (error) {
+            rejectBuild(service, lease, 'VIEW_REJECTED', 'FINAL_VIEW_MATERIALIZATION_FAILED', input.now, input.retryAfter)
+            return { kind: 'source-unavailable', reason: error instanceof Error ? error.message : 'final-view-materialization-failed' }
+          }
         }
-        try {
-          materializedMessages = await materializeProjectionOutputManifest(output, { sessionId: lease.sessionId,
-            sessionGeneration: lease.sessionGeneration, scopeKey: lease.scopeKey, specVersion: input.specVersion,
-            sourceIdentityJson: lease.sourceIdentityJson }, input.blobs as ProjectionOutputBlobReader)
-        } catch (error) {
-          rejectBuild(service, lease, 'VIEW_REJECTED', 'FINAL_VIEW_MATERIALIZATION_FAILED', input.now, input.retryAfter)
-          return { kind: 'source-unavailable', reason: error instanceof Error ? error.message : 'final-view-materialization-failed' }
-        }
+      } else {
+        payload = JSON.stringify({ formatVersion: 1, scopeKey: lease.scopeKey, specVersion: input.specVersion,
+          sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration, sourceIdentityJson: lease.sourceIdentityJson,
+          historyWatermarkJson: (JSON.parse(lease.sourceIdentityJson) as { historyWatermark?: unknown }).historyWatermark ?? null,
+          messages: [] })
+        payloadByteLength = new TextEncoder().encode(payload).byteLength
+        payloadDigest = await projectionPayloadDigest(payload)
       }
-      const payload = JSON.stringify({ formatVersion: 1, scopeKey: lease.scopeKey, specVersion: input.specVersion,
-        sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration, sourceIdentityJson: lease.sourceIdentityJson,
-        historyWatermarkJson: (JSON.parse(lease.sourceIdentityJson) as { historyWatermark?: unknown }).historyWatermark ?? null,
-        messages: materializedMessages })
-      const payloadByteLength = new TextEncoder().encode(payload).byteLength
       const inlinePayload = payloadByteLength <= 256 * 1024 ? payload : undefined
       if (inlinePayload === undefined && output) {
         if (!input.blobs.readVerified) {
@@ -167,7 +207,6 @@ export async function runProjectionBuildSlice(input: Readonly<{
           return { kind: 'source-unavailable', reason: error instanceof Error ? error.message : 'final-view-root-retain-failed' }
         }
       }
-      const payloadDigest = await projectionPayloadDigest(payload)
       let finalBlob: Awaited<ReturnType<ProjectionBuildBlobPort['write']>> | undefined
       if (inlinePayload === undefined) {
         try { finalBlob = await input.blobs.write(payload) }
@@ -223,16 +262,20 @@ export async function runProjectionBuildSlice(input: Readonly<{
     if (!checkpoint.historyReducerStateJson) {
       return invalidateInvalidCheckpoint()
     }
-    let folded: Readonly<{ stateJson: string; outputOperations: readonly unknown[]; resetOutput: boolean }>
+    let folded: ProjectionHistoryChunkReduction
     try {
-      folded = input.historyReducer.fold(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey)
+      folded = input.reduceChunk
+        ? await input.reduceChunk(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey, !result.hasMore)
+        : input.historyReducer.fold(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey)
     } catch (error) {
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'HISTORY_REDUCER_REJECTED_CHUNK', input.now, input.retryAfter)
       return { kind: 'chunk-invalid', reason: error instanceof Error ? error.message : 'history-reducer-rejected-chunk' }
     }
     let outputOperations = [...folded.outputOperations]
     if (!result.hasMore) {
-      try { outputOperations.push(...input.historyReducer.finalize(folded.stateJson, lease.scopeKey).outputOperations) }
+      try {
+        outputOperations.push(...(folded.finalizedOutputOperations ?? input.historyReducer.finalize(folded.stateJson, lease.scopeKey).outputOperations))
+      }
       catch (error) {
         rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'HISTORY_REDUCER_FINALIZE_FAILED', input.now, input.retryAfter)
         return { kind: 'chunk-invalid', reason: error instanceof Error ? error.message : 'history-reducer-finalize-failed' }

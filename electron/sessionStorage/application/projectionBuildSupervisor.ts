@@ -1,5 +1,5 @@
 import type { ProjectionBuildLimits } from '../domain/projectionBuild'
-import type { ProjectionBuildBlobPort, ProjectionHistoryChunkReaderPort, ProjectionHistoryReducerPort } from './projectionBuildCoordinator'
+import type { ProjectionBuildBlobPort, ProjectionHistoryChunkReaderPort, ProjectionHistoryChunkReducerPort, ProjectionHistoryReducerPort } from './projectionBuildCoordinator'
 import { runProjectionBuildSlice } from './projectionBuildCoordinator'
 import type { ProjectionRebuildLease, SessionProjectionService } from './projectionService'
 import type { ProjectionPreparationRequest } from '../public/ports'
@@ -16,6 +16,7 @@ export type ProjectionBuildSupervisorOptions = Readonly<{
   dbPath: string
   readChunk: ProjectionHistoryChunkReaderPort
   historyReducer: ProjectionHistoryReducerPort
+  reduceChunk?: ProjectionHistoryChunkReducerPort
   blobs: ProjectionBuildBlobPort
   limits: ProjectionBuildLimits
   maxChunksPerSlice: number
@@ -196,6 +197,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
           try {
             const result = await runProjectionBuildSlice({ service: options.service, lease, specVersion: item.specVersion,
               dbPath: options.dbPath, readChunk: options.readChunk, historyReducer: options.historyReducer,
+              reduceChunk: options.reduceChunk,
               blobs: options.blobs, limits: options.limits, maxChunksPerSlice: options.maxChunksPerSlice,
               now: options.now, retryAfter: options.retryAfter, signal: controller.signal })
             try { options.onResult?.(item, result) } catch { /* Observability must not own the worker lifecycle. */ }

@@ -23,6 +23,8 @@ import { createTurnRuntimeForSessionExecution } from './execution'
 import { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { createSqliteProjectionChatBodyCacheStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { readProjectionHistoryChunkInWorker } from './infrastructure/sqlite/projectionHistoryChunkWorkerClient'
+import { reduceProjectionHistoryChunkInWorker } from './infrastructure/sqlite/projectionHistoryReducerWorkerClient'
+import { materializeProjectionFinalViewInWorker } from './infrastructure/sqlite/projectionFinalViewWorkerClient'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
 import { createProjectionScopeHistoryReducer } from './infrastructure/sqlite/projectionScopeHistoryReducer'
 import { createProjectionService } from './application/projectionService'
@@ -279,6 +281,11 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
   const stateStore = createSqliteProjectionStateStore(input.db)
   const service = createProjectionService(stateStore, { processGeneration: input.processGeneration,
     connectionEpoch: input.connectionEpoch, createToken: randomUUID, now: input.now })
+  const blobStore = createSessionProjectionBlobStore(input.blobRoot)
+  const blobs = Object.freeze({ ...blobStore,
+    materializeFinalView: (output: Parameters<NonNullable<ProjectionBuildSupervisorOptions['blobs']['materializeFinalView']>>[0],
+      identity: Parameters<NonNullable<ProjectionBuildSupervisorOptions['blobs']['materializeFinalView']>>[1], historyWatermarkJson: unknown) =>
+      materializeProjectionFinalViewInWorker({ root: blobStore.root, output, identity, historyWatermarkJson }) })
   return createProjectionBuildLifecycleTask({ service,
     listDueWork: () => stateStore.listDueWork(input.now(), 64, input.processGeneration()), dbPath: input.dbPath,
     nextRetryAt: () => stateStore.nextRetryAt(input.now()),
@@ -305,6 +312,7 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
       return { sessionId, sessionGeneration: session.generation, scopeKey, specVersion }
     },
     readChunk: readProjectionHistoryChunkInWorker, historyReducer: createProjectionScopeHistoryReducer(),
-    blobs: createSessionProjectionBlobStore(input.blobRoot), limits: input.limits ?? { maxRows: 200, maxBytes: 256 * 1024 },
+    reduceChunk: reduceProjectionHistoryChunkInWorker,
+    blobs, limits: input.limits ?? { maxRows: 200, maxBytes: 256 * 1024 },
     maxChunksPerSlice: input.maxChunksPerSlice ?? 4, now: input.now, onResult: input.onResult, onFailure: input.onFailure })
 }
