@@ -162,6 +162,12 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
               blobs: options.blobs, limits: options.limits, maxChunksPerSlice: options.maxChunksPerSlice,
               now: options.now, retryAfter: options.retryAfter, signal: controller.signal })
             try { options.onResult?.(item, result) } catch { /* Observability must not own the worker lifecycle. */ }
+            if (result.kind === 'publish-unknown') {
+              scheduleRetry(item, lease)
+              requests.get(key)?.resolve(result)
+              requests.delete(key)
+              return false
+            }
             if (result.kind !== 'checkpointed') {
               requests.get(key)?.resolve(result)
               requests.delete(key)

@@ -11,6 +11,7 @@ import { runProjectionBuildSlice, type ProjectionBuildBlobPort, type ProjectionH
 import type { SessionProjectionService } from './projectionService'
 import { createCanonicalSessionSnapshotFoldSession } from '../../runtime/canonicalHistory'
 import { createProjectionScopeHistoryReducer } from '../infrastructure/sqlite/projectionScopeHistoryReducer'
+import { createProjectionBuildCheckpoint } from '../domain/projectionBuild'
 
 describe('projection build coordinator', () => {
   let foldedMessageFacts: unknown[] = []
@@ -28,6 +29,21 @@ describe('projection build coordinator', () => {
   }
   let db: ReturnType<typeof createMemoryAppDb> | undefined
   afterEach(() => { db?.close(); db = undefined })
+
+  it('rejects an invalid build budget instead of leaving its claimed lease rebuilding', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection invalid build budget', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'invalid-budget-token', now: () => 1 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath,
+      readChunk: async () => { throw new Error('invalid budget must fail before source reads') }, historyReducer,
+      blobs: { write: async () => { throw new Error('invalid budget must fail before writes') } }, limits: { maxRows: 0, maxBytes: 512 },
+      maxChunksPerSlice: 1, now: () => 1 })
+    expect(result).toMatchObject({ kind: 'chunk-invalid', reason: 'invalid-build-budget-or-scope' })
+    expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rejected', failureCaseJson: expect.stringContaining('BUILD_BUDGET_INVALID') })
+  })
 
   it('persists a verified chunk checkpoint and resumes it under a newer process lease', async () => {
     foldedMessageFacts = []
@@ -193,6 +209,50 @@ describe('projection build coordinator', () => {
       readChunk: reader, historyReducer, blobs, limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, now: () => 2 })
     expect(result).toEqual({ kind: 'lease-lost' })
     expect(released).toBe(true)
+  })
+
+  it('invalidates an incompatible checkpoint so the same process can rebuild from the start', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection incompatible checkpoint', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'incompatible-checkpoint-token', now: () => 2 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    const incompatible = createProjectionBuildCheckpoint({ sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration,
+      scopeKey: lease.scopeKey, specVersion: 2, sourceIdentityJson: lease.sourceIdentityJson,
+      processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken, startSequence: 0, historyReducerStateJson: '{}' })
+    expect(service.saveCheckpoint(lease, JSON.stringify(incompatible))).toBe(true)
+    const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath,
+      readChunk: async () => { throw new Error('incompatible checkpoint must not reach source') }, historyReducer,
+      blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 512 },
+      maxChunksPerSlice: 1, now: () => 2 })
+    expect(result).toEqual({ kind: 'checkpoint-invalid' })
+    expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'invalid', rebuildToken: null })
+    expect(service.readCheckpoint(session.id, 'scope-a')).toBeNull()
+  })
+
+  it('rejects a missing output blob reader instead of leaving the lease rebuilding', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection output reader missing', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'output-reader-missing-token', now: () => 2 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    const blobs: ProjectionBuildBlobPort = { write: async (payload) => ({ locator: 'output-reader.blob', byteLength: Buffer.byteLength(payload),
+      payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }) }
+    const event = { invocationId: 'reader-inv', sequence: 1, eventId: 'reader-event', idempotencyKey: 'reader-key', turnId: 'reader-turn',
+      schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+    const chunk: ProjectionHistoryChunkReaderPort = async (permit, input) => input.afterSessionSequence === 0
+      ? { kind: 'chunk', permit, afterSessionSequence: 0, nextSessionSequence: 1, events: [event], messageFacts: [],
+        byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: true }
+      : { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+    const checkpointed = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath, readChunk: chunk,
+      historyReducer, blobs, limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, now: () => 2 })
+    expect(checkpointed.kind).toBe('checkpointed')
+    const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath, readChunk: chunk,
+      historyReducer, blobs, limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, now: () => 2 })
+    expect(result).toMatchObject({ kind: 'source-unavailable', reason: 'projection-output-reader-unavailable' })
+    expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rejected', failureCaseJson: expect.stringContaining('PROJECTION_OUTPUT_READER_UNAVAILABLE') })
   })
 
   it('publishes an oversized materialized view blob and keeps its cache manifest referenced', async () => {

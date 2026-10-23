@@ -575,7 +575,12 @@ app.whenReady().then(async () => {
     maintenanceTasks: [
       createSqliteProjectionBuildTask({ db, dbPath, blobRoot: path.join(app.getPath('userData'), 'session-projections'),
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now,
-        onFailure: (code) => console.warn(`[storage] ${code}`) }),
+        onFailure: (code) => console.warn(`[storage] ${code}`),
+        onResult: (_item, result) => {
+          if (result.kind !== 'checkpointed' && result.kind !== 'published') {
+            console.warn(`[storage] projection build ${result.kind}`)
+          }
+        } }),
       {
         taskId: 'spill-reference-index-backfill', category: 'derived-index',
         start: () => scheduleSpillReferenceBackfill(db, {

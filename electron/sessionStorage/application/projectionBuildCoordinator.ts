@@ -52,23 +52,27 @@ export async function runProjectionBuildSlice(input: Readonly<{
     !Number.isSafeInteger(limits.maxRows) || limits.maxRows < 1 || limits.maxRows > 200 ||
     !Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 256 || limits.maxBytes > 256 * 1024 ||
     !Number.isSafeInteger(input.maxChunksPerSlice) || input.maxChunksPerSlice < 1) {
+    rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'BUILD_BUDGET_INVALID', input.now, input.retryAfter)
     return { kind: 'chunk-invalid', reason: 'invalid-build-budget-or-scope' }
   }
+
+  const invalidateInvalidCheckpoint = (): ProjectionBuildSliceResult =>
+    service.invalidateLease(lease) ? { kind: 'checkpoint-invalid' } : { kind: 'lease-lost' }
 
   let checkpoint: ProjectionBuildCheckpoint
   const persisted = service.readCheckpoint(lease.sessionId, lease.scopeKey)
   const parsed = persisted ? parseProjectionBuildCheckpoint(persisted) : null
-  if (persisted && !parsed) return { kind: 'checkpoint-invalid' }
+  if (persisted && !parsed) return invalidateInvalidCheckpoint()
   if (parsed) {
     if (parsed.sessionId !== lease.sessionId || parsed.sessionGeneration !== lease.sessionGeneration ||
       parsed.scopeKey !== lease.scopeKey || parsed.specVersion !== input.specVersion || parsed.sourceIdentityJson !== lease.sourceIdentityJson) {
-      return { kind: 'checkpoint-invalid' }
+      return invalidateInvalidCheckpoint()
     }
     const transferred = parsed.processGeneration === lease.processGeneration && parsed.rebuildToken === lease.rebuildToken
       ? parsed
       : takeoverProjectionBuildCheckpoint(parsed, { processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken,
         sourceIdentityJson: lease.sourceIdentityJson })
-    if (!transferred) return { kind: 'checkpoint-invalid' }
+    if (!transferred) return invalidateInvalidCheckpoint()
     checkpoint = transferred
     if (persisted !== JSON.stringify(checkpoint) && !service.saveCheckpoint(lease, JSON.stringify(checkpoint))) return { kind: 'lease-lost' }
   } else {
@@ -126,10 +130,13 @@ export async function runProjectionBuildSlice(input: Readonly<{
     }
     if (result.kind === 'complete') {
       const output = checkpoint.outputManifest
-      if (checkpoint.nextSequence > 0 && !output) return { kind: 'checkpoint-invalid' }
+      if (checkpoint.nextSequence > 0 && !output) return invalidateInvalidCheckpoint()
       let materializedMessages: readonly Readonly<{ role: string; content: unknown; id?: string }>[] = []
       if (output) {
-        if (!input.blobs.readVerified) return { kind: 'source-unavailable', reason: 'projection-output-reader-unavailable' }
+        if (!input.blobs.readVerified) {
+          rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'PROJECTION_OUTPUT_READER_UNAVAILABLE', input.now, input.retryAfter)
+          return { kind: 'source-unavailable', reason: 'projection-output-reader-unavailable' }
+        }
         try {
           materializedMessages = await materializeProjectionOutputManifest(output, { sessionId: lease.sessionId,
             sessionGeneration: lease.sessionGeneration, scopeKey: lease.scopeKey, specVersion: input.specVersion,
@@ -146,7 +153,10 @@ export async function runProjectionBuildSlice(input: Readonly<{
       const payloadByteLength = new TextEncoder().encode(payload).byteLength
       const inlinePayload = payloadByteLength <= 256 * 1024 ? payload : undefined
       if (inlinePayload === undefined && output) {
-        if (!input.blobs.readVerified) return { kind: 'source-unavailable', reason: 'projection-output-reader-unavailable' }
+        if (!input.blobs.readVerified) {
+          rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'PROJECTION_OUTPUT_ROOT_READER_UNAVAILABLE', input.now, input.retryAfter)
+          return { kind: 'source-unavailable', reason: 'projection-output-reader-unavailable' }
+        }
         try {
           const rootJson = await input.blobs.readVerified(output)
           if (new TextEncoder().encode(rootJson).byteLength !== output.byteLength || await projectionPayloadDigest(rootJson) !== output.payloadDigest) {
@@ -194,7 +204,10 @@ export async function runProjectionBuildSlice(input: Readonly<{
         if (finalBlob) await releaseBlob(finalBlob)
       }
     }
-    if (result.kind !== 'chunk') return { kind: 'source-unavailable', reason: 'unknown-worker-result' }
+    if (result.kind !== 'chunk') {
+      rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'WORKER_RESULT_INVALID', input.now, input.retryAfter)
+      return { kind: 'source-unavailable', reason: 'unknown-worker-result' }
+    }
     if (result.afterSessionSequence !== checkpoint.nextSequence || result.events.length === 0 ||
       result.events.length > limits.maxRows ||
       result.nextSessionSequence <= result.afterSessionSequence || result.byteLength > limits.maxBytes - 128 ||

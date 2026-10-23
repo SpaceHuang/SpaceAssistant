@@ -194,6 +194,38 @@ describe('projection build supervisor', () => {
     } finally { db.close() }
   })
 
+  it('retries an unproven publish commit under the same lease until durable state resolves it', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'projection publish unknown recovery', model: 'test' })
+      const base = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+        connectionEpoch: () => 1, createToken: () => 'publish-unknown-recovery-token', now: () => 1 })
+      let publishes = 0
+      const service = { ...base, publish: (...args: Parameters<typeof base.publish>) => {
+        publishes += 1
+        if (publishes === 1) {
+          const error = new Error('commit result unknown')
+          error.name = 'TransactionCommitUnknownError'
+          throw error
+        }
+        return base.publish(...args)
+      } }
+      const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => [], dbPath: db.filePath,
+        readChunk: async (permit, input) => ({ kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }),
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async () => { throw new Error('inline result should not write blob') } }, limits: { maxRows: 1, maxBytes: 1024 },
+        maxChunksPerSlice: 1, now: () => 1 })
+      const handle = supervisor.start()
+      const result = await supervisor.prepare({ sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-publish-unknown', specVersion: 1 })
+      expect(result.kind).toBe('publish-unknown')
+      for (let i = 0; i < 750 && service.get(session.id, 'scope-publish-unknown')?.status !== 'valid'; i += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+      expect(publishes).toBe(2)
+      expect(service.get(session.id, 'scope-publish-unknown')).toMatchObject({ status: 'valid' })
+      handle.stop()
+      await handle.quiesce()
+    } finally { db.close() }
+  })
+
   it('isolates observer errors after a source failure and settles the foreground request', async () => {
     const db = createMemoryAppDb()
     try {
