@@ -48,6 +48,7 @@ import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sessionStorage/sqliteSessionStorage'
+import { projectionBuildSliceLogFields } from './sessionStorage/host/projectionBuildSliceLog'
 import { createLifecycleTaskHandle } from './sessionStorage/lifecycle'
 import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
 import { flushPendingSessionBackups } from './sessionBackupShutdown'
@@ -576,10 +577,7 @@ app.whenReady().then(async () => {
       createSqliteProjectionBuildTask({ db, dbPath, blobRoot: path.join(app.getPath('userData'), 'session-projections'),
         processGeneration: () => processGeneration, connectionEpoch: () => getDbConnectionEpoch(db), now: Date.now,
         onFailure: (code) => console.warn(`[storage] ${code}`),
-        onSlice: (slice) => logAgentEvent('info', 'session.projection.build.slice', {
-          durationMs: Math.round(slice.durationMs * 100) / 100, nextSequence: slice.nextSequence,
-          outcome: slice.outcome, yielded: slice.yielded,
-        }),
+        onSlice: (slice) => logAgentEvent('info', 'session.projection.build.slice', projectionBuildSliceLogFields(slice)),
         onResult: (_item, result) => {
           if (result.kind !== 'checkpointed' && result.kind !== 'published') {
             console.warn(`[storage] projection build ${result.kind}`)
