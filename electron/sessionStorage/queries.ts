@@ -9,6 +9,7 @@ import {
   listTurnErrorsByAssistantMessageIds,
   getMessages,
   getChatMessagePage,
+  getApiContextBaseline,
 } from '../database/operations'
 import {
   getProjectedApiContextBaseline,
@@ -31,6 +32,41 @@ import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { runInTransaction } from '../database/transaction'
 import type { PreparedChatBodyView } from './public/model'
 import type { PreparedChatBodySelection } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
+import type { Message } from '../../src/shared/domainTypes'
+
+function canonicalBodyMessageIds(db: AppDatabase, sessionId: string, messages: readonly Message[]): string[] {
+  if (messages.length === 0) return []
+  const ids = messages.map(({ id }) => id)
+  const rows = getDbConnection(db).prepare(`SELECT messages.id,messages.content_storage_state,cutover.write_mode
+    FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
+    WHERE messages.session_id=? AND messages.id IN (${ids.map(() => '?').join(',')})`).all(sessionId, ...ids) as
+    Array<{ id: string; content_storage_state: string; write_mode: string | null }>
+  const stateById = new Map(rows.map((row) => [row.id, row]))
+  const canonicalIds: string[] = []
+  for (const message of messages) {
+    const state = stateById.get(message.id)
+    if (!state) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+    if (state.content_storage_state === 'legacy') continue
+    if (!['canonical-backed-dual-write', 'canonical-backed-only'].includes(state.content_storage_state) || state.write_mode !== 'canonical') {
+      throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+    }
+    canonicalIds.push(message.id)
+  }
+  return canonicalIds
+}
+
+function overlayPreparedBodies(messages: readonly Message[], canonicalIds: readonly string[], bodies: PreparedChatBodySelection): Message[] {
+  const canonicalIdSet = new Set(canonicalIds)
+  const bodyById = new Map(bodies.messages.map((message) => [message.id, message]))
+  return messages.map((message) => {
+    if (!canonicalIdSet.has(message.id)) return message
+    const canonical = bodyById.get(message.id)
+    if (!canonical || canonical.role !== message.role || canonical.timestamp !== message.timestamp) {
+      throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+    }
+    return { ...message, content: canonical.content }
+  })
+}
 
 function getTurnByAssistant(db: AppDatabase, sessionId: string, assistantMessageId: string): { requestId: string; turnId: string } | undefined {
   return getDbConnection(db).prepare('SELECT request_id AS requestId, turn_id AS turnId FROM turns WHERE session_id=? AND assistant_message_id=?').get(sessionId, assistantMessageId) as { requestId: string; turnId: string } | undefined
@@ -64,23 +100,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         if (currentIdentity !== view.sourceIdentityJson) return undefined
         const raw = getMessages(db, sessionId, limit ?? 500, offset ?? 0)
         if (raw.length === 0) return { messages: raw, canonicalIds: [] as string[] }
-        const ids = raw.map(({ id }) => id)
-        const states = getDbConnection(db).prepare(`SELECT messages.id,messages.content_storage_state,cutover.write_mode
-          FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
-          WHERE messages.session_id=? AND messages.id IN (${ids.map(() => '?').join(',')})`).all(sessionId, ...ids) as
-          Array<{ id: string; content_storage_state: string; write_mode: string | null }>
-        const stateById = new Map(states.map((row) => [row.id, row]))
-        const canonicalIds: string[] = []
-        for (const message of raw) {
-          const state = stateById.get(message.id)
-          if (!state) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          if (state.content_storage_state === 'legacy') continue
-          if (!['canonical-backed-dual-write', 'canonical-backed-only'].includes(state.content_storage_state) || state.write_mode !== 'canonical') {
-            throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          }
-          canonicalIds.push(message.id)
-        }
-        return { messages: raw, canonicalIds }
+        return { messages: raw, canonicalIds: canonicalBodyMessageIds(db, sessionId, raw) }
       })
       if (!selected) return undefined
       if (selected.canonicalIds.length === 0) return selected.messages
@@ -94,15 +114,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
         const latest = getMessages(db, sessionId, limit ?? 500, offset ?? 0)
         if (latest.length !== selected.messages.length || latest.some((message, index) => message.id !== selected.messages[index]?.id)) return undefined
-        const bodyById = new Map(bodies.messages.map((message) => [message.id, message]))
-        return latest.map((message) => {
-          if (!selected.canonicalIds.includes(message.id)) return message
-          const canonical = bodyById.get(message.id)
-          if (!canonical || canonical.role !== message.role || canonical.timestamp !== message.timestamp) {
-            throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          }
-          return { ...message, content: canonical.content }
-        })
+        return overlayPreparedBodies(latest, selected.canonicalIds, bodies)
       })
     } } : {}),
     ...(preparedChatBody ? { readPreparedChatPage: async ({ sessionId, beforeSequence, limit, prepared }) => {
@@ -112,23 +124,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
         const page = getChatMessagePage(db, sessionId, beforeSequence, limit)
         if (page.entries.length === 0) return { page, canonicalIds: [] as string[] }
-        const ids = page.entries.map(({ message }) => message.id)
-        const states = getDbConnection(db).prepare(`SELECT messages.id,messages.content_storage_state,cutover.write_mode
-          FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
-          WHERE messages.session_id=? AND messages.id IN (${ids.map(() => '?').join(',')})`).all(sessionId, ...ids) as
-          Array<{ id: string; content_storage_state: string; write_mode: string | null }>
-        const stateById = new Map(states.map((row) => [row.id, row]))
-        const canonicalIds: string[] = []
-        for (const { message } of page.entries) {
-          const state = stateById.get(message.id)
-          if (!state) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          if (state.content_storage_state === 'legacy') continue
-          if (!['canonical-backed-dual-write', 'canonical-backed-only'].includes(state.content_storage_state) || state.write_mode !== 'canonical') {
-            throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          }
-          canonicalIds.push(message.id)
-        }
-        return { page, canonicalIds }
+        return { page, canonicalIds: canonicalBodyMessageIds(db, sessionId, page.entries.map(({ message }) => message)) }
       })
       if (!selected) return undefined
       if (selected.canonicalIds.length === 0) return { ...selected.page,
@@ -148,16 +144,39 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
             return !prior || entry.sequence !== prior.sequence || entry.message.id !== prior.message.id ||
               entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
           })) return undefined
-        const bodyById = new Map(bodies.messages.map((message) => [message.id, message]))
-        const entries = latest.entries.map((entry) => {
-          if (!selected.canonicalIds.includes(entry.message.id)) return entry
-          const canonical = bodyById.get(entry.message.id)
-          if (!canonical || canonical.role !== entry.message.role || canonical.timestamp !== entry.message.timestamp) {
-            throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          }
-          return { ...entry, message: { ...entry.message, content: canonical.content } }
-        })
+        const messages = overlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies)
+        const entries = latest.entries.map((entry, index) => ({ ...entry, message: messages[index]! }))
         return { ...latest, entries: projectMessageEntriesV1('chatMessageV1', entries) }
+      })
+    } } : {}),
+    ...(preparedChatBody ? { readPreparedApiBaseline: async ({ sessionId, limit, prepared }) => {
+      const view = prepared as PreparedChatBodyView | undefined
+      if (!view) return undefined
+      const selected = runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const baseline = getApiContextBaseline(db, sessionId, limit ?? 500)
+        return { baseline, canonicalIds: canonicalBodyMessageIds(db, sessionId, baseline.entries.map(({ message }) => message)) }
+      })
+      if (!selected) return undefined
+      if (selected.canonicalIds.length === 0) return { ...selected.baseline,
+        entries: projectMessageEntriesV1('apiBaselineV1', selected.baseline.entries) }
+      let bodies: PreparedChatBodySelection
+      try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
+      catch {
+        preparedChatBody.invalidate(view)
+        return undefined
+      }
+      return runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const latest = getApiContextBaseline(db, sessionId, limit ?? 500)
+        if (latest.entries.length !== selected.baseline.entries.length || latest.entries.some((entry, index) => {
+          const prior = selected.baseline.entries[index]
+          return !prior || entry.sequence !== prior.sequence || entry.message.id !== prior.message.id ||
+            entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
+        })) return undefined
+        const messages = overlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies)
+        const entries = latest.entries.map((entry, index) => ({ ...entry, message: messages[index]! }))
+        return { ...latest, entries: projectMessageEntriesV1('apiBaselineV1', entries) }
       })
     } } : {}),
     readChatPage: ({ sessionId, beforeSequence, limit }) => {

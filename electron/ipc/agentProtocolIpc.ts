@@ -16,7 +16,7 @@ import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import type { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
 import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'
-import { readChatMessagesAfterPreparation, readChatPageAfterPreparation } from '../sessionStorage/public/readMessages'
+import { readApiBaselineAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation } from '../sessionStorage/public/readMessages'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
@@ -714,8 +714,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:get-api-context-baseline',
     async (_e, payload: { sessionId: string }) => {
-      await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, payload.sessionId)
-      return sessionQueries.readApiBaseline(payload)
+      return readApiBaselineAfterPreparation(sessionStorage, payload)
     }
   )
 

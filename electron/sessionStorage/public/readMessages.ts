@@ -1,5 +1,5 @@
 import type { Message } from '../../../src/shared/domainTypes'
-import type { ChatMessagePage } from './model'
+import type { ApiContextBaseline, ChatMessagePage } from './model'
 import { prepareChatBodyForRead } from './readPreparation'
 
 type ChatMessageReadStorage = Readonly<{
@@ -34,6 +34,21 @@ export async function readChatPageAfterPreparation(
   const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
   const prepared = await storage.queries.readPreparedChatPage?.({ ...input, prepared: preparedView })
   return prepared ?? storage.queries.readChatPage(input)
+}
+
+export async function readApiBaselineAfterPreparation(
+  storage: Readonly<{
+    ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
+    queries: Readonly<{
+      readApiBaseline(input: Readonly<{ sessionId: string; limit?: number }>): ApiContextBaseline
+      readPreparedApiBaseline?(input: Readonly<{ sessionId: string; limit?: number; prepared?: unknown }>): Promise<ApiContextBaseline | undefined>
+    }>
+  }>,
+  input: Readonly<{ sessionId: string; limit?: number }>
+): Promise<ApiContextBaseline> {
+  const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
+  const prepared = await storage.queries.readPreparedApiBaseline?.({ ...input, prepared: preparedView })
+  return prepared ?? storage.queries.readApiBaseline(input)
 }
 
 export async function readChatMessageAfterPreparation(

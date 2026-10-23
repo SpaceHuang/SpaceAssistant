@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { prepareChatBodiesForSessions, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation } from './readChatMessages'
+import { prepareChatBodiesForSessions, readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation } from './readChatMessages'
 
 describe('readChatMessagesAfterPreparation', () => {
   it('prepares the chat body view and reruns the complete synchronous selection', async () => {
@@ -112,6 +112,37 @@ describe('readChatPageAfterPreparation', () => {
       }
     }, { sessionId: 'large-page-session' })
     expect(result).toBe(page)
+    expect(events).toEqual(['ensure', 'prepared-miss', 'authority'])
+  })
+})
+
+describe('readApiBaselineAfterPreparation', () => {
+  it('uses the prepared canonical bodies while preserving the latest-window query selection', async () => {
+    const events: string[] = []
+    const prepared = { sourceIdentityJson: 'api-source' }
+    const baseline = { sessionId: 'api-session', entries: [{ sequence: 8, message: { id: 'api-body', content: 'canonical' } }] }
+    const result = await readApiBaselineAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); return prepared },
+      queries: {
+        readPreparedApiBaseline: async (input) => { events.push(`prepared:${input.limit}`); expect(input.prepared).toBe(prepared); return baseline as never },
+        readApiBaseline: () => { events.push('authority'); return { sessionId: 'api-session', entries: [] } }
+      }
+    }, { sessionId: 'api-session', limit: 80 })
+    expect(result).toBe(baseline)
+    expect(events).toEqual(['ensure', 'prepared:80'])
+  })
+
+  it('falls back to the authority baseline when preparation is deferred or selection misses', async () => {
+    const events: string[] = []
+    const baseline = { sessionId: 'api-session', entries: [] }
+    const result = await readApiBaselineAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); throw new Error('PROJECTION_BUILD_DEFERRED:DEFERRED_LARGE') },
+      queries: {
+        readPreparedApiBaseline: async () => { events.push('prepared-miss'); return undefined },
+        readApiBaseline: () => { events.push('authority'); return baseline }
+      }
+    }, { sessionId: 'api-session' })
+    expect(result).toBe(baseline)
     expect(events).toEqual(['ensure', 'prepared-miss', 'authority'])
   })
 })

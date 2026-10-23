@@ -118,7 +118,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const userDataDir = options.getUserDataDir?.()
     if (!session || !workDir || !userDataDir) throw new Error('SESSION_CONTEXT_RESOURCES_UNAVAILABLE')
     const { sink, replay } = await readCompactionReplayForLocation(sessionId, workDir)
-    return createStorageSessionContextAdapter({ sessionId, session, queries, workDir, userDataDir, replay, sink, isBusy,
+    return createStorageSessionContextAdapter({ sessionId, session, queries, ensureChatBodyV1, workDir, userDataDir, replay, sink, isBusy,
       commitCanonicalCompaction: async ({ operationId, compactionId, output, historyPayload }) => {
         const invocationId = operationId
         const turnId = operationId

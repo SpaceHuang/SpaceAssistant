@@ -14,7 +14,7 @@ import { advanceProcessGeneration } from '../database/processGeneration'
 import { getDbConnection } from '../database/sqliteStore'
 import { openDatabase } from '../database'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
-import { readChatMessagesAfterPreparation, readChatPageAfterPreparation } from './application/readChatMessages'
+import { readApiBaselineAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation } from './application/readChatMessages'
 
 describe('SQLite projection build task composition', () => {
   let root: string | undefined
@@ -81,6 +81,9 @@ describe('SQLite projection build task composition', () => {
           .resolves.toMatchObject({ entries: [{ sequence: expect.any(Number), message: { id: 'projection-chat-body-user', content: 'same body' } }] })
         await expect(readChatPageAfterPreparation(host.storage, { sessionId: session.id }))
           .resolves.toMatchObject({ entries: [{ message: { id: 'projection-chat-body-user', content: 'same body' } }] })
+        await expect(readApiBaselineAfterPreparation(host.storage, { sessionId: session.id, limit: 20 }))
+          .resolves.toMatchObject({ sessionId: session.id,
+            entries: [{ sequence: expect.any(Number), message: { id: 'projection-chat-body-user', content: 'same body' } }] })
         getDbConnection(db).prepare(`UPDATE session_projection_cache SET inline_payload=replace(inline_payload,'same body','evil body')
           WHERE session_id=? AND scope_key=?`).run(session.id, scopeKey)
         await expect(readChatPageAfterPreparation(host.storage, { sessionId: session.id }))
@@ -89,6 +92,7 @@ describe('SQLite projection build task composition', () => {
         appendMessage(db, { id: 'projection-chat-body-new-source', sessionId: session.id, role: 'user', content: 'new source', timestamp: 12, status: 'sent' })
         await expect(host.storage.queries.readPreparedMessages?.({ sessionId: session.id, prepared: ensured })).resolves.toBeUndefined()
         await expect(host.storage.queries.readPreparedChatPage?.({ sessionId: session.id, prepared: ensured })).resolves.toBeUndefined()
+        await expect(host.storage.queries.readPreparedApiBaseline?.({ sessionId: session.id, prepared: ensured })).resolves.toBeUndefined()
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
     } finally { db.close(); temp.cleanup() }
   })

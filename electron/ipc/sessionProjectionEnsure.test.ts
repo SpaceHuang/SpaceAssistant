@@ -99,6 +99,36 @@ describe('chat:get-messages projection preparation', () => {
     expect(sessionStorage.ensureChatBodyV1).toHaveBeenCalledWith({ sessionId: session.id })
   })
 
+  it('uses the prepared cache baseline for chat:get-api-context-baseline when available', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'prepared API baseline IPC', model: 'test' })
+    const events: string[] = []
+    const prepared = { sessionId: session.id, sourceIdentityJson: 'source' }
+    const baseline = { sessionId: session.id, entries: [{ sequence: 7,
+      message: { id: 'prepared-api-message', sessionId: session.id, role: 'assistant', content: 'cache body', timestamp: 1 } }] }
+    const base = createSqliteSessionStorage(db)
+    const sessionStorage = {
+      ...base,
+      ensureChatBodyV1: vi.fn(async () => { events.push('ensure'); return prepared }),
+      queries: { ...base.queries,
+        readPreparedApiBaseline: vi.fn(async (input: { sessionId: string; limit?: number; prepared?: unknown }) => {
+          events.push('prepared-read')
+          expect(input).toMatchObject({ sessionId: session.id, prepared })
+          return baseline as never
+        }),
+        readApiBaseline: vi.fn(() => { events.push('authority-read'); return { sessionId: session.id, entries: [] } }) },
+    }
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
+      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
+    })
+
+    await expect(handlers.get('chat:get-api-context-baseline')!(null, { sessionId: session.id })).resolves.toBe(baseline)
+    expect(events).toEqual(['ensure', 'prepared-read'])
+  })
+
   it('prepares chatBodyV1 before the paged synchronous query selects a page', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection page IPC ensure', model: 'test' })

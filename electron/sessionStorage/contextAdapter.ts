@@ -7,12 +7,14 @@ import { buildToolChatMessagesFromSource } from '../chatMessageBuild'
 import { appendCompactionTransaction, type SessionEventSink } from '../sessionEvents'
 import type { SessionContextSurfaceMessage } from '../sessionContextCompaction'
 import type { SessionCommitEvent, SessionHistoryPort } from './public/ports'
+import { readApiBaselineAfterPreparation } from './public/readMessages'
 
 /** Internal factory-owned signer for a session scope. Only the returned ContextPort belongs to consumers. */
 export async function createStorageSessionContextAdapter(input: Readonly<{
   sessionId: string
   session: Pick<Session, 'id' | 'createdAt'>
-  queries: Pick<SessionQueries, 'readApiBaseline'>
+  queries: Pick<SessionQueries, 'readApiBaseline' | 'readPreparedApiBaseline'>
+  ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
   workDir: string
   userDataDir: string
   replay: CompactionReplay
@@ -22,7 +24,9 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
 }>): Promise<Readonly<{ adapter: SessionContextAdapter; messages: SessionContextSurfaceMessage[]; windowId: string }>> {
   const registrar = createContextRegistrar()
   const windowId = currentCompactionWindowId(input.replay, `session:${input.sessionId}`)
-  const readSourceMessages = () => input.queries.readApiBaseline({ sessionId: input.sessionId, limit: 500 }).entries.map((entry) => entry.message)
+  const readSourceMessages = async () => (await readApiBaselineAfterPreparation({
+    ensureChatBodyV1: input.ensureChatBodyV1, queries: input.queries
+  }, { sessionId: input.sessionId, limit: 500 })).entries.map((entry) => entry.message)
   const makeSurface = async (sourceMessages: readonly Message[]) => {
     const latestUser = [...sourceMessages].reverse().find((message) => message.role === 'user')
     if (!latestUser) return []
@@ -33,7 +37,7 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
     return applyCommittedSurfaceShadow(surface, input.replay, [latestUser.id], windowId, (items) => computeReplaySurfaceFingerprint('', items))
   }
   const capture = async () => {
-    const surface = await makeSurface(readSourceMessages())
+    const surface = await makeSurface(await readSourceMessages())
     const projection = projectReplaySurfaceWithSources(surface)
     const identities = surfaceItemIdentitiesForProjectionSubset(projection, projection)
     const checkpointIdentities = new Map<string, string>()
@@ -58,7 +62,7 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
     }
     return { frame, surfaceFingerprint: computeReplaySurfaceFingerprint('', projection.messages) }
   }
-  const latestFingerprint = async () => computeReplaySurfaceFingerprint('', await makeSurface(readSourceMessages()))
+  const latestFingerprint = async () => computeReplaySurfaceFingerprint('', await makeSurface(await readSourceMessages()))
   const adapter = createSessionContextAdapter({
     scope: { kind: 'session', sessionId: input.sessionId }, registrar,
     capture,
@@ -72,5 +76,5 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
       return { status: 'committed' as const }
     }
   })
-  return { adapter, messages: await makeSurface(readSourceMessages()) as SessionContextSurfaceMessage[], windowId }
+  return { adapter, messages: await makeSurface(await readSourceMessages()) as SessionContextSurfaceMessage[], windowId }
 }
