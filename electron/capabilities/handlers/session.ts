@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { CapabilityDescriptor, CapabilityContext } from '../types'
 import { isSessionActiveStream } from '../../chatActiveStreams'
-import { prepareChatBodyForRead } from '../../sessionStorage/public/readPreparation'
+import { readExportPageAfterPreparation } from '../../sessionStorage/public/readMessages'
 
 /**
  * action.session.* 功能执行系列（需求 §4.2，risk=read 免确认）。
@@ -101,10 +101,10 @@ const readCapability: CapabilityDescriptor = {
     if (!target || target.ownership === 'internal' || target.visibility === 'hidden') {
       return { error: 'session not found or not user-visible' }
     }
-    await prepareChatBodyForRead(ctx.ensureChatBodyV1, params.sessionId, ctx.signal)
     const limit = Math.min(params.limit ?? 20, 50)
     const cursor = params.cursor ?? 0
-    const page = queries.readExportPage({ sessionId: params.sessionId, fromSequence: cursor, pageSize: limit })
+    const page = await readExportPageAfterPreparation({ ensureChatBodyV1: ctx.ensureChatBodyV1, queries },
+      { sessionId: params.sessionId, fromSequence: cursor, pageSize: limit, signal: ctx.signal })
     return {
       messages: page.rows.map(({ message: m, sequence }) => {
         if (m.content.length > MESSAGE_MAX_CHARS) {

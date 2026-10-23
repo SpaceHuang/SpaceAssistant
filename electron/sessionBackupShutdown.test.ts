@@ -21,13 +21,21 @@ describe('shutdown session backup flush', () => {
       appendMessage(db, { id: 'pending-backup-message', sessionId: session.id, role: 'user', content: 'still pending', timestamp: 1, status: 'sent' })
       const events: string[] = []
       const baseStorage = createSqliteSessionStorage(db)
-      const storage = { ...baseStorage, ensureChatBodyV1: async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`) },
-        queries: { ...baseStorage.queries, readSession: (sessionId: string) => { events.push(`select:${sessionId}`); return baseStorage.queries.readSession(sessionId) } } }
+      const storage = { ...baseStorage,
+        ensureChatBodyV1: async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`); return 'prepared' },
+        queries: { ...baseStorage.queries,
+          readSession: (sessionId: string) => { events.push(`select:${sessionId}`); return baseStorage.queries.readSession(sessionId) },
+          readPreparedExportPage: async (input: { sessionId: string; fromSequence: number; pageSize: number; prepared?: unknown }) => {
+            events.push(`page:${input.fromSequence}:${input.pageSize}:${input.prepared}`)
+            return baseStorage.queries.readExportPage(input)
+          } } }
       const manager = new DebouncedSessionBackupManager(new SessionBackupManager(workDir))
       manager.schedule(session.id, async () => null)
 
       await flushPendingSessionBackups(manager, storage)
-      expect(events).toEqual([`ensure:${session.id}`, `select:${session.id}`])
+      expect(events).toContain(`ensure:${session.id}`)
+      expect(events).toContain(`select:${session.id}`)
+      expect(events.some((event) => event.startsWith('page:0:'))).toBe(true)
 
       const date = new Date(session.createdAt).toISOString().slice(0, 10).replace(/-/g, '')
       const content = JSON.parse(await fs.readFile(path.join(workDir, 'sessions', `${session.id}-${date}`, 'messages.json'), 'utf8'))

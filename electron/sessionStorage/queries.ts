@@ -210,6 +210,36 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         return { ...latest, entries: projectMessageEntriesV1('searchCorpusV1', entries) }
       })
     } } : {}),
+    ...(preparedChatBody ? { readPreparedExportPage: async ({ sessionId, fromSequence, pageSize, prepared }) => {
+      const view = prepared as PreparedChatBodyView | undefined
+      if (!view) return undefined
+      const select = () => getProjectedMessagesPageWithSequence(db, sessionId, fromSequence, pageSize)
+      const selected = runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const page = select()
+        return { page, canonicalIds: canonicalBodyMessageIds(db, sessionId, page.rows.map(({ message }) => message)) }
+      })
+      if (!selected) return undefined
+      if (selected.canonicalIds.length === 0) return { ...selected.page, rows: projectMessageEntriesV1('exportMessageV1', selected.page.rows) }
+      let bodies: PreparedChatBodySelection
+      try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
+      catch {
+        preparedChatBody.invalidate(view)
+        return undefined
+      }
+      return runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const latest = select()
+        if (latest.nextSequence !== selected.page.nextSequence || latest.rows.length !== selected.page.rows.length || latest.rows.some((entry, index) => {
+          const prior = selected.page.rows[index]
+          return !prior || entry.sequence !== prior.sequence || entry.message.id !== prior.message.id ||
+            entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
+        })) return undefined
+        const messages = overlayPreparedBodies(latest.rows.map(({ message }) => message), selected.canonicalIds, bodies)
+        const rows = latest.rows.map((entry, index) => ({ ...entry, message: messages[index]! }))
+        return { ...latest, rows: projectMessageEntriesV1('exportMessageV1', rows) }
+      })
+    } } : {}),
     readChatPage: ({ sessionId, beforeSequence, limit }) => {
       const page = getProjectedChatMessagePage(db, sessionId, beforeSequence, limit)
       return { ...page, entries: projectMessageEntriesV1('chatMessageV1', page.entries) }

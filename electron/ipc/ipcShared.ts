@@ -28,7 +28,7 @@ import { type Dirent } from 'fs'
 import { type MessagePageReader } from '../sessionBackupManager'
 import type { AuditSink } from '../confirmation/channels'
 import type { SessionCommands, SessionQueries } from '../sessionStorage/public/ports'
-import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
+import { readExportPageAfterPreparation } from '../sessionStorage/public/readMessages'
 
 export async function searchFilesUnder(
   absRoot: string,
@@ -200,9 +200,9 @@ export function readWikiConfig(db: AppDatabase): WikiConfig {
 /** 按 sequence 游标分页读取，不受固定条数上限约束，避免大会话导出被静默截断 */
 
 export function backupPageReader(ctx: AppIpcContext, sessionId: string): MessagePageReader {
-  return (afterSequence, pageSize) => {
+  return async (afterSequence, pageSize) => {
     if (!ctx.sessionStorage) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
-    const page = ctx.sessionStorage.queries.readExportPage({ sessionId, fromSequence: afterSequence, pageSize })
+    const page = await readExportPageAfterPreparation(ctx.sessionStorage, { sessionId, fromSequence: afterSequence, pageSize })
     return { messages: page.rows.map(({ message }) => message), nextSequence: page.nextSequence }
   }
 }
@@ -210,7 +210,6 @@ export function backupPageReader(ctx: AppIpcContext, sessionId: string): Message
 export async function loadBackupPayload(ctx: AppIpcContext, sessionId: string) {
   const storage = ctx.sessionStorage
   if (!storage) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
-  await prepareChatBodyForRead(storage.ensureChatBodyV1, sessionId)
   const queries = ctx.sessionStorage?.queries
   if (!queries) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
   const s = queries.readSession(sessionId)

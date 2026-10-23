@@ -336,13 +336,13 @@ describe('file IPC handlers', () => {
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
   })
 
-  it('auto backup reader resolves message bodies through the canonical-aware sequence page', () => {
+  it('auto backup reader resolves message bodies through the canonical-aware sequence page', async () => {
     const message = { id: 'backup-canonical-user', sessionId: 'backup-session', role: 'user' as const,
       content: 'canonical backup body', timestamp: 1, status: 'sent' as const, schemaVersion: 1 }
     const readPage = vi.spyOn(sessionTranscriptProjection, 'getProjectedMessagesPageWithSequence').mockReturnValue({
       rows: [{ message, sequence: 7 }], nextSequence: 8
     })
-    const page = backupPageReader(ctx, 'backup-session')(0, 25)
+    const page = await backupPageReader(ctx, 'backup-session')(0, 25)
 
     expect(readPage).toHaveBeenCalledWith(ctx.db, 'backup-session', 0, 25)
     expect(page).toEqual({ messages: [message], nextSequence: 8 })
@@ -365,7 +365,7 @@ describe('file IPC handlers', () => {
 
     await expect(loadBackupPayload(ctx, 'backup-order-session')).resolves.toBeNull()
 
-    expect(events).toEqual(['ensure:backup-order-session', 'select'])
+    expect(events).toEqual(['select'])
   })
 
   it('API context baseline IPC resolves the latest-window rows through canonical bodies', async () => {

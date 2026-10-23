@@ -1,6 +1,6 @@
 import type { SessionQueries } from './sessionStorage/public/ports'
 import type { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
-import { prepareChatBodyForRead } from './sessionStorage/public/readPreparation'
+import { readExportPageAfterPreparation } from './sessionStorage/public/readMessages'
 
 /** Flush pending debounce-window backups while the host-owned SessionQueries and database are still available. */
 export async function flushPendingSessionBackups(
@@ -13,14 +13,13 @@ export async function flushPendingSessionBackups(
   const sessionIds = manager.getPendingSessionIds()
   if (sessionIds.length === 0) return
   await manager.flushAllWithRetry(sessionIds, async (sessionId) => {
-    await prepareChatBodyForRead(storage.ensureChatBodyV1, sessionId)
     const queries = storage.queries
     const session = queries.readSession(sessionId)
     if (!session) return null
     return {
       session,
-      readPage: (fromSequence: number, pageSize: number) => {
-        const page = queries.readExportPage({ sessionId, fromSequence, pageSize })
+      readPage: async (fromSequence: number, pageSize: number) => {
+        const page = await readExportPageAfterPreparation(storage, { sessionId, fromSequence, pageSize })
         return { messages: page.rows.map(({ message }) => message), nextSequence: page.nextSequence }
       }
     }

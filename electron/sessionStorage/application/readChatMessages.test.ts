@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { prepareChatBodiesForSessions, readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation } from './readChatMessages'
+import { prepareChatBodiesForSessions, readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readExportPageAfterPreparation } from './readChatMessages'
 
 describe('readChatMessagesAfterPreparation', () => {
   it('prepares the chat body view and reruns the complete synchronous selection', async () => {
@@ -162,5 +162,21 @@ describe('readSearchCorpusPageAfterPreparation', () => {
     }, { sessionId: 'search-session', fromSequence: 17, pageSize: 50 })
     expect(result).toBe(page)
     expect(events).toEqual(['ensure', 'prepared:17:50'])
+  })
+})
+
+describe('readExportPageAfterPreparation', () => {
+  it('prepares each cursor page and preserves authority paging when the cache reader misses', async () => {
+    const events: string[] = []
+    const page = { rows: [{ sequence: 22, message: { id: 'export-row', content: 'body' } }], nextSequence: 23 }
+    const result = await readExportPageAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); return 'prepared' },
+      queries: {
+        readPreparedExportPage: async ({ fromSequence, pageSize, prepared }) => { events.push(`prepared:${fromSequence}:${pageSize}:${prepared}`); return page as never },
+        readExportPage: () => { events.push('authority'); return { rows: [], nextSequence: 0 } }
+      }
+    }, { sessionId: 'export-session', fromSequence: 22, pageSize: 25 })
+    expect(result).toBe(page)
+    expect(events).toEqual(['ensure', 'prepared:22:25:prepared'])
   })
 })

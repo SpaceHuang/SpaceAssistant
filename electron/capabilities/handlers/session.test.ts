@@ -136,15 +136,20 @@ describe('action.session.read', () => {
     const id = await seedSession('projection capability read', ['body'])
     const events: string[] = []
     const base = createSqliteSessionStorage(db).queries
-    const queries = { ...base, readExportPage: (input: Parameters<typeof base.readExportPage>[0]) => {
-      events.push('select-export')
-      return base.readExportPage(input)
-    } }
+    const queries = { ...base,
+      readPreparedExportPage: async (input: { sessionId: string; fromSequence: number; pageSize: number; prepared?: unknown }) => {
+        events.push(`prepared-export:${input.fromSequence}:${input.pageSize}`)
+        return base.readExportPage(input)
+      },
+      readExportPage: (input: Parameters<typeof base.readExportPage>[0]) => {
+        events.push('select-export')
+        return base.readExportPage(input)
+      } }
 
     await findCap('action.session.read').handler({ sessionId: id }, ctx({ sessionQueries: queries,
       ensureChatBodyV1: async ({ sessionId }) => { events.push(`ensure:${sessionId}`) } }))
 
-    expect(events).toEqual([`ensure:${id}`, 'select-export'])
+    expect(events).toEqual([`ensure:${id}`, 'prepared-export:0:20'])
   })
 
   it('按 sequence 游标分页读取消息（复用 getMessagesPage）', async () => {
@@ -199,7 +204,7 @@ describe('action.session.read', () => {
     expect(page2).toMatchObject({ messages: [{ sequence: 2, content: 'canonical page 2' }], nextSequence: 3, hasMore: false })
     expect(page2.messages).toHaveLength(1)
     expect(conn.prepare("SELECT cache_key FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(id))
-      .toEqual({ cache_key: 'transcript' })
+      .toBeUndefined()
   })
 
   it('单条大消息截断为摘要 + 提示', async () => {
