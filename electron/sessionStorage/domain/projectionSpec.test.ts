@@ -42,6 +42,19 @@ describe('ProjectionSpec.chatBodyV1', () => {
     ])
   })
 
+  it('rejects malformed image and tool blocks instead of silently dropping unknown content', () => {
+    const facts: ProjectionMessageFact[] = [
+      { id: 'assistant', role: 'assistant', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'hello' },
+    ]
+    for (const content of [
+      [{ type: 'text', text: 'hello' }, { type: 'image', source: { type: 'url', url: 'https://example.test/image' } }],
+      [{ type: 'text', text: 'hello' }, { type: 'tool_use', id: 'tool-1', name: 'lookup' }],
+    ]) {
+      expect(() => projectCanonicalChatBodyV1([{ id: 'assistant', role: 'assistant', timestamp: 1, content }], facts))
+        .toThrow('CHAT_BODY_IDENTITY_MISMATCH')
+    }
+  })
+
   it('registers output, selection dependencies, and invalidation dependencies for every contract scope', () => {
     expect(PROJECTION_SPECS).toEqual({
       chatBodyV1: { outputFields: ['id', 'role', 'content', 'timestamp'], selectionDependencies: ['sessionGeneration', 'historyWatermark', 'messageOrder', 'bodyAuthority', 'storageStatus'], invalidationDependencies: ['id', 'role', 'content', 'timestamp', 'messageOrder', 'historyWatermark', 'bodyAuthority'] },

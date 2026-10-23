@@ -108,11 +108,24 @@ function canonicalMessageBodyText(content: unknown): string {
     const record = block as Record<string, unknown>
     if (record.type === 'text' && typeof record.text === 'string') text += record.text
     else if (record.type === 'thinking' && typeof record.thinking === 'string') continue
-    else if (record.type === 'image' && typeof record.data === 'string' &&
-      ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(String(record.mimeType))) continue
+    else if (record.type === 'image' && isClaudeBase64ImageSource(record.source)) continue
+    else if (record.type === 'tool_use' && isClaudeToolUseBlock(record)) continue
     else throw new Error('CHAT_BODY_IDENTITY_MISMATCH')
   }
   return text
+}
+
+function isClaudeBase64ImageSource(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const source = value as Record<string, unknown>
+  return source.type === 'base64' && typeof source.data === 'string' &&
+    ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(String(source.media_type))
+}
+
+function isClaudeToolUseBlock(value: Record<string, unknown>): boolean {
+  return typeof value.id === 'string' && !!value.id.trim() && typeof value.name === 'string' && !!value.name.trim() &&
+    !!value.input && typeof value.input === 'object' && !Array.isArray(value.input) &&
+    (value.thought_signature === undefined || typeof value.thought_signature === 'string')
 }
 
 export function encodeChatBodyV1(messages: readonly Message[]): string {
