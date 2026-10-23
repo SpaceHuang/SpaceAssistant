@@ -510,22 +510,9 @@ export function getProjectedChatMessagePage(
 ): ChatMessagePage {
   const page = getChatMessagePage(db, sessionId, beforeSequence, limit)
   if (page.entries.length === 0) return page
-  if (hasSessionProjectionEligibility(db, sessionId)) {
-    try {
-      const cached = new SqliteAgentHistory(getDbConnection(db)).readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
-      if (cached.kind === 'matched') {
-        const canonicalById = new Map(cached.messages.map((message) => [message.id, message]))
-        const projected = page.entries.map((entry) => {
-          const canonical = canonicalById.get(entry.message.id)
-          if (!canonical || canonical.id !== entry.message.id || canonical.role !== entry.message.role || typeof canonical.content !== 'string' || typeof canonical.timestamp !== 'number') return undefined
-          return { ...entry, message: { ...entry.message, id: canonical.id, role: canonical.role, content: canonical.content, timestamp: canonical.timestamp } }
-        })
-        if (projected.every((entry) => entry !== undefined)) return { ...page, entries: projected }
-      }
-    } catch { /* The marker is disposable; any cache ambiguity falls through to exact L2. */ }
-  }
-  // Page-local ID matches are insufficient: an older message outside this cursor page
-  // may be missing from canonical History. L2 proves eligibility for the whole session.
+  // Page-local cache hits cannot prove the body source for every requested ID. The transcript
+  // reader validates the legacy cache against the complete legacy view, or replays History for
+  // canonical-backed bodies, before we apply this page's cursor selection.
   const transcript = readSessionTranscriptProjection(db, sessionId)
   if (transcript.source === 'legacy') return page
   const canonicalById = new Map(transcript.messages.map((message) => [message.id, message]))

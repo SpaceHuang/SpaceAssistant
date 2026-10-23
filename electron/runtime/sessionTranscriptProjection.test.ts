@@ -9,6 +9,7 @@ import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { publishTranscriptParityProof } from '../sessionStorage/sqliteRuntimeBindings'
 import * as agentLogger from '../agentLogger/agentLogger'
 import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
 
@@ -36,7 +37,14 @@ describe('session transcript projection P2 read path', () => {
       conn.prepare("UPDATE canonical_session_projection_cache SET value=?,value_sha256=? WHERE session_id=? AND cache_key='transcript'")
         .run(value, createHash('sha256').update(value).digest('hex'), session.id)
 
+      const verified = new SqliteAgentHistory(conn, 1, () => 2, session.id).readCanonicalSessionTranscriptForShadow(session.id)
+      expect(verified.kind).toBe('matched')
+      if (verified.kind === 'matched') {
+        expect(publishTranscriptParityProof(db, session.id, verified, 'a'.repeat(64))).toBe(true)
+      }
+
       expect(readSessionTranscriptProjection(db, session.id).messages[0]?.content).toBe('source truth')
+      expect(getProjectedChatMessagePage(db, session.id, null, 10).entries[0]?.message.content).toBe('source truth')
     } finally {
       cleanup()
     }
