@@ -283,12 +283,13 @@ export function clearNextSessionMessageContentBatch(
     } catch {
       return ineligible('history-unavailable')
     }
-    const projected = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
-    if (projected.kind !== 'matched' || projected.watermark.sessionGeneration !== state.generation ||
-      projected.watermark.sessionSeq !== state.canonical_session_seq || projected.watermark.commitOrder !== state.canonical_commit_order ||
-      projected.watermark.watermarkEventId !== state.watermark_event_id || projected.watermark.watermarkInvocationId !== state.watermark_invocation_id) {
+    const projected = history.readCanonicalSessionTranscriptForShadow(sessionId)
+    if (projected.kind !== 'matched' || projected.sessionGeneration !== state.generation ||
+      projected.sessionSeq !== state.canonical_session_seq || projected.commitOrder !== state.canonical_commit_order ||
+      projected.watermarkEventId !== state.watermark_event_id || projected.watermarkInvocationId !== state.watermark_invocation_id) {
       return ineligible('history-unavailable')
     }
+    if (cleanupManifestSha256(db, sessionId) !== state.source_manifest_sha256) return ineligible('fence-changed')
     const canonicalById = new Map(projected.messages.map((message) => [message.id, message]))
     const rows = conn.prepare(`SELECT id,role,content,status,timestamp,sequence,content_storage_state FROM messages
       WHERE session_id=? AND (sequence>? OR (sequence=? AND (? IS NULL OR id>?)))
@@ -301,8 +302,6 @@ export function clearNextSessionMessageContentBatch(
       !canonicalById.has(row.id) || canonicalById.get(row.id)?.content !== row.content ||
       canonicalById.get(row.id)?.role !== row.role || canonicalById.get(row.id)?.timestamp !== row.timestamp ||
       !['sent','completed','failed','cancelled'].includes(row.status))) return ineligible('message-mismatch')
-
-    if (cleanupManifestSha256(db, sessionId) !== state.source_manifest_sha256) return ineligible('fence-changed')
 
     for (const row of rows) {
       const changed = conn.prepare(`UPDATE messages SET content='',content_storage_state='canonical-backed-only'
@@ -381,10 +380,10 @@ export function verifyAndCompleteSessionMessageContentCleanup(db: AppDatabase, s
       LIMIT 1`).get(sessionId, sessionId, sessionId, sessionId)
     if (activeControl) return false
     const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
-    const projected = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
-    if (projected.kind !== 'matched' || projected.watermark.sessionGeneration !== state.generation ||
-      projected.watermark.sessionSeq !== state.canonical_session_seq || projected.watermark.commitOrder !== state.canonical_commit_order ||
-      projected.watermark.watermarkEventId !== state.watermark_event_id || projected.watermark.watermarkInvocationId !== state.watermark_invocation_id) return false
+    const projected = history.readCanonicalSessionTranscriptForShadow(sessionId)
+    if (projected.kind !== 'matched' || projected.sessionGeneration !== state.generation ||
+      projected.sessionSeq !== state.canonical_session_seq || projected.commitOrder !== state.canonical_commit_order ||
+      projected.watermarkEventId !== state.watermark_event_id || projected.watermarkInvocationId !== state.watermark_invocation_id) return false
     const canonicalById = new Map(projected.messages.map((message) => [message.id, message]))
     const rows = conn.prepare(`SELECT id,role,content,status,timestamp,sequence,content_storage_state FROM messages
       WHERE session_id=? ORDER BY sequence,id`).all(sessionId) as Array<{
@@ -400,8 +399,8 @@ export function verifyAndCompleteSessionMessageContentCleanup(db: AppDatabase, s
     if (!finalManifest || finalManifest !== state.source_manifest_sha256) return false
     const verificationSha256 = createHash('sha256').update(JSON.stringify({
       sessionId, generation: state.generation, messageRevision: state.cutover_message_revision,
-      sessionSeq: projected.watermark.sessionSeq, commitOrder: projected.watermark.commitOrder,
-      watermarkEventId: projected.watermark.watermarkEventId, watermarkInvocationId: projected.watermark.watermarkInvocationId,
+      sessionSeq: projected.sessionSeq, commitOrder: projected.commitOrder,
+      watermarkEventId: projected.watermarkEventId, watermarkInvocationId: projected.watermarkInvocationId,
       manifest: finalManifest, messageCount: rows.length
     }), 'utf8').digest('hex')
     const now = Date.now()

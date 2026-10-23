@@ -464,6 +464,8 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
       expect(markSessionMessageContentWriteStopped(db, session.id)).toBe(true)
       expect(beginSessionMessageContentCleanup(db, session.id)).toBe(true)
+      getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
+        .run(session.id)
       expect(() => getDbConnection(db).prepare(`UPDATE messages SET content='',content_storage_state='canonical-backed-only',attachments='[]'
         WHERE id='cleanup-user-1'`).run()).toThrow(/write stopped|write-stop|cleanup/i)
 
