@@ -2274,6 +2274,25 @@ describe('session transcript projection P2 read path', () => {
     db.close()
   })
 
+  it('reuses a current parity proof for legacy chat pages and revalidates after source mutation', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'page parity fast path', model: 'test' })
+    appendMessage(db, { id: 'page-parity-user', sessionId: session.id, role: 'user', content: 'source body', timestamp: 1, status: 'sent' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'page-parity-invocation', turnId: 'page-parity-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'page-parity-context', idempotencyKey: 'page-parity-context', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'page-parity-user', role: 'user', content: 'source body', timestamp: 1 }] }
+    }], 0)
+
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
+    expect(getProjectedChatMessagePage(db, session.id, null, 20).entries[0]?.message.content).toBe('source body')
+    getDbConnection(db).prepare('UPDATE messages SET content=? WHERE id=?').run('updated body', 'page-parity-user')
+    expect(getProjectedChatMessagePage(db, session.id, null, 20).entries[0]?.message.content).toBe('updated body')
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', messages: [{ id: 'page-parity-user', content: 'updated body' }] })
+    db.close()
+  })
+
   it('keeps legacy control fields and falls back when an unmapped role is present', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'legacy system row', model: 'test' })

@@ -510,6 +510,15 @@ export function getProjectedChatMessagePage(
 ): ChatMessagePage {
   const page = getChatMessagePage(db, sessionId, beforeSequence, limit)
   if (page.entries.length === 0) return page
+  const conn = getDbConnection(db)
+  const writeMode = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
+    .get(sessionId) as { write_mode: string } | undefined
+  if (writeMode?.write_mode !== 'canonical' && hasCurrentProjectionEligibility(db, sessionId)) {
+    const pageIds = page.entries.map(({ message }) => message.id)
+    const states = conn.prepare(`SELECT id,content_storage_state FROM messages WHERE session_id=? AND id IN (${pageIds.map(() => '?').join(',')})`)
+      .all(sessionId, ...pageIds) as Array<{ id: string; content_storage_state: string }>
+    if (states.length === pageIds.length && states.every(({ content_storage_state }) => content_storage_state === 'legacy')) return page
+  }
   // Page-local cache hits cannot prove the body source for every requested ID. The transcript
   // reader validates the legacy cache against the complete legacy view, or replays History for
   // canonical-backed bodies, before we apply this page's cursor selection.
