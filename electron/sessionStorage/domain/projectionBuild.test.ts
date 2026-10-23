@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { acceptProjectionBuildChunk, attachProjectionPendingHistoryChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint, parseProjectionBuildCheckpoint, takeoverProjectionBuildCheckpoint } from './projectionBuild'
+import { acceptProjectionBuildChunk, attachProjectionPendingHistoryChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint,
+  MAX_STAGED_PROJECTION_CHUNK_BYTES, parseProjectionBuildCheckpoint, takeoverProjectionBuildCheckpoint } from './projectionBuild'
 import type { ProjectionBuildChunkReceipt, ProjectionBuildLimits } from './projectionBuild'
 
 const limits: ProjectionBuildLimits = { maxRows: 2, maxBytes: 64 }
@@ -94,7 +95,12 @@ describe('projection build checkpoint reducer', () => {
       pendingHistoryChunkBlob: { ...pending, fromSequence: 1 } }))).toBeNull()
     expect(parseProjectionBuildCheckpoint(JSON.stringify({ ...staged,
       pendingHistoryChunkBlob: { ...pending, sourceIdentityJson: '{"source":2}' } }))).toBeNull()
-    const accepted = acceptProjectionBuildChunk(staged, chunk({ fromSequence: 0, nextSequence: 1, rowCount: 1 }), limits)!
+    expect(attachProjectionPendingHistoryChunk(checkpoint, { ...pending, byteLength: MAX_STAGED_PROJECTION_CHUNK_BYTES + 1 })).toBeNull()
+    expect(parseProjectionBuildCheckpoint(JSON.stringify({ ...staged,
+      pendingHistoryChunkBlob: { ...pending, sourceBytes: MAX_STAGED_PROJECTION_CHUNK_BYTES + 1 } }))).toBeNull()
+    const largeReceipt = chunk({ fromSequence: 0, nextSequence: 1, rowCount: 1, byteLength: 70_000 })
+    expect(acceptProjectionBuildChunk(staged, largeReceipt, limits, '{}', null, 32, null)).toBeNull()
+    const accepted = acceptProjectionBuildChunk(staged, largeReceipt, limits, '{}', null, 32, null, true)!
     expect(accepted).toMatchObject({ nextSequence: 1, pendingHistoryChunkBlob: null })
   })
 

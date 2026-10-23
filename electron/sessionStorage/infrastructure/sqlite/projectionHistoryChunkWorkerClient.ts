@@ -37,7 +37,8 @@ anchorRequire('tsx/cjs/api').register()
 anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(anchor).href)
   .then(() => {}, (error) => setTimeout(() => { throw error }, 0))
 `)
-  const worker = new Worker(bootstrapPath, { execArgv: [], env: {
+  const worker = new Worker(bootstrapPath, { execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 128,
+    maxYoungGenerationSizeMb: 16, stackSizeMb: 4 }, env: {
     ...process.env, SA_PROJECTION_WORKER_ANCHOR: anchor, SA_PROJECTION_WORKER_TARGET: workerPath,
   } })
   worker.once('exit', () => fs.rm(bootstrapPath, { force: true }, () => undefined))
@@ -47,7 +48,8 @@ anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(
 /** One bounded worker owns its read-only SQLite handle and is considered quiescent only after exit. */
 export function readProjectionHistoryChunkInWorker(
   permit: ProjectionHistoryChunkPermit,
-  input: Readonly<{ afterSessionSequence: number; maxRows: number; maxBytes: number; signal?: AbortSignal }>,
+  input: Readonly<{ afterSessionSequence: number; maxRows: number; maxBytes: number; signal?: AbortSignal;
+    staging?: Readonly<{ root: string; tempLocator: string }> }>,
   options: ProjectionHistoryWorkerOptions = {}
 ): Promise<ProjectionHistoryChunkResult> {
   const signal = options.signal ?? input.signal
@@ -55,7 +57,9 @@ export function readProjectionHistoryChunkInWorker(
   const workerPath = resolveProjectionHistoryWorkerPath(options.workerPath)
   if (!workerPath) return Promise.reject(new Error('PROJECTION_WORKER_ENTRY_UNAVAILABLE'))
   let worker: Worker
-  try { worker = options.createWorker?.(workerPath) ?? (workerPath.endsWith('.ts') ? spawnSourceWorker(workerPath) : new Worker(workerPath)) }
+  try { worker = options.createWorker?.(workerPath) ?? (workerPath.endsWith('.ts') ? spawnSourceWorker(workerPath) : new Worker(workerPath, {
+    resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
+  })) }
   catch (error) { return Promise.reject(new Error(`PROJECTION_WORKER_SPAWN_FAILED:${error instanceof Error ? error.message : String(error)}`)) }
 
   const requestId = randomUUID()
@@ -78,6 +82,22 @@ export function readProjectionHistoryChunkInWorker(
     signal?.addEventListener('abort', onAbort, { once: true })
     worker.on('message', (message: { requestId?: string; result?: ProjectionHistoryChunkResult; workerSample?: ProjectionWorkerSample }) => {
       if (message.requestId !== requestId || !message.result) { stop(new Error('PROJECTION_WORKER_PROTOCOL_MISMATCH')); return }
+      if (message.result.kind === 'staged-chunk') {
+        const staged = message.result.stagedBlob
+        if (!input.staging || staged.tempLocator !== input.staging.tempLocator ||
+          !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(staged.tempLocator) ||
+          !Number.isSafeInteger(staged.byteLength) || staged.byteLength < 1 || staged.byteLength > 32 * 1024 * 1024 ||
+          !/^[a-f0-9]{64}$/.test(staged.payloadDigest) || !Number.isSafeInteger(message.result.rowCount) ||
+          message.result.rowCount < 1 || message.result.rowCount > input.maxRows ||
+          !Number.isSafeInteger(message.result.afterSessionSequence) || !Number.isSafeInteger(message.result.nextSessionSequence) ||
+          message.result.nextSessionSequence <= message.result.afterSessionSequence ||
+          message.result.nextSessionSequence - message.result.afterSessionSequence !== message.result.rowCount ||
+          !Number.isSafeInteger(message.result.sourceByteLength) || message.result.sourceByteLength <= input.maxBytes ||
+          message.result.sourceByteLength > 32 * 1024 * 1024 || typeof message.result.hasMore !== 'boolean') {
+          stop(new Error('PROJECTION_WORKER_STAGED_RESULT_INVALID'))
+          return
+        }
+      }
       result = { ...message.result, ...(isWorkerSample(message.workerSample) ? { workerSample: message.workerSample } : {}) }
     })
     worker.once('error', (error) => stop(error))

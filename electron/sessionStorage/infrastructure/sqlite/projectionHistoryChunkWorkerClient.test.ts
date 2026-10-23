@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events'
+import { createHash, randomUUID } from 'node:crypto'
+import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Worker } from 'node:worker_threads'
@@ -96,6 +99,25 @@ describe('projection history chunk worker client', () => {
       expect(deferred).toMatchObject({ kind: 'deferred-large', observedEventRows: 1, observedByteLength: expect.any(Number),
         snapshotDurationMs: expect.any(Number), workerSample: { durationMs: expect.any(Number),
           heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number) } })
+      const stageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'projection-history-stage-'))
+      try {
+        const tempLocator = `.projection-${randomUUID()}.tmp`
+        const staged = await readProjectionHistoryChunkInWorker({ dbPath: temp.dbPath, sessionId: session.id,
+          sessionGeneration: session.generation, scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson: currentSourceIdentityJson,
+          connectionEpoch: 1, processGeneration: 1, rebuildToken: 'worker-token' },
+        { afterSessionSequence: 1, maxRows: 1, maxBytes: 512,
+          staging: { root: stageRoot, tempLocator } }, {
+          workerPath: path.join(process.cwd(), 'electron/sessionStorage/infrastructure/sqlite/projectionHistoryChunkWorker.ts'), timeoutMs: 5000,
+        })
+        expect(staged).toMatchObject({ kind: 'staged-chunk', afterSessionSequence: 1, nextSessionSequence: 2,
+          rowCount: 1, sourceByteLength: expect.any(Number), stagedBlob: { tempLocator, byteLength: expect.any(Number),
+            payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/) }, workerSample: { durationMs: expect.any(Number) } })
+        if (staged.kind !== 'staged-chunk') throw new Error('expected staged chunk result')
+        const bytes = await fs.readFile(path.join(stageRoot, tempLocator))
+        expect(bytes.byteLength).toBe(staged.stagedBlob.byteLength)
+        expect(createHash('sha256').update(bytes).digest('hex')).toBe(staged.stagedBlob.payloadDigest)
+        expect(JSON.parse(bytes.toString('utf8'))).toMatchObject({ events: [{ eventId: 'worker-large-event' }], messageFacts: [] })
+      } finally { await fs.rm(stageRoot, { recursive: true, force: true }) }
     } finally { temp.cleanup() }
   }, 15_000)
 })

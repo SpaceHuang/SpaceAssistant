@@ -19,11 +19,12 @@ type ProjectionMessageFactRow = {
 
 const MAX_CHUNK_ROWS = 200
 const MAX_CHUNK_BYTES = 256 * 1024
+const MAX_STAGED_SOURCE_CHUNK_BYTES = 32 * 1024 * 1024
 
 /** Read one bounded History page in a worker-owned, read-only SQLite snapshot. */
 export function readProjectionHistoryChunk(
   permit: ProjectionHistoryChunkPermit,
-  input: Readonly<{ afterSessionSequence: number; maxRows: number; maxBytes: number }>
+  input: Readonly<{ afterSessionSequence: number; maxRows: number; maxBytes: number; allowOversizedChunk?: boolean }>
 ): ProjectionHistoryChunkResult {
   if (!Number.isSafeInteger(input.afterSessionSequence) || input.afterSessionSequence < 0 ||
     !Number.isSafeInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > MAX_CHUNK_ROWS ||
@@ -77,11 +78,16 @@ export function readProjectionHistoryChunk(
           commitOrder: row.commit_order, createdAt: row.created_at,
         }
         const eventBytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
-        if (eventBytes > input.maxBytes && events.length === 0) {
+        if (eventBytes > input.maxBytes && events.length === 0 && !input.allowOversizedChunk) {
           return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
             eventSequence: row.session_seq, observedByteLength: eventBytes, observedEventRows: 1 }
         }
-        if (events.length >= input.maxRows || byteLength + eventBytes > input.maxBytes) { hasMore = true; break }
+        if (eventBytes > MAX_STAGED_SOURCE_CHUNK_BYTES && events.length === 0) {
+          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+            eventSequence: row.session_seq, observedByteLength: eventBytes, observedEventRows: 1,
+            reason: 'oversized-event-exceeds-staging-budget' }
+        }
+        if (events.length >= input.maxRows || (events.length > 0 && byteLength + eventBytes > input.maxBytes)) { hasMore = true; break }
         if (row.session_seq !== nextSessionSequence + 1 || row.commit_order < 1) {
           return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'history-order-invalid' }
         }
@@ -107,8 +113,11 @@ export function readProjectionHistoryChunk(
           writeMode: row.write_mode, storedContent: row.content })))
       }
       const totalBytes = byteLength + Buffer.byteLength(JSON.stringify(messageFacts), 'utf8')
-      if (totalBytes > input.maxBytes) return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+      if (totalBytes > input.maxBytes && !input.allowOversizedChunk) return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
         eventSequence: events[0]!.sessionSequence, observedByteLength: totalBytes, observedEventRows: events.length }
+      if (totalBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+        eventSequence: events[0]!.sessionSequence, observedByteLength: totalBytes, observedEventRows: events.length,
+        reason: 'oversized-source-chunk-exceeds-staging-budget' }
       return { kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence,
         nextSessionSequence, events: Object.freeze(events), messageFacts: Object.freeze(messageFacts), byteLength: totalBytes, hasMore }
     })

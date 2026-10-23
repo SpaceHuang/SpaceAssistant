@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
+import type { ProjectionPendingHistoryChunkManifestRef } from '../../domain/projectionBuild'
 import type { ProjectionHistoryChunkReducerPort, ProjectionHistoryChunkReduction } from '../../application/projectionBuildCoordinator'
 
 const MAX_REDUCER_WORKER_MS = 15_000
@@ -43,7 +44,8 @@ anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(
 
 export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducerPort =
   (stateJson: string, events: readonly ProjectionHistoryChunkEvent[], messageFacts: readonly ProjectionMessageFact[],
-    scopeKey: string, finalize: boolean, signal?: AbortSignal): Promise<ProjectionHistoryChunkReduction> => {
+    scopeKey: string, finalize: boolean, signal?: AbortSignal,
+    stagedChunk?: Readonly<{ root: string; manifest: ProjectionPendingHistoryChunkManifestRef }>): Promise<ProjectionHistoryChunkReduction> => {
     if (signal?.aborted) return Promise.reject(new Error('PROJECTION_REDUCER_WORKER_ABORTED'))
     const workerPath = resolveWorkerPath()
     if (!workerPath) return Promise.reject(new Error('PROJECTION_REDUCER_WORKER_ENTRY_UNAVAILABLE'))
@@ -97,7 +99,7 @@ export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducer
         if (!settled) finish(candidateError ?? (abortRequested ? new Error('PROJECTION_REDUCER_WORKER_ABORTED') :
           candidateResult && code === 0 ? undefined : new Error(`PROJECTION_REDUCER_WORKER_EXIT:${code}`)), candidateResult)
       })
-      try { worker.postMessage({ requestId, stateJson, events, messageFacts, scopeKey, finalize }) }
+      try { worker.postMessage({ requestId, stateJson, events, messageFacts, scopeKey, finalize, stagedChunk }) }
       catch (error) { stopWithError(error instanceof Error ? error : new Error('PROJECTION_REDUCER_WORKER_POST_FAILED')) }
     })
   }

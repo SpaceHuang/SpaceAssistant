@@ -1,7 +1,8 @@
 import {
   acceptProjectionBuildChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint, parseProjectionBuildCheckpoint,
   projectionPayloadDigest, takeoverProjectionBuildCheckpoint, type ProjectionBuildCheckpoint, type ProjectionBuildChunkReceipt,
-  type ProjectionBuildLimits, type ProjectionBuildReducerStateManifestRef,
+  attachProjectionPendingHistoryChunk, type ProjectionBuildLimits, type ProjectionBuildReducerStateManifestRef,
+  type ProjectionPendingHistoryChunkManifestRef,
 } from '../domain/projectionBuild'
 import type { SessionProjectionService, ProjectionRebuildLease } from './projectionService'
 import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact,
@@ -9,6 +10,10 @@ import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, Project
 import { materializeProjectionOutputManifest, type ProjectionOutputBlobReader, type ProjectionOutputIdentity } from './projectionOutputManifest'
 
 export type ProjectionBuildBlobPort = Readonly<{
+  root?: string
+  withWorkerStaging?<T>(run: (promote: (input: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>) => Promise<Readonly<{
+    locator: string; byteLength: number; payloadDigest: string; release(): Promise<void>
+  }>>, stage: Readonly<{ root: string; tempLocator: string }>) => Promise<T>): Promise<T>
   write(payload: string): Promise<Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }>>
   writeMany?(payloads: readonly string[]): Promise<readonly Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }> []>
   readVerified?(input: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>): Promise<string>
@@ -25,7 +30,8 @@ const DEFAULT_PROJECTION_RETRY_DELAY_MS = 60_000
 
 export type ProjectionHistoryChunkReaderPort = (
   permit: ProjectionHistoryChunkPermit,
-  input: Readonly<{ afterSessionSequence: number; maxRows: number; maxBytes: number; signal?: AbortSignal }>
+  input: Readonly<{ afterSessionSequence: number; maxRows: number; maxBytes: number; signal?: AbortSignal;
+    staging?: Readonly<{ root: string; tempLocator: string }> }>
 ) => Promise<ProjectionHistoryChunkResult>
 
 export type ProjectionHistoryReducerPort = Readonly<{
@@ -48,7 +54,8 @@ export type ProjectionHistoryChunkReducerPort = (
   messageFacts: readonly ProjectionMessageFact[],
   scopeKey: string,
   finalize: boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  stagedChunk?: Readonly<{ root: string; manifest: ProjectionPendingHistoryChunkManifestRef }>
 ) => Promise<ProjectionHistoryChunkReduction>
 
 export type ProjectionBuildSliceResult =
@@ -136,16 +143,53 @@ export async function runProjectionBuildSlice(input: Readonly<{
       connectionEpoch: lease.connectionEpoch, processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken,
     }
     let result: ProjectionHistoryChunkResult
-    try {
-      result = await input.readChunk(permit, {
-        afterSessionSequence: checkpoint.nextSequence, maxRows: limits.maxRows, maxBytes: limits.maxBytes - 128,
-        ...(input.signal ? { signal: input.signal } : {}),
-      })
-    } catch (error) {
-      if (input.signal?.aborted) return { kind: 'checkpointed', checkpoint }
-      const failure = error instanceof Error ? error.message : 'projection-history-worker-failed'
-      rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'WORKER_FAILED', input.now, input.retryAfter)
-      return { kind: 'source-unavailable', reason: failure }
+    const pendingChunk = checkpoint.pendingHistoryChunkBlob
+    if (pendingChunk) {
+      result = { kind: 'chunk', permit, afterSessionSequence: pendingChunk.fromSequence,
+        nextSessionSequence: pendingChunk.nextSequence, events: [], messageFacts: [],
+        byteLength: pendingChunk.sourceBytes, hasMore: pendingChunk.hasMore }
+    } else {
+      try {
+        const readInput = { afterSessionSequence: checkpoint.nextSequence, maxRows: limits.maxRows, maxBytes: limits.maxBytes - 128,
+          ...(input.signal ? { signal: input.signal } : {}) }
+        let stagedResult: ProjectionHistoryChunkResult | undefined
+        let earlyResult: ProjectionBuildSliceResult | undefined
+        if (input.blobs.withWorkerStaging) {
+          stagedResult = await input.blobs.withWorkerStaging(async (promote, stage) => {
+            const source = await input.readChunk(permit, { ...readInput, staging: stage })
+            if (source.kind !== 'staged-chunk') return source
+            if (!samePermit(source.permit, permit)) return source
+            const blob = await promote(source.stagedBlob)
+            const pending = attachProjectionPendingHistoryChunk(checkpoint, {
+              locator: blob.locator, byteLength: blob.byteLength, payloadDigest: blob.payloadDigest,
+              sessionId: lease.sessionId, scopeKey: lease.scopeKey, sourceIdentityJson: lease.sourceIdentityJson,
+              fromSequence: source.afterSessionSequence, nextSequence: source.nextSessionSequence,
+              rowCount: source.rowCount, sourceBytes: source.sourceByteLength, hasMore: source.hasMore,
+            })
+            if (!pending) {
+              await blob.release()
+              earlyResult = invalidateInvalidCheckpoint()
+              return source
+            }
+            if (!service.saveCheckpoint(lease, JSON.stringify(pending))) {
+              await blob.release()
+              earlyResult = { kind: 'lease-lost' }
+              return source
+            }
+            checkpoint = pending
+            earlyResult = { kind: 'checkpointed', checkpoint }
+            await blob.release()
+            return source
+          })
+        } else stagedResult = await input.readChunk(permit, readInput)
+        if (earlyResult) return earlyResult
+        result = stagedResult!
+      } catch (error) {
+        if (input.signal?.aborted) return { kind: 'checkpointed', checkpoint }
+        const failure = error instanceof Error ? error.message : 'projection-history-worker-failed'
+        rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'WORKER_FAILED', input.now, input.retryAfter)
+        return { kind: 'source-unavailable', reason: failure }
+      }
     }
     if (!samePermit(result.permit, permit)) {
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'WORKER_PERMIT_MISMATCH', input.now, input.retryAfter)
@@ -159,6 +203,10 @@ export async function runProjectionBuildSlice(input: Readonly<{
       rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'DEFERRED_LARGE', input.now, input.retryAfter,
         result.eventSequence === undefined ? undefined : { eventSequence: result.eventSequence })
       return { kind: 'deferred-large', ...(result.eventSequence === undefined ? {} : { eventSequence: result.eventSequence }) }
+    }
+    if (result.kind === 'staged-chunk') {
+      rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'STAGED_CHUNK_PROMOTION_UNAVAILABLE', input.now, input.retryAfter)
+      return { kind: 'source-unavailable', reason: 'staged-chunk-promotion-unavailable' }
     }
     if (result.kind === 'cursor-invalid') {
       rejectBuild(service, lease, 'SOURCE_FENCE_CHANGED', 'SOURCE_CURSOR_INVALID', input.now, input.retryAfter)
@@ -272,14 +320,17 @@ export async function runProjectionBuildSlice(input: Readonly<{
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'WORKER_RESULT_INVALID', input.now, input.retryAfter)
       return { kind: 'source-unavailable', reason: 'unknown-worker-result' }
     }
-    if (result.afterSessionSequence !== checkpoint.nextSequence || result.events.length === 0 ||
-      result.events.length > limits.maxRows ||
-      result.nextSessionSequence <= result.afterSessionSequence || result.byteLength > limits.maxBytes - 128 ||
-      result.events.at(-1)?.sessionSequence !== result.nextSessionSequence) {
+    const chunkRowCount = pendingChunk?.rowCount ?? result.events.length
+    if (result.afterSessionSequence !== checkpoint.nextSequence || chunkRowCount === 0 ||
+      chunkRowCount > limits.maxRows || result.nextSessionSequence <= result.afterSessionSequence ||
+      (!pendingChunk && result.byteLength > limits.maxBytes - 128) ||
+      (pendingChunk && (result.events.length !== 0 || result.messageFacts.length !== 0 ||
+        result.nextSessionSequence !== pendingChunk.nextSequence || result.afterSessionSequence !== pendingChunk.fromSequence)) ||
+      (!pendingChunk && (result.events.length !== chunkRowCount || result.events.at(-1)?.sessionSequence !== result.nextSessionSequence))) {
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'WORKER_CHUNK_SHAPE_INVALID', input.now, input.retryAfter)
       return { kind: 'chunk-invalid', reason: 'worker-chunk-shape-invalid' }
     }
-    if (result.events.some((event, eventIndex) =>
+    if (!pendingChunk && result.events.some((event, eventIndex) =>
       event.sessionSequence !== result.afterSessionSequence + eventIndex + 1)) {
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'WORKER_CHUNK_CONTENT_INVALID', input.now, input.retryAfter)
       return { kind: 'chunk-invalid', reason: 'worker-chunk-content-invalid' }
@@ -289,14 +340,29 @@ export async function runProjectionBuildSlice(input: Readonly<{
     }
     let folded: ProjectionHistoryChunkReduction
     try {
+      let stagedChunkInput: Readonly<{ root: string; manifest: ProjectionPendingHistoryChunkManifestRef }> | undefined
+      let reducerEvents = result.events
+      let reducerMessageFacts = result.messageFacts
+      if (pendingChunk) {
+        if (input.reduceChunk && input.blobs.root) stagedChunkInput = { root: input.blobs.root, manifest: pendingChunk }
+        else if (input.blobs.readVerified) {
+          const payload = JSON.parse(await input.blobs.readVerified(pendingChunk)) as { events?: unknown; messageFacts?: unknown }
+          if (!Array.isArray(payload.events) || !Array.isArray(payload.messageFacts)) throw new Error('PROJECTION_PENDING_CHUNK_INVALID')
+          reducerEvents = payload.events as ProjectionHistoryChunkEvent[]
+          reducerMessageFacts = payload.messageFacts as ProjectionMessageFact[]
+        } else throw new Error('PROJECTION_PENDING_CHUNK_READER_UNAVAILABLE')
+      }
       folded = input.reduceChunk
-        ? await input.reduceChunk(reducerStateJson, result.events, result.messageFacts, lease.scopeKey, !result.hasMore, input.signal)
-        : input.historyReducer.fold(reducerStateJson, result.events, result.messageFacts, lease.scopeKey)
+        ? await input.reduceChunk(reducerStateJson, reducerEvents, reducerMessageFacts, lease.scopeKey, !result.hasMore, input.signal, stagedChunkInput)
+        : input.historyReducer.fold(reducerStateJson, reducerEvents, reducerMessageFacts, lease.scopeKey)
     } catch (error) {
       if (input.signal?.aborted || (error instanceof Error && /WORKER_ABORTED$/.test(error.message))) {
         return { kind: 'checkpointed', checkpoint }
       }
       const reason = error instanceof Error ? error.message : 'history-reducer-rejected-chunk'
+      if (pendingChunk && /^PROJECTION_PENDING_CHUNK_(?:DIGEST_MISMATCH|SHAPE_INVALID|REFERENCE_INVALID|UNAVAILABLE|INVALID_JSON)$/.test(reason)) {
+        return invalidateInvalidCheckpoint()
+      }
       if (isRecoverableReducerWorkerFailure(reason)) {
         rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'WORKER_FAILED', input.now, input.retryAfter)
         return { kind: 'source-unavailable', reason }
@@ -328,7 +394,6 @@ export async function runProjectionBuildSlice(input: Readonly<{
     const parentOutputManifest = folded.resetOutput ? null : checkpoint.outputManifest
     const payload = JSON.stringify({ formatVersion: 2, sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration,
       scopeKey: lease.scopeKey, specVersion: input.specVersion, sourceIdentityJson: lease.sourceIdentityJson,
-      fromSequence: result.afterSessionSequence, nextSequence: result.nextSessionSequence, events: result.events,
       outputManifest: { formatVersion: 1, parent: parentOutputManifest, operations: outputOperations },
       sourceComplete: !result.hasMore })
     let staged: Awaited<ReturnType<ProjectionBuildBlobPort['write']>>[] = []
@@ -362,7 +427,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
         specVersion: input.specVersion, sourceIdentityJson: lease.sourceIdentityJson,
         processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken,
         fromSequence: result.afterSessionSequence, nextSequence: result.nextSessionSequence,
-        rowCount: result.events.length, byteLength: result.byteLength, payloadDigest: blob.payloadDigest, blobLocator: blob.locator,
+        rowCount: chunkRowCount, byteLength: result.byteLength, payloadDigest: blob.payloadDigest, blobLocator: blob.locator,
       }
       let stableIdIndexManifest = checkpoint.stableIdIndexManifest
       if (stableIndex && stableIndexBlob) {
@@ -387,7 +452,8 @@ export async function runProjectionBuildSlice(input: Readonly<{
           sessionId: lease.sessionId, scopeKey: lease.scopeKey, sourceIdentityJson: lease.sourceIdentityJson }
       }
       const advancedBase = acceptProjectionBuildChunk(checkpoint, receipt, limits,
-        externalizeReducerState ? null : nextReducerStateJson, stableIdIndexManifest, blob.byteLength, reducerStateBlob)
+        externalizeReducerState ? null : nextReducerStateJson, stableIdIndexManifest, blob.byteLength, reducerStateBlob,
+        pendingChunk !== null)
       const advanced = advancedBase && stableIdIndexManifest
         ? attachProjectionStableIdIndexManifest(advancedBase, stableIdIndexManifest) : advancedBase
       if (!advanced) {

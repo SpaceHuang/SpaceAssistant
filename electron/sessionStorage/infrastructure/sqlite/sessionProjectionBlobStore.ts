@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
@@ -39,8 +40,10 @@ export function createSessionProjectionBlobStore(root: string) {
 
   return {
     root,
-    async withWorkerStaging<T>(run: (promote: (input: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>) => Promise<StagedProjectionBlob>) => Promise<T>): Promise<T> {
+    async withWorkerStaging<T>(run: (promote: (input: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>) => Promise<StagedProjectionBlob>,
+      stage: Readonly<{ root: string; tempLocator: string }>) => Promise<T>): Promise<T> {
       const releaseFence = await acquireFence()
+      const stage = Object.freeze({ root, tempLocator: `.projection-${randomUUID()}.tmp` })
       let handedOff = false
       let released = false
       let runSucceeded = false
@@ -55,6 +58,9 @@ export function createSessionProjectionBlobStore(root: string) {
           if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== input.byteLength) {
             throw blobError('PROJECTION_WORKER_BLOB_INVALID', 'worker staging file is invalid')
           }
+          if (await digestFile(tempPath) !== input.payloadDigest) {
+            throw blobError('PROJECTION_WORKER_BLOB_INVALID', 'worker staging digest is invalid')
+          }
           const locator = `projection-${randomUUID()}.blob`
           const finalPath = path.join(root, locator)
           await fs.rename(tempPath, finalPath)
@@ -63,11 +69,21 @@ export function createSessionProjectionBlobStore(root: string) {
           handedOff = true
           return Object.freeze({ locator, byteLength: input.byteLength, payloadDigest: input.payloadDigest,
             async release() { if (!released) { released = true; await releaseFence() } } })
-        })
+        }, stage)
         runSucceeded = true
         return result
       } finally {
-        if ((!handedOff || !runSucceeded) && !released) { released = true; await releaseFence() }
+        const tempPath = path.join(root, stage.tempLocator)
+        let cleanupError: unknown
+        try {
+          const tempStat = await fs.lstat(tempPath).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? undefined : Promise.reject(error))
+          if (tempStat && (!tempStat.isFile() || tempStat.isSymbolicLink())) {
+            throw blobError('PROJECTION_WORKER_BLOB_INVALID', 'worker staging file is invalid')
+          }
+          await fs.rm(tempPath, { force: true })
+        } catch (error) { cleanupError = error }
+        if ((!handedOff || !runSucceeded || cleanupError) && !released) { released = true; await releaseFence() }
+        if (runSucceeded && cleanupError) throw cleanupError
       }
     },
     async withWorkerTransientStaging<T>(run: (stage: Readonly<{ root: string; tempLocator: string }>) => Promise<T>): Promise<T> {
@@ -355,4 +371,10 @@ async function syncDirectory(directory: string): Promise<void> {
     const code = error && typeof error === 'object' && 'code' in error ? (error as { code?: unknown }).code : undefined
     if (!['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM', 'EACCES'].includes(String(code))) throw error
   } finally { await handle?.close().catch(() => undefined) }
+}
+
+async function digestFile(filePath: string): Promise<string> {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk as Buffer)
+  return hash.digest('hex')
 }

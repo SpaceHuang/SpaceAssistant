@@ -217,6 +217,9 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             if (result.kind === 'chunk') {
               sliceMetrics.sourceRows += result.events.length
               sliceMetrics.sourceBytes += result.byteLength
+            } else if (result.kind === 'staged-chunk') {
+              sliceMetrics.sourceRows += result.rowCount
+              sliceMetrics.sourceBytes += result.sourceByteLength
             } else if (result.kind === 'deferred-large') {
               sliceMetrics.sourceRows += result.observedEventRows ?? 0
               sliceMetrics.sourceBytes += result.observedByteLength ?? 0

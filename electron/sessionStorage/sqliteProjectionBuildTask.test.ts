@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import os from 'node:os'
+import fsSync from 'node:fs'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
@@ -156,7 +157,7 @@ describe('SQLite projection build task composition', () => {
     } finally { db.close(); temp.cleanup() }
   })
 
-  it('keeps legacy authority readable when projection preparation is deferred for an oversized History event', async () => {
+  it('rebuilds an oversized History event when its persisted pending chunk is corrupted', async () => {
     const temp = createTempDatabase('sqlite-projection-deferred-legacy-')
     const db = temp.db
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-deferred-legacy-blobs-'))
@@ -168,20 +169,31 @@ describe('SQLite projection build task composition', () => {
         eventId: 'deferred-large-event', idempotencyKey: 'deferred-large-event', kind: 'invocation-context-committed',
         payload: { messages: [{ id: 'deferred-legacy-user', role: 'user', content: 'keep-serving-legacy', timestamp: 1 }], extraLargeFact: 'x'.repeat(400_000) } }], 0)
       const processGeneration = advanceProcessGeneration(getDbConnection(db))
+      let corruptedPendingChunk = false
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
-        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3,
+        onResult: (_item, result) => {
+          if (corruptedPendingChunk || result.kind !== 'checkpointed' || !result.checkpoint.pendingHistoryChunkBlob) return
+          corruptedPendingChunk = true
+          fsSync.writeFileSync(path.join(root!, result.checkpoint.pendingHistoryChunkBlob.locator), 'corrupt pending chunk')
+        } })
       const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }), recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
         maintenanceTasks: [task] })
       try {
-        await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).rejects.toThrow('PROJECTION_PREPARATION_DEFERRED_LARGE')
+        await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).rejects.toThrow('PROJECTION_PREPARATION_CHECKPOINT_INVALID')
+        expect(corruptedPendingChunk).toBe(true)
+        await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).resolves.toBeDefined()
+        expect(createSqliteProjectionStateStore(db).get(session.id,
+          encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })))
+          .toMatchObject({ status: 'valid' })
         expect(await readChatMessagesAfterPreparation(host.storage, { sessionId: session.id }))
           .toMatchObject([{ id: 'deferred-legacy-user', content: 'keep-serving-legacy' }])
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
     } finally { db.close(); temp.cleanup() }
   })
 
-  it('keeps canonical-only message bodies readable when one chunk of message facts exceeds the projection budget', async () => {
+  it('stages oversized canonical-only History and message facts and completes projection preparation', async () => {
     const temp = createTempDatabase('sqlite-projection-deferred-facts-')
     const db = temp.db
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-deferred-facts-blobs-'))
@@ -206,7 +218,10 @@ describe('SQLite projection build task composition', () => {
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }), recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
         maintenanceTasks: [task] })
       try {
-        await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).rejects.toThrow('PROJECTION_PREPARATION_DEFERRED_LARGE')
+        await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).resolves.toBeDefined()
+        expect(createSqliteProjectionStateStore(db).get(session.id,
+          encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })))
+          .toMatchObject({ status: 'valid' })
         await expect(readChatMessagesAfterPreparation(host.storage, { sessionId: session.id }))
           .resolves.toMatchObject([{ id: 'deferred-facts-user', content: body }])
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }

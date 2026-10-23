@@ -80,5 +80,11 @@ describe('projection read-only History chunk source', () => {
       observedEventRows: 1, observedByteLength: expect.any(Number), snapshotDurationMs: expect.any(Number) })
     if (result.kind !== 'deferred-large') throw new Error('expected oversized event to defer')
     expect(result.observedByteLength).toBeGreaterThan(512)
+    const stagedCandidate = readProjectionHistoryChunk({ dbPath: temp.dbPath, sessionId: session.id, sessionGeneration: session.generation,
+      scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson, connectionEpoch: 1, processGeneration: 2, rebuildToken: 'token-large' },
+    { afterSessionSequence: 0, maxRows: 1, maxBytes: 512, allowOversizedChunk: true })
+    expect(stagedCandidate).toMatchObject({ kind: 'chunk', afterSessionSequence: 0, nextSessionSequence: 1, byteLength: expect.any(Number) })
+    if (stagedCandidate.kind !== 'chunk') throw new Error('expected staged oversized candidate')
+    expect(stagedCandidate.byteLength).toBeGreaterThan(512)
   })
 })
