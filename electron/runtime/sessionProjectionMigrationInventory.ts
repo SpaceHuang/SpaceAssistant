@@ -70,14 +70,17 @@ function unavailableReason(result: CanonicalSessionTranscriptRead): string | und
   return result.kind === 'unavailable' ? result.reason : undefined
 }
 
-function hasCurrentProjectionCache(
+function hasCurrentProjectionOwner(
   db: AppDatabase,
   history: SqliteAgentHistory,
   transcript: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }>
 ): boolean {
   const writeMode = getDbConnection(db).prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
     .get(transcript.sessionId) as { write_mode: string } | undefined
-  if (writeMode?.write_mode !== 'canonical' && !hasCurrentProjectionEligibility(db, transcript.sessionId)) return false
+  // A canonical writer is already owned by History; the caller validated its exact message
+  // skeletons above. The retired legacy transcript cache is not a completion requirement.
+  if (writeMode?.write_mode === 'canonical') return true
+  if (!hasCurrentProjectionEligibility(db, transcript.sessionId)) return false
   const cache = history.readCanonicalSessionCache({ ...transcript, cacheKey: 'transcript' })
   if (cache.kind !== 'hit') return false
   try {
@@ -204,7 +207,7 @@ export function buildSessionProjectionMigrationInventory(
       }
 
       if (transcript.kind !== 'matched') throw new SessionProjectionMigrationInventoryError('canonical transcript was not matched', session.id)
-      const disposition = hasCurrentProjectionCache(db, history, transcript) ? 'projection_migrated' : 'projection_eligible'
+      const disposition = hasCurrentProjectionOwner(db, history, transcript) ? 'projection_migrated' : 'projection_eligible'
       entries.push({ sessionId: session.id, sessionGeneration: session.generation, disposition })
     }
 

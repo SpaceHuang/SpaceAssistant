@@ -48,6 +48,28 @@ async function appendSessionContext(db: ReturnType<typeof createMemoryAppDb>, se
 }
 
 describe('session projection migration worker', () => {
+  it('treats canonical-backed-only History as the migration owner without requiring the legacy transcript cache', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = await addEligibleSession(db, 'canonical-owner-without-legacy-cache')
+      const conn = getDbConnection(db)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+      conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+
+      const inventory = buildSessionProjectionMigrationInventory(db)
+      expect(inventory.sessions).toContainEqual(expect.objectContaining({ sessionId: session.id, disposition: 'projection_migrated' }))
+      const run = startSessionProjectionMigration(db, inventory, { runId: 'canonical-owner-no-cache', now: 1 })
+      await runSessionProjectionMigrationBatch(db, run.runId, { batchSize: 1, rateLimitMs: 0, now: 2 })
+
+      expect(getSessionProjectionMigrationRun(db, run.runId)).toMatchObject({ status: 'completed', migratedCount: 1 })
+      expect(auditSessionProjectionMigration(db, run.runId)).toMatchObject({ migrationRunStatus: 'completed',
+        sessions: [expect.objectContaining({ sessionId: session.id, status: 'consistent', legacyComparison: 'skeleton' })] })
+      expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
+        .toBeUndefined()
+    } finally { db.close() }
+  })
+
   it('rejects unbounded batches', async () => {
     const db = createMemoryAppDb()
     const run = startSessionProjectionMigration(db, buildSessionProjectionMigrationInventory(db), { runId: 'run-limit', now: 1 })

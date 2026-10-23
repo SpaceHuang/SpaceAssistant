@@ -210,16 +210,17 @@ function auditOneSession(
     issues.push('source-spill-invalid')
   }
 
-  const cache = history.readCanonicalSessionCache({ ...canonical, cacheKey: 'transcript' })
-  if (cache.kind !== 'hit') issues.push(`cache-${cache.reason}`)
-  const cacheRow = conn.prepare(`SELECT session_generation,session_seq,commit_order,watermark_event_id,watermark_invocation_id,event_count
+  const canonicalWriteOwner = cutover?.write_mode === 'canonical'
+  const cache = canonicalWriteOwner ? undefined : history.readCanonicalSessionCache({ ...canonical, cacheKey: 'transcript' })
+  if (!canonicalWriteOwner && cache?.kind !== 'hit') issues.push(`cache-${cache?.reason ?? 'missing'}`)
+  const cacheRow = canonicalWriteOwner ? undefined : conn.prepare(`SELECT session_generation,session_seq,commit_order,watermark_event_id,watermark_invocation_id,event_count
     FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'`).get(session.id) as CacheRow | undefined
   const cacheWatermark = cacheRow ? {
     generation: cacheRow.session_generation, sessionSeq: cacheRow.session_seq, commitOrder: cacheRow.commit_order,
     eventId: cacheRow.watermark_event_id, invocationId: cacheRow.watermark_invocation_id, eventCount: cacheRow.event_count
   } : undefined
   if (cacheRow && !isDeepStrictEqual(cacheWatermark, canonicalWatermark)) issues.push('cache-watermark-mismatch')
-  if (cache.kind === 'hit') {
+  if (!canonicalWriteOwner && cache?.kind === 'hit') {
     try {
       const cachedMessages = JSON.parse(cache.value) as unknown
       if (!isDeepStrictEqual(cachedMessages, canonical.messages)) issues.push('cache-content-mismatch')

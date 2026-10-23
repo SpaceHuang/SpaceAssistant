@@ -123,7 +123,7 @@ describe('session projection migration inventory', () => {
 
     expect(buildSessionProjectionMigrationInventory(db)).toMatchObject({
       databaseSessionCount: 1,
-      counts: { projection_eligible: 1 }
+      counts: { projection_migrated: 1, projection_eligible: 0 }
     })
     db.close()
   })
