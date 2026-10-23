@@ -43,8 +43,5 @@ export function createCanonicalSessionProjectionRetentionPreparer(
     }))
     const folded = history.readCanonicalSessionTranscript(sessionId, legacyMessages)
     if (folded.kind !== 'matched') return
-    if (!history.writeCanonicalSessionCache({ ...folded, cacheKey: 'transcript', value: JSON.stringify(folded.messages) })) {
-      throw new Error(`canonical transcript projection could not be persisted for session ${sessionId}`)
-    }
   }
 }

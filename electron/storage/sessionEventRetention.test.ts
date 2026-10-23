@@ -358,9 +358,8 @@ describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
     expect(interrupted.summary.removed).toBe(0)
     expect(interrupted.summary.failures).toMatchObject([{ sessionName: 'old-19700101', phase: 'retention-delete' }])
     await expect(fs.stat(path.join(root, 'sessions', 'old-19700101'))).resolves.toBeTruthy()
-    expect(history.readCanonicalSessionTranscriptWithCache('old', 'transcript', messages)).toMatchObject({
-      kind: 'matched', source: 'L1', messages
-    })
+    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id='old' AND cache_key='transcript'").get())
+      .toBeUndefined()
 
     db.close()
     db = openDatabase(persistent.dbPath)
@@ -371,9 +370,9 @@ describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
 
     expect(result.summary.removed).toBe(1)
     await expect(fs.stat(path.join(root, 'sessions', 'old-19700101'))).rejects.toThrow()
-    expect(history.readCanonicalSessionTranscriptWithCache('old', 'transcript', messages)).toMatchObject({
-      kind: 'matched', source: 'L1', messages
-    })
+    expect(history.readCanonicalSessionTranscriptForShadow('old')).toMatchObject({ kind: 'matched', messages })
+    expect(getDbConnection(db).prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id='old' AND cache_key='transcript'").get())
+      .toBeUndefined()
     db.close()
     persistent.cleanup()
   })
