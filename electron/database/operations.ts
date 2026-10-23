@@ -159,8 +159,9 @@ function contentForSessionPreview(db: AppDatabase, row: MessageRow & { content_s
     throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
   }
   const history = new SqliteAgentHistory(conn, 1, Date.now, row.session_id)
-  const cached = history.readCanonicalSessionTranscriptWithCache(row.session_id, 'transcript')
-  const canonical = cached.kind === 'matched' ? cached : history.readCanonicalSessionTranscriptForShadow(row.session_id)
+  // Canonical-backed rows have no legacy body to compare with a detached cache value.
+  // Rebuild from History source truth so a self-consistent stale cache cannot authorize a body.
+  const canonical = history.readCanonicalSessionTranscriptForShadow(row.session_id)
   if (canonical.kind !== 'matched') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
   const message = canonical.messages.find((candidate) => candidate.id === row.id)
   if (!message || message.id !== row.id || message.role !== row.role || message.timestamp !== row.timestamp ||

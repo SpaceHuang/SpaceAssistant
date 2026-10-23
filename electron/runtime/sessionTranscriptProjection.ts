@@ -53,18 +53,24 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
   let canonical: ReturnType<SqliteAgentHistory['readCanonicalSessionTranscriptWithCache']>
   try {
     const history = new SqliteAgentHistory(getDbConnection(db))
-    canonical = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
+    // Once message bodies are canonical-only, the legacy projection cache is not an authority
+    // source: its value can be self-consistent while disagreeing with History. Replay source
+    // truth directly until the scoped projection reader owns this route.
+    canonical = hasCanonicalBackedRows && cutover?.write_mode === 'canonical'
+      ? history.readCanonicalSessionTranscriptForShadow(sessionId)
+      : history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
+    const canonicalSource = 'source' in canonical ? canonical.source : 'L2'
     if (canonical.kind === 'matched' && cutover?.write_mode === 'canonical') {
       history.validateCanonicalSessionSourceTruthSpills(sessionId)
       const projected = mergeCanonicalBackedBodies(db, sessionId, canonical.messages)
-      if (projected) return { source: `canonical:${canonical.source}`, messages: projected, replayedEvents: canonical.replayedEvents }
+      if (projected) return { source: `canonical:${canonicalSource}`, messages: projected, replayedEvents: canonical.replayedEvents }
       if (hasCanonicalBackedRows) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
       return { source: 'legacy', messages: getMessages(db, sessionId, Number.MAX_SAFE_INTEGER), reason: 'canonical-backed-identity-mismatch' }
     }
     if (canonical.kind === 'matched' && hasSessionProjectionEligibility(db, sessionId)) {
       const skeletons = getMessageSkeletons(db, sessionId)
       const projected = mergeCanonicalBodies(canonical.messages, skeletons)
-      if (projected) return { source: `canonical:${canonical.source}`, messages: projected, replayedEvents: canonical.replayedEvents }
+      if (projected) return { source: `canonical:${canonicalSource}`, messages: projected, replayedEvents: canonical.replayedEvents }
     }
   } catch (error) {
     if (error instanceof Error && error.message === 'CANONICAL_SESSION_CONTENT_UNAVAILABLE') throw error
@@ -83,7 +89,6 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
       if (authoritative.kind !== 'matched') throw new Error('canonical transcript unavailable')
       const projected = mergeCanonicalBackedBodies(db, sessionId, authoritative.messages)
       if (!projected) throw new Error('canonical transcript does not match message skeletons')
-      history.writeCanonicalSessionCache({ ...authoritative, cacheKey: 'transcript', value: JSON.stringify(authoritative.messages) })
       return { source: 'canonical:L2', messages: projected, replayedEvents: authoritative.eventCount }
     } catch {
       throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')

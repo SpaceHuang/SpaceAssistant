@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Message } from '../../src/shared/domainTypes'
@@ -14,6 +15,33 @@ import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProject
 const runStoragePerf = process.env.SPACEASSISTANT_RUN_STORAGE_PERF === '1'
 
 describe('session transcript projection P2 read path', () => {
+  it('reads canonical-only bodies from History when the legacy cache value is forged', async () => {
+    const { db, cleanup } = createTempDatabase('transcript-forged-legacy-cache-')
+    try {
+      const session = createSession(db, { name: 'forged legacy cache', model: 'test' })
+      appendMessage(db, { id: 'canonical-only-user', sessionId: session.id, role: 'user', content: 'source truth', timestamp: 1, status: 'sent' })
+      const conn = getDbConnection(db)
+      const history = new SqliteAgentHistory(conn, 1, () => 2, session.id)
+      await history.appendBatch([
+        { invocationId: 'canonical-only-invocation', turnId: 'canonical-only-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'canonical-only-context', idempotencyKey: 'canonical-only-context', kind: 'invocation-context-committed',
+          payload: { messages: [{ id: 'canonical-only-user', role: 'user', content: 'source truth', timestamp: 1 }] } },
+        { invocationId: 'canonical-only-invocation', turnId: 'canonical-only-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'canonical-only-end', idempotencyKey: 'canonical-only-end', kind: 'invocation-completed', payload: { status: 'completed' } }
+      ], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id='canonical-only-user'").run()
+
+      const value = JSON.stringify([{ id: 'canonical-only-user', role: 'user', content: 'forged cache value', timestamp: 1 }])
+      conn.prepare("UPDATE canonical_session_projection_cache SET value=?,value_sha256=? WHERE session_id=? AND cache_key='transcript'")
+        .run(value, createHash('sha256').update(value).digest('hex'), session.id)
+
+      expect(readSessionTranscriptProjection(db, session.id).messages[0]?.content).toBe('source truth')
+    } finally {
+      cleanup()
+    }
+  })
+
   it('records canonical read owner and elapsed time without changing the returned transcript', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'observed transcript read', model: 'test' })
@@ -223,7 +251,7 @@ describe('session transcript projection P2 read path', () => {
     expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
 
     conn.prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?')
       .run(JSON.stringify({ status: 'failed' }), 'malformed-cache-terminal')
@@ -288,7 +316,7 @@ describe('session transcript projection P2 read path', () => {
     expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
 
     const commitOrder = Number((conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(Date.now()) as { lastInsertRowid: number | bigint }).lastInsertRowid)
     conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,
@@ -378,7 +406,7 @@ describe('session transcript projection P2 read path', () => {
         eventId: 'valid-approval-terminal', idempotencyKey: 'valid-approval-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
     ], 2)
 
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1', messages: [
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2', messages: [
       { id: 'valid-approval-user', role: 'user', content: 'question' }
     ] })
     expect(getMessages(db, session.id).map(({ content }) => content)).toEqual([''])
@@ -423,7 +451,7 @@ describe('session transcript projection P2 read path', () => {
         payload: { status: 'interrupted', reason: 'process-restart' } }
     ], 3)
 
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1', messages: [
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2', messages: [
       { id: 'concurrent-approval-user', role: 'user', content: 'question' }
     ] })
     expect(getMessages(db, session.id).map(({ content }) => content)).toEqual([''])
@@ -486,7 +514,7 @@ describe('session transcript projection P2 read path', () => {
 
     expect(history.readCanonicalSessionTranscriptForShadow(session.id)).toMatchObject({ kind: 'matched' })
     const l1 = readSessionTranscriptProjection(db, session.id)
-    expect(l1.source).toBe('canonical:L1')
+    expect(l1.source).toBe('canonical:L2')
     expect(l1.messages).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: expect.arrayContaining([
       expect.objectContaining({ id: 'partial-tool-a' }), expect.objectContaining({ id: 'partial-tool-b' })
     ]) }))
@@ -560,7 +588,7 @@ describe('session transcript projection P2 read path', () => {
 
     expect(history.readCanonicalSessionTranscriptForShadow(session.id)).toMatchObject({ kind: 'matched' })
     const l1 = readSessionTranscriptProjection(db, session.id)
-    expect(l1.source).toBe('canonical:L1')
+    expect(l1.source).toBe('canonical:L2')
     expect(l1.messages).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: expect.arrayContaining([
       expect.objectContaining({ id: 'finished-partial-a' }), expect.objectContaining({ id: 'finished-partial-b' })
     ]) }))
@@ -739,7 +767,7 @@ describe('session transcript projection P2 read path', () => {
       cacheKey: 'transcript', value: JSON.stringify(cachedMessages) })).toBe(true)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
 
     const commitOrder = Number((conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(Date.now()) as { lastInsertRowid: number | bigint }).lastInsertRowid)
     conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,
@@ -789,7 +817,7 @@ describe('session transcript projection P2 read path', () => {
       cacheKey: 'transcript', value: JSON.stringify(cachedMessages) })).toBe(true)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
 
     const terminalCommitOrder = Number((conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(Date.now()) as { lastInsertRowid: number | bigint }).lastInsertRowid)
     conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,
@@ -838,7 +866,7 @@ describe('session transcript projection P2 read path', () => {
       cacheKey: 'transcript', value: JSON.stringify(cachedMessages) })).toBe(true)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
 
     const terminalCommitOrder = Number((conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(Date.now()) as { lastInsertRowid: number | bigint }).lastInsertRowid)
     conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,
@@ -848,7 +876,7 @@ describe('session transcript projection P2 read path', () => {
     conn.prepare('UPDATE agent_history_streams SET version=3 WHERE invocation_id=?').run('watermarked-interrupted-invocation')
     conn.prepare('UPDATE session_event_cursor SET next_seq=3 WHERE session_id=?').run(session.id)
 
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1', messages: cachedMessages })
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2', messages: cachedMessages })
     expect(getMessages(db, session.id).map(({ content }) => content)).toEqual(['', ''])
     expect(history.readSync('watermarked-interrupted-invocation').events.at(-1)).toMatchObject({
       kind: 'invocation-interrupted', payload: { status: terminalStatus, reason: 'process-restart' }
@@ -914,7 +942,7 @@ describe('session transcript projection P2 read path', () => {
       cacheKey: 'transcript', value: JSON.stringify(cachedMessages) })).toBe(true)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
 
     const terminalCommitOrder = Number((conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(Date.now()) as { lastInsertRowid: number | bigint }).lastInsertRowid)
     conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,
@@ -924,7 +952,7 @@ describe('session transcript projection P2 read path', () => {
     conn.prepare('UPDATE agent_history_streams SET version=? WHERE invocation_id=?').run(terminalSequence, 'interrupted-proposal-invocation')
     conn.prepare('UPDATE session_event_cursor SET next_seq=? WHERE session_id=?').run(terminalSequence, session.id)
 
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1', messages: cachedMessages })
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2', messages: cachedMessages })
     expect(getMessages(db, session.id).map(({ content }) => content)).toEqual(['', ''])
     expect(history.readSync('interrupted-proposal-invocation').events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: terminalStatus } })
     conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
@@ -1238,7 +1266,7 @@ describe('session transcript projection P2 read path', () => {
       }], 0)
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L1')
+      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L2')
 
       conn.prepare('UPDATE agent_history_events SET session_id=? WHERE event_id=?').run(otherSession.id, 'history-owner-drift-context')
 
@@ -1265,7 +1293,7 @@ describe('session transcript projection P2 read path', () => {
       }], 0)
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L1')
+      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L2')
 
       conn.prepare('UPDATE agent_history_streams SET session_id=? WHERE invocation_id=?')
         .run(otherSession.id, 'history-stream-owner-drift-invocation')
@@ -1321,7 +1349,7 @@ describe('session transcript projection P2 read path', () => {
       }], 0)
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L1')
+      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L2')
 
       const commitOrder = Number((conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(Date.now()) as { lastInsertRowid: number | bigint }).lastInsertRowid)
       conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,
@@ -1405,7 +1433,7 @@ describe('session transcript projection P2 read path', () => {
       }], 0)
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L1')
+      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L2')
 
       conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(Date.now())
 
@@ -1646,7 +1674,7 @@ describe('session transcript projection P2 read path', () => {
       ], 0)
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
-      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L1')
+      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L2')
 
       // Use a free sequence temporarily to avoid the invocation/sequence primary key collision.
       conn.prepare("UPDATE agent_history_events SET sequence=3 WHERE event_id='terminal-order-terminal'").run()
@@ -1704,7 +1732,7 @@ describe('session transcript projection P2 read path', () => {
         const started = performance.now()
         const read = readSessionTranscriptProjection(temp.db, session.id)
         l1Samples.push(performance.now() - started)
-        expect(read.source).toBe('canonical:L1')
+        expect(read.source).toBe('canonical:L2')
         expect(read.messages.find(({ id }) => id === user.id)?.content).toBe(body)
       }
       l1Samples.sort((left, right) => left - right)
@@ -2060,7 +2088,7 @@ describe('session transcript projection P2 read path', () => {
       const coldRead = readSessionTranscriptProjection(reopened, session.id)
       expect(coldRead.source).toBe('canonical:L2')
       expect(coldRead.messages[0]).toMatchObject({ id: 'search-reopen-user-0', content: body })
-      expect(readSessionTranscriptProjection(reopened, session.id).source).toBe('canonical:L1')
+      expect(readSessionTranscriptProjection(reopened, session.id).source).toBe('canonical:L2')
       expect(getProjectedChatMessagePage(reopened, session.id, null, 10).entries[0]?.message.content).toBe(body)
       expect(getProjectedApiContextBaseline(reopened, session.id).entries[0]?.message.content).toBe(body)
       expect(getProjectedSearchCorpusPage(reopened, session.id, 0, 10).entries[0]?.message.content).toBe(body)
@@ -2081,7 +2109,7 @@ describe('session transcript projection P2 read path', () => {
       expect(page2.rows).toHaveLength(1)
       expect(page2.nextSequence).toBe(3)
       expect(getDbConnection(reopened).prepare("SELECT cache_key FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
-        .toEqual({ cache_key: 'transcript' })
+        .toBeUndefined()
     } finally {
       reopened?.close()
       for (const suffix of ['', '-wal', '-shm']) await fs.rm(`${temp.dbPath}${suffix}`, { force: true })
