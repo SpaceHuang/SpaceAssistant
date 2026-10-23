@@ -110,11 +110,9 @@ function readEligibility(db: AppDatabase, sessionId: string): EligibilityRow | u
     watermarkEventId: watermark[2] as string | null, watermarkInvocationId: watermark[3] as string | null, protocolVersion: 1 }
 }
 
-function readCanonicalState(db: AppDatabase, sessionId: string): Readonly<{ watermark?: CanonicalWatermark; cacheValidated: boolean }> {
-  const history = new SqliteAgentHistory(getDbConnection(db))
-  const canonical = history.readCanonicalSessionTranscriptForShadow(sessionId)
-  if (canonical.kind !== 'matched' || canonical.eventCount === 0) return { cacheValidated: false }
-  const cache = history.readCanonicalSessionCache({ ...canonical, cacheKey: 'transcript' })
+function readCanonicalState(db: AppDatabase, sessionId: string): Readonly<{ watermark?: CanonicalWatermark }> {
+  const canonical = new SqliteAgentHistory(getDbConnection(db)).readCanonicalSessionTranscriptForShadow(sessionId)
+  if (canonical.kind !== 'matched' || canonical.eventCount === 0) return {}
   const watermark: CanonicalWatermark = {
     sessionGeneration: canonical.sessionGeneration,
     sessionSeq: canonical.sessionSeq,
@@ -122,16 +120,7 @@ function readCanonicalState(db: AppDatabase, sessionId: string): Readonly<{ wate
     watermarkEventId: canonical.watermarkEventId,
     watermarkInvocationId: canonical.watermarkInvocationId
   }
-  if (cache.kind !== 'hit') return { watermark, cacheValidated: false }
-  try {
-    const cached = JSON.parse(cache.value) as typeof canonical.messages
-    const cacheValidated = Array.isArray(cached) && cached.length === canonical.messages.length && cached.every((message, index) => {
-      const folded = canonical.messages[index]
-      return !!folded && !!message && message.id === folded.id && message.role === folded.role &&
-        message.timestamp === folded.timestamp && message.content === folded.content
-    })
-    return { watermark, cacheValidated }
-  } catch { return { watermark, cacheValidated: false } }
+  return { watermark }
 }
 
 function sameWatermark(a: CanonicalWatermark | undefined, b: CanonicalWatermark | undefined): boolean {
@@ -201,19 +190,6 @@ export function certifyCanonicalSessionApiRead(db: AppDatabase, sessionId: strin
       }
     }
 
-    const canonicalSnapshot = new SqliteAgentHistory(getDbConnection(db)).readCanonicalSessionTranscriptForShadow(sessionId)
-    if (canonicalSnapshot.kind !== 'matched' || canonicalSnapshot.eventCount === 0 ||
-      canonicalSnapshot.sessionSeq !== watermark.sessionSeq || canonicalSnapshot.commitOrder !== watermark.commitOrder ||
-      canonicalSnapshot.watermarkEventId !== watermark.watermarkEventId ||
-      canonicalSnapshot.watermarkInvocationId !== watermark.watermarkInvocationId ||
-      !new SqliteAgentHistory(getDbConnection(db)).writeCanonicalSessionCache({
-        ...canonicalSnapshot, cacheKey: 'transcript', value: JSON.stringify(canonicalSnapshot.messages)
-      })) {
-      revokeEligibility(db, sessionId)
-      return { status: 'ineligible', reason: 'canonical-cache-seed-failed', apiReadMode: state.apiReadMode === 'canonical' ? 'revalidation-required' : 'legacy',
-        apiDifferenceCount: apiShadow.differenceCount, routeDifferenceCount: routeShadow.differenceCount }
-    }
-
     const now = Date.now()
     const changed = getDbConnection(db).prepare(`UPDATE session_message_content_cutover SET
       session_generation=?,api_read_mode='canonical',updated_at=?
@@ -267,12 +243,12 @@ export function readCanonicalApiContextIfEligible(
       revokeEligibility(db, sessionId)
       return undefined
     }
-    if (!candidate.canonicalCacheValidated || !eligibilityMatches(row, candidate.canonicalWatermark)) {
+    if (!candidate.canonicalSourceValidated || !eligibilityMatches(row, candidate.canonicalWatermark)) {
       revokeEligibility(db, sessionId)
       if (certifyCanonicalSessionApiRead(db, sessionId).status !== 'eligible') return undefined
       row = readEligibility(db, sessionId)
       candidate = readCanonicalTurnContextCandidate(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds)
-      if (!row || candidate.status !== 'available' || !candidate.messages || !candidate.canonicalCacheValidated ||
+      if (!row || candidate.status !== 'available' || !candidate.messages || !candidate.canonicalSourceValidated ||
         !eligibilityMatches(row, candidate.canonicalWatermark)) {
         revokeEligibility(db, sessionId)
         return undefined
@@ -327,12 +303,12 @@ export function readCanonicalTurnRoutingInputWithFenceIfEligible<T extends Reado
       revokeEligibility(db, input.sessionId)
       return undefined
     }
-    if (!report.canonicalCacheValidated || !eligibilityMatches(row, report.canonicalWatermark)) {
+    if (!report.canonicalSourceValidated || !eligibilityMatches(row, report.canonicalWatermark)) {
       revokeEligibility(db, input.sessionId)
       if (certifyCanonicalSessionApiRead(db, input.sessionId).status !== 'eligible') return undefined
       row = readEligibility(db, input.sessionId)
       report = shadowTurnRoutingInput(db, input)
-      if (!row || report.status !== 'matched' || !report.candidate || !report.canonicalCacheValidated ||
+      if (!row || report.status !== 'matched' || !report.candidate || !report.canonicalSourceValidated ||
         !eligibilityMatches(row, report.canonicalWatermark) || fieldDifferences(input.routeInput, report.candidate).length > 0) {
         revokeEligibility(db, input.sessionId)
         return undefined
@@ -353,7 +329,7 @@ export function isCanonicalApiReadFenceCurrent(db: AppDatabase, sessionId: strin
     const row = readEligibility(db, sessionId)
     const current = readCanonicalState(db, sessionId)
     const watermark = current.watermark
-    if (!watermark || !current.cacheValidated || !eligibilityMatches(row, watermark) || row.sessionGeneration !== fence.sessionGeneration ||
+    if (!watermark || !eligibilityMatches(row, watermark) || row.sessionGeneration !== fence.sessionGeneration ||
       row.messageRevision !== fence.messageRevision || watermark.sessionSeq !== fence.canonicalSessionSeq ||
       watermark.commitOrder !== fence.canonicalCommitOrder || watermark.watermarkEventId !== fence.watermarkEventId ||
       watermark.watermarkInvocationId !== fence.watermarkInvocationId) {

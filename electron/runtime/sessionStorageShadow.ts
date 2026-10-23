@@ -26,7 +26,7 @@ export type SessionStorageShadowReport<T = unknown> = Readonly<{
     watermarkEventId: string | null
     watermarkInvocationId: string | null
   }>
-  canonicalCacheValidated?: boolean
+  canonicalSourceValidated?: boolean
   candidate?: T
 }>
 
@@ -36,7 +36,7 @@ export type CanonicalTurnContextCandidate = Readonly<{
   reason?: string
   errorCode?: 'TURN_REQUIRED_USER_INVALID' | 'TURN_REQUIRED_USER_EXCLUDED' | 'CANONICAL_CONTENT_UNAVAILABLE'
   canonicalWatermark?: SessionStorageShadowReport['canonicalWatermark']
-  canonicalCacheValidated?: boolean
+  canonicalSourceValidated?: boolean
   messages?: readonly Message[]
 }>
 
@@ -44,7 +44,7 @@ type CanonicalBodyRead = Readonly<{
   source: string
   messagesById?: ReadonlyMap<string, Message>
   canonicalWatermark?: SessionStorageShadowReport['canonicalWatermark']
-  canonicalCacheValidated?: boolean
+  canonicalSourceValidated?: boolean
   reason?: string
 }>
 
@@ -68,7 +68,6 @@ function readCanonicalBodies(db: AppDatabase, sessionId: string, validateLegacyR
     const history = new SqliteAgentHistory(getDbConnection(db))
     const read = history.readCanonicalSessionTranscriptForShadow(sessionId)
     if (read.kind === 'unavailable') return { source: 'canonical:unavailable', reason: read.reason }
-    const cache = history.readCanonicalSessionCache({ ...read, cacheKey: 'transcript' })
     const hasCanonicalSnapshot = read.eventCount > 0
     if (!hasCanonicalSnapshot) return { source: 'canonical:unavailable', reason: 'canonical-snapshot-missing' }
     const canonicalWatermark = {
@@ -78,22 +77,8 @@ function readCanonicalBodies(db: AppDatabase, sessionId: string, validateLegacyR
       watermarkEventId: read.watermarkEventId,
       watermarkInvocationId: read.watermarkInvocationId
     }
-    let canonicalMessages = read.messages
-    let canonicalCacheValidated = false
-    if (cache.kind === 'hit') {
-      try {
-        const cached = JSON.parse(cache.value) as typeof read.messages
-        const sameIdentityAndBody = Array.isArray(cached) && cached.length === read.messages.length && cached.every((message, index) => {
-          const folded = read.messages[index]
-          return !!folded && !!message && typeof message.id === 'string' && typeof message.content === 'string' &&
-            message.id === folded.id && message.role === folded.role && message.timestamp === folded.timestamp && message.content === folded.content
-        })
-        if (sameIdentityAndBody) {
-          canonicalMessages = cached
-          canonicalCacheValidated = true
-        }
-      } catch { /* Corrupt cache is ignored; the independently folded canonical transcript remains authoritative. */ }
-    }
+    const canonicalMessages = read.messages
+    const canonicalSourceValidated = true
     const canonicalById = new Map(canonicalMessages.map((message) => [message.id, message]))
     const messagesById = new Map<string, Message>()
     for (const legacy of legacyMessages) {
@@ -109,7 +94,7 @@ function readCanonicalBodies(db: AppDatabase, sessionId: string, validateLegacyR
         typeof canonical.content !== 'string' || typeof canonical.timestamp !== 'number') continue
       if (!messagesById.has(canonical.id)) messagesById.set(canonical.id, { id: canonical.id, role: canonical.role, content: canonical.content, timestamp: canonical.timestamp } as Message)
     }
-    return { source: `canonical:${canonicalCacheValidated ? 'L1' : 'L2'}`, messagesById, canonicalWatermark, canonicalCacheValidated }
+    return { source: 'canonical:L2', messagesById, canonicalWatermark, canonicalSourceValidated }
   } catch {
     return { source: 'unavailable', reason: 'canonical-read-failed' }
   }
@@ -146,12 +131,12 @@ export function readCanonicalTurnContextCandidate(
           typeof body.timestamp !== 'number') {
         return { status: 'unavailable', source: canonical.source, reason: 'message-identity-or-body-missing',
             errorCode: 'CANONICAL_CONTENT_UNAVAILABLE', canonicalWatermark: canonical.canonicalWatermark,
-            canonicalCacheValidated: canonical.canonicalCacheValidated }
+            canonicalSourceValidated: canonical.canonicalSourceValidated }
         }
         messages.push({ ...skeleton, content: body.content, timestamp: body.timestamp })
       }
       return { status: 'available', source: canonical.source, messages, canonicalWatermark: canonical.canonicalWatermark,
-        canonicalCacheValidated: canonical.canonicalCacheValidated }
+        canonicalSourceValidated: canonical.canonicalSourceValidated }
     })
   } catch {
     return { status: 'unavailable', source: 'canonical:unavailable', reason: 'snapshot-read-failed',
@@ -205,7 +190,7 @@ export function reportCanonicalApiContextComparison(input: {
   legacy: readonly Message[]
   candidate: readonly Message[]
   canonicalWatermark?: SessionStorageShadowReport['canonicalWatermark']
-  canonicalCacheValidated?: boolean
+  canonicalSourceValidated?: boolean
   acceptedInput?: Readonly<{ messageId: string; fingerprint: string }>
 }): SessionStorageShadowReport<readonly Message[]> {
   const fields = fieldDifferences(input.legacy, input.candidate)
@@ -221,7 +206,7 @@ export function reportCanonicalApiContextComparison(input: {
     consumer: 'api-context', sessionId: input.sessionId, source: input.source,
     status: fields.length === 0 ? 'matched' : 'mismatched', differenceCount: fields.length, fields,
     legacyHash, canonicalHash: fields.length === 0 ? legacyHash : hash(input.candidate),
-    canonicalWatermark: input.canonicalWatermark, canonicalCacheValidated: input.canonicalCacheValidated,
+    canonicalWatermark: input.canonicalWatermark, canonicalSourceValidated: input.canonicalSourceValidated,
     ...(acceptedInputFingerprint ? { acceptedInputFingerprint } : {}), candidate: input.candidate
   })
 }
@@ -303,7 +288,7 @@ export function shadowAcceptedTurnContext(
         status: fields.length === 0 ? 'matched' : 'mismatched', differenceCount: fields.length, fields,
         legacyHash: hash(legacyMessages), canonicalHash: hash(candidate),
         canonicalWatermark: canonical.canonicalWatermark,
-        canonicalCacheValidated: canonical.canonicalCacheValidated,
+        canonicalSourceValidated: canonical.canonicalSourceValidated,
         ...(acceptedInputFingerprint ? { acceptedInputFingerprint } : {}), candidate
       })
     })
@@ -374,7 +359,7 @@ export function shadowTurnRoutingInput<T extends Readonly<{ userInput: string; r
         status: fields.length === 0 ? 'matched' : 'mismatched', differenceCount: fields.length, fields,
         legacyHash: hash(safeLegacy), canonicalHash: hash(safeCandidate), candidate
         , canonicalWatermark: canonical.canonicalWatermark,
-        canonicalCacheValidated: canonical.canonicalCacheValidated
+        canonicalSourceValidated: canonical.canonicalSourceValidated
       })
     })
   } catch {

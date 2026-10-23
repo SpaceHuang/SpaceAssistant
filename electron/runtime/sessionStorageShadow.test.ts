@@ -147,7 +147,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
 
     const report = shadowAcceptedTurnContext(db, session.id, legacy, { messageId: 'api-user', fingerprint: acceptedInputFingerprint })
 
-    expect(report).toMatchObject({ consumer: 'api-context', status: 'matched', source: 'canonical:L1', differenceCount: 0, acceptedInputFingerprint: 'matched' })
+    expect(report).toMatchObject({ consumer: 'api-context', status: 'matched', source: 'canonical:L2', differenceCount: 0, acceptedInputFingerprint: 'matched' })
     expect(report.fields).not.toContain('accepted-input-fingerprint')
     expect(report.candidate).toEqual(legacy)
     expect(report.legacyHash).toMatch(/^[a-f0-9]{64}$/)
@@ -231,7 +231,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     if (firstWatermark.kind !== 'matched') throw new Error('expected initial canonical transcript')
     expect(history.writeCanonicalSessionCache({ ...firstWatermark, cacheKey: 'transcript', value: JSON.stringify(firstWatermark.messages) })).toBe(true)
     const legacy = getTurnContext(db, session.id, undefined, user.message.id, [])
-    expect(shadowAcceptedTurnContext(db, session.id, legacy)).toMatchObject({ status: 'matched', source: 'canonical:L1' })
+    expect(shadowAcceptedTurnContext(db, session.id, legacy)).toMatchObject({ status: 'matched', source: 'canonical:L2' })
 
     conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(session.id)
     setCanonicalApiReadFeatureEnabled(db, true)
@@ -254,7 +254,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     // shadow observes a fresh seed; its independent fold still drives the mismatch verdict.
     expect(history.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'hit' })
     const report = shadowAcceptedTurnContext(db, session.id, legacy)
-    expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L1', fields: ['content'], candidate: [{ content: 'provider summary' }] })
+    expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L2', fields: ['content'], candidate: [{ content: 'provider summary' }] })
     expect(getMessage(db, user.message.id)?.content).toBe('full UI body')
     expectNoValidApiRouteScopes(conn, session.id)
     expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
@@ -283,7 +283,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
       setCanonicalApiReadFeatureEnabled(temp.db, true)
       expect(certifyCanonicalSessionApiRead(temp.db, session.id).status).toBe('eligible')
       const legacyBeforeClose = getTurnContext(temp.db, session.id, undefined, user.message.id, [])
-      expect(shadowAcceptedTurnContext(temp.db, session.id, legacyBeforeClose)).toMatchObject({ status: 'matched', source: 'canonical:L1' })
+      expect(shadowAcceptedTurnContext(temp.db, session.id, legacyBeforeClose)).toMatchObject({ status: 'matched', source: 'canonical:L2' })
       temp.db.close()
 
       reopened = openDatabase(temp.dbPath)
@@ -294,7 +294,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
       if (beforeAppend.kind !== 'matched') throw new Error('expected reopened canonical transcript')
       expect(reopenedHistory.readCanonicalSessionCache({ ...beforeAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'hit' })
       const legacyAfterReopen = getTurnContext(reopened, session.id, undefined, user.message.id, [])
-      expect(shadowAcceptedTurnContext(reopened, session.id, legacyAfterReopen)).toMatchObject({ status: 'matched', source: 'canonical:L1' })
+      expect(shadowAcceptedTurnContext(reopened, session.id, legacyAfterReopen)).toMatchObject({ status: 'matched', source: 'canonical:L2' })
 
       await reopenedHistory.appendBatch([{
         invocationId: 'reopen-watermark-invocation', turnId: 'reopen-watermark-turn', sequence: 2, schemaVersion: 1,
@@ -308,7 +308,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
       // P1-①: the reopened connection's append advanced the cache to the compaction watermark.
       expect(reopenedHistory.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'hit' })
       const report = shadowAcceptedTurnContext(reopened, session.id, legacyAfterReopen)
-      expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L1', fields: ['content'], candidate: [{ content: 'provider summary' }] })
+      expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L2', fields: ['content'], candidate: [{ content: 'provider summary' }] })
       expect(getMessage(reopened, user.message.id)?.content).toBe('full UI body')
       expectNoValidApiRouteScopes(reopenedConn, session.id)
       expect(reopenedConn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
@@ -533,7 +533,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
       boundarySequence: undefined, excludeMessageIds: [], limit: 50
     })
 
-    expect(report).toMatchObject({ consumer: 'turn-routing', status: 'matched', source: 'canonical:L1', differenceCount: 0 })
+    expect(report).toMatchObject({ consumer: 'turn-routing', status: 'matched', source: 'canonical:L2', differenceCount: 0 })
     expect(report.candidate).toEqual(routeInput)
     expect(report.fields).toEqual([])
     expect(report.candidate?.recentMessages).toEqual(Array.from({ length: 50 }, (_, index) => ({ role: 'user', content: index === 49 ? '\t' : `route body ${index}` })))
@@ -668,7 +668,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     db.close()
   })
 
-  it('fails closed on missing source spill and cache storage errors without changing the legacy API or route', async () => {
+  it('fails closed on missing source spill while remaining independent from legacy cache storage', async () => {
     const temp = createTempDatabase('session-shadow-spill-failure-')
     const { db, dbPath } = temp
     const session = createSession(db, { name: 'spill failure shadow', model: 'test' })
@@ -715,8 +715,8 @@ describe('Phase 5.2 canonical shadow reads', () => {
       routeInput: { userInput: 'new prompt', recentMessages: legacyRoute, sessionId: session.id },
       boundarySequence: undefined, excludeMessageIds: [], limit: 50
     })
-    expect(cacheFailureApi.status).toBe('unavailable')
-    expect(cacheFailureRoute.status).toBe('unavailable')
+    expect(cacheFailureApi).toMatchObject({ status: 'matched', source: 'canonical:L2' })
+    expect(cacheFailureRoute).toMatchObject({ status: 'matched', source: 'canonical:L2' })
     expect(getTurnContext(db, session.id, undefined, user.message.id, [])).toEqual(legacyApi)
     expect(getRecentTurnRoutingMessages(db, session.id)).toEqual(legacyRoute)
     temp.cleanup()
@@ -816,7 +816,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     db.close()
   })
 
-  it('hydrates source spill after database reopen and cache clear, then uses a rebuilt canonical L1 seed', async () => {
+  it('hydrates source spill after database reopen without depending on the legacy transcript cache', async () => {
     const temp = createTempDatabase('session-shadow-cache-reopen-')
     const { db, dbPath } = temp
     const session = createSession(db, { name: 'cache reopen shadow', model: 'test' })
@@ -844,13 +844,13 @@ describe('Phase 5.2 canonical shadow reads', () => {
     if (originalRead.kind !== 'matched') throw new Error('expected canonical L2 snapshot')
     expect(history.readCanonicalSessionTranscriptWithCache(session.id, 'transcript', expectedTranscript)).toMatchObject({ kind: 'matched', source: 'L1' })
     const firstReport = shadowAcceptedTurnContext(db, session.id, legacyBeforeClose)
-    expect(firstReport).toMatchObject({ status: 'matched', source: 'canonical:L1', differenceCount: 0 })
+    expect(firstReport).toMatchObject({ status: 'matched', source: 'canonical:L2', differenceCount: 0 })
     const firstRouteReport = shadowTurnRoutingInput(db, {
       sessionId: session.id, mode: 'reuse-user', reuseUserMessageId: user.message.id,
       routeInput: { userInput: largeBody, recentMessages: legacyRouteBeforeClose, sessionId: session.id },
       excludeMessageIds: [], limit: 50
     })
-    expect(firstRouteReport).toMatchObject({ status: 'matched', source: 'canonical:L1', differenceCount: 0 })
+    expect(firstRouteReport).toMatchObject({ status: 'matched', source: 'canonical:L2', differenceCount: 0 })
     db.close()
 
     const reopened = openDatabase(dbPath)
@@ -858,14 +858,14 @@ describe('Phase 5.2 canonical shadow reads', () => {
     const legacyRouteAfterReopen = getRecentTurnRoutingMessages(reopened, session.id)
     expect(legacyAfterReopen[0]?.content).toBe(largeBody)
     const reopenedReport = shadowAcceptedTurnContext(reopened, session.id, legacyAfterReopen)
-    expect(reopenedReport).toMatchObject({ status: 'matched', source: 'canonical:L1', differenceCount: 0 })
+    expect(reopenedReport).toMatchObject({ status: 'matched', source: 'canonical:L2', differenceCount: 0 })
     expect(reopenedReport.candidate).toEqual(legacyBeforeClose)
     const reopenedRouteReport = shadowTurnRoutingInput(reopened, {
       sessionId: session.id, mode: 'reuse-user', reuseUserMessageId: user.message.id,
       routeInput: { userInput: largeBody, recentMessages: legacyRouteAfterReopen, sessionId: session.id },
       excludeMessageIds: [], limit: 50
     })
-    expect(reopenedRouteReport).toMatchObject({ status: 'matched', source: 'canonical:L1', differenceCount: 0 })
+    expect(reopenedRouteReport).toMatchObject({ status: 'matched', source: 'canonical:L2', differenceCount: 0 })
     expect(reopenedRouteReport.candidate?.recentMessages).toEqual(legacyRouteBeforeClose)
     const stored = getDbConnection(reopened).prepare("SELECT payload_json FROM agent_history_events WHERE event_id='cache-reopen-context'").get() as { payload_json: string }
     const payload = JSON.parse(stored.payload_json) as { messages: Array<{ content: { __spaceassistant_spill_v1: { locator: string } } }> }
@@ -896,14 +896,14 @@ describe('Phase 5.2 canonical shadow reads', () => {
       .readCanonicalSessionTranscriptWithCache(session.id, 'transcript', expectedTranscript)
     expect(rebuilt).toMatchObject({ kind: 'matched', source: 'L2' })
     const afterRebuild = shadowAcceptedTurnContext(reopened, session.id, legacyAfterReopen)
-    expect(afterRebuild).toMatchObject({ status: 'matched', source: 'canonical:L1', differenceCount: 0 })
+    expect(afterRebuild).toMatchObject({ status: 'matched', source: 'canonical:L2', differenceCount: 0 })
     expect(afterRebuild.candidate).toEqual(legacyBeforeClose)
     const routeAfterRebuild = shadowTurnRoutingInput(reopened, {
       sessionId: session.id, mode: 'reuse-user', reuseUserMessageId: user.message.id,
       routeInput: { userInput: largeBody, recentMessages: legacyRouteAfterReopen, sessionId: session.id },
       excludeMessageIds: [], limit: 50
     })
-    expect(routeAfterRebuild).toMatchObject({ status: 'matched', source: 'canonical:L1', differenceCount: 0 })
+    expect(routeAfterRebuild).toMatchObject({ status: 'matched', source: 'canonical:L2', differenceCount: 0 })
     expect(routeAfterRebuild.candidate?.recentMessages).toEqual(legacyRouteBeforeClose)
     await fs.writeFile(spillFile, `${largeBody.slice(0, -1)}x`)
     const tamperedRebuiltCache = shadowAcceptedTurnContext(reopened, session.id, legacyAfterReopen)
