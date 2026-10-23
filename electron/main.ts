@@ -602,11 +602,7 @@ app.whenReady().then(async () => {
       ...recoveryWorkDirs.map((workDir) => dailyRetentionTask(`session-event-retention-${createHash('sha256').update(workDir).digest('hex').slice(0, 12)}`,
         () => JSON.stringify(resolveRetentionPolicyFromDb(db).sessionEventMaxSessions), () => workDir, async () => {
         const shouldRetain = createSessionLedgerCompactionDependencyGuard(db)
-        const prepareProjectionForRetention = createCanonicalSessionProjectionRetentionPreparer(db, async ({ sessionId }) => {
-          const ensureChatBodyV1 = sessionStorageHost.storage.ensureChatBodyV1
-          if (!ensureChatBodyV1) throw new Error('SESSION_PROJECTION_PREPARATION_UNAVAILABLE')
-          await ensureChatBodyV1({ sessionId })
-        })
+        const prepareProjectionForRetention = createCanonicalSessionProjectionRetentionPreparer(db, sessionStorageHost.storage)
         const result = await runSessionEventRetentionMaintenance(db, workDir, {
           prepareProjectionForRetention, shouldRetainSessionDir: shouldRetain,
           withSessionLifecycleLock: async (sessionName, root, operation) => {

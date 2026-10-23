@@ -48,11 +48,16 @@ describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
       return []
     })
     try {
-      const prepare = createCanonicalSessionProjectionRetentionPreparer(db, async ({ sessionId }) => {
-        order.push(`ensure:${sessionId}`)
-      })
+      const prepare = createCanonicalSessionProjectionRetentionPreparer(db, {
+        ensureChatBodyV1: async ({ sessionId }) => { order.push(`ensure:${sessionId}`); return { sessionId } },
+        queries: {
+          readMessages: () => { order.push('read-legacy-messages'); return [] },
+          readPreparedMessages: async () => { order.push('read-prepared-messages'); return [] }
+        }
+      } as never)
       await prepare('retention-order-19700101', '/work')
-      expect(order).toEqual(['ensure:retention-order', 'read-projected-messages'])
+      expect(order).toEqual(['ensure:retention-order', 'read-prepared-messages'])
+      expect(projectionRead).not.toHaveBeenCalled()
     } finally {
       projectionRead.mockRestore()
       db.close()

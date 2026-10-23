@@ -2,6 +2,7 @@ import type { AppDatabase } from '../../../database/sqliteStore'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
 import { getProjectedMessages } from '../../../runtime/sessionTranscriptProjection'
+import { readChatMessagesAfterPreparation } from '../../public/readMessages'
 import path from 'node:path'
 import { readSessionEvents } from '../../../sessionEvents'
 import type { SessionStorage } from '../../host/ports'
@@ -21,14 +22,15 @@ export function createSessionLedgerCompactionDependencyGuard(db: AppDatabase): (
 /** Prepare and inspect canonical session facts for the legacy event-ledger retention owner. */
 export function createCanonicalSessionProjectionRetentionPreparer(
   db: AppDatabase,
-  ensureChatBodyV1?: (input: Parameters<NonNullable<SessionStorage['ensureChatBodyV1']>>[0]) => Promise<unknown>
+  storage?: Parameters<typeof readChatMessagesAfterPreparation>[0]
 ): (sessionName: string, workDir: string) => Promise<void> {
   const history = new SqliteAgentHistory(getDbConnection(db))
   return async (sessionName) => {
     const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1]
     if (!sessionId) return
-    await ensureChatBodyV1?.({ sessionId })
-    const messages = getProjectedMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+    const messages = storage
+      ? await readChatMessagesAfterPreparation(storage, { sessionId, limit: Number.MAX_SAFE_INTEGER, offset: 0 })
+      : getProjectedMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
     if (messages.length === 0 || messages.some(({ role }) => role !== 'user' && role !== 'assistant')) return
     const legacyMessages = messages.map(({ id, role, content, timestamp, thinking, contentSegments, toolCalls, toolUse, attachments,
       imagesDeliveredToApi, skillHints }) => ({
