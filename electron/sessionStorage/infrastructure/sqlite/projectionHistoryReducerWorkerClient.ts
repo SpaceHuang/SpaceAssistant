@@ -92,7 +92,7 @@ export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducer
         }
         candidateResult = message.result
       })
-      worker.once('error', (error) => { candidateError ??= error })
+      worker.once('error', (error) => { candidateError ??= new Error(`PROJECTION_REDUCER_WORKER_RUNTIME_FAILED:${error.message}`) })
       worker.once('exit', (code) => {
         if (!settled) finish(candidateError ?? (abortRequested ? new Error('PROJECTION_REDUCER_WORKER_ABORTED') :
           candidateResult && code === 0 ? undefined : new Error(`PROJECTION_REDUCER_WORKER_EXIT:${code}`)), candidateResult)

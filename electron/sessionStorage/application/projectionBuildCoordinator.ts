@@ -281,8 +281,13 @@ export async function runProjectionBuildSlice(input: Readonly<{
       if (input.signal?.aborted || (error instanceof Error && /WORKER_ABORTED$/.test(error.message))) {
         return { kind: 'checkpointed', checkpoint }
       }
+      const reason = error instanceof Error ? error.message : 'history-reducer-rejected-chunk'
+      if (isRecoverableReducerWorkerFailure(reason)) {
+        rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'WORKER_FAILED', input.now, input.retryAfter)
+        return { kind: 'source-unavailable', reason }
+      }
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'HISTORY_REDUCER_REJECTED_CHUNK', input.now, input.retryAfter)
-      return { kind: 'chunk-invalid', reason: error instanceof Error ? error.message : 'history-reducer-rejected-chunk' }
+      return { kind: 'chunk-invalid', reason }
     }
     let outputOperations = [...folded.outputOperations]
     if (!result.hasMore) {
@@ -460,4 +465,8 @@ function rejectBuild(
     attempts: (current?.attempts ?? 0) + 1,
     retryAfter: code === 'SPEC_UNSUPPORTED' || caseId === 'DEFERRED_LARGE'
       ? Number.MAX_SAFE_INTEGER : retryAfter?.() ?? now() + DEFAULT_PROJECTION_RETRY_DELAY_MS, })
+}
+
+function isRecoverableReducerWorkerFailure(reason: string): boolean {
+  return /^PROJECTION_REDUCER_WORKER_(?:ENTRY_UNAVAILABLE|SPAWN_FAILED|TIMEOUT|TERMINATION_FAILED|ABORT_FAILED|EXIT(?::|$)|PROTOCOL_MISMATCH|RESULT_INVALID|POST_FAILED|RUNTIME_FAILED)(?:$|:)/.test(reason)
 }
