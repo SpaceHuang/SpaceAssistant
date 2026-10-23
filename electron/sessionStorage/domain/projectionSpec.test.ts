@@ -26,6 +26,22 @@ describe('ProjectionSpec.chatBodyV1', () => {
     expect(() => projectCanonicalChatBodyV1([{ ...canonical[1]!, role: 'user' as const }], facts)).toThrow('CHAT_BODY_IDENTITY_MISMATCH')
   })
 
+  it('projects canonical model content blocks using the chat display text rules', () => {
+    const facts: ProjectionMessageFact[] = [
+      { id: 'blocks', role: 'assistant', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'hello' },
+      { id: 'legacy-blocks', role: 'assistant', timestamp: 2, sequence: 1, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'hello' },
+    ]
+    expect(projectCanonicalChatBodyV1([
+      { id: 'blocks', role: 'assistant', timestamp: 1, content: [
+        { type: 'text', text: 'hello' }, { type: 'thinking', thinking: 'private' },
+      ] },
+      { id: 'legacy-blocks', role: 'assistant', timestamp: 2, content: [{ type: 'text', text: 'hello' }] },
+    ], facts)).toEqual([
+      { id: 'blocks', role: 'assistant', content: 'hello', timestamp: 1 },
+      { id: 'legacy-blocks', role: 'assistant', content: 'hello', timestamp: 2 },
+    ])
+  })
+
   it('registers output, selection dependencies, and invalidation dependencies for every contract scope', () => {
     expect(PROJECTION_SPECS).toEqual({
       chatBodyV1: { outputFields: ['id', 'role', 'content', 'timestamp'], selectionDependencies: ['sessionGeneration', 'historyWatermark', 'messageOrder', 'bodyAuthority', 'storageStatus'], invalidationDependencies: ['id', 'role', 'content', 'timestamp', 'messageOrder', 'historyWatermark', 'bodyAuthority'] },

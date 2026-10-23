@@ -2,6 +2,9 @@ import { Buffer } from 'node:buffer'
 import { getDbConnection, openSqliteDatabaseReadOnly, type AppDatabase } from '../../../database/sqliteStore'
 import { runInTransaction } from '../../../database/transaction'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
+import { collectSpillDescriptorsStrict, readSourceTruthSpillSync } from '../../../storage/spillProtocol'
+import type { SpillDescriptor } from '../../../storage/spillProtocol'
+import path from 'node:path'
 import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact } from '../../domain/projectionSource'
 
 export type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact } from '../../domain/projectionSource'
@@ -60,10 +63,17 @@ export function readProjectionHistoryChunk(
           permit.sessionId, permit.sessionId, input.afterSessionSequence, input.maxRows + 1
         ) as Iterable<ProjectionHistoryEventRow>
       for (const row of rows) {
+        let payloadJson: string
+        try {
+          payloadJson = JSON.stringify(hydrateSourceTruthSpills(JSON.parse(row.payload_json), path.join(path.dirname(permit.dbPath), 'spill')))
+        } catch (error) {
+          return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence,
+            reason: error instanceof Error ? error.message : 'projection-spill-unavailable' }
+        }
         const event: ProjectionHistoryChunkEvent = {
           invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id,
           idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version,
-          kind: row.kind, payloadJson: row.payload_json, sessionSequence: row.session_seq,
+          kind: row.kind, payloadJson, sessionSequence: row.session_seq,
           commitOrder: row.commit_order, createdAt: row.created_at,
         }
         const eventBytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
@@ -107,6 +117,21 @@ export function readProjectionHistoryChunk(
   } finally {
     db?.close()
   }
+}
+
+function hydrateSourceTruthSpills(value: unknown, spillRoot: string): unknown {
+  if (Array.isArray(value)) return value.map((item) => hydrateSourceTruthSpills(item, spillRoot))
+  if (!value || typeof value !== 'object') return value
+  const record = value as Record<string, unknown>
+  if ('__spaceassistant_spill_v1' in record) {
+    if (Object.keys(record).length !== 1) throw new Error('projection history spill marker is ambiguous')
+    const descriptors = collectSpillDescriptorsStrict(record)
+    if (descriptors.length !== 1) throw new Error('projection history spill descriptor is invalid')
+    const descriptor = descriptors[0] as SpillDescriptor
+    if (descriptor?.kind !== 'source-of-truth') throw new Error('projection history references a non-source spill')
+    return readSourceTruthSpillSync(spillRoot, descriptor)
+  }
+  return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, hydrateSourceTruthSpills(item, spillRoot)]))
 }
 
 function referencedMessageIds(event: ProjectionHistoryChunkEvent): string[] {

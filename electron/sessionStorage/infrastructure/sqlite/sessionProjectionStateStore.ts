@@ -188,7 +188,7 @@ export function createSqliteProjectionChatBodyCacheStore(db: AppDatabase): Proje
     const specVersion = projectionScopeSpecVersion(scopeKey)
     if (specVersion === null) return null
     const currentSourceIdentityJson = readProjectionSourceIdentity(conn, sessionId, session.generation)
-    return Object.freeze({ sessionId, sessionGeneration: state.session_generation, currentSessionGeneration: session.generation, scopeKey, specVersion, status: state.status,
+    return Object.freeze({ sessionId, sessionGeneration: state.session_generation, currentSessionGeneration: session.generation, scopeKey, specVersion, status: state.status, cachePresent: !!cache,
       sourceIdentityJson: cache?.source_identity_json ?? null, stateSourceIdentityJson: state.source_identity_json, currentSourceIdentityJson,
       payloadGeneration: cache?.payload_generation ?? null,
       payloadDigest: cache?.payload_digest ?? null,
@@ -204,11 +204,15 @@ export function createSqliteProjectionChatBodyCacheStore(db: AppDatabase): Proje
       payload_generation=NULL,payload_digest=NULL,validated_range_json=NULL,source_identity_json=NULL,process_generation=NULL,rebuild_token=NULL,
       failure_case_json=NULL,attempts=0,retry_after=NULL,updated_at=? WHERE session_id=? AND scope_key=? AND session_generation=?
       AND status='valid' AND source_identity_json=? AND payload_generation=? AND payload_digest=? AND validated_range_json=?
-      AND EXISTS(SELECT 1 FROM sessions WHERE id=? AND generation=?)`)
+      AND EXISTS(SELECT 1 FROM sessions WHERE id=? AND generation=?)
+      AND ((?=1 AND EXISTS(SELECT 1 FROM session_projection_cache WHERE session_id=? AND scope_key=? AND payload_generation=? AND source_identity_json=? AND payload_digest=? AND validated_range_json=?))
+        OR (?=0 AND NOT EXISTS(SELECT 1 FROM session_projection_cache WHERE session_id=? AND scope_key=?)))`)
       .run(Date.now(), input.sessionId, input.scopeKey, input.sessionGeneration, input.stateSourceIdentityJson, input.statePayloadGeneration,
-        input.statePayloadDigest, input.stateValidatedRangeJson, input.sessionId, input.sessionGeneration)
+        input.statePayloadDigest, input.stateValidatedRangeJson, input.sessionId, input.sessionGeneration,
+        input.cachePresent ? 1 : 0, input.sessionId, input.scopeKey, input.payloadGeneration, input.sourceIdentityJson, input.payloadDigest,
+        input.validatedRangeJson, input.cachePresent ? 0 : 1, input.sessionId, input.scopeKey)
     if (changesToNumber(result.changes) !== 1) return false
-    conn.prepare(`DELETE FROM session_projection_cache WHERE session_id=? AND scope_key=? AND payload_generation=?
+    if (input.cachePresent) conn.prepare(`DELETE FROM session_projection_cache WHERE session_id=? AND scope_key=? AND payload_generation=?
       AND source_identity_json=? AND payload_digest=? AND validated_range_json=?`)
       .run(input.sessionId, input.scopeKey, input.payloadGeneration, input.sourceIdentityJson, input.payloadDigest, input.validatedRangeJson)
     return true

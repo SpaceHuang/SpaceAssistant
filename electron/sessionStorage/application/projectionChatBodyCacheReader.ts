@@ -10,6 +10,7 @@ export type ProjectionChatBodyCacheSnapshot = Readonly<{
   scopeKey: string
   specVersion: number
   status: 'valid' | 'invalid' | 'rebuilding' | 'rejected'
+  cachePresent: boolean
   sourceIdentityJson: string | null
   stateSourceIdentityJson: string | null
   currentSourceIdentityJson: string | null
@@ -29,8 +30,8 @@ export type ProjectionChatBodyCacheReadStore = Readonly<{
   readSnapshot(sessionId: string, scopeKey: string): ProjectionChatBodyCacheSnapshot | null
   /** Invalidates only the exact publication observed by this reader. */
   invalidateObserved(input: Readonly<{
-    sessionId: string; scopeKey: string; sessionGeneration: string; sourceIdentityJson: string
-    payloadGeneration: string; payloadDigest: string; validatedRangeJson: string
+    sessionId: string; scopeKey: string; sessionGeneration: string; cachePresent: boolean; sourceIdentityJson: string | null
+    payloadGeneration: string | null; payloadDigest: string | null; validatedRangeJson: string | null
     stateSourceIdentityJson: string; statePayloadGeneration: string; statePayloadDigest: string; stateValidatedRangeJson: string
   }>): boolean
 }>
@@ -98,9 +99,10 @@ function validManifest(snapshot: ProjectionChatBodyCacheSnapshot): boolean {
 
 function invalidateObserved(snapshot: ProjectionChatBodyCacheSnapshot, store: ProjectionChatBodyCacheReadStore): void {
   if (snapshot.status !== 'valid' || !snapshot.stateSourceIdentityJson || snapshot.stateSourceIdentityJson !== snapshot.currentSourceIdentityJson ||
-    !snapshot.statePayloadGeneration || !snapshot.statePayloadDigest || !snapshot.stateValidatedRangeJson || !snapshot.sourceIdentityJson ||
-    !snapshot.payloadGeneration || !snapshot.payloadDigest || !snapshot.validatedRangeJson) return
+    !snapshot.statePayloadGeneration || !snapshot.statePayloadDigest || !snapshot.stateValidatedRangeJson ||
+    (snapshot.cachePresent && (!snapshot.sourceIdentityJson || !snapshot.payloadGeneration || !snapshot.payloadDigest || !snapshot.validatedRangeJson))) return
   store.invalidateObserved({ sessionId: snapshot.sessionId, scopeKey: snapshot.scopeKey, sessionGeneration: snapshot.sessionGeneration,
+    cachePresent: snapshot.cachePresent,
     sourceIdentityJson: snapshot.sourceIdentityJson, payloadGeneration: snapshot.payloadGeneration, payloadDigest: snapshot.payloadDigest,
     validatedRangeJson: snapshot.validatedRangeJson, stateSourceIdentityJson: snapshot.stateSourceIdentityJson,
     statePayloadGeneration: snapshot.statePayloadGeneration, statePayloadDigest: snapshot.statePayloadDigest,

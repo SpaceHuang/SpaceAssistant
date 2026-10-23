@@ -286,7 +286,15 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
       if (!session) return undefined
       let current = stateStore.get(sessionId, scopeKey)
       const sourceIdentityJson = stateStore.readSourceIdentity(sessionId, session.generation)
-      if (current?.status === 'valid' && current.sessionGeneration === session.generation && current.sourceIdentityJson === sourceIdentityJson) return undefined
+      if (current?.status === 'valid' && current.sessionGeneration === session.generation && current.sourceIdentityJson === sourceIdentityJson) {
+        const cache = getDbConnection(input.db).prepare(`SELECT payload_generation,payload_digest,validated_range_json,source_identity_json
+          FROM session_projection_cache WHERE session_id=? AND scope_key=?`).get(sessionId, scopeKey) as
+          { payload_generation: string; payload_digest: string; validated_range_json: string; source_identity_json: string } | undefined
+        if (cache && cache.payload_generation === current.payloadGeneration && cache.payload_digest === current.payloadDigest &&
+          cache.validated_range_json === current.validatedRangeJson && cache.source_identity_json === current.sourceIdentityJson) return undefined
+        stateStore.invalidateInTransaction({ sessionId, scopeKey, sessionGeneration: session.generation, now: input.now() })
+        current = stateStore.get(sessionId, scopeKey)
+      }
       if (current?.status === 'valid' && current.sessionGeneration === session.generation) {
         stateStore.invalidateInTransaction({ sessionId, scopeKey, sessionGeneration: session.generation, now: input.now() })
         current = stateStore.get(sessionId, scopeKey)

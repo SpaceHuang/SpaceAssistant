@@ -75,26 +75,44 @@ export function projectCanonicalChatBodyV1(
     if (fact.queueScope !== 'desktop') continue
     if (seenIds.has(fact.id) || !Number.isSafeInteger(fact.sequence) || fact.sequence <= previousSequence ||
       canonical.role !== fact.role || canonical.timestamp !== fact.timestamp || !Number.isSafeInteger(fact.timestamp) ||
-      (canonical.role !== 'user' && canonical.role !== 'assistant') || typeof canonical.content !== 'string') {
+      (canonical.role !== 'user' && canonical.role !== 'assistant')) {
       throw new Error('CHAT_BODY_IDENTITY_MISMATCH')
     }
+    const projectedContent = canonicalMessageBodyText(canonical.content)
     if (fact.contentStorageState === 'canonical-backed-only' && (fact.writeMode !== 'canonical' || fact.storedContent !== '')) {
       throw new Error('CHAT_BODY_AUTHORITY_MISMATCH')
     }
     if (fact.contentStorageState === 'canonical-backed-dual-write' &&
-      (fact.writeMode !== 'canonical' || canonical.content !== fact.storedContent)) {
+      (fact.writeMode !== 'canonical' || projectedContent !== fact.storedContent)) {
       throw new Error('CHAT_BODY_AUTHORITY_MISMATCH')
     }
-    if (fact.contentStorageState === 'legacy' && canonical.content !== fact.storedContent) {
+    if (fact.contentStorageState === 'legacy' && projectedContent !== fact.storedContent) {
       throw new Error('CHAT_BODY_AUTHORITY_MISMATCH')
     }
     result.push({ id: fact.id, role: fact.role as Message['role'],
-      content: fact.contentStorageState === 'legacy' ? fact.storedContent : canonical.content,
+      content: fact.contentStorageState === 'legacy' ? fact.storedContent : projectedContent,
       timestamp: fact.timestamp })
     seenIds.add(fact.id)
     previousSequence = fact.sequence
   }
   return result
+}
+
+/** Match canonical model content to the legacy chat body mirror without exposing non-text execution blocks. */
+function canonicalMessageBodyText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) throw new Error('CHAT_BODY_IDENTITY_MISMATCH')
+  let text = ''
+  for (const block of content) {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) throw new Error('CHAT_BODY_IDENTITY_MISMATCH')
+    const record = block as Record<string, unknown>
+    if (record.type === 'text' && typeof record.text === 'string') text += record.text
+    else if (record.type === 'thinking' && typeof record.thinking === 'string') continue
+    else if (record.type === 'image' && typeof record.data === 'string' &&
+      ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(String(record.mimeType))) continue
+    else throw new Error('CHAT_BODY_IDENTITY_MISMATCH')
+  }
+  return text
 }
 
 export function encodeChatBodyV1(messages: readonly Message[]): string {
