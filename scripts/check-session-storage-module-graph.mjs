@@ -34,7 +34,8 @@ function moduleEdges(sourceFile) {
     edges.push({ specifier, resolved, symbols, typeOnly })
   }
   const visit = (node) => {
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier &&
+      (ts.isStringLiteral(node.moduleSpecifier) || ts.isNoSubstitutionTemplateLiteral(node.moduleSpecifier))) {
       const clause = ts.isImportDeclaration(node) ? node.importClause : node.exportClause
       const typeOnly = ts.isImportDeclaration(node) ? !!node.importClause?.isTypeOnly : !!node.isTypeOnly
       const symbols = []
@@ -48,7 +49,8 @@ function moduleEdges(sourceFile) {
       add(node.moduleSpecifier.text, symbols.length ? symbols : ['*'], typeOnly)
     }
     else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) add(node.argument.literal.text, ['*'], true)
-    else if (ts.isCallExpression(node) && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]) &&
+    else if (ts.isCallExpression(node) && node.arguments.length === 1 &&
+      (ts.isStringLiteral(node.arguments[0]) || ts.isNoSubstitutionTemplateLiteral(node.arguments[0])) &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) add(node.arguments[0].text, ['*'], false)
     ts.forEachChild(node, visit)
   }
@@ -62,7 +64,9 @@ function nonStaticModuleLoads(sourceFile) {
     if (ts.isCallExpression(node) && node.arguments.length === 1 &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
       const argument = node.arguments[0]
-      if (!ts.isStringLiteral(argument) && !ts.isNoSubstitutionTemplateLiteral(argument)) {
+      // Require quoted static specifiers. Template literals are rejected even without substitutions
+      // so import paths have one unambiguous form for the edge scanner to audit.
+      if (!ts.isStringLiteral(argument)) {
         loads.push({ line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
           kind: node.expression.kind === ts.SyntaxKind.ImportKeyword ? 'import()' : 'require()' })
       }
@@ -109,6 +113,27 @@ export function findSessionStorageModuleViolations(filePath, source) {
     ['electron/storage/sessionEventRetention.ts', new Set(['createSessionLedgerCompactionDependencyGuard', 'createCanonicalSessionProjectionRetentionPreparer'])],
     ['electron/storage/sessionProjectionCacheMaintenance.ts', new Set(['createSqliteProjectionStateStore', 'createProjectionService'])],
   ])
+  // Root facades that still re-export host/SQLite implementations are caller- and symbol-scoped.
+  // New application modules must consume SessionStorage ports instead of acquiring these capabilities.
+  const runtimeFacadeCallers = new Map([
+    ['electron/main.ts|electron/sessionStorage/sqliteSessionStorage', new Set([
+      'createSessionLedgerRecoveryBindings', 'createSessionTurnRuntime', 'createSqliteProjectionBuildTask', 'createSqliteSessionStorageHost'])],
+    ['electron/appIpc.ts|electron/sessionStorage/sqliteSessionStorage', new Set(['createSqliteSessionStorage'])],
+    ['electron/ipc/agentProtocolIpc.ts|electron/sessionStorage/sqliteSessionStorage', new Set(['createSessionTurnRuntime'])],
+    ['electron/testSupport/invocationAssembler.ts|electron/sessionStorage/sqliteSessionStorage', new Set(['createSqliteSessionStorage'])],
+    ['electron/testSupport/claudeStreamHandlers.ts|electron/sessionStorage/sqliteSessionStorage', new Set(['createSqliteSessionStorage'])],
+    ['electron/runtime/sessionStorageCleanupAuthorization.ts|electron/sessionStorage/certification', new Set(['certifyCanonicalSessionApiRead'])],
+    ['electron/runtime/sessionStorageCleanupProduction.ts|electron/sessionStorage/certification', new Set(['certifyCanonicalSessionApiRead'])],
+    ['electron/runtime/sessionStorageCleanupAuthorization.ts|electron/sessionStorage/maintenance', new Set(['getSessionMessageContentCleanupAuthorizationSnapshotSha256'])],
+    ['electron/runtime/sessionStorageCleanupProduction.ts|electron/sessionStorage/maintenance', new Set([
+      'beginSessionMessageContentCleanup', 'clearNextSessionMessageContentBatch', 'markSessionMessageContentWriteStopped',
+      'verifyAndCompleteSessionMessageContentCleanup', 'SessionMessageContentCleanupBatchResult'])],
+    ['electron/main.ts|electron/sessionStorage/lifecycle', new Set(['createLifecycleTaskHandle'])],
+    ['electron/storage/maintenanceScheduler.ts|electron/sessionStorage/lifecycle', new Set(['createLifecycleTaskHandle'])],
+    ['electron/storage/spillReferenceBackfillScheduler.ts|electron/sessionStorage/lifecycle', new Set(['createLifecycleTaskHandle'])],
+    ['electron/ipc/sessionIpc.ts|electron/sessionStorage/contextPortRegistry', new Set([
+      'bindSessionStorageContextPort', 'createBoundSessionContextAdapter'])],
+  ])
   const allowed = (edge) => {
     if (category === 'external-electron' && edge.resolved === 'electron/database/operations' &&
       edge.symbols.some((symbol) => rawSessionMessageReads.has(symbol))) {
@@ -118,6 +143,11 @@ export function findSessionStorageModuleViolations(filePath, source) {
     if (category === 'external-electron' && edge.resolved === 'electron/sessionStorage/sqliteRuntimeBindings') {
       const approved = runtimeBindingCallers.get(normalizedFile)
       return !!approved && !edge.typeOnly && edge.symbols.length > 0 && edge.symbols.every((symbol) => approved.has(symbol))
+    }
+    if (category === 'external-electron' && /^electron\/sessionStorage\/[^/]+$/.test(edge.resolved)) {
+      if (edge.resolved === 'electron/sessionStorage/contracts') return edge.typeOnly
+      const approved = runtimeFacadeCallers.get(`${normalizedFile}|${edge.resolved}`)
+      return !!approved && edge.symbols.length > 0 && edge.symbols.every((symbol) => approved.has(symbol))
     }
     if (category === 'external-electron') return !/^electron\/sessionStorage\/(?:application|infrastructure|internal)\//.test(edge.resolved)
     if (category === 'domain') return edge.resolved === 'src/shared/domainTypes'
@@ -275,8 +305,7 @@ function rootProductionFiles(directory) {
     .map((entry) => path.join(directory, entry.name))
 }
 
-function main() {
-  if (process.argv.includes('--probe-illegal-edge')) {
+function runIllegalEdgeProbes() {
     const probes = [
       ['domain raw DB access', 'electron/sessionStorage/domain/__gate_probe__.ts', `import { getSession } from '../../database/operations'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
@@ -300,6 +329,12 @@ function main() {
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['external implementation binding import', 'electron/ipc/__gate_probe__.ts', `import { createProjectionService, createSqliteProjectionStateStore } from '../sessionStorage/sqliteRuntimeBindings'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['external implementation re-export import', 'electron/ipc/__gate_probe__.ts', `import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['external SQLite composition re-export import', 'electron/ipc/__gate_probe__.ts', `import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['template-literal static implementation import', 'electron/ipc/__gate_probe__.ts', 'import(`../sessionStorage/application/readMessages`)',
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['non-static dynamic module load', 'electron/ipc/__gate_probe__.ts', `const modulePath = '../sessionStorage/infrastructure/sqlite/sessionProjectionStateStore'; import(modulePath)`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0]
     ]
@@ -307,12 +342,18 @@ function main() {
     if (missed.length > 0) {
       console.error('[check:session-storage-module-graph] illegal-edge probes were not rejected:')
       for (const [name] of missed) console.error(`  - ${name}`)
-      process.exitCode = 1
-      return
+      return false
     }
     console.log(`[check:session-storage-module-graph] illegal-edge probes rejected as expected (${probes.length} probes)`)
+    return true
+}
+
+function main() {
+  if (!runIllegalEdgeProbes()) {
+    process.exitCode = 1
     return
   }
+  if (process.argv.includes('--probe-illegal-edge')) return
   const sourceRoot = path.join(root, 'electron/sessionStorage')
   observedCrossDirectoryExceptions.clear()
   const files = [...rootProductionFiles(sourceRoot), ...['domain', 'public', 'application', 'infrastructure', 'host', 'maintenance', 'internal'].flatMap((category) => filesUnder(path.join(sourceRoot, category))),
