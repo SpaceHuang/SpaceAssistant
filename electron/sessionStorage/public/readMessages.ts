@@ -1,5 +1,5 @@
 import type { Message } from '../../../src/shared/domainTypes'
-import type { ApiContextBaseline, ChatMessagePage, ExportPage, SearchCorpusPage } from './model'
+import type { ApiContextBaseline, ChatMessagePage, ExportPage, RetryContextTarget, SearchCorpusPage } from './model'
 import { prepareChatBodyForRead } from './readPreparation'
 
 type ChatMessageReadStorage = Readonly<{
@@ -79,6 +79,25 @@ export async function readExportPageAfterPreparation(
   const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId, input.signal)
   const prepared = await storage.queries.readPreparedExportPage?.({ ...input, prepared: preparedView })
   return prepared ?? storage.queries.readExportPage(input)
+}
+
+export async function readRetryTargetAfterPreparation(
+  storage: Readonly<{
+    ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
+    queries: Readonly<{
+      readRetryTarget(input: Readonly<{ sessionId: string; failedAssistantMessageId: string }>): RetryContextTarget | null
+      readLatestRetryTarget(sessionId: string): RetryContextTarget | null
+      readPreparedRetryTarget?(input: Readonly<{ sessionId: string; failedAssistantMessageId?: string; prepared?: unknown }>): Promise<RetryContextTarget | null | undefined>
+    }>
+  }>,
+  input: Readonly<{ sessionId: string; failedAssistantMessageId?: string }>
+): Promise<RetryContextTarget | null> {
+  const preparedView = await prepareChatBodyForRead(storage.ensureChatBodyV1, input.sessionId)
+  const prepared = await storage.queries.readPreparedRetryTarget?.({ ...input, prepared: preparedView })
+  if (prepared !== undefined) return prepared
+  return input.failedAssistantMessageId
+    ? storage.queries.readRetryTarget({ sessionId: input.sessionId, failedAssistantMessageId: input.failedAssistantMessageId })
+    : storage.queries.readLatestRetryTarget(input.sessionId)
 }
 
 export async function readChatMessageAfterPreparation(

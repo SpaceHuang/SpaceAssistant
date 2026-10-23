@@ -242,10 +242,12 @@ describe('chat:get-messages projection preparation', () => {
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure') }),
-      queries: { ...base.queries, readRetryTarget: vi.fn((input: { sessionId: string; failedAssistantMessageId: string }) => {
-        events.push('select')
-        return base.queries.readRetryTarget(input)
-      }) },
+      queries: { ...base.queries,
+        readPreparedRetryTarget: vi.fn(async () => { events.push('prepared-select'); return undefined }),
+        readRetryTarget: vi.fn((input: { sessionId: string; failedAssistantMessageId: string }) => {
+          events.push('select')
+          return base.queries.readRetryTarget(input)
+        }) },
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
@@ -257,7 +259,7 @@ describe('chat:get-messages projection preparation', () => {
     await expect(Promise.resolve(handlers.get('chat:resolve-retry-context')!(null, {
       sessionId: session.id, failedAssistantMessageId: 'missing'
     }))).resolves.toBeNull()
-    expect(events).toEqual(['ensure', 'select'])
+    expect(events).toEqual(['ensure', 'prepared-select', 'select'])
     expect(sessionStorage.ensureChatBodyV1).toHaveBeenCalledWith({ sessionId: session.id })
   })
 })

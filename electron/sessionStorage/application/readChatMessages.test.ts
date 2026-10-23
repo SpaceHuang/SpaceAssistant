@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { prepareChatBodiesForSessions, readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readExportPageAfterPreparation } from './readChatMessages'
+import { prepareChatBodiesForSessions, readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readExportPageAfterPreparation, readRetryTargetAfterPreparation } from './readChatMessages'
 
 describe('readChatMessagesAfterPreparation', () => {
   it('prepares the chat body view and reruns the complete synchronous selection', async () => {
@@ -178,5 +178,26 @@ describe('readExportPageAfterPreparation', () => {
     }, { sessionId: 'export-session', fromSequence: 22, pageSize: 25 })
     expect(result).toBe(page)
     expect(events).toEqual(['ensure', 'prepared:22:25:prepared'])
+  })
+})
+
+describe('readRetryTargetAfterPreparation', () => {
+  it('uses the prepared retry target and falls back after a selection miss', async () => {
+    const events: string[] = []
+    const target = { failedAssistant: { message: { id: 'failed' } }, currentUser: { message: { id: 'user' } }, excludeMessageIds: [] }
+    const preparedResult = await readRetryTargetAfterPreparation({
+      ensureChatBodyV1: async () => { events.push('ensure'); return 'prepared' },
+      queries: {
+        readPreparedRetryTarget: async (input) => { events.push(`prepared:${input.failedAssistantMessageId}:${input.prepared}`); return target as never },
+        readRetryTarget: () => { events.push('authority'); return null },
+        readLatestRetryTarget: () => null
+      }
+    }, { sessionId: 'retry-session', failedAssistantMessageId: 'failed' })
+    expect(preparedResult).toBe(target)
+    expect(events).toEqual(['ensure', 'prepared:failed:prepared'])
+
+    await expect(readRetryTargetAfterPreparation({ ensureChatBodyV1: async () => undefined,
+      queries: { readPreparedRetryTarget: async () => undefined, readRetryTarget: () => null, readLatestRetryTarget: () => target as never } },
+    { sessionId: 'retry-session' })).resolves.toBe(target)
   })
 })

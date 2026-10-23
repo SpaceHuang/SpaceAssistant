@@ -240,6 +240,51 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         return { ...latest, rows: projectMessageEntriesV1('exportMessageV1', rows) }
       })
     } } : {}),
+    ...(preparedChatBody ? { readPreparedRetryTarget: async ({ sessionId, failedAssistantMessageId, prepared }) => {
+      const view = prepared as PreparedChatBodyView | undefined
+      if (!view) return undefined
+      const select = () => {
+        if (failedAssistantMessageId) {
+          const target = resolveProjectedRetryContext(db, sessionId, failedAssistantMessageId)
+          return target ? attachTurnIdentity(db, sessionId, target) as ReturnType<SessionQueries['readRetryTarget']> : null
+        }
+        const failed = getProjectedMessages(db, sessionId).filter((item) => item.role === 'assistant' && item.status === 'failed')
+        if (failed.length > 1) return null
+        const message = failed.at(-1)
+        const target = message ? resolveProjectedRetryContext(db, sessionId, message.id) : null
+        return target ? attachTurnIdentity(db, sessionId, target) : null
+      }
+      const selected = runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const target = select()
+        if (!target) return { target, canonicalIds: [] as string[] }
+        const messages = [target.failedAssistant.message, target.currentUser.message]
+        return { target, canonicalIds: canonicalBodyMessageIds(db, sessionId, messages) }
+      })
+      if (!selected) return undefined
+      if (!selected.target || selected.canonicalIds.length === 0) return selected.target
+      let bodies: PreparedChatBodySelection
+      try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
+      catch {
+        preparedChatBody.invalidate(view)
+        return undefined
+      }
+      return runInTransaction(getDbConnection(db), () => {
+        if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+        const latest = select()
+        const prior = selected.target!
+        if (!latest || latest.failedAssistant.sequence !== prior.failedAssistant.sequence || latest.currentUser.sequence !== prior.currentUser.sequence ||
+          latest.failedAssistant.message.id !== prior.failedAssistant.message.id || latest.currentUser.message.id !== prior.currentUser.message.id ||
+          latest.failedAssistant.message.role !== prior.failedAssistant.message.role || latest.currentUser.message.role !== prior.currentUser.message.role ||
+          latest.failedAssistant.message.timestamp !== prior.failedAssistant.message.timestamp || latest.currentUser.message.timestamp !== prior.currentUser.message.timestamp ||
+          latest.excludeMessageIds.length !== prior.excludeMessageIds.length || latest.excludeMessageIds.some((id, index) => id !== prior.excludeMessageIds[index]) ||
+          latest.sourceInvocationId !== prior.sourceInvocationId || latest.sourceTurnId !== prior.sourceTurnId) return undefined
+        const messages = overlayPreparedBodies([latest.failedAssistant.message, latest.currentUser.message], selected.canonicalIds, bodies)
+        return { ...latest,
+          failedAssistant: { ...latest.failedAssistant, message: messages[0]! },
+          currentUser: { ...latest.currentUser, message: messages[1]! } }
+      })
+    } } : {}),
     readChatPage: ({ sessionId, beforeSequence, limit }) => {
       const page = getProjectedChatMessagePage(db, sessionId, beforeSequence, limit)
       return { ...page, entries: projectMessageEntriesV1('chatMessageV1', page.entries) }

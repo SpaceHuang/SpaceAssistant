@@ -41,7 +41,7 @@ describe('SQLite projection build task composition', () => {
       const session = createSession(db, { name: 'projection chat body', model: 'test' })
       const processGeneration = advanceProcessGeneration(getDbConnection(db))
       appendMessage(db, { id: 'projection-chat-body-user', sessionId: session.id, role: 'user', content: 'same body', timestamp: 11, status: 'sent' })
-      appendMessage(db, { id: 'projection-chat-body-assistant', sessionId: session.id, role: 'assistant', content: 'assistant body', timestamp: 12, status: 'completed' })
+      appendMessage(db, { id: 'projection-chat-body-assistant', sessionId: session.id, role: 'assistant', content: 'assistant body', timestamp: 12, status: 'failed' })
       const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'projection-chat-body-queued', content: 'queued body' })
       const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id)
       await history.appendBatch([
@@ -56,8 +56,11 @@ describe('SQLite projection build task composition', () => {
           eventId: 'projection-chat-body-terminal', idempotencyKey: 'projection-chat-body-terminal', kind: 'invocation-completed',
           payload: { status: 'completed' } },
       ], 0)
+      createPersistedTurn(db, { turnId: 'projection-chat-body-failed-turn', requestId: 'projection-chat-body-failed-invocation',
+        sessionId: session.id, userMessageId: 'projection-chat-body-user', assistantMessageId: 'projection-chat-body-assistant',
+        contextBoundarySequence: 0, state: 'failed', startToken: 'projection-chat-body-failed-token' })
       getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
-      getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run('projection-chat-body-user')
+      getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id IN (?,?)").run('projection-chat-body-user', 'projection-chat-body-assistant')
       const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
@@ -112,6 +115,12 @@ describe('SQLite projection build task composition', () => {
         const authorityExport = host.storage.queries.readExportPage({ sessionId: session.id, fromSequence: 0, pageSize: 50 })
         await expect(readExportPageAfterPreparation(host.storage, { sessionId: session.id, fromSequence: 0, pageSize: 50 }))
           .resolves.toEqual(authorityExport)
+        await expect(host.storage.queries.readPreparedRetryTarget?.({ sessionId: session.id, prepared: ensured }))
+          .resolves.toMatchObject({
+            failedAssistant: { message: { id: 'projection-chat-body-assistant', content: 'assistant body' } },
+            currentUser: { message: { id: 'projection-chat-body-user', content: 'same body' } },
+            sourceInvocationId: 'projection-chat-body-failed-invocation', sourceTurnId: 'projection-chat-body-failed-turn',
+          })
         const authorityCorpus = host.storage.queries.readSearchCorpusPage({ sessionId: session.id, fromSequence: 0, pageSize: 50 })
         expect(authorityCorpus.entries.map(({ message }) => message.id)).toEqual(['projection-chat-body-user', 'projection-chat-body-assistant'])
         const corpusPage = await host.storage.queries.readPreparedSearchCorpusPage?.({ sessionId: session.id, fromSequence: 0, pageSize: 50, prepared: ensured })

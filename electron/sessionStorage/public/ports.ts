@@ -128,6 +128,8 @@ export interface SessionQueries {
   readPreparedSearchCorpusPage?(input: { sessionId: string; fromSequence: number; pageSize?: number; prepared?: PreparedChatBodyView }): Promise<SearchCorpusPage | undefined>
   /** Async export page lookup; undefined means selection must use the existing authority reader. */
   readPreparedExportPage?(input: { sessionId: string; fromSequence: number; pageSize: number; prepared?: PreparedChatBodyView }): Promise<ExportPage | undefined>
+  /** Async retry-context lookup; undefined means selection must use the existing authority reader. */
+  readPreparedRetryTarget?(input: { sessionId: string; failedAssistantMessageId?: string; prepared?: PreparedChatBodyView }): Promise<RetryContextTarget | null | undefined>
   readChatPage(input: { sessionId: string; beforeSequence?: number | null; limit?: number }): ChatMessagePage
   readTurnContext(input: { sessionId: string; boundarySequence?: number; requiredUserMessageId?: string; excludeMessageIds?: string[] }): Message[]
   readApiBaseline(input: { sessionId: string; limit?: number }): ApiContextBaseline
