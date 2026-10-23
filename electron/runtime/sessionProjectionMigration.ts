@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { isDeepStrictEqual } from 'node:util'
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
@@ -345,15 +344,6 @@ async function processItem(db: AppDatabase, runId: string, item: ItemRow, now: n
           // Canonical-backed readers replay History and validate message skeletons. Recovered runs
           // must not wait for the retired transcript cache to be recreated.
           if (writeMode?.write_mode === 'canonical') return { kind: 'migrated' as const }
-          const history = new SqliteAgentHistory(conn)
-          const cache = history.readCanonicalSessionTranscriptWithCache(item.session_id, 'transcript')
-          const persistedCache = cache.kind === 'matched'
-            ? history.readCanonicalSessionCache({ ...cache.watermark, cacheKey: 'transcript' })
-            : undefined
-          const persistedValue = persistedCache?.kind === 'hit' ? JSON.parse(persistedCache.value) as unknown : undefined
-          if (cache.kind !== 'matched' || persistedCache?.kind !== 'hit' || !isDeepStrictEqual(persistedValue, cache.messages)) {
-            return { kind: 'retry' as const, reason: 'projection-cache-not-durable-or-current' }
-          }
           return hasCurrentProjectionEligibility(db, item.session_id)
             ? { kind: 'migrated' as const }
             : { kind: 'retry' as const, reason: 'projection-eligibility-not-durable-or-current' }

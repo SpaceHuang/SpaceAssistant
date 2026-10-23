@@ -48,6 +48,47 @@ async function appendSessionContext(db: ReturnType<typeof createMemoryAppDb>, se
 }
 
 describe('session projection migration worker', () => {
+  it('recognizes a current parity proof without requiring the legacy transcript cache', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = await addEligibleSession(db, 'legacy-owner-with-parity-proof')
+      expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
+      expect(hasCurrentProjectionEligibility(db, session.id)).toBe(true)
+      const conn = getDbConnection(db)
+      conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+
+      const inventory = buildSessionProjectionMigrationInventory(db)
+
+      expect(inventory.sessions).toContainEqual(expect.objectContaining({ sessionId: session.id, disposition: 'projection_migrated' }))
+    } finally { db.close() }
+  })
+
+  it('certifies a current parity proof when the retired transcript cache cannot be rebuilt', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = await addEligibleSession(db, 'legacy-owner-cache-retired')
+      const projection = readSessionTranscriptProjection(db, session.id)
+      expect(projection.source).toBe('canonical:L2')
+      expect(hasCurrentProjectionEligibility(db, session.id)).toBe(true)
+      const conn = getDbConnection(db)
+      conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+      const inventory = buildSessionProjectionMigrationInventory(db)
+      const run = startSessionProjectionMigration(db, inventory, { runId: 'legacy-owner-cache-retired', now: 1 })
+      conn.prepare("UPDATE session_projection_migration_items SET status='pending' WHERE run_id=? AND session_id=?")
+        .run(run.runId, session.id)
+      vi.spyOn(projectionModule, 'readSessionTranscriptProjection').mockReturnValue(projection)
+
+      const result = await runSessionProjectionMigrationBatch(db, run.runId, { batchSize: 1, rateLimitMs: 0, now: 2 })
+
+      expect(result).toMatchObject({ status: 'completed', migratedCount: 1, outcomes: [expect.objectContaining({ status: 'migrated' })] })
+      expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
+        .toBeUndefined()
+    } finally {
+      vi.restoreAllMocks()
+      db.close()
+    }
+  })
+
   it('treats canonical-backed-only History as the migration owner without requiring the legacy transcript cache', async () => {
     const db = createMemoryAppDb()
     try {

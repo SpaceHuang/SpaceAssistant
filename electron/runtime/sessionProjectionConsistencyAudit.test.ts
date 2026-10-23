@@ -70,7 +70,7 @@ describe('session projection consistency audit', () => {
     db.close()
   })
 
-  it('compares cache event identity against its live History anchor', async () => {
+  it('does not treat retired cache watermark drift as a History migration difference', async () => {
     const db = createMemoryAppDb()
     const session = await addEligibleSession(db, 'audit-event-anchor')
     await completeMigration(db, 'audit-event-anchor-run')
@@ -79,11 +79,11 @@ describe('session projection consistency audit', () => {
 
     const report = auditSessionProjectionMigration(db, 'audit-event-anchor-run')
 
-    expect(report).toMatchObject({ complete: false, differenceCount: 1 })
+    expect(report).toMatchObject({ complete: true, consistentCount: 1, differenceCount: 0 })
     expect(report.sessions).toEqual([expect.objectContaining({
       sessionId: session.id,
-      status: 'difference',
-      issues: expect.arrayContaining(['cache-watermark-invalid', 'cache-watermark-mismatch'])
+      status: 'consistent',
+      issues: []
     })])
     db.close()
   })
@@ -105,7 +105,7 @@ describe('session projection consistency audit', () => {
     db.close()
   })
 
-  it('reports cache content drift even when the stored checksum is internally valid', async () => {
+  it('does not treat retired cache content drift as a History migration difference', async () => {
     const db = createMemoryAppDb()
     const session = await addEligibleSession(db, 'audit-damaged-cache')
     await completeMigration(db, 'audit-damaged-run')
@@ -116,8 +116,21 @@ describe('session projection consistency audit', () => {
 
     const report = auditSessionProjectionMigration(db, 'audit-damaged-run')
 
-    expect(report).toMatchObject({ complete: false, differenceCount: 1 })
-    expect(report.sessions).toEqual([expect.objectContaining({ sessionId: session.id, status: 'difference', issues: ['cache-content-mismatch'] })])
+    expect(report).toMatchObject({ complete: true, consistentCount: 1, differenceCount: 0 })
+    expect(report.sessions).toEqual([expect.objectContaining({ sessionId: session.id, status: 'consistent', issues: [] })])
+    db.close()
+  })
+
+  it('keeps migration audit consistent when the retired cache row is absent', async () => {
+    const db = createMemoryAppDb()
+    const session = await addEligibleSession(db, 'audit-missing-cache')
+    await completeMigration(db, 'audit-missing-cache-run')
+    getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+
+    const report = auditSessionProjectionMigration(db, 'audit-missing-cache-run')
+
+    expect(report).toMatchObject({ complete: true, consistentCount: 1, differenceCount: 0 })
+    expect(report.sessions).toEqual([expect.objectContaining({ sessionId: session.id, status: 'consistent', issues: [] })])
     db.close()
   })
 
@@ -157,7 +170,7 @@ describe('session projection consistency audit', () => {
     db.close()
   })
 
-  it('finds projection cache records orphaned after a session disappears', async () => {
+  it('reports a session missing from the census without treating its retired cache as authoritative', async () => {
     const db = createMemoryAppDb()
     const session = await addEligibleSession(db, 'audit-orphan-cache')
     await completeMigration(db, 'audit-orphan-run')
@@ -169,7 +182,7 @@ describe('session projection consistency audit', () => {
     expect(report.sessions).toEqual([expect.objectContaining({
       sessionId: session.id,
       status: 'difference',
-      issues: expect.arrayContaining(['session-missing-without-deleted-disposition', 'orphan-projection-cache'])
+      issues: ['session-missing-without-deleted-disposition']
     })])
     db.close()
   })

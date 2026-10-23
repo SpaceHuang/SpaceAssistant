@@ -210,24 +210,12 @@ function auditOneSession(
     issues.push('source-spill-invalid')
   }
 
-  const canonicalWriteOwner = cutover?.write_mode === 'canonical'
-  const cache = canonicalWriteOwner ? undefined : history.readCanonicalSessionCache({ ...canonical, cacheKey: 'transcript' })
-  if (!canonicalWriteOwner && cache?.kind !== 'hit') issues.push(`cache-${cache?.reason ?? 'missing'}`)
-  const cacheRow = canonicalWriteOwner ? undefined : conn.prepare(`SELECT session_generation,session_seq,commit_order,watermark_event_id,watermark_invocation_id,event_count
+  const cacheRow = conn.prepare(`SELECT session_generation,session_seq,commit_order,watermark_event_id,watermark_invocation_id,event_count
     FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'`).get(session.id) as CacheRow | undefined
   const cacheWatermark = cacheRow ? {
     generation: cacheRow.session_generation, sessionSeq: cacheRow.session_seq, commitOrder: cacheRow.commit_order,
     eventId: cacheRow.watermark_event_id, invocationId: cacheRow.watermark_invocation_id, eventCount: cacheRow.event_count
   } : undefined
-  if (cacheRow && !isDeepStrictEqual(cacheWatermark, canonicalWatermark)) issues.push('cache-watermark-mismatch')
-  if (!canonicalWriteOwner && cache?.kind === 'hit') {
-    try {
-      const cachedMessages = JSON.parse(cache.value) as unknown
-      if (!isDeepStrictEqual(cachedMessages, canonical.messages)) issues.push('cache-content-mismatch')
-    } catch {
-      issues.push('cache-content-invalid')
-    }
-  }
   return {
     sessionId: session.id, status: issues.length === 0 ? 'consistent' : 'difference',
     sourceDisposition: item.source_disposition, migrationStatus: item.status, generation: session.generation,
@@ -333,25 +321,6 @@ export function auditSessionProjectionMigration(
             migrationStatus: item.status, legacyComparison: 'not-compared', issues: [] }
           : { sessionId: item.session_id, status: 'difference', sourceDisposition: item.source_disposition,
             migrationStatus: item.status, legacyComparison: 'not-compared', issues: ['session-missing-without-deleted-disposition'] })
-      }
-    }
-    const liveSessionIds = new Set(liveSessions.map(({ id }) => id))
-    const cacheRows = conn.prepare(`SELECT session_id,cache_key FROM canonical_session_projection_cache ORDER BY session_id,cache_key`)
-      .all() as Array<{ session_id: string; cache_key: string }>
-    for (const cache of cacheRows) {
-      // The snapshot-fold row is a validated internal acceleration index paired with the
-      // transcript cache. auditOneSession reads the canonical transcript through History,
-      // which validates the fold checkpoint and falls back to replay when it is unusable.
-      const cacheIssue = !liveSessionIds.has(cache.session_id) ? 'orphan-projection-cache'
-        : cache.cache_key !== 'transcript' && cache.cache_key !== 'transcript:snapshot-fold-v1'
-          ? `unsupported-cache-key-${cache.cache_key}` : undefined
-      if (!cacheIssue) continue
-      const index = results.findIndex(({ sessionId }) => sessionId === cache.session_id)
-      if (index >= 0) {
-        const existing = results[index]!
-        results[index] = { ...existing, status: 'difference', issues: [...existing.issues, cacheIssue] }
-      } else {
-        results.push({ sessionId: cache.session_id, status: 'difference', legacyComparison: 'not-compared', issues: [cacheIssue] })
       }
     }
     const counts = conn.prepare(`SELECT

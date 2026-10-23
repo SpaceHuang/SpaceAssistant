@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from 'node:util'
 import { createHash } from 'node:crypto'
 import { getMessages } from '../database/operations'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
@@ -72,7 +71,6 @@ function unavailableReason(result: CanonicalSessionTranscriptRead): string | und
 
 function hasCurrentProjectionOwner(
   db: AppDatabase,
-  history: SqliteAgentHistory,
   transcript: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }>
 ): boolean {
   const writeMode = getDbConnection(db).prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
@@ -80,14 +78,7 @@ function hasCurrentProjectionOwner(
   // A canonical writer is already owned by History; the caller validated its exact message
   // skeletons above. The retired legacy transcript cache is not a completion requirement.
   if (writeMode?.write_mode === 'canonical') return true
-  if (!hasCurrentProjectionEligibility(db, transcript.sessionId)) return false
-  const cache = history.readCanonicalSessionCache({ ...transcript, cacheKey: 'transcript' })
-  if (cache.kind !== 'hit') return false
-  try {
-    return isDeepStrictEqual(JSON.parse(cache.value), transcript.messages)
-  } catch {
-    return false
-  }
+  return hasCurrentProjectionEligibility(db, transcript.sessionId)
 }
 
 /**
@@ -207,7 +198,7 @@ export function buildSessionProjectionMigrationInventory(
       }
 
       if (transcript.kind !== 'matched') throw new SessionProjectionMigrationInventoryError('canonical transcript was not matched', session.id)
-      const disposition = hasCurrentProjectionOwner(db, history, transcript) ? 'projection_migrated' : 'projection_eligible'
+      const disposition = hasCurrentProjectionOwner(db, transcript) ? 'projection_migrated' : 'projection_eligible'
       entries.push({ sessionId: session.id, sessionGeneration: session.generation, disposition })
     }
 
