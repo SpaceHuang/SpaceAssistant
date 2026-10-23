@@ -51,7 +51,9 @@ export function materializeProjectionFinalViewInWorker(input: Readonly<{
   output: ProjectionBuildOutputManifestRef
   identity: ProjectionOutputIdentity
   historyWatermarkJson: unknown
+  signal?: AbortSignal
 }>): Promise<ProjectionFinalViewPayload> {
+  if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_FINAL_VIEW_WORKER_ABORTED'))
   const workerPath = resolveWorkerPath()
   if (!workerPath) return Promise.reject(new Error('PROJECTION_FINAL_VIEW_WORKER_ENTRY_UNAVAILABLE'))
   let worker: Worker
@@ -65,11 +67,22 @@ export function materializeProjectionFinalViewInWorker(input: Readonly<{
   const requestId = randomUUID()
   return new Promise((resolve, reject) => {
     let settled = false
-    const timer = setTimeout(() => { void worker.terminate(); finish(new Error('PROJECTION_FINAL_VIEW_WORKER_TIMEOUT')) }, MAX_MATERIALIZATION_MS)
+    let abortRequested = false
+    const timer = setTimeout(() => {
+      void worker.terminate().then(() => finish(new Error('PROJECTION_FINAL_VIEW_WORKER_TIMEOUT')),
+        () => finish(new Error('PROJECTION_FINAL_VIEW_WORKER_TERMINATION_FAILED')))
+    }, MAX_MATERIALIZATION_MS)
+    const onAbort = () => {
+      abortRequested = true
+      void worker.terminate().then(() => finish(new Error('PROJECTION_FINAL_VIEW_WORKER_ABORTED')),
+        () => finish(new Error('PROJECTION_FINAL_VIEW_WORKER_ABORT_FAILED')))
+    }
+    input.signal?.addEventListener('abort', onAbort, { once: true })
     const finish = (error?: Error, result?: ProjectionFinalViewPayload) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      input.signal?.removeEventListener('abort', onAbort)
       error ? reject(error) : resolve(result!)
     }
     worker.once('message', (message: { requestId?: string; error?: string; result?: ProjectionFinalViewPayload }) => {
@@ -87,7 +100,7 @@ export function materializeProjectionFinalViewInWorker(input: Readonly<{
       finish(undefined, result)
     })
     worker.once('error', (error) => finish(error))
-    worker.once('exit', (code) => { if (!settled) finish(new Error(`PROJECTION_FINAL_VIEW_WORKER_EXIT:${code}`)) })
+    worker.once('exit', (code) => { if (!settled) finish(new Error(abortRequested ? 'PROJECTION_FINAL_VIEW_WORKER_ABORTED' : `PROJECTION_FINAL_VIEW_WORKER_EXIT:${code}`)) })
     try { worker.postMessage({ requestId, root: input.root, output: input.output, identity: input.identity,
       payloadIdentity: { formatVersion: 1, historyWatermarkJson: input.historyWatermarkJson } }) }
     catch (error) { finish(error instanceof Error ? error : new Error('PROJECTION_FINAL_VIEW_WORKER_POST_FAILED')) }

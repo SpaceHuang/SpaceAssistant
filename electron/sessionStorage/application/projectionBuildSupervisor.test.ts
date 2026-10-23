@@ -12,6 +12,48 @@ import type { ProjectionHistoryChunkReaderPort, ProjectionHistoryReducerPort } f
 
 describe('projection build supervisor', () => {
   afterEach(() => { vi.useRealTimers() })
+  it('releases and reacquires its lease after an over-budget slice while preserving the checkpoint', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'projection cooperative slice', model: 'test' })
+      const store = createSqliteProjectionStateStore(db)
+      const service = createProjectionService(store, { processGeneration: () => 1, connectionEpoch: () => 1,
+        createToken: (() => { let token = 0; return () => `cooperative-${++token}` })(), now: () => 1 })
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
+      service.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })
+      const work = { sessionId: session.id, sessionGeneration: session.generation, scopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }
+      let reads = 0
+      let clock = 0
+      const slices: Array<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean }> = []
+      const stored = new Map<string, string>()
+      const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => store.listDueWork(1), dbPath: db.filePath,
+        readChunk: async (permit, input) => {
+          reads += 1
+          if (input.afterSessionSequence > 0) return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+          const event = { invocationId: 'cooperative-inv', sequence: 1, eventId: 'cooperative-event', idempotencyKey: 'cooperative-key',
+            turnId: 'cooperative-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+          return { kind: 'chunk', permit, afterSessionSequence: 0, nextSessionSequence: 1, events: [event], messageFacts: [],
+            byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: true }
+        },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', resetOutput: false,
+          outputOperations: [{ type: 'append', messages: [{ id: 'cooperative-message', role: 'user', content: 'kept' }] }] }),
+          finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async (payload) => { const locator = `cooperative-${stored.size}.blob`; stored.set(locator, payload)
+          return { locator, byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined } },
+          readVerified: async ({ locator }) => stored.get(locator)! },
+        limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, sliceBudgetMs: 0,
+        monotonicNow: () => { const value = clock; clock += 10; return value }, onSlice: (slice) => slices.push(slice), now: () => 1 })
+      const handle = supervisor.start()
+      const result = await supervisor.prepare(work)
+      expect(result.kind).toBe('published')
+      expect(reads).toBe(2)
+      expect(slices[0]).toMatchObject({ nextSequence: 1, yielded: true })
+      expect(service.get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
+      handle.stop()
+      await handle.quiesce()
+    } finally { db.close() }
+  })
+
   it('sleeps without due work and wakes only when explicitly requested', async () => {
     const db = createMemoryAppDb()
     try {

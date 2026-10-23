@@ -58,4 +58,24 @@ describe('projection final view worker client', () => {
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(result.stagedBlob!.payloadDigest)
     expect(JSON.parse(bytes.toString('utf8')).messages[0].content).toHaveLength(300 * 1024)
   })
+
+  it('terminates an active final view worker before settling an aborted build', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'projection-final-view-abort-'))
+    roots.push(root)
+    const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 3 })
+    const identity = { sessionId: 'worker-abort-session', sessionGeneration: 'worker-generation', scopeKey,
+      specVersion: 3, sourceIdentityJson: JSON.stringify({ historyWatermark: { sessionSeq: 1 } }) }
+    const locator = 'projection-123e4567-e89b-12d3-a456-426614174002.blob'
+    const blob = JSON.stringify({ formatVersion: 2, ...identity, fromSequence: 0, nextSequence: 1, events: [],
+      outputManifest: { formatVersion: 1, parent: null, operations: [{ type: 'append', messages: [
+        { id: 'abort-view-output', role: 'user', content: 'x'.repeat(32 * 1024) }
+      ] }] } })
+    await fs.writeFile(path.join(root, locator), blob, { mode: 0o600 })
+    const output = { locator, byteLength: Buffer.byteLength(blob), payloadDigest: createHash('sha256').update(blob).digest('hex') }
+    const controller = new AbortController()
+    const work = materializeProjectionFinalViewInWorker({ root, output, identity, historyWatermarkJson: null, signal: controller.signal })
+    controller.abort()
+
+    await expect(work).rejects.toThrow('PROJECTION_FINAL_VIEW_WORKER_ABORTED')
+  })
 })

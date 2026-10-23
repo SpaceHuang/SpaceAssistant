@@ -20,6 +20,10 @@ export type ProjectionBuildSupervisorOptions = Readonly<{
   blobs: ProjectionBuildBlobPort
   limits: ProjectionBuildLimits
   maxChunksPerSlice: number
+  /** Cooperative wall-clock budget; one synchronous chunk cannot be preempted, so it is measured then yielded. */
+  sliceBudgetMs?: number
+  monotonicNow?(): number
+  onSlice?(input: Readonly<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean }>): void
   now(): number
   retryAfter?(): number
   onResult?(item: ProjectionBuildWorkItem, result: Awaited<ReturnType<typeof runProjectionBuildSlice>>): void
@@ -194,6 +198,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         }
         claimFailures.delete(key)
         while (!stopped && !controller.signal.aborted) {
+          const sliceStartedAt = options.monotonicNow?.() ?? performance.now()
           try {
             const result = await runProjectionBuildSlice({ service: options.service, lease, specVersion: item.specVersion,
               dbPath: options.dbPath, readChunk: options.readChunk, historyReducer: options.historyReducer,
@@ -201,6 +206,12 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
               blobs: options.blobs, limits: options.limits, maxChunksPerSlice: options.maxChunksPerSlice,
               now: options.now, retryAfter: options.retryAfter, signal: controller.signal })
             try { options.onResult?.(item, result) } catch { /* Observability must not own the worker lifecycle. */ }
+            const sliceDurationMs = Math.max(0, (options.monotonicNow?.() ?? performance.now()) - sliceStartedAt)
+            const nextSequence = result.kind === 'checkpointed' || result.kind === 'published' ? result.checkpoint.nextSequence : null
+            const sliceBudgetMs = options.sliceBudgetMs ?? Number.POSITIVE_INFINITY
+            const yielded = result.kind === 'checkpointed' && sliceDurationMs >= sliceBudgetMs
+            try { options.onSlice?.({ durationMs: sliceDurationMs, nextSequence, outcome: result.kind, yielded }) }
+            catch { /* Metrics are observational and cannot own projection progress. */ }
             if (result.kind === 'publish-unknown') {
               scheduleRetry(item, lease)
               requests.get(key)?.resolve(result)
@@ -210,6 +221,16 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             if (result.kind !== 'checkpointed') {
               requests.get(key)?.resolve(result)
               requests.delete(key)
+              return true
+            }
+            if (yielded) {
+              if (!options.service.releaseLease(lease)) {
+                requests.get(key)?.resolve({ kind: 'lease-lost' })
+                requests.delete(key)
+                return true
+              }
+              retryWorkItems.set(key, item)
+              await new Promise<void>((resolve) => setImmediate(resolve))
               return true
             }
           } catch {

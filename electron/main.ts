@@ -576,6 +576,10 @@ app.whenReady().then(async () => {
       createSqliteProjectionBuildTask({ db, dbPath, blobRoot: path.join(app.getPath('userData'), 'session-projections'),
         processGeneration: () => processGeneration, connectionEpoch: () => getDbConnectionEpoch(db), now: Date.now,
         onFailure: (code) => console.warn(`[storage] ${code}`),
+        onSlice: (slice) => logAgentEvent('info', 'session.projection.build.slice', {
+          durationMs: Math.round(slice.durationMs * 100) / 100, nextSequence: slice.nextSequence,
+          outcome: slice.outcome, yielded: slice.yielded,
+        }),
         onResult: (_item, result) => {
           if (result.kind !== 'checkpointed' && result.kind !== 'published') {
             console.warn(`[storage] projection build ${result.kind}`)

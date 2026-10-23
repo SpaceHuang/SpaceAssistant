@@ -28,4 +28,12 @@ describe('projection History reducer worker client', () => {
     expect(result.outputOperations).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'replace' })]))
     expect(result.finalizedOutputOperations).toEqual(expect.any(Array))
   })
+
+  it('terminates the worker and waits for exit when the maintenance signal aborts', async () => {
+    const controller = new AbortController()
+    const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 3 })
+    const work = reduceProjectionHistoryChunkInWorker('{}', [], [], scopeKey, false, controller.signal)
+    controller.abort()
+    await expect(work).rejects.toThrow('PROJECTION_REDUCER_WORKER_ABORTED')
+  })
 })

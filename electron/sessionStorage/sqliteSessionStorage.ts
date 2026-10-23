@@ -275,6 +275,7 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
   now(): number
   limits?: ProjectionBuildSupervisorOptions['limits']
   maxChunksPerSlice?: number
+  onSlice?(input: Readonly<{ durationMs: number; nextSequence: number | null; outcome: string; yielded: boolean }>): void
   onResult?: ProjectionBuildSupervisorOptions['onResult']
   onFailure?: ProjectionBuildSupervisorOptions['onFailure']
 }>): LifecycleTaskRegistration {
@@ -284,9 +285,9 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
   const blobStore = createSessionProjectionBlobStore(input.blobRoot)
   const blobs = Object.freeze({ ...blobStore,
     materializeFinalView: (output: Parameters<NonNullable<ProjectionBuildSupervisorOptions['blobs']['materializeFinalView']>>[0],
-      identity: Parameters<NonNullable<ProjectionBuildSupervisorOptions['blobs']['materializeFinalView']>>[1], historyWatermarkJson: unknown) =>
+      identity: Parameters<NonNullable<ProjectionBuildSupervisorOptions['blobs']['materializeFinalView']>>[1], historyWatermarkJson: unknown, signal?: AbortSignal) =>
       blobStore.withWorkerStaging(async (promote) => {
-        const result = await materializeProjectionFinalViewInWorker({ root: blobStore.root, output, identity, historyWatermarkJson })
+        const result = await materializeProjectionFinalViewInWorker({ root: blobStore.root, output, identity, historyWatermarkJson, signal })
         if (!result.stagedBlob) return result
         const blob = await promote(result.stagedBlob)
         return { byteLength: result.byteLength, payloadDigest: result.payloadDigest, blob }
@@ -319,5 +320,6 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
     readChunk: readProjectionHistoryChunkInWorker, historyReducer: createProjectionScopeHistoryReducer(),
     reduceChunk: reduceProjectionHistoryChunkInWorker,
     blobs, limits: input.limits ?? { maxRows: 200, maxBytes: 256 * 1024 },
-    maxChunksPerSlice: input.maxChunksPerSlice ?? 4, now: input.now, onResult: input.onResult, onFailure: input.onFailure })
+    maxChunksPerSlice: input.maxChunksPerSlice ?? 4, sliceBudgetMs: 8, now: input.now, onResult: input.onResult,
+    onSlice: input.onSlice, onFailure: input.onFailure })
 }

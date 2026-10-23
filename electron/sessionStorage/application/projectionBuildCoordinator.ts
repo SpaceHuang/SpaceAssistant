@@ -11,7 +11,7 @@ export type ProjectionBuildBlobPort = Readonly<{
   writeMany?(payloads: readonly string[]): Promise<readonly Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }> []>
   readVerified?(input: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>): Promise<string>
   materializeFinalView?(output: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>,
-    identity: ProjectionOutputIdentity, historyWatermarkJson: unknown): Promise<Readonly<{
+    identity: ProjectionOutputIdentity, historyWatermarkJson: unknown, signal?: AbortSignal): Promise<Readonly<{
       payload?: string
       blob?: Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }>
       byteLength: number
@@ -44,7 +44,8 @@ export type ProjectionHistoryChunkReducerPort = (
   events: readonly ProjectionHistoryChunkEvent[],
   messageFacts: readonly ProjectionMessageFact[],
   scopeKey: string,
-  finalize: boolean
+  finalize: boolean,
+  signal?: AbortSignal
 ) => Promise<ProjectionHistoryChunkReduction>
 
 export type ProjectionBuildSliceResult =
@@ -165,7 +166,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
         const historyWatermarkJson = (JSON.parse(lease.sourceIdentityJson) as { historyWatermark?: unknown }).historyWatermark ?? null
         if (input.blobs.materializeFinalView) {
           try {
-            const materialized = await input.blobs.materializeFinalView(output, identity, historyWatermarkJson)
+            const materialized = await input.blobs.materializeFinalView(output, identity, historyWatermarkJson, input.signal)
             payload = materialized.payload ?? ''
             payloadByteLength = materialized.byteLength
             payloadDigest = materialized.payloadDigest
@@ -274,7 +275,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
     let folded: ProjectionHistoryChunkReduction
     try {
       folded = input.reduceChunk
-        ? await input.reduceChunk(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey, !result.hasMore)
+        ? await input.reduceChunk(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey, !result.hasMore, input.signal)
         : input.historyReducer.fold(checkpoint.historyReducerStateJson, result.events, result.messageFacts, lease.scopeKey)
     } catch (error) {
       rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'HISTORY_REDUCER_REJECTED_CHUNK', input.now, input.retryAfter)

@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { projectAgentLogFields } from './agentLogProjection'
 
 describe('projectAgentLogFields', () => {
+  it('retains bounded projection slice metrics without scope or payload data', () => {
+    expect(projectAgentLogFields('session.projection.build.slice', {
+      durationMs: 9.2, nextSequence: 400, outcome: 'checkpointed', yielded: true,
+      scopeKey: 'private-scope', payload: 'private-body'
+    })).toEqual({ durationMs: 9.2, nextSequence: 400, outcome: 'checkpointed', yielded: true })
+  })
+
   it('retains only safe per-turn tool execution counts', () => {
     const projected = projectAgentLogFields('tools.execution_summary', {
       requestId: 'request-1', turnId: 'turn-1', proposalCount: 4, executorEntryCount: 1,

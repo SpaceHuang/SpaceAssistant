@@ -43,7 +43,8 @@ anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(
 
 export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducerPort =
   (stateJson: string, events: readonly ProjectionHistoryChunkEvent[], messageFacts: readonly ProjectionMessageFact[],
-    scopeKey: string, finalize: boolean): Promise<ProjectionHistoryChunkReduction> => {
+    scopeKey: string, finalize: boolean, signal?: AbortSignal): Promise<ProjectionHistoryChunkReduction> => {
+    if (signal?.aborted) return Promise.reject(new Error('PROJECTION_REDUCER_WORKER_ABORTED'))
     const workerPath = resolveWorkerPath()
     if (!workerPath) return Promise.reject(new Error('PROJECTION_REDUCER_WORKER_ENTRY_UNAVAILABLE'))
     let worker: Worker
@@ -57,11 +58,22 @@ export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducer
     const requestId = randomUUID()
     return new Promise((resolve, reject) => {
       let settled = false
-      const timer = setTimeout(() => { void worker.terminate(); finish(new Error('PROJECTION_REDUCER_WORKER_TIMEOUT')) }, MAX_REDUCER_WORKER_MS)
+      let abortRequested = false
+      const timer = setTimeout(() => {
+        void worker.terminate().then(() => finish(new Error('PROJECTION_REDUCER_WORKER_TIMEOUT')),
+          () => finish(new Error('PROJECTION_REDUCER_WORKER_TERMINATION_FAILED')))
+      }, MAX_REDUCER_WORKER_MS)
+      const onAbort = () => {
+        abortRequested = true
+        void worker.terminate().then(() => finish(new Error('PROJECTION_REDUCER_WORKER_ABORTED')),
+          () => finish(new Error('PROJECTION_REDUCER_WORKER_ABORT_FAILED')))
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
       const finish = (error?: Error, result?: ProjectionHistoryChunkReduction) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
         error ? reject(error) : resolve(result!)
       }
       worker.once('message', (message: { requestId?: string; error?: string; result?: ProjectionHistoryChunkReduction }) => {
@@ -77,7 +89,7 @@ export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducer
       })
       worker.once('error', (error) => finish(error))
       worker.once('exit', (code) => {
-        if (!settled) finish(new Error(`PROJECTION_REDUCER_WORKER_EXIT:${code}`))
+        if (!settled) finish(new Error(abortRequested ? 'PROJECTION_REDUCER_WORKER_ABORTED' : `PROJECTION_REDUCER_WORKER_EXIT:${code}`))
       })
       try { worker.postMessage({ requestId, stateJson, events, messageFacts, scopeKey, finalize }) }
       catch (error) { finish(error instanceof Error ? error : new Error('PROJECTION_REDUCER_WORKER_POST_FAILED')) }

@@ -11,6 +11,7 @@ export type AgentLogEventName =
   | 'session.history.recovery'
   | 'session.history.repair.failed'
   | 'session.transcript.read'
+  | 'session.projection.build.slice'
   | 'session.transcript.reconciliation'
   | 'eventloop.delay'
   | 'session.transcript.revalidation'
