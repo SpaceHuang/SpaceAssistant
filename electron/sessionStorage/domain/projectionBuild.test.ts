@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { acceptProjectionBuildChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint, parseProjectionBuildCheckpoint, takeoverProjectionBuildCheckpoint } from './projectionBuild'
+import { acceptProjectionBuildChunk, attachProjectionPendingHistoryChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint, parseProjectionBuildCheckpoint, takeoverProjectionBuildCheckpoint } from './projectionBuild'
 import type { ProjectionBuildChunkReceipt, ProjectionBuildLimits } from './projectionBuild'
 
 const limits: ProjectionBuildLimits = { maxRows: 2, maxBytes: 64 }
@@ -78,6 +78,24 @@ describe('projection build checkpoint reducer', () => {
     expect(parseProjectionBuildCheckpoint(JSON.stringify({ ...externalized,
       historyReducerStateBlob: { ...ref, sourceIdentityJson: '{"revision":2}' } }))).toBeNull()
     expect(parseProjectionBuildCheckpoint(JSON.stringify({ ...state, historyReducerStateBlob: ref }))).toBeNull()
+  })
+
+  it('persists a source-bound pending chunk at the committed cursor until reducer acceptance', () => {
+    const checkpoint = initial()
+    const pending = { locator: 'projection-00000000-0000-4000-8000-000000000222.blob', byteLength: 70_000,
+      payloadDigest: 'd'.repeat(64), sessionId: checkpoint.sessionId, scopeKey: checkpoint.scopeKey,
+      sourceIdentityJson: checkpoint.sourceIdentityJson, fromSequence: 0, nextSequence: 1, rowCount: 1,
+      sourceBytes: 70_000, hasMore: true }
+    const staged = attachProjectionPendingHistoryChunk(checkpoint, pending)!
+    expect(staged).toMatchObject({ nextSequence: 0, pendingHistoryChunkBlob: pending })
+    expect(parseProjectionBuildCheckpoint(JSON.stringify(staged))).toEqual(staged)
+    expect(attachProjectionPendingHistoryChunk(staged, pending)).toBeNull()
+    expect(parseProjectionBuildCheckpoint(JSON.stringify({ ...staged,
+      pendingHistoryChunkBlob: { ...pending, fromSequence: 1 } }))).toBeNull()
+    expect(parseProjectionBuildCheckpoint(JSON.stringify({ ...staged,
+      pendingHistoryChunkBlob: { ...pending, sourceIdentityJson: '{"source":2}' } }))).toBeNull()
+    const accepted = acceptProjectionBuildChunk(staged, chunk({ fromSequence: 0, nextSequence: 1, rowCount: 1 }), limits)!
+    expect(accepted).toMatchObject({ nextSequence: 1, pendingHistoryChunkBlob: null })
   })
 
   it('persists only a bounded reference to the resumable stable-ID index manifest', () => {

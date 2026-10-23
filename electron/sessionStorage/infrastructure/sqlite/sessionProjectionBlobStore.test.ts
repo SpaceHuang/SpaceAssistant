@@ -7,7 +7,7 @@ import { createSession } from '../../../database/operations'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
-import { acceptProjectionBuildChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint } from '../../domain/projectionBuild'
+import { acceptProjectionBuildChunk, attachProjectionPendingHistoryChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint } from '../../domain/projectionBuild'
 
 const lockState = vi.hoisted(() => ({ failRelease: false }))
 vi.mock('proper-lockfile', async (importOriginal) => {
@@ -207,6 +207,37 @@ describe('session projection derived blob store', () => {
     await expect(fs.stat(path.join(root, orphan.locator))).resolves.toBeTruthy()
     conn.prepare('UPDATE session_projection_state SET build_checkpoint_json=NULL WHERE session_id=? AND scope_key=?').run(session.id, 'scope-a')
     expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 2 })
+  })
+
+  it('retains a staged pending History chunk across GC until the reducer advances its checkpoint', async () => {
+    temp = createTempDatabase('projection-blob-pending-history-')
+    const session = createSession(temp.db, { name: 'pending History chunk checkpoint', model: 'test' })
+    const conn = getDbConnection(temp.db)
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const staged = await blobs.write(JSON.stringify({ events: [{ payloadJson: '{"large":"x"}' }], messageFacts: [] }))
+    const seed = createProjectionBuildCheckpoint({ sessionId: session.id, sessionGeneration: session.generation,
+      scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson: '{"source":1}', processGeneration: 1,
+      rebuildToken: 'pending-history-token', startSequence: 0, historyReducerStateJson: '{}' })
+    const checkpoint = attachProjectionPendingHistoryChunk(seed, { locator: staged.locator, byteLength: staged.byteLength,
+      payloadDigest: staged.payloadDigest, sessionId: session.id, scopeKey: 'scope-a', sourceIdentityJson: '{"source":1}',
+      fromSequence: 0, nextSequence: 1, rowCount: 1, sourceBytes: staged.byteLength, hasMore: true })!
+    conn.prepare("INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,process_generation,rebuild_token,updated_at,build_checkpoint_json) VALUES(?,?,?,'rebuilding',1,'pending-history-token',1,?)")
+      .run(session.id, 'scope-a', session.generation, JSON.stringify(checkpoint))
+    await staged.release()
+
+    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 0 })
+    const output = await blobs.write(JSON.stringify({ formatVersion: 2, sessionId: session.id, scopeKey: 'scope-a',
+      sourceIdentityJson: '{"source":1}', outputManifest: { formatVersion: 1, parent: null, operations: [] } }))
+    const advanced = acceptProjectionBuildChunk(checkpoint, { sessionId: session.id, sessionGeneration: session.generation,
+      scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson: '{"source":1}', processGeneration: 1,
+      rebuildToken: 'pending-history-token', fromSequence: 0, nextSequence: 1, rowCount: 1, byteLength: 1,
+      payloadDigest: output.payloadDigest, blobLocator: output.locator },
+    { maxRows: 1, maxBytes: 1 }, '{}', null, output.byteLength)!
+    conn.prepare('UPDATE session_projection_state SET build_checkpoint_json=? WHERE session_id=? AND scope_key=?')
+      .run(JSON.stringify(advanced), session.id, 'scope-a')
+    await output.release()
+    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 1 })
   })
 
   it('retains the full append chain reachable from a durable checkpoint output manifest root', async () => {

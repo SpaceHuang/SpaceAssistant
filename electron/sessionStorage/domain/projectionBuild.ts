@@ -18,6 +18,8 @@ export type ProjectionBuildLimits = Readonly<{ maxRows: number; maxBytes: number
 export type ProjectionBuildOutputManifestRef = Readonly<{ locator: string; byteLength: number; payloadDigest: string }>
 export type ProjectionStableIdIndexManifestRef = Readonly<{ locator: string; byteLength: number; payloadDigest: string; itemCount: number; sessionId: string; scopeKey: string; sourceIdentityJson: string }>
 export type ProjectionBuildReducerStateManifestRef = Readonly<{ locator: string; byteLength: number; payloadDigest: string; sessionId: string; scopeKey: string; sourceIdentityJson: string }>
+export type ProjectionPendingHistoryChunkManifestRef = Readonly<{ locator: string; byteLength: number; payloadDigest: string; sessionId: string;
+  scopeKey: string; sourceIdentityJson: string; fromSequence: number; nextSequence: number; rowCount: number; sourceBytes: number; hasMore: boolean }>
 
 /** Stable UTF-8 SHA-256 receipt check shared without exposing runtime filesystem or database details. */
 export async function projectionPayloadDigest(payload: string): Promise<string> {
@@ -40,11 +42,12 @@ export type ProjectionBuildCheckpoint = Readonly<{
   processedBytes: number
   historyReducerStateJson: string | null
   historyReducerStateBlob: ProjectionBuildReducerStateManifestRef | null
+  pendingHistoryChunkBlob: ProjectionPendingHistoryChunkManifestRef | null
   outputManifest: ProjectionBuildOutputManifestRef | null
   stableIdIndexManifest: ProjectionStableIdIndexManifestRef | null
 }>
 
-export function createProjectionBuildCheckpoint(input: Omit<ProjectionBuildCheckpoint, 'formatVersion' | 'nextSequence' | 'processedRows' | 'processedBytes' | 'historyReducerStateJson' | 'historyReducerStateBlob' | 'outputManifest' | 'stableIdIndexManifest'> & { startSequence: number; historyReducerStateJson?: string | null }): ProjectionBuildCheckpoint {
+export function createProjectionBuildCheckpoint(input: Omit<ProjectionBuildCheckpoint, 'formatVersion' | 'nextSequence' | 'processedRows' | 'processedBytes' | 'historyReducerStateJson' | 'historyReducerStateBlob' | 'pendingHistoryChunkBlob' | 'outputManifest' | 'stableIdIndexManifest'> & { startSequence: number; historyReducerStateJson?: string | null }): ProjectionBuildCheckpoint {
   if (!input.sessionId || !input.sessionGeneration || !input.scopeKey || !input.sourceIdentityJson ||
     !Number.isSafeInteger(input.specVersion) || input.specVersion < 1 ||
     !Number.isSafeInteger(input.processGeneration) || input.processGeneration < 0 ||
@@ -54,7 +57,7 @@ export function createProjectionBuildCheckpoint(input: Omit<ProjectionBuildCheck
   const { startSequence, ...identity } = input
   return Object.freeze({ formatVersion: 1, ...identity, nextSequence: startSequence, processedRows: 0, processedBytes: 0,
     historyReducerStateJson: input.historyReducerStateJson ?? null, historyReducerStateBlob: null,
-    outputManifest: null, stableIdIndexManifest: null })
+    pendingHistoryChunkBlob: null, outputManifest: null, stableIdIndexManifest: null })
 }
 
 /** Reject malformed or internally inconsistent checkpoint bytes before any resume or takeover. */
@@ -64,6 +67,7 @@ export function parseProjectionBuildCheckpoint(json: string): ProjectionBuildChe
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const checkpoint = value as Partial<ProjectionBuildCheckpoint>
   const historyReducerStateBlob = checkpoint.historyReducerStateBlob ?? null
+  const pendingHistoryChunkBlob = checkpoint.pendingHistoryChunkBlob ?? null
   if (checkpoint.formatVersion !== 1 || typeof checkpoint.sessionId !== 'string' || !checkpoint.sessionId ||
     typeof checkpoint.sessionGeneration !== 'string' || !checkpoint.sessionGeneration ||
     typeof checkpoint.scopeKey !== 'string' || !checkpoint.scopeKey ||
@@ -83,6 +87,16 @@ export function parseProjectionBuildCheckpoint(json: string): ProjectionBuildChe
       historyReducerStateBlob.scopeKey === checkpoint.scopeKey && historyReducerStateBlob.sourceIdentityJson === checkpoint.sourceIdentityJson)) ||
     (checkpoint.historyReducerStateJson !== null && historyReducerStateBlob !== null) ||
     (checkpoint.nextSequence! > 0 && checkpoint.historyReducerStateJson === null && historyReducerStateBlob === null) ||
+    !(pendingHistoryChunkBlob === null || (pendingHistoryChunkBlob && typeof pendingHistoryChunkBlob === 'object' &&
+      typeof pendingHistoryChunkBlob.locator === 'string' && pendingHistoryChunkBlob.locator.trim() &&
+      Number.isSafeInteger(pendingHistoryChunkBlob.byteLength) && pendingHistoryChunkBlob.byteLength > 0 &&
+      /^[a-f0-9]{64}$/.test(pendingHistoryChunkBlob.payloadDigest) && pendingHistoryChunkBlob.sessionId === checkpoint.sessionId &&
+      pendingHistoryChunkBlob.scopeKey === checkpoint.scopeKey && pendingHistoryChunkBlob.sourceIdentityJson === checkpoint.sourceIdentityJson &&
+      pendingHistoryChunkBlob.fromSequence === checkpoint.nextSequence && Number.isSafeInteger(pendingHistoryChunkBlob.nextSequence) &&
+      pendingHistoryChunkBlob.nextSequence > pendingHistoryChunkBlob.fromSequence && Number.isSafeInteger(pendingHistoryChunkBlob.rowCount) &&
+      pendingHistoryChunkBlob.rowCount > 0 && pendingHistoryChunkBlob.nextSequence - pendingHistoryChunkBlob.fromSequence === pendingHistoryChunkBlob.rowCount &&
+      Number.isSafeInteger(pendingHistoryChunkBlob.sourceBytes) && pendingHistoryChunkBlob.sourceBytes > 0 &&
+      typeof pendingHistoryChunkBlob.hasMore === 'boolean')) ||
     !(checkpoint.outputManifest === null || (checkpoint.outputManifest && typeof checkpoint.outputManifest === 'object' &&
       typeof checkpoint.outputManifest.locator === 'string' && checkpoint.outputManifest.locator.trim() &&
       Number.isSafeInteger(checkpoint.outputManifest.byteLength) && checkpoint.outputManifest.byteLength > 0 &&
@@ -98,6 +112,7 @@ export function parseProjectionBuildCheckpoint(json: string): ProjectionBuildChe
     checkpoint.processedRows !== checkpoint.nextSequence ||
     ((checkpoint.processedBytes === 0) !== (checkpoint.nextSequence === 0))) return null
   return Object.freeze({ ...checkpoint, historyReducerStateBlob: historyReducerStateBlob ? Object.freeze({ ...historyReducerStateBlob }) : null,
+    pendingHistoryChunkBlob: pendingHistoryChunkBlob ? Object.freeze({ ...pendingHistoryChunkBlob }) : null,
     outputManifest: checkpoint.outputManifest ? Object.freeze({ ...checkpoint.outputManifest }) : null,
     stableIdIndexManifest: checkpoint.stableIdIndexManifest ? Object.freeze({ ...checkpoint.stableIdIndexManifest }) : null }) as ProjectionBuildCheckpoint
 }
@@ -140,8 +155,24 @@ export function acceptProjectionBuildChunk(
   return Object.freeze({ ...checkpoint, nextSequence: chunk.nextSequence, processedRows, processedBytes,
     historyReducerStateJson: validHistoryReducerStateJson ? historyReducerStateJson : null,
     historyReducerStateBlob: validHistoryReducerStateBlob ? Object.freeze({ ...historyReducerStateBlob }) : null,
+    pendingHistoryChunkBlob: null,
     stableIdIndexManifest: stableIdIndexManifest ? Object.freeze({ ...stableIdIndexManifest }) : null,
     outputManifest: Object.freeze({ locator: chunk.blobLocator, byteLength: outputBlobByteLength, payloadDigest: chunk.payloadDigest }) })
+}
+
+/** Persist an oversized source chunk without advancing the reducer cursor. */
+export function attachProjectionPendingHistoryChunk(
+  checkpoint: ProjectionBuildCheckpoint,
+  manifest: ProjectionPendingHistoryChunkManifestRef
+): ProjectionBuildCheckpoint | null {
+  if (checkpoint.pendingHistoryChunkBlob || manifest.sessionId !== checkpoint.sessionId || manifest.scopeKey !== checkpoint.scopeKey ||
+    manifest.sourceIdentityJson !== checkpoint.sourceIdentityJson || manifest.fromSequence !== checkpoint.nextSequence ||
+    !manifest.locator.trim() || !Number.isSafeInteger(manifest.byteLength) || manifest.byteLength < 1 ||
+    !/^[a-f0-9]{64}$/.test(manifest.payloadDigest) || !Number.isSafeInteger(manifest.nextSequence) ||
+    manifest.nextSequence <= manifest.fromSequence || !Number.isSafeInteger(manifest.rowCount) || manifest.rowCount < 1 ||
+    manifest.nextSequence - manifest.fromSequence !== manifest.rowCount || !Number.isSafeInteger(manifest.sourceBytes) ||
+    manifest.sourceBytes < 1 || typeof manifest.hasMore !== 'boolean') return null
+  return Object.freeze({ ...checkpoint, pendingHistoryChunkBlob: Object.freeze({ ...manifest }) })
 }
 
 /** Transfer a durable checkpoint to a newer process generation without changing its source fence or cursor. */

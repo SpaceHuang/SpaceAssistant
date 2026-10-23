@@ -4,7 +4,7 @@ import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import acquireFileLock from './projectionBlobLock'
 import { runInTransaction } from '../../../database/transaction'
-import { parseProjectionBuildCheckpoint, type ProjectionBuildReducerStateManifestRef } from '../../domain/projectionBuild'
+import { parseProjectionBuildCheckpoint, type ProjectionBuildReducerStateManifestRef, type ProjectionPendingHistoryChunkManifestRef } from '../../domain/projectionBuild'
 
 export type StagedProjectionBlob = Readonly<{
   locator: string
@@ -179,6 +179,7 @@ export function createSessionProjectionBlobStore(root: string) {
           const locators = new Set<string>()
           const manifests: Array<{ locator: string; byteLength?: number; payloadDigest: string; sessionId: string; scopeKey: string; sourceIdentityJson: string; kind?: 'output' | 'stable-id-index' | 'final-view'; itemCount?: number }> = []
           const reducerStateManifests: ProjectionBuildReducerStateManifestRef[] = []
+          const pendingChunkManifests: ProjectionPendingHistoryChunkManifestRef[] = []
           for (const row of conn.prepare('SELECT session_id,scope_key,source_identity_json,blob_locator,blob_byte_length,payload_digest FROM session_projection_cache WHERE blob_locator IS NOT NULL').all() as Array<{ session_id: string; scope_key: string; source_identity_json: string; blob_locator: string; blob_byte_length: number; payload_digest: string }>) {
             try {
               manifests.push({ locator: assertLocator(row.blob_locator), byteLength: row.blob_byte_length, payloadDigest: row.payload_digest,
@@ -194,6 +195,11 @@ export function createSessionProjectionBlobStore(root: string) {
                 locator: assertLocator(checkpoint.historyReducerStateBlob.locator) }) }
               catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid reducer state blob reference: ${String(cause)}`) }
             }
+            if (checkpoint.pendingHistoryChunkBlob) {
+              try { pendingChunkManifests.push({ ...checkpoint.pendingHistoryChunkBlob,
+                locator: assertLocator(checkpoint.pendingHistoryChunkBlob.locator) }) }
+              catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid pending History chunk reference: ${String(cause)}`) }
+            }
             if (checkpoint.outputManifest) {
               try { manifests.push({ ...checkpoint.outputManifest, locator: assertLocator(checkpoint.outputManifest.locator),
                 sessionId: checkpoint.sessionId, scopeKey: checkpoint.scopeKey, sourceIdentityJson: checkpoint.sourceIdentityJson, kind: 'output' }) }
@@ -205,7 +211,7 @@ export function createSessionProjectionBlobStore(root: string) {
               catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid stable-ID index manifest reference: ${String(cause)}`) }
             }
           }
-          return { locators, manifests, reducerStateManifests }
+          return { locators, manifests, reducerStateManifests, pendingChunkManifests }
         })
         const referenced = roots.locators
         await retainOutputManifestChains(root, roots.manifests, referenced)
@@ -215,6 +221,15 @@ export function createSessionProjectionBlobStore(root: string) {
           catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `reducer state blob is unavailable: ${String(cause)}`) }
           if (content.byteLength !== manifest.byteLength || digest(content) !== manifest.payloadDigest) {
             throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'reducer state blob failed reference verification')
+          }
+          referenced.add(manifest.locator)
+        }
+        for (const manifest of roots.pendingChunkManifests) {
+          let content: Buffer
+          try { content = await fs.readFile(path.join(root, manifest.locator)) }
+          catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `pending History chunk blob is unavailable: ${String(cause)}`) }
+          if (content.byteLength !== manifest.byteLength || digest(content) !== manifest.payloadDigest) {
+            throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending History chunk blob failed reference verification')
           }
           referenced.add(manifest.locator)
         }
