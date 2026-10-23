@@ -154,6 +154,43 @@ describe('projection build supervisor', () => {
     } finally { db.close() }
   })
 
+  it('resumes an in-memory lease after both coordinator and rejection persistence fail transiently', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'projection transient storage recovery', model: 'test' })
+      const base = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+        connectionEpoch: () => 1, createToken: () => 'transient-recovery-token', now: () => 1 })
+      let checkpointReads = 0
+      let rejectWrites = 0
+      const service = { ...base,
+        readCheckpoint: (sessionId: string, scopeKey: string) => {
+          checkpointReads += 1
+          if (checkpointReads === 1) throw new Error('temporary sqlite read failure')
+          return base.readCheckpoint(sessionId, scopeKey)
+        },
+        reject: (...args: Parameters<typeof base.reject>) => {
+          rejectWrites += 1
+          if (rejectWrites === 1) throw new Error('temporary sqlite write failure')
+          return base.reject(...args)
+        } }
+      let reads = 0
+      const work = { sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-transient-recovery', specVersion: 1 }
+      const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => [work], dbPath: db.filePath,
+        readChunk: async (permit, input) => { reads += 1; return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence } },
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 1024 },
+        maxChunksPerSlice: 1, now: () => 1 })
+      const handle = supervisor.start()
+      for (let i = 0; i < 750 && service.get(session.id, work.scopeKey)?.status !== 'valid'; i += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+      expect(checkpointReads).toBeGreaterThan(1)
+      expect(rejectWrites).toBeGreaterThan(0)
+      expect(reads).toBeGreaterThan(0)
+      expect(service.get(session.id, work.scopeKey)).toMatchObject({ status: 'valid' })
+      handle.stop()
+      await handle.quiesce()
+    } finally { db.close() }
+  })
+
   it('isolates observer errors after a source failure and settles the foreground request', async () => {
     const db = createMemoryAppDb()
     try {

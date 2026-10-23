@@ -30,6 +30,8 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
   let active: Readonly<{ handle: ProjectionBuildTaskHandle; wake(reason: MaintenanceReason): void }> | undefined
   const requests = new Map<string, { item: ProjectionBuildWorkItem; resolve(value: Awaited<ReturnType<typeof runProjectionBuildSlice>>): void; reject(error: unknown): void }>()
   const suspendedLeases = new Map<string, ProjectionRebuildLease>()
+  const suspendedItems = new Map<string, ProjectionBuildWorkItem>()
+  const retryWorkItems = new Map<string, ProjectionBuildWorkItem>()
   const keyOf = (item: ProjectionBuildWorkItem) => JSON.stringify([item.sessionId, item.scopeKey])
   return Object.freeze({
     prepare(item) {
@@ -56,6 +58,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       let wakeResolve: (() => void) | undefined
       let loopPromise: Promise<void>
       let dueScanFailed = false
+      const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
       const wake = (_reason: MaintenanceReason = 'startup') => { wakeResolve?.(); wakeResolve = undefined }
       const nextWake = () => new Promise<void>((resolve) => { wakeResolve = resolve })
       const waitForWorkOrRetry = async () => {
@@ -71,15 +74,38 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         try { dueScanFailed = false; return options.listDueWork() }
         catch { dueScanFailed = true; return [] }
       }
+      const scheduleRetry = (item: ProjectionBuildWorkItem, lease?: ProjectionRebuildLease) => {
+        const key = keyOf(item)
+        if (lease) suspendedLeases.set(key, lease)
+        suspendedItems.set(key, item)
+        if (retryTimers.has(key)) return
+        retryTimers.set(key, setTimeout(() => {
+          retryTimers.delete(key)
+          retryWorkItems.set(key, item)
+          wake('retry')
+        }, 1_000))
+      }
+      for (const [key, item] of suspendedItems) retryWorkItems.set(key, item)
       const runItem = async (item: ProjectionBuildWorkItem): Promise<boolean> => {
         const key = keyOf(item)
+        const retryTimer = retryTimers.get(key)
+        if (retryTimer) clearTimeout(retryTimer)
+        retryTimers.delete(key)
+        retryWorkItems.delete(key)
         const settleUnexpectedFailure = (error: unknown) => {
           try {
             const current = options.service.get(item.sessionId, item.scopeKey)
             const lease = suspendedLeases.get(key)
-            if (lease) options.service.reject(lease, { failureCaseJson: JSON.stringify({ case: 'CONTENT_UNAVAILABLE', caseId: 'SUPERVISOR_FAILED' }),
-              attempts: (current?.attempts ?? 0) + 1, retryAfter: options.retryAfter?.() ?? options.now() + 60_000 })
-          } catch { /* Preserve the request outcome when durable failure recording is unavailable. */ }
+            if (lease) {
+              options.service.reject(lease, { failureCaseJson: JSON.stringify({ case: 'CONTENT_UNAVAILABLE', caseId: 'SUPERVISOR_FAILED' }),
+                attempts: (current?.attempts ?? 0) + 1, retryAfter: options.retryAfter?.() ?? options.now() + 60_000 })
+              suspendedLeases.delete(key)
+              suspendedItems.delete(key)
+            }
+          } catch {
+            const lease = suspendedLeases.get(key)
+            if (lease) scheduleRetry(item, lease)
+          }
           requests.get(key)?.reject(error)
           requests.delete(key)
           return false
@@ -93,6 +119,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         }
         if (lease) {
           suspendedLeases.delete(key)
+          suspendedItems.delete(key)
         } else {
           try {
             lease = options.service.beginRebuild({ sessionId: item.sessionId,
@@ -129,17 +156,23 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             }
           } catch {
             if (controller.signal.aborted) break
+            let failureRecorded = false
             try {
               const current = options.service.get(item.sessionId, item.scopeKey)
               options.service.reject(lease, { failureCaseJson: JSON.stringify({ case: 'CONTENT_UNAVAILABLE', caseId: 'SUPERVISOR_FAILED' }),
                 attempts: (current?.attempts ?? 0) + 1, retryAfter: options.retryAfter?.() ?? options.now() + 60_000 })
+              failureRecorded = true
             } catch { /* A storage failure must not strand or crash the in-memory request queue. */ }
+            if (!failureRecorded) scheduleRetry(item, lease)
             requests.get(key)?.reject(new Error('PROJECTION_BUILD_SUPERVISOR_FAILED'))
             requests.delete(key)
             return false
           }
         }
-        if (stopped || controller.signal.aborted) suspendedLeases.set(key, lease)
+        if (stopped || controller.signal.aborted) {
+          suspendedLeases.set(key, lease)
+          suspendedItems.set(key, item)
+        }
         requests.get(key)?.reject(controller.signal.reason ?? new Error('PROJECTION_BUILD_STOPPED'))
         requests.delete(key)
         return true
@@ -151,6 +184,8 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         while (!stopped) {
           const requested = requests.values().next().value as { item: ProjectionBuildWorkItem } | undefined
           if (requested) { await runItem(requested.item); continue }
+          const retryItem = retryWorkItems.values().next().value as ProjectionBuildWorkItem | undefined
+          if (retryItem) { retryWorkItems.delete(keyOf(retryItem)); await runItem(retryItem); continue }
           const work = readDueWork()
           if (!work.length) {
             await waitForWorkOrRetry()
@@ -171,6 +206,8 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
           stopped = true
           const error = new Error('PROJECTION_BUILD_STOPPED')
           controller.abort(error)
+          for (const timer of retryTimers.values()) clearTimeout(timer)
+          retryTimers.clear()
           for (const request of requests.values()) request.reject(error)
           requests.clear()
           wakeResolve?.(); wakeResolve = undefined

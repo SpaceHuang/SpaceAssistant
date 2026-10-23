@@ -208,7 +208,7 @@ describe('projection build coordinator', () => {
       write: async (payload) => {
         const locator = `projection-00000000-0000-4000-8000-${String(persisted.size + 1).padStart(12, '0')}.blob`
         persisted.set(locator, payload)
-        return { locator, byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }
+        return { locator, byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => { throw new Error('staging cleanup failed') } }
       },
       readVerified: async ({ locator, byteLength, payloadDigest }) => {
         const payload = persisted.get(locator)
@@ -230,8 +230,9 @@ describe('projection build coordinator', () => {
     const built = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath, readChunk: chunk, historyReducer: largeReducer,
       blobs, limits: { maxRows: 1, maxBytes: 256 * 1024 }, maxChunksPerSlice: 1, now: () => 3 })
     if (built.kind !== 'checkpointed') throw new Error(JSON.stringify(built))
-    await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath, readChunk: chunk, historyReducer: largeReducer,
+    const published = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath, readChunk: chunk, historyReducer: largeReducer,
       blobs, limits: { maxRows: 1, maxBytes: 256 * 1024 }, maxChunksPerSlice: 1, now: () => 3 })
+    expect(published).toMatchObject({ kind: 'published' })
     const state = service.get(session.id, 'scope-a')
     expect(state).toMatchObject({ status: 'valid' })
     const cache = getDbConnection(db).prepare('SELECT inline_payload,blob_locator,blob_byte_length,payload_digest FROM session_projection_cache WHERE session_id=? AND scope_key=?').get(session.id, 'scope-a') as
