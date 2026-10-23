@@ -84,6 +84,18 @@ describe('projection history chunk worker client', () => {
       })
       expect(result).toMatchObject({ kind: 'chunk', afterSessionSequence: 0,
         workerSample: { durationMs: expect.any(Number), heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number) } })
+      await history.appendBatch([{ invocationId: 'worker-sample-inv', turnId: 'worker-sample-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'worker-large-event', idempotencyKey: 'worker-large-event', kind: 'invocation-context-committed',
+        payload: { messages: [{ id: 'large-worker-message', role: 'user', content: 'x'.repeat(4096) }] } }], 1)
+      const currentSourceIdentityJson = readProjectionSourceIdentity(getDbConnection(temp.db), session.id, session.generation)!
+      const deferred = await readProjectionHistoryChunkInWorker({ dbPath: temp.dbPath, sessionId: session.id,
+        sessionGeneration: session.generation, scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson: currentSourceIdentityJson,
+        connectionEpoch: 1, processGeneration: 1, rebuildToken: 'worker-token' }, { afterSessionSequence: 1, maxRows: 1, maxBytes: 512 }, {
+        workerPath: path.join(process.cwd(), 'electron/sessionStorage/infrastructure/sqlite/projectionHistoryChunkWorker.ts'), timeoutMs: 5000,
+      })
+      expect(deferred).toMatchObject({ kind: 'deferred-large', observedEventRows: 1, observedByteLength: expect.any(Number),
+        snapshotDurationMs: expect.any(Number), workerSample: { durationMs: expect.any(Number),
+          heapUsedBytesAtExit: expect.any(Number), processRssBytesAtExit: expect.any(Number) } })
     } finally { temp.cleanup() }
   }, 15_000)
 })

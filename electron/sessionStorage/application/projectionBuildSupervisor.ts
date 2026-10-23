@@ -217,9 +217,12 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             if (result.kind === 'chunk') {
               sliceMetrics.sourceRows += result.events.length
               sliceMetrics.sourceBytes += result.byteLength
-              sliceMetrics.sourceSnapshotDurationMs += result.snapshotDurationMs ?? 0
-              collectSample(result.workerSample, 'source')
+            } else if (result.kind === 'deferred-large') {
+              sliceMetrics.sourceRows += result.observedEventRows ?? 0
+              sliceMetrics.sourceBytes += result.observedByteLength ?? 0
             }
+            sliceMetrics.sourceSnapshotDurationMs += result.snapshotDurationMs ?? 0
+            collectSample(result.workerSample, 'source')
             return result
           }
           const reduceChunk: ProjectionHistoryChunkReducerPort | undefined = options.reduceChunk

@@ -76,6 +76,9 @@ describe('projection read-only History chunk source', () => {
     const result = readProjectionHistoryChunk({ dbPath: temp.dbPath, sessionId: session.id, sessionGeneration: session.generation,
       scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson, connectionEpoch: 1, processGeneration: 2, rebuildToken: 'token-large' },
     { afterSessionSequence: 0, maxRows: 1, maxBytes: 512 })
-    expect(result).toMatchObject({ kind: 'deferred-large', afterSessionSequence: 0, eventSequence: 1 })
+    expect(result).toMatchObject({ kind: 'deferred-large', afterSessionSequence: 0, eventSequence: 1,
+      observedEventRows: 1, observedByteLength: expect.any(Number), snapshotDurationMs: expect.any(Number) })
+    if (result.kind !== 'deferred-large') throw new Error('expected oversized event to defer')
+    expect(result.observedByteLength).toBeGreaterThan(512)
   })
 })

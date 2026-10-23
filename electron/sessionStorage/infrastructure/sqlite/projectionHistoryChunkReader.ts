@@ -78,7 +78,8 @@ export function readProjectionHistoryChunk(
         }
         const eventBytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
         if (eventBytes > input.maxBytes && events.length === 0) {
-          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence, eventSequence: row.session_seq }
+          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+            eventSequence: row.session_seq, observedByteLength: eventBytes, observedEventRows: 1 }
         }
         if (events.length >= input.maxRows || byteLength + eventBytes > input.maxBytes) { hasMore = true; break }
         if (row.session_seq !== nextSessionSequence + 1 || row.commit_order < 1) {
@@ -107,11 +108,11 @@ export function readProjectionHistoryChunk(
       }
       const totalBytes = byteLength + Buffer.byteLength(JSON.stringify(messageFacts), 'utf8')
       if (totalBytes > input.maxBytes) return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
-        eventSequence: events[0]!.sessionSequence }
+        eventSequence: events[0]!.sessionSequence, observedByteLength: totalBytes, observedEventRows: events.length }
       return { kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence,
         nextSessionSequence, events: Object.freeze(events), messageFacts: Object.freeze(messageFacts), byteLength: totalBytes, hasMore }
     })
-    return result.kind === 'chunk' ? { ...result, snapshotDurationMs: Math.max(0, performance.now() - snapshotStartedAt) } : result
+    return { ...result, snapshotDurationMs: Math.max(0, performance.now() - snapshotStartedAt) }
   } catch (error) {
     return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence,
       reason: error instanceof Error ? error.message : 'projection-source-read-failed' }

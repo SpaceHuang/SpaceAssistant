@@ -316,6 +316,37 @@ describe('projection build supervisor', () => {
     } finally { db.close() }
   })
 
+  it('reports source measurements when a worker defers an oversized History event', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'projection deferred metrics', model: 'test' })
+      const service = createProjectionService(createSqliteProjectionStateStore(db), {
+        processGeneration: () => 1, connectionEpoch: () => 1, createToken: () => 'deferred-metrics-token', now: () => 1,
+      })
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
+      service.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })
+      const slices: Array<Record<string, unknown>> = []
+      const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => [], dbPath: db.filePath,
+        readChunk: async (permit, input) => ({ kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+          eventSequence: 1, observedByteLength: 900_000, observedEventRows: 1, snapshotDurationMs: 7,
+          workerSample: { durationMs: 9, heapUsedBytesAtExit: 12_000, processRssBytesAtExit: 24_000 } }),
+        historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }),
+          finalize: () => ({ outputOperations: [] }) },
+        blobs: { write: async () => { throw new Error('deferred event must not write a blob') } },
+        limits: { maxRows: 1, maxBytes: 512 }, maxChunksPerSlice: 1, now: () => 1,
+        onSlice: (slice) => slices.push(slice) })
+      const handle = supervisor.start()
+      const result = await supervisor.prepare({ sessionId: session.id, sessionGeneration: session.generation,
+        scopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
+      expect(result.kind).toBe('deferred-large')
+      expect(slices[0]).toMatchObject({ outcome: 'deferred-large', sourceRows: 1, sourceBytes: 900_000,
+        sourceSnapshotDurationMs: 7, sourceWorkerDurationMs: 9, maxWorkerHeapUsedBytesAtExit: 12_000,
+        maxProcessRssBytesAtExit: 24_000, workerSamples: 1 })
+      handle.stop()
+      await handle.quiesce()
+    } finally { db.close() }
+  })
+
   it('returns the persisted rejection reason instead of masking a not-due scope as a claim failure', async () => {
     const db = createMemoryAppDb()
     try {
