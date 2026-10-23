@@ -274,6 +274,7 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
   limits?: ProjectionBuildSupervisorOptions['limits']
   maxChunksPerSlice?: number
   onResult?: ProjectionBuildSupervisorOptions['onResult']
+  onFailure?: ProjectionBuildSupervisorOptions['onFailure']
 }>): LifecycleTaskRegistration {
   const stateStore = createSqliteProjectionStateStore(input.db)
   const service = createProjectionService(stateStore, { processGeneration: input.processGeneration,
@@ -304,5 +305,5 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
     },
     readChunk: readProjectionHistoryChunkInWorker, historyReducer: createProjectionScopeHistoryReducer(),
     blobs: createSessionProjectionBlobStore(input.blobRoot), limits: input.limits ?? { maxRows: 200, maxBytes: 256 * 1024 },
-    maxChunksPerSlice: input.maxChunksPerSlice ?? 4, now: input.now, onResult: input.onResult })
+    maxChunksPerSlice: input.maxChunksPerSlice ?? 4, now: input.now, onResult: input.onResult, onFailure: input.onFailure })
 }

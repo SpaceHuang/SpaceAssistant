@@ -40,11 +40,13 @@ describe('projection build supervisor', () => {
       const session = createSession(db, { name: 'projection due scan recovery', model: 'test' })
       let scans = 0
       let reads = 0
+      const failures: string[] = []
       const supervisor = createProjectionBuildSupervisor({ service, listDueWork: () => {
         scans += 1
         if (scans === 1) throw new Error('sqlite busy')
         return [{ sessionId: session.id, sessionGeneration: session.generation, scopeKey: 'scope-scan-recovery', specVersion: 1 }]
       }, dbPath: db.filePath,
+        onFailure: (code) => { failures.push(code); throw new Error('diagnostic sink unavailable') },
         readChunk: async (permit, input) => { reads += 1; return { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence } },
         historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
         blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 1024 },
@@ -52,6 +54,7 @@ describe('projection build supervisor', () => {
       const handle = supervisor.start()
       for (let i = 0; i < 750 && reads === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 2))
       expect(scans).toBeGreaterThan(1)
+      expect(failures).toEqual(['PROJECTION_BUILD_DUE_WORK_SCAN_FAILED'])
       expect(reads).toBeGreaterThan(0)
       for (let i = 0; i < 50 && service.get(session.id, 'scope-scan-recovery')?.status !== 'valid'; i += 1) await new Promise((resolve) => setTimeout(resolve, 2))
       expect(service.get(session.id, 'scope-scan-recovery')).toMatchObject({ status: 'valid' })

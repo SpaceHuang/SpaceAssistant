@@ -19,6 +19,8 @@ export type ProjectionBuildSupervisorOptions = Readonly<{
   now(): number
   retryAfter?(): number
   onResult?(item: ProjectionBuildWorkItem, result: Awaited<ReturnType<typeof runProjectionBuildSlice>>): void
+  onFailure?(code: 'PROJECTION_BUILD_DUE_WORK_SCAN_FAILED' | 'PROJECTION_BUILD_CLAIM_FAILED' |
+    'PROJECTION_BUILD_STATE_UNAVAILABLE' | 'PROJECTION_BUILD_SUPERVISOR_FAILED'): void
   resolveWorkItem?(input: ProjectionPreparationRequest): ProjectionBuildWorkItem | undefined
 }>
 
@@ -59,6 +61,9 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       let loopPromise: Promise<void>
       let dueScanFailed = false
       const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+      const reportFailure = (code: Parameters<NonNullable<typeof options.onFailure>>[0]) => {
+        try { options.onFailure?.(code) } catch { /* Failure reporting must not own the worker lifecycle. */ }
+      }
       const wake = (_reason: MaintenanceReason = 'startup') => { wakeResolve?.(); wakeResolve = undefined }
       const nextWake = () => new Promise<void>((resolve) => { wakeResolve = resolve })
       const waitForWorkOrRetry = async () => {
@@ -72,7 +77,11 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
       }
       const readDueWork = () => {
         try { dueScanFailed = false; return options.listDueWork() }
-        catch { dueScanFailed = true; return [] }
+        catch {
+          if (!dueScanFailed) reportFailure('PROJECTION_BUILD_DUE_WORK_SCAN_FAILED')
+          dueScanFailed = true
+          return []
+        }
       }
       const scheduleRetry = (item: ProjectionBuildWorkItem, lease?: ProjectionRebuildLease) => {
         const key = keyOf(item)
@@ -125,6 +134,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             lease = options.service.beginRebuild({ sessionId: item.sessionId,
               sessionGeneration: item.sessionGeneration, scopeKey: item.scopeKey }) ?? undefined
           } catch {
+            reportFailure('PROJECTION_BUILD_CLAIM_FAILED')
             requests.get(key)?.reject(new Error('PROJECTION_BUILD_CLAIM_FAILED'))
             requests.delete(key)
             return false
@@ -133,7 +143,10 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         if (!lease) {
           let state
           try { state = options.service.get(item.sessionId, item.scopeKey) }
-          catch { return settleUnexpectedFailure(new Error('PROJECTION_BUILD_STATE_UNAVAILABLE')) }
+          catch {
+            reportFailure('PROJECTION_BUILD_STATE_UNAVAILABLE')
+            return settleUnexpectedFailure(new Error('PROJECTION_BUILD_STATE_UNAVAILABLE'))
+          }
           const error = state?.sessionGeneration === item.sessionGeneration && state.status === 'rejected' &&
             state.retryAfter !== null && state.retryAfter > options.now()
             ? new Error(`PROJECTION_BUILD_DEFERRED:${readFailureCaseId(state.failureCaseJson) ?? 'REJECTED'}`)
@@ -156,6 +169,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
             }
           } catch {
             if (controller.signal.aborted) break
+            reportFailure('PROJECTION_BUILD_SUPERVISOR_FAILED')
             let failureRecorded = false
             try {
               const current = options.service.get(item.sessionId, item.scopeKey)
@@ -177,6 +191,7 @@ export function createProjectionBuildSupervisor(options: ProjectionBuildSupervis
         requests.delete(key)
         return true
         } catch {
+          reportFailure('PROJECTION_BUILD_SUPERVISOR_FAILED')
           return settleUnexpectedFailure(new Error('PROJECTION_BUILD_SUPERVISOR_FAILED'))
         }
       }

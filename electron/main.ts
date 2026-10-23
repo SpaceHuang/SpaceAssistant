@@ -574,7 +574,8 @@ app.whenReady().then(async () => {
     },
     maintenanceTasks: [
       createSqliteProjectionBuildTask({ db, dbPath, blobRoot: path.join(app.getPath('userData'), 'session-projections'),
-        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now }),
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now,
+        onFailure: (code) => console.warn(`[storage] ${code}`) }),
       {
         taskId: 'spill-reference-index-backfill', category: 'derived-index',
         start: () => scheduleSpillReferenceBackfill(db, {
