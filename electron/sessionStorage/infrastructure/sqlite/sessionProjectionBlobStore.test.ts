@@ -182,6 +182,33 @@ describe('session projection derived blob store', () => {
     expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 1 })
   })
 
+  it('retains reducer state blobs referenced only by a durable checkpoint', async () => {
+    temp = createTempDatabase('projection-blob-reducer-state-')
+    const session = createSession(temp.db, { name: 'reducer state checkpoint', model: 'test' })
+    const conn = getDbConnection(temp.db)
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const statePayload = JSON.stringify({ reducerState: 'x'.repeat(70_000) })
+    const staged = await blobs.write(statePayload)
+    const seed = createProjectionBuildCheckpoint({ sessionId: session.id, sessionGeneration: session.generation,
+      scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson: '{"source":1}', processGeneration: 1,
+      rebuildToken: 'reducer-state-token', startSequence: 0, historyReducerStateJson: null })
+    const checkpoint = { ...seed, historyReducerStateBlob: { locator: staged.locator, byteLength: staged.byteLength,
+      payloadDigest: staged.payloadDigest, sessionId: session.id, scopeKey: 'scope-a', sourceIdentityJson: '{"source":1}' } }
+    conn.prepare("INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,process_generation,rebuild_token,updated_at,build_checkpoint_json) VALUES(?,?,?,'rebuilding',1,'reducer-state-token',1,?)")
+      .run(session.id, 'scope-a', session.generation, JSON.stringify(checkpoint))
+    await staged.release()
+
+    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 0 })
+    const orphan = await blobs.write('unreferenced candidate')
+    await orphan.release()
+    await fs.writeFile(path.join(root, staged.locator), 'corrupt reducer state')
+    await expect(blobs.collectGarbage(conn)).rejects.toMatchObject({ code: 'PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE' })
+    await expect(fs.stat(path.join(root, orphan.locator))).resolves.toBeTruthy()
+    conn.prepare('UPDATE session_projection_state SET build_checkpoint_json=NULL WHERE session_id=? AND scope_key=?').run(session.id, 'scope-a')
+    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 2 })
+  })
+
   it('retains the full append chain reachable from a durable checkpoint output manifest root', async () => {
     temp = createTempDatabase('projection-blob-manifest-chain-')
     const session = createSession(temp.db, { name: 'output manifest chain', model: 'test' })

@@ -67,6 +67,19 @@ describe('projection build checkpoint reducer', () => {
     expect(parseProjectionBuildCheckpoint('{bad json')).toBeNull()
   })
 
+  it('accepts an identity-bound reducer state blob reference and rejects conflicting state sources', () => {
+    const state = acceptProjectionBuildChunk(initial(), chunk(), limits)!
+    const ref = { locator: 'projection-00000000-0000-4000-8000-000000000111.blob', byteLength: 70_000,
+      payloadDigest: 'c'.repeat(64), sessionId: state.sessionId, scopeKey: state.scopeKey,
+      sourceIdentityJson: state.sourceIdentityJson }
+    const externalized = acceptProjectionBuildChunk(initial(), chunk(), limits, null, null, 32, ref)!
+    expect(externalized).toMatchObject({ historyReducerStateJson: null, historyReducerStateBlob: ref })
+    expect(parseProjectionBuildCheckpoint(JSON.stringify(externalized))).toEqual(externalized)
+    expect(parseProjectionBuildCheckpoint(JSON.stringify({ ...externalized,
+      historyReducerStateBlob: { ...ref, sourceIdentityJson: '{"revision":2}' } }))).toBeNull()
+    expect(parseProjectionBuildCheckpoint(JSON.stringify({ ...state, historyReducerStateBlob: ref }))).toBeNull()
+  })
+
   it('persists only a bounded reference to the resumable stable-ID index manifest', () => {
     const checkpoint = initial()
     const indexed = attachProjectionStableIdIndexManifest(checkpoint, { locator: 'stable-index.blob', byteLength: 2048,

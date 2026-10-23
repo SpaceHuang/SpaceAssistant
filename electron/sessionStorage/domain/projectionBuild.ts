@@ -17,6 +17,7 @@ export type ProjectionBuildChunkReceipt = Readonly<{
 export type ProjectionBuildLimits = Readonly<{ maxRows: number; maxBytes: number }>
 export type ProjectionBuildOutputManifestRef = Readonly<{ locator: string; byteLength: number; payloadDigest: string }>
 export type ProjectionStableIdIndexManifestRef = Readonly<{ locator: string; byteLength: number; payloadDigest: string; itemCount: number; sessionId: string; scopeKey: string; sourceIdentityJson: string }>
+export type ProjectionBuildReducerStateManifestRef = Readonly<{ locator: string; byteLength: number; payloadDigest: string; sessionId: string; scopeKey: string; sourceIdentityJson: string }>
 
 /** Stable UTF-8 SHA-256 receipt check shared without exposing runtime filesystem or database details. */
 export async function projectionPayloadDigest(payload: string): Promise<string> {
@@ -38,11 +39,12 @@ export type ProjectionBuildCheckpoint = Readonly<{
   processedRows: number
   processedBytes: number
   historyReducerStateJson: string | null
+  historyReducerStateBlob: ProjectionBuildReducerStateManifestRef | null
   outputManifest: ProjectionBuildOutputManifestRef | null
   stableIdIndexManifest: ProjectionStableIdIndexManifestRef | null
 }>
 
-export function createProjectionBuildCheckpoint(input: Omit<ProjectionBuildCheckpoint, 'formatVersion' | 'nextSequence' | 'processedRows' | 'processedBytes' | 'historyReducerStateJson' | 'outputManifest' | 'stableIdIndexManifest'> & { startSequence: number; historyReducerStateJson?: string | null }): ProjectionBuildCheckpoint {
+export function createProjectionBuildCheckpoint(input: Omit<ProjectionBuildCheckpoint, 'formatVersion' | 'nextSequence' | 'processedRows' | 'processedBytes' | 'historyReducerStateJson' | 'historyReducerStateBlob' | 'outputManifest' | 'stableIdIndexManifest'> & { startSequence: number; historyReducerStateJson?: string | null }): ProjectionBuildCheckpoint {
   if (!input.sessionId || !input.sessionGeneration || !input.scopeKey || !input.sourceIdentityJson ||
     !Number.isSafeInteger(input.specVersion) || input.specVersion < 1 ||
     !Number.isSafeInteger(input.processGeneration) || input.processGeneration < 0 ||
@@ -51,7 +53,8 @@ export function createProjectionBuildCheckpoint(input: Omit<ProjectionBuildCheck
   }
   const { startSequence, ...identity } = input
   return Object.freeze({ formatVersion: 1, ...identity, nextSequence: startSequence, processedRows: 0, processedBytes: 0,
-    historyReducerStateJson: input.historyReducerStateJson ?? null, outputManifest: null, stableIdIndexManifest: null })
+    historyReducerStateJson: input.historyReducerStateJson ?? null, historyReducerStateBlob: null,
+    outputManifest: null, stableIdIndexManifest: null })
 }
 
 /** Reject malformed or internally inconsistent checkpoint bytes before any resume or takeover. */
@@ -60,6 +63,7 @@ export function parseProjectionBuildCheckpoint(json: string): ProjectionBuildChe
   try { value = JSON.parse(json) } catch { return null }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const checkpoint = value as Partial<ProjectionBuildCheckpoint>
+  const historyReducerStateBlob = checkpoint.historyReducerStateBlob ?? null
   if (checkpoint.formatVersion !== 1 || typeof checkpoint.sessionId !== 'string' || !checkpoint.sessionId ||
     typeof checkpoint.sessionGeneration !== 'string' || !checkpoint.sessionGeneration ||
     typeof checkpoint.scopeKey !== 'string' || !checkpoint.scopeKey ||
@@ -72,6 +76,13 @@ export function parseProjectionBuildCheckpoint(json: string): ProjectionBuildChe
     !Number.isSafeInteger(checkpoint.processedBytes) || (checkpoint.processedBytes ?? -1) < 0 ||
     !(checkpoint.historyReducerStateJson === null || (typeof checkpoint.historyReducerStateJson === 'string' &&
       checkpoint.historyReducerStateJson.length > 0 && new TextEncoder().encode(checkpoint.historyReducerStateJson).byteLength <= 64 * 1024 && isJson(checkpoint.historyReducerStateJson))) ||
+    !(historyReducerStateBlob === null || (historyReducerStateBlob && typeof historyReducerStateBlob === 'object' &&
+      typeof historyReducerStateBlob.locator === 'string' && historyReducerStateBlob.locator.trim() &&
+      Number.isSafeInteger(historyReducerStateBlob.byteLength) && historyReducerStateBlob.byteLength > 0 &&
+      /^[a-f0-9]{64}$/.test(historyReducerStateBlob.payloadDigest) && historyReducerStateBlob.sessionId === checkpoint.sessionId &&
+      historyReducerStateBlob.scopeKey === checkpoint.scopeKey && historyReducerStateBlob.sourceIdentityJson === checkpoint.sourceIdentityJson)) ||
+    (checkpoint.historyReducerStateJson !== null && historyReducerStateBlob !== null) ||
+    (checkpoint.nextSequence! > 0 && checkpoint.historyReducerStateJson === null && historyReducerStateBlob === null) ||
     !(checkpoint.outputManifest === null || (checkpoint.outputManifest && typeof checkpoint.outputManifest === 'object' &&
       typeof checkpoint.outputManifest.locator === 'string' && checkpoint.outputManifest.locator.trim() &&
       Number.isSafeInteger(checkpoint.outputManifest.byteLength) && checkpoint.outputManifest.byteLength > 0 &&
@@ -86,7 +97,8 @@ export function parseProjectionBuildCheckpoint(json: string): ProjectionBuildChe
     ((checkpoint.processedRows === 0) !== (checkpoint.nextSequence === 0)) ||
     checkpoint.processedRows !== checkpoint.nextSequence ||
     ((checkpoint.processedBytes === 0) !== (checkpoint.nextSequence === 0))) return null
-  return Object.freeze({ ...checkpoint, outputManifest: checkpoint.outputManifest ? Object.freeze({ ...checkpoint.outputManifest }) : null,
+  return Object.freeze({ ...checkpoint, historyReducerStateBlob: historyReducerStateBlob ? Object.freeze({ ...historyReducerStateBlob }) : null,
+    outputManifest: checkpoint.outputManifest ? Object.freeze({ ...checkpoint.outputManifest }) : null,
     stableIdIndexManifest: checkpoint.stableIdIndexManifest ? Object.freeze({ ...checkpoint.stableIdIndexManifest }) : null }) as ProjectionBuildCheckpoint
 }
 
@@ -95,10 +107,17 @@ export function acceptProjectionBuildChunk(
   checkpoint: ProjectionBuildCheckpoint,
   chunk: ProjectionBuildChunkReceipt,
   limits: ProjectionBuildLimits,
-  historyReducerStateJson: string = checkpoint.historyReducerStateJson ?? '',
+  historyReducerStateJson: string | null = checkpoint.historyReducerStateJson,
   stableIdIndexManifest: ProjectionStableIdIndexManifestRef | null = checkpoint.stableIdIndexManifest,
-  outputBlobByteLength: number = chunk.byteLength
+  outputBlobByteLength: number = chunk.byteLength,
+  historyReducerStateBlob: ProjectionBuildReducerStateManifestRef | null = checkpoint.historyReducerStateBlob
 ): ProjectionBuildCheckpoint | null {
+  const validHistoryReducerStateJson = typeof historyReducerStateJson === 'string' && historyReducerStateJson.length > 0 &&
+    new TextEncoder().encode(historyReducerStateJson).byteLength <= 64 * 1024 && isJson(historyReducerStateJson)
+  const validHistoryReducerStateBlob = historyReducerStateBlob !== null && !!historyReducerStateBlob.locator.trim() &&
+    Number.isSafeInteger(historyReducerStateBlob.byteLength) && historyReducerStateBlob.byteLength > 0 &&
+    /^[a-f0-9]{64}$/.test(historyReducerStateBlob.payloadDigest) && historyReducerStateBlob.sessionId === checkpoint.sessionId &&
+    historyReducerStateBlob.scopeKey === checkpoint.scopeKey && historyReducerStateBlob.sourceIdentityJson === checkpoint.sourceIdentityJson
   if (chunk.sessionId !== checkpoint.sessionId || chunk.sessionGeneration !== checkpoint.sessionGeneration ||
     chunk.scopeKey !== checkpoint.scopeKey || chunk.specVersion !== checkpoint.specVersion ||
     chunk.sourceIdentityJson !== checkpoint.sourceIdentityJson || chunk.processGeneration !== checkpoint.processGeneration ||
@@ -107,8 +126,8 @@ export function acceptProjectionBuildChunk(
     !Number.isSafeInteger(chunk.rowCount) || chunk.rowCount < 1 || chunk.rowCount > limits.maxRows || chunk.nextSequence - chunk.fromSequence !== chunk.rowCount ||
     !Number.isSafeInteger(chunk.byteLength) || chunk.byteLength < 1 || chunk.byteLength > limits.maxBytes ||
     !Number.isSafeInteger(limits.maxRows) || limits.maxRows < 1 || !Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 1 ||
-    !/^[a-f0-9]{64}$/.test(chunk.payloadDigest) || !chunk.blobLocator.trim() || !historyReducerStateJson ||
-    new TextEncoder().encode(historyReducerStateJson).byteLength > 64 * 1024 || !isJson(historyReducerStateJson) ||
+    !/^[a-f0-9]{64}$/.test(chunk.payloadDigest) || !chunk.blobLocator.trim() ||
+    (validHistoryReducerStateJson === validHistoryReducerStateBlob) ||
     !Number.isSafeInteger(outputBlobByteLength) || outputBlobByteLength < 1 ||
     (stableIdIndexManifest !== null && (!stableIdIndexManifest.locator.trim() || stableIdIndexManifest.sessionId !== checkpoint.sessionId ||
       stableIdIndexManifest.scopeKey !== checkpoint.scopeKey || stableIdIndexManifest.sourceIdentityJson !== checkpoint.sourceIdentityJson ||
@@ -119,7 +138,8 @@ export function acceptProjectionBuildChunk(
   const processedBytes = checkpoint.processedBytes + chunk.byteLength
   if (!Number.isSafeInteger(processedRows) || !Number.isSafeInteger(processedBytes)) return null
   return Object.freeze({ ...checkpoint, nextSequence: chunk.nextSequence, processedRows, processedBytes,
-    historyReducerStateJson,
+    historyReducerStateJson: validHistoryReducerStateJson ? historyReducerStateJson : null,
+    historyReducerStateBlob: validHistoryReducerStateBlob ? Object.freeze({ ...historyReducerStateBlob }) : null,
     stableIdIndexManifest: stableIdIndexManifest ? Object.freeze({ ...stableIdIndexManifest }) : null,
     outputManifest: Object.freeze({ locator: chunk.blobLocator, byteLength: outputBlobByteLength, payloadDigest: chunk.payloadDigest }) })
 }

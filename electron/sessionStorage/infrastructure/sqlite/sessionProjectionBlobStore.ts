@@ -4,7 +4,7 @@ import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import acquireFileLock from './projectionBlobLock'
 import { runInTransaction } from '../../../database/transaction'
-import { parseProjectionBuildCheckpoint } from '../../domain/projectionBuild'
+import { parseProjectionBuildCheckpoint, type ProjectionBuildReducerStateManifestRef } from '../../domain/projectionBuild'
 
 export type StagedProjectionBlob = Readonly<{
   locator: string
@@ -178,6 +178,7 @@ export function createSessionProjectionBlobStore(root: string) {
         const roots = runInTransaction(conn, () => {
           const locators = new Set<string>()
           const manifests: Array<{ locator: string; byteLength?: number; payloadDigest: string; sessionId: string; scopeKey: string; sourceIdentityJson: string; kind?: 'output' | 'stable-id-index' | 'final-view'; itemCount?: number }> = []
+          const reducerStateManifests: ProjectionBuildReducerStateManifestRef[] = []
           for (const row of conn.prepare('SELECT session_id,scope_key,source_identity_json,blob_locator,blob_byte_length,payload_digest FROM session_projection_cache WHERE blob_locator IS NOT NULL').all() as Array<{ session_id: string; scope_key: string; source_identity_json: string; blob_locator: string; blob_byte_length: number; payload_digest: string }>) {
             try {
               manifests.push({ locator: assertLocator(row.blob_locator), byteLength: row.blob_byte_length, payloadDigest: row.payload_digest,
@@ -188,6 +189,11 @@ export function createSessionProjectionBlobStore(root: string) {
           for (const row of conn.prepare('SELECT build_checkpoint_json FROM session_projection_state WHERE build_checkpoint_json IS NOT NULL').all() as Array<{ build_checkpoint_json: string }>) {
             const checkpoint = parseProjectionBuildCheckpoint(row.build_checkpoint_json)
             if (!checkpoint) throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'invalid durable build checkpoint')
+            if (checkpoint.historyReducerStateBlob) {
+              try { reducerStateManifests.push({ ...checkpoint.historyReducerStateBlob,
+                locator: assertLocator(checkpoint.historyReducerStateBlob.locator) }) }
+              catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid reducer state blob reference: ${String(cause)}`) }
+            }
             if (checkpoint.outputManifest) {
               try { manifests.push({ ...checkpoint.outputManifest, locator: assertLocator(checkpoint.outputManifest.locator),
                 sessionId: checkpoint.sessionId, scopeKey: checkpoint.scopeKey, sourceIdentityJson: checkpoint.sourceIdentityJson, kind: 'output' }) }
@@ -199,10 +205,19 @@ export function createSessionProjectionBlobStore(root: string) {
               catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid stable-ID index manifest reference: ${String(cause)}`) }
             }
           }
-          return { locators, manifests }
+          return { locators, manifests, reducerStateManifests }
         })
         const referenced = roots.locators
         await retainOutputManifestChains(root, roots.manifests, referenced)
+        for (const manifest of roots.reducerStateManifests) {
+          let content: Buffer
+          try { content = await fs.readFile(path.join(root, manifest.locator)) }
+          catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `reducer state blob is unavailable: ${String(cause)}`) }
+          if (content.byteLength !== manifest.byteLength || digest(content) !== manifest.payloadDigest) {
+            throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'reducer state blob failed reference verification')
+          }
+          referenced.add(manifest.locator)
+        }
         const names = await fs.readdir(root)
         let removedCount = 0
         let removedBytes = 0
