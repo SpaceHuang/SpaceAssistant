@@ -1,14 +1,33 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { appendMessage, createSession } from '../../../database/operations'
-import { createMemoryAppDb } from '../../../database/testHelpers'
-import { getDbConnection } from '../../../database/sqliteStore'
+import { createMemoryAppDb, createTempDatabase } from '../../../database/testHelpers'
+import { getDbConnection, reopenDatabaseConnection } from '../../../database/sqliteStore'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
-import { createSqliteProjectionStateStore } from './sessionProjectionStateStore'
+import { createSqliteProjectionChatBodyCacheStore, createSqliteProjectionStateStore } from './sessionProjectionStateStore'
 import { encodeProjectionScopeKey } from '../../domain/scopeKey'
 
 describe('SQLite session projection state store', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
   afterEach(() => { db?.close(); db = undefined })
+
+  it('resolves the active connection after the same AppDatabase is reopened', () => {
+    const temp = createTempDatabase('projection-connection-swap-')
+    try {
+      const session = createSession(temp.db, { name: 'projection connection swap', model: 'test' })
+      const stateStore = createSqliteProjectionStateStore(temp.db)
+      const cacheStore = createSqliteProjectionChatBodyCacheStore(temp.db)
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 3 })
+      stateStore.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation, now: 1 })
+
+      temp.db.close()
+      reopenDatabaseConnection(temp.db)
+
+      expect(stateStore.get(session.id, scopeKey)?.status).toBe('invalid')
+      expect(() => cacheStore.readSnapshot(session.id, scopeKey)).not.toThrow()
+    } finally {
+      temp.cleanup()
+    }
+  })
 
   it('enumerates only due current-generation rows with valid canonical scope identities in stable order', () => {
     db = createMemoryAppDb()

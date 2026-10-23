@@ -61,26 +61,28 @@ function insertInvalid(db: AppDatabase, sessionId: string, scopeKey: string, ses
 }
 
 export function createSqliteProjectionStateStore(db: AppDatabase) {
-  const conn = getDbConnection(db)
+  // Keep the AppDatabase handle, not a connection that may be retired by a
+  // same-object close/reopen (for example during database compaction).
+  const conn = () => getDbConnection(db)
 
   const readSourceIdentity = (sessionId: string, sessionGeneration: string): string | null =>
-    readProjectionSourceIdentity(conn, sessionId, sessionGeneration)
+    readProjectionSourceIdentity(conn(), sessionId, sessionGeneration)
 
   const get = (sessionId: string, scopeKey: string): ProjectionStateRecord | null =>
-    fromRow(conn.prepare('SELECT * FROM session_projection_state WHERE session_id=? AND scope_key=?').get(sessionId, scopeKey) as ProjectionStateRow | undefined)
+    fromRow(conn().prepare('SELECT * FROM session_projection_state WHERE session_id=? AND scope_key=?').get(sessionId, scopeKey) as ProjectionStateRow | undefined)
 
   /** Enumerate only current-generation invalid or retry-due scopes with canonical scope identities. */
   const listDueWork = (now: number, limit = 64, processGeneration?: number): readonly DueProjectionWorkItem[] => {
     if (!Number.isSafeInteger(now) || !Number.isSafeInteger(limit) || limit < 1 || limit > 256 ||
       (processGeneration !== undefined && (!Number.isSafeInteger(processGeneration) || processGeneration < 0))) return Object.freeze([])
-    const dueRows = conn.prepare(`SELECT state.session_id,state.session_generation,state.scope_key,COALESCE(state.retry_after,0) AS sort_retry,state.updated_at
+    const dueRows = conn().prepare(`SELECT state.session_id,state.session_generation,state.scope_key,COALESCE(state.retry_after,0) AS sort_retry,state.updated_at
       FROM session_projection_state state JOIN sessions ON sessions.id=state.session_id AND sessions.generation=state.session_generation
       WHERE state.status IN ('invalid','rejected') AND (state.retry_after IS NULL OR state.retry_after<=?)
         AND state.scope_key LIKE 'session-projection:%'
       ORDER BY COALESCE(state.retry_after,0),state.updated_at,state.session_id,state.scope_key LIMIT ?`).all(now, limit) as Array<{
         session_id: string; session_generation: string; scope_key: string; sort_retry: number; updated_at: number
       }>
-    const takeoverRows = processGeneration === undefined ? [] : conn.prepare(`SELECT state.session_id,state.session_generation,state.scope_key,
+    const takeoverRows = processGeneration === undefined ? [] : conn().prepare(`SELECT state.session_id,state.session_generation,state.scope_key,
         COALESCE(state.retry_after,0) AS sort_retry,state.updated_at
       FROM session_projection_state state JOIN sessions ON sessions.id=state.session_id AND sessions.generation=state.session_generation
       WHERE state.status='rebuilding' AND state.process_generation<? AND state.scope_key LIKE 'session-projection:%'
@@ -98,7 +100,7 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
 
   const nextRetryAt = (now: number): number | null => {
     if (!Number.isSafeInteger(now)) return null
-    const row = conn.prepare(`SELECT MIN(state.retry_after) AS retry_after
+    const row = conn().prepare(`SELECT MIN(state.retry_after) AS retry_after
       FROM session_projection_state state JOIN sessions ON sessions.id=state.session_id AND sessions.generation=state.session_generation
       WHERE state.status='rejected' AND state.retry_after>? AND state.retry_after<? AND state.scope_key LIKE 'session-projection:%'`)
       .get(now, Number.MAX_SAFE_INTEGER) as
@@ -107,13 +109,13 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
   }
 
   const readCheckpoint = (sessionId: string, scopeKey: string): string | null => {
-    const row = conn.prepare('SELECT build_checkpoint_json FROM session_projection_state WHERE session_id=? AND scope_key=?')
+    const row = conn().prepare('SELECT build_checkpoint_json FROM session_projection_state WHERE session_id=? AND scope_key=?')
       .get(sessionId, scopeKey) as { build_checkpoint_json: string | null } | undefined
     return row?.build_checkpoint_json ?? null
   }
 
   const saveCheckpoint = (input: Parameters<ProjectionStateStore['saveCheckpoint']>[0]): boolean => {
-    const result = conn.prepare(`UPDATE session_projection_state SET build_checkpoint_json=?,updated_at=?
+    const result = conn().prepare(`UPDATE session_projection_state SET build_checkpoint_json=?,updated_at=?
       WHERE session_id=? AND scope_key=? AND session_generation=? AND status='rebuilding'
         AND source_identity_json=? AND process_generation=? AND rebuild_token=?`)
       .run(input.checkpointJson, input.now, input.sessionId, input.scopeKey, input.sessionGeneration,
@@ -122,7 +124,7 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
   }
 
   const releaseLease = (input: Parameters<ProjectionStateStore['releaseLease']>[0]): boolean => {
-    const result = conn.prepare(`UPDATE session_projection_state SET process_generation=process_generation-1,
+    const result = conn().prepare(`UPDATE session_projection_state SET process_generation=process_generation-1,
         build_checkpoint_json=CASE WHEN json_valid(build_checkpoint_json)
           AND json_extract(build_checkpoint_json,'$.processGeneration')=process_generation
           AND json_extract(build_checkpoint_json,'$.rebuildToken')=rebuild_token
@@ -136,7 +138,7 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
   }
 
   const ensureInvalid = (input: Readonly<{ sessionId: string; scopeKey: string; sessionGeneration: string; now: number }>): ProjectionStateRecord | null =>
-    runInTransaction(conn, () => insertInvalid(db, input.sessionId, input.scopeKey, input.sessionGeneration, input.now))
+    runInTransaction(conn(), () => insertInvalid(db, input.sessionId, input.scopeKey, input.sessionGeneration, input.now))
 
   const transition = (input: Readonly<{
     sessionId: string
@@ -144,7 +146,7 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
     sessionGeneration: string
     command: ProjectionStateCommand
     cache?: ProjectionCacheCandidate
-  }>): ProjectionStateRecord | null => runInTransaction(conn, () => {
+  }>): ProjectionStateRecord | null => runInTransaction(conn(), () => {
     const current = insertInvalid(db, input.sessionId, input.scopeKey, input.sessionGeneration, input.command.now)
     if (!current) return null
     const sourceIdentityJson = readSourceIdentity(input.sessionId, input.sessionGeneration)
@@ -158,7 +160,7 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
     const next = transitionProjectionState(current, input.command, sourceIdentityJson)
     if (!next) return null
 
-    const update = conn.prepare(`UPDATE session_projection_state SET
+    const update = conn().prepare(`UPDATE session_projection_state SET
       status=?,history_watermark_json=?,message_revision=?,payload_generation=?,payload_digest=?,validated_range_json=?,
       source_identity_json=?,process_generation=?,rebuild_token=?,failure_case_json=?,attempts=?,retry_after=?,updated_at=?
       WHERE session_id=? AND scope_key=? AND session_generation=? AND status=? AND process_generation IS ? AND rebuild_token IS ?`)
@@ -177,7 +179,7 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
         (cache.blobLocator !== undefined && (!Number.isSafeInteger(cache.blobByteLength) || cache.blobByteLength! <= 0))) {
         throw new Error('PROJECTION_CACHE_MANIFEST_MISMATCH')
       }
-      conn.prepare(`INSERT INTO session_projection_cache(
+      conn().prepare(`INSERT INTO session_projection_cache(
         session_id,scope_key,payload_generation,source_identity_json,payload_digest,validated_range_json,inline_payload,blob_locator,blob_byte_length,updated_at
       ) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,scope_key) DO UPDATE SET
         payload_generation=excluded.payload_generation,source_identity_json=excluded.source_identity_json,
@@ -186,7 +188,7 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
         .run(next.sessionId,next.scopeKey,cache.payloadGeneration,cache.sourceIdentityJson,cache.payloadDigest,cache.validatedRangeJson,
           cache.inlinePayload ?? null,cache.blobLocator ?? null,cache.blobByteLength ?? null,next.updatedAt)
     } else {
-      conn.prepare('DELETE FROM session_projection_cache WHERE session_id=? AND scope_key=?').run(next.sessionId, next.scopeKey)
+      conn().prepare('DELETE FROM session_projection_cache WHERE session_id=? AND scope_key=?').run(next.sessionId, next.scopeKey)
     }
     return next
   })
@@ -199,19 +201,21 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
 
 /** Read and CAS-invalidate a final cache publication against a fresh source identity. */
 export function createSqliteProjectionChatBodyCacheStore(db: AppDatabase): ProjectionChatBodyCacheReadStore {
-  const conn = getDbConnection(db)
-  const readSnapshot = (sessionId: string, scopeKey: string): ProjectionChatBodyCacheSnapshot | null => runInTransaction(conn, () => {
-    const session = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
-    const state = conn.prepare('SELECT session_generation,status,payload_generation,payload_digest,validated_range_json,source_identity_json FROM session_projection_state WHERE session_id=? AND scope_key=?')
+  // Resolve the live connection for each operation because AppDatabase may be
+  // reopened in place while these stores remain owned by long-lived services.
+  const conn = () => getDbConnection(db)
+  const readSnapshot = (sessionId: string, scopeKey: string): ProjectionChatBodyCacheSnapshot | null => runInTransaction(conn(), () => {
+    const session = conn().prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
+    const state = conn().prepare('SELECT session_generation,status,payload_generation,payload_digest,validated_range_json,source_identity_json FROM session_projection_state WHERE session_id=? AND scope_key=?')
       .get(sessionId, scopeKey) as { session_generation: string; status: ProjectionStateRecord['status']; payload_generation: string | null;
         payload_digest: string | null; validated_range_json: string | null; source_identity_json: string | null } | undefined
     if (!session || !state) return null
-    const cache = conn.prepare('SELECT payload_generation,source_identity_json,payload_digest,validated_range_json,inline_payload,blob_locator,blob_byte_length FROM session_projection_cache WHERE session_id=? AND scope_key=?')
+    const cache = conn().prepare('SELECT payload_generation,source_identity_json,payload_digest,validated_range_json,inline_payload,blob_locator,blob_byte_length FROM session_projection_cache WHERE session_id=? AND scope_key=?')
       .get(sessionId, scopeKey) as { payload_generation: string; source_identity_json: string; payload_digest: string; validated_range_json: string;
         inline_payload: string | null; blob_locator: string | null; blob_byte_length: number | null } | undefined
     const specVersion = projectionScopeSpecVersion(scopeKey)
     if (specVersion === null) return null
-    const currentSourceIdentityJson = readProjectionSourceIdentity(conn, sessionId, session.generation)
+    const currentSourceIdentityJson = readProjectionSourceIdentity(conn(), sessionId, session.generation)
     return Object.freeze({ sessionId, sessionGeneration: state.session_generation, currentSessionGeneration: session.generation, scopeKey, specVersion, status: state.status, cachePresent: !!cache,
       sourceIdentityJson: cache?.source_identity_json ?? null, stateSourceIdentityJson: state.source_identity_json, currentSourceIdentityJson,
       payloadGeneration: cache?.payload_generation ?? null,
@@ -223,8 +227,8 @@ export function createSqliteProjectionChatBodyCacheStore(db: AppDatabase): Proje
       ...(cache?.blob_locator === null || cache?.blob_locator === undefined ? {} : { blobLocator: cache.blob_locator }),
       ...(cache?.blob_byte_length === null || cache?.blob_byte_length === undefined ? {} : { blobByteLength: cache.blob_byte_length }) })
   })
-  const invalidateObserved = (input: Parameters<ProjectionChatBodyCacheReadStore['invalidateObserved']>[0]): boolean => runInTransaction(conn, () => {
-    const result = conn.prepare(`UPDATE session_projection_state SET status='invalid',history_watermark_json=NULL,message_revision=NULL,
+  const invalidateObserved = (input: Parameters<ProjectionChatBodyCacheReadStore['invalidateObserved']>[0]): boolean => runInTransaction(conn(), () => {
+    const result = conn().prepare(`UPDATE session_projection_state SET status='invalid',history_watermark_json=NULL,message_revision=NULL,
       payload_generation=NULL,payload_digest=NULL,validated_range_json=NULL,source_identity_json=NULL,process_generation=NULL,rebuild_token=NULL,
       failure_case_json=NULL,attempts=0,retry_after=NULL,updated_at=? WHERE session_id=? AND scope_key=? AND session_generation=?
       AND status='valid' AND source_identity_json=? AND payload_generation=? AND payload_digest=? AND validated_range_json=?
@@ -236,7 +240,7 @@ export function createSqliteProjectionChatBodyCacheStore(db: AppDatabase): Proje
         input.cachePresent ? 1 : 0, input.sessionId, input.scopeKey, input.payloadGeneration, input.sourceIdentityJson, input.payloadDigest,
         input.validatedRangeJson, input.cachePresent ? 0 : 1, input.sessionId, input.scopeKey)
     if (changesToNumber(result.changes) !== 1) return false
-    if (input.cachePresent) conn.prepare(`DELETE FROM session_projection_cache WHERE session_id=? AND scope_key=? AND payload_generation=?
+    if (input.cachePresent) conn().prepare(`DELETE FROM session_projection_cache WHERE session_id=? AND scope_key=? AND payload_generation=?
       AND source_identity_json=? AND payload_digest=? AND validated_range_json=?`)
       .run(input.sessionId, input.scopeKey, input.payloadGeneration, input.sourceIdentityJson, input.payloadDigest, input.validatedRangeJson)
     return true
