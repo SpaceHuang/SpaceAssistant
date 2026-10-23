@@ -3,6 +3,7 @@ import os from 'node:os'
 import fsSync from 'node:fs'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { appendMessage, createPersistedTurn, createSession, enqueueQueuedUserMessage } from '../database/operations'
 import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
@@ -227,6 +228,48 @@ describe('SQLite projection build task composition', () => {
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
     } finally { db.close(); temp.cleanup() }
   })
+
+  it('publishes a segmented output manifest chain for a multi-message oversized History chunk', async () => {
+    const temp = createTempDatabase('sqlite-projection-output-segments-')
+    const db = temp.db
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-output-segments-blobs-'))
+    try {
+      const session = createSession(db, { name: 'segmented output manifests', model: 'test' })
+      const firstBody = 'first-large-message'.repeat(450_000)
+      const secondBody = 'second-large-message'.repeat(450_000)
+      appendMessage(db, { id: 'segmented-first', sessionId: session.id, role: 'user', content: '', timestamp: 1, status: 'sent' })
+      appendMessage(db, { id: 'segmented-second', sessionId: session.id, role: 'user', content: '', timestamp: 2, status: 'sent' })
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id)
+      await history.appendBatch([
+        { invocationId: 'segmented-output-inv', turnId: 'segmented-output-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'segmented-output-context', idempotencyKey: 'segmented-output-context', kind: 'invocation-context-committed',
+          payload: { messages: [
+            { id: 'segmented-first', role: 'user', content: firstBody, timestamp: 1 },
+            { id: 'segmented-second', role: 'user', content: secondBody, timestamp: 2 },
+          ] } },
+        { invocationId: 'segmented-output-inv', turnId: 'segmented-output-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'segmented-output-terminal', idempotencyKey: 'segmented-output-terminal', kind: 'invocation-completed',
+          payload: { status: 'completed' } },
+      ], 0)
+      getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+      const processGeneration = advanceProcessGeneration(getDbConnection(db))
+      const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }), recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
+        maintenanceTasks: [task] })
+      try {
+        await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).resolves.toBeDefined()
+        const messages = await readChatMessagesAfterPreparation(host.storage, { sessionId: session.id })
+        expect(messages.map((message) => ({ id: message.id, length: String(message.content).length,
+          digest: createHash('sha256').update(String(message.content)).digest('hex') }))).toEqual([
+          { id: 'segmented-first', length: firstBody.length, digest: createHash('sha256').update(firstBody).digest('hex') },
+          { id: 'segmented-second', length: secondBody.length, digest: createHash('sha256').update(secondBody).digest('hex') },
+        ])
+      } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
+    } finally { db.close(); temp.cleanup() }
+  }, 30_000)
 
   it('publishes the complete canonical-only assistant body when response chunks cross worker slices', async () => {
     const temp = createTempDatabase('sqlite-projection-assistant-chunks-')

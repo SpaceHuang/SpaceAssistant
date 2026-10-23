@@ -11,7 +11,7 @@ import { materializeProjectionOutputManifest, type ProjectionOutputBlobReader, t
 
 export type ProjectionBuildBlobPort = Readonly<{
   root?: string
-  withWorkerStaging?<T>(run: (promote: (input: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>) => Promise<Readonly<{
+  withWorkerStaging?<T>(run: (promote: (input: Readonly<{ tempLocator: string; locator?: string; byteLength: number; payloadDigest: string }>) => Promise<Readonly<{
     locator: string; byteLength: number; payloadDigest: string; release(): Promise<void>
   }>>, stage: Readonly<{ root: string; tempLocator: string; allocate(count: number): readonly string[] }>) => Promise<T>): Promise<T>
   write(payload: string): Promise<Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }>>
@@ -26,6 +26,7 @@ export type ProjectionBuildBlobPort = Readonly<{
     }>>
 }>
 const MAX_DERIVED_CHUNK_BLOB_BYTES = 256 * 1024 * 1024
+const MAX_STAGED_OUTPUT_MANIFEST_SEGMENTS = 14
 const DEFAULT_PROJECTION_RETRY_DELAY_MS = 60_000
 
 export type ProjectionHistoryChunkReaderPort = (
@@ -44,9 +45,9 @@ export type ProjectionHistoryChunkReduction =
   | Readonly<{ stateJson: string; outputOperations: readonly unknown[]; resetOutput: boolean;
       finalizedOutputOperations?: readonly unknown[]; workerThreadId?: number; workerSample?: ProjectionWorkerSample }>
   | Readonly<{ resetOutput: boolean; stateJson?: string; stagedArtifacts: Readonly<{
-    outputManifest: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>
-    stableIdIndex: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string; itemCount: number }>
-    reducerState?: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>
+    outputManifests: readonly Readonly<{ tempLocator: string; locator: string; byteLength: number; payloadDigest: string }>[]
+    stableIdIndex: Readonly<{ tempLocator: string; locator: string; byteLength: number; payloadDigest: string; itemCount: number }>
+    reducerState?: Readonly<{ tempLocator: string; locator: string; byteLength: number; payloadDigest: string }>
   }>; workerThreadId?: number; workerSample?: ProjectionWorkerSample }>
 export type ProjectionHistoryChunkReducerPort = (
   stateJson: string,
@@ -61,7 +62,7 @@ export type ProjectionHistoryChunkReducerPort = (
 
 export type ProjectionReducerArtifactStaging = Readonly<{
   root: string
-  outputManifestTempLocator: string
+  outputManifestTempLocators: readonly string[]
   stableIdIndexTempLocator: string
   reducerStateTempLocator: string
   context: Readonly<{
@@ -362,7 +363,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
     const currentReducerStateJson = reducerStateJson ?? ''
     let folded: ProjectionHistoryChunkReduction
     let promotedReducerArtifacts: Readonly<{
-      outputManifest: Awaited<ReturnType<ProjectionBuildBlobPort['write']>>
+      outputManifests: readonly Awaited<ReturnType<ProjectionBuildBlobPort['write']>>[]
       stableIdIndex: Awaited<ReturnType<ProjectionBuildBlobPort['write']>>
       reducerState?: Awaited<ReturnType<ProjectionBuildBlobPort['write']>>
     }> | undefined
@@ -381,9 +382,12 @@ export async function runProjectionBuildSlice(input: Readonly<{
       }
       if (input.reduceChunk && input.blobs.withWorkerStaging && input.blobs.root) {
         folded = await input.blobs.withWorkerStaging(async (promote, stage) => {
-          const [outputManifestTempLocator, stableIdIndexTempLocator, reducerStateTempLocator] = stage.allocate(3)
+          const allocated = stage.allocate(MAX_STAGED_OUTPUT_MANIFEST_SEGMENTS + 2)
+          const outputManifestTempLocators = allocated.slice(0, MAX_STAGED_OUTPUT_MANIFEST_SEGMENTS)
+          const stableIdIndexTempLocator = allocated[MAX_STAGED_OUTPUT_MANIFEST_SEGMENTS]
+          const reducerStateTempLocator = allocated[MAX_STAGED_OUTPUT_MANIFEST_SEGMENTS + 1]
           const reduction = await input.reduceChunk!(currentReducerStateJson, reducerEvents, reducerMessageFacts, lease.scopeKey,
-            !result.hasMore, input.signal, stagedChunkInput, { root: stage.root, outputManifestTempLocator: outputManifestTempLocator!,
+            !result.hasMore, input.signal, stagedChunkInput, { root: stage.root, outputManifestTempLocators,
               stableIdIndexTempLocator: stableIdIndexTempLocator!, reducerStateTempLocator: reducerStateTempLocator!, context: {
                 sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration, scopeKey: lease.scopeKey,
                 specVersion: input.specVersion, sourceIdentityJson: lease.sourceIdentityJson,
@@ -392,17 +396,21 @@ export async function runProjectionBuildSlice(input: Readonly<{
               } })
           if (!('stagedArtifacts' in reduction)) return reduction
           const artifacts = reduction.stagedArtifacts
-          const promoted: Awaited<ReturnType<typeof promote>>[] = []
+          const promotedOutputs: Awaited<ReturnType<typeof promote>>[] = []
+          let promotedStable: Awaited<ReturnType<typeof promote>> | undefined
+          let promotedState: Awaited<ReturnType<typeof promote>> | undefined
           try {
-            promoted.push(await promote(artifacts.outputManifest))
-            promoted.push(await promote(artifacts.stableIdIndex))
-            if (artifacts.reducerState) promoted.push(await promote(artifacts.reducerState))
+            for (const artifact of artifacts.outputManifests) {
+              promotedOutputs.push(await promote({ ...artifact, locator: artifact.locator }))
+            }
+            promotedStable = await promote({ ...artifacts.stableIdIndex, locator: artifacts.stableIdIndex.locator })
+            if (artifacts.reducerState) promotedState = await promote({ ...artifacts.reducerState, locator: artifacts.reducerState.locator })
           } catch (error) {
-            await releaseBlobs(promoted)
+            await releaseBlobs([...promotedOutputs, ...(promotedStable ? [promotedStable] : []), ...(promotedState ? [promotedState] : [])])
             throw error
           }
-          promotedReducerArtifacts = { outputManifest: promoted[0]!, stableIdIndex: promoted[1]!,
-            ...(promoted[2] ? { reducerState: promoted[2] } : {}) }
+          promotedReducerArtifacts = { outputManifests: promotedOutputs, stableIdIndex: promotedStable!,
+            ...(promotedState ? { reducerState: promotedState } : {}) }
           return reduction
         })
       } else {
@@ -415,6 +423,11 @@ export async function runProjectionBuildSlice(input: Readonly<{
         return { kind: 'checkpointed', checkpoint }
       }
       const reason = error instanceof Error ? error.message : 'history-reducer-rejected-chunk'
+      if (reason === 'PROJECTION_REDUCER_OUTPUT_SEGMENT_LIMIT_EXCEEDED') {
+        rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'DEFERRED_LARGE', input.now, input.retryAfter,
+          { eventSequence: result.nextSessionSequence })
+        return { kind: 'deferred-large', eventSequence: result.nextSessionSequence }
+      }
       if (pendingChunk && /^PROJECTION_PENDING_CHUNK_(?:DIGEST_MISMATCH|SHAPE_INVALID|REFERENCE_INVALID|UNAVAILABLE|INVALID_JSON)$/.test(reason)) {
         return invalidateInvalidCheckpoint()
       }
@@ -432,17 +445,20 @@ export async function runProjectionBuildSlice(input: Readonly<{
     if ('stagedArtifacts' in folded) {
       const artifacts = folded.stagedArtifacts
       const promoted = promotedReducerArtifacts
-      if (!promoted || promoted.outputManifest.byteLength !== artifacts.outputManifest.byteLength ||
-        promoted.outputManifest.payloadDigest !== artifacts.outputManifest.payloadDigest ||
+      if (!promoted || promoted.outputManifests.length !== artifacts.outputManifests.length ||
+        promoted.outputManifests.some((blob, index) => blob.locator !== artifacts.outputManifests[index]?.locator ||
+          blob.byteLength !== artifacts.outputManifests[index]?.byteLength || blob.payloadDigest !== artifacts.outputManifests[index]?.payloadDigest) ||
         promoted.stableIdIndex.byteLength !== artifacts.stableIdIndex.byteLength ||
         promoted.stableIdIndex.payloadDigest !== artifacts.stableIdIndex.payloadDigest ||
         (artifacts.reducerState && (!promoted.reducerState || promoted.reducerState.byteLength !== artifacts.reducerState.byteLength ||
           promoted.reducerState.payloadDigest !== artifacts.reducerState.payloadDigest)) ||
-        promoted.outputManifest.byteLength < 1 || promoted.outputManifest.byteLength > MAX_DERIVED_CHUNK_BLOB_BYTES ||
+        promoted.outputManifests.length < 1 || promoted.outputManifests.length > MAX_STAGED_OUTPUT_MANIFEST_SEGMENTS ||
+        promoted.outputManifests.some((blob) => blob.byteLength < 1 || blob.byteLength > MAX_DERIVED_CHUNK_BLOB_BYTES) ||
         promoted.stableIdIndex.byteLength < 1 || promoted.stableIdIndex.byteLength > MAX_DERIVED_CHUNK_BLOB_BYTES ||
         (promoted.reducerState !== undefined && (promoted.reducerState.byteLength < 1 ||
           promoted.reducerState.byteLength > MAX_DERIVED_CHUNK_BLOB_BYTES))) {
-        await releaseBlobs([promoted?.outputManifest, promoted?.stableIdIndex, promoted?.reducerState].filter(isDefined))
+        await releaseBlobs([...(promoted?.outputManifests ?? []), ...(promoted ? [promoted.stableIdIndex] : []),
+          ...(promoted?.reducerState ? [promoted.reducerState] : [])])
         rejectBuild(service, lease, 'VIEW_REJECTED', 'STAGED_REDUCER_OUTPUT_INVALID', input.now, input.retryAfter)
         return { kind: 'blob-write-failed', reason: 'staged-reducer-output-invalid' }
       }
@@ -464,10 +480,11 @@ export async function runProjectionBuildSlice(input: Readonly<{
           scopeKey: lease.scopeKey, specVersion: input.specVersion, sourceIdentityJson: lease.sourceIdentityJson,
           processGeneration: lease.processGeneration, rebuildToken: lease.rebuildToken,
           fromSequence: result.afterSessionSequence, nextSequence: result.nextSessionSequence,
-          rowCount: chunkRowCount, byteLength: result.byteLength, payloadDigest: promoted.outputManifest.payloadDigest,
-          blobLocator: promoted.outputManifest.locator }
+          rowCount: chunkRowCount, byteLength: result.byteLength,
+          payloadDigest: promoted.outputManifests.at(-1)!.payloadDigest,
+          blobLocator: promoted.outputManifests.at(-1)!.locator }
         const advancedBase = acceptProjectionBuildChunk(checkpoint, receipt, limits, folded.stateJson ?? null,
-          stableIdIndexManifest, promoted.outputManifest.byteLength, stateRef, pendingChunk !== null)
+          stableIdIndexManifest, promoted.outputManifests.at(-1)!.byteLength, stateRef, pendingChunk !== null)
         const advanced = advancedBase ? attachProjectionStableIdIndexManifest(advancedBase, stableIdIndexManifest) : advancedBase
         if (!advanced) {
           rejectBuild(service, lease, 'SPEC_UNSUPPORTED', 'CHECKPOINT_REDUCER_REJECTED_CHUNK', input.now, input.retryAfter)
@@ -481,7 +498,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
         rejectBuild(service, lease, 'VIEW_REJECTED', 'STAGED_REDUCER_CHECKPOINT_FAILED', input.now, input.retryAfter)
         return { kind: 'blob-write-failed', reason: error instanceof Error ? error.message : 'staged-reducer-checkpoint-failed' }
       } finally {
-        await releaseBlobs([promoted.outputManifest, promoted.stableIdIndex, promoted.reducerState].filter(isDefined))
+        await releaseBlobs([...promoted.outputManifests, promoted.stableIdIndex, ...(promoted.reducerState ? [promoted.reducerState] : [])])
       }
       continue
     }

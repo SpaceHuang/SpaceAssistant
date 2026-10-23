@@ -91,11 +91,14 @@ export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducer
         const staged = result && 'stagedArtifacts' in result ? result.stagedArtifacts : undefined
         const hasInline = result && 'stateJson' in result && 'outputOperations' in result &&
           typeof result.stateJson === 'string' && Array.isArray(result.outputOperations)
-        const hasStaged = staged && isStagedArtifact(staged.outputManifest) && isStagedArtifact(staged.stableIdIndex) &&
+        const hasStaged = staged && Array.isArray(staged.outputManifests) && staged.outputManifests.length > 0 &&
+          staged.outputManifests.length <= 14 && staged.outputManifests.every(isStagedArtifact) &&
+          isStagedArtifact(staged.stableIdIndex) &&
           Number.isSafeInteger(staged.stableIdIndex.itemCount) && staged.stableIdIndex.itemCount >= 0 &&
           (staged.reducerState === undefined || isStagedArtifact(staged.reducerState)) &&
-          new Set([staged.outputManifest.tempLocator, staged.stableIdIndex.tempLocator,
-            ...(staged.reducerState ? [staged.reducerState.tempLocator] : [])]).size === (staged.reducerState ? 3 : 2) &&
+          new Set([...staged.outputManifests.map((artifact) => artifact.tempLocator), staged.stableIdIndex.tempLocator,
+            ...(staged.reducerState ? [staged.reducerState.tempLocator] : [])]).size ===
+            staged.outputManifests.length + 1 + (staged.reducerState ? 1 : 0) &&
           result !== undefined && !('outputOperations' in result) && !('finalizedOutputOperations' in result)
         if (!result || (!hasInline && !hasStaged) || typeof result.resetOutput !== 'boolean' && hasStaged ||
           ('finalizedOutputOperations' in result && result.finalizedOutputOperations !== undefined && !Array.isArray(result.finalizedOutputOperations)) ||
@@ -115,9 +118,11 @@ export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducer
     })
   }
 
-function isStagedArtifact(value: unknown): value is Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }> {
+function isStagedArtifact(value: unknown): value is Readonly<{ tempLocator: string; locator: string; byteLength: number; payloadDigest: string }> {
   return Boolean(value && typeof value === 'object' &&
     /^\.projection-[0-9a-f-]{36}\.tmp$/.test((value as { tempLocator?: string }).tempLocator ?? '') &&
+    /^projection-[0-9a-f-]{36}\.blob$/.test((value as { locator?: string }).locator ?? '') &&
+    (value as { locator?: string }).locator === `${((value as { tempLocator: string }).tempLocator).slice(1, -4)}.blob` &&
     Number.isSafeInteger((value as { byteLength?: number }).byteLength) && (value as { byteLength: number }).byteLength > 0 &&
     /^[a-f0-9]{64}$/.test((value as { payloadDigest?: string }).payloadDigest ?? ''))
 }

@@ -9,6 +9,7 @@ import type { ProjectionReducerArtifactStaging } from '../../application/project
 import { createProjectionScopeHistoryReducer } from './projectionScopeHistoryReducer'
 
 if (!parentPort) throw new Error('projection history reducer worker requires a parent port')
+const MAX_OUTPUT_MANIFEST_SEGMENT_BYTES = 16 * 1024 * 1024
 
 parentPort.once('message', (message: {
   requestId: string
@@ -94,25 +95,35 @@ parentPort.once('message', (message: {
           }
           throw error
         } finally { await handle?.close() }
-        return { tempLocator: locator, byteLength: bytes.byteLength, payloadDigest: createHash('sha256').update(bytes).digest('hex') }
+        return { tempLocator: locator, locator: `${locator.slice(1, -4)}.blob`, byteLength: bytes.byteLength,
+          payloadDigest: createHash('sha256').update(bytes).digest('hex') }
       }
       const outputOperations = [...folded.outputOperations, ...(finalizedOutputOperations ?? [])]
-      const outputPayload = JSON.stringify({ formatVersion: 2, sessionId: context.sessionId,
-        sessionGeneration: context.sessionGeneration, scopeKey: context.scopeKey, specVersion: context.specVersion,
-        sourceIdentityJson: context.sourceIdentityJson,
-        outputManifest: { formatVersion: 1, parent: folded.resetOutput ? null : context.parentOutputManifest,
-          operations: outputOperations }, sourceComplete: message.finalize })
+      const operationSegments = segmentOutputOperations(outputOperations)
+      if (operationSegments.length > message.staging.outputManifestTempLocators.length) {
+        throw new Error('PROJECTION_REDUCER_OUTPUT_SEGMENT_LIMIT_EXCEEDED')
+      }
       const stableIndex = await buildStableIdIndex({ root, prior: context.priorStableIdIndex, operations: outputOperations,
         identity: { sessionId: context.sessionId, scopeKey: context.scopeKey, sourceIdentityJson: context.sourceIdentityJson } })
-      const [outputManifest, stableIdIndex, reducerState] = await Promise.all([
-        writeArtifact(message.staging.outputManifestTempLocator, outputPayload),
+      const outputManifests: Array<Awaited<ReturnType<typeof writeArtifact>>> = []
+      let parent = folded.resetOutput ? null : context.parentOutputManifest
+      for (const [index, operations] of operationSegments.entries()) {
+        const outputPayload = JSON.stringify({ formatVersion: 2, sessionId: context.sessionId,
+          sessionGeneration: context.sessionGeneration, scopeKey: context.scopeKey, specVersion: context.specVersion,
+          sourceIdentityJson: context.sourceIdentityJson,
+          outputManifest: { formatVersion: 1, parent, operations }, sourceComplete: message.finalize && index === operationSegments.length - 1 })
+        const artifact = await writeArtifact(message.staging.outputManifestTempLocators[index]!, outputPayload)
+        outputManifests.push(artifact)
+        parent = { locator: artifact.locator, byteLength: artifact.byteLength, payloadDigest: artifact.payloadDigest }
+      }
+      const [stableIdIndex, reducerState] = await Promise.all([
         writeArtifact(message.staging.stableIdIndexTempLocator, stableIndex.payload),
         Buffer.byteLength(folded.stateJson) > 64 * 1024
           ? writeArtifact(message.staging.reducerStateTempLocator, folded.stateJson) : Promise.resolve(undefined),
       ])
       result = { resetOutput: folded.resetOutput,
         ...(reducerState ? {} : { stateJson: folded.stateJson }),
-        stagedArtifacts: { outputManifest, stableIdIndex: { ...stableIdIndex, itemCount: stableIndex.itemCount },
+        stagedArtifacts: { outputManifests, stableIdIndex: { ...stableIdIndex, itemCount: stableIndex.itemCount },
           ...(reducerState ? { reducerState } : {}) }, workerThreadId: threadId,
         workerSample: { durationMs: Math.max(0, performance.now() - startedAt),
           heapUsedBytesAtExit: getHeapStatistics().used_heap_size, processRssBytesAtExit: process.memoryUsage.rss() } }
@@ -124,6 +135,38 @@ parentPort.once('message', (message: {
     parentPort!.close()
   })
 })
+
+function segmentOutputOperations(operations: readonly unknown[]): readonly (readonly unknown[])[] {
+  const segments: unknown[][] = []
+  let current: unknown[] = []
+  let currentBytes = 0
+  const flush = () => { if (current.length) { segments.push(current); current = []; currentBytes = 0 } }
+  const add = (operation: unknown) => {
+    const byteLength = Buffer.byteLength(JSON.stringify(operation) ?? 'null')
+    if (current.length && currentBytes + byteLength > MAX_OUTPUT_MANIFEST_SEGMENT_BYTES) flush()
+    current.push(operation)
+    currentBytes += byteLength
+  }
+  for (const raw of operations) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { add(raw); continue }
+    const operation = raw as { type?: unknown; messages?: unknown; updates?: unknown }
+    if ((operation.type === 'append' || operation.type === 'replace') && Array.isArray(operation.messages)) {
+      if (operation.messages.length === 0) { add(operation); continue }
+      for (const [index, message] of operation.messages.entries()) {
+        add({ type: operation.type === 'replace' && index === 0 ? 'replace' : 'append', messages: [message] })
+      }
+      continue
+    }
+    if (operation.type === 'appendText' && Array.isArray(operation.updates)) {
+      if (operation.updates.length === 0) { add(operation); continue }
+      for (const update of operation.updates) add({ type: 'appendText', updates: [update] })
+      continue
+    }
+    add(operation)
+  }
+  flush()
+  return Object.freeze((segments.length ? segments : [[]]).map((segment) => Object.freeze(segment)))
+}
 
 async function buildStableIdIndex(input: Readonly<{
   root: string

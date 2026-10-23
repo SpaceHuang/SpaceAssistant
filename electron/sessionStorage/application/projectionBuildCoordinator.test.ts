@@ -333,6 +333,27 @@ describe('projection build coordinator', () => {
     expect(service.readCheckpoint(session.id, 'scope-a')).toBeNull()
   })
 
+  it('records reducer output segment overflow as deferred-large instead of retrying an unbounded build', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection output segment limit', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'output-segment-limit-token', now: () => 2 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    const event = { invocationId: 'segment-limit-inv', sequence: 1, eventId: 'segment-limit-event',
+      idempotencyKey: 'segment-limit-key', turnId: 'segment-limit-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}',
+      sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+    const result = await runProjectionBuildSlice({ service, lease, specVersion: 1, dbPath: db.filePath,
+      readChunk: async (permit, input) => ({ kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence,
+        nextSessionSequence: 1, events: [event], messageFacts: [], byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: false }),
+      historyReducer, reduceChunk: async () => { throw new Error('PROJECTION_REDUCER_OUTPUT_SEGMENT_LIMIT_EXCEEDED') },
+      blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 4096 },
+      maxChunksPerSlice: 1, now: () => 2 })
+    expect(result).toEqual({ kind: 'deferred-large', eventSequence: 1 })
+    expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rejected', retryAfter: Number.MAX_SAFE_INTEGER,
+      failureCaseJson: expect.stringContaining('DEFERRED_LARGE') })
+  })
+
   it('passes reducer state blob references to the worker without reading large state in the coordinator', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection worker state read', model: 'test' })

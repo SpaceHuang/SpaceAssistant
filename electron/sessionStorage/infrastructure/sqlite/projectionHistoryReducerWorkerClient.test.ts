@@ -8,6 +8,7 @@ import { encodeProjectionScopeKey } from '../../domain/scopeKey'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
 import { createProjectionScopeHistoryReducer } from './projectionScopeHistoryReducer'
 import { reduceProjectionHistoryChunkInWorker } from './projectionHistoryReducerWorkerClient'
+import { materializeProjectionOutputManifest } from '../../application/projectionOutputManifest'
 
 describe('projection History reducer worker client', () => {
   it('folds and finalizes a bounded chunk off the main thread', async () => {
@@ -93,7 +94,7 @@ describe('projection History reducer worker client', () => {
       const facts: ProjectionMessageFact[] = [{ id: 'artifact-user', role: 'user', timestamp: 1, sequence: 0,
         queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: content }]
       const result = await reduceProjectionHistoryChunkInWorker(reducer.createState(scopeKey), events, facts, scopeKey, true,
-        undefined, undefined, { root, outputManifestTempLocator: locator(), stableIdIndexTempLocator: locator(),
+        undefined, undefined, { root, outputManifestTempLocators: [locator()], stableIdIndexTempLocator: locator(),
           reducerStateTempLocator: locator(), context: { sessionId: 'artifact-session', sessionGeneration: 'generation-1',
             scopeKey, specVersion: 3, sourceIdentityJson: '{"source":1}', parentOutputManifest: null, priorStableIdIndex: null,
             priorReducerState: null } })
@@ -101,7 +102,7 @@ describe('projection History reducer worker client', () => {
       expect('stagedArtifacts' in result).toBe(true)
       if (!('stagedArtifacts' in result)) throw new Error('expected staged reducer artifacts')
       expect('outputOperations' in result).toBe(false)
-      const manifest = result.stagedArtifacts.outputManifest
+      const manifest = result.stagedArtifacts.outputManifests[0]!
       const bytes = await fs.readFile(path.join(root, manifest.tempLocator))
       expect(bytes.byteLength).toBe(manifest.byteLength)
       expect(createHash('sha256').update(bytes).digest('hex')).toBe(manifest.payloadDigest)
@@ -128,7 +129,7 @@ describe('projection History reducer worker client', () => {
         payloadDigest: createHash('sha256').update(stateBytes).digest('hex'), sessionId: 'state-session', scopeKey,
         sourceIdentityJson: '{"source":1}' }
       const locator = () => `.projection-${randomUUID()}.tmp`
-      const staging = { root, outputManifestTempLocator: locator(), stableIdIndexTempLocator: locator(), reducerStateTempLocator: locator(),
+      const staging = { root, outputManifestTempLocators: [locator()], stableIdIndexTempLocator: locator(), reducerStateTempLocator: locator(),
         context: { sessionId: 'state-session', sessionGeneration: 'generation-1', scopeKey, specVersion: 3,
           sourceIdentityJson: '{"source":1}', parentOutputManifest: null, priorStableIdIndex: null, priorReducerState } }
 
@@ -143,6 +144,64 @@ describe('projection History reducer worker client', () => {
       await expect(reduceProjectionHistoryChunkInWorker('', [], [], scopeKey, false, undefined, undefined, { ...staging,
         context: { ...staging.context, priorReducerState: { ...priorReducerState, payloadDigest: '0'.repeat(64) } } }))
         .rejects.toThrow('PROJECTION_REDUCER_STATE_DIGEST_MISMATCH')
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('segments a multi-message reducer output into linked manifests without changing message order or content', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'projection-reducer-output-segments-'))
+    try {
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 3 })
+      const reducer = createProjectionScopeHistoryReducer()
+      const firstContent = 'first-segment-message'.repeat(400_000)
+      const secondContent = 'second-segment-message'.repeat(400_000)
+      const events: ProjectionHistoryChunkEvent[] = [{ invocationId: 'segment-invocation', sequence: 1,
+        eventId: 'segment-context', idempotencyKey: 'segment-context', turnId: 'segment-turn', schemaVersion: 1,
+        kind: 'invocation-context-committed', sessionSequence: 1, commitOrder: 1, createdAt: 1,
+        payloadJson: JSON.stringify({ messages: [
+          { id: 'segment-first', role: 'user', content: firstContent, timestamp: 1 },
+          { id: 'segment-second', role: 'user', content: secondContent, timestamp: 2 },
+        ] }) },
+      { invocationId: 'segment-invocation', sequence: 2, eventId: 'segment-terminal', idempotencyKey: 'segment-terminal',
+        turnId: 'segment-turn', schemaVersion: 1, kind: 'invocation-completed', sessionSequence: 2, commitOrder: 2,
+        createdAt: 2, payloadJson: JSON.stringify({ status: 'completed' }) }]
+      const facts: ProjectionMessageFact[] = [
+        { id: 'segment-first', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy',
+          writeMode: null, storedContent: firstContent },
+        { id: 'segment-second', role: 'user', timestamp: 2, sequence: 1, queueScope: 'desktop', contentStorageState: 'legacy',
+          writeMode: null, storedContent: secondContent },
+      ]
+      const locator = () => `.projection-${randomUUID()}.tmp`
+      const staging = { root, outputManifestTempLocators: Array.from({ length: 14 }, locator),
+        stableIdIndexTempLocator: locator(), reducerStateTempLocator: locator(),
+        context: { sessionId: 'segment-session', sessionGeneration: 'generation-1', scopeKey, specVersion: 3,
+          sourceIdentityJson: '{"source":1}', parentOutputManifest: null, priorStableIdIndex: null, priorReducerState: null } }
+      const result = await reduceProjectionHistoryChunkInWorker(reducer.createState(scopeKey), events, facts, scopeKey, true,
+        undefined, undefined, staging)
+      expect('stagedArtifacts' in result).toBe(true)
+      if (!('stagedArtifacts' in result)) throw new Error('expected segmented reducer artifacts')
+      const manifests = result.stagedArtifacts.outputManifests
+      expect(manifests).toHaveLength(2)
+      const manifestPayloads = new Map<string, string>()
+      for (const artifact of manifests) {
+        const bytes = await fs.readFile(path.join(root, artifact.tempLocator))
+        expect(createHash('sha256').update(bytes).digest('hex')).toBe(artifact.payloadDigest)
+        manifestPayloads.set(artifact.locator, bytes.toString('utf8'))
+      }
+      expect(JSON.parse(manifestPayloads.get(manifests[0]!.locator)!).outputManifest.parent).toBeNull()
+      expect(JSON.parse(manifestPayloads.get(manifests[1]!.locator)!).outputManifest.parent).toEqual({
+        locator: manifests[0]!.locator, byteLength: manifests[0]!.byteLength, payloadDigest: manifests[0]!.payloadDigest,
+      })
+      const output = await materializeProjectionOutputManifest({ locator: manifests[1]!.locator,
+        byteLength: manifests[1]!.byteLength, payloadDigest: manifests[1]!.payloadDigest },
+      { sessionId: 'segment-session', sessionGeneration: 'generation-1', scopeKey, specVersion: 3,
+        sourceIdentityJson: '{"source":1}' }, { readVerified: async (ref) => manifestPayloads.get(ref.locator)! })
+      expect(output.map(({ id, role, content }) => ({ id, role, length: String(content).length,
+        digest: createHash('sha256').update(String(content)).digest('hex') }))).toEqual([
+        { id: 'segment-first', role: 'user', length: firstContent.length,
+          digest: createHash('sha256').update(firstContent).digest('hex') },
+        { id: 'segment-second', role: 'user', length: secondContent.length,
+          digest: createHash('sha256').update(secondContent).digest('hex') },
+      ])
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 

@@ -40,14 +40,14 @@ export function createSessionProjectionBlobStore(root: string) {
 
   return {
     root,
-    async withWorkerStaging<T>(run: (promote: (input: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>) => Promise<StagedProjectionBlob>,
+    async withWorkerStaging<T>(run: (promote: (input: Readonly<{ tempLocator: string; locator?: string; byteLength: number; payloadDigest: string }>) => Promise<StagedProjectionBlob>,
       stage: Readonly<{ root: string; tempLocator: string; allocate(count: number): readonly string[] }>) => Promise<T>): Promise<T> {
       const releaseFence = await acquireFence()
       const tempLocators = new Set<string>()
       const firstTempLocator = `.projection-${randomUUID()}.tmp`
       tempLocators.add(firstTempLocator)
       const stage = Object.freeze({ root, tempLocator: firstTempLocator, allocate(count: number) {
-        if (!Number.isSafeInteger(count) || count < 1 || count > 16) throw blobError('PROJECTION_WORKER_STAGE_COUNT_INVALID', 'worker staging count is invalid')
+        if (!Number.isSafeInteger(count) || count < 1 || count > 32) throw blobError('PROJECTION_WORKER_STAGE_COUNT_INVALID', 'worker staging count is invalid')
         const locators = Array.from({ length: count }, () => `.projection-${randomUUID()}.tmp`)
         for (const locator of locators) tempLocators.add(locator)
         return Object.freeze(locators)
@@ -58,6 +58,8 @@ export function createSessionProjectionBlobStore(root: string) {
       try {
         const result = await run(async (input) => {
           if (!/^\.projection-[0-9a-f-]{36}\.tmp$/.test(input.tempLocator) || path.basename(input.tempLocator) !== input.tempLocator ||
+            (input.locator !== undefined && (!/^projection-[0-9a-f-]{36}\.blob$/.test(input.locator) ||
+              input.locator !== `${input.tempLocator.slice(1, -4)}.blob`)) ||
             !Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || !/^[a-f0-9]{64}$/.test(input.payloadDigest)) {
             throw blobError('PROJECTION_WORKER_BLOB_REFERENCE_INVALID', 'worker staging reference is invalid')
           }
@@ -70,8 +72,11 @@ export function createSessionProjectionBlobStore(root: string) {
           if (await digestFile(tempPath) !== input.payloadDigest) {
             throw blobError('PROJECTION_WORKER_BLOB_INVALID', 'worker staging digest is invalid')
           }
-          const locator = `projection-${randomUUID()}.blob`
+          const locator = input.locator ?? `projection-${randomUUID()}.blob`
           const finalPath = path.join(root, locator)
+          if (await fs.lstat(finalPath).then(() => true, (error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? false : Promise.reject(error))) {
+            throw blobError('PROJECTION_WORKER_BLOB_TARGET_EXISTS', 'worker staging target already exists')
+          }
           await fs.rename(tempPath, finalPath)
           tempLocators.delete(input.tempLocator)
           await fs.chmod(finalPath, 0o600)
