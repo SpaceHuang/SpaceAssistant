@@ -4,7 +4,7 @@ import { getMessages } from '../database/operations'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
 import { SqliteAgentHistory, type CanonicalSessionTranscriptRead } from './sqliteAgentHistory'
 import { canonicalBackedSessionProjectionMatches } from './sessionTranscriptProjection'
-import { hasCurrentProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
+import { hasCurrentProjectionEligibility } from '../sessionStorage/sqliteRuntimeBindings'
 
 export type SessionProjectionMigrationDisposition =
   | 'projection_migrated'

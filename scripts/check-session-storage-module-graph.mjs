@@ -15,6 +15,7 @@ const observedCrossDirectoryExceptions = new Set()
 function categoryFor(filePath) {
   const normalized = filePath.replaceAll('\\', '/')
   if (/^electron\//.test(normalized) && !normalized.startsWith('electron/sessionStorage/')) return 'external-electron'
+  if (normalized === 'electron/sessionStorage/sqliteRuntimeBindings.ts') return 'sqlite-host-bindings'
   if (normalized === 'electron/sessionStorage/maintenance.ts') return 'maintenance'
   if (normalized.startsWith('electron/sessionStorage/internal/')) return 'infrastructure/sqlite'
   const match = /^electron\/sessionStorage\/(domain|public|application|infrastructure(?:\/[^/]+)?|host|maintenance)\//.exec(normalized)
@@ -69,6 +70,23 @@ export function findSessionStorageModuleViolations(filePath, source) {
         ['electron/sessionStorage/public/model', 'electron/sessionStorage/public/readPreparation'].includes(edge.resolved) ||
         (edge.resolved === 'electron/sessionStorage/public/ports' && edge.typeOnly && edge.symbols.length === 1 && edge.symbols[0] === 'SessionHistoryPort') ||
         edge.resolved.startsWith('packages/agent-sdk/')
+    }
+    if (category === 'sqlite-host-bindings') {
+      const namedBindings = new Map([
+        ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts', new Set([
+          'computeCanonicalProjectionFingerprint', 'hasCurrentProjectionEligibility', 'publishTranscriptParityProof',
+          'readLegacyProjectionMessages', 'refreshValidatedProjectionFastPath', 'validateAndCacheCanonicalProjection'])],
+        ['electron/sessionStorage/internal/messageBodyResolver', new Set(['resolveSelectedMessageBodies'])],
+        ['electron/sessionStorage/application/projectionService', new Set(['createProjectionService'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionStateStore', new Set(['createSqliteProjectionStateStore'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionApiRouteProjectionFence', new Set(['createSqliteSessionApiRouteProjectionFence'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionEligibility', new Set(['hasRejectedTranscriptParityStateInConnection'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionEventRetentionAdapter', new Set([
+          'createSessionLedgerCompactionDependencyGuard', 'createCanonicalSessionProjectionRetentionPreparer'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost', new Set(['createSqliteStartupHistoryRecoveryBindings'])],
+      ])
+      const allowedSymbols = namedBindings.get(edge.resolved)
+      return !edge.typeOnly && edge.symbols.length > 0 && !!allowedSymbols && edge.symbols.every((symbol) => allowedSymbols.has(symbol))
     }
     if (category === 'application') {
       return edge.resolved.startsWith('src/shared/') ||
@@ -213,6 +231,8 @@ function main() {
       ['infrastructure reverse application edge', 'electron/sessionStorage/infrastructure/sqlite/__gate_probe__.ts', `import { runProjectionBuildSlice } from '../../../application/unregisteredService'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['maintenance unapproved implementation edge', 'electron/sessionStorage/maintenance.ts', `export * from './application/unregisteredService'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['SQLite host binding unregistered edge', 'electron/sessionStorage/sqliteRuntimeBindings.ts', `export { unregistered } from './infrastructure/sqlite/unregistered'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0]
     ]
     const missed = probes.filter(([, file, source, rejects]) => !rejects(file, source))

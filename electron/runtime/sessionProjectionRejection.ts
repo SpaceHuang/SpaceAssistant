@@ -7,8 +7,7 @@ import { encodeChatBodyV1 } from '../sessionStorage/domain/projectionSpec'
 import { currentProcessGeneration } from '../database/processGeneration'
 import { randomUUID } from 'node:crypto'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
-import { createProjectionService } from '../sessionStorage/application/projectionService'
-import { createSqliteProjectionStateStore } from '../sessionStorage/infrastructure/sqlite/sessionProjectionStateStore'
+import { createProjectionService, createSqliteProjectionStateStore } from '../sessionStorage/sqliteRuntimeBindings'
 
 /**
  * P0-② negative-cache verdict row (plan §5 ①/②, v4 M1). The synchronous read path consults

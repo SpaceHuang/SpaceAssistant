@@ -8,7 +8,7 @@ import { buildSessionProjectionMigrationInventory, classifySessionProjectionMigr
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
 import { backfillLegacySessionProjectionBaseline } from './sessionProjectionLegacyBaseline'
-import { hasCurrentProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
+import { hasCurrentProjectionEligibility } from '../sessionStorage/sqliteRuntimeBindings'
 
 export type SessionProjectionMigrationRun = Readonly<{
   runId: string

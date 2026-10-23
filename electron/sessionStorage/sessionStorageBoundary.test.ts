@@ -23,7 +23,7 @@ describe('session storage module graph rules', () => {
       expect(command.indexOf('npm run check:session-storage-boundary')).toBeLessThan(command.indexOf('tsc -p tsconfig.electron.json'))
     }
     expect(execFileSync(process.execPath, [path.resolve('scripts/check-session-storage-module-graph.mjs'), '--probe-illegal-edge'], { encoding: 'utf8' }))
-      .toContain('illegal-edge probes rejected as expected (8 probes)')
+      .toContain('illegal-edge probes rejected as expected (9 probes)')
   })
 
   it('blocks both Electron build command chains before compilation when the injected graph probe fails', () => {
@@ -43,7 +43,7 @@ describe('session storage module graph rules', () => {
         expect(command).toContain('npm run check:session-storage-boundary')
         const result = spawnSync('/bin/sh', ['-c', command], { cwd: path.resolve('.'), env: { ...process.env, PATH: isolatedPath }, encoding: 'utf8' })
         expect(result.status, `${name} must stop on the injected illegal edge`).not.toBe(0)
-        expect(`${result.stdout}${result.stderr}`).toContain('illegal-edge probes rejected as expected (8 probes)')
+        expect(`${result.stdout}${result.stderr}`).toContain('illegal-edge probes rejected as expected (9 probes)')
         expect(existsSync(marker)).toBe(false)
       }
     } finally {
@@ -195,11 +195,22 @@ describe('session storage module graph rules', () => {
     `)).toEqual([])
   })
 
+  it('allows only named exports from the SQLite host binding module', () => {
+    expect(findSessionStorageModuleViolations('electron/sessionStorage/sqliteRuntimeBindings.ts', `
+      export { hasCurrentProjectionEligibility } from './infrastructure/sqlite/sessionProjectionRevalidationFacts'
+      export { resolveSelectedMessageBodies } from './internal/messageBodyResolver'
+    `)).toEqual([])
+    expect(findSessionStorageModuleViolations('electron/sessionStorage/sqliteRuntimeBindings.ts', `
+      export * from './infrastructure/sqlite/sessionProjectionRevalidationFacts'
+      export { unregistered } from './infrastructure/sqlite/unregistered'
+    `)).toHaveLength(2)
+  })
+
   it('keeps every cross-directory exception precise and reviewable', () => {
     const entries = JSON.parse(readFileSync(path.resolve('scripts/session-storage-cross-directory-exceptions.json'), 'utf8')) as Array<{
       source: string; target: string; symbols: string[]; typeOnly: boolean; owner: string; reason: string; exitStage: string; evidence: string
     }>
-    expect(entries).toHaveLength(14)
+    expect(entries).toHaveLength(0)
     for (const entry of entries) {
       expect(entry.source).toMatch(/^electron\//)
       expect(entry.target).toMatch(/^electron\/sessionStorage\/(application|infrastructure|internal)\//)

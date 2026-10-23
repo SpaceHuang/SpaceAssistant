@@ -3,8 +3,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { currentProcessGeneration } from '../database/processGeneration'
 import { randomUUID } from 'node:crypto'
-import { createSqliteProjectionStateStore } from '../sessionStorage/infrastructure/sqlite/sessionProjectionStateStore'
-import { createProjectionService } from '../sessionStorage/application/projectionService'
+import { createSqliteProjectionStateStore, createProjectionService } from '../sessionStorage/sqliteRuntimeBindings'
 
 /** Clear only derived projection caches and their eligibility, preserving canonical transcript and cleanup state. */
 export function clearSessionProjectionCaches(db: AppDatabase): { cacheRows: number; eligibilityRows: number } {

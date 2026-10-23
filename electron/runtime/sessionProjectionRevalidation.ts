@@ -12,7 +12,7 @@ import {
   readLegacyProjectionMessages,
   refreshValidatedProjectionFastPath,
   validateAndCacheCanonicalProjection
-} from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
+} from '../sessionStorage/sqliteRuntimeBindings'
 
 /**
  * P0-③ background revalidation executor (plan §4 保障链 / §5 ③). Full rebuild+compare runs

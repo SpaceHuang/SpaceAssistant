@@ -7,7 +7,7 @@ import { runInTransaction } from '../database/transaction'
 import { canonicalBackedSessionProjectionMatches } from './sessionTranscriptProjection'
 import { SqliteAgentHistory, type CanonicalSessionTranscriptRead } from './sqliteAgentHistory'
 import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
-import { hasCurrentProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
+import { hasCurrentProjectionEligibility } from '../sessionStorage/sqliteRuntimeBindings'
 
 export type SessionProjectionConsistencyStatus = 'consistent' | 'legacy_exception' | 'deleted' | 'difference'
 export type SessionProjectionLegacyComparison = 'exact' | 'skeleton' | 'legacy-exception' | 'not-compared'
