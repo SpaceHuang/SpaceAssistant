@@ -2,12 +2,11 @@ import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
-import { getMessages } from '../database/operations'
 import { runInTransaction } from '../database/transaction'
 import { canonicalBackedSessionProjectionMatches } from './sessionTranscriptProjection'
 import { SqliteAgentHistory, type CanonicalSessionTranscriptRead } from './sqliteAgentHistory'
 import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
-import { hasCurrentProjectionEligibility } from '../sessionStorage/sqliteRuntimeBindings'
+import { hasCurrentProjectionEligibility, readLegacyProjectionMessages } from '../sessionStorage/sqliteRuntimeBindings'
 
 export type SessionProjectionConsistencyStatus = 'consistent' | 'legacy_exception' | 'deleted' | 'difference'
 export type SessionProjectionLegacyComparison = 'exact' | 'skeleton' | 'legacy-exception' | 'not-compared'
@@ -152,7 +151,7 @@ function auditOneSession(
   const cutover = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
     .get(session.id) as { write_mode: string } | undefined
   const hasCanonicalBackedRows = storedRows.some(({ content_storage_state }) => content_storage_state !== 'legacy')
-  const legacyMessages = getMessages(db, session.id, Number.MAX_SAFE_INTEGER)
+  const legacyMessages = readLegacyProjectionMessages(db, session.id)
   let canonical: CanonicalSessionTranscriptRead
   let legacyComparison: SessionProjectionLegacyComparison
 

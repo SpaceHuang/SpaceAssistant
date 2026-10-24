@@ -58,7 +58,8 @@ describe('session storage module graph rules', () => {
     expect(source).not.toContain('sessionLedgerRecovery')
   })
 
-  it.each(['electron/runtime/sessionProjectionMigrationInventory.ts', 'electron/runtime/sessionProjectionLegacyBaseline.ts'])(
+  it.each(['electron/runtime/sessionProjectionMigrationInventory.ts', 'electron/runtime/sessionProjectionLegacyBaseline.ts',
+    'electron/runtime/sessionProjectionConsistencyAudit.ts'])(
     'keeps %s legacy message reads behind the storage-owned binding', (file) => {
       const source = readFileSync(path.resolve(file), 'utf8')
       expect(source).not.toContain("from '../database/operations'")
