@@ -50,6 +50,16 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     .get(sessionId) as { write_mode: string } | undefined
   const hasCanonicalBackedRows = getDbConnection(db).prepare(`SELECT 1 FROM messages
     WHERE session_id=? AND content_storage_state IN ('canonical-backed-dual-write','canonical-backed-only') LIMIT 1`).get(sessionId) !== undefined
+  const legacySnapshot = hasCanonicalBackedRows && cutover?.write_mode === 'canonical'
+    ? undefined
+    : getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+  if (legacySnapshot?.every(({ role }) => role === 'user' || role === 'assistant')) {
+    const rejectionVerdict = consultProjectionRejection(db, sessionId, legacySnapshot)
+    if (rejectionVerdict) {
+      if (rejectionVerdict === 'stale') enqueueSessionProjectionRevalidation(db, sessionId, { stale: true })
+      return { source: 'legacy', messages: legacySnapshot, reason: 'projection-rejected' }
+    }
+  }
   let canonical: ReturnType<SqliteAgentHistory['readCanonicalSessionTranscriptWithCache']> |
     ReturnType<SqliteAgentHistory['readCanonicalSessionTranscriptForShadow']>
   try {
@@ -59,8 +69,12 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     // truth directly until the scoped projection reader owns this route.
     if (hasCanonicalBackedRows && cutover?.write_mode === 'canonical') {
       canonical = history.readCanonicalSessionTranscriptForShadow(sessionId)
+    } else if (!hasSessionProjectionEligibility(db, sessionId)) {
+      // A legacy transcript cache is only an L1 candidate after the current source-fenced
+      // parity proof exists. Without it, go straight to the one authoritative L2 compare.
+      canonical = { kind: 'unavailable', reason: 'legacy-mismatch' }
     } else {
-      const legacyMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+      const legacyMessages = legacySnapshot ?? getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
       canonical = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript', legacyMessages.map(({ id, role, content, timestamp }) => ({
         id, role: role as 'user' | 'assistant', content, timestamp
       })))
@@ -103,7 +117,7 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     }
   }
 
-  const legacyMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+  const legacyMessages = legacySnapshot ?? getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
   if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) {
     return { source: 'legacy', messages: legacyMessages, reason: 'field-not-eligible' }
   }
@@ -124,6 +138,9 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
         id, role: role as 'user' | 'assistant', content, timestamp
       })))
       if (verified.kind !== 'matched') return verified
+      // This detached transcript is only an L1 acceleration and is written from this exact L2 fold.
+      // It remains unreadable until the independent parity proof publishes for this source fence.
+      history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })
       publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
       return { kind: 'matched' as const, source: 'L2' as const, messages: verified.messages, replayedEvents: verified.eventCount, watermark: verified }
     })

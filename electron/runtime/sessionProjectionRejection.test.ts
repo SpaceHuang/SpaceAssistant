@@ -56,6 +56,24 @@ describe('session projection rejection negative cache (P0-②)', () => {
     db.close()
   })
 
+  it('does not delete the legacy transcript cache when the new parity state rejects it', async () => {
+    const { db, conn, session, history } = await createMismatchedSession()
+    const canonical = history.readCanonicalSessionTranscriptForShadow(session.id)
+    if (canonical.kind !== 'matched') throw new Error('expected canonical History transcript')
+    history.writeCanonicalSessionCache({ ...canonical, cacheKey: 'transcript', value: JSON.stringify(canonical.messages) })
+    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
+      .get(session.id)).toBeDefined()
+    const cacheReadSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptWithCache')
+
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'legacy-mismatch' })
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
+    expect(cacheReadSpy).not.toHaveBeenCalled()
+    cacheReadSpy.mockRestore()
+    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
+      .get(session.id)).toBeDefined()
+    db.close()
+  })
+
   it('routes the next read by the persisted verdict without repeating the full rebuild', async () => {
     const { db, session } = await createMismatchedSession()
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')

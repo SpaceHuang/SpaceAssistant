@@ -125,9 +125,7 @@ export function recordProjectionRejection(db: AppDatabase, sessionId: string, re
   const existing = getProjectionRejection(db, sessionId)
   const attempts = (existing?.attempts ?? 0) + 1
   const retryAfter = now + (metadata.permanent ? REJECTION_RETRY_MAX_MS : projectionRejectionBackoffDelayMs(attempts))
-  // S6: drop the session's cached transcript so no warm L1 hit can bypass the verdict before
-  // the background revalidator re-adjudicates the divergence.
-  getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(sessionId)
+  // The source-fenced parity state gates L1 eligibility; rejection does not own the retired transcript cache.
   publishRejectedState(db, sessionId, { fingerprint: metadata.fingerprint ?? '', watermarkEventId: o1.watermarkEventId,
     watermarkInvocationId: o1.watermarkInvocationId, eventCount: o1.eventCount, legacyMessageCount: o1.legacyMessageCount,
     legacyMaxRowid: o1.legacyMaxRowid, legacyDigest, lastReason: reason, permanent: metadata.permanent === true, staleMetadata: false }, attempts, retryAfter)
