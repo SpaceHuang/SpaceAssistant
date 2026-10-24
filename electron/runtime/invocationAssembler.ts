@@ -592,7 +592,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     return { effectiveRules: currentRules, lanePackage: currentLanePackage, policyOrigins: currentOrigin.origins, disabledRuleIds: currentOrigin.disabledRuleIds, authorizationVersion: version }
   }
   const currentAuthorization = resolveCurrentAuthorization()
-  const authorizationVersion = currentAuthorization.authorizationVersion
+  let authorizationVersion = currentAuthorization.authorizationVersion
   const policy = db
     ? {
         effectiveRules,
@@ -768,6 +768,12 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     if (call.invocationId !== binding.invocationId || call.toolCallId !== binding.toolCallId) throw new Error('AGENT_SDK_GATE_CALL_BINDING_MISMATCH')
     const toolName = resolveAgentSdkToolName(call.toolName)
     const current = resolveCurrentAuthorization()
+    // Every hosted gate evaluation is a fresh policy checkpoint. If an old permit was
+    // invalidated before dispatch, the SDK may evaluate the same proposal again under
+    // the new rules; subsequent model turns must use that checkpoint as their baseline.
+    // A later change still invalidates the invocation because it will differ from this
+    // most recently evaluated policy version.
+    authorizationVersion = current.authorizationVersion
     const currentBrowserConfig = binding.phase === 'recheck' ? materials.resolveBrowserConfig?.() ?? materials.browserConfig : materials.browserConfig
     const browserFacts = await resolveHostedBrowserGateFacts({
       sessionId: materials.sessionId,

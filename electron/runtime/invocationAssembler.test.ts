@@ -787,7 +787,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
   })
 
   it.each([
-    { override: 'ask' as const, expected: { type: 'require-confirm', answerer: 'user', ruleId: 'im-write-ask', disposition: 'human-required' } },
+    { override: 'ask' as const, expected: { type: 'require-confirm', answerer: 'user', ruleId: 'mcp-tool-ask', disposition: 'human-required' } },
     { override: 'deny' as const, expected: { type: 'deny', ruleId: 'mcp-tool-ask' } }
   ])('honors persisted MCP $override override over the generic IM write candidate after real assembly', async ({ override, expected }) => {
     const db = createImPolicyTestDb(`im-standard-v2-mcp-${override}-override`)

@@ -575,7 +575,7 @@ export function decide(
       selectedAsk.userOverride ? 'user' : selectedAsk.answerer ?? askAnswererFor(context.lane))
   }
   const explicitReviewAutos = matchedActions.filter(({ action, rule }) => action === 'auto-evaluator' &&
-    (rule.userOverride || rule.action === 'ask' && !rule.cacheableAsk))
+    !askUnlessHolds(rule, deps) && (rule.userOverride || rule.action === 'ask' && !rule.cacheableAsk))
     .sort((a, b) => a.rule.id.localeCompare(b.rule.id))
   if (context.lane !== 'automation' && explicitReviewAutos.length > 0) {
     const selectedAuto = explicitReviewAutos[0].rule
