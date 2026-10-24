@@ -219,6 +219,9 @@ describe('SQLite projection build task composition', () => {
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }), recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
         maintenanceTasks: [task] })
       try {
+        const deferredStorage = { ...host.storage, ensureChatBodyV1: async () => { throw new Error('PROJECTION_PREPARATION_DEFERRED_LARGE') } }
+        await expect(readChatMessagesAfterPreparation(deferredStorage, { sessionId: session.id }))
+          .resolves.toMatchObject([{ id: 'deferred-facts-user', content: body }])
         await expect(host.storage.ensureChatBodyV1?.({ sessionId: session.id })).resolves.toBeDefined()
         expect(createSqliteProjectionStateStore(db).get(session.id,
           encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })))
