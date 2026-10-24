@@ -1661,6 +1661,17 @@ describe('SQLite session storage execution boundary', () => {
             async () => { throw new Error(`seeded random lifecycle retry failure ${retry + 1}`) })
           expect(retryFailure.failedTargetId).toBeTruthy()
           expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, ledgerLocation.ledger_location_key)).toHaveLength(1)
+          const appendNonce = (next() >>> 0).toString(16)
+          const appendedRequestId = `random-retry-append-${retry + 1}-${appendNonce}`
+          const appendedContent = `random retry append ${appendNonce}`
+          const appended = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: appendedRequestId, content: appendedContent })
+          expect(appended.duplicate).toBe(false)
+          expect(enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: appendedRequestId, content: appendedContent }))
+            .toMatchObject({ duplicate: true, persisted: { message: { id: appended.persisted.message.id } } })
+          entries.push({ requestId: appendedRequestId, messageId: appended.persisted.message.id, state: 'queued',
+            content: appendedContent, turnId: undefined })
+          operationTrace.push(`append-during-ledger-retry:${appendedRequestId}`)
+          assertLifecycleInvariants(1)
           const retryQueueEntries = entries.filter(({ state }) => state === 'queued')
           if (retryQueueEntries.length > 0) {
             const retryEntry = retryQueueEntries[next() % retryQueueEntries.length]!
@@ -1747,6 +1758,7 @@ describe('SQLite session storage execution boundary', () => {
         }
         expect(operationTrace.some((step) => step.startsWith('independent-retry-owner-generation:'))).toBe(true)
         expect(operationTrace.some((step) => step.startsWith('independent-retry-edit:') || step.startsWith('independent-retry-cancel:'))).toBe(true)
+        expect(operationTrace.some((step) => step.startsWith('append-during-ledger-retry:'))).toBe(true)
         expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, ledgerLocation.ledger_location_key,
           (item) => projectCanonicalSessionLedgerTarget(sink, item))).toEqual({ projected: 1 })
         expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, ledgerLocation.ledger_location_key,
