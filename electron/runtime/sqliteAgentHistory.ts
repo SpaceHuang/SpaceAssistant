@@ -1,5 +1,4 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import {
   HistoryBatchError,
@@ -27,8 +26,7 @@ import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibilit
 import { decodeTerminalOutcome } from './terminalOutcome'
 import { classifySessionHistoryRepairFailure } from './sessionHistoryRecoveryDiagnostics'
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { canonicalSessionTranscriptEvents, createCanonicalSessionSnapshotFoldSession, foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
-import { isCanonicalProjectionWatermarkValid } from './canonicalHistory'
+import { canonicalSessionTranscriptEvents, foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
@@ -38,23 +36,6 @@ import { withSessionLedgerLifecycleLocks } from '../sessionLedgerLifecycle'
 import { projectChatBodyV1 } from '../sessionStorage/domain/projectionSpec'
 import type { SessionHistoryLedgerLocation, SessionHistoryRecoveryOptions } from '../sessionStorage/public/ports'
 import type { CanonicalContextMeterEvent } from '../sessionStorage/public/model'
-
-const CANONICAL_SESSION_CACHE_VERSION = 1
-const SNAPSHOT_FOLD_CACHE_SUFFIX = ':snapshot-fold-v1'
-
-function snapshotFoldCacheKey(cacheKey: string): string { return `${cacheKey}${SNAPSHOT_FOLD_CACHE_SUFFIX}` }
-
-function createSnapshotFoldFromCache(input: Readonly<{ sessionId: string; sessionSeq: number; commitOrder: number;
-  watermarkInvocationId: string | null; messages: readonly ClaudeChatMessageWithBlocks[] }>) {
-  const fold = createCanonicalSessionSnapshotFoldSession()
-  if (input.sessionSeq === -1) {
-    if (input.commitOrder !== -1 || input.messages.length !== 0) throw new Error('canonical snapshot fold empty cache watermark is invalid')
-    return fold
-  }
-  fold.fold({ sessionId: input.sessionId, invocationId: input.watermarkInvocationId ?? 'cache-seed',
-    sessionSeq: input.sessionSeq, commitOrder: input.commitOrder, messages: input.messages })
-  return fold
-}
 
 function stableCanonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableCanonicalValue)
@@ -200,7 +181,7 @@ type EventRow = {
   session_id?: string | null
 }
 
-/** P1-②: persisted transition state for one invocation stream (tool/approval + stream invariants). */
+/** Full-stream transition state used to validate canonical tool and approval history. */
 type CanonicalToolTransitionState = {
   pending: Map<string, 'proposed' | 'started'>
   toolApproval: Map<string, { approvalId: string; approved?: boolean }>
@@ -210,58 +191,6 @@ type CanonicalToolTransitionState = {
   approvalIdentity: Map<string, string>
   terminalSeen: boolean
   turnId: string | null
-}
-
-function cloneToolTransitionState(state: CanonicalToolTransitionState): CanonicalToolTransitionState {
-  return {
-    pending: new Map(state.pending),
-    toolApproval: new Map(state.toolApproval),
-    unboundApprovalIds: new Set(state.unboundApprovalIds),
-    seenApprovalIds: new Set(state.seenApprovalIds),
-    pendingApprovals: new Set(state.pendingApprovals),
-    approvalIdentity: new Map(state.approvalIdentity),
-    terminalSeen: state.terminalSeen,
-    turnId: state.turnId
-  }
-}
-
-function serializeToolTransitionState(state: CanonicalToolTransitionState): string {
-  return JSON.stringify({
-    pending: [...state.pending],
-    approvals: [...state.toolApproval],
-    unbound: [...state.unboundApprovalIds],
-    seen: [...state.seenApprovalIds],
-    pendingApprovals: [...state.pendingApprovals],
-    approvalIdentity: [...state.approvalIdentity],
-    terminalSeen: state.terminalSeen,
-    turnId: state.turnId
-  })
-}
-
-function deserializeToolTransitionState(json: string): CanonicalToolTransitionState {
-  const raw = JSON.parse(json) as {
-    pending: Array<[string, 'proposed' | 'started']>
-    approvals: Array<[string, { approvalId: string; approved?: boolean }]>
-    unbound: string[]
-    seen: string[]
-    pendingApprovals?: string[]
-    approvalIdentity?: Array<[string, string]>
-    terminalSeen?: boolean
-    turnId?: string | null
-  }
-  if (!Array.isArray(raw.pending) || !Array.isArray(raw.approvals) || !Array.isArray(raw.unbound) || !Array.isArray(raw.seen)) {
-    throw new Error('invalid pending view payload')
-  }
-  return {
-    pending: new Map(raw.pending),
-    toolApproval: new Map(raw.approvals),
-    unboundApprovalIds: new Set(raw.unbound),
-    seenApprovalIds: new Set(raw.seen),
-    pendingApprovals: new Set(raw.pendingApprovals ?? []),
-    approvalIdentity: new Map(raw.approvalIdentity ?? []),
-    terminalSeen: raw.terminalSeen === true,
-    turnId: typeof raw.turnId === 'string' ? raw.turnId : null
-  }
 }
 
 /** P3-②: a retried repair on any invocation waits at least this long (first attempts stay immediate). */
@@ -304,17 +233,6 @@ type LegacyTranscriptMessage = Readonly<{
   status?: unknown; sequence?: unknown; imagesDeliveredToApi?: unknown; skillHints?: unknown
 }>
 
-export type CanonicalSessionCacheRead =
-  | Readonly<{ kind: 'hit'; value: string; sessionSeq: number; commitOrder: number }>
-  | Readonly<{ kind: 'miss'; reason: 'cache-missing' | 'watermark-invalid' | 'schema-invalid' }>
-
-function sha256(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex')
-}
-
-export type CanonicalSessionTranscriptWithCacheRead =
-  | Readonly<{ kind: 'matched'; source: 'L1' | 'L2'; messages: ClaudeChatMessageWithBlocks[]; replayedEvents: number; watermark: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> }>
-  | Readonly<{ kind: 'unavailable'; reason: Extract<CanonicalSessionTranscriptRead, { kind: 'unavailable' }>['reason'] }>
 type CanonicalCompactionLedger = { location: SessionHistoryLedgerLocation; start: Record<string, unknown>; summary: Record<string, unknown> }
 type CanonicalToolLedger = { location: SessionHistoryLedgerLocation; stepId: string; result: Record<string, unknown>; requestId?: string; invocationRequestId?: string; lane?: string; turnId?: string }
 type CanonicalToolCallLedger = { location: SessionHistoryLedgerLocation; stepId?: string; toolCalls?: Array<Record<string, unknown>>; requestUsage?: Record<string, unknown> }
@@ -744,9 +662,7 @@ export class SqliteAgentHistory implements HistoryPort {
         }
       }
       if (!transcriptCommit) {
-        // The source commit invalidates transcript parity; only a later full comparison may
-        // publish a current proof and refresh the disposable legacy transcript cache.
-        this.updateCanonicalInvocationPendingViewInTransaction(events)
+        // The source commit invalidates transcript parity; only a later full comparison may publish a current proof.
         return appended
       }
       if (!this.sessionId || transcriptCommit.sessionId !== this.sessionId) throw new HistoryBatchError('terminal transcript commit session identity mismatch')
@@ -801,7 +717,6 @@ export class SqliteAgentHistory implements HistoryPort {
         )
         if (Number(result.changes) !== 1) throw new HistoryBatchError('terminal message mirror target is missing or not an assistant message')
       }
-      this.updateCanonicalInvocationPendingViewInTransaction(events)
       return appended
     })
   }
@@ -985,13 +900,9 @@ export class SqliteAgentHistory implements HistoryPort {
       rows.at(-1)!.sequence === stream.version && rows.every((row) => this.isCanonicalSessionEventRowStructurallyValid(row))
   }
 
-  /**
-   * P1-②: replay tool/approval transitions over an optional persisted starting state. With no
-   * initial state this is the exact historical full-stream validation; the append transaction
-   * feeds the persisted view so each append replays only its own events.
-   */
-  private replayCanonicalSessionToolTransitions(events: readonly HistoryEvent[], initial?: CanonicalToolTransitionState): CanonicalToolTransitionState {
-    const state: CanonicalToolTransitionState = initial ? cloneToolTransitionState(initial) : {
+  /** Replay tool and approval transitions over the complete invocation stream. */
+  private replayCanonicalSessionToolTransitions(events: readonly HistoryEvent[]): CanonicalToolTransitionState {
+    const state: CanonicalToolTransitionState = {
       pending: new Map(), toolApproval: new Map(), unboundApprovalIds: new Set(), seenApprovalIds: new Set(),
       pendingApprovals: new Set(), approvalIdentity: new Map(), terminalSeen: false, turnId: null
     }
@@ -1148,47 +1059,6 @@ export class SqliteAgentHistory implements HistoryPort {
     this.replayCanonicalSessionToolTransitions(events)
   }
 
-  /** P1-② write-side maintenance: advance the invocation's persisted pending view in-transaction. */
-  private updateCanonicalInvocationPendingViewInTransaction(events: readonly HistoryEvent[]): void {
-    if (events.length === 0) return
-    const invocationId = events[0]!.invocationId
-    const first = events[0]!.sequence
-    const last = events[events.length - 1]!.sequence
-    try {
-      const existing = this.conn.prepare('SELECT pending_json, stream_version FROM canonical_invocation_pending_views WHERE invocation_id=?')
-        .get(invocationId) as { pending_json: string; stream_version: number } | undefined
-      let initial: CanonicalToolTransitionState | undefined
-      if (existing && Number(existing.stream_version) === first - 1) {
-        initial = deserializeToolTransitionState(existing.pending_json)
-      } else if (first > 1) {
-        // View missing or non-adjacent: rebuild once from the preceding stream, then fold the new events.
-        const priorRows = this.conn.prepare(`SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json
-          FROM agent_history_events WHERE invocation_id=? AND sequence<? ORDER BY sequence ASC`).all(invocationId, first) as EventRow[]
-        initial = this.replayCanonicalSessionToolTransitions(priorRows.map(fromRow))
-      }
-      const finalState = this.replayCanonicalSessionToolTransitions(events, initial)
-      this.conn.prepare(`INSERT INTO canonical_invocation_pending_views(invocation_id, pending_json, stream_version, updated_at)
-        VALUES(?, ?, ?, ?) ON CONFLICT(invocation_id) DO UPDATE SET
-        pending_json=excluded.pending_json, stream_version=excluded.stream_version, updated_at=excluded.updated_at`)
-        .run(invocationId, serializeToolTransitionState(finalState), last, Date.now())
-    } catch (error) {
-      // The write path must keep accepting every stream the append gate accepts. A view that
-      // cannot be derived (loose tool lifecycle mid-write, legacy test shapes) is dropped so the
-      // read path falls back to its exact historical full-stream validation — log it so a mass
-      // fall-out (e.g. a new invariant tripping on legacy streams) is observable.
-      try { logAgentEvent('warn', 'session.storage.pending_view', { invocationId, reason: error instanceof Error ? error.message : String(error) }) } catch { /* logging cannot fail the append */ }
-      this.conn.prepare('DELETE FROM canonical_invocation_pending_views WHERE invocation_id=?').run(invocationId)
-    }
-  }
-
-  /** P1-② read-side lookup: undefined when absent or non-adjacent (caller falls back to the full stream). */
-  private readCanonicalInvocationPendingView(invocationId: string, streamVersion: number): CanonicalToolTransitionState | undefined {
-    const row = this.conn.prepare('SELECT pending_json, stream_version FROM canonical_invocation_pending_views WHERE invocation_id=?')
-      .get(invocationId) as { pending_json: string; stream_version: number } | undefined
-    if (!row || Number(row.stream_version) !== streamVersion) return undefined
-    try { return deserializeToolTransitionState(row.pending_json) } catch { return undefined }
-  }
-
   private isCanonicalSessionEventRowStructurallyValid(row: OrderedSessionEventRow): boolean {
     try {
       const payload = JSON.parse(row.payload_json) as unknown
@@ -1215,260 +1085,6 @@ export class SqliteAgentHistory implements HistoryPort {
         if (descriptor.kind === 'source-of-truth') this.readSourceTruthSync(descriptor)
       }
     }
-  }
-
-  /** Reads a detached per-key cache record only when its live session incarnation and exact anchor still match. */
-  readCanonicalSessionCache(input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & { cacheKey: string }): CanonicalSessionCacheRead {
-    const row = this.conn.prepare(`SELECT session_id, cache_version, session_generation, session_seq, commit_order, watermark_event_id,
-      watermark_invocation_id, event_count, value, value_sha256 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?`)
-      .get(input.sessionId, input.cacheKey) as { session_id: string; cache_version: number; session_generation: string; session_seq: number; commit_order: number;
-        watermark_event_id: string | null; watermark_invocation_id: string | null; event_count: number; value: string; value_sha256: string } | undefined
-    if (!row) return { kind: 'miss', reason: 'cache-missing' }
-    if (row.cache_version !== CANONICAL_SESSION_CACHE_VERSION) return { kind: 'miss', reason: 'schema-invalid' }
-    if (row.value_sha256 !== sha256(row.value)) return { kind: 'miss', reason: 'schema-invalid' }
-    const liveSession = this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(input.sessionId) as { generation: string } | undefined
-    const anchor = row.session_seq === -1 ? undefined : this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id
-      FROM agent_history_events WHERE session_id=? AND session_seq=?`).get(input.sessionId, row.session_seq) as
-      { session_id: string; session_seq: number; commit_order: number; event_id: string; invocation_id: string } | undefined
-    const canonicalEventCount = Number((this.conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=?').get(input.sessionId) as { count: number }).count)
-    const valid = isCanonicalProjectionWatermarkValid({
-      watermark: { sessionId: row.session_id, sessionGeneration: row.session_generation, sessionSeq: row.session_seq,
-        commitOrder: row.commit_order, watermarkEventId: row.watermark_event_id, watermarkInvocationId: row.watermark_invocation_id,
-        eventCount: row.event_count },
-      currentSessionId: input.sessionId, currentGeneration: liveSession?.generation ?? '', canonicalEventCount,
-      ...(anchor ? { anchor: { sessionId: anchor.session_id, sessionGeneration: row.session_generation,
-        sessionSeq: anchor.session_seq, commitOrder: anchor.commit_order, eventId: anchor.event_id, invocationId: anchor.invocation_id } } : {})
-    })
-    if (!valid || row.session_generation !== input.sessionGeneration || row.session_seq !== input.sessionSeq || row.commit_order !== input.commitOrder ||
-      row.watermark_event_id !== input.watermarkEventId || row.watermark_invocation_id !== input.watermarkInvocationId || row.event_count !== input.eventCount) {
-      return { kind: 'miss', reason: 'watermark-invalid' }
-    }
-    try { JSON.parse(row.value) } catch { return { kind: 'miss', reason: 'schema-invalid' } }
-    return { kind: 'hit', value: row.value, sessionSeq: row.session_seq, commitOrder: row.commit_order }
-  }
-
-  /** Best-effort per-session canonical seed write; callers keep legacy as their authority on failure. */
-  writeCanonicalSessionCache(input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & { cacheKey: string; value: string }): boolean {
-    if (input.cacheKey !== 'transcript') return this.writeCanonicalSessionCacheRow(input)
-    try {
-      const messages = JSON.parse(input.value) as ClaudeChatMessageWithBlocks[]
-      if (!Array.isArray(messages)) return false
-      const fold = createSnapshotFoldFromCache({ sessionId: input.sessionId, sessionSeq: input.sessionSeq,
-        commitOrder: input.commitOrder, watermarkInvocationId: input.watermarkInvocationId, messages })
-      return this.writeCanonicalSessionCacheWithSnapshotFold(input, fold.stateJson(), fold.indexJson())
-    } catch { return false }
-  }
-
-  private writeCanonicalSessionCacheWithSnapshotFold(
-    input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & { cacheKey: string; value: string },
-    stateJson: string,
-    indexJson: string
-  ): boolean {
-    try {
-      return runInTransaction(this.conn, () => this.writeCanonicalSessionCacheRow(input) &&
-        this.writeCanonicalSnapshotFoldCache({ ...input, cacheKey: snapshotFoldCacheKey(input.cacheKey), stateJson, indexJson }))
-    } catch { return false }
-  }
-
-  private writeCanonicalSnapshotFoldCache(input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & {
-    cacheKey: string; stateJson: string; indexJson: string
-  }): boolean {
-    return this.writeCanonicalSessionCacheRow({ ...input, value: JSON.stringify({ formatVersion: 1,
-      stateJson: input.stateJson, indexJson: input.indexJson }) })
-  }
-
-  private writeCanonicalSessionCacheRow(input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & { cacheKey: string; value: string }): boolean {
-    try {
-      JSON.parse(input.value)
-      const valueSha256 = sha256(input.value)
-      // S7: an append whose tail fold reproduces the cached transcript byte-for-byte (duplicate
-      // append, no transcript-visible delta) must not rewrite the whole cached JSON per append.
-      // The skip requires every cached identity column to match too — a drifted generation,
-      // watermark or a corrupted cache_version must still be rewritten.
-      const unchanged = this.conn.prepare(`SELECT value_sha256, cache_version, session_generation, session_seq, commit_order,
-        watermark_event_id, watermark_invocation_id, event_count
-        FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?`)
-        .get(input.sessionId, input.cacheKey) as { value_sha256: string; cache_version: number; session_generation: string;
-        session_seq: number; commit_order: number; watermark_event_id: string | null; watermark_invocation_id: string | null; event_count: number } | undefined
-      if (unchanged && unchanged.value_sha256 === valueSha256 && unchanged.cache_version === CANONICAL_SESSION_CACHE_VERSION &&
-        unchanged.session_generation === input.sessionGeneration && unchanged.session_seq === input.sessionSeq &&
-        unchanged.commit_order === input.commitOrder && unchanged.watermark_event_id === input.watermarkEventId &&
-        unchanged.watermark_invocation_id === input.watermarkInvocationId && unchanged.event_count === input.eventCount) return true
-      const result = this.conn.prepare(`INSERT INTO canonical_session_projection_cache(
-        session_id, cache_key, cache_version, session_generation, session_seq, commit_order, watermark_event_id, watermark_invocation_id,
-        event_count, value, value_sha256, updated_at
-      ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, cache_key) DO UPDATE SET
-        cache_version=excluded.cache_version, session_generation=excluded.session_generation, session_seq=excluded.session_seq, commit_order=excluded.commit_order,
-        watermark_event_id=excluded.watermark_event_id, watermark_invocation_id=excluded.watermark_invocation_id,
-        event_count=excluded.event_count, value=excluded.value, value_sha256=excluded.value_sha256, updated_at=excluded.updated_at`).run(
-        input.sessionId, input.cacheKey, CANONICAL_SESSION_CACHE_VERSION, input.sessionGeneration, input.sessionSeq, input.commitOrder,
-        input.watermarkEventId, input.watermarkInvocationId, input.eventCount, input.value, valueSha256, Date.now()
-      )
-      return Number(result.changes) > 0
-    } catch { return false }
-  }
-
-  /** L1 reads a validated detached seed and folds only later snapshot facts; any ambiguity runs the L2 full fold. */
-  readCanonicalSessionTranscriptWithCache(sessionId: string, cacheKey: string, legacyMessages?: readonly LegacyTranscriptMessage[]): CanonicalSessionTranscriptWithCacheRead {
-    let cacheRow: { session_id: string; cache_version: number; session_generation: string; session_seq: number; commit_order: number;
-      watermark_event_id: string | null; watermark_invocation_id: string | null; event_count: number; value: string; value_sha256: string } | undefined
-    try {
-      cacheRow = this.conn.prepare(`SELECT session_id, cache_version, session_generation, session_seq, commit_order, watermark_event_id,
-        watermark_invocation_id, event_count, value, value_sha256 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?`)
-        .get(sessionId, cacheKey) as typeof cacheRow
-    } catch { cacheRow = undefined }
-    if (cacheRow && cacheRow.cache_version === CANONICAL_SESSION_CACHE_VERSION && cacheRow.value_sha256 === sha256(cacheRow.value)) {
-      const liveSession = this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
-      const cursorRow = this.conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId) as { next_seq: number } | undefined
-      const cursor = cursorRow ?? { next_seq: 0 }
-      const canonicalEventCount = Number((this.conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=?').get(sessionId) as { count: number }).count)
-      const anchor = cacheRow.session_seq === -1 ? undefined : this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id
-        FROM agent_history_events WHERE session_id=? AND session_seq=?`).get(sessionId, cacheRow.session_seq) as
-        { session_id: string; session_seq: number; commit_order: number; event_id: string; invocation_id: string } | undefined
-      const cursorIntegrity = this.conn.prepare(`SELECT invalid, EXISTS(SELECT 1 FROM agent_history_pending_commit_cursor) AS has_pending
-        FROM agent_history_cursor_integrity WHERE singleton_id=1`).get() as { invalid: number; has_pending: number } | undefined
-      const valid = cursorIntegrity?.invalid === 0 && cursorIntegrity.has_pending === 0 && isCanonicalProjectionWatermarkValid({
-        watermark: { sessionId: cacheRow.session_id, sessionGeneration: cacheRow.session_generation, sessionSeq: cacheRow.session_seq,
-          commitOrder: cacheRow.commit_order, watermarkEventId: cacheRow.watermark_event_id,
-          watermarkInvocationId: cacheRow.watermark_invocation_id, eventCount: cacheRow.event_count },
-        currentSessionId: sessionId, currentGeneration: liveSession?.generation ?? '', canonicalEventCount: cacheRow.event_count,
-        ...(anchor ? { anchor: { sessionId: anchor.session_id, sessionGeneration: cacheRow.session_generation,
-          sessionSeq: anchor.session_seq, commitOrder: anchor.commit_order, eventId: anchor.event_id, invocationId: anchor.invocation_id } } : {})
-      })
-      if (valid && cursor.next_seq === canonicalEventCount && cacheRow.session_seq <= canonicalEventCount &&
-        (cacheRow.session_seq === -1 ? cacheRow.event_count === 0 : cacheRow.event_count === cacheRow.session_seq)) {
-        try {
-          const seed = JSON.parse(cacheRow.value) as ClaudeChatMessageWithBlocks[]
-          if (!Array.isArray(seed) || seed.some((message) => !message || !['user', 'assistant'].includes(message.role))) throw new Error('invalid cache seed')
-          const foldCheckpoint = this.readCanonicalSessionCache({ kind: 'matched', messages: seed, sessionId, sessionGeneration: cacheRow.session_generation,
-            sessionSeq: cacheRow.session_seq, commitOrder: cacheRow.commit_order, watermarkEventId: cacheRow.watermark_event_id,
-            watermarkInvocationId: cacheRow.watermark_invocation_id, eventCount: cacheRow.event_count,
-            cacheKey: snapshotFoldCacheKey(cacheKey) })
-          let snapshotFold = createSnapshotFoldFromCache({ sessionId, sessionSeq: cacheRow.session_seq,
-            commitOrder: cacheRow.commit_order, watermarkInvocationId: cacheRow.watermark_invocation_id, messages: seed })
-          if (foldCheckpoint.kind === 'hit') {
-            const persistedFold = JSON.parse(foldCheckpoint.value) as { formatVersion?: unknown; stateJson?: unknown; indexJson?: unknown }
-            if (persistedFold.formatVersion !== 1 || typeof persistedFold.stateJson !== 'string' || typeof persistedFold.indexJson !== 'string') {
-              throw new Error('canonical snapshot fold checkpoint is malformed')
-            }
-            snapshotFold = createCanonicalSessionSnapshotFoldSession(persistedFold.stateJson, seed, persistedFold.indexJson)
-            const persistedState = JSON.parse(persistedFold.stateJson) as { sessionId?: unknown; lastSessionSeq?: unknown; lastCommitOrder?: unknown; messageCount?: unknown }
-            if ((cacheRow.session_seq === -1 && (persistedState.sessionId !== null || persistedState.lastSessionSeq !== 0 ||
-              persistedState.lastCommitOrder !== 0 || persistedState.messageCount !== 0)) ||
-              (cacheRow.session_seq >= 1 && (persistedState.sessionId !== sessionId ||
-                !Number.isSafeInteger(persistedState.lastSessionSeq) || (persistedState.lastSessionSeq as number) < 1 ||
-                (persistedState.lastSessionSeq as number) > cacheRow.session_seq ||
-                (persistedState.lastSessionSeq === cacheRow.session_seq && (!Number.isSafeInteger(persistedState.lastCommitOrder) ||
-                  (persistedState.lastCommitOrder as number) > cacheRow.commit_order)) || persistedState.messageCount !== seed.length))) {
-              throw new Error('canonical snapshot fold checkpoint watermark mismatch')
-            }
-          }
-          const tailRows = this.conn.prepare(`SELECT events.invocation_id, events.sequence, events.event_id, events.idempotency_key, events.turn_id,
-            events.schema_version, events.kind, events.payload_json, events.session_seq, events.commit_order, events.session_id, events.created_at
-            FROM agent_history_events events JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
-            WHERE events.session_id=? AND streams.session_id=? AND events.session_seq>? ORDER BY events.session_seq, events.commit_order`)
-            .all(sessionId, sessionId, cacheRow.session_seq) as OrderedSessionEventRow[]
-          if (cursor && cursor.next_seq === (cacheRow.session_seq === -1 ? tailRows.length : cacheRow.session_seq + tailRows.length) && tailRows.every((row, index) => row.session_seq === (cacheRow.session_seq === -1 ? index + 1 : cacheRow.session_seq + index + 1) &&
-            (index === 0 ? row.commit_order > cacheRow.commit_order : row.commit_order > tailRows[index - 1]!.commit_order))) {
-            const rowsByInvocation = new Map<string, OrderedSessionEventRow[]>()
-            for (const row of tailRows) rowsByInvocation.set(row.invocation_id, [...(rowsByInvocation.get(row.invocation_id) ?? []), row])
-            const tailSnapshots: CanonicalSessionSnapshot[] = []
-            let usedSeedAsBase = false
-            for (const [invocationId, invocationRows] of rowsByInvocation) {
-              const firstTailSequence = invocationRows[0]!.sequence
-              if (!this.isCanonicalSessionInvocationTailValid(sessionId, invocationId, invocationRows)) {
-                throw new Error('canonical History tail sequence or stream metadata is invalid')
-              }
-              const terminalBeforeTail = this.conn.prepare(`SELECT 1 FROM agent_history_events
-                WHERE invocation_id=? AND sequence<? AND kind IN ('invocation-parked','invocation-completed','invocation-failed','invocation-interrupted') LIMIT 1`)
-                .get(invocationId, firstTailSequence)
-              if (terminalBeforeTail) throw new Error('canonical History tail follows an invocation terminal')
-              if (invocationRows.some((row) => ['model-response-committed', 'tool-call-started', 'tool-call-finished',
-                'tool-call-not-dispatched', 'approval-waiting', 'approval-resolved', 'invocation-completed',
-                'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(row.kind))) {
-                // A session cache stores transcript state, not the invocation's pending tool/approval state.
-                // State-bearing deltas validate the transitions so proposals and dispatch facts before the
-                // cache watermark cannot be hidden by the seed. P1-②: the persisted pending view covers
-                // everything before the tail, so only the tail events are replayed; without an adjacent
-                // view the complete stream is re-read exactly as before. The view path still applies the
-                // same per-event schema gate the full-stream read applies through readSync.
-                const view = this.readCanonicalInvocationPendingView(invocationId, invocationRows[0]!.sequence - 1)
-                if (view) {
-                  if (!invocationRows.every((row) => this.isCanonicalSessionEventRowStructurallyValid(row))) {
-                    throw new Error('canonical History tail event schema is invalid')
-                  }
-                  // Stream-level invariants the full-stream read derives from the whole history:
-                  // turn identity, append-after-terminal, and terminal kind/status matching.
-                  if (view.terminalSeen || (view.turnId !== null && invocationRows.some((row) => row.turn_id !== view.turnId)) ||
-                    !invocationRows.every((row) => invocationTerminalStatusMatches({ kind: row.kind as HistoryEvent['kind'],
-                      payload: JSON.parse(row.payload_json) as unknown }))) {
-                    throw new Error('canonical History tail violates stream invariants')
-                  }
-                  this.replayCanonicalSessionToolTransitions(invocationRows.map((row) => ({ invocationId,
-                    sequence: row.sequence, eventId: row.event_id, idempotencyKey: row.idempotency_key,
-                    turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind,
-                    payload: JSON.parse(row.payload_json) as unknown })), view)
-                } else {
-                  this.validateCanonicalSessionToolTransitions(this.readSync(invocationId).events)
-                }
-              }
-              const hasBase = invocationRows.some((row) => row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')
-              if (!hasBase && !invocationRows.some((row) => ['model-response-committed', 'replay-message-committed', 'tool-call-finished', 'tool-call-not-dispatched'].includes(row.kind))) continue
-              const events = invocationRows.map((row) => ({ invocationId, sequence: row.sequence + (hasBase ? 0 : 1),
-                eventId: row.event_id, idempotencyKey: row.idempotency_key, turnId: row.turn_id,
-                schemaVersion: row.schema_version, kind: row.kind, payload: JSON.parse(row.payload_json) as unknown })) as HistoryEvent[]
-              const hydratedEvents = this.spillStore ? events.map((event) => this.hydrateLargeToolResultSync(event)) : events
-              if (!hasBase) {
-                if (usedSeedAsBase) throw new Error('multiple context-free transcript deltas are ambiguous')
-                usedSeedAsBase = true
-                const seedEvent: HistoryEvent = { invocationId, sequence: 1, eventId: `cache-seed:${cacheRow.watermark_event_id}`,
-                  idempotencyKey: `cache-seed:${cacheRow.watermark_event_id}`, turnId: events[0]!.turnId,
-                  schemaVersion: events[0]!.schemaVersion, kind: 'invocation-context-committed', payload: { messages: seed } }
-                hydratedEvents.unshift(seedEvent)
-              }
-              const transcriptEvents = canonicalSessionTranscriptEvents(hydratedEvents)
-              validateHistoryTransition([], transcriptEvents)
-              const messages = rebuildClaudeMessagesFromHistory(transcriptEvents, { omitAnonymousReplayFromSessionTranscript: true,
-                allowPendingToolCalls: invocationRows.at(-1)?.kind === 'invocation-interrupted' })
-              const last = invocationRows.at(-1)!
-              tailSnapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq,
-                commitOrder: last.commit_order, messages })
-            }
-            for (const snapshot of tailSnapshots.sort((left, right) => left.sessionSeq - right.sessionSeq || left.commitOrder - right.commitOrder)) {
-              snapshotFold.fold(snapshot)
-            }
-            const folded = snapshotFold.messages()
-            const canonical = toCanonicalModelMessages(folded)
-            const legacyBody = legacyMessages ? projectChatBodyV1(legacyMessages as never) : undefined
-            if (legacyBody === undefined || JSON.stringify(projectChatBodyV1(canonical as never)) === JSON.stringify(legacyBody)) {
-              const lastTail = tailRows.at(-1)
-              const watermarkEventId = lastTail?.event_id ?? cacheRow.watermark_event_id
-              const watermarkInvocationId = lastTail?.invocation_id ?? cacheRow.watermark_invocation_id
-              const sessionSeq = lastTail?.session_seq ?? cacheRow.session_seq
-              const commitOrder = lastTail?.commit_order ?? cacheRow.commit_order
-              if (sessionSeq === -1 ? watermarkEventId !== null || watermarkInvocationId !== null : !watermarkEventId || !watermarkInvocationId) throw new Error('cache watermark is incomplete')
-              const eventCount = cacheRow.event_count + tailRows.length
-              const anchor = this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id
-                FROM agent_history_events WHERE session_id=? AND session_seq=?`).get(sessionId, sessionSeq) as
-                { session_id: string; session_seq: number; commit_order: number; event_id: string; invocation_id: string } | undefined
-              if (sessionSeq === -1 ? anchor !== undefined || eventCount !== 0 : !anchor || anchor.commit_order !== commitOrder || anchor.event_id !== watermarkEventId || anchor.invocation_id !== watermarkInvocationId) throw new Error('cache tail anchor changed')
-              const watermark = { kind: 'matched' as const, messages: folded, sessionId,
-                sessionGeneration: liveSession!.generation, sessionSeq, commitOrder,
-                watermarkEventId, watermarkInvocationId, eventCount }
-              const result = { kind: 'matched' as const, source: 'L1' as const, messages: folded, replayedEvents: tailRows.length, watermark }
-              this.writeCanonicalSessionCacheWithSnapshotFold({ ...watermark, cacheKey, value: JSON.stringify(folded) },
-                snapshotFold.stateJson(), snapshotFold.indexJson())
-              return result
-            }
-          }
-        } catch { /* fail closed to the L2 full fold below */ }
-      }
-    }
-    if (legacyMessages === undefined) return { kind: 'unavailable', reason: 'legacy-mismatch' }
-    const full = this.readCanonicalSessionTranscript(sessionId, legacyMessages)
-    if (full.kind === 'unavailable') return full
-    this.writeCanonicalSessionCache({ ...full, cacheKey, value: JSON.stringify(full.messages) })
-    return { kind: 'matched', source: 'L2', messages: full.messages, replayedEvents: full.eventCount, watermark: full }
   }
 
   /** Classifies pre-queue canonical projection obligations in bounded, resumable transactions. */

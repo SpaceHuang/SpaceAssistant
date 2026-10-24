@@ -565,39 +565,6 @@ describe('spillStore P-5 protocol', () => {
     temp.cleanup()
   })
 
-  it('folds a spilled assistant response byte-for-byte through cold L2 and warm L1 transcript reads', async () => {
-    const { root, store } = await createStore()
-    const db = createMemoryAppDb()
-    const conn = getDbConnection(db)
-    const sessionId = 'spill-transcript-fold-session'
-    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
-      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'spill-generation')`).run(sessionId)
-    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId, store)
-    const answer = 'canonical spilled assistant answer '.repeat(8_000)
-    const legacy = [
-      { id: 'spill-fold-user', role: 'user' as const, content: 'question', timestamp: 1 },
-      { id: 'spill-fold-assistant', role: 'assistant' as const, content: answer, timestamp: 2 }
-    ]
-    await history.appendBatch([{
-      invocationId: 'spill-transcript-fold-invocation', turnId: 'spill-transcript-fold-turn', sequence: 1, schemaVersion: 1,
-      eventId: 'spill-transcript-fold-context', idempotencyKey: 'spill-transcript-fold-context', kind: 'invocation-context-committed',
-      payload: { messages: [{ role: 'user', content: 'question', id: 'spill-fold-user', timestamp: 1 }] }
-    }, {
-      invocationId: 'spill-transcript-fold-invocation', turnId: 'spill-transcript-fold-turn', sequence: 2, schemaVersion: 1,
-      eventId: 'spill-transcript-fold-response', idempotencyKey: 'spill-transcript-fold-response', kind: 'model-response-committed',
-      payload: { message: { role: 'assistant', content: answer, id: 'spill-fold-assistant', timestamp: 2 } }
-    }, {
-      invocationId: 'spill-transcript-fold-invocation', turnId: 'spill-transcript-fold-turn', sequence: 3, schemaVersion: 1,
-      eventId: 'spill-transcript-fold-terminal', idempotencyKey: 'spill-transcript-fold-terminal', kind: 'invocation-completed', payload: { status: 'completed' }
-    }], 0)
-
-    const cold = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript', legacy)
-    expect(cold).toMatchObject({ kind: 'matched', source: 'L2', messages: legacy })
-    const warm = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript', legacy)
-    expect(warm).toMatchObject({ kind: 'matched', source: 'L1', messages: legacy })
-    db.close()
-  })
-
   it('stores oversized provider context text and image bytes as source-truth and hydrates both on resume', async () => {
     const { store } = await createStore()
     const db = createMemoryAppDb()

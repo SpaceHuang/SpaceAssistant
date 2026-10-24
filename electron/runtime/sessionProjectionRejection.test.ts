@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { appendMessage, createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
@@ -60,17 +61,19 @@ describe('session projection rejection negative cache (P0-②)', () => {
     const { db, conn, session, history } = await createMismatchedSession()
     const canonical = history.readCanonicalSessionTranscriptForShadow(session.id)
     if (canonical.kind !== 'matched') throw new Error('expected canonical History transcript')
-    history.writeCanonicalSessionCache({ ...canonical, cacheKey: 'transcript', value: JSON.stringify(canonical.messages) })
-    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
-      .get(session.id)).toBeDefined()
-    const cacheReadSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptWithCache')
+    const legacyPayload = JSON.stringify(canonical.messages)
+    conn.prepare(`INSERT INTO canonical_session_projection_cache(session_id,cache_key,cache_version,session_generation,session_seq,
+      commit_order,watermark_event_id,watermark_invocation_id,event_count,value,value_sha256,updated_at)
+      VALUES(?,?,1,?,?,?,?,?,?,?,?,?)`).run(session.id, 'transcript', canonical.sessionGeneration, canonical.sessionSeq,
+      canonical.commitOrder, canonical.watermarkEventId, canonical.watermarkInvocationId, canonical.eventCount, legacyPayload,
+      createHash('sha256').update(legacyPayload, 'utf8').digest('hex'), Date.now())
+    const cacheBefore = conn.prepare("SELECT value,value_sha256 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
+      .get(session.id)
 
     expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'legacy-mismatch' })
     expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
-    expect(cacheReadSpy).not.toHaveBeenCalled()
-    cacheReadSpy.mockRestore()
-    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
-      .get(session.id)).toBeDefined()
+    expect(conn.prepare("SELECT value,value_sha256 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
+      .get(session.id)).toEqual(cacheBefore)
     db.close()
   })
 

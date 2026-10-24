@@ -9,7 +9,8 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { computeLegacyProjectionDigest, getProjectionRejection, listProjectionRejectionWork, markProjectionRejectionStale } from './sessionProjectionRejection'
 import { runDueSessionProjectionRevalidations } from './sessionProjectionRevalidation'
 import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
-import { publishTranscriptParityProof, readLegacyProjectionMessages, refreshValidatedProjectionFastPath, validateCanonicalProjection } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
+import { publishTranscriptParityProof, refreshValidatedProjectionFastPath, validateCanonicalProjection } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
+import { readLegacyProjectionMessages } from '../sessionStorage/sqliteRuntimeBindings'
 import { hasSessionProjectionEligibility } from './sessionTranscriptProjection'
 import { readSessionTranscriptProjection, refreshSessionTranscriptParityProof } from './sessionTranscriptProjection'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
@@ -46,26 +47,6 @@ describe('background projection revalidation queue (P0-③/④)', () => {
       VALUES(?,?,?,'invalid',1)`).run(session.id, scopeKey, session.generation)
     expect(hasSessionProjectionEligibility(db, session.id)).toBe(false)
     expect(hasSessionProjectionEligibility(db, session.id)).toBe(false)
-    db.close()
-  })
-
-  it('uses a matched parity proof in the fast path without requiring the legacy transcript cache', async () => {
-    const { db, session, history } = await createMismatchedSession('fast-path-adapter')
-    expect(refreshValidatedProjectionFastPath(db, session.id)).toBe(false)
-    getDbConnection(db).prepare("DELETE FROM messages WHERE id='fast-path-adapter-user-b'").run()
-    const verified = history.readCanonicalSessionTranscript(session.id, [
-      { id: 'fast-path-adapter-user-a', role: 'user', content: 'legacy-a', timestamp: 1 }
-    ])
-    expect(verified.kind).toBe('matched')
-    if (verified.kind === 'matched') {
-      expect(history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })).toBe(true)
-      expect(publishTranscriptParityProof(db, session.id, verified, computeLegacyProjectionDigest([
-        { id: 'fast-path-adapter-user-a', role: 'user', content: 'legacy-a', timestamp: 1 }
-      ]))).toBe(true)
-    }
-    getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
-      .run(session.id)
-    expect(refreshValidatedProjectionFastPath(db, session.id)).toBe(true)
     db.close()
   })
 
