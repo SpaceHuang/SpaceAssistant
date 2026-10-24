@@ -1661,19 +1661,22 @@ describe('SQLite session storage execution boundary', () => {
             async () => { throw new Error(`seeded random lifecycle retry failure ${retry + 1}`) })
           expect(retryFailure.failedTargetId).toBeTruthy()
           expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, ledgerLocation.ledger_location_key)).toHaveLength(1)
-          const appendNonce = (next() >>> 0).toString(16)
-          const appendedRequestId = `random-retry-append-${retry + 1}-${appendNonce}`
-          const appendedContent = `random retry append ${appendNonce}`
-          const appended = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: appendedRequestId, content: appendedContent })
-          expect(appended.duplicate).toBe(false)
-          expect(enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: appendedRequestId, content: appendedContent }))
-            .toMatchObject({ duplicate: true, persisted: { message: { id: appended.persisted.message.id } } })
-          entries.push({ requestId: appendedRequestId, messageId: appended.persisted.message.id, state: 'queued',
-            content: appendedContent, turnId: undefined })
-          operationTrace.push(`append-during-ledger-retry:${appendedRequestId}`)
-          assertLifecycleInvariants(1)
-          const retryQueueEntries = entries.filter(({ state }) => state === 'queued')
-          if (retryQueueEntries.length > 0) {
+        const retryActions: Array<{ kind: string; run: () => void }> = [
+          { kind: 'append', run: () => {
+            const appendNonce = (next() >>> 0).toString(16)
+            const appendedRequestId = `random-retry-append-${retry + 1}-${appendNonce}`
+            const appendedContent = `random retry append ${appendNonce}`
+            const appended = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: appendedRequestId, content: appendedContent })
+            expect(appended.duplicate).toBe(false)
+            expect(enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: appendedRequestId, content: appendedContent }))
+              .toMatchObject({ duplicate: true, persisted: { message: { id: appended.persisted.message.id } } })
+            entries.push({ requestId: appendedRequestId, messageId: appended.persisted.message.id, state: 'queued',
+              content: appendedContent, turnId: undefined })
+            operationTrace.push(`append-during-ledger-retry:${appendedRequestId}`)
+          } },
+          { kind: 'primary-queue', run: () => {
+            const retryQueueEntries = entries.filter(({ state }) => state === 'queued')
+            if (retryQueueEntries.length === 0) return
             const retryEntry = retryQueueEntries[next() % retryQueueEntries.length]!
             if ((next() & 1) === 0) {
               retryEntry.content = `${retryEntry.content}-retry-edit-${next()}`
@@ -1685,10 +1688,11 @@ describe('SQLite session storage execution boundary', () => {
               expect(storage.commands.deleteQueuedMessage(retryEntry.messageId)).toEqual({ ok: true, sessionId: session.id })
               retryEntry.state = 'cancelled'
             }
-          }
-          if (independentPendingState === 'queued') {
+          } },
+          { kind: 'independent-queue', run: () => {
+            if (independentPendingState !== 'queued') return
             if ((next() & 1) === 0) {
-              independentPendingContent= `${independentPendingContent}-retry-edit-${next()}`
+              independentPendingContent = `${independentPendingContent}-retry-edit-${next()}`
               operationTrace.push(`independent-retry-edit:${retry + 1}`)
               expect(storage.commands.editQueuedMessage({ sessionId: independentSession.id,
                 messageId: independentPending.persisted.message.id, content: independentPendingContent }))
@@ -1699,34 +1703,47 @@ describe('SQLite session storage execution boundary', () => {
                 .toEqual({ ok: true, sessionId: independentSession.id })
               independentPendingState = 'cancelled'
             }
-          }
-          if (retry > 0 && (next() & 1) === 0) {
-            expect(storage.execution.releaseExecution(retryLease)).toBe(true)
-            expect(storage.execution.releaseExecution(retryLease)).toBe(false)
-            const retryOwnerId = `random-turn-3-retry-owner-${(next() >>> 0).toString(16)}`
-            const retryOwner = storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn-3', ownerId: retryOwnerId })
-            expect(retryOwner.acquired).toBe(true)
-            if (!retryOwner.acquired) throw new Error('expected seeded retry owner claim')
-            expect(retryOwner.generation).toBeGreaterThan(retryLease.generation)
-            retryLease = { sessionId: session.id, turnId: 'random-turn-3', ownerId: retryOwnerId, generation: retryOwner.generation }
-            expect(storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn-3', ownerId: `${retryOwnerId}-rival` }))
-              .toMatchObject({ acquired: false })
-            operationTrace.push(`primary-retry-owner-generation:${retryLease.generation}`)
-          } else {
-            expect(storage.execution.releaseExecution(independentLease)).toBe(true)
-            expect(storage.execution.releaseExecution(independentLease)).toBe(false)
-            const independentOwnerId = `random-independent-retry-owner-${(next() >>> 0).toString(16)}`
-            const nextIndependentOwner = storage.execution.claimExecution({ sessionId: independentSession.id,
-              turnId: 'random-independent-turn', ownerId: independentOwnerId })
-            expect(nextIndependentOwner.acquired).toBe(true)
-            if (!nextIndependentOwner.acquired) throw new Error('expected seeded independent retry owner claim')
-            expect(nextIndependentOwner.generation).toBeGreaterThan(independentLease.generation)
-            independentLease = { sessionId: independentSession.id, turnId: 'random-independent-turn',
-              ownerId: independentOwnerId, generation: nextIndependentOwner.generation }
-            expect(storage.execution.claimExecution({ sessionId: independentSession.id, turnId: 'random-independent-turn',
-              ownerId: `${independentOwnerId}-rival` })).toMatchObject({ acquired: false })
-            operationTrace.push(`independent-retry-owner-generation:${independentLease.generation}`)
-          }
+          } },
+          { kind: 'owner', run: () => {
+            if (retry > 0 && (next() & 1) === 0) {
+              expect(storage.execution.releaseExecution(retryLease)).toBe(true)
+              expect(storage.execution.releaseExecution(retryLease)).toBe(false)
+              const retryOwnerId = `random-turn-3-retry-owner-${(next() >>> 0).toString(16)}`
+              const retryOwner = storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn-3', ownerId: retryOwnerId })
+              expect(retryOwner.acquired).toBe(true)
+              if (!retryOwner.acquired) throw new Error('expected seeded retry owner claim')
+              expect(retryOwner.generation).toBeGreaterThan(retryLease.generation)
+              retryLease = { sessionId: session.id, turnId: 'random-turn-3', ownerId: retryOwnerId, generation: retryOwner.generation }
+              expect(storage.execution.claimExecution({ sessionId: session.id, turnId: 'random-turn-3', ownerId: `${retryOwnerId}-rival` }))
+                .toMatchObject({ acquired: false })
+              operationTrace.push(`primary-retry-owner-generation:${retryLease.generation}`)
+            } else {
+              expect(storage.execution.releaseExecution(independentLease)).toBe(true)
+              expect(storage.execution.releaseExecution(independentLease)).toBe(false)
+              const independentOwnerId = `random-independent-retry-owner-${(next() >>> 0).toString(16)}`
+              const nextIndependentOwner = storage.execution.claimExecution({ sessionId: independentSession.id,
+                turnId: 'random-independent-turn', ownerId: independentOwnerId })
+              expect(nextIndependentOwner.acquired).toBe(true)
+              if (!nextIndependentOwner.acquired) throw new Error('expected seeded independent retry owner claim')
+              expect(nextIndependentOwner.generation).toBeGreaterThan(independentLease.generation)
+              independentLease = { sessionId: independentSession.id, turnId: 'random-independent-turn',
+                ownerId: independentOwnerId, generation: nextIndependentOwner.generation }
+              expect(storage.execution.claimExecution({ sessionId: independentSession.id, turnId: 'random-independent-turn',
+                ownerId: `${independentOwnerId}-rival` })).toMatchObject({ acquired: false })
+              operationTrace.push(`independent-retry-owner-generation:${independentLease.generation}`)
+            }
+          } },
+        ]
+        for (let index = retryActions.length - 1; index > 0; index -= 1) {
+          const swapIndex = next() % (index + 1)
+          ;[retryActions[index], retryActions[swapIndex]] = [retryActions[swapIndex]!, retryActions[index]!]
+        }
+        for (const action of retryActions) {
+          operationTrace.push(`retry-action:${action.kind}`)
+          action.run()
+          assertLifecycleInvariants(1)
+          expect(listPendingCanonicalLedgerProjectionTargets(reopenedConn, ledgerLocation.ledger_location_key)).toHaveLength(1)
+        }
           expect(reopenedConn.prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE status IN ('claimed','executing','transcript_committed')")
             .get()).toMatchObject({ count: 2 })
           expect(reopenedConn.prepare("SELECT COUNT(*) AS count FROM session_execution_claims WHERE session_id=? AND status IN ('claimed','executing','transcript_committed')")
@@ -1759,6 +1776,14 @@ describe('SQLite session storage execution boundary', () => {
         expect(operationTrace.some((step) => step.startsWith('independent-retry-owner-generation:'))).toBe(true)
         expect(operationTrace.some((step) => step.startsWith('independent-retry-edit:') || step.startsWith('independent-retry-cancel:'))).toBe(true)
         expect(operationTrace.some((step) => step.startsWith('append-during-ledger-retry:'))).toBe(true)
+        const firstRetryOperations = operationTrace.slice(operationTrace.indexOf('ledger-retry-failure:1') + 1)
+          .filter((step) => step.startsWith('append-during-ledger-retry:') || step.startsWith('retry-edit-during-ledger-failure:') ||
+            step.startsWith('retry-cancel-during-ledger-failure:') || step.startsWith('independent-retry-edit:') ||
+            step.startsWith('independent-retry-cancel:') || step.startsWith('primary-retry-owner-generation:') ||
+            step.startsWith('independent-retry-owner-generation:'))
+          .map((step) => step.startsWith('append-') ? 'append' : step.startsWith('retry-') ? 'primary-queue' :
+            step.startsWith('independent-retry-edit:') || step.startsWith('independent-retry-cancel:') ? 'independent-queue' : 'owner')
+        expect(firstRetryOperations.slice(0, 4)).not.toEqual(['append', 'primary-queue', 'independent-queue', 'owner'])
         expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, ledgerLocation.ledger_location_key,
           (item) => projectCanonicalSessionLedgerTarget(sink, item))).toEqual({ projected: 1 })
         expect(await drainCanonicalLedgerProjectionOutbox(reopenedConn, ledgerLocation.ledger_location_key,
