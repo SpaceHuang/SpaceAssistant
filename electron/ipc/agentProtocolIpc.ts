@@ -15,7 +15,6 @@ import { OutboundSubmitIntent } from '../../src/shared/outboundProtocol'
 import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import type { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
-import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'
 import { readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readRetryTargetAfterPreparation } from '../sessionStorage/public/readMessages'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
@@ -410,7 +409,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   // 且不会把已确认的 waiter 永久留在 committing。
   try { reconcileConfirmationSubmissions(ctx.db, settleReconciledDesktopConfirm) } catch { /* 下次启动继续对账 */ }
 
-  const turnRuntime = ctx.turnRuntime ?? createSessionTurnRuntime(sessionStorage, { deps: { now: Date.now, id: randomUUID } })
+  const turnRuntime = ctx.turnRuntime
+  if (!turnRuntime) throw new Error('TURN_RUNTIME_REQUIRED')
   const turnCoordinator = turnRuntime.coordinator
 
   const skillManager = createSkillManager({

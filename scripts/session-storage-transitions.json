@@ -17,18 +17,6 @@
     "evidence": "main.ts; appIpc.ts composition tests"
   },
   {
-    "source": "electron/ipc/agentProtocolIpc.ts",
-    "target": "electron/sessionStorage/sqliteSessionStorage",
-    "symbols": [
-      "createSessionTurnRuntime"
-    ],
-    "typeOnly": false,
-    "owner": "Agent protocol IPC composition",
-    "reason": "IPC fallback creates the SQLite-backed turn runtime when the process composition root did not supply one.",
-    "exitStage": "P2",
-    "evidence": "sessionProjectionEnsure.test.ts; agentProtocolIpc tests"
-  },
-  {
     "source": "electron/testSupport/invocationAssembler.ts",
     "target": "electron/sessionStorage/sqliteSessionStorage",
     "symbols": [

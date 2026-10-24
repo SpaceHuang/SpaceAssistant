@@ -16,7 +16,7 @@ import type { WorkDirManager } from '../workDirManager'
 import { acceptTurnContext, readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { commitSessionTranscript } from '../database/sessionTranscript'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
-import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { createSessionTurnRuntime, createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } from '../sessionStorage/certification'
 import { enableCanonicalSessionWriteAuthority } from '../sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
@@ -214,8 +214,9 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
       messageId: trackBUser.message.id, invocationId: 'track-b-turn', occurredAt: 5, parentEventId: 'provider-track-b-root' })
     const patchHandlers = new Map<string, (...args: unknown[]) => unknown>()
     let storage = createSqliteSessionStorage(db)
+    const turnRuntime = createSessionTurnRuntime(storage, { deps: { now: Date.now, id: () => 'test-turn' } })
     const registerPatchHandlers = () => registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => patchHandlers.set(channel, handler) } as never, {
-      db, sessionStorage: storage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage: storage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => workDir!, setWorkDir: () => undefined, getUserDataPath: () => path.join(workDir!, 'userdata'),
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir }) as never
     })
@@ -342,8 +343,9 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
     }
     const patchHandlers = new Map<string, (...args: unknown[]) => unknown>()
     let storage = createSqliteSessionStorage(db)
+    const turnRuntime = createSessionTurnRuntime(storage, { deps: { now: Date.now, id: () => 'test-turn' } })
     const registerPatchHandlers = () => registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => patchHandlers.set(channel, handler) } as never, {
-      db, sessionStorage: storage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage: storage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => workDir!, setWorkDir: () => undefined, getUserDataPath: () => path.join(workDir!, 'userdata'),
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir }) as never
     })
@@ -465,8 +467,9 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
     }
     const patchHandlers = new Map<string, (...args: unknown[]) => unknown>()
     const storage = createSqliteSessionStorage(db)
+    const turnRuntime = createSessionTurnRuntime(storage, { deps: { now: Date.now, id: () => 'test-turn' } })
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => patchHandlers.set(channel, handler) } as never, {
-      db, sessionStorage: storage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage: storage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => workDir!, setWorkDir: () => undefined, getUserDataPath: () => path.join(workDir!, 'userdata'),
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir }) as never
     })
@@ -576,8 +579,10 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
     recordTrackModelMessage(db, { trackId: otherTrack.trackId, eventId: 'wechat-provider-other-message', idempotencyKey: 'wechat-provider-other-message', sessionId: session.id,
       messageId: otherUser.message.id, invocationId: 'wechat-track-other-turn', occurredAt: 5, parentEventId: 'wechat-provider-track-b-root' })
     const patchHandlers = new Map<string, (...args: unknown[]) => unknown>()
+    const sessionStorage = createSqliteSessionStorage(db)
+    const turnRuntime = createSessionTurnRuntime(sessionStorage, { deps: { now: Date.now, id: () => 'test-turn' } })
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => patchHandlers.set(channel, handler) } as never, {
-      db, sessionStorage: createSqliteSessionStorage(db), backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => workDir!, setWorkDir: () => undefined, getUserDataPath: () => path.join(workDir!, 'userdata'),
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir }) as never
     })

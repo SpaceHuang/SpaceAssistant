@@ -3,11 +3,12 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { createSession } from '../database/operations'
 import { registerAgentIpc } from './agentProtocolIpc'
 import { readLatestRetrySourceAfterProjection } from './agentProtocolIpc'
-import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { createSessionTurnRuntime, createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 describe('chat:get-messages projection preparation', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
-  afterEach(() => { db?.close(); db = undefined })
+  let turnRuntime: ReturnType<typeof createSessionTurnRuntime> | undefined
+  afterEach(() => { db?.close(); db = undefined; turnRuntime = undefined })
 
   it('prepares a session before the outbound retry-source query reads message bodies', async () => {
     const events: string[] = []
@@ -26,6 +27,7 @@ describe('chat:get-messages projection preparation', () => {
     const session = createSession(db, { name: 'projection IPC ensure', model: 'test' })
     const events: string[] = []
     const base = createSqliteSessionStorage(db)
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure') }),
@@ -36,7 +38,7 @@ describe('chat:get-messages projection preparation', () => {
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
-      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
@@ -53,6 +55,7 @@ describe('chat:get-messages projection preparation', () => {
     const prepared = { sessionId: session.id, sourceIdentityJson: 'source' }
     const messages = [{ id: 'prepared-message', sessionId: session.id, role: 'assistant', content: 'cache body', timestamp: 1 }]
     const base = createSqliteSessionStorage(db)
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure'); return prepared }),
@@ -66,7 +69,7 @@ describe('chat:get-messages projection preparation', () => {
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
-      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
@@ -80,6 +83,7 @@ describe('chat:get-messages projection preparation', () => {
     const session = createSession(db, { name: 'projection API baseline IPC ensure', model: 'test' })
     const events: string[] = []
     const base = createSqliteSessionStorage(db)
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure') }),
@@ -90,7 +94,7 @@ describe('chat:get-messages projection preparation', () => {
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
-      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
@@ -108,6 +112,7 @@ describe('chat:get-messages projection preparation', () => {
     const baseline = { sessionId: session.id, entries: [{ sequence: 7,
       message: { id: 'prepared-api-message', sessionId: session.id, role: 'assistant', content: 'cache body', timestamp: 1 } }] }
     const base = createSqliteSessionStorage(db)
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure'); return prepared }),
@@ -121,7 +126,7 @@ describe('chat:get-messages projection preparation', () => {
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
-      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
@@ -135,6 +140,7 @@ describe('chat:get-messages projection preparation', () => {
     const session = createSession(db, { name: 'projection page IPC ensure', model: 'test' })
     const events: string[] = []
     const base = createSqliteSessionStorage(db)
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure') }),
@@ -145,7 +151,7 @@ describe('chat:get-messages projection preparation', () => {
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
-      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
@@ -160,6 +166,7 @@ describe('chat:get-messages projection preparation', () => {
     const session = createSession(db, { name: 'projection page fallback IPC', model: 'test' })
     const events: string[] = []
     const base = createSqliteSessionStorage(db)
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure'); throw new Error('PROJECTION_PREPARATION_DEFERRED_LARGE') }),
@@ -170,7 +177,7 @@ describe('chat:get-messages projection preparation', () => {
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
-      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
@@ -184,6 +191,7 @@ describe('chat:get-messages projection preparation', () => {
     const session = createSession(db, { name: 'projection display page IPC ensure', model: 'test' })
     const events: string[] = []
     const base = createSqliteSessionStorage(db)
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure') }),
@@ -194,7 +202,7 @@ describe('chat:get-messages projection preparation', () => {
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
-      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
@@ -209,6 +217,7 @@ describe('chat:get-messages projection preparation', () => {
     const session = createSession(db, { name: 'projection search corpus IPC ensure', model: 'test' })
     const events: string[] = []
     const base = createSqliteSessionStorage(db)
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure') }),
@@ -225,7 +234,7 @@ describe('chat:get-messages projection preparation', () => {
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
-      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })
@@ -240,6 +249,7 @@ describe('chat:get-messages projection preparation', () => {
     const session = createSession(db, { name: 'projection retry context IPC ensure', model: 'test' })
     const events: string[] = []
     const base = createSqliteSessionStorage(db)
+    turnRuntime = createSessionTurnRuntime(base, { deps: { now: Date.now, id: () => 'test-turn' } })
     const sessionStorage = {
       ...base,
       ensureChatBodyV1: vi.fn(async () => { events.push('ensure') }),
@@ -252,7 +262,7 @@ describe('chat:get-messages projection preparation', () => {
     }
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, {
-      db, sessionStorage, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => '/tmp', setWorkDir: () => undefined, getUserDataPath: () => '/tmp',
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir: '/tmp' }) as never,
     })

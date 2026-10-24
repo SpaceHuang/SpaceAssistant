@@ -10,7 +10,7 @@ import { createTempDatabase } from '../database/testHelpers'
 import { persistLlmServices } from '../llmServiceResolver'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { acceptTurnContext } from '../database/acceptedTurnStorage'
-import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { createSessionTurnRuntime, createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { TurnRuntime } from '../turnRuntime'
 import { createDesktopAgentRuntime } from '../runtime/desktopAgentRuntime'
@@ -273,8 +273,10 @@ describe('Feishu prepared wake to real provider integration', () => {
       channelMessageId: 'feishu-track-wake-platform', content: 'Track A accepted input sentinel', trackId: attribution.context.trackId,
       trackEventId: attribution.context.attributionEventId })
     const patchHandlers = new Map<string, (...args: unknown[]) => unknown>()
+    const sessionStorage = createSqliteSessionStorage(db)
+    const turnRuntime = createSessionTurnRuntime(sessionStorage, { deps: { now: Date.now, id: () => 'test-turn' } })
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => patchHandlers.set(channel, handler) } as never, {
-      db, sessionStorage: createSqliteSessionStorage(db), backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => workDir!, setWorkDir: () => undefined, getUserDataPath: () => path.join(workDir!, 'userdata'),
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir }) as never
     })

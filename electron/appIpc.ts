@@ -41,7 +41,7 @@ export type AppIpcContext = {
   setApiKey: (value: string) => Promise<void>
   getBrowserDetectContext: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
-  turnRuntime?: TurnRuntime
+  turnRuntime: TurnRuntime
   /** Wake the durable source-truth spill collection queue after its owning session is deleted. */
   wakeSourceTruthSpillGc?: () => void
   executeTurn?: ClaudeTurnExecution

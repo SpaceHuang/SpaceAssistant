@@ -192,6 +192,13 @@ describe('session storage module graph rules', () => {
     expect(source).not.toContain('getDbConnection')
   })
 
+  it('requires the process-composed turn runtime and keeps SQLite runtime construction out of agent IPC', () => {
+    const ipc = readFileSync(path.resolve('electron/ipc/agentProtocolIpc.ts'), 'utf8')
+    const appIpc = readFileSync(path.resolve('electron/appIpc.ts'), 'utf8')
+    expect(ipc).not.toContain('createSessionTurnRuntime')
+    expect(appIpc).toMatch(/turnRuntime:\s*TurnRuntime/)
+  })
+
   it('classifies startup History recovery composition as SQLite infrastructure', () => {
     const adapterFile = 'electron/sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost.ts'
     expect(findSessionStorageModuleViolations(adapterFile, readFileSync(path.resolve(adapterFile), 'utf8'))).toEqual([])
