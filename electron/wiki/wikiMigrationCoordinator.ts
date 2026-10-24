@@ -33,17 +33,20 @@ export function createWikiMigrationCoordinator(wikiRoot: string) {
       if (!changes.length) throw new Error('wiki-migration-plan-empty')
       const manifest = await journal.prepare(changes)
       await lifecycle.beginMigration(input.preflightHash, manifest.migrationId)
-      const completed = await journal.apply(manifest.migrationId, { crashAfterWriteIndex: input.crashAfterWriteIndex })
+      const completed = await journal.apply(manifest.migrationId, {
+        crashAfterWriteIndex: input.crashAfterWriteIndex,
+        onVerifiedComplete: () => lifecycle.completeMigration(input.preflightHash, manifest.migrationId, { lockHeld: true })
+      })
       if (completed.status === 'conflict') throw new Error('wiki-migration-conflict')
-      await lifecycle.completeMigration(input.preflightHash, manifest.migrationId)
       return completed
     },
 
     async resume(input: { migrationId: string; preflightHash: string }): Promise<WikiMigrationManifest> {
       const snapshot = await lifecycle.read()
       if (snapshot.lifecycle !== 'initializing' || snapshot.preflightHash !== input.preflightHash || snapshot.migrationId !== input.migrationId) throw new Error('wiki-migration-lifecycle-invalid')
-      const completed = await journal.apply(input.migrationId)
-      await lifecycle.completeMigration(input.preflightHash, input.migrationId)
+      const completed = await journal.apply(input.migrationId, {
+        onVerifiedComplete: () => lifecycle.completeMigration(input.preflightHash, input.migrationId, { lockHeld: true })
+      })
       return completed
     },
 

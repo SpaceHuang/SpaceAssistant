@@ -67,11 +67,13 @@ export function createWikiMigrationJournal(options: { store: WikiFileStore; mark
 
     read(migrationId: string): Promise<WikiMigrationManifest> { return readManifest(options.store, migrationId) },
 
-    apply(migrationId: string, input: { crashAfterWriteIndex?: number } = {}): Promise<WikiMigrationManifest> {
+    apply(migrationId: string, input: { crashAfterWriteIndex?: number; onVerifiedComplete?: () => void | Promise<void> } = {}): Promise<WikiMigrationManifest> {
       return withWikiWriteMutex(lockPath, async () => {
         const manifest = await readManifest(options.store, migrationId)
-        if (manifest.status === 'completed') return manifest
         if (manifest.status === 'conflict' || manifest.status === 'rolled_back' || manifest.status === 'rolling_back') throw new WikiMigrationJournalError('wiki-migration-not-applicable')
+        // A completed manifest describes a prior commit, but lifecycle.resume may
+        // still be crossing the migration barrier after a crash. Recheck every target
+        // and its backup/staging material on every apply, including that final window.
         manifest.status = 'applying'
         await writeManifest(options.store, manifest)
         for (const [index, entry] of manifest.entries.entries()) {
@@ -110,6 +112,7 @@ export function createWikiMigrationJournal(options: { store: WikiFileStore; mark
         }
         manifest.status = 'completed'
         await writeManifest(options.store, manifest)
+        await input.onVerifiedComplete?.()
         return structuredClone(manifest)
       })
     },

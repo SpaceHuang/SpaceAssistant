@@ -4,7 +4,7 @@ import path from 'node:path'
 import type { WikiFileStore } from './wikiFileStore'
 import type { FileIdentity } from '../safeAtomicWrite'
 import { createWikiWriteService } from './wikiWriteService'
-import { serializeWikiPageMarker } from './wikiReconciler'
+import { parseWikiPageMarker, serializeWikiPageMarker } from './wikiReconciler'
 import { buildWikiIndex, buildWikiLog, type WikiProjectionPage, type WikiSuccessEvent } from './wikiProjection'
 import { withWikiWriteMutex } from './wikiWriteMutex'
 
@@ -21,7 +21,7 @@ export interface WikiDomainCoordinator {
   movePage(input: WikiSavePageInput & { pageId: string; expectedRevision: number; parentPageId: string | null }): Promise<WikiSavePageResult>
 }
 interface OperationJournal {
-  formatVersion: 1; operationId: string; inputFingerprint: string; callerId: string; lane: string; status: 'prepared' | 'domain_committed' | 'completed' | 'conflict'
+  formatVersion: 1; operationId: string; inputFingerprint: string; callerId: string; lane: string; schemaVersion?: number; status: 'prepared' | 'domain_committed' | 'completed' | 'conflict'
   targetPath: string; oldHash: string | null; newHash: string; stagingPath: string; result: WikiSavePageResult; eventMaterial: WikiSuccessEvent; successEvent?: WikiSuccessEvent; errorCode?: string
 }
 
@@ -82,7 +82,7 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     const oldSnapshot = existingPage ? await writeService.read(existingPage.path) : undefined
     const result: WikiSavePageResult = { pageId, revision, projectionStatus: 'complete', operationId: invocationKey }
     const event: WikiSuccessEvent = { operationId: invocationKey, type: input.operationKind ?? (existingPage ? 'saved' : 'created'), title: input.title.trim(), revision, committedAt: now().toISOString(), pageId, sourceIds: (input.sourceRefs ?? []).map(source => source.sourceId), changeSummary: input.summary }
-    const journal: OperationJournal = { formatVersion: 1, operationId: invocationKey, inputFingerprint: fingerprint, callerId: input.callerId, lane: input.lane, status: 'prepared', targetPath: relPath, oldHash: oldSnapshot?.sha256 ?? null, newHash: sha(bytes), stagingPath: `.wiki-service/staging/${invocationKey}.payload`, result, eventMaterial: event }
+    const journal: OperationJournal = { formatVersion: 1, operationId: invocationKey, inputFingerprint: fingerprint, callerId: input.callerId, lane: input.lane, schemaVersion: schema.schemaVersion, status: 'prepared', targetPath: relPath, oldHash: oldSnapshot?.sha256 ?? null, newHash: sha(bytes), stagingPath: `.wiki-service/staging/${invocationKey}.payload`, result, eventMaterial: event }
     await options.store.write(journal.stagingPath, bytes)
     await options.store.write(operationPath, json(journal))
     if (oldSnapshot) await writeSnapshotIfMissing(options.store, `.wiki-service/page-history/${pageId}/${existingPage!.revision}.md`, oldSnapshot.bytes)
@@ -95,6 +95,22 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     if (journal.status === 'prepared') {
       const staged = await options.store.read(journal.stagingPath)
       if (sha(staged) !== journal.newHash) throw codedError('operation_pending')
+      try {
+        await validatePreparedOperation(journal, staged)
+      } catch (error) {
+        const code = (error as { code?: unknown }).code
+        if (typeof code !== 'string') throw error
+        journal.status = 'conflict'
+        journal.errorCode = code
+        await options.store.write(operationPath, json(journal))
+        try { await rollbackPreparedTarget(journal) }
+        catch {
+          journal.errorCode = 'operation_pending'
+          await options.store.write(operationPath, json(journal))
+          throw codedError('operation_pending')
+        }
+        throw codedError(code)
+      }
       const current = await options.store.identity(journal.targetPath)
       const currentBytes = current ? await options.store.read(journal.targetPath) : null
       const currentHash = currentBytes ? sha(currentBytes) : null
@@ -138,7 +154,7 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
       if (sha(target) !== journal.newHash) throw codedError('external_change_conflict')
       if (existing && (existing.revision ?? 1) === journal.result.revision && existing.contentHash !== journal.newHash) throw codedError('external_change_conflict')
       const page = { pageId: journal.result.pageId, path: journal.targetPath, revision: journal.result.revision, contentHash: journal.newHash, title: decoded.title, categoryId: decoded.categoryId, summary: decoded.summary, parentPageId: decoded.parentPageId, sourceRefs: decoded.sourceRefs }
-      const nextCatalog = { formatVersion: 1 as const, pages: [...catalog.pages.filter(item => item.pageId !== page.pageId), page], tombstones: (catalog.tombstones ?? []).filter(item => item.pageId !== page.pageId) }
+      const nextCatalog = { formatVersion: 1 as const, pages: [...catalog.pages.filter(item => item.pageId !== page.pageId), page], tombstones: (catalog.tombstones ?? []).filter(item => item.pageId !== page.pageId), pathAliases: catalog.pathAliases ?? [] }
       await options.store.writeCatalog(nextCatalog)
     }
     await writeSnapshotIfMissing(options.store, `.wiki-service/page-history/${journal.result.pageId}/${journal.result.revision}.md`, staged)
@@ -169,6 +185,48 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     if (crashAt === 'after-domain-commit') throw new Error('injected crash after domain commit')
     return recover(journal, operationPath, crashAt)
   }
+
+  async function validatePreparedOperation(journal: OperationJournal, staged: Buffer): Promise<void> {
+    const schema = options.schema()
+    if (journal.schemaVersion !== undefined && journal.schemaVersion !== schema.schemaVersion) throw codedError('schema_conflict')
+    const decoded = parsePage(staged.toString('utf8'))
+    if (decoded.pageId !== journal.result.pageId || decoded.revision !== journal.result.revision) throw codedError('operation_pending')
+    if (!schema.categories.some(category => category.id === decoded.categoryId && category.status === 'active')) throw codedError('category_invalid')
+
+    const catalog = await options.store.readCatalog() ?? { formatVersion: 1 as const, pages: [] }
+    const existing = catalog.pages.find(page => page.pageId === decoded.pageId)
+    const tombstone = catalog.tombstones?.find(page => page.pageId === decoded.pageId)
+    const priorRevision = existing?.revision ?? tombstone?.revision ?? 0
+    if (priorRevision + 1 !== decoded.revision) throw codedError('revision_conflict')
+    if (existing && existing.path !== journal.targetPath) throw codedError('revision_conflict')
+    if (catalog.pages.some(page => page.pageId !== decoded.pageId && page.path === journal.targetPath)) throw codedError('external_change_conflict')
+    if (existing && existing.contentHash && journal.oldHash !== existing.contentHash) throw codedError('revision_conflict')
+    for (const source of decoded.sourceRefs) {
+      try { await options.store.read(`.wiki-service/source-history/${source.sourceId}/${source.sourceRevision}.md`) }
+      catch { throw codedError('source_missing') }
+    }
+    const candidate = { pageId: decoded.pageId, path: journal.targetPath, revision: decoded.revision, title: decoded.title,
+      categoryId: decoded.categoryId, summary: decoded.summary, parentPageId: decoded.parentPageId }
+    validateActivePageSet([...catalog.pages.filter(page => page.pageId !== decoded.pageId), candidate], schema, decoded.pageId)
+  }
+
+  async function rollbackPreparedTarget(journal: OperationJournal): Promise<void> {
+    const identity = await options.store.identity(journal.targetPath)
+    if (!identity) return
+    const bytes = await options.store.read(journal.targetPath)
+    const currentHash = sha(bytes)
+    if (currentHash !== journal.newHash) return
+    if (journal.oldHash === null) {
+      await options.store.remove(journal.targetPath, identity)
+      return
+    }
+    const catalog = await options.store.readCatalog()
+    const existing = catalog?.pages.find(page => page.pageId === journal.result.pageId)
+    if (!existing) throw codedError('operation_pending')
+    const previous = await options.store.read(`.wiki-service/page-history/${existing.pageId}/${existing.revision ?? 1}.md`)
+    if (sha(previous) !== journal.oldHash) throw codedError('operation_pending')
+    await writeService.write(journal.targetPath, previous, identity)
+  }
 }
 
 async function readJournal(store: WikiFileStore, relPath: string): Promise<OperationJournal | undefined> {
@@ -193,10 +251,11 @@ async function listOperations(store: WikiFileStore): Promise<OperationJournal[]>
   return results
 }
 function parsePage(text: string) {
-  const match = /<!-- wiki-page:start -->\n(.*?)\n<!-- wiki-page:end -->\n# (.+?)\n\n/s.exec(text)
-  if (!match) throw codedError('wiki-page-marker-invalid')
-  const marker = JSON.parse(match[1]) as { categoryId: string; summary: string; parentPageId: string | null; sourceRefs?: Array<{ sourceId: string; sourceRevision: number }> }
-  return { title: match[2], categoryId: marker.categoryId, summary: marker.summary, parentPageId: marker.parentPageId, sourceRefs: marker.sourceRefs ?? [] }
+  const parsed = parseWikiPageMarker(text)
+  const title = /^#\s+(.+?)\s*#*\s*$/m.exec(parsed.body)?.[1]?.trim()
+  if (!parsed.marker || !title) throw codedError('wiki-page-marker-invalid')
+  return { pageId: parsed.marker.pageId, revision: parsed.marker.revision, title, categoryId: parsed.marker.categoryId,
+    summary: parsed.marker.summary, parentPageId: parsed.marker.parentPageId, sourceRefs: parsed.marker.sourceRefs }
 }
 function normalizeTitle(value: string): string { return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US') }
 function isDescendant(pages: Array<{ pageId: string; parentPageId?: string | null }>, candidateId: string, ancestorId: string): boolean {

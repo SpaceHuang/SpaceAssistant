@@ -45,8 +45,8 @@ export function createWikiLifecycleController(wikiRoot: string) {
         await store.write('.wiki-service/state.json', json({ formatVersion: 1, bootstrapId: seal.bootstrapId, lifecycle: 'initializing', initialization: seal.initialization, preflightHash, migrationId } satisfies LifecycleFile))
       })
     },
-    completeMigration(preflightHash: string, migrationId: string): Promise<void> {
-      return withWikiWriteMutex(lock, async () => {
+    completeMigration(preflightHash: string, migrationId: string, options: { lockHeld?: boolean } = {}): Promise<void> {
+      const complete = async () => {
         const snapshot = await readSnapshot()
         if (!snapshot || snapshot.lifecycle !== 'initializing' || snapshot.preflightHash !== preflightHash || snapshot.migrationId !== migrationId) throw new Error('wiki-lifecycle-invalid-transition')
         const seal = await readSeal()
@@ -55,7 +55,8 @@ export function createWikiLifecycleController(wikiRoot: string) {
         delete seal.migrationId
         await writeSeal(seal)
         await store.write('.wiki-service/state.json', json({ formatVersion: 1, bootstrapId: seal.bootstrapId, lifecycle: 'domain_ready', initialization: seal.initialization, preflightHash } satisfies LifecycleFile))
-      })
+      }
+      return options.lockHeld ? complete() : withWikiWriteMutex(lock, complete)
     },
     enable(): Promise<void> {
       return withWikiWriteMutex(lock, async () => {

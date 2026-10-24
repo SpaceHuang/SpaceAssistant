@@ -141,11 +141,22 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
     const source = files.find(file => file.path === page.path)!
     const parsed = parseWikiPageMarker(source.content)
     if (!parsed.marker) continue
-    const marker = serializeWikiPageMarker({ ...parsed.marker, revision: page.revision })
-    const updated = `${marker}\n${parsed.body.replace(/^\s+/, '')}`
+    let revision = page.revision
+    let updated = serializeWikiPageMarker({ ...parsed.marker, revision }) + `\n${parsed.body.replace(/^\s+/, '')}`
+    while (await store.identity(`.wiki-service/page-history/${page.pageId}/${revision}.md`)) {
+      const existingSnapshot = await store.readText(`.wiki-service/page-history/${page.pageId}/${revision}.md`)
+      if (hashText(existingSnapshot) === hashText(updated)) break
+      revision += 1
+      updated = serializeWikiPageMarker({ ...parsed.marker, revision }) + `\n${parsed.body.replace(/^\s+/, '')}`
+    }
+    page.revision = revision
+    page.contentHash = hashText(updated)
     updatedBodies.set(page.path, updated)
     const historyPath = `.wiki-service/page-history/${page.pageId}/${page.revision}.md`
     if (!(await store.identity(historyPath))) await store.writeImmutable(historyPath, Buffer.from(updated))
+    else if (hashText(await store.readText(historyPath)) !== hashText(updated)) {
+      return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-history-conflict', path: page.path, pageId: page.pageId, message: 'An immutable revision snapshot already exists with different content.' }] }
+    }
     const revisionMetadataPath = `.wiki-service/page-revision-metadata/${page.pageId}/${page.revision}.json`
     const revisionMetadata = { formatVersion: 1, pageId: page.pageId, revision: page.revision, externalEdit: true, changeSummary: `外部编辑：${page.title}` }
     const existingMetadata = await store.identity(revisionMetadataPath)

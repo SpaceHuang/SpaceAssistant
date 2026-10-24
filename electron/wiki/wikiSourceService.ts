@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import path from 'node:path'
 import type { WikiFileStore } from './wikiFileStore'
 import type { WikiReadCaller } from './wikiDomainRead'
 import { normalizeWikiRelativePath } from './wikiPaths'
+import { withWikiWriteMutex } from './wikiWriteMutex'
 
 export interface WikiBoundSource { path: string; displayName: string; projectId?: string }
 interface StoredSource { formatVersion: 1; sourceId: string; sourceRevision: number; displayName: string; projectId?: string; rawPath?: string; deleted?: true }
@@ -44,7 +46,11 @@ export function createWikiSourceService(options: {
       const cursor = input.cursor ? cursorMap.get(input.cursor) : undefined
       if (input.cursor && (!cursor || cursor.sourceId !== sourceId || cursor.callerId !== caller.callerId || cursor.lane !== caller.lane ||
         (input.sourceRevision !== undefined && input.sourceRevision !== cursor.sourceRevision))) throw new WikiSourceError('source_cursor_invalid')
-      stored = await reconcileRawSource(options.store, stored, maxBytes)
+      stored = await withWikiWriteMutex(path.join(options.store.root, '.wiki-domain-lock'), async () => {
+        const latest = await readBinding(options.store, sourceId)
+        if (!latest || !(await options.authorize(sourceId, caller))) throw new WikiSourceError('source_missing')
+        return reconcileRawSource(options.store, latest, maxBytes)
+      })
       if (stored.deleted && !cursor && input.sourceRevision === undefined) throw new WikiSourceError('source_missing')
       const revision = cursor?.sourceRevision ?? input.sourceRevision ?? stored.sourceRevision
       if (!Number.isSafeInteger(revision) || revision < 1 || revision > stored.sourceRevision) throw new WikiSourceError('source_missing')
@@ -77,12 +83,20 @@ async function readBinding(store: WikiFileStore, sourceId: string): Promise<Stor
 
 async function reconcileRawSource(store: WikiFileStore, stored: StoredSource, maxBytes: number): Promise<StoredSource> {
   if (!stored.rawPath) return stored
+  const bindingPath = `.wiki-service/sources/${stored.sourceId}.json`
+  const bindingIdentity = await store.identity(bindingPath)
+  if (!bindingIdentity) throw new WikiSourceError('source_missing')
+  const rawIdentity = await store.identity(stored.rawPath)
   let bytes: Buffer
-  try { bytes = await store.read(stored.rawPath) } catch (error) {
+  try {
+    bytes = await store.read(stored.rawPath)
+    if (!sameIdentity(rawIdentity, await store.identity(stored.rawPath))) throw new WikiSourceError('source_revision_conflict')
+  } catch (error) {
+    if (error instanceof WikiSourceError) throw error
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new WikiSourceError('source_missing')
     if (stored.deleted) return stored
     const deleted: StoredSource = { ...stored, deleted: true }
-    await store.write(`.wiki-service/sources/${stored.sourceId}.json`, `${JSON.stringify(deleted, null, 2)}\n`)
+    await store.write(bindingPath, `${JSON.stringify(deleted, null, 2)}\n`, bindingIdentity)
     return deleted
   }
   if (bytes.length > maxBytes || bytes.includes(0)) throw new WikiSourceError('source_missing')
@@ -91,16 +105,29 @@ async function reconcileRawSource(store: WikiFileStore, stored: StoredSource, ma
     if (!stored.deleted) return stored
     const restored: StoredSource = { ...stored }
     delete restored.deleted
-    await store.write(`.wiki-service/sources/${stored.sourceId}.json`, `${JSON.stringify(restored, null, 2)}\n`)
+    await store.write(bindingPath, `${JSON.stringify(restored, null, 2)}\n`, bindingIdentity)
     return restored
   }
   const next: StoredSource = { ...stored, sourceRevision: stored.sourceRevision + 1 }
   delete next.deleted
-  await store.writeImmutable(`.wiki-service/source-history/${stored.sourceId}/${next.sourceRevision}.md`, bytes)
-  await store.write(`.wiki-service/sources/${stored.sourceId}.json`, `${JSON.stringify(next, null, 2)}\n`)
+  const snapshotPath = `.wiki-service/source-history/${stored.sourceId}/${next.sourceRevision}.md`
+  if (await store.identity(snapshotPath)) {
+    const existingSnapshot = await store.read(snapshotPath)
+    if (hash(existingSnapshot) !== hash(bytes)) throw new WikiSourceError('source_revision_conflict')
+  } else {
+    await store.writeImmutable(snapshotPath, bytes)
+  }
+  if (!sameIdentity(rawIdentity, await store.identity(stored.rawPath)) || hash(await store.read(stored.rawPath)) !== hash(bytes)) {
+    throw new WikiSourceError('source_revision_conflict')
+  }
+  await store.write(bindingPath, `${JSON.stringify(next, null, 2)}\n`, bindingIdentity)
   return next
 }
 
 function safeSegment(value: string): string { return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(value) ? value : 'unassigned' }
 function baseName(value: string): string { return value.replace(/\\/g, '/').split('/').at(-1) ?? '' }
 function hash(value: Buffer): string { return createHash('sha256').update(value).digest('hex') }
+function sameIdentity(left: Awaited<ReturnType<WikiFileStore['identity']>>, right: Awaited<ReturnType<WikiFileStore['identity']>>): boolean {
+  if (!left || !right) return left === right
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs && left.nlink === right.nlink
+}
