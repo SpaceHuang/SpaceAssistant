@@ -609,14 +609,25 @@ describe('file IPC handlers', () => {
     }) as never)
     vi.spyOn(sessionStorageCutover, 'isCanonicalApiReadFenceCurrent').mockReturnValue(true)
     const intent = { mode: 'reuse-user' as const, requestId: started.requestId, sessionId: started.sessionId, userMessageId: 'reuse-user', excludeMessageIds: [], config: {} }
+    const preparedView = { sessionId: started.sessionId, sessionGeneration: 'generation-1', sourceIdentityJson: '{"source":1}',
+      scopeKey: 'chatBodyV1', specVersion: 3, payloadGeneration: 'projection-one', payloadDigest: 'a'.repeat(64),
+      validatedRangeJson: '{}', cachePresent: true, stateSourceIdentityJson: '{"source":1}',
+      statePayloadGeneration: 'projection-one', statePayloadDigest: 'a'.repeat(64), stateValidatedRangeJson: '{}' }
+    const preparedMessageRead = vi.fn(async () => canonicalAwareUserMessage)
+    const preparedRoutingRead = vi.fn(async () => undefined)
 
     ipc = mockIpcMain()
     routeSessionStorageTurnReadsThroughDatabaseMocks(ctx)
+    ctx.sessionStorage = { ...ctx.sessionStorage!, ensureChatBodyV1: async () => preparedView,
+      queries: { ...ctx.sessionStorage!.queries, readPreparedMessage: preparedMessageRead,
+        readPreparedRoutingInput: preparedRoutingRead } as SessionQueries }
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     await expect(ipc.getHandler('chat:prepare-turn')!({}, intent)).resolves.toMatchObject({ turnId: started.turnId })
     await vi.waitFor(() => expect(mockSkillManager.route).toHaveBeenCalledTimes(1))
 
     expect(canonicalAwareMessageRead).toHaveBeenCalledWith(ctx.db, 'reuse-user')
+    expect(preparedMessageRead).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'reuse-user', prepared: preparedView }))
+    expect(preparedRoutingRead).toHaveBeenCalledWith(expect.objectContaining({ prepared: preparedView, signal: expect.any(AbortSignal) }))
     expect(database.getMessage(ctx.db, 'reuse-user')?.content).toBe('')
     expect(canonicalRouteRead).toHaveBeenCalledWith(ctx.db, expect.objectContaining({
       sessionId: 'session-1', mode: 'reuse-user', reuseUserMessageId: 'reuse-user',

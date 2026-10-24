@@ -805,10 +805,14 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       const { executionConfig: _executionConfig, ...prepared } = turnCoordinator.prepare({ ...intent, config: existing.executionConfig ?? {} })
       return prepared
     }
-    await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, intent.sessionId)
+    const preparedChatBody = await prepareChatBodyForRead(sessionStorage.ensureChatBodyV1, intent.sessionId)
     // A retry must fail closed on a missing canonical body before reporting an unrelated
     // admission conflict. This read is side-effect free and does not claim the session.
-    if (intent.mode === 'reuse-user') sessionQueries.readMessage({ sessionId: intent.sessionId, messageId: intent.userMessageId })
+    if (intent.mode === 'reuse-user') {
+      const preparedUser = await sessionQueries.readPreparedMessage?.({ sessionId: intent.sessionId,
+        messageId: intent.userMessageId, prepared: preparedChatBody as PreparedChatBodyView | undefined })
+      if (preparedUser === undefined) sessionQueries.readMessage({ sessionId: intent.sessionId, messageId: intent.userMessageId })
+    }
     const inFlightConfiguration = configuringTurns.get(configuringKey)
     if (inFlightConfiguration) {
       turnCoordinator.prepare({ ...intent, config: {} })
@@ -828,7 +832,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         const session = sessionQueries.readSession(intent.sessionId)
         if (!session) throw new Error('TURN_SESSION_NOT_FOUND')
         const excludeMessageIds = intent.excludeMessageIds ?? []
-        const routeRead = sessionQueries.readRoutingInput({
+        const routeSelection = {
           sessionId: intent.sessionId,
           boundarySequence: persisted.contextBoundarySequence,
           requiredUserMessageId: persisted.userMessageId,
@@ -836,8 +840,12 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           limit: 50,
           ...(intent.mode === 'create-user' ? { userInput: intent.input.text } : {}),
           ...(intent.mode === 'reuse-user' ? { reuseUserMessageId: intent.userMessageId } : {})
+        }
+        const preparedRouteRead = await sessionQueries.readPreparedRoutingInput?.({
+          ...routeSelection, prepared: preparedChatBody as PreparedChatBodyView | undefined, signal: controller.signal
         })
-        const reusedUserMessage = intent.mode === 'reuse-user'
+        const routeRead = preparedRouteRead ?? sessionQueries.readRoutingInput(routeSelection)
+        const reusedUserMessage = intent.mode === 'reuse-user' && !preparedRouteRead
           ? sessionQueries.readMessage({ sessionId: intent.sessionId, messageId: intent.userMessageId })
           : undefined
         const userInput = routeRead.userInput

@@ -89,7 +89,7 @@ function selectUniqueFailedAssistantMessageId(db: AppDatabase, sessionId: string
 
 export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonly<{
   currentSourceIdentity(sessionId: string, sessionGeneration: string): string | undefined
-  readBodies(view: PreparedChatBodyView, messageIds: readonly string[]): Promise<PreparedChatBodySelection>
+  readBodies(view: PreparedChatBodyView, messageIds: readonly string[], signal?: AbortSignal): Promise<PreparedChatBodySelection>
   searchBodies(view: PreparedChatBodyView, query: string, limit: number): Promise<PreparedChatBodySearch>
   invalidate(view: PreparedChatBodyView): void
 }>): SessionQueries {
@@ -339,7 +339,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
     readContextHistorySummaryBaseline: (sessionId) => getContextHistorySummaryBaseline(db, sessionId),
     readCanonicalCompactionReplay: (sessionId) => new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId).readCanonicalCompactionReplay(sessionId),
     readCanonicalContextMeterEvents: (sessionId) => new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId).readCanonicalContextMeterEvents(sessionId),
-    ...createRoutingQueries(db),
+    ...createRoutingQueries(db, preparedChatBody),
     readExportPage: ({ sessionId, fromSequence, pageSize }) => {
       const page = getProjectedMessagesPageWithSequence(db, sessionId, fromSequence, pageSize)
       return { ...page, rows: projectMessageEntriesV1('exportMessageV1', page.rows) }

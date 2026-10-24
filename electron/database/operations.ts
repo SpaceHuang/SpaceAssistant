@@ -678,6 +678,52 @@ export function* iterateRecentTurnRoutingMessageCandidates(
   }
 }
 
+export type RecentTurnRoutingMessageCursor = Readonly<{ contextSequence: number; roleOrder: number; id: string }>
+
+/** Read a bounded keyset page of route candidates so async body resolution never holds a SQLite cursor open. */
+export function getRecentTurnRoutingMessageCandidatePage(
+  db: AppDatabase,
+  input: { sessionId: string; boundarySequence?: number; excludeMessageIds?: readonly string[]; cursor?: RecentTurnRoutingMessageCursor; pageSize?: number }
+): Readonly<{ candidates: readonly RecentTurnRoutingMessageCandidate[]; nextCursor?: RecentTurnRoutingMessageCursor }> {
+  const pageSize = input.pageSize ?? 128
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 256) throw new Error('TURN_ROUTING_PAGE_SIZE_INVALID')
+  const excluded = input.excludeMessageIds ?? []
+  const excludedClause = excluded.length ? ` AND m.id NOT IN (${excluded.map(() => '?').join(',')})` : ''
+  const cursorClause = input.cursor
+    ? ` AND (candidate.route_context_sequence < ? OR
+        (candidate.route_context_sequence=? AND (candidate.route_role_order < ? OR
+          (candidate.route_role_order=? AND candidate.id < ?))))`
+    : ''
+  const rows = getDbConnection(db).prepare(`SELECT candidate.* FROM (
+      SELECT m.*, m.content_storage_state AS route_content_storage_state, cutover.write_mode AS route_write_mode,
+        CASE WHEN m.role='user' THEN COALESCE((
+          SELECT MIN(anchor.sequence) FROM turns linked_turn
+          JOIN messages anchor ON anchor.id=linked_turn.assistant_message_id AND anchor.session_id=linked_turn.session_id
+          WHERE linked_turn.session_id=m.session_id AND linked_turn.user_message_id=m.id
+        ),m.sequence) ELSE m.sequence END AS route_context_sequence,
+        CASE m.role WHEN 'user' THEN 0 ELSE 1 END AS route_role_order
+      FROM messages m LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=m.session_id
+      WHERE m.session_id=? AND (? IS NULL OR m.sequence<=?) AND m.role IN ('user','assistant')
+        AND m.status NOT IN ('streaming','queued') ${excludedClause}
+        AND (m.role!='assistant' OR NOT EXISTS (
+          SELECT 1 FROM turns linked_turn WHERE linked_turn.session_id=m.session_id AND linked_turn.assistant_message_id=m.id
+        ) OR EXISTS (
+          SELECT 1 FROM turns linked_turn WHERE linked_turn.session_id=m.session_id AND linked_turn.assistant_message_id=m.id AND linked_turn.state='terminal'
+        ))
+    ) candidate WHERE 1=1 ${cursorClause}
+    ORDER BY candidate.route_context_sequence DESC,candidate.route_role_order DESC,candidate.id DESC LIMIT ?`)
+    .all(input.sessionId, input.boundarySequence ?? null, input.boundarySequence ?? null, ...excluded,
+      ...(input.cursor ? [input.cursor.contextSequence, input.cursor.contextSequence, input.cursor.roleOrder,
+        input.cursor.roleOrder, input.cursor.id] : []), pageSize) as Array<MessageRow & {
+          route_content_storage_state: string; route_write_mode: string | null; route_context_sequence: number; route_role_order: number
+        }>
+  const candidates = rows.map((row) => ({ message: rowToStoredMessage(row),
+    contentStorageState: row.route_content_storage_state, writeMode: row.route_write_mode }))
+  const last = rows.at(-1)
+  return { candidates, ...(last ? { nextCursor: { contextSequence: last.route_context_sequence,
+    roleOrder: last.route_role_order, id: last.id } } : {}) }
+}
+
 export type TurnRoutingMessageSkeleton = Readonly<{ id: string; role: 'user' | 'assistant' }>
 
 /** Descending qualified turn-route skeletons; callers resolve canonical bodies before filtering and applying the tail limit. */

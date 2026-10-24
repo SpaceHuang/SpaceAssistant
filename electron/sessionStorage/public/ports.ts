@@ -142,6 +142,8 @@ export interface SessionQueries {
   readCanonicalCompactionReplay(sessionId: string): CompactionReplay | undefined
   readCanonicalContextMeterEvents(sessionId: string): readonly CanonicalContextMeterEvent[] | undefined
   readRoutingInput(input: { sessionId: string; boundarySequence?: number; requiredUserMessageId?: string; excludeMessageIds?: string[]; limit?: number; reuseUserMessageId?: string; userInput?: string }): RoutingRead
+  /** Resolve route-window bodies from a prepared, source-fenced view; undefined preserves the authority-reader fallback. */
+  readPreparedRoutingInput?(input: { sessionId: string; boundarySequence?: number; requiredUserMessageId?: string; excludeMessageIds?: string[]; limit?: number; reuseUserMessageId?: string; userInput?: string; prepared?: PreparedChatBodyView; signal?: AbortSignal }): Promise<RoutingRead | undefined>
   resolveRoutingInput<T extends RouteInput>(input: { sessionId: string; selection: SelectionFence; routeInput: T }): Readonly<{ routeInput: T; fence: SelectionFence }>
   isSelectionCurrent(sessionId: string, fence: SelectionFence): boolean
   readSelectionSnapshot(sessionId: string, fence: SelectionFence): Readonly<{ sessionId: string; generation: string; messageRevision: number }> | undefined

@@ -96,7 +96,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       return snapshot?.sessionGeneration === sessionGeneration && snapshot.currentSessionGeneration === sessionGeneration
         ? snapshot.currentSourceIdentityJson ?? undefined : undefined
     },
-    readBodies: (view, messageIds) => readPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', view, messageIds }),
+    readBodies: (view, messageIds, signal) => readPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', view, messageIds, signal }),
     searchBodies: (view, query, limit) => searchPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', view, query, limit }),
     invalidate: (view) => invalidatePreparedChatBodyView(view, cacheStore)
   })
