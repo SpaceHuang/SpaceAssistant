@@ -15,6 +15,7 @@ import { buildToolChatMessagesFromSource } from '../chatMessageBuild'
 import { computeReplaySurfaceFingerprint, projectReplaySurface, projectReplaySurfaceWithSources } from '../../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
 import { getProjectedMessages, readSessionTranscriptProjection } from '../runtime/sessionTranscriptProjection'
+import * as sessionTranscriptProjection from '../runtime/sessionTranscriptProjection'
 import { drainCanonicalLedgerProjectionOutbox, enqueueCanonicalLedgerProjectionTargetInTransaction, listPendingCanonicalLedgerProjectionTargets } from '../sessionLedgerOutbox'
 import { getSessionEventSink, readSessionEvents, resolveSessionEventPaths } from '../sessionEvents'
 import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
@@ -49,6 +50,24 @@ describe('SQLite session storage public queries', () => {
     expect(storage.queries.readTurnByRequest({ sessionId: session.id, requestId: 'turn-status-request' }))
       .toMatchObject({ turnId: 'turn-status-turn', sessionId: session.id, requestId: 'turn-status-request', state: 'terminal', outcome: 'completed' })
     expect(storage.queries.readTurnByRequest({ sessionId: session.id, requestId: 'missing' })).toBeUndefined()
+  })
+
+  it('counts queued user messages from the message index without loading transcript bodies', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'queued count query' })
+    appendMessage(db, { id: 'queued-count-user', sessionId: session.id, role: 'user', content: 'queued', timestamp: 1, status: 'queued' })
+    appendMessage(db, { id: 'queued-count-assistant', sessionId: session.id, role: 'assistant', content: 'ignored', timestamp: 2, status: 'queued' })
+    appendMessage(db, { id: 'queued-count-sent', sessionId: session.id, role: 'user', content: 'sent', timestamp: 3, status: 'sent' })
+    const storage = createSqliteSessionStorage(db)
+    const transcriptRead = vi.spyOn(sessionTranscriptProjection, 'getProjectedMessages').mockImplementation(() => {
+      throw new Error('QUEUE_COUNT_MUST_NOT_READ_TRANSCRIPT_BODIES')
+    })
+    const countQueuedMessages = (storage.queries as unknown as { countQueuedMessages?: (sessionId: string) => number }).countQueuedMessages
+
+    expect(countQueuedMessages).toBeTypeOf('function')
+    expect(countQueuedMessages?.(session.id)).toBe(1)
+    expect(transcriptRead).not.toHaveBeenCalled()
+    transcriptRead.mockRestore()
   })
 
   it('reads request header and context facts from canonical History when the JSONL ledger is absent', async () => {

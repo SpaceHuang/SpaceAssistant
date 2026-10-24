@@ -96,6 +96,8 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       return message?.sessionId === sessionId ? message : undefined
     },
     readMessages: ({ sessionId, limit, offset }) => getProjectedMessages(db, sessionId, limit, offset),
+    countQueuedMessages: (sessionId) => Number(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM messages
+      WHERE session_id=? AND role='user' AND status='queued'`).get(sessionId)?.count ?? 0),
     ...(preparedChatBody ? { readPreparedMessages: async ({ sessionId, limit, offset, prepared }) => {
       const view = prepared as PreparedChatBodyView | undefined
       if (!view) return undefined

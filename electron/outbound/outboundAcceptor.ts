@@ -237,7 +237,8 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
     wikiImportRaw: deps.wikiImportRaw
   }
 
-  const countQueued = (sessionId: string): number => countQueuedUserMessages(sessionQueries.readMessages({ sessionId }), sessionId)
+  const countQueued = (sessionId: string): number => sessionQueries.countQueuedMessages?.(sessionId) ??
+    countQueuedUserMessages(sessionQueries.readMessages({ sessionId }), sessionId)
 
   /** 排队落库（v2-B4 降级与 enqueue 决定共用）：幂等凭证、附件兜底、落库后补触发（v2-B3） */
   function enqueueDecision(

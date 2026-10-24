@@ -118,6 +118,8 @@ export interface SessionQueries {
   listSessions(options?: { view?: 'all' | 'user-visible' }): Session[]
   readMessage(ref: MessageRef): Message | undefined
   readMessages(input: { sessionId: string; limit?: number; offset?: number }): Message[]
+  /** Counts queued user rows from the message index without materializing transcript bodies. */
+  countQueuedMessages?(sessionId: string): number
   /** Async chat-body cache lookup; undefined means selection must use the existing authority reader. */
   readPreparedMessages?(input: { sessionId: string; limit?: number; offset?: number; prepared?: PreparedChatBodyView }): Promise<Message[] | undefined>
   /** Async single message body lookup; undefined means selection must use the existing authority reader. */
