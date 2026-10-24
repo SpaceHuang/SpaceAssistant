@@ -6,9 +6,11 @@ import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
 import type { PreparedChatBodyView } from '../../public/model'
+import { selectVerifiedChatBodyPayload } from './projectionChatBodyCachePayload'
 
 export type PreparedChatBodySelection = Readonly<{
   messages: readonly Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>[]
+  /** Zero identifies a fully verified <=256 KiB inline payload read on the caller thread. */
   workerThreadId: number
 }>
 
@@ -48,6 +50,15 @@ export function readPreparedChatBodiesInWorker(input: Readonly<{
   signal?: AbortSignal
 }>): Promise<PreparedChatBodySelection> {
   if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
+  if (input.view.inlinePayload !== undefined && Buffer.byteLength(input.view.inlinePayload, 'utf8') <= 256 * 1024) {
+    try {
+      return Promise.resolve({ messages: selectVerifiedChatBodyPayload({ payload: Buffer.from(input.view.inlinePayload, 'utf8'),
+        sessionId: input.view.sessionId, sessionGeneration: input.view.sessionGeneration, scopeKey: input.view.scopeKey,
+        specVersion: input.view.specVersion, sourceIdentityJson: input.view.sourceIdentityJson,
+        payloadDigest: input.view.payloadDigest, validatedRangeJson: input.view.validatedRangeJson, messageIds: input.messageIds }),
+      workerThreadId: 0 })
+    } catch (error) { return Promise.reject(error instanceof Error ? error : new Error('PROJECTION_CHAT_BODY_CACHE_INLINE_READ_FAILED')) }
+  }
   const workerPath = resolveWorkerPath()
   if (!workerPath) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ENTRY_UNAVAILABLE'))
   let worker: Worker

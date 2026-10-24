@@ -6,7 +6,9 @@ vi.mock('node:worker_threads', async () => {
     constructor(..._args: unknown[]) { super(); state.workers.push(this) }
     postMessage(message: any) {
       queueMicrotask(() => this.emit('message', { requestId: message.requestId, result: message.stateJson !== undefined
-        ? { stateJson: '{}', outputOperations: [], resetOutput: false, workerThreadId: 1 }
+        ? { stateJson: '{}', outputOperations: [], resetOutput: false, workerThreadId: 1,
+          workerSample: { durationMs: 0, heapUsedBytesAtExit: 0, processRssBytesAtExit: 0,
+            heapUsedBytesPeakSampled: 0, processRssBytesPeakSampled: 0, memorySampleIntervalMs: 10 } }
         : message.messageIds !== undefined ? { messages: message.messageIds.map((id: string) => ({ id, role: 'user', content: 'body', timestamp: 1 })), workerThreadId: 1 }
           : { payload: '{}', byteLength: 2, payloadDigest: 'a'.repeat(64), workerThreadId: 1 } }))
     }
@@ -26,7 +28,7 @@ for (const kind of ['reducer', 'final', 'chat-body-cache'] as const) it(`waits f
       : readPreparedChatBodiesInWorker({ root: '/tmp', messageIds: ['m'], view: { sessionId: 's', sessionGeneration: 'g', scopeKey: 'scope',
         specVersion: 1, sourceIdentityJson: '{}', payloadGeneration: 'projection-x', payloadDigest: 'a'.repeat(64), validatedRangeJson: '{}',
         cachePresent: true, stateSourceIdentityJson: '{}', statePayloadGeneration: 'projection-x', statePayloadDigest: 'a'.repeat(64),
-        stateValidatedRangeJson: '{}', inlinePayload: '{}' } })
+        stateValidatedRangeJson: '{}', blobLocator: 'projection-123e4567-e89b-12d3-a456-426614174000.blob', blobByteLength: 1 } })
   const observed = promise.then(() => { settled = true })
   try {
     await new Promise<void>((resolve) => setImmediate(resolve))
