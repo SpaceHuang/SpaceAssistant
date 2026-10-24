@@ -3,7 +3,7 @@ import type { IpcMain } from 'electron'
 import type { AppIpcContext } from '../appIpc'
 import { StorageProfileCoordinator } from '../storageProfile/storageProfileCoordinator'
 import { runStorageProfileWorker } from '../storageProfile/storageProfileWorkerClient'
-import { clearSessionProjectionCaches, compactSessionDatabase, StorageMaintenanceError } from '../storage/sessionStorageMaintenance'
+import { compactSessionDatabase, StorageMaintenanceError } from '../storage/sessionStorageMaintenance'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 
 export function registerStorageMaintenanceIpc(ipcMain: IpcMain, ctx: AppIpcContext): StorageProfileCoordinator {
@@ -19,7 +19,7 @@ export function registerStorageMaintenanceIpc(ipcMain: IpcMain, ctx: AppIpcConte
     catch (error) { throw new Error(logProfileRequestFailure('audit', error)) }
   })
   ipcMain.handle('storage:clear-cache', async () => {
-    try { return await coordinator.withMaintenance(ctx.db.filePath, async () => clearSessionProjectionCaches(ctx.db)) }
+    try { return await coordinator.withMaintenance(ctx.db.filePath, async () => ctx.sessionStorage?.clearProjectionCaches?.() ?? Promise.reject(new Error('SESSION_STORAGE_CACHE_CLEANUP_REQUIRED'))) }
     catch (error) {
       const stable = stableMaintenanceError(error)
       logAgentEvent('warn', 'storage.profile.request_failed', { request: 'clear-cache', errorCode: stable,

@@ -1,18 +1,5 @@
 [
   {
-    "source": "electron/storage/sessionProjectionCacheMaintenance.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "createSqliteProjectionStateStore",
-      "createProjectionService"
-    ],
-    "typeOnly": false,
-    "owner": "SessionStorage projection cache maintenance",
-    "reason": "Maintenance currently assembles storage-backed cache retirement participants.",
-    "exitStage": "P2",
-    "evidence": "sessionStorageMaintenance.test.ts"
-  },
-  {
     "source": "electron/main.ts",
     "target": "electron/sessionStorage/sqliteSessionStorage",
     "symbols": [

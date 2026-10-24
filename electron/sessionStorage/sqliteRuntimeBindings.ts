@@ -13,8 +13,6 @@ export type {
   ApiContextBaselineResult, ChatMessagePage, MessageSearchHit, MessagesPageWithSequence, RetryContextTarget, SearchCorpusPage,
 } from './infrastructure/sqlite/sessionLegacyQueryAdapter'
 export { resolveSelectedMessageBodies } from './internal/messageBodyResolver'
-export { createProjectionService } from './application/projectionService'
-export { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 export { createSqliteSessionApiRouteProjectionFence } from './infrastructure/sqlite/sessionApiRouteProjectionFence'
 export { hasRejectedTranscriptParityStateInConnection } from './infrastructure/sqlite/sessionProjectionEligibility'
 export { selectRecentTurnRoutingMessages, selectTurnContext } from './infrastructure/sqlite/sessionTranscriptSelector'

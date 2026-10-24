@@ -19,7 +19,7 @@ import { activeSessionTurnCount, compactSessionDatabase, FULL_VACUUM_FREELIST_RA
 import { sqlActiveTurnPredicate } from '../sessionStorage/domain/turnState'
 import type { StorageMaintenanceProgress } from './sessionStorageMaintenance'
 import { pruneSessionArchives } from './sessionArchiveRetention'
-import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
+import { clearSessionProjectionCaches } from '../sessionStorage/infrastructure/sqlite/sessionProjectionCacheMaintenance'
 import { readSessionTranscriptProjection } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSpillStore } from './spillStore'
@@ -638,7 +638,7 @@ describe('session storage maintenance', () => {
     conn.exec('CREATE TABLE maintenance_reclaim(value BLOB NOT NULL); INSERT INTO maintenance_reclaim VALUES(zeroblob(2500000)); DELETE FROM maintenance_reclaim;')
     temp.db.flushSave()
 
-    const compacted = await compactSessionDatabase(temp.db, userDataDir, undefined, { clearProjectionCachesAfterArchive: true })
+    const compacted = await compactSessionDatabase(temp.db, userDataDir, undefined, { clearProjectionCachesAfterArchive: true, clearProjectionCaches: () => clearSessionProjectionCaches(temp.db) })
     temp.db.close()
     const reopened = (await import('../database')).openDatabase(temp.dbPath)
     try {

@@ -1,10 +1,11 @@
-import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
-import { currentProcessGeneration } from '../database/processGeneration'
+import type { AppDatabase } from '../../../database'
+import { getDbConnection } from '../../../database/sqliteStore'
+import { runInTransaction } from '../../../database/transaction'
+import { currentProcessGeneration } from '../../../database/processGeneration'
 import { randomUUID } from 'node:crypto'
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
-import { createSqliteProjectionStateStore, createProjectionService } from '../sessionStorage/sqliteRuntimeBindings'
+import { createProjectionService } from '../../application/projectionService'
+import { createSqliteProjectionStateStore } from './sessionProjectionStateStore'
 
 const LEGACY_CACHE_DELETE_MAX_ROWS = 64
 const LEGACY_CACHE_DELETE_MAX_BYTES = 1024 * 1024

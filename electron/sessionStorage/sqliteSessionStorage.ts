@@ -27,6 +27,7 @@ import { reduceProjectionHistoryChunkInWorker } from './infrastructure/sqlite/pr
 import { materializeProjectionFinalViewInWorker } from './infrastructure/sqlite/projectionFinalViewWorkerClient'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
 import { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer } from './infrastructure/sqlite/sessionEventRetentionAdapter'
+import { clearSessionProjectionCaches } from './infrastructure/sqlite/sessionProjectionCacheMaintenance'
 import { createProjectionScopeHistoryReducer } from './infrastructure/sqlite/projectionScopeHistoryReducer'
 import { createProjectionService } from './application/projectionService'
 import { checkpointSessionTranscriptProjection, startSessionProjectionRevalidationDrain } from './infrastructure/sqlite/sessionProjectionRevalidation'
@@ -247,6 +248,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const storagePorts: SessionStorage = {
     queries, commands: createSessionCommands(db), execution, contexts, recovery, availability, ensureLedgerReady,
     checkpointProjection: (sessionId: string) => checkpointSessionTranscriptProjection(db, sessionId),
+    clearProjectionCaches: () => clearSessionProjectionCaches(db),
     shouldRetainSessionEventDirectory: createSessionLedgerCompactionDependencyGuard(db),
     readCompactionReplay: readCompactionReplayForSession,
     readContextMeterEvents: readContextMeterEventsForSession,

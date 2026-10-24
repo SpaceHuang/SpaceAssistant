@@ -78,6 +78,7 @@ export interface SessionStorage {
   readContextMeterEvents(input: Readonly<{ sessionId: string; workDir: string }>): Promise<readonly CanonicalContextMeterEvent[]>
   ensureLedgerReady?(sessionId: string): Promise<boolean>
   checkpointProjection?(sessionId: string): boolean
+  clearProjectionCaches?(): Promise<Readonly<{ cacheRows: number; eligibilityRows: number }>>
   shouldRetainSessionEventDirectory?(sessionName: string, workDir: string): Promise<boolean>
   prepareSessionEventRetentionProjection?(sessionName: string, workDir: string): Promise<void>
   prepareProjection?(input: ProjectionPreparationRequest): Promise<void>

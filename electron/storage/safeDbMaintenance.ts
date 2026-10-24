@@ -8,6 +8,6 @@ export function isSafeDbMaintenanceRequested(args: readonly string[]): boolean {
 }
 
 /** Runs after the app window is visible; caller intentionally skips canonical History recovery for this launch. */
-export async function runSafeDbMaintenance(db: AppDatabase, userDataDir: string): Promise<void> {
-  await compactSessionDatabase(db, userDataDir, undefined, { clearProjectionCachesAfterArchive: true })
+export async function runSafeDbMaintenance(db: AppDatabase, userDataDir: string, clearProjectionCaches: () => Promise<Readonly<{ cacheRows: number; eligibilityRows: number }>>): Promise<void> {
+  await compactSessionDatabase(db, userDataDir, undefined, { clearProjectionCachesAfterArchive: true, clearProjectionCaches })
 }

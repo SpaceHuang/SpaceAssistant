@@ -1458,7 +1458,7 @@ app.whenReady().then(async () => {
       }
       if (safeDbMaintenanceRequested) {
         const spillRoot = path.join(userDataDir, 'spill')
-        safeDatabaseMaintenanceInFlight = measureStartupPhase('safe-db-maintenance', () => createSpillStore(spillRoot).withSpillRootFence(() => runSafeDbMaintenance(db, userDataDir))).then(() => {
+        safeDatabaseMaintenanceInFlight = measureStartupPhase('safe-db-maintenance', () => createSpillStore(spillRoot).withSpillRootFence(() => runSafeDbMaintenance(db, userDataDir, () => sessionStorage.clearProjectionCaches?.() ?? Promise.reject(new Error('SESSION_STORAGE_CACHE_CLEANUP_REQUIRED'))))).then(() => {
           console.info('[storage] safe database maintenance completed')
         }).catch((error) => {
           console.error('[storage] safe database maintenance failed; app remains available:', error instanceof Error ? error.message : String(error))
