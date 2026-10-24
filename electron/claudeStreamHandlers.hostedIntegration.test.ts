@@ -45,6 +45,8 @@ import { foldCompactionEvents } from '../src/shared/compactionEvents'
 import { createSessionTurnRuntime, createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createBoundSessionContextAdapter } from './sessionStorage/contextPortRegistry'
 import { commitSessionTranscript, readSessionTranscript } from './database/sessionTranscript'
+import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } from './sessionStorage/certification'
+import { enableCanonicalSessionWriteAuthority } from './sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
 import { registerAgentIpc } from './ipc/agentProtocolIpc'
 import { createAcceptedTurn } from '../src/shared/acceptedTurn'
 import { acceptTurnContext, readAcceptedTurn } from './database/acceptedTurnStorage'
@@ -295,9 +297,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
   })
 
   it.each([
-    { checkpointed: false, expectedPriorUser: 'edited prior user sentinel', expectedPriorAssistant: 'edited prior assistant sentinel', excludedPriorUser: 'old prior user sentinel', excludedPriorAssistant: 'old prior assistant sentinel' },
-    { checkpointed: true, expectedPriorUser: 'old prior user sentinel', expectedPriorAssistant: 'old prior assistant sentinel', excludedPriorUser: 'edited prior user sentinel', excludedPriorAssistant: 'edited prior assistant sentinel' }
-  ])('routes reachable prior user/assistant edits to provider according to checkpoint=$checkpointed', async ({ checkpointed, expectedPriorUser, expectedPriorAssistant, excludedPriorUser, excludedPriorAssistant }) => {
+    { checkpointed: false, canonicalRetained: false, expectedPriorUser: 'edited prior user sentinel', expectedPriorAssistant: 'edited prior assistant sentinel', excludedPriorUser: 'old prior user sentinel', excludedPriorAssistant: 'old prior assistant sentinel' },
+    { checkpointed: true, canonicalRetained: false, expectedPriorUser: 'old prior user sentinel', expectedPriorAssistant: 'old prior assistant sentinel', excludedPriorUser: 'edited prior user sentinel', excludedPriorAssistant: 'edited prior assistant sentinel' },
+    { checkpointed: false, canonicalRetained: true, expectedPriorUser: 'old prior user sentinel', expectedPriorAssistant: 'old prior assistant sentinel', excludedPriorUser: 'edited prior user sentinel', excludedPriorAssistant: 'edited prior assistant sentinel' }
+  ])('routes reachable prior user/assistant edits to provider according to checkpoint=$checkpointed canonicalRetained=$canonicalRetained', async ({ checkpointed, canonicalRetained, expectedPriorUser, expectedPriorAssistant, excludedPriorUser, excludedPriorAssistant }) => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
@@ -323,11 +326,25 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const session = createSession(db, { name: 'checkpoint-edited-history', model: modelId, maxTokens: 512 })
     const priorUser = appendMessage(db, { id: 'edited-checkpoint-prior-user', sessionId: session.id, role: 'user', content: 'old prior user sentinel', timestamp: 1, status: 'sent' })
     const priorAssistant = appendMessage(db, { id: 'edited-checkpoint-prior-assistant', sessionId: session.id, role: 'assistant', content: 'old prior assistant sentinel', timestamp: 2, status: 'completed' })
-    if (checkpointed) {
+    if (checkpointed || canonicalRetained) {
       expect(commitSessionTranscript(db, { sessionId: session.id, turnId: 'edited-checkpoint-prior-turn', baseVersion: 0, outcome: 'completed', messages: [
         { id: priorUser.message.id, role: 'user', content: priorUser.message.content, timestamp: priorUser.message.timestamp },
         { id: priorAssistant.message.id, role: 'assistant', content: priorAssistant.message.content, timestamp: priorAssistant.message.timestamp }
       ] })).toMatchObject({ committed: true, version: 1 })
+    }
+    if (canonicalRetained) {
+      await new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).appendBatch([{
+        invocationId: 'edited-checkpoint-canonical-seed', turnId: 'edited-checkpoint-canonical-seed-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'edited-checkpoint-canonical-seed-context', idempotencyKey: 'edited-checkpoint-canonical-seed-context',
+        kind: 'invocation-context-committed', payload: { messages: [priorUser.message, priorAssistant.message].map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) }
+      }, {
+        invocationId: 'edited-checkpoint-canonical-seed', turnId: 'edited-checkpoint-canonical-seed-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'edited-checkpoint-canonical-seed-completed', idempotencyKey: 'edited-checkpoint-canonical-seed-completed',
+        kind: 'invocation-completed', payload: { status: 'completed', completedAt: Date.now() }
+      }], 0)
+      setCanonicalApiReadFeatureEnabled(db, true)
+      expect(certifyCanonicalSessionApiRead(db, session.id)).toMatchObject({ status: 'eligible' })
+      expect(enableCanonicalSessionWriteAuthority(db, session.id)).toMatchObject({ status: 'enabled' })
     }
 
     const patchHandlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -346,6 +363,13 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         { id: priorUser.message.id, sequence: 0, content: 'edited prior user sentinel' },
         { id: priorAssistant.message.id, sequence: 1, content: 'edited prior assistant sentinel' }
       ])
+    if (canonicalRetained) {
+      expect(new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).readCanonicalSessionTranscriptForShadow(session.id))
+        .toMatchObject({ kind: 'matched', messages: [
+          expect.objectContaining({ id: priorUser.message.id, content: 'edited prior user sentinel' }),
+          expect.objectContaining({ id: priorAssistant.message.id, content: 'edited prior assistant sentinel' })
+        ] })
+    }
     const prepared = prepareTurnAtomically(db, {
       user: { id: 'edited-checkpoint-current-user', sessionId: session.id, role: 'user', content: 'current request sentinel', timestamp: 3, status: 'sent' },
       assistant: { id: 'edited-checkpoint-current-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 4, status: 'streaming' },
@@ -359,7 +383,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(setPersistedTurnExecutionConfig(db, 'edited-checkpoint-current-turn', executionConfig, 'edited-checkpoint-current-fingerprint', snapshot)).toBe(true)
     const acceptedTurn = createAcceptedTurn({ turnId: 'edited-checkpoint-current-turn', requestId: 'edited-checkpoint-current-request', sessionId: session.id,
       lane: 'desktop', startToken: 'edited-checkpoint-current-token', currentUserMessageId: current.message.id,
-      transcriptVersion: checkpointed ? 1 : 0, config: executionConfig })
+      transcriptVersion: checkpointed || canonicalRetained ? 1 : 0, config: executionConfig })
     acceptTurnContext(db, acceptedTurn)
     expect(readAcceptedTurn(db, session.id, acceptedTurn.requestId)).toEqual(acceptedTurn)
     expect(getPersistedTurn(db, acceptedTurn.turnId)).toMatchObject({ acceptedInputHistoryVersion: 1, intentFingerprint: 'edited-checkpoint-current-fingerprint' })
