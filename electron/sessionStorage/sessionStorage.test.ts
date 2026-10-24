@@ -1830,8 +1830,9 @@ describe('SQLite session storage execution boundary', () => {
       VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run('resolve-intent-request', session.id, payloadSha256, 'question', '[]', 'follow-up', 'ordinary-queue', 'queued-message', 'queued', 1, 1)
     const queued = appendMessage(db, { id: 'queued-message', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'queued' })
 
-    expect(execution.resolveContinuationAcceptance({ requestId: 'resolve-intent-request', sessionId: session.id, payloadSha256 }))
-      .toMatchObject({ kind: 'queued', message: { id: queued.message.id, status: 'queued', sequence: queued.sequence } })
+    const queuedResolution = execution.resolveContinuationAcceptance({ requestId: 'resolve-intent-request', sessionId: session.id, payloadSha256 })
+    expect(queuedResolution).toMatchObject({ kind: 'queued', message: { id: queued.message.id, status: 'queued', sequence: queued.sequence } })
+    expect(queuedResolution).not.toHaveProperty('message.message')
     expect(execution.resolveContinuationAcceptance({ requestId: 'resolve-intent-request', sessionId: session.id, payloadSha256: 'c'.repeat(64) }))
       .toMatchObject({ kind: 'unresolved', reason: 'CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT' })
     expect(execution.resolveContinuationAcceptance({ requestId: 'resolve-intent-request', sessionId: session.id, payloadSha256: 'd'.repeat(64) }))
@@ -1914,8 +1915,10 @@ describe('SQLite session storage execution boundary', () => {
 
     expect(storage.execution.bindExactContinueTurn({ requestId: 'exact-request', sessionId: session.id, text: '继续', payloadSha256, turnId: 'exact-turn' }))
       .toMatchObject({ route: 'continuation', status: 'accepted_continuation', targetId: 'exact-turn' })
-    expect(storage.execution.resolveContinuationAcceptance({ requestId: 'exact-request', sessionId: session.id, payloadSha256 }))
-      .toMatchObject({ kind: 'turn', turn: { turnId: 'exact-turn' } })
+    const turnResolution = storage.execution.resolveContinuationAcceptance({ requestId: 'exact-request', sessionId: session.id, payloadSha256 })
+    expect(turnResolution).toMatchObject({ kind: 'turn', turn: { turnId: 'exact-turn' },
+      assistant: { id: 'exact-assistant', role: 'assistant', sequence: 1 } })
+    expect(turnResolution.kind === 'turn' ? turnResolution.assistant : undefined).not.toHaveProperty('content')
   })
 
   it('repairs a missing prepared acceptance only for an existing matching turn', () => {
