@@ -33,6 +33,7 @@ import { enableCanonicalSessionWriteAuthority } from '../sessionStorage/infrastr
 import { createSpillStore, readCanonicalSpillReferences, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
 import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivityTimeline'
 import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
+import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 function createDb(dbPath = ':memory:'): DatabaseSync {
   const conn = new DatabaseSync(dbPath)
@@ -46,6 +47,13 @@ const event = (id: string, sequence: number): HistoryEvent => ({
   invocationId: 'inv-1', turnId: 'turn-1', sequence, schemaVersion: 1, eventId: id,
   idempotencyKey: `client:${id}`, kind: sequence === 1 ? 'tool-call-started' : 'tool-call-finished', payload: { id }
 })
+
+function expectApiRouteScopesInvalid(db: ReturnType<typeof createMemoryAppDb>, sessionId: string): void {
+  const conn = getDbConnection(db)
+  const scopes = (['apiBaselineV1', 'routeV1'] as const).map((scope) => encodeProjectionScopeKey({ scope, specVersion: 1 }))
+  expect(conn.prepare(`SELECT scope_key FROM session_projection_state WHERE session_id=? AND scope_key IN (?,?) AND status='valid'`)
+    .all(sessionId, ...scopes)).toEqual([])
+}
 
 describe('SqliteAgentHistory', () => {
   it('retires the legacy transcript cache reader and writer from History', () => {
@@ -401,8 +409,10 @@ describe('SqliteAgentHistory', () => {
       .run(JSON.stringify([{ content: 'before', startTime: 1, endTime: 2 }, { content: 'after', startTime: 4, endTime: 5 }]), 'atomic-terminal-assistant')
     conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
       VALUES('atomic-terminal-turn','atomic-terminal-request','atomic-terminal-session','atomic-terminal-assistant','executing',1,1,0)`).run()
-    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write'
+    conn.prepare(`UPDATE session_message_content_cutover SET write_mode='dual-write'
       WHERE session_id='atomic-terminal-session'`).run()
+    seedValidProjectionScope(db, 'atomic-terminal-session', 'apiBaselineV1')
+    seedValidProjectionScope(db, 'atomic-terminal-session', 'routeV1')
     const parityScope = seedValidProjectionScope(db, 'atomic-terminal-session')
     const terminal: HistoryEvent = { ...event('atomic-terminal', 1), invocationId: 'atomic-terminal-invocation', turnId: 'atomic-terminal-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
     const intent = { sessionId: 'atomic-terminal-session', baseVersion: 0, outcome: 'completed' as const,
@@ -426,8 +436,9 @@ describe('SqliteAgentHistory', () => {
     expect(buildAssistantActivityTimeline({ content: 'beforeafter', contentSegments: persistedSegments,
       toolCalls: [{ id: 'tool-1', toolName: 'lookup', input: {}, status: 'completed', startedAt: 3 }], timestamp: 0 })
       .map((item) => item.kind)).toEqual(['text', 'tool', 'text'])
-    expect(conn.prepare(`SELECT message_revision,api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?`)
-      .get('atomic-terminal-session')).toEqual({ message_revision: 3, api_read_mode: 'revalidation-required', write_mode: 'dual-write', cleanup_state: 'retained' })
+    expect(conn.prepare(`SELECT message_revision,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?`)
+      .get('atomic-terminal-session')).toEqual({ message_revision: 3, write_mode: 'dual-write', cleanup_state: 'retained' })
+    expectApiRouteScopesInvalid(db, 'atomic-terminal-session')
     expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get('atomic-terminal-session', parityScope))
       .toEqual({ status: 'invalid' })
     db.close()
@@ -455,7 +466,7 @@ describe('SqliteAgentHistory', () => {
       JSON.stringify([{ content: 'short checkpoint', startTime: 20, endTime: 21 }]))
     conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
       VALUES(?,?,?,?,'executing',1,1,0)`).run(turnId, `${turnId}-request`, sessionId, messageId)
-    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`UPDATE session_message_content_cutover SET write_mode='dual-write' WHERE session_id=?`).run(sessionId)
     seedValidProjectionScope(db, sessionId)
     const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
 
@@ -493,7 +504,7 @@ describe('SqliteAgentHistory', () => {
       VALUES('canonical-only-terminal-assistant',?,'assistant','','streaming',1,10,0,'canonical-backed-only')`).run(sessionId)
     conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
       VALUES('canonical-only-terminal-turn','canonical-only-terminal-request',?,'canonical-only-terminal-assistant','executing',1,1,0)`).run(sessionId)
-    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='canonical'
+    conn.prepare(`UPDATE session_message_content_cutover SET write_mode='canonical'
       WHERE session_id=?`).run(sessionId)
     const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
     const terminal: HistoryEvent = { ...event('canonical-only-terminal-event', 1), invocationId: 'canonical-only-terminal-invocation', turnId: 'canonical-only-terminal-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
@@ -597,13 +608,14 @@ describe('SqliteAgentHistory', () => {
     const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
     await history.appendBatch([{ ...event('compaction-eligibility-context-event', 1), invocationId: 'compaction-eligibility-invocation', kind: 'invocation-context-committed',
       payload: { messages: [{ id: 'compaction-eligibility-user', role: 'user', content: 'full UI prompt', timestamp: 10 }] } }], 0)
-    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?`).run(sessionId)
+    seedValidProjectionScope(db, sessionId, 'apiBaselineV1')
+    seedValidProjectionScope(db, sessionId, 'routeV1')
 
     await history.appendBatch([{ ...event('compaction-eligibility-snapshot-event', 2), invocationId: 'compaction-eligibility-invocation', kind: 'transcript-compacted',
       payload: { messages: [{ id: 'compaction-eligibility-user', role: 'user', content: 'provider summary', timestamp: 10 }] } }], 1)
 
-    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
-      .toEqual({ api_read_mode: 'revalidation-required' })
+    expectApiRouteScopesInvalid(db, sessionId)
     expect(conn.prepare('SELECT content FROM messages WHERE id=?').get('compaction-eligibility-user'))
       .toEqual({ content: 'full UI prompt' })
     db.close()
@@ -619,11 +631,13 @@ describe('SqliteAgentHistory', () => {
     const committed: HistoryEvent = { ...event('idempotent-eligibility-event', 1), invocationId: 'idempotent-eligibility-invocation',
       kind: 'transcript-compacted', payload: { messages: [{ role: 'user', content: 'same provider snapshot' }] } }
     await history.appendBatch([committed], 0)
-    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?`).run(sessionId)
+    const apiScope = seedValidProjectionScope(db, sessionId, 'apiBaselineV1')
+    const routeScope = seedValidProjectionScope(db, sessionId, 'routeV1')
 
     await expect(history.appendBatch([committed], 0)).resolves.toMatchObject({ version: 1, duplicate: true })
-    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
-      .toEqual({ api_read_mode: 'canonical' })
+    expect(conn.prepare(`SELECT scope_key,status FROM session_projection_state WHERE session_id=? AND scope_key IN (?,?) ORDER BY scope_key`).all(sessionId, apiScope, routeScope))
+      .toEqual([{ scope_key: apiScope, status: 'valid' }, { scope_key: routeScope, status: 'valid' }])
     db.close()
   })
 
@@ -633,15 +647,16 @@ describe('SqliteAgentHistory', () => {
     const sessionId = 'direct-history-eligibility-session'
     conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
       VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
-    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?`).run(sessionId)
+    seedValidProjectionScope(db, sessionId, 'apiBaselineV1')
+    seedValidProjectionScope(db, sessionId, 'routeV1')
     const directEvent: HistoryEvent = { ...event('direct-append-compaction', 1), invocationId: 'direct-append-invocation',
       kind: 'transcript-compacted', payload: { messages: [{ role: 'user', content: 'provider summary' }] } }
 
     runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, [directEvent], 0,
       { schemaVersion: 1, sessionId, now: () => 2 }))
 
-    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
-      .toEqual({ api_read_mode: 'revalidation-required' })
+    expectApiRouteScopesInvalid(db, sessionId)
     db.close()
   })
 
@@ -1287,7 +1302,9 @@ describe('SqliteAgentHistory', () => {
       VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
     conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
       VALUES('atomic-context-later-failure-user',?,'user','original body','sent',1,10,0)`).run(sessionId)
-    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?`).run(sessionId)
+    const apiScope = seedValidProjectionScope(db, sessionId, 'apiBaselineV1')
+    const routeScope = seedValidProjectionScope(db, sessionId, 'routeV1')
     conn.exec(`CREATE TRIGGER fail_later_history_event BEFORE INSERT ON agent_history_events
       WHEN NEW.event_id='atomic-context-later-failure-event' BEGIN SELECT RAISE(ABORT, 'injected later History failure'); END`)
     const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
@@ -1300,8 +1317,10 @@ describe('SqliteAgentHistory', () => {
 
     expect(conn.prepare('SELECT content FROM messages WHERE id=?').get('atomic-context-later-failure-user'))
       .toEqual({ content: 'original body' })
-    expect(conn.prepare('SELECT message_revision,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
-      .toEqual({ message_revision: 1, api_read_mode: 'canonical' })
+    expect(conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
+      .toEqual({ message_revision: 1 })
+    expect(conn.prepare(`SELECT scope_key,status FROM session_projection_state WHERE session_id=? AND scope_key IN (?,?) ORDER BY scope_key`).all(sessionId, apiScope, routeScope))
+      .toEqual([{ scope_key: apiScope, status: 'valid' }, { scope_key: routeScope, status: 'valid' }])
     expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE invocation_id=?').get('atomic-context-later-failure-invocation'))
       .toEqual({ count: 0 })
     db.close()

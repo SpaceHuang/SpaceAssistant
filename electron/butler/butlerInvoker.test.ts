@@ -154,6 +154,7 @@ import { HostedTurnFinalizedError } from '../runtime/hostedTurnFinalization'
 import { readDisabledPolicyRuleIds, resolveEffectivePolicyRulesWithOrigin, writeDisabledPolicyRuleIds } from '../confirmation/policyRulesRuntime'
 import { registerAppIpcHandlers } from '../appIpc'
 import type { AppIpcContext } from '../appIpc'
+import { withSessionRuntime } from '../testSupport/sessionStorageComposition'
 
 describe('buildButlerSystemAppendix tool scopes', () => {
   it('describes only receipt-backed Shell commands, grep roots and per-script hash review', () => {
@@ -318,14 +319,14 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
 
   function makePolicySettingsInvoker() {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
-    registerAppIpcHandlers({ handle: (channel, handler) => { handlers.set(channel, handler) } } as unknown as import('electron').IpcMain, {
+    registerAppIpcHandlers({ handle: (channel, handler) => { handlers.set(channel, handler) } } as unknown as import('electron').IpcMain, withSessionRuntime({
       db,
       backup: {} as AppIpcContext['backup'],
       workDirManager: {} as AppIpcContext['workDirManager'],
       getWorkDir: () => testWorkDir, setWorkDir: () => undefined, getUserDataPath: () => '/tmp/ud',
       getApiKey: async () => null, setApiKey: async () => undefined,
       getBrowserDetectContext: () => ({ isPackaged: false, appPath: '/tmp', devRoot: '/tmp' })
-    })
+    } as AppIpcContext))
     return handlers.get('security:set-rule-enabled')!
   }
 

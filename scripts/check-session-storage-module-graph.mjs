@@ -131,7 +131,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
           ['electron/main.ts', new Set(['createSessionLedgerRecoveryBindings', 'createSessionTurnRuntime',
             'createSqliteProjectionBuildTask', 'createSqliteSessionStorage', 'createSqliteSessionStorageHost',
             'createSqliteStartupHistoryRecoveryBindings', 'startSessionProjectionRevalidationDrain'])],
-          ['electron/testSupport/sessionStorageComposition.ts', new Set(['createSqliteSessionStorage'])],
+          ['electron/testSupport/sessionStorageComposition.ts', new Set(['createSessionTurnRuntime', 'createSqliteSessionStorage'])],
         ])
         const allowedSymbols = compositionSymbols.get(normalizedFile)
         if (allowedSymbols && edge.symbols.length > 0 && edge.symbols.every((symbol) => allowedSymbols.has(symbol))) return true

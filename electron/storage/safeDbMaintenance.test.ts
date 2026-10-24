@@ -3,6 +3,7 @@ import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { isSafeDbMaintenanceRequested, runSafeDbMaintenance, SAFE_DB_MAINTENANCE_FLAG } from './safeDbMaintenance'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 describe('safe database maintenance startup mode', () => {
   it('recognizes only the explicit command-line flag', () => {
@@ -25,7 +26,13 @@ describe('safe database maintenance startup mode', () => {
     temp.db.save()
     const before = conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_cache').get()
 
-    await runSafeDbMaintenance(temp.db, require('node:path').dirname(temp.dbPath))
+    const sessionStorage = createSqliteSessionStorage(temp.db)
+    const clearProjectionCaches = vi.fn(async () => {
+      if (!sessionStorage.clearProjectionCaches) throw new Error('SESSION_STORAGE_CACHE_CLEANUP_REQUIRED')
+      return sessionStorage.clearProjectionCaches()
+    })
+    await runSafeDbMaintenance(temp.db, require('node:path').dirname(temp.dbPath), clearProjectionCaches)
+    expect(clearProjectionCaches).toHaveBeenCalledOnce()
 
     expect(before).toEqual({ count: 1 })
     // 压缩换入临界区重建了底层连接，须重取后再断言。

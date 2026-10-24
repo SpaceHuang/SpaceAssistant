@@ -165,8 +165,6 @@ describe('loadAcceptedTurnMessages Phase 5.2 shadow ordering', () => {
     expect(loadAcceptedTurnMessages(db, turn)).toMatchObject([{ id: user.message.id, content: 'accepted body' }])
     expect(canonicalRead).toHaveBeenCalledWith(db, session.id, undefined, user.message.id, [], { messageId: user.message.id, fingerprint })
     expect(duplicateShadow).not.toHaveBeenCalled()
-    expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'canonical' })
   })
 
   it('旧正文已清空时先从 canonical-backed transcript 重建 accepted input，再验证持久指纹', async () => {
@@ -218,8 +216,8 @@ describe('loadAcceptedTurnMessages Phase 5.2 shadow ordering', () => {
     expect(loadAcceptedTurnMessages(db, turn)).toMatchObject([{ id: user.message.id, content: 'accepted body' }])
     expect(getDbConnection(db).prepare('SELECT content FROM messages WHERE id=?').get(user.message.id))
       .toEqual({ content: '' })
-    expect(getDbConnection(db).prepare('SELECT cleanup_state,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ cleanup_state: 'pending', api_read_mode: 'legacy' })
+    expect(getDbConnection(db).prepare('SELECT cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+      .toEqual({ cleanup_state: 'pending' })
     db.close()
     db = openDatabase(temp.dbPath)
     expect(loadAcceptedTurnMessages(db, turn)).toMatchObject([{ id: user.message.id, content: 'accepted body' }])

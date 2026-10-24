@@ -266,6 +266,8 @@ describe('v27 → v28 usage 归因迁移', () => {
     conn.exec('ALTER TABLE usage_step_facts DROP COLUMN estimator_version')
     conn.exec('ALTER TABLE usage_step_facts DROP COLUMN attribution_json')
     conn.exec('ALTER TABLE usage_turn_facts DROP COLUMN tool_attribution_json')
+    // Recreate the v27 eligibility marker retired by the current schema so this fixture models its source version.
+    conn.exec("ALTER TABLE session_message_content_cutover ADD COLUMN api_read_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(api_read_mode IN ('legacy','canonical','revalidation-required'))")
 
     runMigrations(conn)
     expect(conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion)).toMatchObject({ value: String(DB_SCHEMA_VERSION) })

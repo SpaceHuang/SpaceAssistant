@@ -29,10 +29,7 @@ import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessio
 import { buildSessionProjectionMigrationInventory } from './infrastructure/sqlite/sessionProjectionMigrationInventory'
 import { cancelSessionProjectionMigration, getSessionProjectionMigrationRun, pauseSessionProjectionMigration,
   resumeSessionProjectionMigration, runSessionProjectionMigrationBatch, startSessionProjectionMigration } from './infrastructure/sqlite/sessionProjectionMigration'
-import { certifyCanonicalSessionApiRead } from './certification'
-import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch,
-  getSessionMessageContentCleanupAuthorizationSnapshotSha256, markSessionMessageContentWriteStopped,
-  verifyAndCompleteSessionMessageContentCleanup } from './maintenance'
+import { createSqliteSessionCleanupPort } from './maintenance'
 import { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer } from './infrastructure/sqlite/sessionEventRetentionAdapter'
 import { clearSessionProjectionCaches } from './infrastructure/sqlite/sessionProjectionCacheMaintenance'
 import { createProjectionScopeHistoryReducer } from './infrastructure/sqlite/projectionScopeHistoryReducer'
@@ -254,14 +251,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     readContextMeterEventsForLocation(input.sessionId, input.workDir)
   const storagePorts: SessionStorage = {
     queries, commands: createSessionCommands(db), execution, contexts, recovery, availability, ensureLedgerReady,
-    cleanup: Object.freeze({
-      certifyCanonicalRead: (sessionId: string) => certifyCanonicalSessionApiRead(db, sessionId).status === 'eligible',
-      authorizationSnapshotSha256: (sessionId: string) => getSessionMessageContentCleanupAuthorizationSnapshotSha256(db, sessionId),
-      markWriteStopped: (sessionId: string) => markSessionMessageContentWriteStopped(db, sessionId),
-      begin: (sessionId: string) => beginSessionMessageContentCleanup(db, sessionId),
-      clearNextBatch: (sessionId: string, batchSize?: number) => clearNextSessionMessageContentBatch(db, sessionId, batchSize),
-      verifyAndComplete: (sessionId: string) => verifyAndCompleteSessionMessageContentCleanup(db, sessionId),
-    }),
+    cleanup: createSqliteSessionCleanupPort(db),
     projectionMigration: Object.freeze({
       getRun: (runId: string) => getSessionProjectionMigrationRun(db, runId),
       createOrReuseRun: (input: { runId?: string; knownSessionIds?: readonly string[]; now: number }) => {

@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
-import { registerAppIpcHandlers } from './appIpc'
+import { registerAppIpcHandlers as registerAppIpcHandlersRaw } from './appIpc'
+import { withSessionRuntime } from './testSupport/sessionStorageComposition'
 import type { AppIpcContext } from './appIpc'
+
 import { createMemoryAppDb } from './database/testHelpers'
 import { isToolRevoked, registerToolRevocationRequest, clearToolRevocationRequest } from './toolRevocationRegistry'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
@@ -191,6 +193,9 @@ setDefaultAgentRuntime(
     builtinRegistry: createBuiltinToolRegistry()
   })
 )
+
+const registerAppIpcHandlers: typeof registerAppIpcHandlersRaw = (ipc, ctx) =>
+  registerAppIpcHandlersRaw(ipc, withSessionRuntime(ctx))
 
 describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail-closed ask 不可禁用）', () => {
   let ipc: ReturnType<typeof mockIpcMain>

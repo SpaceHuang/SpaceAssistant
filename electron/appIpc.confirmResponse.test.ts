@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
-import { registerAppIpcHandlers } from './appIpc'
+import { registerAppIpcHandlers as registerAppIpcHandlersRaw } from './appIpc'
+import { withSessionRuntime } from './testSupport/sessionStorageComposition'
 import type { AppIpcContext } from './appIpc'
+
 import { isPendingConfirm, waitForToolConfirm } from './toolConfirmRegistry'
 import type { CacheKey } from '../src/shared/confirmation/types'
 import { createMemoryAppDb } from './database/testHelpers'
@@ -132,6 +134,9 @@ function makeCtx(db: AppIpcContext['db']): AppIpcContext {
 
 const sessionTierKey: CacheKey = { kind: 'domain', domain: 'example.com', level: 'domain-any-action', sessionId: 's1' }
 const persistentTierKey: CacheKey = { kind: 'shell-command', verb: 'git status', level: 'exact' }
+
+const registerAppIpcHandlers: typeof registerAppIpcHandlersRaw = (ipc, ctx) =>
+  registerAppIpcHandlersRaw(ipc, withSessionRuntime(ctx))
 
 describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
   let ipc: ReturnType<typeof mockIpcMain>

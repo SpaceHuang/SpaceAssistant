@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
-import { registerAppIpcHandlers } from './appIpc'
+import { registerAppIpcHandlers as registerAppIpcHandlersRaw } from './appIpc'
+import { withSessionRuntime } from './testSupport/sessionStorageComposition'
 import type { AppIpcContext } from './appIpc'
+
 import { createMemoryAppDb } from './database/testHelpers'
 
 const TEST_DB = createMemoryAppDb()
@@ -109,6 +111,9 @@ function makeCtx(dbOverrides: Partial<AppIpcContext['db']> = {}): AppIpcContext 
     })
   }
 }
+
+const registerAppIpcHandlers: typeof registerAppIpcHandlersRaw = (ipc, ctx) =>
+  registerAppIpcHandlersRaw(ipc, withSessionRuntime(ctx))
 
 describe('usage IPC handlers', () => {
   let ipc: ReturnType<typeof mockIpcMain>

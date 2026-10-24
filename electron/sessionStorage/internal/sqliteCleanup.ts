@@ -4,6 +4,8 @@ import { getDbConnection } from '../../database/sqliteStore'
 import { runInTransaction } from '../../database/transaction'
 import { SqliteAgentHistory } from '../../runtime/sqliteAgentHistory'
 import { sqlActiveTurnPredicate } from '../domain/turnState'
+import type { SessionCleanupPort } from '../host/ports'
+import { certifyCanonicalSessionApiRead } from '../certification'
 
 type CleanupProgressRow = Readonly<{
   session_generation: string
@@ -23,6 +25,18 @@ type CleanupProgressRow = Readonly<{
 
 const writeStoppedDatabaseBySession = new Map<string, WeakRef<AppDatabase>>()
 const lastCleanupWriteDatabaseBySession = new Map<string, WeakRef<AppDatabase>>()
+
+/** Keep raw cleanup primitives inside this privileged adapter; production callers still pass it through the release gate. */
+export function createSqliteSessionCleanupPort(db: AppDatabase): SessionCleanupPort {
+  return Object.freeze({
+    certifyCanonicalRead: (sessionId: string) => certifyCanonicalSessionApiRead(db, sessionId).status === 'eligible',
+    authorizationSnapshotSha256: (sessionId: string) => getSessionMessageContentCleanupAuthorizationSnapshotSha256(db, sessionId),
+    markWriteStopped: (sessionId: string) => markSessionMessageContentWriteStopped(db, sessionId),
+    begin: (sessionId: string) => beginSessionMessageContentCleanup(db, sessionId),
+    clearNextBatch: (sessionId: string, batchSize?: number) => clearNextSessionMessageContentBatch(db, sessionId, batchSize),
+    verifyAndComplete: (sessionId: string) => verifyAndCompleteSessionMessageContentCleanup(db, sessionId),
+  })
+}
 
 function cleanupManifestSha256(db: AppDatabase, sessionId: string): string | undefined {
   const conn = getDbConnection(db)

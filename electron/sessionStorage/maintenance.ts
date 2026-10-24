@@ -1,5 +1,6 @@
 /** Privileged cleanup phase operations; import only from host maintenance owners. */
 export {
+  createSqliteSessionCleanupPort,
   beginSessionMessageContentCleanup,
   clearNextSessionMessageContentBatch,
   getSessionMessageContentCleanupAuthorizationSnapshotSha256,

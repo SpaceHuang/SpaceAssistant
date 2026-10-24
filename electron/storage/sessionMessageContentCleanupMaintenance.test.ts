@@ -227,7 +227,6 @@ describe('会话正文清理维护 worker', () => {
       expect(certifyCanonicalSessionApiRead(temp.db, session.id).status).toBe('eligible')
       expect(enableCanonicalSessionWriteAuthority(temp.db, session.id).status).toBe('enabled')
       getDbConnection(temp.db).prepare(`DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'`).run(session.id)
-      getDbConnection(temp.db).prepare(`UPDATE session_message_content_cutover SET api_read_mode='revalidation-required' WHERE session_id=?`).run(session.id)
       approveCleanupScope(temp.db, [session.id])
 
       const result = runSessionMessageContentCleanupMaintenance(temp.db, createBoundary(true, temp.db), {
@@ -235,8 +234,8 @@ describe('会话正文清理维护 worker', () => {
       })
 
       expect(result).toMatchObject({ status: 'processed', scanned: 1, writeStopped: 1, pendingStarted: 1, batches: 1, ineligible: 0 })
-      expect(getDbConnection(temp.db).prepare(`SELECT cleanup_state,api_read_mode FROM session_message_content_cutover WHERE session_id=?`)
-        .get(session.id)).toEqual({ cleanup_state: 'complete', api_read_mode: 'revalidation-required' })
+      expect(getDbConnection(temp.db).prepare(`SELECT cleanup_state FROM session_message_content_cutover WHERE session_id=?`)
+        .get(session.id)).toEqual({ cleanup_state: 'complete' })
     } finally {
       temp.cleanup()
     }

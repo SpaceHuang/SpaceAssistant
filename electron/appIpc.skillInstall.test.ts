@@ -1,6 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { registerAppIpcHandlers } from './appIpc'
+import { registerAppIpcHandlers as registerAppIpcHandlersRaw } from './appIpc'
+import { withSessionRuntime } from './testSupport/sessionStorageComposition'
 import type { AppIpcContext } from './appIpc'
+
 import { createMemoryAppDb } from './database/testHelpers'
 
 const mockFs = vi.hoisted(() => ({
@@ -130,6 +132,9 @@ function makeCtx(): AppIpcContext {
 
 const TEST_DB = createMemoryAppDb()
 afterAll(() => TEST_DB.close())
+
+const registerAppIpcHandlers: typeof registerAppIpcHandlersRaw = (ipc, ctx) =>
+  registerAppIpcHandlersRaw(ipc, withSessionRuntime(ctx))
 
 describe('skill install IPC handlers', () => {
   let ipc: ReturnType<typeof mockIpcMain>

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
-import { registerAppIpcHandlers } from './appIpc'
+import { registerAppIpcHandlers as registerAppIpcHandlersRaw } from './appIpc'
+import { withSessionRuntime } from './testSupport/sessionStorageComposition'
 import type { AppIpcContext } from './appIpc'
+
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { createMemoryAppDb } from './database/testHelpers'
 
@@ -116,6 +118,9 @@ function makeCtx(db: AppIpcContext['db']): AppIpcContext {
  * agent 裁决路径（AgentChannel）不在 registry 登记 waiter，其残留卡片上的
  * 「信任并允许」点击此前会照常持久化信任——现要求 pending 存在才接受。
  */
+const registerAppIpcHandlers: typeof registerAppIpcHandlersRaw = (ipc, ctx) =>
+  registerAppIpcHandlersRaw(ipc, withSessionRuntime(ctx))
+
 describe('tool:confirm-response 信任写入与 pending 确认挂钩（H1）', () => {
   let ipc: ReturnType<typeof mockIpcMain>
   let db: ReturnType<typeof createMemoryAppDb>

@@ -117,8 +117,6 @@ describe('Phase 5.2 canonical shadow reads', () => {
     expect(conn.prepare('SELECT queued_message_id,state FROM queue_input_requests WHERE session_id=?').get(session.id))
       .toEqual({ queued_message_id: queued.persisted.message.id, state: 'queued' })
     expectNoValidApiRouteScopes(conn, session.id)
-    expect(conn.prepare("SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?").get(session.id))
-      .toEqual({ api_read_mode: 'legacy' })
     expect(conn.prepare('PRAGMA foreign_key_check').all()).toEqual([])
     db.close()
   })
@@ -251,8 +249,6 @@ describe('Phase 5.2 canonical shadow reads', () => {
     expect(shadow).toMatchObject({ status: 'mismatched', differenceCount: 1, fields: ['content'] })
     expect(shadow.candidate).toEqual([{ ...legacy[0], content: 'provider summary' }])
     expectNoValidApiRouteScopes(getDbConnection(db), session.id)
-    expect(getDbConnection(db).prepare("SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?").get(session.id))
-      .toEqual({ api_read_mode: 'legacy' })
     db.close()
   })
 
@@ -273,8 +269,6 @@ describe('Phase 5.2 canonical shadow reads', () => {
     expect(selectedLegacyContext.map(({ id }) => id)).toEqual([required.message.id])
     expect(report).toMatchObject({ status: 'matched', differenceCount: 0, candidate: selectedLegacyContext })
     expectNoValidApiRouteScopes(getDbConnection(db), session.id)
-    expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'legacy' })
     db.close()
   })
 
@@ -306,8 +300,6 @@ describe('Phase 5.2 canonical shadow reads', () => {
         expect(candidate).toMatchObject({ status: 'available', messages: [{ id: user.message.id, content: 'provider summary' }] })
         expect(shadow).toMatchObject({ status: 'mismatched', differenceCount: 1, fields: ['content'] })
         expectNoValidApiRouteScopes(conn, session.id)
-        expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-          .toEqual({ api_read_mode: 'legacy' })
       } finally {
         reopened.close()
       }

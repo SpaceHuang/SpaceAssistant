@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
-import { registerAppIpcHandlers } from './appIpc'
+import { registerAppIpcHandlers as registerAppIpcHandlersRaw } from './appIpc'
+import { withSessionRuntime } from './testSupport/sessionStorageComposition'
 import type { AppIpcContext } from './appIpc'
+
 import { createMemoryAppDb } from './database/testHelpers'
 import { getConfigValue } from './database'
 import { createAnthropicClient } from './anthropicClientFactory'
@@ -130,6 +132,9 @@ function makeModel(id: string, name: string) {
     enabled: true
   }
 }
+
+const registerAppIpcHandlers: typeof registerAppIpcHandlersRaw = (ipc, ctx) =>
+  registerAppIpcHandlersRaw(ipc, withSessionRuntime(ctx))
 
 describe('config:test-connection IPC handler', () => {
   let ipc: ReturnType<typeof mockIpcMain>

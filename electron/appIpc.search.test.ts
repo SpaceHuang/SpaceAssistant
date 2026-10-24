@@ -1,7 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import path from 'path'
-import { registerAppIpcHandlers } from './appIpc'
+import { registerAppIpcHandlers as registerAppIpcHandlersRaw } from './appIpc'
+import { withSessionRuntime } from './testSupport/sessionStorageComposition'
 import type { AppIpcContext } from './appIpc'
+
 import { listSearchHistory } from './database/operations'
 import * as sessionTranscriptProjection from './sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
@@ -112,6 +114,9 @@ function makeCtx(): AppIpcContext {
     })
   }
 }
+
+const registerAppIpcHandlers: typeof registerAppIpcHandlersRaw = (ipc, ctx) =>
+  registerAppIpcHandlersRaw(ipc, withSessionRuntime(ctx))
 
 describe('search:execute IPC handler', () => {
   let ipc: ReturnType<typeof mockIpcMain>

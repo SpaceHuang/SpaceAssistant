@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'crypto'
 import { appendMessage, createPersistedTurn, createSession } from './operations'
-import { createMemoryAppDb } from './testHelpers'
+import { createMemoryAppDb, seedValidProjectionScope } from './testHelpers'
 import { cleanupStreamingResiduesOnStartup } from './streamingCleanup'
 import { getMessages } from './operations'
 import { getDbConnection } from './sqliteStore'
@@ -75,12 +75,13 @@ describe('cleanupStreamingResiduesOnStartup', () => {
     const session = createSession(db, { name: 'cleanup-content-fence' })
     appendMessage(db, { id: 'cleanup-fenced-assistant', sessionId: session.id, role: 'assistant', content: 'partial', timestamp: 1, status: 'streaming',
       toolCalls: [{ id: 'cleanup-tool', toolName: 'read_file', input: {}, status: 'executing', riskLevel: 'low' }] })
-    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(session.id)
     const generation = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
     const scopeKey = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
     conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
       message_revision,payload_generation,payload_digest,validated_range_json,updated_at)
       VALUES(?,?,?,'valid','{}',0,'payload','digest','{}',1)`).run(session.id, scopeKey, generation.generation)
+    const apiScope = seedValidProjectionScope(db, session.id, 'apiBaselineV1')
+    const routeScope = seedValidProjectionScope(db, session.id, 'routeV1')
 
     expect(cleanupStreamingResiduesOnStartup(db)).toBe(1)
 
@@ -88,7 +89,9 @@ describe('cleanupStreamingResiduesOnStartup', () => {
       .toEqual({ content: 'partial', status: 'failed', content_storage_state: 'legacy' })
     expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, scopeKey))
       .toEqual({ status: 'invalid' })
-    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'revalidation-required' })
+    expect(conn.prepare(`SELECT scope_key,status FROM session_projection_state WHERE session_id=? AND scope_key IN (?,?) ORDER BY scope_key`)
+      .all(session.id, apiScope, routeScope)).toEqual([
+      { scope_key: apiScope, status: 'invalid' }, { scope_key: routeScope, status: 'invalid' }
+    ])
   })
 })

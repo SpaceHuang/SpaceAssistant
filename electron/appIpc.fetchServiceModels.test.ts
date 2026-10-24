@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
-import { registerAppIpcHandlers } from './appIpc'
+import { registerAppIpcHandlers as registerAppIpcHandlersRaw } from './appIpc'
+import { withSessionRuntime } from './testSupport/sessionStorageComposition'
 import type { AppIpcContext } from './appIpc'
+
 import { createMemoryAppDb } from './database/testHelpers'
 import { resolveTestConnectionCredentials } from './llmServiceResolver'
 import { fetchServiceModels } from './llmModelListFetcher'
@@ -114,6 +116,9 @@ function makeCtx(): AppIpcContext {
     })
   }
 }
+
+const registerAppIpcHandlers: typeof registerAppIpcHandlersRaw = (ipc, ctx) =>
+  registerAppIpcHandlersRaw(ipc, withSessionRuntime(ctx))
 
 describe('llm:fetch-service-models IPC handler', () => {
   let ipc: ReturnType<typeof mockIpcMain>
