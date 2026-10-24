@@ -1,8 +1,8 @@
-import type { Message } from '../../src/shared/domainTypes'
-import type { AppDatabase } from '../database'
-import { getTurnContext, iterateRecentTurnRoutingMessageCandidates, type RecentTurnRoutingMessageCandidate } from '../database/operations'
-import { getDbConnection } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
+import type { Message } from '../../../../src/shared/domainTypes'
+import type { AppDatabase } from '../../../database/sqliteStore'
+import { getTurnContext, iterateRecentTurnRoutingMessageCandidates, type RecentTurnRoutingMessageCandidate } from '../../../database/operations'
+import { getDbConnection } from '../../../database/sqliteStore'
+import { runInTransaction } from '../../../database/transaction'
 
 /** Select the persisted sequence window independently from the body projection resolver. */
 export function selectTurnContext(

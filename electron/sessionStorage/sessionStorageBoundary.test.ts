@@ -68,6 +68,16 @@ describe('session storage module graph rules', () => {
     }
   )
 
+  it('keeps transcript selector implementation inside the SQLite adapter', () => {
+    const runtimeFile = 'electron/runtime/sessionTranscriptSelector.ts'
+    const projectionFile = 'electron/runtime/sessionTranscriptProjection.ts'
+    expect(existsSync(path.resolve(runtimeFile))).toBe(false)
+    const source = readFileSync(path.resolve(projectionFile), 'utf8')
+    expect(source).not.toContain("from './sessionTranscriptSelector'")
+    expect(source).toContain('selectRecentTurnRoutingMessages')
+    expect(source).toContain('selectTurnContext')
+  })
+
   it('keeps startup ledger repair mechanics behind the SQLite History recovery host', () => {
     const main = readFileSync(path.resolve('electron/main.ts'), 'utf8')
     expect(main).toContain('recoverInterruptedInvocationsWithLedger')

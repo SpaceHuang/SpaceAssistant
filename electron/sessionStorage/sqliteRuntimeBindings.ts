@@ -12,3 +12,4 @@ export { hasRejectedTranscriptParityStateInConnection } from './infrastructure/s
 export { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer }
   from './infrastructure/sqlite/sessionEventRetentionAdapter'
 export { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
+export { selectRecentTurnRoutingMessages, selectTurnContext } from './infrastructure/sqlite/sessionTranscriptSelector'

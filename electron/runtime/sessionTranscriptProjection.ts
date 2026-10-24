@@ -7,9 +7,9 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { consultProjectionRejection, clearProjectionRejection, computeLegacyProjectionDigest, readProjectionO1Metadata, recordProjectionRejection } from './sessionProjectionRejection'
 import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
-import { resolveSelectedMessageBodies, hasCurrentProjectionEligibility, publishTranscriptParityProof, refreshValidatedProjectionFastPath }
+import { resolveSelectedMessageBodies, hasCurrentProjectionEligibility, publishTranscriptParityProof, refreshValidatedProjectionFastPath,
+  selectRecentTurnRoutingMessages, selectTurnContext }
   from '../sessionStorage/sqliteRuntimeBindings'
-import { selectRecentTurnRoutingMessages, selectTurnContext } from './sessionTranscriptSelector'
 
 export type SessionTranscriptProjectionRead =
   | Readonly<{ source: 'canonical:L2'; messages: readonly Message[]; replayedEvents: number }>

@@ -92,7 +92,6 @@ export function findSessionStorageModuleViolations(filePath, source) {
     ['electron/runtime/sessionTranscriptProjection.ts', new Set(['getApiContextBaseline', 'getChatMessagePage', 'getMessage', 'getMessageSkeletons',
       'getMessages', 'getMessagesPageWithSequence', 'getSearchCorpusPage', 'resolveRetryContext', 'ApiContextBaselineResult',
       'ChatMessagePage', 'MessageSearchHit', 'MessagesPageWithSequence', 'RetryContextTarget', 'SearchCorpusPage'])],
-    ['electron/runtime/sessionTranscriptSelector.ts', new Set(['getTurnContext', 'iterateRecentTurnRoutingMessageCandidates', 'RecentTurnRoutingMessageCandidate'])],
   ])
   const runtimeBindingCallers = new Map([
     ['electron/main.ts', new Set(['createSqliteStartupHistoryRecoveryBindings'])],
@@ -108,7 +107,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
     ['electron/runtime/sessionProjectionLegacyBaseline.ts', new Set(['readLegacyProjectionMessages'])],
     ['electron/runtime/sessionContentWriteAuthority.ts', new Set(['createSqliteSessionApiRouteProjectionFence'])],
     ['electron/runtime/sessionTranscriptProjection.ts', new Set(['resolveSelectedMessageBodies', 'hasCurrentProjectionEligibility',
-      'publishTranscriptParityProof', 'refreshValidatedProjectionFastPath'])],
+      'publishTranscriptParityProof', 'refreshValidatedProjectionFastPath', 'selectRecentTurnRoutingMessages', 'selectTurnContext'])],
     ['electron/storage/sessionEventRetention.ts', new Set(['createSessionLedgerCompactionDependencyGuard', 'createCanonicalSessionProjectionRetentionPreparer'])],
     ['electron/storage/sessionProjectionCacheMaintenance.ts', new Set(['createSqliteProjectionStateStore', 'createProjectionService'])],
   ])
@@ -172,6 +171,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
         ['electron/sessionStorage/infrastructure/sqlite/sessionEventRetentionAdapter', new Set([
           'createSessionLedgerCompactionDependencyGuard', 'createCanonicalSessionProjectionRetentionPreparer'])],
         ['electron/sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost', new Set(['createSqliteStartupHistoryRecoveryBindings'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionTranscriptSelector', new Set(['selectRecentTurnRoutingMessages', 'selectTurnContext'])],
       ])
       const allowedSymbols = namedBindings.get(edge.resolved)
       return !edge.typeOnly && edge.symbols.length > 0 && !!allowedSymbols && edge.symbols.every((symbol) => allowedSymbols.has(symbol))
