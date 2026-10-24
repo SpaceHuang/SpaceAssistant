@@ -202,8 +202,8 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
         maintenance: Object.freeze({ state: maintenanceState, tasks: Object.freeze(maintenanceTasks), source: maintenanceSource })
       })
       const conn = getDbConnection(db)
-      const cutover = conn.prepare('SELECT session_generation,message_revision,api_read_mode,write_mode FROM session_message_content_cutover WHERE session_id=?')
-        .get(sessionId) as { session_generation: string; message_revision: number; api_read_mode: string; write_mode: string } | undefined
+      const cutover = conn.prepare('SELECT session_generation,message_revision,write_mode FROM session_message_content_cutover WHERE session_id=?')
+        .get(sessionId) as { session_generation: string; message_revision: number; write_mode: string } | undefined
       let contentReadable = true
       try { queries.readApiBaseline({ sessionId, limit: 1 }) }
       catch (error) {
@@ -233,7 +233,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
         content: Object.freeze({ state: contentReadable ? 'readable' as const : 'unavailable' as const,
           ...(!contentReadable ? { reason: 'content-unavailable' as const } : {}),
           source: Object.freeze({ sessionGeneration: session.generation, messageRevision: cutover?.message_revision ?? 0,
-            authority: `${cutover?.api_read_mode ?? 'legacy'}:${cutover?.write_mode ?? 'legacy'}` }) }),
+            authority: cutover?.write_mode ?? 'legacy' }) }),
         execution: Object.freeze({ state: executionState, source: Object.freeze({ sessionId, transcriptVersion: transcript.version,
           ...(transcript.lastTurnId ? { lastTurnId: transcript.lastTurnId } : {}) }) }),
         ledger: Object.freeze({ ...ledger, source: Object.freeze(ledger.source) }),

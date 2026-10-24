@@ -18,7 +18,6 @@ export const CANONICAL_API_READ_FEATURE_CONFIG_KEY = 'config.sessionStorageCanon
 type EligibilityRow = Readonly<{
   sessionGeneration: string
   messageRevision: number
-  apiReadMode: string
   writeMode: string
   cleanupState: string
   eligibleSessionGeneration: string | null
@@ -57,36 +56,29 @@ export type CanonicalApiReadFence = Readonly<{
 }>
 function revokeEligibility(db: AppDatabase, sessionId: string): void {
   const conn = getDbConnection(db)
-  conn.prepare(`UPDATE session_message_content_cutover SET
-    api_read_mode=CASE WHEN api_read_mode='canonical' THEN 'revalidation-required' ELSE api_read_mode END,
-    updated_at=? WHERE session_id=?`).run(Date.now(), sessionId)
+  const session = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
+  if (!session) return
+  const store = createSqliteProjectionStateStore(db)
+  for (const scope of ['apiBaselineV1', 'routeV1'] as const) {
+    const scopeKey = encodeProjectionScopeKey({ scope, specVersion: 1 })
+    store.invalidateInTransaction({ sessionId, scopeKey, sessionGeneration: session.generation, now: Date.now() })
+  }
 }
 
 function canonicalApiReadFeatureEnabled(db: AppDatabase): boolean {
   return getConfigValue(db, CANONICAL_API_READ_FEATURE_CONFIG_KEY) === 'true'
 }
 
-/** The global kill switch forces all per-session API reads back to the retained legacy copy. */
-function disableCanonicalReadForSession(db: AppDatabase, sessionId: string): void {
-  const conn = getDbConnection(db)
-  conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='legacy',updated_at=?
-    WHERE session_id=?`).run(Date.now(), sessionId)
-}
-
 /** Enter the persisted write-stop fence only after checking that no queued or active turn can still write bodies. */
 export function setCanonicalApiReadFeatureEnabled(db: AppDatabase, enabled: boolean): void {
   runInTransaction(getDbConnection(db), () => {
     setConfigValue(db, CANONICAL_API_READ_FEATURE_CONFIG_KEY, enabled ? 'true' : 'false')
-    if (!enabled) {
-      getDbConnection(db).prepare(`UPDATE session_message_content_cutover SET api_read_mode='legacy',updated_at=?
-        WHERE api_read_mode!='legacy'`).run(Date.now())
-    }
   })
 }
 
 function readEligibility(db: AppDatabase, sessionId: string): EligibilityRow | undefined {
   const row = getDbConnection(db).prepare(`SELECT sessions.generation AS sessionGeneration,
-      cutover.message_revision AS messageRevision, cutover.api_read_mode AS apiReadMode,
+      cutover.message_revision AS messageRevision,
       cutover.write_mode AS writeMode, cutover.cleanup_state AS cleanupState
     FROM sessions
     JOIN session_message_content_cutover cutover ON cutover.session_id=sessions.id
@@ -132,7 +124,7 @@ function sameWatermark(a: CanonicalWatermark | undefined, b: CanonicalWatermark 
 function eligibilityMatches(row: EligibilityRow | undefined, watermark: CanonicalWatermark | undefined): row is EligibilityRow {
   return !!row && !!watermark && row.eligibleSessionGeneration !== null && row.skeletonRevision !== null &&
     row.canonicalSessionSeq !== null && row.canonicalCommitOrder !== null && row.protocolVersion !== null &&
-    row.apiReadMode === 'canonical' && (row.writeMode === 'legacy' || row.writeMode === 'canonical') && row.cleanupState === 'retained' &&
+    (row.writeMode === 'legacy' || row.writeMode === 'canonical') && row.cleanupState === 'retained' &&
     row.eligibleSessionGeneration === row.sessionGeneration && row.sessionGeneration === watermark.sessionGeneration &&
     row.skeletonRevision === row.messageRevision && row.canonicalSessionSeq === watermark.sessionSeq &&
     row.canonicalCommitOrder === watermark.commitOrder && row.watermarkEventId === watermark.watermarkEventId &&
@@ -158,7 +150,7 @@ export function certifyCanonicalSessionApiRead(db: AppDatabase, sessionId: strin
     if (!initial || !state) return { status: 'ineligible', reason: 'session-or-cutover-state-missing', apiReadMode: 'legacy' }
     if ((state.writeMode !== 'legacy' && state.writeMode !== 'canonical') || state.cleanupState !== 'retained') {
       revokeEligibility(db, sessionId)
-      return { status: 'ineligible', reason: 'write-or-cleanup-phase-not-eligible', apiReadMode: state.apiReadMode === 'canonical' ? 'revalidation-required' : 'legacy' }
+      return { status: 'ineligible', reason: 'write-or-cleanup-phase-not-eligible', apiReadMode: 'legacy' }
     }
 
     const allApiMessages = getTurnContext(db, sessionId, undefined, undefined, [])
@@ -184,7 +176,7 @@ export function certifyCanonicalSessionApiRead(db: AppDatabase, sessionId: strin
         status: 'ineligible',
         reason: !watermark ? 'canonical-watermark-unavailable' : apiShadow.status !== 'matched' ? 'api-context-not-matched' :
           routeShadow.status !== 'matched' ? 'turn-routing-not-matched' : 'session-fence-changed',
-        apiReadMode: state.apiReadMode === 'canonical' ? 'revalidation-required' : 'legacy',
+        apiReadMode: 'legacy',
         apiDifferenceCount: apiShadow.differenceCount,
         routeDifferenceCount: routeShadow.differenceCount
       }
@@ -192,12 +184,12 @@ export function certifyCanonicalSessionApiRead(db: AppDatabase, sessionId: strin
 
     const now = Date.now()
     const changed = getDbConnection(db).prepare(`UPDATE session_message_content_cutover SET
-      session_generation=?,api_read_mode='canonical',updated_at=?
+      session_generation=?,updated_at=?
       WHERE session_id=? AND session_generation=? AND message_revision=? AND write_mode IN ('legacy','canonical') AND cleanup_state='retained'`)
       .run(initial.generation, now, sessionId, initial.generation, initial.messageRevision)
     if (Number(changed.changes) !== 1) {
       revokeEligibility(db, sessionId)
-      return { status: 'ineligible', reason: 'session-fence-changed', apiReadMode: 'revalidation-required',
+      return { status: 'ineligible', reason: 'session-fence-changed', apiReadMode: 'legacy',
         apiDifferenceCount: apiShadow.differenceCount, routeDifferenceCount: routeShadow.differenceCount }
     }
     const sourceIdentityJson = readProjectionSourceIdentity(getDbConnection(db), sessionId, initial.generation)
@@ -211,7 +203,7 @@ export function certifyCanonicalSessionApiRead(db: AppDatabase, sessionId: strin
         apiBaseline: apiShadow.candidate, route: routeShadow.candidate
       })) {
       revokeEligibility(db, sessionId)
-      return { status: 'ineligible', reason: 'projection-scope-publish-failed', apiReadMode: 'revalidation-required',
+      return { status: 'ineligible', reason: 'projection-scope-publish-failed', apiReadMode: 'legacy',
         apiDifferenceCount: apiShadow.differenceCount, routeDifferenceCount: routeShadow.differenceCount }
     }
     return { status: 'eligible', apiReadMode: 'canonical', apiDifferenceCount: apiShadow.differenceCount,
@@ -230,11 +222,10 @@ export function readCanonicalApiContextIfEligible(
 ): CanonicalTurnContextCandidate | undefined {
   return runInTransaction(getDbConnection(db), () => {
     if (!canonicalApiReadFeatureEnabled(db)) {
-      disableCanonicalReadForSession(db, sessionId)
       return undefined
     }
     let row = readEligibility(db, sessionId)
-    if (!row || row.apiReadMode !== 'canonical') {
+    if (!row) {
       if (certifyCanonicalSessionApiRead(db, sessionId).status !== 'eligible') return undefined
       row = readEligibility(db, sessionId)
     }
@@ -290,11 +281,10 @@ export function readCanonicalTurnRoutingInputWithFenceIfEligible<T extends Reado
 ): Readonly<{ routeInput: T; fence: CanonicalApiReadFence }> | undefined {
   return runInTransaction(getDbConnection(db), () => {
     if (!canonicalApiReadFeatureEnabled(db)) {
-      disableCanonicalReadForSession(db, input.sessionId)
       return undefined
     }
     let row = readEligibility(db, input.sessionId)
-    if (!row || row.apiReadMode !== 'canonical') {
+    if (!row) {
       if (certifyCanonicalSessionApiRead(db, input.sessionId).status !== 'eligible') return undefined
       row = readEligibility(db, input.sessionId)
     }
@@ -323,7 +313,6 @@ export function readCanonicalTurnRoutingInputWithFenceIfEligible<T extends Reado
 export function isCanonicalApiReadFenceCurrent(db: AppDatabase, sessionId: string, fence: CanonicalApiReadFence): boolean {
   return runInTransaction(getDbConnection(db), () => {
     if (!canonicalApiReadFeatureEnabled(db)) {
-      disableCanonicalReadForSession(db, sessionId)
       return false
     }
     const row = readEligibility(db, sessionId)

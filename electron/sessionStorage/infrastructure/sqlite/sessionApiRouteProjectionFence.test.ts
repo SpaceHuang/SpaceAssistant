@@ -57,6 +57,19 @@ describe('SQLite API and route projection fence', () => {
     expect(fence.isCurrent({ sessionId: session.id, sessionGeneration: session.generation, messageRevision: 0, historyWatermarkJson })).toBe(false)
   })
 
+  it('does not include the retired API read eligibility marker in the projection source identity', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'API read marker retirement', model: 'test' })
+    const store = createSqliteProjectionStateStore(db)
+    const before = store.readSourceIdentity(session.id, session.generation)
+    const conn = getDbConnection(db)
+
+    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='revalidation-required' WHERE session_id=?").run(session.id)
+
+    expect(store.readSourceIdentity(session.id, session.generation)).toBe(before)
+    expect(JSON.parse(before!).bodyAuthority).toEqual(['legacy', 'retained'])
+  })
+
   it('publishes both certified scopes through ProjectionService and refuses a stale source fence', () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'publish API route scopes', model: 'test' })

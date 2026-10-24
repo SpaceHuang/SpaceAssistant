@@ -19,16 +19,16 @@ export function enableCanonicalSessionWriteAuthority(db: AppDatabase, sessionId:
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
     const state = conn.prepare(`SELECT sessions.generation,cutover.session_generation AS cutover_generation,
-        cutover.message_revision,cutover.api_read_mode,cutover.write_mode,cutover.cleanup_state
+        cutover.message_revision,cutover.write_mode,cutover.cleanup_state
       FROM sessions JOIN session_message_content_cutover cutover ON cutover.session_id=sessions.id
       WHERE sessions.id=?`).get(sessionId) as {
-        generation: string; cutover_generation: string; message_revision: number; api_read_mode: string; write_mode: string; cleanup_state: string
+        generation: string; cutover_generation: string; message_revision: number; write_mode: string; cleanup_state: string
       } | undefined
     const ineligible = (reason: NonNullable<CanonicalWriteAuthorityResult['reason']>): CanonicalWriteAuthorityResult =>
       ({ status: 'ineligible', reason, migratedMessageCount: 0 })
     if (!state) return ineligible('session-or-cutover-state-missing')
     if (state.write_mode !== 'legacy' && state.write_mode !== 'canonical') return ineligible('write-mode-conflict')
-    if (state.cutover_generation !== state.generation || state.api_read_mode !== 'canonical' || state.cleanup_state !== 'retained') {
+    if (state.cutover_generation !== state.generation || state.cleanup_state !== 'retained') {
       return ineligible('read-fence-not-current')
     }
 
@@ -55,7 +55,7 @@ export function enableCanonicalSessionWriteAuthority(db: AppDatabase, sessionId:
     if (state.write_mode === 'legacy') {
       const changed = conn.prepare(`UPDATE session_message_content_cutover
         SET write_mode='canonical',updated_at=? WHERE session_id=? AND session_generation=?
-        AND message_revision=? AND api_read_mode='canonical' AND write_mode='legacy' AND cleanup_state='retained'`)
+        AND message_revision=? AND write_mode='legacy' AND cleanup_state='retained'`)
         .run(Date.now(), sessionId, state.generation, state.message_revision)
       if (Number(changed.changes) !== 1) return ineligible('read-fence-not-current')
     }

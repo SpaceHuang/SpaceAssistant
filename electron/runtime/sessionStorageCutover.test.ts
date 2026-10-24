@@ -60,7 +60,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     expectRetiredApiEligibilityTable(db)
     expect(readCanonicalApiContextIfEligible(db, session.id, undefined, undefined, [])).toMatchObject({ status: 'available', messages: expectedApi })
     expect(getDbConnection(db).prepare('SELECT api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'canonical', write_mode: 'legacy', cleanup_state: 'retained' })
+      .toEqual({ api_read_mode: 'legacy', write_mode: 'legacy', cleanup_state: 'retained' })
     expect(getDbConnection(db).prepare(`SELECT scope_key,status,message_revision,history_watermark_json
       FROM session_projection_state WHERE session_id=? ORDER BY scope_key`).all(session.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ status: 'valid', message_revision: expect.any(Number), history_watermark_json: expect.any(String) }),
@@ -71,7 +71,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
 
     expect(readCanonicalApiContextIfEligible(db, session.id, undefined, undefined, [])).toMatchObject({ status: 'available', messages: expectedApi })
     expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'canonical' })
+      .toEqual({ api_read_mode: 'legacy' })
     expect(getDbConnection(db).prepare("SELECT cache_key FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
       .toBeUndefined()
 
@@ -115,7 +115,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       status: 'available', messages: [{ id: user.message.id, content: 'body' }]
     })
     expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'canonical' })
+      .toEqual({ api_read_mode: 'legacy' })
     db.close()
   })
 
@@ -137,7 +137,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     expect(getTurnContext(db, session.id, undefined, user.message.id, [])[0]?.content).toBe('legacy body')
     expectRetiredApiEligibilityTable(db)
     expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'revalidation-required' })
+      .toEqual({ api_read_mode: 'legacy' })
     db.close()
   })
 
@@ -154,7 +154,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       .run(otherSession.id, `cutover-${session.id}`)
 
     expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'revalidation-required' })
+      .toEqual({ api_read_mode: 'legacy' })
     expectRetiredApiEligibilityTable(db)
     expect(readCanonicalApiContextIfEligible(db, session.id, undefined, user.message.id, [])).toBeUndefined()
     expect(getTurnContext(db, session.id, undefined, user.message.id, [])[0]?.content).toBe('intact legacy body')
@@ -178,7 +178,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     expect(readCanonicalApiContextIfEligible(db, session.id, undefined, user.message.id, [])).toBeUndefined()
     expectRetiredApiEligibilityTable(db)
     expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'revalidation-required' })
+      .toEqual({ api_read_mode: 'legacy' })
     expect(getDbConnection(db).prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id))
       .not.toEqual(previous)
     expect(getSession(db, session.id)?.generation).toBe(session.generation)
@@ -210,7 +210,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     expect(isCanonicalApiReadFenceCurrent(db, session.id, selected!.fence)).toBe(false)
     expectRetiredApiEligibilityTable(db)
     expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'revalidation-required' })
+      .toEqual({ api_read_mode: 'legacy' })
     db.close()
   })
 
@@ -233,7 +233,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       expect(readCanonicalApiContextIfEligible(reopened, session.id, undefined, user.message.id, []))
         .toMatchObject({ status: 'available', messages: [{ id: user.message.id, content: 'legacy body' }] })
       expect(getDbConnection(reopened).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-        .toEqual({ api_read_mode: 'canonical' })
+        .toEqual({ api_read_mode: 'legacy' })
 
       await new SqliteAgentHistory(getDbConnection(reopened), 1, Date.now, session.id).appendBatch([{
         invocationId: `cutover-${session.id}`, turnId: `turn-${session.id}`, sequence: 2, schemaVersion: 1,
@@ -245,7 +245,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       expect(getTurnContext(reopened, session.id, undefined, user.message.id, [])[0]?.content).toBe('legacy body')
       expect(getDbConnection(reopened).prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_session_api_context_eligibility'").get()).toBeUndefined()
       expect(getDbConnection(reopened).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-        .toEqual({ api_read_mode: 'revalidation-required' })
+        .toEqual({ api_read_mode: 'legacy' })
     } finally {
       reopened?.close()
       temp.cleanup()
@@ -374,7 +374,7 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       canonical_session_seq: 1, canonical_commit_order: 1, next_sequence: 0, cleaned_message_count: 0 })
     expect(beginSessionMessageContentCleanup(db, session.id)).toBe(true)
     expect(conn.prepare('SELECT cleanup_state,api_read_mode,write_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ cleanup_state: 'pending', api_read_mode: 'revalidation-required', write_mode: 'canonical' })
+      .toEqual({ cleanup_state: 'pending', api_read_mode: 'legacy', write_mode: 'canonical' })
     expectRetiredApiEligibilityTable(db)
     expect(conn.prepare('SELECT id,content,content_storage_state FROM messages WHERE session_id=?').all(session.id))
       .toEqual([{ id: 'write-stop-sealed-user', content: 'question', content_storage_state: 'canonical-backed-dual-write' }])
@@ -1486,6 +1486,21 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       .toBe('canonical body')
     expect(getDbConnection(db).prepare('SELECT content,thinking FROM messages WHERE id=?').get('canonical-write-boundary-user'))
       .toEqual({ content: 'canonical body', thinking: JSON.stringify({ ...'metadata only' }) })
+    db.close()
+  })
+
+  it('uses current API and route scope proofs instead of the retired api_read_mode marker', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'retired API read marker', model: 'test' })
+    appendMessage(db, { id: 'retired-api-marker-user', sessionId: session.id, role: 'user', content: 'canonical body', timestamp: 1, status: 'sent' })
+    await writeCanonicalMessages(db, session.id, [{ id: 'retired-api-marker-user', role: 'user', content: 'canonical body', timestamp: 1 }])
+    getDbConnection(db).prepare("UPDATE session_message_content_cutover SET api_read_mode='revalidation-required' WHERE session_id=?").run(session.id)
+    expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
+    expect(getDbConnection(db).prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+      .toEqual({ api_read_mode: 'revalidation-required' })
+
+    const { enableCanonicalSessionWriteAuthority } = await import('../sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority')
+    expect(enableCanonicalSessionWriteAuthority(db, session.id)).toMatchObject({ status: 'enabled' })
     db.close()
   })
 
