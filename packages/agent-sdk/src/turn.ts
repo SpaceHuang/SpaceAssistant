@@ -1884,6 +1884,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       let resourceLease: { release(): void } | undefined
       let resourceReleaseDeferred = false
       let executionResult: CanonicalToolExecutionResult
+      let policyChangedDuringDispatch = false
       try {
         const resourceKeys = input.toolResourceKeys?.(executionCall) ?? [`unknown:${invocationId}`]
         resourceLease = await resourceLocks.acquire(resourceKeys, input.request.signal ? { signal: input.request.signal } : undefined)
@@ -1897,7 +1898,12 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         // Match the host lifecycle: resource ownership is acquired before the final policy/facts recheck.
         let recheckBinding: PermitBinding
         try {
-          recheckBinding = await input.prepareTool(executionCall, { kind: 'recheck', ...(confirmation ? { confirmation } : {}), ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {}) })
+          recheckBinding = await input.prepareTool(executionCall, {
+            kind: 'recheck',
+            ...(confirmation ? { confirmation } : {}),
+            ...(policyChangedDuringDispatch ? { replanAfterFreshApproval: true, policyChanged: true } : {}),
+            ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {})
+          })
         } catch (error) {
           throwIfAborted(input.request.signal)
           const message = error instanceof Error ? error.message : ''
@@ -1908,7 +1914,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           throw new ToolDeniedError(reasonCode)
         }
         throwIfAborted(input.request.signal)
-        if (!matchesRecheckBinding(initialBinding, recheckBinding)) {
+        if (!matchesRecheckBinding(initialBinding, recheckBinding, policyChangedDuringDispatch)) {
           await markNotDispatched(tool, 'STALE_AUTHORIZATION')
           throw new ToolDeniedError('STALE_AUTHORIZATION')
         }
@@ -2084,6 +2090,26 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             if (error.reason === 'CANCELLED' || input.request.signal?.aborted) {
               await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
               throw abortErrorForSignal(input.request.signal)
+            }
+            if (error.reason === 'AUTHORIZATION_STALE') {
+              const hadStartedProjection = toolDispatchStates.get(tool.toolCallId) === 'started'
+              toolDispatchStates.set(tool.toolCallId, 'pending')
+              if (hadStartedProjection) {
+                await appendHistory([{ kind: 'tool-call-not-dispatched', payload: {
+                  toolCallId: tool.toolCallId,
+                  sourceRequestId: `${invocationId}:round:${modelTurns}`,
+                  modelTurn: modelTurns,
+                  reason: 'AUTHORIZATION_STALE',
+                  replayContent: 'Tool call was not dispatched (AUTHORIZATION_STALE).',
+                  isError: true,
+                  executorEntry: 'not-entered',
+                  executionOutcome: 'not-dispatched'
+                } }])
+              }
+              confirmation = undefined
+              activeApprovalId = undefined
+              policyChangedDuringDispatch = true
+              continue dispatchAuthorization
             }
             await markNotDispatched(tool, error.reason)
             if (error.reason.startsWith('VERIFY_ONLY_') || error.reason.startsWith('RECOVERY_')) {

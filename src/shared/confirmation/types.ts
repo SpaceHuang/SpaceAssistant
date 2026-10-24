@@ -644,6 +644,8 @@ export interface PolicyRule {
   action: PolicyAction
   /** Trusted main-process marker: this action came from a validated persisted user override. */
   userOverride?: true
+  /** This ask explicitly supports its declared user memory tier (for example exact script trust). */
+  cacheableAsk?: true
   /** 安全语义标记：即使 rule.action 被档位映射为 auto-evaluator，也必须原渠道逐次人工确认。 */
   humanRequired?: boolean
   /** Explicit reviewer for an ask rule; defaults to the lane's established reviewer. */

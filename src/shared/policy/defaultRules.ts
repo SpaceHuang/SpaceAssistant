@@ -346,7 +346,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'script-unmodeled-path-ask',
     when: 'invocation',
     match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unmodeled-call'] },
-    action: 'ask', denyClass: 'insufficient-info', reason: '脚本含未建模调用；可选择仅在本会话信任相同脚本'
+    action: 'ask', denyClass: 'insufficient-info', cacheableAsk: true, reason: '脚本含未建模调用；可选择仅在本会话信任相同脚本'
   },
   {
     id: 'script-unverified-language-confirm',
@@ -500,6 +500,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     denyClass: 'insufficient-info',
     action: 'ask',
     configRequires: { config: 'actRequiresConfirm', equals: true },
+    cacheableAsk: true,
     reason: '浏览器 act 需确认'
   },
   // navigate（open 模式）：远程仅在桌面与远程开关都要求时确认（等价现基线+跳过覆写叠加语义）；
@@ -514,6 +515,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
       { config: 'navigateRequiresConfirm', equals: true },
       { config: 'remoteNavigateRequiresConfirm', equals: true }
     ],
+    cacheableAsk: true,
     reason: '远程浏览器打开网页需确认'
   },
   {
@@ -523,6 +525,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'navigateRequiresConfirm', equals: false },
+    cacheableAsk: true,
     reason: '浏览器打开网页需确认'
   },
   // lark-cli 高影响/未知子命令无条件确认（fail-closed，等价现 larkCliWriteNeedsConfirm：
@@ -715,7 +718,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], actionClass: 'write', excludeSignals: ['write-target-new', 'write-target-existing'] },
     denyClass: 'insufficient-info',
-    action: 'ask',
+    action: 'ask', cacheableAsk: true,
     reason: '未被低风险分类或人工确认底线覆盖的 IM 写入，交由标准档审核 Agent 评估'
   },
 

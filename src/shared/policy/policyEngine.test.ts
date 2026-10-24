@@ -719,7 +719,24 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
       deps({ cache: { lookup } })
     )
     expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'user' })
-    expect(lookup).toHaveBeenCalledOnce()
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
+  it('any matching ask outranks a cached allow regardless of specificity, rule source, or cache kind', () => {
+    const mcpFacts = mkFacts('mcp_tool', 'execute', [{ kind: 'mcp-tool', serverId: 'server', toolName: 'tool' }])
+    const shellFacts = mkFacts('run_shell', 'execute', [{ kind: 'command-sequence', commands: [{ verb: 'echo', args: ['ok'], signature: 'echo ok' }], persistable: true }])
+    const cachedAllow = (kind: 'mcp-tool' | 'shell-command') => ({ lookup: (key: import('../confirmation/types').CacheKey) => ({
+      id: 'old-allow', key: { ...key, kind }, decision: 'allow' as const, lane: 'desktop' as const, scope: 'persistent' as const,
+      createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' as const
+    }) })
+    const rules = [
+      { id: 'specific-default-ask', when: 'invocation' as const, match: { toolName: 'mcp_tool', signals: ['mcp-tool'] }, action: 'ask' as const, cacheableAsk: true as const, reason: 'default' },
+      { id: 'user-ask', when: 'invocation' as const, action: 'ask' as const, userOverride: true as const, reason: 'user' }
+    ]
+    expect(decide(mcpFacts, mkContext('desktop'), rules, deps({ cache: cachedAllow('mcp-tool') })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'user-ask', answerer: 'user' })
+    expect(decide(shellFacts, mkContext('desktop'), [{ id: 'default-shell-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'ask' }], deps({ cache: cachedAllow('shell-command') })))
+      .toMatchObject({ type: 'require-confirm', answerer: 'user' })
   })
 
   it.each([

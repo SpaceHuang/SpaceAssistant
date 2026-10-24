@@ -466,8 +466,8 @@ export function deriveInvocationPolicyConstraints(
 /**
  * 工具调用时机（invocation）判定：纯函数，无副作用。
  *
- * 求值顺序：拒绝规则 → 缓存 → 自动审批器 → 链路软约束 → 默认表。
- * 所有命中的 deny 规则都先于缓存，缓存信任不能覆盖用户或系统策略的明确拒绝。
+ * 求值顺序：拒绝规则 → 人工 ask/显式自动审核 → 例外缓存 → 自动审批器 → 默认表。
+ * 所有命中的 deny 和未声明缓存例外的 ask 都先于 allow 缓存；cacheableAsk 仅为规则声明的记忆路径。
  * auto-evaluator 命中不产生 Decision，评估器不裁决则交还规则链。
  */
 export function decide(
@@ -521,21 +521,23 @@ export function decide(
   // Every effective action participates in the same priority regardless of
   // whether it came from a package default, a user override, or a transform.
   // Explicit rule overrides remain authoritative over previous user memory.
-  const selectedOverrides = matchedActions.filter(({ rule }) => rule.userOverride)
   const actionableAsks = matchedActions.filter(({ rule }) => !rule.humanRequired && rule.id !== 'automation-default-confirm' && !askUnlessHolds(rule, deps))
-  const selectedAsk = byAction(actionableAsks, 'ask')
+  const selectedAsk = byAction(actionableAsks.filter(({ rule }) => rule.userOverride), 'ask')
+    ?? byAction(actionableAsks, 'ask')
+  const matchingAsks = actionableAsks.filter(({ action }) => action === 'ask' || action === 'confirm-every-time')
+  const onlyExplicitlyCacheableAsks = matchingAsks.length > 0 && matchingAsks.every(({ rule }) =>
+    rule.cacheableAsk === true && !rule.userOverride && !rule.humanRequired
+  )
   const askUnlessAllows = matchedActions.filter(({ action, rule }) =>
     !rule.humanRequired && !rule.locked && (action === 'ask' || action === 'auto-evaluator') && askUnlessHolds(rule, deps))
-  // A user-selected ask is an explicit human boundary; do not even consult a
-  // remembered allow for the same invocation.
-  if (selectedAsk?.userOverride) return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints, 'user')
-  const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
+  // Only rules that explicitly declare a user-memory exception may consume
+  // cached allow before asking. Generic or user-selected asks always win.
+  const cacheHit = selectedAsk && !onlyExplicitlyCacheableAsks
+    ? null
+    : selectedAsk?.cacheableAsk
+    ? lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
+    : lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
   if (cacheHit?.type === 'deny') return cacheHit
-  // Existing user memories remain bound to their exact key. A generic MCP tool
-  // memory cannot silently suppress the default MCP ask after a policy change.
-  const mcpCacheMustYield = cacheHit?.type === 'auto-allow' && cacheHit.cacheKey?.kind === 'mcp-tool' &&
-    matchedActions.some(({ rule }) => rule.id === 'mcp-tool-ask')
-  if (cacheHit && !mcpCacheMustYield) return cacheHit
   const larkMessageOutbound = facts.toolName === 'run_lark_cli' && facts.signals.some((signal) =>
     signal.kind === 'lark-subcommand' && signal.category === 'message'
   )
@@ -568,13 +570,22 @@ export function decide(
     }
   }
 
-  if (selectedAsk) return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints,
-    selectedAsk.answerer ?? askAnswererFor(context.lane))
+  if (selectedAsk && !(onlyExplicitlyCacheableAsks && cacheHit?.type === 'auto-allow')) {
+    return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints,
+      selectedAsk.userOverride ? 'user' : selectedAsk.answerer ?? askAnswererFor(context.lane))
+  }
+  const explicitReviewAutos = matchedActions.filter(({ action, rule }) => action === 'auto-evaluator' &&
+    (rule.userOverride || rule.action === 'ask' && !rule.cacheableAsk))
+    .sort((a, b) => a.rule.id.localeCompare(b.rule.id))
+  if (context.lane !== 'automation' && explicitReviewAutos.length > 0) {
+    const selectedAuto = explicitReviewAutos[0].rule
+    if (deps.autoEvaluator?.(facts, context).approve) return autoAllow(selectedAuto.id, facts)
+    return requireConfirm(selectedAuto, facts, context.sessionId, context.lane, constraints, 'agent')
+  }
+  if (cacheHit) return cacheHit
 
   if (context.lane !== 'automation') {
-    const overrideAuto = matchedActions.filter(({ action, rule }) => action === 'auto-evaluator' && rule.userOverride)
-      .sort((a, b) => a.rule.id.localeCompare(b.rule.id))
-    const autoCandidates = overrideAuto.length > 0 ? overrideAuto : matchedActions
+    const autoCandidates = matchedActions
       .filter(({ action }) => action === 'auto-evaluator')
       .sort((a, b) => Number((a.rule.match?.signals?.length ?? 0) + (a.rule.match?.toolName ? 1 : 0) + (a.rule.match?.lane?.length ? 1 : 0))
         - Number((b.rule.match?.signals?.length ?? 0) + (b.rule.match?.toolName ? 1 : 0) + (b.rule.match?.lane?.length ? 1 : 0))
