@@ -518,7 +518,7 @@ async function compactSessionDatabaseImpl(
     // 非空库上该 pragma 需 VACUUM 才能生效（实测），legacy 库由进程内回退路径首次运行时经 L2 转换。
     // 可重建投影缓存的清理必须在换入之后：worker 的 VACUUM INTO 快照早于清理，
     // 若在换入前清理，staging 会把已清行原样带回来（归档中仍保有这些行，语义不变）。
-    if (options.clearProjectionCachesAfterArchive) clearSessionProjectionCaches(db)
+    if (options.clearProjectionCachesAfterArchive) await clearSessionProjectionCaches(db)
     db.flushSave()
     const filesAfter = sqliteFileSizes(dbPath)
     const archiveBytes = directoryFileBytes(archivePath)
@@ -671,7 +671,7 @@ async function compactSessionDatabaseInProcess(
       throw new StorageMaintenanceError('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE',
         `database maintenance requires ${filesBefore.dbBytes} bytes for the VACUUM working copy; ${availableBytesAtVacuum} bytes are available after archiving`)
     }
-    if (options.clearProjectionCachesAfterArchive) clearSessionProjectionCaches(db)
+    if (options.clearProjectionCachesAfterArchive) await clearSessionProjectionCaches(db)
     const vacuumStageStartedAt = performance.now()
     stageDurationsMs.verify = vacuumStageStartedAt - verifyStageStartedAt
     const originalPages = Number((conn.prepare('PRAGMA page_count').get() as { page_count: number }).page_count)

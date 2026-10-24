@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { createTempDatabase } from '../database/testHelpers'
-import { getDbConnection } from '../database/sqliteStore'
+import { getDbConnection, openSqliteDatabase } from '../database/sqliteStore'
 import { appendMessage, createPersistedTurn, createSession, getApiContextBaseline } from '../database/operations'
 import { cancelQueuedSessionExecution, claimSessionExecution, commitSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
 import { EventEmitter } from 'node:events'
@@ -85,7 +85,7 @@ describe('session storage maintenance', () => {
     temp.cleanup()
   })
 
-  it('clears disposable projection data while preserving canonical repair obligations and turn protocol rows', () => {
+  it('clears disposable projection data while preserving canonical repair obligations and turn protocol rows', async () => {
     const temp = createTempDatabase('storage-maintenance-cache-')
     const conn = getDbConnection(temp.db)
     conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
@@ -98,13 +98,48 @@ describe('session storage maintenance', () => {
       message_revision,payload_generation,payload_digest,validated_range_json,updated_at)
       VALUES('s','transcriptParityV1','g','valid','{}',0,'payload','digest','{}',1)`).run()
 
-    expect(clearSessionProjectionCaches(temp.db)).toEqual({ cacheRows: 1, eligibilityRows: 1 })
+    expect(await clearSessionProjectionCaches(temp.db)).toEqual({ cacheRows: 1, eligibilityRows: 1 })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_cache').get()).toEqual({ count: 0 })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_eligibility'").get()).toBeUndefined()
     expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?')
       .get('s', 'transcriptParityV1')).toEqual({ status: 'invalid' })
     expect(conn.prepare('SELECT status FROM canonical_projection_repairs WHERE repair_id=?').get('r')).toEqual({ status: 'pending' })
     temp.cleanup()
+  })
+
+  it('reclaims old transcript cache by stable keyset pages and resumes after an interrupted page', async () => {
+    const temp = createTempDatabase('storage-maintenance-cache-pages-')
+    let db = temp.db
+    let conn = getDbConnection(db)
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES('cache-state','s','m',0.7,1,1,1,'{}','{}',1,'cache-state-generation')`).run()
+    conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
+      message_revision,payload_generation,payload_digest,validated_range_json,updated_at)
+      VALUES('cache-state','transcriptParityV1','cache-state-generation','valid','{}',0,'payload','digest','{}',1)`).run()
+    const insert = conn.prepare(`INSERT INTO canonical_session_projection_cache(session_id,cache_key,cache_version,session_generation,
+      session_seq,commit_order,watermark_event_id,watermark_invocation_id,event_count,value,updated_at)
+      VALUES(?, 'transcript',1,'g',-1,-1,NULL,NULL,0,'[]',1)`)
+    for (let index = 0; index < 130; index += 1) insert.run(`cache-${String(index).padStart(3, '0')}`)
+    conn.exec(`CREATE TRIGGER interrupt_projection_cache_page BEFORE DELETE ON canonical_session_projection_cache
+      WHEN OLD.session_id='cache-064' BEGIN SELECT RAISE(ABORT,'injected cache page interruption'); END`)
+
+    try {
+      await expect(clearSessionProjectionCaches(db)).rejects.toThrow('injected cache page interruption')
+      expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_cache').get()).toEqual({ count: 66 })
+      expect(conn.prepare("SELECT status FROM session_projection_state WHERE session_id='cache-state' AND scope_key='transcriptParityV1'").get())
+        .toEqual({ status: 'invalid' })
+
+      db.close()
+      db = openSqliteDatabase(temp.dbPath)
+      conn = getDbConnection(db)
+      conn.exec('DROP TRIGGER interrupt_projection_cache_page')
+
+      expect(await clearSessionProjectionCaches(db)).toEqual({ cacheRows: 66, eligibilityRows: 0 })
+      expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_cache').get()).toEqual({ count: 0 })
+    } finally {
+      db.close()
+      await fs.rm(path.dirname(temp.dbPath), { recursive: true, force: true })
+    }
   })
 
   it('archives DB and spill before vacuum, reclaims visible file space, and reports bounded progress', async () => {
