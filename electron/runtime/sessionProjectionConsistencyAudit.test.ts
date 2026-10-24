@@ -4,10 +4,10 @@ import { appendMessage, createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { runEligibleSessionProjectionMigration } from './sessionProjectionMigration'
-import { auditSessionProjectionMigration } from './sessionProjectionConsistencyAudit'
+import { auditSessionProjectionMigration } from '../sessionStorage/infrastructure/sqlite/sessionProjectionConsistencyAudit'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { buildSessionProjectionMigrationInventory } from './sessionProjectionMigrationInventory'
-import { buildSessionProjectionRetirementCandidates } from './sessionProjectionRetirementCandidates'
+import { buildSessionProjectionRetirementCandidates } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRetirementCandidates'
 
 async function addEligibleSession(db: ReturnType<typeof createMemoryAppDb>, id: string,
   scope: Partial<Parameters<typeof createSession>[1]> = {}) {

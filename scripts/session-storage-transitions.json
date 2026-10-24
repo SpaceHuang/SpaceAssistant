@@ -1,18 +1,5 @@
 [
   {
-    "source": "electron/runtime/sessionProjectionConsistencyAudit.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "hasCurrentProjectionEligibility",
-      "readLegacyProjectionMessages"
-    ],
-    "typeOnly": false,
-    "owner": "SessionStorage projection consistency audit",
-    "reason": "Audit compatibility reads remain while the audit is migrated behind the application port.",
-    "exitStage": "P2",
-    "evidence": "sessionProjectionConsistencyAudit.test.ts"
-  },
-  {
     "source": "electron/runtime/sessionProjectionRejection.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [

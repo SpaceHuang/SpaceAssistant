@@ -204,6 +204,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
         edge.resolved === 'electron/storage/spillProtocol' ||
         edge.resolved === 'electron/sessionLedgerIdentity' ||
         ['electron/sessionEvents', 'electron/queueInputFingerprint', 'electron/runtime/sqliteAgentHistory',
+          'electron/runtime/sessionProjectionMigrationInventory',
           'electron/runtime/sessionStorageShadow', 'electron/runtime/sessionTranscriptProjection',
           'electron/runtime/sessionContentWriteAuthority', 'electron/runtime/agentContinuation',
           'electron/runtime/continuationSummary', 'electron/runtime/terminalOutcome', 'electron/runtime/canonicalHistory',

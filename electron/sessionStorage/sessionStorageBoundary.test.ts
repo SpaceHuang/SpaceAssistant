@@ -81,7 +81,7 @@ describe('session storage module graph rules', () => {
   })
 
   it.each(['electron/runtime/sessionProjectionMigrationInventory.ts', 'electron/runtime/sessionProjectionLegacyBaseline.ts',
-    'electron/runtime/sessionProjectionConsistencyAudit.ts', 'electron/runtime/sessionStorageShadow.ts'])(
+    'electron/runtime/sessionStorageShadow.ts'])(
     'keeps %s legacy message reads behind the storage-owned binding', (file) => {
       const source = readFileSync(path.resolve(file), 'utf8')
       expect(source).not.toContain("from '../database/operations'")
@@ -89,6 +89,15 @@ describe('session storage module graph rules', () => {
       expect(findSessionStorageModuleViolations(file, source)).toEqual([])
     }
   )
+
+  it('keeps the migration consistency audit and retirement classification inside the SQLite owner', () => {
+    const file = 'electron/sessionStorage/infrastructure/sqlite/sessionProjectionConsistencyAudit.ts'
+    const source = readFileSync(path.resolve(file), 'utf8')
+    expect(existsSync(path.resolve('electron/runtime/sessionProjectionConsistencyAudit.ts'))).toBe(false)
+    expect(source).toContain("from './sessionLegacyQueryAdapter'")
+    expect(source).not.toContain('sqliteRuntimeBindings')
+    expect(findSessionStorageModuleViolations(file, source)).toEqual([])
+  })
 
   it('keeps transcript selector implementation inside the SQLite adapter', () => {
     const runtimeFile = 'electron/runtime/sessionTranscriptSelector.ts'
