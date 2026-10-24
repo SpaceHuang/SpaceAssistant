@@ -255,9 +255,9 @@ describe('WeChat prepared wake to real provider integration', () => {
       trackEventId: attribution.context.attributionEventId })
     const patchHandlers = new Map<string, (...args: unknown[]) => unknown>()
     const sessionStorage = createSqliteSessionStorage(db)
-    const turnRuntime = createSessionTurnRuntime(sessionStorage, { deps: { now: Date.now, id: () => 'test-turn' } })
+    const patchTurnRuntime = createSessionTurnRuntime(sessionStorage, { deps: { now: Date.now, id: () => 'test-turn' } })
     registerAgentIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => patchHandlers.set(channel, handler) } as never, {
-      db, sessionStorage, turnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
+      db, sessionStorage, turnRuntime: patchTurnRuntime, backup: { schedule: vi.fn() } as never, workDirManager: {} as never,
       getWorkDir: () => workDir!, setWorkDir: () => undefined, getUserDataPath: () => path.join(workDir!, 'userdata'),
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir }) as never
     })

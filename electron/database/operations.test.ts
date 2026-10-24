@@ -759,16 +759,15 @@ describe('updateMessageContentIfStreaming', () => {
     expect(getPersistedTurn(db, 'checkpoint-t')?.version).toBe(10_000)
   })
 
-  it('streaming checkpoint 保留 legacy 正文状态并撤销旧 canonical 资格', () => {
+  it('streaming checkpoint 保留 legacy 正文状态并使 projection proof 失效', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
     const session = createSession(db, { name: 'checkpoint-content-cutover' })
     appendMessage(db, { id: 'checkpoint-cutover-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
     createPersistedTurn(db, { turnId: 'checkpoint-cutover-turn', requestId: 'checkpoint-cutover-request', sessionId: session.id,
       assistantMessageId: 'checkpoint-cutover-assistant', state: 'executing' })
-    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write'
-      WHERE session_id=?`).run(session.id)
     const parityScope = seedValidProjectionScope(db, session.id)
+    const beforeRevision = conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id) as { message_revision: number }
 
     expect(checkpointTurnAtomically(db, 'checkpoint-cutover-turn', 1, 'checkpoint-cutover-assistant', { content: 'partial checkpoint' })).toBe(true)
 
@@ -776,8 +775,10 @@ describe('updateMessageContentIfStreaming', () => {
       .toEqual({ content: 'partial checkpoint', content_storage_state: 'legacy', status: 'streaming' })
     expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, parityScope))
       .toEqual({ status: 'invalid' })
-    expect(conn.prepare('SELECT api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'revalidation-required', write_mode: 'dual-write', cleanup_state: 'retained' })
+    expect(conn.prepare('SELECT message_revision,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+      .toMatchObject({ message_revision: expect.any(Number), write_mode: 'legacy', cleanup_state: 'retained' })
+    expect((conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id) as { message_revision: number }).message_revision)
+      .toBeGreaterThan(beforeRevision.message_revision)
     db.close()
   })
 })
@@ -863,13 +864,11 @@ describe('queue input receipts', () => {
     expect(() => enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'enqueue-r', content: 'different' })).toThrow(/FINGERPRINT/)
   })
 
-  it('queued enqueue 撤销会话既有 canonical eligibility 并保留 legacy 正文', () => {
+  it('queued enqueue 使会话既有 projection proof 失效并保留 legacy 正文', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
     const session = createSession(db, { name: 'queued-content-cutover' })
     appendMessage(db, { id: 'queued-cutover-existing-user', sessionId: session.id, role: 'user', content: 'existing', timestamp: 1, status: 'sent' })
-    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write'
-      WHERE session_id=?`).run(session.id)
     const parityScope = seedValidProjectionScope(db, session.id)
 
     const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'queued-cutover-request', content: 'queued payload' })
@@ -879,8 +878,8 @@ describe('queue input receipts', () => {
       .toEqual({ content: 'queued payload', content_storage_state: 'legacy', status: 'queued' })
     expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, parityScope))
       .toEqual({ status: 'invalid' })
-    expect(conn.prepare('SELECT api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'revalidation-required', write_mode: 'dual-write', cleanup_state: 'retained' })
+    expect(conn.prepare('SELECT write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+      .toEqual({ write_mode: 'legacy', cleanup_state: 'retained' })
     db.close()
   })
 
@@ -891,21 +890,19 @@ describe('queue input receipts', () => {
     const first = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'reorder-first', content: 'first' })
     const second = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'reorder-second', content: 'second' })
     const revision = conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id) as { message_revision: number }
-    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(session.id)
     const parityScope = seedValidProjectionScope(db, session.id)
 
     expect(reorderQueuedUserMessages(db, { sessionId: session.id, messageIds: [first.persisted.message.id, second.persisted.message.id] }).ok).toBe(true)
     expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, parityScope))
       .toEqual({ status: 'valid' })
-    expect(conn.prepare('SELECT message_revision,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ message_revision: revision.message_revision, api_read_mode: 'canonical' })
+    expect(conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+      .toEqual({ message_revision: revision.message_revision })
 
     expect(reorderQueuedUserMessages(db, { sessionId: session.id, messageIds: [second.persisted.message.id, first.persisted.message.id] }).ok).toBe(true)
     expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, parityScope))
       .toEqual({ status: 'invalid' })
-    const invalidated = conn.prepare('SELECT message_revision,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id) as
-      { message_revision: number; api_read_mode: string }
-    expect(invalidated.api_read_mode).toBe('revalidation-required')
+    const invalidated = conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id) as
+      { message_revision: number }
     expect(invalidated.message_revision).toBeGreaterThan(revision.message_revision)
     expect(conn.prepare('SELECT id,sequence,status,content_storage_state FROM messages WHERE session_id=? ORDER BY sequence').all(session.id))
       .toEqual([
@@ -922,7 +919,6 @@ describe('queue input receipts', () => {
     const first = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'reorder-rollback-first', content: 'first' })
     const second = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'reorder-rollback-second', content: 'second' })
     const revision = conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id) as { message_revision: number }
-    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(session.id)
     const parityScope = seedValidProjectionScope(db, session.id)
     const before = conn.prepare('SELECT id,sequence FROM messages WHERE session_id=? ORDER BY sequence').all(session.id)
     const preview = getSession(db, session.id)?.preview
@@ -972,14 +968,13 @@ describe('queue input receipts', () => {
     expect(getQueueInputReceipt(db, session.id, 'recover-r')?.state).toBe('recovered')
   })
 
-  it('turn recovery preserves the legacy body and revokes API and projection eligibility', () => {
+  it('turn recovery preserves the legacy body and invalidates projection proofs', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
     const session = createSession(db, { name: 'recover-content-fence' })
     const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'recover-content-fence-request', content: 'accepted question' })
     claimQueuedTurnAtomically(db, { sessionId: session.id, userMessageId: queued.persisted.message.id, turnId: 'recover-content-fence-turn', assistantMessageId: 'recover-content-fence-assistant', requestId: 'recover-content-fence-request' })
     updateMessageContentIfStreaming(db, 'recover-content-fence-assistant', { content: 'partial answer' })
-    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(session.id)
     const parityScope = seedValidProjectionScope(db, session.id)
 
     expect(recoverPersistedTurn(db, 'recover-content-fence-turn', 'recover-content-fence-assistant')).toBe(true)
@@ -989,8 +984,6 @@ describe('queue input receipts', () => {
     expect(getQueueInputReceipt(db, session.id, 'recover-content-fence-request')?.state).toBe('recovered')
     expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get(session.id, parityScope))
       .toEqual({ status: 'invalid' })
-    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
-      .toEqual({ api_read_mode: 'revalidation-required' })
     db.close()
   })
 
@@ -1692,7 +1685,6 @@ describe('updateQueuedUserMessageContent', () => {
     const conn = getDbConnection(db)
     const queued = enqueueQueuedUserMessage(db, { sessionId, requestId: 'edit-rollback-request', content: 'before' })
     const beforeCutover = conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(sessionId) as { message_revision: number }
-    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(sessionId)
     const parityScope = seedValidProjectionScope(db, sessionId)
     const originalFingerprint = getQueueInputReceipt(db, sessionId, 'edit-rollback-request')!.fingerprint
     const originalPreview = getSession(db, sessionId)?.preview
@@ -1706,8 +1698,8 @@ describe('updateQueuedUserMessageContent', () => {
     expect(getMessage(db, queued.persisted.message.id)).toMatchObject({ content: 'before', status: 'queued' })
     expect(getQueueInputReceipt(db, sessionId, 'edit-rollback-request')).toMatchObject({ fingerprint: originalFingerprint, state: 'queued' })
     expect(getSession(db, sessionId)?.preview).toBe(originalPreview)
-    expect(conn.prepare('SELECT message_revision,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
-      .toEqual({ message_revision: originalRevision.message_revision, api_read_mode: 'canonical' })
+    expect(conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
+      .toEqual({ message_revision: originalRevision.message_revision })
     expect(conn.prepare('SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=?').get(sessionId, parityScope))
       .toEqual({ status: 'valid' })
   })

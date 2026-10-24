@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
@@ -21,7 +21,7 @@ import { getDbConnection as getActualDbConnection } from './database/sqliteStore
 import { TurnCoordinator } from '../src/shared/turnCoordinator'
 import type { SessionQueries } from './sessionStorage/public/ports'
 import type { SessionStorage } from './sessionStorage/host/ports'
-import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
+import { createSessionTurnRuntime, createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createSessionCommands } from './sessionStorage/commands'
 import { createSessionExecutionStore } from './sessionStorage/execution'
 import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped,
@@ -276,6 +276,7 @@ function makeCtx(db = createMemoryAppDb()): AppIpcContext {
     commands: { ...createSessionCommands(ctx.db), renameSession: (sessionId: string, name: string) => database.updateSession(ctx.db, sessionId, { name }) },
     execution
   } satisfies SessionStorage
+  ctx.turnRuntime = createSessionTurnRuntime(ctx.sessionStorage, { deps: { now: Date.now, id: randomUUID } })
   return ctx
 }
 
@@ -1628,6 +1629,7 @@ describe('file IPC handlers', () => {
     vi.mocked(database.getSessionMessageRevisionSnapshot).mockImplementation((_db, sessionId) => real.getSessionMessageRevisionSnapshot(db, sessionId))
     ctx.db = db
     ctx.sessionStorage = createSqliteSessionStorage(db)
+    ctx.turnRuntime = createSessionTurnRuntime(ctx.sessionStorage, { deps: { now: Date.now, id: randomUUID } })
     const retryProvider = new RecordingModelProvider([
       { type: 'text-delta', text: 'retry provider completed' },
       { type: 'usage', inputTokens: 2, outputTokens: 1 },
