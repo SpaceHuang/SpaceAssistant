@@ -1,4 +1,3 @@
-import { createLifecycleTaskHandle } from '../sessionStorage/lifecycle'
 import type { MaintenanceReason } from '../sessionStorage/host/ports'
 import { recordMaintenanceFailure, recordMaintenanceSuccess, shouldRunMaintenance, type MaintenanceWatermarkInput } from './maintenanceWatermark'
 
@@ -92,15 +91,15 @@ export function createMaintenanceScheduler(input: {
       }
 
       schedule(0)
-      return createLifecycleTaskHandle(() => {
+      return Object.freeze({ stop: () => {
         stopped = true
         controller?.abort()
         if (timer) clearTimeout(timer)
-      }, async () => { await inFlight }, (reason) => {
+      }, quiesce: async () => { await inFlight }, request: (reason: MaintenanceReason) => {
         if (stopped) return
         pendingReason = reason
         if (!inFlight) schedule(0)
-      })
+      } })
     }
   })
 }

@@ -51,7 +51,6 @@ import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSq
   createSqliteSessionStorageHost, createSqliteStartupHistoryRecoveryBindings,
   startSessionProjectionRevalidationDrain } from './sessionStorage/sqliteSessionStorage'
 import { projectionBuildSliceLogFields } from './sessionStorage/host/projectionBuildSliceLog'
-import { createLifecycleTaskHandle } from './sessionStorage/lifecycle'
 import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
 import { flushPendingSessionBackups } from './sessionBackupShutdown'
 import type { SessionStorage } from './sessionStorage/host/ports'
@@ -662,7 +661,7 @@ app.whenReady().then(async () => {
               if (result !== 'checkpointed') console.info('[storage] periodic database maintenance skipped:', result)
             }
           })
-          return createLifecycleTaskHandle(task, task.quiesce)
+          return Object.freeze({ stop: task, quiesce: task.quiesce })
         })()
       },
       {
@@ -673,7 +672,7 @@ app.whenReady().then(async () => {
             if (summary === 'failed' || summary.failed > 0) console.warn('[storage] source-truth spill collection remains pending', summary)
           }
           })
-          return createLifecycleTaskHandle(task, task.quiesce)
+          return Object.freeze({ stop: task, quiesce: task.quiesce })
         }
       },
       {
@@ -713,7 +712,7 @@ app.whenReady().then(async () => {
               }
             },
           })
-          return createLifecycleTaskHandle(task, task.quiesce)
+          return Object.freeze({ stop: task, quiesce: task.quiesce })
         }
       }
     ],

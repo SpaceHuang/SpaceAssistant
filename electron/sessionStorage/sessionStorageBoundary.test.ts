@@ -210,6 +210,23 @@ describe('session storage module graph rules', () => {
     expect(findSessionStorageModuleViolations(composition, readFileSync(path.resolve(composition), 'utf8'))).toEqual([])
   })
 
+  it('keeps cleanup certification and phase operations behind SessionStorage cleanup ports', () => {
+    for (const file of ['electron/runtime/sessionStorageCleanupAuthorization.ts', 'electron/runtime/sessionStorageCleanupProduction.ts']) {
+      const source = readFileSync(path.resolve(file), 'utf8')
+      expect(source).not.toContain("from '../sessionStorage/certification'")
+      expect(source).not.toContain("from '../sessionStorage/maintenance'")
+    }
+  })
+
+  it('keeps the generic lifecycle task handle helper outside SessionStorage', () => {
+    const lifecycle = readFileSync(path.resolve('electron/sessionStorage/lifecycle.ts'), 'utf8')
+    expect(lifecycle).not.toContain('function createLifecycleTaskHandle')
+    for (const file of ['electron/main.ts', 'electron/storage/maintenanceScheduler.ts', 'electron/storage/spillReferenceBackfillScheduler.ts']) {
+      expect(readFileSync(path.resolve(file), 'utf8')).not.toContain("from '../sessionStorage/lifecycle'")
+      expect(readFileSync(path.resolve(file), 'utf8')).not.toContain("from './sessionStorage/lifecycle'")
+    }
+  })
+
   it('classifies startup History recovery composition as SQLite infrastructure', () => {
     const adapterFile = 'electron/sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost.ts'
     expect(findSessionStorageModuleViolations(adapterFile, readFileSync(path.resolve(adapterFile), 'utf8'))).toEqual([])

@@ -1,6 +1,5 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
-import { createLifecycleTaskHandle } from '../sessionStorage/lifecycle'
 import { runSpillReferenceBackfillBatch } from './spillReferenceBackfill'
 import { runSpillReferenceReconciliationBatch } from './spillReferenceReconciliation'
 
@@ -61,13 +60,13 @@ export function scheduleSpillReferenceBackfill(db: AppDatabase, options: {
     await inFlight
   }
   schedule(0)
-  return createLifecycleTaskHandle(() => {
+  return Object.freeze({ stop: () => {
     stopped = true
     controller.abort()
     if (timer) clearTimeout(timer)
-  }, async () => { await inFlight }, () => {
+  }, quiesce: async () => { await inFlight }, request: () => {
     if (stopped) return
     if (inFlight) wakePending = true
     else schedule(0)
-  })
+  } })
 }

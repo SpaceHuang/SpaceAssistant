@@ -81,42 +81,6 @@
     "evidence": "sessionMessageContentCleanupMaintenance.test.ts"
   },
   {
-    "source": "electron/main.ts",
-    "target": "electron/sessionStorage/lifecycle",
-    "symbols": [
-      "createLifecycleTaskHandle"
-    ],
-    "typeOnly": false,
-    "owner": "Electron lifecycle composition",
-    "reason": "Application shutdown composition owns lifecycle task handle construction.",
-    "exitStage": "P2",
-    "evidence": "main.ts lifecycle tests"
-  },
-  {
-    "source": "electron/storage/maintenanceScheduler.ts",
-    "target": "electron/sessionStorage/lifecycle",
-    "symbols": [
-      "createLifecycleTaskHandle"
-    ],
-    "typeOnly": false,
-    "owner": "Storage maintenance scheduler",
-    "reason": "Scheduler uses the shared lifecycle handle contract during shutdown migration.",
-    "exitStage": "P2",
-    "evidence": "maintenanceScheduler tests"
-  },
-  {
-    "source": "electron/storage/spillReferenceBackfillScheduler.ts",
-    "target": "electron/sessionStorage/lifecycle",
-    "symbols": [
-      "createLifecycleTaskHandle"
-    ],
-    "typeOnly": false,
-    "owner": "Spill reference backfill scheduler",
-    "reason": "Backfill scheduler uses the shared lifecycle handle contract during shutdown migration.",
-    "exitStage": "P2",
-    "evidence": "spillReferenceBackfillScheduler tests"
-  },
-  {
     "source": "electron/runtime/sessionProjectionMigrationCoordinator.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [

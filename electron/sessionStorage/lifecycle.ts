@@ -1,4 +1,4 @@
-import type { StorageLifecycleControl, MaintenanceState, MaintenanceReason, LifecycleTaskHandle, LifecycleTaskRegistration } from './host/ports'
+import type { StorageLifecycleControl, MaintenanceState, LifecycleTaskHandle, LifecycleTaskRegistration } from './host/ports'
 
 /** Host-owned coordinator for existing maintenance schedulers; task policy remains with each existing owner. */
 export function createStorageLifecycleControl(input: {
@@ -106,13 +106,4 @@ export function createStorageLifecycleControl(input: {
       return stopping
     }
   })
-}
-
-/** Adapt one already-authorized scheduler; calling stop is synchronous and quiescence is owner-defined. */
-export function createLifecycleTaskHandle(
-  stop: () => void,
-  quiesce: () => Promise<void> = () => Promise.resolve(),
-  request?: (reason: MaintenanceReason) => void
-): LifecycleTaskHandle {
-  return Object.freeze({ stop, quiesce, ...(request ? { request } : {}) })
 }
