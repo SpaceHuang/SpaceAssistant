@@ -6,7 +6,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { runEligibleSessionProjectionMigration } from '../sessionStorage/infrastructure/sqlite/sessionProjectionMigration'
 import { auditSessionProjectionMigration } from '../sessionStorage/infrastructure/sqlite/sessionProjectionConsistencyAudit'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { buildSessionProjectionMigrationInventory } from './sessionProjectionMigrationInventory'
+import { buildSessionProjectionMigrationInventory } from '../sessionStorage/infrastructure/sqlite/sessionProjectionMigrationInventory'
 import { buildSessionProjectionRetirementCandidates } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRetirementCandidates'
 
 async function addEligibleSession(db: ReturnType<typeof createMemoryAppDb>, id: string,

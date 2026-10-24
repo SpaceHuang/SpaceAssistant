@@ -5,7 +5,7 @@ import { getDbConnection } from '../../../database/sqliteStore'
 import { runInTransaction } from '../../../database/transaction'
 import { canonicalBackedSessionProjectionMatches } from '../../../runtime/sessionTranscriptProjection'
 import { SqliteAgentHistory, type CanonicalSessionTranscriptRead } from '../../../runtime/sqliteAgentHistory'
-import { classifySessionProjectionMigrationScope } from '../../../runtime/sessionProjectionMigrationInventory'
+import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
 import { hasCurrentProjectionEligibility } from './sessionProjectionRevalidationFacts'
 import { readLegacyProjectionMessages } from './sessionLegacyQueryAdapter'
 

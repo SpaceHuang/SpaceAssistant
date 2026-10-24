@@ -1,6 +1,6 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
-import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
+import { classifySessionProjectionMigrationScope } from '../sessionStorage/sqliteRuntimeBindings'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
 import { createSessionCommitService } from '../sessionStorage/host/sessionCommitService'

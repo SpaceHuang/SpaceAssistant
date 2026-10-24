@@ -80,7 +80,7 @@ describe('session storage module graph rules', () => {
     expect(source).not.toContain('sessionLedgerRecovery')
   })
 
-  it.each(['electron/runtime/sessionProjectionMigrationInventory.ts', 'electron/runtime/sessionProjectionLegacyBaseline.ts'])(
+  it.each(['electron/runtime/sessionProjectionLegacyBaseline.ts'])(
     'keeps %s legacy message reads behind the storage-owned binding', (file) => {
       const source = readFileSync(path.resolve(file), 'utf8')
       expect(source).not.toContain("from '../database/operations'")
@@ -93,6 +93,15 @@ describe('session storage module graph rules', () => {
     const file = 'electron/sessionStorage/infrastructure/sqlite/sessionProjectionConsistencyAudit.ts'
     const source = readFileSync(path.resolve(file), 'utf8')
     expect(existsSync(path.resolve('electron/runtime/sessionProjectionConsistencyAudit.ts'))).toBe(false)
+    expect(source).toContain("from './sessionLegacyQueryAdapter'")
+    expect(source).not.toContain('sqliteRuntimeBindings')
+    expect(findSessionStorageModuleViolations(file, source)).toEqual([])
+  })
+
+  it('keeps migration census and eligibility selection in the SQLite owner', () => {
+    const file = 'electron/sessionStorage/infrastructure/sqlite/sessionProjectionMigrationInventory.ts'
+    const source = readFileSync(path.resolve(file), 'utf8')
+    expect(existsSync(path.resolve('electron/runtime/sessionProjectionMigrationInventory.ts'))).toBe(false)
     expect(source).toContain("from './sessionLegacyQueryAdapter'")
     expect(source).not.toContain('sqliteRuntimeBindings')
     expect(findSessionStorageModuleViolations(file, source)).toEqual([])

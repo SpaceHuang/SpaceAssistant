@@ -35,3 +35,10 @@ export type {
   LegacyRequiredSessionProjection, LegacyRequiredSessionProjectionReport, SessionProjectionMigrationExecutionReport,
   SessionProjectionMigrationItemOutcome, SessionProjectionMigrationRun
 } from './infrastructure/sqlite/sessionProjectionMigration'
+export {
+  buildSessionProjectionMigrationInventory, classifySessionProjectionMigrationScope, SessionProjectionMigrationInventoryError
+} from './infrastructure/sqlite/sessionProjectionMigrationInventory'
+export type {
+  SessionProjectionMigrationDisposition, SessionProjectionMigrationInventory,
+  SessionProjectionMigrationInventoryEntry, SessionProjectionMigrationScope
+} from './infrastructure/sqlite/sessionProjectionMigrationInventory'

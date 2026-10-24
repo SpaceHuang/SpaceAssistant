@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
-import { SqliteAgentHistory, type CanonicalSessionTranscriptRead } from './sqliteAgentHistory'
-import { canonicalBackedSessionProjectionMatches } from './sessionTranscriptProjection'
-import { hasCurrentProjectionEligibility, readLegacyProjectionMessages } from '../sessionStorage/sqliteRuntimeBindings'
+import { getDbConnection, type AppDatabase } from '../../../database/sqliteStore'
+import { SqliteAgentHistory, type CanonicalSessionTranscriptRead } from '../../../runtime/sqliteAgentHistory'
+import { canonicalBackedSessionProjectionMatches } from '../../../runtime/sessionTranscriptProjection'
+import { hasCurrentProjectionEligibility } from './sessionProjectionRevalidationFacts'
+import { readLegacyProjectionMessages } from './sessionLegacyQueryAdapter'
 
 export type SessionProjectionMigrationDisposition =
   | 'projection_migrated'

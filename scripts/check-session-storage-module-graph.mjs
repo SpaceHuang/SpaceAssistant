@@ -172,6 +172,10 @@ export function findSessionStorageModuleViolations(filePath, source) {
           'runSessionProjectionMigrationBatch', 'startSessionProjectionMigration', 'LegacyRequiredSessionProjection',
           'LegacyRequiredSessionProjectionReport', 'SessionProjectionMigrationExecutionReport',
           'SessionProjectionMigrationItemOutcome', 'SessionProjectionMigrationRun'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionMigrationInventory', new Set([
+          'buildSessionProjectionMigrationInventory', 'classifySessionProjectionMigrationScope', 'SessionProjectionMigrationInventoryError',
+          'SessionProjectionMigrationDisposition', 'SessionProjectionMigrationInventory', 'SessionProjectionMigrationInventoryEntry',
+          'SessionProjectionMigrationScope'])],
       ])
       const allowedSymbols = namedBindings.get(edge.resolved)
       return edge.symbols.length > 0 && !!allowedSymbols && edge.symbols.every((symbol) => allowedSymbols.has(symbol))

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
-import { buildSessionProjectionMigrationInventory } from './sessionProjectionMigrationInventory'
+import { buildSessionProjectionMigrationInventory } from '../sessionStorage/sqliteRuntimeBindings'
 import {
   cancelSessionProjectionMigration,
   getSessionProjectionMigrationRun,

@@ -3,7 +3,7 @@ import { appendMessage, createSession } from '../database/operations'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { getDbConnection, openSqliteDatabaseReadOnly } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { buildSessionProjectionMigrationInventory, classifySessionProjectionMigrationScope, SessionProjectionMigrationInventoryError } from './sessionProjectionMigrationInventory'
+import { buildSessionProjectionMigrationInventory, classifySessionProjectionMigrationScope, SessionProjectionMigrationInventoryError } from '../sessionStorage/infrastructure/sqlite/sessionProjectionMigrationInventory'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 async function appendCanonicalContext(db: ReturnType<typeof createMemoryAppDb>, sessionId: string,

@@ -12,23 +12,11 @@
     "evidence": "claudeStreamHandlers.callerContract.test.ts; sessionProjectionRevalidation.test.ts"
   },
   {
-    "source": "electron/runtime/sessionProjectionMigrationInventory.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "hasCurrentProjectionEligibility",
-      "readLegacyProjectionMessages"
-    ],
-    "typeOnly": false,
-    "owner": "SessionStorage migration inventory",
-    "reason": "Inventory retains a named legacy source reader pending its read-port migration.",
-    "exitStage": "P2",
-    "evidence": "sessionProjectionMigrationInventory.test.ts"
-  },
-  {
     "source": "electron/runtime/sessionProjectionLegacyBaseline.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [
-      "readLegacyProjectionMessages"
+      "readLegacyProjectionMessages",
+      "classifySessionProjectionMigrationScope"
     ],
     "typeOnly": false,
     "owner": "SessionStorage migration baseline",
@@ -288,7 +276,8 @@
       "startSessionProjectionMigration",
       "SessionProjectionMigrationExecutionReport",
       "SessionProjectionMigrationItemOutcome",
-      "SessionProjectionMigrationRun"
+      "SessionProjectionMigrationRun",
+      "buildSessionProjectionMigrationInventory"
     ],
     "typeOnly": false,
     "owner": "Session projection migration coordinator",
