@@ -17,6 +17,7 @@ import { withWikiWriteMutex } from './wikiWriteMutex'
 import type { AppDatabase } from '../database/sqliteStore'
 import { createWikiFileStore } from './wikiFileStore'
 import { randomUUID } from 'node:crypto'
+import { createWikiLifecycleController } from './wikiLifecycle'
 
 export type WikiImportRawResult =
   | { ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number }
@@ -164,6 +165,23 @@ async function importRawToSharedRoot(
   srcRelPath: string,
   shared: WikiImportSharedOptions
 ): Promise<WikiImportRawResult> {
+  const realBase = resolveSharedWikiRoot(shared.userDataPath!, wikiConfig)
+  return withWikiWriteMutex(path.join(realBase, '.wiki-domain-lock'), async () => {
+    const lifecycle = await createWikiLifecycleController(realBase).read()
+    if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') {
+      return { ok: false, error: `Wiki lifecycle blocks import: ${lifecycle.lifecycle}` }
+    }
+    return importRawToSharedRootUnderLock(workDir, wikiConfig, srcRelPath, shared, realBase)
+  })
+}
+
+async function importRawToSharedRootUnderLock(
+  workDir: string,
+  wikiConfig: WikiConfig,
+  srcRelPath: string,
+  shared: WikiImportSharedOptions,
+  realBase: string
+): Promise<WikiImportRawResult> {
   const normalized = normalizeRelPath(srcRelPath)
   if (!normalized) return { ok: false, error: '路径无效' }
 
@@ -175,8 +193,20 @@ async function importRawToSharedRoot(
     return { ok: false, error: '该路径不能收录到 Wiki' }
   }
 
-  const userDataPath = shared.userDataPath!
-  const realBase = resolveSharedWikiRoot(userDataPath, wikiConfig)
+  if (kind === 'raw') {
+    const relative = normalized.startsWith(`${WIKI_VOCABULARY_PREFIX}/`) ? normalized.slice(WIKI_VOCABULARY_PREFIX.length + 1) : normalized
+    try {
+      const sourceAbs = resolveSafePath(realBase, relative)
+      const stat = await fs.stat(sourceAbs)
+      if (stat.isDirectory()) return { ok: false, error: '目录不能收录到 Wiki' }
+      const meta = await getFileMetadata(sourceAbs)
+      if (!meta.isText) return { ok: false, error: '首版仅支持文本资料（.md / .txt）' }
+      const projectId = relative.split('/')[1] || computeProjectId(workDir)
+      const rawRelPath = `${WIKI_VOCABULARY_PREFIX}/${relative}`
+      const source = await registerSourceBinding(realBase, sourceAbs, relative, projectId)
+      return { ok: true, rawRelPath, copied: false, sourceId: source.sourceId, sourceRevision: source.sourceRevision }
+    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+  }
 
   let srcAbs: string
   try {
@@ -187,17 +217,6 @@ async function importRawToSharedRoot(
     if (!meta.isText) return { ok: false, error: '首版仅支持文本资料（.md / .txt）' }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
-  }
-
-  if (kind === 'raw') {
-    const relative = normalized.startsWith(`${WIKI_VOCABULARY_PREFIX}/`) ? normalized.slice(WIKI_VOCABULARY_PREFIX.length + 1) : normalized
-    try {
-      const sourceAbs = resolveSafePath(realBase, relative)
-      const projectId = relative.split('/')[1] || computeProjectId(workDir)
-      const rawRelPath = `${WIKI_VOCABULARY_PREFIX}/${relative}`
-      const source = await registerSourceBinding(realBase, sourceAbs, relative, projectId)
-      return { ok: true, rawRelPath, copied: false, sourceId: source.sourceId, sourceRevision: source.sourceRevision }
-    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
   }
 
   // 项目登记（projectId = workDir 哈希；同目录幂等收敛）
@@ -217,8 +236,8 @@ async function importRawToSharedRoot(
       const rawRelInRoot = await resolveAvailableRawPath(realBase, baseRawRelInRoot)
       if (!rawRelInRoot) throw new Error('无法生成 raw 目标路径')
       const dest = resolveSafePath(realBase, rawRelInRoot)
-      await fs.mkdir(path.dirname(dest), { recursive: true })
-      await fs.copyFile(srcAbs, dest)
+      const bytes = await fs.readFile(srcAbs)
+      await createWikiFileStore(realBase).write(rawRelInRoot, bytes, null)
       return dest
     })
     const finalRel = path.relative(realBase, destAbs).replace(/\\/g, '/')

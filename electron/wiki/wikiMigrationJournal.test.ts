@@ -58,6 +58,27 @@ describe('WikiMigrationJournal', () => {
     expect(await store.readText('wiki/migrated-notes/new.md')).toBe('# New note')
   })
 
+  it('rechecks verified targets on resume and preserves an external edit as a conflict', async () => {
+    const { store } = await fixture()
+    await store.write('wiki/first.md', 'first-old')
+    await store.write('wiki/second.md', 'second-old')
+    const recovery = vi.fn()
+    const journal = createWikiMigrationJournal({ store, markRecoveryRequired: recovery })
+    const prepared = await journal.prepare([
+      { objectKind: 'page', relativePath: 'wiki/first.md', newBytes: Buffer.from('first-new') },
+      { objectKind: 'page', relativePath: 'wiki/second.md', newBytes: Buffer.from('second-new') },
+    ])
+    await expect(journal.apply(prepared.migrationId, { crashAfterWriteIndex: 1 })).rejects.toThrow('injected migration crash')
+    expect((await journal.read(prepared.migrationId)).entries[0]!.step).toBe('verified')
+    await writeFile(store.absolutePath('wiki/first.md'), 'external-first')
+
+    await expect(journal.apply(prepared.migrationId)).rejects.toMatchObject({ code: 'wiki-migration-conflict' })
+
+    expect(await store.readText('wiki/first.md')).toBe('external-first')
+    expect((await journal.read(prepared.migrationId)).status).toBe('conflict')
+    expect(recovery).toHaveBeenCalledOnce()
+  })
+
   it('stops on an external change and marks lifecycle recovery without overwriting it', async () => {
     const { store } = await fixture()
     await store.write('wiki/page.md', 'old')

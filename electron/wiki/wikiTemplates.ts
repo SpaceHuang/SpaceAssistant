@@ -1,6 +1,6 @@
 export const DEFAULT_SCHEMA_MD = `# LLM Wiki Schema
 
-> 本文件定义 Wiki 目录约定与 ingest / query / lint 工作流。可与 LLM 协作演化。
+> 本文件定义 Wiki 分类和整理原则。页面读写、来源读取、搜索、索引和日志均通过 SpaceAssistant 的 Wiki 领域工具完成。
 
 <!-- wiki-categories:start -->
 {
@@ -17,16 +17,17 @@ export const DEFAULT_SCHEMA_MD = `# LLM Wiki Schema
 
 ## 目录说明
 
-- \`raw/<projectId>/\`：只读原始资料，按来源项目分目录（\`projectId\` 形如 \`p-<hash8>\`；用户/应用写入，LLM **仅 read**）
-- \`wiki/\`：LLM 维护的结构化 Markdown 页面（read/write），**跨项目共享**——写前先读 index + grep 查重，优先更新既有页
-- \`wiki/projects/<projectId>/\`：（可选）仅属于单一项目的专属页面分区
-- \`SCHEMA.md\`：本规范文件
+- \`raw/<projectId>/\`：按来源项目分区的原始资料；Agent 只通过 \`memory.wiki_read_source\` 按 sourceId 读取。
+- \`wiki/\`：跨项目共享的结构化页面；Agent 通过 Wiki 领域工具搜索、打开和保存。
+- \`wiki/projects/<projectId>/\`：保留用于兼容既有库的项目页面分区。
+- \`SCHEMA.md\`：本规范及唯一的机器可读分类定义。
 
 ## 共享协作守则
 
-- Wiki 是跨项目共享记忆库：所有项目的 Agent 共享同一份页面。写页面前先读 \`wiki/index.md\` 并 grep 查重，优先更新既有页面；冲突时合并并注明差异场景。
-- 日志条目格式：\`## [YYYY-MM-DD HH:mm] [project:<id>] <动作>\`。
-- 不要用 shell / 终端访问 \`llm-wiki/...\` 路径（shell 不经过共享库映射）；一律使用内置文件工具。
+- Wiki 是跨项目共享记忆库：所有获准的项目会话共享同一份页面。保存前使用 \`memory.wiki_search\` 查重，优先更新既有页面。
+- 搜索结果提供稳定页面 ID；通过 \`memory.wiki_open_page\` 和 \`memory.wiki_read_page\` 查看页面，通过 \`memory.wiki_save_page\` 创建或更新。
+- 需要整理来源时，先用应用绑定的 sourceId 调用 \`memory.wiki_import_source\`，再用 \`memory.wiki_read_source\` 读取；不得传路径。
+- \`index.md\` 与 \`log.md\` 是服务生成的投影。Agent 不直接读写它们。不要用 shell、终端、通用文件或 grep 工具访问 Wiki 路径。
 
 ## 页面类型
 
@@ -40,24 +41,22 @@ export const DEFAULT_SCHEMA_MD = `# LLM Wiki Schema
 
 ## Ingest 工作流
 
-1. \`read_file\` 读取 raw 文件
-2. 分析要点，更新/创建 wiki 下相关页面（entity、concept、topic、source 等）
-3. 更新 \`wiki/index.md\`
-4. 向 \`wiki/log.md\` 追加 ingest 条目
+1. 使用应用绑定的 sourceId 调用 \`memory.wiki_import_source\` 导入来源。
+2. 使用 \`memory.wiki_read_source\` 按有界片段读取来源。
+3. 使用 \`memory.wiki_search\` 查重，再通过 \`memory.wiki_save_page\` 保存页面。
+4. 服务自动更新索引与操作日志。
 
 **禁止：** 不得修改 \`raw/\`；不得删除 log 历史。
 
 ## Query 工作流
 
-1. \`read_file(wiki/index.md)\` — 按分类定位候选页
-2. \`read_file\` 深入阅读相关页
-3. index 未覆盖时 \`grep(pattern, path=wiki/)\` 补充搜索
-4. 综合回答，正文引用 \`wiki/...\` 路径
-5. 用户要求时归档为 \`wiki/queries/\` 新页
+1. 使用 \`memory.wiki_search\` 按关键词查找候选页面。
+2. 使用 \`memory.wiki_open_page\` 与 \`memory.wiki_read_page\` 按需读取。
+3. 综合回答并引用页面标题；用户要求归档时用 \`memory.wiki_save_page\` 保存。
 
 ## Lint 工作流
 
-检查：矛盾声明、过时结论、孤儿页、缺页、缺链、index 与文件系统不一致。
+检查：矛盾声明、过时结论、孤儿页、缺页、缺链。索引与日志由服务维护，Agent 不手动修订。
 
 ## 输出语言
 

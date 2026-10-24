@@ -41,6 +41,28 @@ describe('reconcileExternalWikiChanges', () => {
     const catalog = await store.readCatalog()
     expect(catalog?.pages[0]).toMatchObject({ pageId: 'page-a', revision: 2, contentHash: sha(saved) })
     expect(catalog?.tombstones).toEqual([{ pageId: 'page-gone', path: 'wiki/topics/gone.md', revision: 3, deleted: true }])
+    expect(JSON.parse(await store.readText('.wiki-service/page-revision-metadata/page-a/2.json'))).toMatchObject({ externalEdit: true, pageId: 'page-a', revision: 2 })
+    const operations = await import('node:fs/promises').then(fs => fs.readdir(path.join(store.root, '.wiki-service/operations')))
+    const externalEvents = await Promise.all(operations.map(async name => JSON.parse(await store.readText(`.wiki-service/operations/${name}`))))
+    expect(externalEvents.map(operation => operation.successEvent)).toContainEqual(expect.objectContaining({ type: 'externally_edited', pageId: 'page-a', revision: 2, changeSummary: '外部编辑：A' }))
+    expect(await store.readText('wiki/log.md')).toContain('externally_edited A')
+  })
+
+  it('preserves a changed page when its external revision journal identity conflicts', async () => {
+    const { store } = await fixture()
+    const previous = page('page-a', 1, 'A', 'before')
+    const edited = page('page-a', 1, 'A', 'after')
+    await store.write('wiki/topics/a.md', edited)
+    await store.writeImmutable('.wiki-service/page-history/page-a/1.md', previous)
+    await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: 'page-a', path: 'wiki/topics/a.md', revision: 1, contentHash: sha(previous), title: 'A', categoryId: 'topic', summary: '' }] })
+    await store.write('.wiki-service/page-revision-metadata/page-a/2.json', JSON.stringify({ formatVersion: 1, pageId: 'different-page', revision: 2, externalEdit: true }))
+
+    const result = await reconcileExternalWikiChanges(store)
+
+    expect(result.diagnostics.map(item => item.code)).toContain('wiki-revision-metadata-conflict')
+    expect(await store.readText('wiki/topics/a.md')).toBe(edited)
+    expect((await store.readCatalog())?.pages[0]).toMatchObject({ revision: 1, contentHash: sha(previous) })
+    expect(await store.identity('.wiki-service/operations')).toBeNull()
   })
 
   it('preserves all files when a changed page has no previous immutable snapshot', async () => {
@@ -65,6 +87,19 @@ describe('reconcileExternalWikiChanges', () => {
     expect(result).toMatchObject({ changed: 1, diagnostics: [] })
     const catalog = await store.readCatalog()
     expect(catalog?.pages[0]).toMatchObject({ pageId: 'page-a', path: 'wiki/topics/new-name.md', revision: 3 })
+  })
+
+  it('retains the old external path as a stable pageId alias after a rename', async () => {
+    const { store } = await fixture()
+    const previous = page('page-a', 2, 'A', 'same body')
+    await store.write('wiki/topics/new-name.md', previous)
+    await store.writeImmutable('.wiki-service/page-history/page-a/2.md', previous)
+    await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: 'page-a', path: 'wiki/topics/old-name.md', revision: 2, contentHash: sha(previous), title: 'A', categoryId: 'topic', summary: '' }] })
+
+    const result = await reconcileExternalWikiChanges(store)
+
+    expect(result.diagnostics).toEqual([])
+    expect(await store.readCatalog()).toMatchObject({ pathAliases: [{ path: 'wiki/topics/old-name.md', pageId: 'page-a' }] })
   })
 
   it('backs up drifted index and log views before rebuilding them from catalog and successful operations', async () => {

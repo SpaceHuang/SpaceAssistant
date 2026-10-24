@@ -5,7 +5,7 @@ import type { WikiReadCaller } from './wikiDomainRead'
 import { normalizeWikiRelativePath } from './wikiPaths'
 
 export interface WikiBoundSource { path: string; displayName: string; projectId?: string }
-interface StoredSource { formatVersion: 1; sourceId: string; sourceRevision: number; displayName: string; projectId?: string; rawPath?: string }
+interface StoredSource { formatVersion: 1; sourceId: string; sourceRevision: number; displayName: string; projectId?: string; rawPath?: string; deleted?: true }
 interface SourceCursor { sourceId: string; sourceRevision: number; offset: number; callerId: string; lane: string }
 export class WikiSourceError extends Error { constructor(readonly code: string) { super(code); this.name = 'WikiSourceError' } }
 
@@ -41,23 +41,22 @@ export function createWikiSourceService(options: {
       let stored = await readBinding(options.store, sourceId)
       const allowed = stored && await options.authorize(sourceId, caller)
       if (!stored || !allowed) throw new WikiSourceError('source_missing')
+      const cursor = input.cursor ? cursorMap.get(input.cursor) : undefined
+      if (input.cursor && (!cursor || cursor.sourceId !== sourceId || cursor.callerId !== caller.callerId || cursor.lane !== caller.lane ||
+        (input.sourceRevision !== undefined && input.sourceRevision !== cursor.sourceRevision))) throw new WikiSourceError('source_cursor_invalid')
       stored = await reconcileRawSource(options.store, stored, maxBytes)
-      const revision = input.sourceRevision ?? stored.sourceRevision
+      if (stored.deleted && !cursor && input.sourceRevision === undefined) throw new WikiSourceError('source_missing')
+      const revision = cursor?.sourceRevision ?? input.sourceRevision ?? stored.sourceRevision
       if (!Number.isSafeInteger(revision) || revision < 1 || revision > stored.sourceRevision) throw new WikiSourceError('source_missing')
       const bytes = await options.store.read(`.wiki-service/source-history/${sourceId}/${revision}.md`).catch(() => { throw new WikiSourceError('source_missing') })
       const text = bytes.toString('utf8')
       const codepoints = Array.from(text)
-      let offset = 0
-      if (input.cursor) {
-        const cursor = cursorMap.get(input.cursor)
-        if (!cursor || cursor.sourceId !== sourceId || cursor.sourceRevision !== revision || cursor.callerId !== caller.callerId || cursor.lane !== caller.lane) throw new WikiSourceError('source_cursor_invalid')
-        offset = cursor.offset
-      }
+      const offset = cursor?.offset ?? 0
       const limit = Math.min(maxChars, Math.max(1, input.maxChars ?? maxChars))
       const end = Math.min(codepoints.length, offset + limit)
       const nextCursor = end < codepoints.length ? randomUUID() : undefined
       if (nextCursor) cursorMap.set(nextCursor, { sourceId, sourceRevision: revision, offset: end, callerId: caller.callerId, lane: caller.lane })
-      return { sourceId, sourceRevision: revision, displayName: stored.displayName, projectId: stored.projectId, text: codepoints.slice(offset, end).join(''), startOffset: offset, endOffset: end, ...(nextCursor ? { nextCursor } : {}), hasMore: end < codepoints.length }
+      return { sourceId, sourceRevision: revision, displayName: stored.displayName, projectId: stored.projectId, ...(stored.deleted ? { deleted: true as const } : {}), text: codepoints.slice(offset, end).join(''), startOffset: offset, endOffset: end, ...(nextCursor ? { nextCursor } : {}), hasMore: end < codepoints.length }
     },
   }
 }
@@ -69,6 +68,7 @@ async function readBinding(store: WikiFileStore, sourceId: string): Promise<Stor
     if (!value || value.formatVersion !== 1 || value.sourceId !== sourceId || !Number.isSafeInteger(value.sourceRevision) || (value.sourceRevision as number) < 1 ||
       typeof value.displayName !== 'string' || !value.displayName || value.displayName.includes('/') || value.displayName.includes('\\') ||
       (value.projectId !== undefined && typeof value.projectId !== 'string') ||
+      (value.deleted !== undefined && value.deleted !== true) ||
       (value.rawPath !== undefined && (typeof value.rawPath !== 'string' || !value.rawPath.startsWith('raw/') || normalizeWikiRelativePath(value.rawPath) !== value.rawPath))) return undefined
     return value as StoredSource
   }
@@ -78,11 +78,24 @@ async function readBinding(store: WikiFileStore, sourceId: string): Promise<Stor
 async function reconcileRawSource(store: WikiFileStore, stored: StoredSource, maxBytes: number): Promise<StoredSource> {
   if (!stored.rawPath) return stored
   let bytes: Buffer
-  try { bytes = await store.read(stored.rawPath) } catch { throw new WikiSourceError('source_missing') }
+  try { bytes = await store.read(stored.rawPath) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new WikiSourceError('source_missing')
+    if (stored.deleted) return stored
+    const deleted: StoredSource = { ...stored, deleted: true }
+    await store.write(`.wiki-service/sources/${stored.sourceId}.json`, `${JSON.stringify(deleted, null, 2)}\n`)
+    return deleted
+  }
   if (bytes.length > maxBytes || bytes.includes(0)) throw new WikiSourceError('source_missing')
   const current = await store.read(`.wiki-service/source-history/${stored.sourceId}/${stored.sourceRevision}.md`).catch(() => { throw new WikiSourceError('source_missing') })
-  if (hash(bytes) === hash(current)) return stored
-  const next = { ...stored, sourceRevision: stored.sourceRevision + 1 }
+  if (hash(bytes) === hash(current)) {
+    if (!stored.deleted) return stored
+    const restored: StoredSource = { ...stored }
+    delete restored.deleted
+    await store.write(`.wiki-service/sources/${stored.sourceId}.json`, `${JSON.stringify(restored, null, 2)}\n`)
+    return restored
+  }
+  const next: StoredSource = { ...stored, sourceRevision: stored.sourceRevision + 1 }
+  delete next.deleted
   await store.writeImmutable(`.wiki-service/source-history/${stored.sourceId}/${next.sourceRevision}.md`, bytes)
   await store.write(`.wiki-service/sources/${stored.sourceId}.json`, `${JSON.stringify(next, null, 2)}\n`)
   return next

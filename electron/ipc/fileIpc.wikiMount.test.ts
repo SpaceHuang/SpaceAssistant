@@ -112,6 +112,35 @@ describe('file:read-file / show-in-explorer 挂载（T1.15）', () => {
     spy.mockRestore()
   })
 
+  it('opens the current page when a historical chat link uses an external rename alias', async () => {
+    const { handlers, realBase } = await setupWorld()
+    fs.mkdirSync(path.join(realBase, 'wiki', 'topics'), { recursive: true })
+    fs.writeFileSync(path.join(realBase, 'wiki', 'topics', 'new-name.md'), 'current renamed page', 'utf8')
+    fs.mkdirSync(path.join(realBase, '.wiki-service'), { recursive: true })
+    fs.writeFileSync(path.join(realBase, '.wiki-service', 'catalog.json'), JSON.stringify({ formatVersion: 1,
+      pages: [{ pageId: 'page-a', path: 'wiki/topics/new-name.md', revision: 2, title: 'A', categoryId: 'topic' }],
+      pathAliases: [{ path: 'wiki/topics/old-name.md', pageId: 'page-a' }] }))
+    const read = (await import('../fileReadHelpers')) as unknown as { readFileForViewer: (p: string) => Promise<unknown> }
+    const spy = vi.spyOn(read, 'readFileForViewer')
+
+    await handlers.get('file:read-file')!(null as never, 'llm-wiki/wiki/topics/old-name.md' as never)
+
+    expect(spy).toHaveBeenCalledWith(path.join(realBase, 'wiki', 'topics', 'new-name.md'))
+    spy.mockRestore()
+  })
+
+  it('returns a conflict when an old path alias points to multiple page identities', async () => {
+    const { handlers, realBase } = await setupWorld()
+    fs.mkdirSync(path.join(realBase, '.wiki-service'), { recursive: true })
+    fs.writeFileSync(path.join(realBase, '.wiki-service', 'catalog.json'), JSON.stringify({ formatVersion: 1,
+      pages: [{ pageId: 'page-a', path: 'wiki/a.md' }, { pageId: 'page-b', path: 'wiki/b.md' }],
+      pathAliases: [{ path: 'wiki/old.md', pageId: 'page-a' }, { path: 'wiki/old.md', pageId: 'page-b' }] }))
+
+    const result = await handlers.get('file:read-file')!(null as never, 'llm-wiki/wiki/old.md' as never) as { kind?: string; error?: string }
+
+    expect(result).toMatchObject({ kind: 'error', error: 'wiki_path_alias_conflict' })
+  })
+
   it('⑤show-in-explorer 与 read-file 同一挂载解析入口（行为验证属 manual M5 真机走查）', async () => {
     const { handlers, realBase } = await setupWorld()
     // show-in-explorer 的 shell 调用在测试 electron mock 下不可观察；同一 wikiMountOf 入口

@@ -44,6 +44,46 @@ describe('WikiSourceService', () => {
     expect(old).toMatchObject({ sourceRevision: 1, text: 'revision one' })
   })
 
+  it('keeps an implicit source revision fixed across cursor reads after an external edit', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wiki-source-cursor-snapshot-'))
+    roots.push(root)
+    await mkdir(path.join(root, 'wiki'))
+    const outside = path.join(root, 'source.md')
+    await writeFile(outside, 'first-chunk|second-chunk')
+    const store = createWikiFileStore(path.join(root, 'wiki'))
+    const service = createWikiSourceService({ store, resolveSourceRef: () => ({ path: outside, displayName: 'source.md' }), validateSource: async () => true, authorize: async () => true, maxChars: 12 })
+    const imported = await service.importSource('bound', { callerId: 'c', lane: 'chat' })
+    const first = await service.readSource(imported.sourceId, { callerId: 'c', lane: 'chat' })
+    expect(first.hasMore).toBe(true)
+    const binding = JSON.parse(await store.readText(`.wiki-service/sources/${imported.sourceId}.json`)) as { rawPath: string }
+    await store.write(binding.rawPath, 'external revision replaced the source')
+
+    const next = await service.readSource(imported.sourceId, { callerId: 'c', lane: 'chat' }, { cursor: first.nextCursor })
+
+    expect(next).toMatchObject({ sourceRevision: 1, text: 'second-chunk' })
+  })
+
+  it('records a raw tombstone and still serves immutable source history after raw deletion', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wiki-source-deleted-'))
+    roots.push(root)
+    await mkdir(path.join(root, 'wiki'))
+    const outside = path.join(root, 'source.md')
+    await writeFile(outside, 'historical snapshot')
+    const store = createWikiFileStore(path.join(root, 'wiki'))
+    const service = createWikiSourceService({ store, resolveSourceRef: () => ({ path: outside, displayName: 'source.md' }), validateSource: async () => true, authorize: async () => true })
+    const imported = await service.importSource('bound', { callerId: 'c', lane: 'chat' })
+    const bindingPath = `.wiki-service/sources/${imported.sourceId}.json`
+    const binding = JSON.parse(await store.readText(bindingPath)) as { rawPath: string }
+    await store.remove(binding.rawPath)
+
+    await expect(service.readSource(imported.sourceId, { callerId: 'c', lane: 'chat' })).rejects.toMatchObject({ code: 'source_missing' })
+    const historical = await service.readSource(imported.sourceId, { callerId: 'c', lane: 'chat' }, { sourceRevision: 1 })
+    const stored = JSON.parse(await store.readText(bindingPath)) as { sourceRevision: number; deleted?: boolean }
+
+    expect(historical).toMatchObject({ sourceRevision: 1, text: 'historical snapshot', deleted: true })
+    expect(stored).toMatchObject({ sourceRevision: 1, deleted: true })
+  })
+
   it('returns the same error for unknown and unauthorized ids and rejects unsafe sources', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wiki-source-deny-'))
     roots.push(root)

@@ -4,7 +4,7 @@ import path from 'node:path'
 import type { WikiFileStore } from './wikiFileStore'
 import { parseWikiPageMarker } from './wikiReconciler'
 
-export interface WikiPageReadRecord { pageId: string; title: string; categoryId: string; summary?: string; parentPageId?: string | null; path: string; revision: number; sourceRefs?: Array<{ sourceId: string; sourceRevision: number }> }
+export interface WikiPageReadRecord { pageId: string; title: string; categoryId: string; summary?: string; parentPageId?: string | null; path: string; revision: number; sourceRefs?: Array<{ sourceId: string; sourceRevision: number }>; deleted?: true }
 export interface WikiReadCaller { callerId: string; lane: string }
 export interface WikiSourceBinding { sourceId: string; sourceRevision: number; displayName: string; path: string; projectId?: string }
 export class WikiDomainReadError extends Error {
@@ -32,6 +32,24 @@ export function createWikiDomainReadService(options: {
     async openPage(pageId: string, caller: WikiReadCaller, requestedRevision?: number) {
       const page = options.pages.find(item => item.pageId === pageId)
       if (!page || (options.authorize && !await options.authorize(pageId, caller))) throw new WikiDomainReadError('wiki-page-unavailable')
+      if (page.deleted && requestedRevision === undefined) {
+        const tombstone: { pageId: string; deleted: true; revision: number; title?: string; categoryId?: string; summary?: string; parentPageId?: string | null; sourceRefs?: Array<{ sourceId: string; sourceRevision: number }> } = {
+          pageId, deleted: true, revision: page.revision
+        }
+        try {
+          const snapshot = await options.store.readText(`.wiki-service/page-history/${pageId}/${page.revision}.md`)
+          const parsed = parseWikiPageMarker(snapshot)
+          if (parsed.marker?.pageId === pageId && parsed.marker.revision === page.revision) {
+            const content = splitStoredPageTitle(parsed.body)
+            tombstone.title = content.title
+            tombstone.categoryId = parsed.marker.categoryId
+            tombstone.summary = parsed.marker.summary
+            tombstone.parentPageId = parsed.marker.parentPageId
+            tombstone.sourceRefs = parsed.marker.sourceRefs
+          }
+        } catch { /* a tombstone remains visible even when its latest optional metadata snapshot is unavailable */ }
+        return tombstone
+      }
       const revision = requestedRevision ?? page.revision
       if (!Number.isSafeInteger(revision) || revision < 1) throw new WikiDomainReadError('wiki-page-unavailable')
       let text: string

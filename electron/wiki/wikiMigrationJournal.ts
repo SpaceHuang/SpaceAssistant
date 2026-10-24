@@ -75,10 +75,13 @@ export function createWikiMigrationJournal(options: { store: WikiFileStore; mark
         manifest.status = 'applying'
         await writeManifest(options.store, manifest)
         for (const [index, entry] of manifest.entries.entries()) {
-          if (entry.step === 'verified') continue
           if (!(await entryMaterialsValid(options.store, entry))) return markConflict(manifest, entry)
           const current = await currentFile(options.store, entry.relativePath)
           const currentHash = current ? hash(current.bytes) : null
+          if (entry.step === 'verified') {
+            if (currentHash !== entry.newHash) return markConflict(manifest, entry)
+            continue
+          }
           if (entry.step === 'pending' && currentHash === entry.newHash) {
             entry.step = 'verified'
             await writeManifest(options.store, manifest)
@@ -99,6 +102,11 @@ export function createWikiMigrationJournal(options: { store: WikiFileStore; mark
           if (hash(written) !== entry.newHash) return markConflict(manifest, entry)
           entry.step = 'verified'
           await writeManifest(options.store, manifest)
+        }
+        for (const entry of manifest.entries) {
+          if (!(await entryMaterialsValid(options.store, entry))) return markConflict(manifest, entry)
+          const current = await currentFile(options.store, entry.relativePath)
+          if (!current || hash(current.bytes) !== entry.newHash) return markConflict(manifest, entry)
         }
         manifest.status = 'completed'
         await writeManifest(options.store, manifest)

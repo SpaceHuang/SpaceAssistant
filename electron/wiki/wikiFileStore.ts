@@ -8,6 +8,7 @@ export interface WikiCatalog {
   formatVersion: 1
   pages: Array<{ pageId: string; path: string; revision?: number; contentHash?: string; title?: string; categoryId?: string; summary?: string; parentPageId?: string | null; sourceRefs?: Array<{ sourceId: string; sourceRevision: number }> }>
   tombstones?: Array<{ pageId: string; path: string; revision: number; deleted: true }>
+  pathAliases?: Array<{ path: string; pageId: string }>
 }
 
 export interface WikiFileStore {

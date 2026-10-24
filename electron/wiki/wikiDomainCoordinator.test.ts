@@ -29,6 +29,19 @@ describe('WikiDomainCoordinator', () => {
     expect(await readFile(path.join(root, `wiki/${(JSON.parse(await readFile(path.join(root, '.wiki-service/catalog.json'), 'utf8')) as { pages: Array<{ path: string }> }).pages[0].path.split('/').pop()}`), 'utf8')).toContain('Updated')
   })
 
+  it('records stable page, source, and change summary metadata in operation events', async () => {
+    const { root, store, coordinator } = await fixture()
+    const sourceId = '01234567-89ab-cdef-0123-456789abcdef'
+    await store.writeImmutable(`.wiki-service/source-history/${sourceId}/1.md`, Buffer.from('source snapshot'))
+    const result = await coordinator.savePage({ ...base, sourceRefs: [{ sourceId, sourceRevision: 1 }] })
+    const operation = JSON.parse(await readFile(path.join(root, '.wiki-service/operations', `${result.operationId}.json`), 'utf8')) as { successEvent?: Record<string, unknown> }
+    expect(operation.successEvent).toMatchObject({ pageId: result.pageId, sourceIds: [sourceId], changeSummary: 'A' })
+    const log = await readFile(path.join(root, 'wiki/log.md'), 'utf8')
+    expect(log).toContain(`page ${result.pageId}`)
+    expect(log).toContain(`sources ${sourceId}`)
+    expect(log).toContain('summary A')
+  })
+
   it('rejects invocation key reuse with different input', async () => {
     const { coordinator } = await fixture()
     await coordinator.savePage(base)
@@ -197,6 +210,26 @@ describe('WikiDomainCoordinator', () => {
     const parent = await coordinator.savePage(base)
     const child = await coordinator.savePage({ ...base, requestId: 'child', toolUseId: 'child', title: 'Child', parentPageId: parent.pageId })
     await expect(coordinator.movePage({ ...base, requestId: 'move', toolUseId: 'move', pageId: parent.pageId, expectedRevision: 1, parentPageId: child.pageId })).rejects.toMatchObject({ code: 'parent_invalid' })
+  })
+
+  it('rejects changing a parent category when that would invalidate an existing child', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wiki-domain-coordinator-parent-category-'))
+    roots.push(root)
+    const store = createWikiFileStore(root)
+    const coordinator = createWikiDomainCoordinator({ store, schema: () => ({ schemaVersion: 1, categories: [
+      { id: 'parent-a', name: 'Parent A', status: 'active' },
+      { id: 'parent-b', name: 'Parent B', status: 'active' },
+      { id: 'child-c', name: 'Child C', status: 'active', allowedParentCategoryIds: ['parent-a'] },
+    ] }) })
+    const parent = await coordinator.savePage({ ...base, categoryId: 'parent-a', title: 'Parent' })
+    const child = await coordinator.savePage({ ...base, requestId: 'child-create', toolUseId: 'child-create', categoryId: 'child-c', title: 'Child', parentPageId: parent.pageId })
+
+    await expect(coordinator.savePage({ ...base, requestId: 'parent-update', toolUseId: 'parent-update', pageId: parent.pageId,
+      expectedRevision: 1, categoryId: 'parent-b', title: 'Parent' })).rejects.toMatchObject({ code: 'parent_invalid' })
+
+    const catalog = await store.readCatalog()
+    expect(catalog?.pages.find(page => page.pageId === parent.pageId)).toMatchObject({ categoryId: 'parent-a', revision: 1 })
+    expect(catalog?.pages.find(page => page.pageId === child.pageId)).toMatchObject({ categoryId: 'child-c', parentPageId: parent.pageId })
   })
 })
 

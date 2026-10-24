@@ -22,6 +22,7 @@ import { readWikiConfig } from './ipcShared'
 import { assertInsideDir } from '../skills/skillPaths'
 import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { createWikiLifecycleController } from '../wiki/wikiLifecycle'
+import { createWikiFileStore } from '../wiki/wikiFileStore'
 
 /**
  * T1.15（§7.4）：fileIpc 子通道的挂载解析入口。知识库恒默认启用，未挂载（非词汇路径等）返回 undefined。
@@ -57,6 +58,20 @@ async function assertWikiDomainFileOperationAllowed(mounted: ReturnType<typeof w
   if (lifecycle.lifecycle === 'domain_enabled') {
     throw new Error('Wiki 已启用领域工具，请通过 Wiki 页面操作管理知识内容')
   }
+}
+
+async function resolveDomainWikiAlias(mounted: NonNullable<ReturnType<typeof wikiMountOf>>): Promise<{ path?: string; error?: string } | undefined> {
+  if (!mounted.realRel) return undefined
+  const catalog = await createWikiFileStore(mounted.realBase).readCatalog().catch(() => undefined)
+  const aliases = (catalog?.pathAliases ?? []).filter(alias => alias.path.replace(/\\/g, '/') === mounted.realRel.replace(/\\/g, '/'))
+  if (!aliases.length) return undefined
+  const pageIds = new Set(aliases.map(alias => alias.pageId))
+  const activeAtAlias = (catalog?.pages ?? []).filter(page => page.path.replace(/\\/g, '/') === mounted.realRel.replace(/\\/g, '/'))
+  if (pageIds.size !== 1 || activeAtAlias.some(page => !pageIds.has(page.pageId))) return { error: 'wiki_path_alias_conflict' }
+  const pageId = [...pageIds][0]!
+  const targets = (catalog?.pages ?? []).filter(page => page.pageId === pageId)
+  if (targets.length !== 1) return { error: 'wiki_path_alias_conflict' }
+  return { path: targets[0]!.path }
 }
 
 export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
@@ -102,8 +117,10 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const root = ctx.getWorkDir()
     const normalized = normalizeRelPathInput(typeof rel === 'string' ? rel : '')
     const mounted = wikiMountOf(ctx, normalized)
+    const alias = mounted ? await resolveDomainWikiAlias(mounted) : undefined
+    if (alias?.error) return { kind: 'error' as const, error: alias.error }
     const target = mounted
-      ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+      ? (mounted.realRel ? resolveSafePath(mounted.realBase, alias?.path ?? mounted.realRel) : mounted.realBase)
       : resolveSafePath(root, normalized)
     try {
       return await readFileForViewer(target)

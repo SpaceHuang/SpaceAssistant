@@ -32,7 +32,7 @@ function defineWikiTool(spec: DirectToolSpec<WikiInput, ToolExecutorResult>): Re
     actionClass: spec.actionClass,
     parseInput: spec.parseInput,
     plan: async (input) => ({ input: structuredClone(input) }),
-    execute: ({ input }, context) => spec.execute(input, { runtimeContext: wikiExecutionContext(context) } as never),
+    execute: async ({ input }, context) => withWikiErrorEnvelope(await spec.execute(input, { runtimeContext: wikiExecutionContext(context) } as never)),
     facts: () => ({ operation: spec.name }),
     display: () => ({ operation: spec.name })
   })
@@ -126,6 +126,7 @@ export async function saveWikiPageForContext(input: WikiInput, context: WikiDoma
     (input.parentPageId !== undefined && typeof input.parentPageId !== 'string') ||
     (input.pageId !== undefined && input.parentPageId !== undefined) ||
     (input.sourceRefs !== undefined && !isSourceRefs(input.sourceRefs))) return { success: false, error: 'wiki_page_input_invalid' }
+  if (input.expectedRevision !== undefined && input.pageId === undefined) return { success: false, error: 'wiki_page_id_required_for_update' }
   if (!context.requestId || !context.toolUseId || !context.sessionId) return { success: false, error: 'wiki_invocation_invalid' }
   try {
     const store = await getReadyWikiStore(context)
@@ -192,23 +193,42 @@ async function validateSourceRefs(store: WikiFileStore, refs?: Array<{ sourceId:
 
 export async function getWikiSchemaForContext(context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'appDatabase'>): Promise<ToolExecutorResult> {
   let store: WikiFileStore
-  try { store = await getReadyWikiStore(context) }
+  try { store = await getReadyWikiStore(context, { reconcileExternalChanges: false }) }
   catch (error) { return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'wiki_schema_unavailable' } }
-  const content = await store.readText('SCHEMA.md').catch(() => undefined)
+  let content = await store.readText('SCHEMA.md').catch(() => undefined)
   if (content === undefined) return { success: false, error: 'wiki_schema_unavailable' }
-  const parsed = parseWikiSchema(content)
+  let parsed = parseWikiSchema(content)
+  if (parsed.valid) {
+    const reconciliation = await reconcileExternalWikiChanges(store)
+    if (reconciliation.diagnostics.length) return { success: false, error: 'wiki_external_change_conflict' }
+    content = await store.readText('SCHEMA.md').catch(() => undefined)
+    if (content === undefined) return { success: false, error: 'wiki_schema_unavailable' }
+    parsed = parseWikiSchema(content)
+    if (!parsed.valid) return { success: false, error: 'wiki_external_change_conflict' }
+  }
   const stateText = await store.readText('.wiki-service/schema-state.json').catch(() => undefined)
   let schemaVersion = 1
+  let schemaState: { contentHash?: string } | undefined
   if (stateText !== undefined) {
     try {
-      const state = JSON.parse(stateText) as { formatVersion?: unknown; schemaVersion?: unknown }
-      if (state.formatVersion !== 1 || !Number.isSafeInteger(state.schemaVersion) || (state.schemaVersion as number) < 1) return { success: false, error: 'wiki_schema_state_invalid' }
+      const state = JSON.parse(stateText) as { formatVersion?: unknown; schemaVersion?: unknown; contentHash?: unknown }
+      if (state.formatVersion !== 1 || !Number.isSafeInteger(state.schemaVersion) || (state.schemaVersion as number) < 1 || typeof state.contentHash !== 'string') return { success: false, error: 'wiki_schema_state_invalid' }
       schemaVersion = state.schemaVersion as number
+      schemaState = { contentHash: state.contentHash }
     } catch {
       return { success: false, error: 'wiki_schema_state_invalid' }
     }
   }
-  return { success: true, data: { schemaVersion, content, valid: parsed.valid, categories: parsed.categories, diagnostics: parsed.diagnostics } }
+  if (parsed.valid && schemaState?.contentHash !== hash(content)) return { success: false, error: 'wiki_external_change_conflict' }
+  let lastValid: { schemaVersion: number; content: string; categories: ReturnType<typeof parseWikiSchema>['categories'] } | undefined
+  if (!parsed.valid && schemaState?.contentHash) {
+    const previous = await store.readText(`.wiki-service/schema-history/${schemaVersion}.md`).catch(() => undefined)
+    if (previous !== undefined && hash(previous) === schemaState.contentHash) {
+      const previousParsed = parseWikiSchema(previous)
+      if (previousParsed.valid) lastValid = { schemaVersion, content: previous, categories: previousParsed.categories }
+    }
+  }
+  return { success: true, data: { schemaVersion, content, valid: parsed.valid, categories: parsed.categories, diagnostics: parsed.diagnostics, ...(lastValid ? { lastValid } : {}) } }
 }
 
 export class WikiDomainToolError extends Error {
@@ -237,7 +257,7 @@ export async function importWikiSourceForContext(
 
 export async function searchWikiForContext(input: WikiInput, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'appDatabase'>): Promise<ToolExecutorResult> {
   try {
-    return { success: true, data: await searchWikiCatalog(await getReadyWikiStore(context, { reconcileExternalChanges: false }), input) }
+    return { success: true, data: await searchWikiCatalog(await getReadyWikiStore(context), input) }
   } catch (error) {
     return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'wiki_search_unavailable' }
   }
@@ -249,7 +269,9 @@ export async function openWikiPageForContext(input: WikiInput, context: WikiDoma
   try {
     const store = await getReadyWikiStore(context)
     const service = await getPageReadService(store)
-    return { success: true, data: await service.openPage(input.pageId, wikiCaller(context), input.revision as number | undefined) }
+    const page = await service.openPage(input.pageId, wikiCaller(context), input.revision as number | undefined)
+    const sourceRefs = 'sourceRefs' in page && Array.isArray(page.sourceRefs) ? page.sourceRefs : []
+    return { success: true, data: { ...page, sourceAttribution: await resolveSourceAttribution(store, sourceRefs) } }
   } catch (error) {
     return { success: false, error: readErrorCode(error, 'wiki-page-unavailable') }
   }
@@ -294,7 +316,13 @@ export async function listWikiPageRevisionsForContext(input: WikiInput, context:
   if (typeof input.pageId !== 'string' || !input.pageId) return { success: false, error: 'wiki-page-unavailable' }
   try {
     const store = await getReadyWikiStore(context)
-    return { success: true, data: await listWikiPageRevisions(store, input.pageId) }
+    const revisions = await listWikiPageRevisions(store, input.pageId)
+    const enriched = await Promise.all(revisions.map(async revision => {
+      const snapshot = await store.readText(`.wiki-service/page-history/${input.pageId}/${revision.revision}.md`).catch(() => '')
+      const sourceRefs = parseWikiPageMarker(snapshot).marker?.sourceRefs ?? []
+      return { ...revision, sourceRefs, sourceAttribution: await resolveSourceAttribution(store, sourceRefs) }
+    }))
+    return { success: true, data: enriched }
   } catch (error) {
     return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'wiki-page-unavailable' }
   }
@@ -326,7 +354,7 @@ export async function applyWikiRestoreForContext(input: WikiInput, context: Wiki
     const result = await runtime.service.applyRestore(input.proposalId, { requestId: context.requestId ?? '', toolUseId: context.toolUseId ?? '', callerId: wikiCaller(context).callerId,
       lane: context.lane ?? 'desktop', receipt, expectedFinalPage: input.finalPage })
     return { success: true, data: result }
-  } catch (error) { return { success: false, error: error instanceof WikiDomainToolError ? error.code : (error as { code?: string }).code ?? 'restore_conflict' } }
+  } catch (error) { return wikiFailure((error as { code?: string }).code ?? 'restore_conflict', error) }
 }
 
 export async function proposeWikiSchemaChangeForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
@@ -341,7 +369,8 @@ export async function proposeWikiSchemaChangeForContext(input: WikiInput, contex
 }
 
 export async function updateWikiSchemaForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
-  if (typeof input.proposalId !== 'string' || !input.proposalId || !Number.isSafeInteger(input.expectedSchemaVersion) || (input.expectedSchemaVersion as number) < 1 || !isSchemaProposalDiff(input.proposalDiff)) return { success: false, error: 'schema_proposal_missing' }
+  if (typeof input.proposalId !== 'string' || !input.proposalId || !Number.isSafeInteger(input.expectedSchemaVersion) || (input.expectedSchemaVersion as number) < 1 ||
+    !isSchemaProposalDiff(input.proposalDiff)) return { success: false, error: 'schema_material_mismatch' }
   try {
     const store = await getReadyWikiStore(context)
     const receipt = {
@@ -353,10 +382,38 @@ export async function updateWikiSchemaForContext(input: WikiInput, context: Wiki
       confirmed: context.toolUserConfirmed === true,
       answerer: context.userConfirmationAnswerer
     }
-    return { success: true, data: await getSchemaProposalService(store).apply(input.proposalId, input.expectedSchemaVersion as number, receipt, input.proposalDiff) }
+    return { success: true, data: await getSchemaProposalService(store).apply(input.proposalId, input.expectedSchemaVersion as number, receipt,
+      input.proposalDiff) }
   } catch (error) {
-    return { success: false, error: error instanceof WikiSchemaProposalError ? error.code : error instanceof WikiDomainToolError ? error.code : 'schema_conflict' }
+    return wikiFailure(error instanceof WikiSchemaProposalError ? error.code : error instanceof WikiDomainToolError ? error.code : (error as { code?: string }).code ?? 'schema_conflict', error)
   }
+}
+
+function wikiFailure(code: string, cause?: unknown): ToolExecutorResult {
+  const messageByCode: Record<string, string> = {
+    restore_conflict: '页面恢复与当前 Wiki 约束冲突。',
+    schema_conflict: 'SCHEMA 基线或受影响页面已变化，请刷新后重试。',
+    schema_material_mismatch: '确认内容与已保存的 SCHEMA 提案不一致。',
+    external_change_conflict: '检测到 Wiki 文件外部变化，服务未覆盖该文件。',
+    wiki_external_change_conflict: '检测到 Wiki 文件外部变化，服务未覆盖该文件。',
+  }
+  const value = cause && typeof cause === 'object' ? cause as { conflicts?: unknown; cause?: { code?: unknown; message?: unknown } } : undefined
+  const diagnostics = [
+    ...(Array.isArray(value?.conflicts) ? value!.conflicts.map(item => typeof item === 'string' ? { code, detail: item } : item) : []),
+    ...(typeof value?.cause?.code === 'string' ? [{ code: value.cause.code, message: '底层 Wiki 校验未通过。' }] : []),
+  ]
+  const retryable = ['schema_conflict', 'revision_conflict', 'external_change_conflict', 'wiki_external_change_conflict', 'projection_pending', 'operation_pending', 'page_read_handle_expired'].includes(code)
+  return { success: false, error: code, data: { error: { code, message: messageByCode[code] ?? 'Wiki 操作未完成。', retryable, diagnostics } } }
+}
+
+function withWikiErrorEnvelope(result: ToolExecutorResult): ToolExecutorResult {
+  if (result.success || typeof result.error !== 'string') return result
+  const existingData = result.data && typeof result.data === 'object' && !Array.isArray(result.data) ? result.data as Record<string, unknown> : {}
+  const existingError = existingData.error && typeof existingData.error === 'object' ? existingData.error as { code?: unknown } : undefined
+  if (existingError && existingError.code === result.error) return result
+  const normalized = wikiFailure(result.error)
+  const structured = (normalized.data as { error: unknown }).error
+  return { ...result, data: { ...existingData, error: structured } }
 }
 
 function isSchemaProposalDiff(value: unknown): value is { before: string; after: string } {
@@ -368,13 +425,40 @@ function isSchemaProposalDiff(value: unknown): value is { before: string; after:
 export async function searchWikiCatalog(store: WikiFileStore, input: WikiInput) {
   if (typeof input.query !== 'string' || input.query.length > 256) throw new WikiDomainToolError('wiki-search-query-invalid')
   const query = input.query.normalize('NFKC').trim().toLocaleLowerCase()
+  const terms = query ? query.split(/\s+/) : []
   const categoryId = typeof input.categoryId === 'string' ? input.categoryId : undefined
   const catalog = await store.readCatalog()
-  const pages = [...(catalog?.pages ?? [])].filter((page) => {
-    if (categoryId && page.categoryId !== categoryId) return false
-    const searchable = `${page.title ?? ''}\n${page.summary ?? ''}\n${page.categoryId ?? ''}`.normalize('NFKC').toLocaleLowerCase()
-    return !query || query.split(/\s+/).every((term) => searchable.includes(term))
-  }).sort((a, b) => (a.title ?? '').localeCompare(b.title ?? '') || a.pageId.localeCompare(b.pageId))
+  const pages = [] as Array<{ page: NonNullable<typeof catalog>['pages'][number]; priority: number; matchLine?: number; snippet: string; sourceRefs: Array<{ sourceId: string; sourceRevision: number }>; sourceAttribution: { sourceIds: string[]; projectIds: string[] }; updatedAt: number }>
+  for (const page of catalog?.pages ?? []) {
+    if (categoryId && page.categoryId !== categoryId) continue
+    let body = ''
+    let sourceRefs = page.sourceRefs ?? []
+    try {
+      const stored = await store.readText(page.path)
+      const parsed = parseWikiPageMarker(stored)
+      if (!parsed.marker || parsed.marker.pageId === page.pageId) {
+        if (!page.sourceRefs?.length && parsed.marker) sourceRefs = parsed.marker.sourceRefs
+        body = parsed.body.replace(/^#\s+.+?\s*#*\s*$(?:\r?\n)?/m, '').replace(/^\r?\n/, '')
+      }
+    } catch { /* catalog metadata remains searchable when a page disappears before reconciliation */ }
+    const titleText = (page.title ?? '').normalize('NFKC').toLocaleLowerCase()
+    const summaryText = (page.summary ?? '').normalize('NFKC').toLocaleLowerCase()
+    const bodyText = body.normalize('NFKC').toLocaleLowerCase()
+    const hasAll = (value: string) => !terms.length || terms.every(term => value.includes(term))
+    const categoryText = (page.categoryId ?? '').normalize('NFKC').toLocaleLowerCase()
+    const searchable = `${titleText}\n${summaryText}\n${categoryText}\n${bodyText}`
+    if (!hasAll(searchable)) continue
+    const priority = !terms.length || hasAll(titleText) ? 0 : hasAll(summaryText) ? 1 : hasAll(bodyText) ? 2 : 3
+    const lines = body.split(/\r?\n/)
+    const matchingLineIndex = terms.length ? lines.findIndex(line => terms.some(term => line.normalize('NFKC').toLocaleLowerCase().includes(term))) : -1
+    const snippetSource = matchingLineIndex >= 0 ? lines[matchingLineIndex]! : page.summary ?? page.title ?? ''
+    const snippet = clipWikiSnippet(snippetSource, terms[0] ?? '')
+    const sourceAttribution = await resolveSourceAttribution(store, sourceRefs)
+    const identity = await store.identity(page.path).catch(() => null)
+    pages.push({ page, priority, ...(matchingLineIndex >= 0 ? { matchLine: matchingLineIndex + 1 } : {}), snippet,
+      sourceRefs: sourceRefs.map(ref => ({ ...ref })), sourceAttribution, updatedAt: identity?.mtimeMs ?? 0 })
+  }
+  pages.sort((a, b) => a.priority - b.priority || b.updatedAt - a.updatedAt || (a.page.title ?? '').localeCompare(b.page.title ?? '') || a.page.pageId.localeCompare(b.page.pageId))
   const catalogHash = hash(JSON.stringify(catalog ?? { formatVersion: 1, pages: [] }))
   if (input.cursor !== undefined && typeof input.cursor !== 'string') throw new WikiDomainToolError('wiki-search-cursor-invalid')
   const cursor = typeof input.cursor === 'string' ? decodeCursor(input.cursor) : undefined
@@ -382,11 +466,15 @@ export async function searchWikiCatalog(store: WikiFileStore, input: WikiInput) 
   const offset = cursor?.offset ?? 0
   const requestedLimit = typeof input.limit === 'number' && Number.isSafeInteger(input.limit) ? input.limit : 8
   const limit = Math.min(20, Math.max(1, requestedLimit))
-  const matches = pages.slice(offset, offset + limit).map((page) => ({
+  const matches = pages.slice(offset, offset + limit).map(({ page, matchLine, snippet, sourceRefs, sourceAttribution }) => ({
     pageId: page.pageId,
+    pageRef: { type: 'wiki_page' as const, pageId: page.pageId },
     title: page.title ?? '',
     categoryId: page.categoryId ?? '',
     summary: Array.from(page.summary ?? '').slice(0, 1000).join(''),
+    snippet,
+    ...(matchLine !== undefined ? { matchLine } : {}),
+    sourceAttribution,
     revision: page.revision ?? 1
   }))
   const nextOffset = offset + matches.length
@@ -396,6 +484,35 @@ export async function searchWikiCatalog(store: WikiFileStore, input: WikiInput) 
     truncated: nextOffset < pages.length,
     ...(nextOffset < pages.length ? { nextCursor: encodeCursor({ catalogHash, query, ...(categoryId ? { categoryId } : {}), offset: nextOffset }) } : {})
   }
+}
+
+function clipWikiSnippet(value: string, term: string): string {
+  const chars = Array.from(value)
+  if (chars.length <= 500) return value
+  const normalized = value.normalize('NFKC').toLocaleLowerCase()
+  const index = term ? normalized.indexOf(term) : 0
+  const start = Math.max(0, Math.min(chars.length - 500, index >= 0 ? index - 120 : 0))
+  return `${start > 0 ? '…' : ''}${chars.slice(start, start + 500).join('')}${start + 500 < chars.length ? '…' : ''}`
+}
+
+async function resolveSourceAttribution(store: WikiFileStore, value: unknown): Promise<{ sourceIds: string[]; projectIds: string[] }> {
+  const sourceIds = new Set<string>()
+  const projectIds = new Set<string>()
+  if (!Array.isArray(value)) return { sourceIds: [], projectIds: [] }
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const ref = item as { sourceId?: unknown; sourceRevision?: unknown }
+    if (typeof ref.sourceId !== 'string' || !/^[0-9a-f-]{36}$/i.test(ref.sourceId) || !Number.isSafeInteger(ref.sourceRevision) || (ref.sourceRevision as number) < 1) continue
+    sourceIds.add(ref.sourceId)
+    try {
+      const binding = JSON.parse(await store.readText(`.wiki-service/sources/${ref.sourceId}.json`)) as { formatVersion?: unknown; sourceId?: unknown; sourceRevision?: unknown; projectId?: unknown }
+      if (binding.formatVersion !== 1 || binding.sourceId !== ref.sourceId || !Number.isSafeInteger(binding.sourceRevision) ||
+        (binding.sourceRevision as number) < (ref.sourceRevision as number) || typeof binding.projectId !== 'string' || !binding.projectId) continue
+      if (binding.sourceRevision !== ref.sourceRevision && !await store.identity(`.wiki-service/source-history/${ref.sourceId}/${ref.sourceRevision}.md`)) continue
+      projectIds.add(binding.projectId)
+    } catch { /* absent or invalid source metadata does not justify project attribution */ }
+  }
+  return { sourceIds: [...sourceIds].sort(), projectIds: [...projectIds].sort() }
 }
 
 async function getReadyWikiStore(
@@ -408,7 +525,7 @@ async function getReadyWikiStore(
   const lifecycle = await createWikiLifecycleController(root).read()
   if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') throw new WikiDomainToolError('wiki_lifecycle_not_ready')
   const store = createWikiFileStore(root)
-  if (options.reconcileExternalChanges !== false && await store.identity('SCHEMA.md') && await store.readCatalog()) {
+  if (options.reconcileExternalChanges !== false && await store.identity('SCHEMA.md')) {
     const reconciliation = await reconcileExternalWikiChanges(store)
     if (reconciliation.diagnostics.length) throw new WikiDomainToolError('wiki_external_change_conflict')
   }
@@ -425,16 +542,22 @@ async function getPageReadService(store: WikiFileStore): Promise<PageReadService
       authorize: async (pageId) => {
         const lifecycle = await createWikiLifecycleController(store.root).read()
         if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') return false
-        return (await store.readCatalog())?.pages.some((page) => page.pageId === pageId) ?? false
+        const catalog = await store.readCatalog()
+        return catalog?.pages.some((page) => page.pageId === pageId) || catalog?.tombstones?.some((page) => page.pageId === pageId) || false
       }
     }) }
     pageReadServices.set(store.root, cached)
   }
   const catalog = await store.readCatalog()
-  cached.pages.splice(0, cached.pages.length, ...(catalog?.pages ?? []).map((page) => ({
-    pageId: page.pageId, path: page.path, title: page.title ?? '', categoryId: page.categoryId ?? '', revision: page.revision ?? 1,
-    summary: page.summary ?? '', parentPageId: page.parentPageId ?? null, sourceRefs: page.sourceRefs ?? []
-  })))
+  cached.pages.splice(0, cached.pages.length,
+    ...(catalog?.pages ?? []).map((page) => ({
+      pageId: page.pageId, path: page.path, title: page.title ?? '', categoryId: page.categoryId ?? '', revision: page.revision ?? 1,
+      summary: page.summary ?? '', parentPageId: page.parentPageId ?? null, sourceRefs: page.sourceRefs ?? []
+    })),
+    ...(catalog?.tombstones ?? []).map((page) => ({
+      pageId: page.pageId, path: page.path, title: '', categoryId: '', revision: page.revision, deleted: true as const
+    }))
+  )
   return cached.service
 }
 

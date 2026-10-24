@@ -81,12 +81,31 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
     ? schemaState.contentHash === schemaHash ? schemaState : { formatVersion: 1 as const, schemaVersion: schemaState.schemaVersion + 1, contentHash: schemaHash }
     : { formatVersion: 1 as const, schemaVersion: 1, contentHash: schemaHash }
   const changedPages = reconciled.pages.filter(page => page.externalEdit)
+  const newlyRegisteredPages = reconciled.pages.filter(page => !catalog.pages.some(item => item.pageId === page.pageId || item.path === page.path))
   const updatedBodies = new Map<string, string>()
   for (const page of changedPages) {
     const old = catalog.pages.find(item => item.pageId === page.pageId)
     if (!old) continue
     try { await store.read(`.wiki-service/page-history/${page.pageId}/${old.revision ?? 1}.md`) }
     catch { diagnostics.push({ code: 'wiki-history-missing', path: page.path, pageId: page.pageId, message: 'Previous page snapshot is missing; external change is preserved for manual recovery.' }) }
+  }
+  for (const page of newlyRegisteredPages) {
+    const source = files.find(file => file.path === page.path)
+    const parsed = source ? parseWikiPageMarker(source.content) : undefined
+    if (!source || !parsed?.marker) {
+      diagnostics.push({ code: 'wiki-page-marker-invalid', path: page.path, pageId: page.pageId, message: 'New page marker could not be read for its initial history snapshot.' })
+      continue
+    }
+    const normalized = parsed.marker.revision === page.revision
+      ? source.content
+      : `${serializeWikiPageMarker({ ...parsed.marker, revision: page.revision })}\n${parsed.body.replace(/^\s+/, '')}`
+    if (normalized !== source.content) updatedBodies.set(page.path, normalized)
+    const historyPath = `.wiki-service/page-history/${page.pageId}/${page.revision}.md`
+    if (await store.identity(historyPath)) {
+      if (hashText(await store.readText(historyPath)) !== hashText(normalized)) {
+        diagnostics.push({ code: 'wiki-history-conflict', path: page.path, pageId: page.pageId, message: 'An initial page history snapshot already exists with different content.' })
+      }
+    }
   }
   if (diagnostics.length) return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics }
 
@@ -127,19 +146,56 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
     updatedBodies.set(page.path, updated)
     const historyPath = `.wiki-service/page-history/${page.pageId}/${page.revision}.md`
     if (!(await store.identity(historyPath))) await store.writeImmutable(historyPath, Buffer.from(updated))
-    const scanned = files.find(file => file.path === page.path)
-    if (!scanned) return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-target-changed', path: page.path, pageId: page.pageId, message: 'Page disappeared during reconciliation.' }] }
-    await store.write(page.path, updated, scanned.identity)
+    const revisionMetadataPath = `.wiki-service/page-revision-metadata/${page.pageId}/${page.revision}.json`
+    const revisionMetadata = { formatVersion: 1, pageId: page.pageId, revision: page.revision, externalEdit: true, changeSummary: `外部编辑：${page.title}` }
+    const existingMetadata = await store.identity(revisionMetadataPath)
+    if (!existingMetadata) await store.writeImmutable(revisionMetadataPath, `${JSON.stringify(revisionMetadata, null, 2)}\n`)
+    else {
+      try {
+        const savedMetadata = JSON.parse(await store.readText(revisionMetadataPath)) as { pageId?: unknown; revision?: unknown; externalEdit?: unknown }
+        if (savedMetadata.pageId !== page.pageId || savedMetadata.revision !== page.revision || savedMetadata.externalEdit !== true) throw new Error('wiki-revision-metadata-conflict')
+      } catch { return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-revision-metadata-conflict', path: revisionMetadataPath, pageId: page.pageId, message: 'External revision metadata conflicts with the existing immutable record.' }] } }
+    }
+    const operationId = hashText(`${page.pageId}\0${page.revision}\0${hashText(source.content)}`)
+    const operationPath = `.wiki-service/operations/${operationId}.json`
+    const operationIdentity = await store.identity(operationPath)
+    if (!operationIdentity) {
+      const successEvent: WikiSuccessEvent = { operationId, type: 'externally_edited', title: page.title, revision: page.revision,
+        committedAt: new Date(source.identity.mtimeMs).toISOString(), pageId: page.pageId, sourceIds: page.sourceRefs.map(sourceRef => sourceRef.sourceId), changeSummary: `外部编辑：${page.title}` }
+      await store.writeImmutable(operationPath, `${JSON.stringify({ formatVersion: 1, operationId, status: 'completed', successEvent, externalEdit: true }, null, 2)}\n`)
+    } else {
+      try {
+        const savedOperation = JSON.parse(await store.readText(operationPath)) as { operationId?: unknown; status?: unknown; successEvent?: { pageId?: unknown; revision?: unknown; type?: unknown } }
+        if (savedOperation.operationId !== operationId || savedOperation.status !== 'completed' || savedOperation.successEvent?.pageId !== page.pageId || savedOperation.successEvent?.revision !== page.revision || savedOperation.successEvent?.type !== 'externally_edited') throw new Error('wiki-external-edit-journal-conflict')
+      } catch { return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-external-edit-journal-conflict', path: operationPath, pageId: page.pageId, message: 'External edit journal conflicts with the immutable revision record.' }] } }
+    }
+    await store.write(page.path, updated, source.identity)
+  }
+  for (const page of newlyRegisteredPages) {
+    const source = files.find(file => file.path === page.path)!
+    const snapshot = updatedBodies.get(page.path) ?? source.content
+    const historyPath = `.wiki-service/page-history/${page.pageId}/${page.revision}.md`
+    if (!(await store.identity(historyPath))) await store.writeImmutable(historyPath, Buffer.from(snapshot))
+    if (snapshot !== source.content) await store.write(page.path, snapshot, source.identity)
   }
   const pages = reconciled.pages.map(page => ({
     pageId: page.pageId, path: page.path, revision: page.revision, contentHash: hashText(updatedBodies.get(page.path) ?? files.find(file => file.path === page.path)!.content), title: page.title,
     categoryId: page.categoryId, summary: page.summary, parentPageId: page.parentPageId, sourceRefs: page.sourceRefs
   }))
+  const aliasMap = new Map((catalog.pathAliases ?? []).map(alias => [alias.path, alias.pageId]))
+  for (const page of pages) {
+    const previous = catalog.pages.find(item => item.pageId === page.pageId)
+    if (previous && previous.path !== page.path) aliasMap.set(previous.path, page.pageId)
+  }
+  for (const [aliasPath, pageId] of aliasMap) {
+    if (pages.some(page => page.pageId === pageId && page.path === aliasPath)) aliasMap.delete(aliasPath)
+  }
+  const pathAliases = [...aliasMap].map(([aliasPath, pageId]) => ({ path: aliasPath, pageId })).sort((a, b) => a.path.localeCompare(b.path) || a.pageId.localeCompare(b.pageId))
   const tombstoneMap = new Map<string, NonNullable<typeof catalog.tombstones>[number]>([
     ...(catalog.tombstones ?? []).map(item => [item.pageId, item] as const),
     ...reconciled.tombstones.map(item => [item.pageId, item] as const)
   ])
-  const nextCatalog = { formatVersion: 1 as const, pages, tombstones: [...tombstoneMap.values()] }
+  const nextCatalog = { formatVersion: 1 as const, pages, tombstones: [...tombstoneMap.values()], pathAliases }
   await store.write('.wiki-service/catalog.json', `${JSON.stringify(nextCatalog, null, 2)}\n`, catalogIdentity)
   try {
     const operations = await readOperationEvents(store)

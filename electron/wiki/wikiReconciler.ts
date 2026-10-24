@@ -45,7 +45,7 @@ export function parseWikiPageMarker(content: string): { marker?: WikiPageMarker;
   return { marker: { pageId: data.pageId, categoryId: data.categoryId, summary: data.summary, parentPageId: data.parentPageId as string | null, sourceRefs, revision: data.revision as number }, body }
 }
 
-export function reconcileWikiFiles(files: WikiReconcileInput[], catalog: WikiReconcileCatalogEntry[], schema?: { categories: Array<{ id: string; status: 'active' | 'deprecated' }> }): WikiReconcileResult {
+export function reconcileWikiFiles(files: WikiReconcileInput[], catalog: WikiReconcileCatalogEntry[], schema?: { categories: Array<{ id: string; status: 'active' | 'deprecated'; allowedParentCategoryIds?: string[] }> }): WikiReconcileResult {
   const previousByPath = new Map(catalog.map(entry => [entry.path, entry]))
   const previousById = new Map(catalog.map(entry => [entry.pageId, entry]))
   const byId = new Map<string, WikiReconcileInput[]>()
@@ -82,8 +82,24 @@ export function reconcileWikiFiles(files: WikiReconcileInput[], catalog: WikiRec
     }
     pages.push({ pageId: item.marker.pageId, path: item.file.path, revision, contentHash: item.hash, title, categoryId: item.marker.categoryId, parentPageId: item.marker.parentPageId, summary: item.marker.summary, sourceRefs: item.marker.sourceRefs, externalEdit })
   }
-  const ids = new Set(pages.map(page => page.pageId))
-  for (const page of pages) if (page.parentPageId && !ids.has(page.parentPageId)) diagnostics.push({ code: 'wiki-page-parent-missing', path: page.path, pageId: page.pageId, message: 'Page references a missing parent page.' })
+  const pagesById = new Map(pages.map(page => [page.pageId, page]))
+  for (const page of pages) {
+    if (!page.parentPageId) continue
+    const parent = pagesById.get(page.parentPageId)
+    if (!parent) {
+      diagnostics.push({ code: 'wiki-page-parent-missing', path: page.path, pageId: page.pageId, message: 'Page references a missing parent page.' })
+      continue
+    }
+    const category = schema?.categories.find(item => item.id === page.categoryId)
+    if (category?.allowedParentCategoryIds && !category.allowedParentCategoryIds.includes(parent.categoryId)) {
+      diagnostics.push({ code: 'wiki-page-parent-category-invalid', path: page.path, pageId: page.pageId, message: 'Page parent category is not allowed by SCHEMA.' })
+    }
+  }
+  const cyclePageIds = findParentCyclePageIds(pages)
+  for (const pageId of cyclePageIds) {
+    const page = pagesById.get(pageId)!
+    diagnostics.push({ code: 'wiki-page-parent-cycle', path: page.path, pageId, message: 'Page parent relationships contain a cycle.' })
+  }
   const titles = new Map<string, WikiReconcilePage[]>()
   for (const page of pages) {
     const key = `${page.categoryId}\0${page.parentPageId ?? ''}\0${normalizeTitle(page.title)}`
@@ -93,6 +109,31 @@ export function reconcileWikiFiles(files: WikiReconcileInput[], catalog: WikiRec
   const seenPageIds = new Set(pages.map(page => page.pageId))
   const tombstones = catalog.filter(entry => !seenPageIds.has(entry.pageId)).map(entry => ({ pageId: entry.pageId, path: entry.path, revision: entry.revision, deleted: true as const }))
   return { pages, tombstones, diagnostics }
+}
+
+
+function findParentCyclePageIds(pages: readonly WikiReconcilePage[]): string[] {
+  const pagesById = new Map(pages.map(page => [page.pageId, page]))
+  const state = new Map<string, 'visiting' | 'visited'>()
+  const stack: string[] = []
+  const cycles = new Set<string>()
+  const visit = (pageId: string): void => {
+    const currentState = state.get(pageId)
+    if (currentState === 'visited') return
+    if (currentState === 'visiting') {
+      const cycleStart = stack.lastIndexOf(pageId)
+      for (const member of stack.slice(cycleStart)) cycles.add(member)
+      return
+    }
+    state.set(pageId, 'visiting')
+    stack.push(pageId)
+    const parentId = pagesById.get(pageId)?.parentPageId
+    if (parentId && pagesById.has(parentId)) visit(parentId)
+    stack.pop()
+    state.set(pageId, 'visited')
+  }
+  for (const page of [...pages].sort((left, right) => left.pageId.localeCompare(right.pageId))) visit(page.pageId)
+  return [...cycles].sort((left, right) => left.localeCompare(right))
 }
 
 function sha256(content: string): string { return createHash('sha256').update(content, 'utf8').digest('hex') }

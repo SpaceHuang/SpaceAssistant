@@ -8,6 +8,7 @@ import { createWikiLifecycleController } from './wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { createHash } from 'node:crypto'
 import { serializeWikiPageMarker } from './wikiReconciler'
+import { reconcileExternalWikiChanges } from './wikiReconciliationService'
 
 const roots: string[] = []
 function tempRoot(): string {
@@ -20,6 +21,14 @@ async function storeWrite(root: string, relativePath: string, body: string): Pro
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
 
 describe('Wiki domain search tool', () => {
+  it('explains that an update must include the existing pageId when expectedRevision is supplied', async () => {
+    const result = await saveWikiPageForContext({
+      title: 'Deprecated page', categoryId: 'topic', summary: 'deprecated', markdown: 'deprecated body',
+      schemaVersion: 1, expectedRevision: 1
+    }, { sessionId: 'session-update', lane: 'desktop', requestId: 'request-update', toolUseId: 'tool-update' })
+    expect(result).toMatchObject({ success: false, error: 'wiki_page_id_required_for_update' })
+  })
+
   it('saves and moves pages through the domain coordinator, including an omitted root parent', async () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
@@ -77,7 +86,29 @@ describe('Wiki domain search tool', () => {
     expect(JSON.stringify(result)).not.toContain('wiki/secrets.md')
   })
 
-  it('runs a read-only search without scanning and reconciling every Wiki file', async () => {
+  it('searches authored body text and returns a line snippet, stable reference, and merged project attribution', async () => {
+    const store = createWikiFileStore(tempRoot())
+    const sourceA = '11111111-1111-4111-8111-111111111111'
+    const sourceB = '22222222-2222-4222-8222-222222222222'
+    await store.writeCatalog({ formatVersion: 1, pages: [
+      { pageId: 'p-body', path: 'wiki/body.md', revision: 4, title: 'A generic title', categoryId: 'topic', summary: 'A generic summary', sourceRefs: [
+        { sourceId: sourceA, sourceRevision: 2 }, { sourceId: sourceB, sourceRevision: 1 }
+      ] }
+    ] })
+    await store.write('wiki/body.md', `${serializeWikiPageMarker({ pageId: 'p-body', categoryId: 'topic', summary: 'A generic summary', parentPageId: null, sourceRefs: [
+      { sourceId: sourceA, sourceRevision: 2 }, { sourceId: sourceB, sourceRevision: 1 }
+    ], revision: 4 })}\n# A generic title\n\nFirst line\nUniqueNeedle appears here\n`)
+    await store.write(`.wiki-service/sources/${sourceA}.json`, JSON.stringify({ formatVersion: 1, sourceId: sourceA, sourceRevision: 2, displayName: 'a.md', projectId: 'project-a' }))
+    await store.write(`.wiki-service/sources/${sourceB}.json`, JSON.stringify({ formatVersion: 1, sourceId: sourceB, sourceRevision: 1, displayName: 'b.md', projectId: 'project-b' }))
+
+    const result = await searchWikiCatalog(store, { query: 'UniqueNeedle' })
+
+    expect(result).toMatchObject({ totalMatches: 1, matches: [{ pageId: 'p-body', pageRef: { type: 'wiki_page', pageId: 'p-body' }, matchLine: 2,
+      snippet: 'UniqueNeedle appears here', sourceAttribution: { sourceIds: [sourceA, sourceB], projectIds: ['project-a', 'project-b'] } }] })
+    expect(JSON.stringify(result)).not.toContain('wiki/body.md')
+  })
+
+  it('searches current catalog data without rewriting unchanged page files', async () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(path.join(wikiRoot, 'wiki', 'topics'), { recursive: true })
@@ -100,6 +131,161 @@ describe('Wiki domain search tool', () => {
     expect(result).toMatchObject({ success: true, data: { matches: [{ pageId: 'p-catalog', title: 'Runtime', revision: 2 }] } })
     expect(await store.readText('wiki/topics/page.md')).toBe(unchangedPage)
     expect((await store.readCatalog())?.pages[0]).toMatchObject({ pageId: 'p-catalog', revision: 2, contentHash: hash })
+  })
+
+  it('discovers externally added pages before the first domain save and makes them readable', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{\"formatVersion\":1,\"categories\":[{\"id\":\"topic\",\"name\":\"Topic\",\"description\":\"Topics\",\"status\":\"active\"}]}\n<!-- wiki-categories:end -->\n')
+    await store.write('wiki/external.md', `${serializeWikiPageMarker({ pageId: 'external-page', categoryId: 'topic', summary: 'External summary', parentPageId: null, sourceRefs: [], revision: 1 })}\n# External\n\nDiscovered body\n`)
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-first-discovery', lane: 'desktop' }
+
+    const search = await searchWikiForContext({ query: 'External' }, context)
+    expect(search).toMatchObject({ success: true, data: { totalMatches: 1, matches: [{ pageId: 'external-page', revision: 1 }] } })
+    const opened = await openWikiPageForContext({ pageId: 'external-page' }, context)
+    expect(opened).toMatchObject({ success: true, data: { pageId: 'external-page', revision: 1 } })
+    const readHandle = (opened as { data: { readHandle: string } }).data.readHandle
+    expect(await readWikiPageForContext({ readHandle }, context)).toMatchObject({ success: true, data: { text: 'Discovered body\n' } })
+  })
+
+  it('reconciles externally deleted pages before search returns catalog results', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{\"formatVersion\":1,\"categories\":[{\"id\":\"topic\",\"name\":\"Topic\",\"description\":\"Topics\",\"status\":\"active\"}]}\n<!-- wiki-categories:end -->\n')
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-search-delete', lane: 'desktop', requestId: 'request-search-delete', toolUseId: 'tool-search-delete' }
+    const saved = await saveWikiPageForContext({ title: 'Alpha', categoryId: 'topic', summary: 'Old summary', markdown: 'Body', schemaVersion: 1 }, context)
+    const pageId = (saved as { data: { pageId: string } }).data.pageId
+    const page = (await store.readCatalog())!.pages.find(item => item.pageId === pageId)!
+    await store.remove(page.path)
+
+    const result = await searchWikiForContext({ query: 'Alpha' }, context)
+
+    expect(result).toMatchObject({ success: true, data: { totalMatches: 0, matches: [] } })
+    expect((await store.readCatalog())?.tombstones).toContainEqual(expect.objectContaining({ pageId, deleted: true }))
+  })
+
+  it('does not persist an externally edited parent cycle', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{\"formatVersion\":1,\"categories\":[{\"id\":\"topic\",\"name\":\"Topic\",\"description\":\"Topics\",\"status\":\"active\"}]}\n<!-- wiki-categories:end -->\n')
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-parent-cycle', lane: 'desktop', requestId: 'request-parent-cycle', toolUseId: 'tool-parent-cycle' }
+    const saved = await saveWikiPageForContext({ title: 'Alpha', categoryId: 'topic', summary: 'Summary', markdown: 'Body', schemaVersion: 1 }, context)
+    const pageId = (saved as { data: { pageId: string } }).data.pageId
+    const page = (await store.readCatalog())!.pages.find(item => item.pageId === pageId)!
+    const before = await store.readText(page.path)
+    await store.write(page.path, before.replace('"parentPageId":null', `"parentPageId":"${pageId}"`))
+
+    const result = await reconcileExternalWikiChanges(store)
+
+    expect(result.diagnostics.map(item => item.code)).toContain('wiki-page-parent-cycle')
+    expect((await store.readCatalog())?.pages).toMatchObject([{ pageId, revision: 1, parentPageId: null }])
+    expect(await store.identity(`.wiki-service/page-history/${pageId}/2.md`)).toBeNull()
+  })
+
+  it('opens and reads a retained revision after external deletion', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{\"formatVersion\":1,\"categories\":[{\"id\":\"topic\",\"name\":\"Topic\",\"description\":\"Topics\",\"status\":\"active\"}]}\n<!-- wiki-categories:end -->\n')
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-open-deleted', lane: 'desktop', requestId: 'request-open-deleted', toolUseId: 'tool-open-deleted' }
+    const saved = await saveWikiPageForContext({ title: 'Alpha', categoryId: 'topic', summary: 'Summary', markdown: 'Retained body', schemaVersion: 1 }, context)
+    const pageId = (saved as { data: { pageId: string } }).data.pageId
+    const page = (await store.readCatalog())!.pages.find(item => item.pageId === pageId)!
+    await store.remove(page.path)
+    expect((await reconcileExternalWikiChanges(store)).tombstones).toContainEqual(expect.objectContaining({ pageId, deleted: true }))
+
+    expect(await listWikiPageRevisionsForContext({ pageId }, context)).toMatchObject({ success: true, data: [{ revision: 1, deleted: true }] })
+    const opened = await openWikiPageForContext({ pageId, revision: 1 }, context)
+    expect(opened).toMatchObject({ success: true, data: { pageId, revision: 1 } })
+    const readHandle = (opened as { data: { readHandle: string } }).data.readHandle
+    expect(await readWikiPageForContext({ readHandle }, context)).toMatchObject({ success: true, data: { text: 'Retained body\n' } })
+    expect(await openWikiPageForContext({ pageId }, context)).toMatchObject({ success: true, data: { pageId, revision: 1, deleted: true } })
+  })
+
+  it('reconciles a valid external SCHEMA edit before returning its version', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const initial = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    await store.write('SCHEMA.md', initial)
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-external-schema', lane: 'desktop', requestId: 'request-schema-page', toolUseId: 'tool-schema-page' }
+    await expect(saveWikiPageForContext({ title: 'Page', categoryId: 'topic', summary: '', markdown: 'body', schemaVersion: 1 }, context)).resolves.toMatchObject({ success: true })
+    const external = initial.replace('"name":"Topic"', '"name":"Renamed"')
+    await store.write('SCHEMA.md', external)
+
+    const result = await getWikiSchemaForContext(context)
+
+    expect(result).toMatchObject({ success: true, data: { valid: true, schemaVersion: 2, content: external, categories: [{ id: 'topic', name: 'Renamed' }] } })
+    expect(JSON.parse(await store.readText('.wiki-service/schema-state.json'))).toMatchObject({ schemaVersion: 2, contentHash: createHash('sha256').update(external).digest('hex') })
+    expect(await store.readText('.wiki-service/schema-history/2.md')).toBe(external)
+  })
+
+  it('preserves project attribution for historical source revisions across page surfaces', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const schema = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    await store.write('SCHEMA.md', schema)
+    const sourceId = '33333333-3333-4333-8333-333333333333'
+    await store.write(`.wiki-service/sources/${sourceId}.json`, JSON.stringify({ formatVersion: 1, sourceId, sourceRevision: 2, displayName: 'source.md', projectId: 'project-a', rawPath: 'raw/project-a/source.md' }))
+    await store.writeImmutable(`.wiki-service/source-history/${sourceId}/1.md`, Buffer.from('source revision one'))
+    await store.writeImmutable(`.wiki-service/source-history/${sourceId}/2.md`, Buffer.from('source revision two'))
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-source-attribution', lane: 'desktop', requestId: 'request-source-page', toolUseId: 'tool-source-page' }
+    const saved = await saveWikiPageForContext({ title: 'Attributed page', categoryId: 'topic', summary: 'source-backed', markdown: 'attribution needle', schemaVersion: 1, sourceRefs: [{ sourceId, sourceRevision: 1 }] }, context)
+    expect(saved).toMatchObject({ success: true, data: { revision: 1 } })
+    const pageId = (saved as { data: { pageId: string } }).data.pageId
+    const expectedAttribution = { sourceIds: [sourceId], projectIds: ['project-a'] }
+
+    expect(await searchWikiCatalog(store, { query: 'attribution needle' })).toMatchObject({ matches: [{ pageId, sourceAttribution: expectedAttribution }] })
+    expect(await openWikiPageForContext({ pageId }, context)).toMatchObject({ success: true, data: { sourceAttribution: expectedAttribution } })
+    expect(await listWikiPageRevisionsForContext({ pageId }, context)).toMatchObject({ success: true, data: [{ revision: 1, sourceAttribution: expectedAttribution }] })
+  })
+
+  it('returns parser diagnostics for invalid SCHEMA instead of masking it as an external conflict', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const lastValid = '# Valid\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    await store.write('SCHEMA.md', lastValid)
+    await store.writeImmutable('.wiki-service/schema-history/1.md', lastValid)
+    await store.write('.wiki-service/schema-state.json', JSON.stringify({ formatVersion: 1, schemaVersion: 1, contentHash: createHash('sha256').update(lastValid).digest('hex') }))
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\nnot-json\n<!-- wiki-categories:end -->\n')
+    const result = await getWikiSchemaForContext({ userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG })
+    expect(result).toMatchObject({ success: true, data: { valid: false, diagnostics: expect.arrayContaining([expect.objectContaining({ code: expect.any(String) })]), lastValid: { schemaVersion: 1, content: lastValid } } })
+  })
+
+  it('exposes the stable structured error envelope through the registered Wiki tool', async () => {
+    const userDataDir = tempRoot()
+    const tool = createWikiDomainTools().find(candidate => candidate.name === 'memory.wiki_search')!
+    const requestId = 'registered-search-error'
+    const toolUseId = 'registered-search-error-tool'
+    const runtimeContext = { userDataDir, requestId, toolUseId }
+    const handle = await tool.begin({ query: 'runtime' }, { requestId, toolUseId, executionContext: runtimeContext as never })
+    const executionContext = { requestId, toolUseId, runtimeContext, signal: new AbortController().signal }
+    handle.awaitConfirmation()
+    handle.confirm()
+    handle.beginValidation()
+    await handle.validatePrepared(executionContext)
+    handle.finishValidation()
+    const result = await handle.execute(executionContext)
+    expect(result).toMatchObject({ success: false, error: 'wiki_lifecycle_unavailable', data: { error: { code: 'wiki_lifecycle_unavailable', message: expect.any(String), retryable: false, diagnostics: [] } } })
   })
 
   it('reports Wiki lifecycle unavailable from search when Wiki config is absent', async () => {
@@ -204,7 +390,7 @@ describe('Wiki domain search tool', () => {
     expect(await store.identity('.wiki-service/page-history/p-external/2.md')).not.toBeNull()
   })
 
-  it('keeps read-only search on the catalog snapshot and leaves external files untouched', async () => {
+  it('reconciles changed page and schema metadata before search results', async () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(path.join(wikiRoot, 'wiki', 'topics'), { recursive: true })
@@ -224,15 +410,15 @@ describe('Wiki domain search tool', () => {
 
     const result = await searchWikiForContext({ query: '' }, { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG })
 
-    expect(result).toMatchObject({ success: true, data: { matches: [{ pageId: 'p-reconcile', title: 'External Page', revision: 1 }] } })
+    expect(result).toMatchObject({ success: true, data: { matches: [{ pageId: 'p-reconcile', title: 'External Page', revision: 2 }] } })
     expect((await store.readText('SCHEMA.md')).trim()).toBe(schema.trim())
     expect(await store.readText('wiki/topics/external.md')).toContain('written outside the app')
     expect(await store.readText('raw/e16-fixture/source.md')).toContain('external raw source')
-    expect(await store.readCatalog()).toMatchObject({ pages: [{ pageId: 'p-reconcile', path: 'wiki/topics/external.md', revision: 1 }] })
-    expect(await store.identity('wiki/index.md')).toBeNull()
-    expect(await store.identity('wiki/log.md')).toBeNull()
-    expect(JSON.parse(await store.readText('.wiki-service/schema-state.json'))).toMatchObject({ schemaVersion: 1 })
-    expect(await store.identity('.wiki-service/page-history/p-reconcile/2.md')).toBeNull()
+    expect(await store.readCatalog()).toMatchObject({ pages: [{ pageId: 'p-reconcile', path: 'wiki/topics/external.md', revision: 2 }] })
+    expect(await store.identity('wiki/index.md')).not.toBeNull()
+    expect(await store.identity('wiki/log.md')).not.toBeNull()
+    expect(JSON.parse(await store.readText('.wiki-service/schema-state.json'))).toMatchObject({ schemaVersion: 2 })
+    expect(await store.identity('.wiki-service/page-history/p-reconcile/2.md')).not.toBeNull()
   })
 
   it('reads only a bound source snapshot and binds continuation cursors to caller and lane', async () => {
@@ -311,6 +497,24 @@ describe('Wiki domain search tool', () => {
     expect(await store.readText('SCHEMA.md')).toBe(proposed)
   })
 
+  it('requires the exact proposal diff in the host-confirmed schema tool call', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    const initial = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    const proposed = initial.replace('"name":"Topic"', '"name":"Knowledge"')
+    await store.write('SCHEMA.md', initial)
+    const baseContext = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-a', lane: 'desktop', requestId: 'request-a', toolUseId: 'propose-a' }
+    const proposalResult = await proposeWikiSchemaChangeForContext({ content: proposed, expectedSchemaVersion: 1 }, baseContext)
+    const { proposalId, diff } = proposalResult.data as { proposalId: string; diff: { before: string; after: string } }
+    expect(await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1 }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-missing-diff', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })).toMatchObject({ success: false, error: 'schema_material_mismatch' })
+    const applied = await updateWikiSchemaForContext({ proposalId, expectedSchemaVersion: 1, proposalDiff: diff }, { ...baseContext, requestId: 'request-b', toolUseId: 'apply-user-stored', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })
+    expect(applied).toMatchObject({ success: true, data: { schemaVersion: 2 } })
+    expect(await store.readText('SCHEMA.md')).toBe(proposed)
+  })
+
   it('keeps existing pages readable while their category is deprecated and allows reactivation', async () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
@@ -378,6 +582,26 @@ describe('Wiki domain search tool', () => {
 
     expect(applied, JSON.stringify(applied)).toMatchObject({ success: true, data: { schemaVersion: 2 } })
     expect(await store.readText('SCHEMA.md')).toBe(proposed)
+  })
+
+  it('preserves the complete restore conflict set in the tool failure result', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const store = createWikiFileStore(wikiRoot)
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n')
+    const base = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-restore-conflict', lane: 'desktop', requestId: 'request-restore-conflict', toolUseId: 'save-a' }
+    const first = await saveWikiPageForContext({ title: 'Alpha', categoryId: 'topic', summary: 'A', markdown: 'Original', schemaVersion: 1 }, base)
+    const pageId = (first as { data: { pageId: string } }).data.pageId
+    await saveWikiPageForContext({ pageId, expectedRevision: 1, title: 'Alpha', categoryId: 'topic', summary: 'A', markdown: 'Current', schemaVersion: 1 }, { ...base, requestId: 'update-a', toolUseId: 'update-a' })
+    await saveWikiPageForContext({ title: 'Beta', categoryId: 'topic', summary: 'B', markdown: 'Other', schemaVersion: 1 }, { ...base, requestId: 'save-b', toolUseId: 'save-b' })
+    const prepared = await prepareWikiRestoreForContext({ pageId, targetRevision: 1, expectedCurrentRevision: 2, title: 'Beta' }, { ...base, requestId: 'prepare-restore', toolUseId: 'prepare-restore' })
+    const proposal = (prepared as { data: { proposalId: string; finalPage: Record<string, unknown> } }).data
+
+    const applied = await applyWikiRestoreForContext({ proposalId: proposal.proposalId, finalPage: proposal.finalPage }, { ...base, requestId: 'apply-restore', toolUseId: 'apply-restore', toolUserConfirmed: true, userConfirmationAnswerer: 'user' })
+
+    expect(applied).toMatchObject({ success: false, error: 'restore_conflict', data: { error: { code: 'restore_conflict', retryable: false, diagnostics: [expect.objectContaining({ code: 'title_conflict' })] } } })
   })
 
   it('prepares a full restore proposal and applies only the exact material after host user confirmation', async () => {

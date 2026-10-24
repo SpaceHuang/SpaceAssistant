@@ -28,8 +28,11 @@ describe('Wiki domain tool discovery', () => {
     expect(registry.get('memory.wiki_apply_restore')).toBeDefined()
     expect(registry.get('memory.wiki_propose_schema_change')).toBeDefined()
     expect(registry.get('memory.wiki_update_schema')).toBeDefined()
-    expect(WIKI_DOMAIN_TOOL_DEFINITIONS.find(tool => tool.name === 'memory.wiki_update_schema')?.input_schema).toMatchObject({ required: ['proposalId', 'expectedSchemaVersion', 'proposalDiff'] })
+    expect(WIKI_DOMAIN_TOOL_DEFINITIONS.find(tool => tool.name === 'memory.wiki_update_schema')?.input_schema).toMatchObject({ required: ['proposalId', 'expectedSchemaVersion', 'proposalDiff'], properties: { proposalDiff: { type: 'object', properties: { before: { type: 'string' }, after: { type: 'string' } } } } })
     expect(WIKI_DOMAIN_TOOL_DEFINITIONS.find(tool => tool.name === 'memory.wiki_move_page')?.input_schema).toMatchObject({ required: ['pageId', 'expectedRevision'] })
+    const saveSchema = WIKI_DOMAIN_TOOL_DEFINITIONS.find(tool => tool.name === 'memory.wiki_save_page')?.input_schema
+    expect(saveSchema?.properties?.pageId?.description).toContain('更新时必填')
+    expect(saveSchema?.properties?.expectedRevision?.description).toContain('必须与 pageId 同时提供')
   })
 
   it('registers every advertised Wiki operation in the runtime registry', () => {

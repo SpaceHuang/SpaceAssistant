@@ -17,6 +17,9 @@ describe('Wiki command to sourceId integration', () => {
     const workDir = temp('wiki-route-work-')
     const userDataPath = temp('wiki-route-data-')
     fs.writeFileSync(path.join(workDir, 'note.md'), 'integration source')
+    const wikiRoot = path.join(userDataPath, 'llm-wiki')
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
     const imported = await parseWikiCommand('/wiki ingest note.md', { manualActivated: [], manualDisabled: [] }, {
       wikiInit: vi.fn(),
       wikiStatus: vi.fn().mockResolvedValue({ rootPath: 'llm-wiki', initialized: true, pageCount: 0, rawCount: 0 }),
@@ -26,8 +29,6 @@ describe('Wiki command to sourceId integration', () => {
     if (imported.type !== 'run') return
     const sourceId = /sourceId=([0-9a-f-]{36})/.exec(imported.text)?.[1]
     expect(sourceId).toBeTruthy()
-    const wikiRoot = path.join(userDataPath, 'llm-wiki')
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
     const context = { userDataDir: userDataPath, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'assistant', lane: 'chat' }
     expect(await importWikiSourceForContext({ sourceRef: sourceId }, context)).toMatchObject({ success: true, data: { sourceId, sourceRevision: 1 } })
     const read = await readWikiSourceForContext({ sourceId, sourceRevision: 1 }, {
@@ -39,6 +40,9 @@ describe('Wiki command to sourceId integration', () => {
   it('bulk /wiki ingest imports only host-enumerated text files and emits their bound source ids', async () => {
     const workDir = temp('wiki-route-bulk-work-')
     const userDataPath = temp('wiki-route-bulk-data-')
+    const wikiRoot = path.join(userDataPath, 'llm-wiki')
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
     fs.mkdirSync(path.join(workDir, 'docs', 'nested'), { recursive: true })
     fs.mkdirSync(path.join(workDir, '.private'), { recursive: true })
     fs.mkdirSync(path.join(workDir, 'node_modules', 'pkg'), { recursive: true })

@@ -44,6 +44,20 @@ describe('reconcileWikiFiles', () => {
     expect(result.diagnostics.map(item => item.code)).toContain('wiki-page-category-invalid')
   })
 
+  it('rejects self-parent and multi-page parent cycles', () => {
+    const page = (pageId: string, parentPageId: string | null) =>
+      `${serializeWikiPageMarker({ pageId, categoryId: 'topic', summary: '', parentPageId, sourceRefs: [], revision: 1 })}\n# ${pageId}\nBody\n`
+
+    const result = reconcileWikiFiles([
+      { path: 'wiki/self.md', content: page('self', 'self') },
+      { path: 'wiki/a.md', content: page('a', 'b') },
+      { path: 'wiki/b.md', content: page('b', 'a') }
+    ], [])
+
+    expect(result.diagnostics.filter(item => item.code === 'wiki-page-parent-cycle').map(item => item.pageId).sort())
+      .toEqual(['a', 'b', 'self'])
+  })
+
   it('preserves existing page references to deprecated categories while still rejecting removed categories', () => {
     const marker = serializeWikiPageMarker({ pageId: 'p-deprecated', categoryId: 'topic', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })
     const files = [{ path: 'wiki/a.md', content: `${marker}\n# A` }]

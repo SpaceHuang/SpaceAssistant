@@ -45,6 +45,10 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
       if (existing.status === 'conflict') throw codedError(existing.errorCode ?? 'external_change_conflict')
       return recover(existing, operationPath, input.crashAt)
     }
+    for (const source of input.sourceRefs ?? []) {
+      try { await options.store.read(`.wiki-service/source-history/${source.sourceId}/${source.sourceRevision}.md`) }
+      catch { throw codedError('source_missing') }
+    }
 
     const catalog = await options.store.readCatalog() ?? { formatVersion: 1 as const, pages: [] }
     const schema = options.schema()
@@ -67,6 +71,9 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     const titleKey = normalizeTitle(input.title)
     if (catalog.pages.some(page => page.pageId !== existingPage?.pageId && page.categoryId === input.categoryId && (page.parentPageId ?? null) === parentPageId && normalizeTitle(page.title ?? '') === titleKey)) throw codedError('title_conflict')
     const pageId = existingPage?.pageId ?? input.pageId ?? randomUUID()
+    const proposedPage = { pageId, path: existingPage?.path ?? tombstone?.path ?? '', revision: (existingPage?.revision ?? tombstone?.revision ?? 0) + 1,
+      title: input.title.trim(), categoryId: input.categoryId, summary: input.summary, parentPageId }
+    validateActivePageSet([...catalog.pages.filter(page => page.pageId !== pageId), proposedPage], schema, pageId)
     const revision = (existingPage?.revision ?? tombstone?.revision ?? 0) + 1
     const relPath = existingPage?.path ?? tombstone?.path ?? `wiki/${slug(input.title)}-${pageId.slice(0, 8)}.md`
     const marker = serializeWikiPageMarker({ pageId, categoryId: input.categoryId, summary: input.summary, parentPageId, sourceRefs: input.sourceRefs ?? [], revision })
@@ -74,7 +81,7 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     const bytes = Buffer.from(pageBody)
     const oldSnapshot = existingPage ? await writeService.read(existingPage.path) : undefined
     const result: WikiSavePageResult = { pageId, revision, projectionStatus: 'complete', operationId: invocationKey }
-    const event: WikiSuccessEvent = { operationId: invocationKey, type: input.operationKind ?? (existingPage ? 'saved' : 'created'), title: input.title.trim(), revision, committedAt: now().toISOString() }
+    const event: WikiSuccessEvent = { operationId: invocationKey, type: input.operationKind ?? (existingPage ? 'saved' : 'created'), title: input.title.trim(), revision, committedAt: now().toISOString(), pageId, sourceIds: (input.sourceRefs ?? []).map(source => source.sourceId), changeSummary: input.summary }
     const journal: OperationJournal = { formatVersion: 1, operationId: invocationKey, inputFingerprint: fingerprint, callerId: input.callerId, lane: input.lane, status: 'prepared', targetPath: relPath, oldHash: oldSnapshot?.sha256 ?? null, newHash: sha(bytes), stagingPath: `.wiki-service/staging/${invocationKey}.payload`, result, eventMaterial: event }
     await options.store.write(journal.stagingPath, bytes)
     await options.store.write(operationPath, json(journal))
@@ -130,7 +137,7 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
       const target = await options.store.read(journal.targetPath)
       if (sha(target) !== journal.newHash) throw codedError('external_change_conflict')
       if (existing && (existing.revision ?? 1) === journal.result.revision && existing.contentHash !== journal.newHash) throw codedError('external_change_conflict')
-      const page = { pageId: journal.result.pageId, path: journal.targetPath, revision: journal.result.revision, contentHash: journal.newHash, title: decoded.title, categoryId: decoded.categoryId, summary: decoded.summary, parentPageId: decoded.parentPageId }
+      const page = { pageId: journal.result.pageId, path: journal.targetPath, revision: journal.result.revision, contentHash: journal.newHash, title: decoded.title, categoryId: decoded.categoryId, summary: decoded.summary, parentPageId: decoded.parentPageId, sourceRefs: decoded.sourceRefs }
       const nextCatalog = { formatVersion: 1 as const, pages: [...catalog.pages.filter(item => item.pageId !== page.pageId), page], tombstones: (catalog.tombstones ?? []).filter(item => item.pageId !== page.pageId) }
       await options.store.writeCatalog(nextCatalog)
     }
@@ -188,8 +195,8 @@ async function listOperations(store: WikiFileStore): Promise<OperationJournal[]>
 function parsePage(text: string) {
   const match = /<!-- wiki-page:start -->\n(.*?)\n<!-- wiki-page:end -->\n# (.+?)\n\n/s.exec(text)
   if (!match) throw codedError('wiki-page-marker-invalid')
-  const marker = JSON.parse(match[1]) as { categoryId: string; summary: string; parentPageId: string | null }
-  return { title: match[2], categoryId: marker.categoryId, summary: marker.summary, parentPageId: marker.parentPageId }
+  const marker = JSON.parse(match[1]) as { categoryId: string; summary: string; parentPageId: string | null; sourceRefs?: Array<{ sourceId: string; sourceRevision: number }> }
+  return { title: match[2], categoryId: marker.categoryId, summary: marker.summary, parentPageId: marker.parentPageId, sourceRefs: marker.sourceRefs ?? [] }
 }
 function normalizeTitle(value: string): string { return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US') }
 function isDescendant(pages: Array<{ pageId: string; parentPageId?: string | null }>, candidateId: string, ancestorId: string): boolean {
@@ -204,6 +211,28 @@ function isDescendant(pages: Array<{ pageId: string; parentPageId?: string | nul
     current = pages.find(page => page.pageId === current!.parentPageId)
   }
   return false
+}
+function validateActivePageSet(pages: Array<{ pageId: string; title?: string; categoryId?: string; parentPageId?: string | null }>, schema: WikiDomainSchema, updatedPageId: string): void {
+  const byId = new Map(pages.map(page => [page.pageId, page]))
+  const titleKeys = new Set<string>()
+  for (const page of pages) {
+    const category = schema.categories.find(item => item.id === page.categoryId)
+    if (!category) throw codedError('category_invalid')
+    if (page.pageId === updatedPageId && category.status !== 'active') throw codedError('category_invalid')
+    const parent = page.parentPageId ? byId.get(page.parentPageId) : undefined
+    if (page.parentPageId && !parent) throw codedError('parent_invalid')
+    if (category.allowedParentCategoryIds && page.parentPageId && !category.allowedParentCategoryIds.includes(parent?.categoryId ?? '')) throw codedError('parent_invalid')
+    const titleKey = `${page.categoryId}\0${page.parentPageId ?? ''}\0${normalizeTitle(page.title ?? '')}`
+    if (titleKeys.has(titleKey)) throw codedError('title_conflict')
+    titleKeys.add(titleKey)
+    const visited = new Set<string>([page.pageId])
+    let parentId = page.parentPageId
+    while (parentId) {
+      if (visited.has(parentId)) throw codedError('parent_invalid')
+      visited.add(parentId)
+      parentId = byId.get(parentId)?.parentPageId ?? null
+    }
+  }
 }
 function slug(value: string): string { return value.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'page' }
 function sha(value: string | Buffer): string { return createHash('sha256').update(value).digest('hex') }

@@ -19,6 +19,15 @@ async function fixture() {
 const input = { requestId: 'create', toolUseId: 'create', callerId: 'assistant', lane: 'chat', title: 'Alpha', categoryId: 'topic', summary: 'Summary', markdown: 'Original body', schemaVersion: 1 }
 
 describe('WikiHistoryService', () => {
+  it('reports externally reconciled revisions as external edits', async () => {
+    const { store, coordinator, service } = await fixture()
+    const page = await coordinator.savePage(input)
+    await coordinator.savePage({ ...input, requestId: 'update', toolUseId: 'update', pageId: page.pageId, expectedRevision: 1, markdown: 'Changed body' })
+    await store.write('.wiki-service/page-revision-metadata/' + page.pageId + '/2.json', JSON.stringify({ formatVersion: 1, pageId: page.pageId, revision: 2, externalEdit: true, changeSummary: 'External edit' }))
+    const revisions = await service.listPageRevisions(page.pageId)
+    expect(revisions.find(item => item.revision === 2)).toMatchObject({ externalEdit: true, changeSummary: 'External edit' })
+    expect(revisions.find(item => item.revision === 1)?.externalEdit).toBe(false)
+  })
   it('lists immutable revisions and confirms the final full restored page before writing', async () => {
     const { root, coordinator, service } = await fixture()
     const created = await coordinator.savePage(input)
@@ -42,6 +51,17 @@ describe('WikiHistoryService', () => {
     expect(await readFile(path.join(root, '.wiki-service/page-history', second.pageId, '1.md'), 'utf8')).toContain('Other')
   })
 
+  it('expires an unapplied restore proposal at its TTL', async () => {
+    const { store, coordinator } = await fixture()
+    const page = await coordinator.savePage(input)
+    let clock = 1_000
+    const service = createWikiHistoryService({ store, coordinator, schema: () => ({ schemaVersion: 1, categories: [{ id: 'topic', status: 'active' }] }), verifyConfirmation: receipt => receipt === 'approved', now: () => clock, proposalTtlMs: 100 })
+    const proposal = await service.prepareRestore({ pageId: page.pageId, targetRevision: 1, expectedCurrentRevision: 1, callerId: 'assistant', lane: 'chat' })
+    clock += 101
+    await expect(service.applyRestore(proposal.proposalId, { requestId: 'expired-restore', toolUseId: 'expired-restore', callerId: 'assistant', lane: 'chat', receipt: 'approved' })).rejects.toMatchObject({ code: 'restore_proposal_expired' })
+    expect((await store.readCatalog())?.pages[0]).toMatchObject({ revision: 1 })
+  })
+
   it('rejects automation and model supplied approval claims', async () => {
     const { coordinator, service } = await fixture()
     const page = await coordinator.savePage(input)
@@ -62,4 +82,47 @@ describe('WikiHistoryService', () => {
     expect((await store.readCatalog())?.pages).toMatchObject([{ pageId: page.pageId, revision: 2 }])
     expect(await readFile(path.join(root, 'wiki', 'alpha-' + page.pageId.slice(0, 8) + '.md'), 'utf8').catch(() => '')).not.toBe('')
   })
+
+  it('lists self-parent, descendant-cycle, and parent-category conflicts before restore confirmation', async () => {
+    const categories = [
+      { id: 'parent-a', name: 'Parent A', status: 'active' as const },
+      { id: 'parent-b', name: 'Parent B', status: 'active' as const },
+      { id: 'child-c', name: 'Child C', status: 'active' as const, allowedParentCategoryIds: ['parent-a'] },
+    ]
+    const { coordinator, service } = await fixtureWithCategories(categories)
+    const parentA = await coordinator.savePage({ ...input, categoryId: 'parent-a', title: 'Parent A' })
+    const parentB = await coordinator.savePage({ ...input, requestId: 'parent-b', toolUseId: 'parent-b', categoryId: 'parent-b', title: 'Parent B' })
+    const child = await coordinator.savePage({ ...input, requestId: 'child', toolUseId: 'child', categoryId: 'child-c', title: 'Child', parentPageId: parentA.pageId })
+
+    const self = await service.prepareRestore({ pageId: parentA.pageId, targetRevision: 1, expectedCurrentRevision: 1, callerId: 'assistant', lane: 'chat', overrides: { parentPageId: parentA.pageId } })
+    const cycle = await service.prepareRestore({ pageId: parentA.pageId, targetRevision: 1, expectedCurrentRevision: 1, callerId: 'assistant', lane: 'chat', overrides: { parentPageId: child.pageId } })
+    const disallowedCategory = await service.prepareRestore({ pageId: child.pageId, targetRevision: 1, expectedCurrentRevision: 1, callerId: 'assistant', lane: 'chat', overrides: { parentPageId: parentB.pageId } })
+
+    expect(self.conflicts.map(item => item.code)).toContain('parent_invalid')
+    expect(cycle.conflicts.map(item => item.code)).toContain('parent_invalid')
+    expect(disallowedCategory.conflicts.map(item => item.code)).toContain('parent_invalid')
+  })
+
+  it('replays a successful restore tool invocation with its original stale baseline', async () => {
+    const { coordinator, service } = await fixture()
+    const page = await coordinator.savePage(input)
+    await coordinator.savePage({ ...input, requestId: 'update', toolUseId: 'update', pageId: page.pageId, expectedRevision: 1, markdown: 'Changed body' })
+    const proposal = await service.prepareRestore({ pageId: page.pageId, targetRevision: 1, expectedCurrentRevision: 2, callerId: 'assistant', lane: 'chat' })
+    const invocation = { requestId: 'restore-idempotent', toolUseId: 'restore-idempotent', callerId: 'assistant', lane: 'chat', receipt: 'approved' }
+
+    const first = await service.applyRestore(proposal.proposalId, invocation)
+    const retry = await service.applyRestore(proposal.proposalId, invocation)
+
+    expect(retry).toEqual(first)
+    expect((await service.listPageRevisions(page.pageId)).map(item => item.revision)).toEqual([3, 2, 1])
+  })
 })
+
+async function fixtureWithCategories(categories: Array<{ id: string; name: string; status: 'active'; allowedParentCategoryIds?: string[] }>) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'wiki-history-categories-'))
+  roots.push(root)
+  const store = createWikiFileStore(root)
+  const coordinator = createWikiDomainCoordinator({ store, schema: () => ({ schemaVersion: 1, categories }) })
+  const service = createWikiHistoryService({ store, coordinator, schema: () => ({ schemaVersion: 1, categories }), verifyConfirmation: receipt => receipt === 'approved' })
+  return { root, store, coordinator, service }
+}
