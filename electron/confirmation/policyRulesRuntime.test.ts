@@ -199,8 +199,8 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
       requestApproval
     })
 
-    expect(requestApproval).toHaveBeenCalledWith({ channel: 'wechat', senderId: 'external-sender',
-      messageId: 'incoming-1', ruleId: 'ingress-direct-other-deny' })
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({ channel: 'wechat', senderId: 'external-sender',
+      messageId: 'incoming-1', ruleId: 'ingress-direct-other-deny', policyRevision: expect.any(String) }))
     expect(result.ok).toBe(true)
   })
 

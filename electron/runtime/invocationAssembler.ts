@@ -177,6 +177,8 @@ export interface AgentInvocationMaterials {
   getBrowserDetectContext?: () => import('../../src/shared/browserTypes').BrowserDetectContext
   /** P3：父调用的规则集上界（嵌套调用取交集；放行集合只收窄，授权不继承）。 */
   policyRuleFloor?: import('../../src/shared/confirmation/types').PolicyRule[]
+  /** Live parent policy floor; unlike policyRuleFloor this may refresh after a policy revision. */
+  resolvePolicyRuleFloor?: () => import('../../src/shared/confirmation/types').PolicyRule[]
   /** P7（偏差 16）：本次调用的工具裁剪声明（allow 封闭集 / deny）。 */
   toolsTrim?: { allow?: readonly string[]; deny?: readonly string[] }
   /** P7：父调用的工具裁剪上界（嵌套取交集；违规 = 装配期拒绝）。 */
@@ -533,8 +535,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const withOrigin = db
     ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
     : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} as Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>, disabledRuleIds: [] }
-  const effectiveRules = materials.policyRuleFloor
-    ? intersectPolicyRulesWithFloor(withOrigin.rules, materials.policyRuleFloor)
+  const initialPolicyRuleFloor = materials.resolvePolicyRuleFloor?.() ?? materials.policyRuleFloor
+  const effectiveRules = initialPolicyRuleFloor
+    ? intersectPolicyRulesWithFloor(withOrigin.rules, initialPolicyRuleFloor)
     : withOrigin.rules
   // 档位来源：显式声明（无库宿主 / 测试收紧）优先；有库宿主读实际配置；否则 standard
   const explicitLanePackage = (materials as { policyLanePackage?: import('../../src/shared/policy/policyPackages').PolicyPackage })
@@ -575,8 +578,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     const currentOrigin = db
       ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
       : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} as Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>, disabledRuleIds: [] }
-    const currentRules = materials.policyRuleFloor
-      ? intersectPolicyRulesWithFloor(currentOrigin.rules, materials.policyRuleFloor)
+    const currentParentFloor = materials.resolvePolicyRuleFloor?.() ?? materials.policyRuleFloor
+    const currentRules = currentParentFloor
+      ? intersectPolicyRulesWithFloor(currentOrigin.rules, currentParentFloor)
       : currentOrigin.rules
     const currentLanePackage = explicitLanePackage ?? resolveLanePackage()
     const version = createHash('sha256').update(JSON.stringify({
@@ -635,6 +639,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     }
   }
   // 暴露面规则与门控同源同判（P3：带来源解析；嵌套交集同样适用）
+  // Host-only live policy readers are attached outside the serializable SDK contract.
   const exposure = db ? { rules: effectiveRules } : undefined
   // FR11（评审 P1 修复）：装配器先读档位再建快照——auto/always 档按偏执上限（512/1 MiB）准入，
   // off 档走现状路径（64/96 KiB 裁剪，10.1.1 逐字节兼容）。档位与 toolChatLoop 的 plan 计算同源
@@ -870,6 +875,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput } as const
           const metadata: Record<string, unknown> = {
             decisionRuleId: result.decision.ruleId,
+            policyFactsHash: createHash('sha256').update(JSON.stringify(result.facts)).digest('hex'),
             fileAutoApproved: result.fileAutoApproved === true,
             ...(result.fileAutoApproved === true && (args.toolName === 'write_file' || args.toolName === 'edit_file')
               ? { autoApprovedWrite: { path: typeof args.toolInput.path === 'string' ? args.toolInput.path : '', stats: 'pending' } }
@@ -1069,7 +1075,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             db,
             sessionStorage: sessionStorage!,
             ...(materials.historyForSession ? { historyForSession: materials.historyForSession } : {}),
-            policyRuleFloor: materials.policyRuleFloor ?? effectiveRules,
+            policyRuleFloor: resolveCurrentAuthorization().effectiveRules,
+            resolvePolicyRuleFloor: () => resolveCurrentAuthorization().effectiveRules,
             workDir: materials.resolveWorkDir?.() ?? materials.workDir,
             ...(materials.taskWorkDirs !== undefined ? { taskWorkDirs: materials.taskWorkDirs } : {}),
             ...(materials.taskAccessPermissions !== undefined ? { taskAccessPermissions: materials.taskAccessPermissions } : {}),
@@ -1134,6 +1141,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       })
       return createAgentSdkConfirmationPort({
       ...confirmationAdapter,
+      subscribeAuthorizationChange: confirmationAdapter.subscribeAuthorizationChange ?? ((call, listener) =>
+        getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(call.invocationId, materialsLane, listener)),
+      currentAuthorizationVersion: confirmationAdapter.currentAuthorizationVersion ?? (() => resolveCurrentAuthorization().authorizationVersion),
       fallback: confirmationAdapter.fallback ?? (async (call, confirmation, context, primaryOutcome) => {
         if (!shouldFallbackToUser({
           lane: materialsLane,
@@ -1634,6 +1644,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       }
     } : {}),
     exposure,
+    ...(db ? {
+      resolveExposureRules: () => resolveCurrentAuthorization().effectiveRules,
+      resolveExposureAuthorizationVersion: () => resolveCurrentAuthorization().authorizationVersion
+    } : {}),
     mcp,
     usage,
     recordProviderAttemptUsage: createAgentSdkUsageRecorder({

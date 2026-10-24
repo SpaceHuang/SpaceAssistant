@@ -217,7 +217,10 @@ export function computeEffectiveTools(args: {
 }
 
 export async function computeEffectiveToolsWithExposureApproval(
-  args: Parameters<typeof computeEffectiveTools>[0],
+  args: Parameters<typeof computeEffectiveTools>[0] & {
+    resolveExposureRules?: () => PolicyRule[]
+    resolveExposureAuthorizationVersion?: () => string
+  },
   requestApproval: (request: { lane: import('../src/shared/confirmation/types').ExecutionLane; toolName: string; ruleId: string }) => Promise<boolean>
 ): Promise<EffectiveTools> {
   const resolvedBuiltinTools = await filterBuiltinToolsForApiWithApproval({
@@ -228,6 +231,8 @@ export async function computeEffectiveToolsWithExposureApproval(
     wechat: args.wechatConfig,
     remoteContext: args.remoteContext,
     rules: args.exposureRules,
+    resolveRules: args.resolveExposureRules,
+    resolveAuthorizationVersion: args.resolveExposureAuthorizationVersion,
     requestApproval
   })
   return computeEffectiveTools({ ...args, resolvedBuiltinTools })

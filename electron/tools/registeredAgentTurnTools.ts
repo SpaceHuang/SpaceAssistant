@@ -82,6 +82,7 @@ export function createRegisteredAgentTurnTools(input: {
   discardPreparedTool(call: TurnToolCall): void
   getPreparedCall(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): TurnToolCall | undefined
   getPreparedFacts(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): unknown
+  getPolicyDecisionMetadata(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): { ruleId: string; factsHash: string } | undefined
   updateExecutionContext(call: TurnToolCall, update: (context: Record<string, unknown>) => void): void
   toolExecution: ReturnType<typeof createPermitBoundToolExecutionPort<TurnToolCall, TurnToolResult>>
   executeDeferred(call: TurnToolCall, input: {
@@ -225,6 +226,15 @@ export function createRegisteredAgentTurnTools(input: {
     return record ? record.registeredTool.getPreparedFacts?.(record.handle.prepared) : undefined
   }
 
+  const getPolicyDecisionMetadata = (identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>) => {
+    const record = prepared.get(JSON.stringify([identity.invocationId, identity.toolCallId]))
+    const context = record?.runtimeContext
+    if (!context || typeof context !== 'object' || Array.isArray(context)) return undefined
+    const value = context as Record<string, unknown>
+    return typeof value.decisionRuleId === 'string' && typeof value.policyFactsHash === 'string'
+      ? { ruleId: value.decisionRuleId, factsHash: value.policyFactsHash } : undefined
+  }
+
   const updateExecutionContext = (call: TurnToolCall, update: (context: Record<string, unknown>) => void): void => {
     const record = prepared.get(keyFor(call))
     const resolveName = input.resolveRegisteredToolName ?? ((name: string) => resolveRegisteredToolName(name, input.registry))
@@ -323,6 +333,7 @@ export function createRegisteredAgentTurnTools(input: {
     discardPreparedTool,
     getPreparedCall,
     getPreparedFacts,
+    getPolicyDecisionMetadata,
     updateExecutionContext,
     toolExecution,
     executeDeferred,

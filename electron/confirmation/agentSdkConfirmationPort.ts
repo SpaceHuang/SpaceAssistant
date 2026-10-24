@@ -71,6 +71,8 @@ export function createAgentSdkConfirmationPort(input: {
     context: GateConfirmationContext,
     primaryOutcome: ConfirmOutcome
   ): Promise<Awaited<ReturnType<ConfirmationPort>> | undefined>
+  subscribeAuthorizationChange?(call: Parameters<ConfirmationPort>[0]['call'], listener: () => void): () => void
+  currentAuthorizationVersion?(call: Parameters<ConfirmationPort>[0]['call']): string | undefined
 }): ConfirmationPort {
   const explicitDenials = new Map<string, Readonly<{ userMessage?: string }>>()
   return async (confirmation) => {
@@ -113,18 +115,36 @@ export function createAgentSdkConfirmationPort(input: {
       }
     }
     const channel = input.createChannel(confirmation.call, confirmation)
+    let authorizationChanged = false
+    let waiterCancelled = false
+    let resolveAuthorizationChange!: (value: Awaited<ReturnType<ConfirmationPort>>) => void
+    const authorizationChange = new Promise<Awaited<ReturnType<ConfirmationPort>>>((resolve) => { resolveAuthorizationChange = resolve })
     const cancel = () => {
+      if (waiterCancelled) return
+      waiterCancelled = true
       input.cancel(confirmation.call, confirmation.confirmationId)
       channel.cancel(confirmation.confirmationId, 'cancelled')
     }
+    const initialAuthorizationVersion = input.currentAuthorizationVersion?.(confirmation.call)
+    const onAuthorizationChange = () => {
+      if (input.currentAuthorizationVersion && initialAuthorizationVersion === input.currentAuthorizationVersion(confirmation.call)) return
+      authorizationChanged = true
+      resolveAuthorizationChange({ kind: 'authorization-changed' })
+      cancel()
+    }
+    const removeAuthorizationListener = input.subscribeAuthorizationChange?.(confirmation.call, onAuthorizationChange) ?? (() => undefined)
     if (confirmation.signal?.aborted) {
       cancel()
+      removeAuthorizationListener()
       return { kind: 'cancelled', cause: 'cancelled' }
     }
 
     let abort: (() => void) | undefined
     const aborted = new Promise<Awaited<ReturnType<ConfirmationPort>>>((resolve) => {
-      abort = () => { cancel(); resolve({ kind: 'cancelled', cause: 'cancelled' }) }
+      abort = () => {
+        cancel()
+        resolve(authorizationChanged ? { kind: 'authorization-changed' } : { kind: 'cancelled', cause: 'cancelled' })
+      }
       confirmation.signal?.addEventListener('abort', abort, { once: true })
     })
     try {
@@ -135,7 +155,7 @@ export function createAgentSdkConfirmationPort(input: {
       )
       if (confirmation.signal?.aborted) {
         cancel()
-        return { kind: 'cancelled', cause: 'cancelled' }
+        return authorizationChanged ? { kind: 'authorization-changed' } : { kind: 'cancelled', cause: 'cancelled' }
       }
       try {
         await input.publish(confirmation.call, request, confirmation.confirmationId, confirmation.context as GateConfirmationContext)
@@ -143,7 +163,12 @@ export function createAgentSdkConfirmationPort(input: {
         cancel()
         return { kind: 'unavailable', cause: 'unavailable' }
       }
-      const result = await Promise.race([response, aborted.then((mapped) => ({ mapped }))])
+      const result = await Promise.race([
+        response,
+        aborted.then((mapped) => ({ mapped })),
+        authorizationChange.then((mapped) => ({ mapped }))
+      ])
+      if (authorizationChanged) return { kind: 'authorization-changed' }
       let outcome = result.mapped
       if ('outcome' in result && confirmation.answerer === 'agent' &&
         result.outcome.kind !== 'approved-with-action' &&
@@ -167,6 +192,7 @@ export function createAgentSdkConfirmationPort(input: {
       return outcome
     } finally {
       if (abort) confirmation.signal?.removeEventListener('abort', abort)
+      removeAuthorizationListener()
     }
   }
 }

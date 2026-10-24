@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import {
   authorizeImInboundMessage,
   evaluateImInboundGuard,
@@ -33,7 +34,8 @@ describe('imInboundGuard', () => {
       getPolicyRules: () => rules
     }
     expect(evaluateImInboundGuard(base)).toMatchObject({ ok: false, reason: 'approval_required', ruleId: 'ingress-direct-other-deny' })
-    const approvedIngress = { channel: 'wechat' as const, senderId: 'external', messageId: 'platform-message-7', ruleId: 'ingress-direct-other-deny' }
+    const approvedIngress = { channel: 'wechat' as const, senderId: 'external', messageId: 'platform-message-7', ruleId: 'ingress-direct-other-deny',
+      policyRevision: createHash('sha256').update(JSON.stringify(rules)).digest('hex') }
     const approved = evaluateImInboundGuard({ ...base, approvedIngress })
     expect(approved.ok).toBe(true)
     if (approved.ok) expect(approved.snapshot.ingressApproval).toEqual(approvedIngress)
@@ -53,6 +55,44 @@ describe('imInboundGuard', () => {
       }
     })
     expect(stale).toMatchObject({ ok: false, reason: 'not_owner' })
+  })
+
+  it('re-evaluates a pending ingress approval against the new policy revision', async () => {
+    let rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'ingress-direct-other-deny'
+      ? { ...rule, action: 'ask' as const, userOverride: true }
+      : rule)
+    let approvals = 0
+    const result = await authorizeImInboundMessage({ channel: 'wechat', senderId: 'external', messageId: 'policy-change-message',
+      getConfig: () => ({ enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['owner'] }),
+      getPolicyRules: () => rules,
+      requestApproval: async () => {
+        approvals += 1
+        rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'ingress-direct-other-deny'
+          ? { ...rule, action: 'allow' as const, userOverride: true }
+          : rule)
+        return true
+      }
+    })
+    expect(result.ok).toBe(true)
+    expect(approvals).toBe(1)
+    if (result.ok) expect(result.snapshot.policyRevision).toBe(createHash('sha256').update(JSON.stringify(rules)).digest('hex'))
+  })
+
+  it('requires a fresh approval after an A→B→A revision change while ingress approval is pending', async () => {
+    const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'ingress-direct-other-deny'
+      ? { ...rule, action: 'ask' as const, userOverride: true } : rule)
+    let revision = 'im-v2:1:4'
+    let approvals = 0
+    const result = await authorizeImInboundMessage({ channel: 'wechat', senderId: 'external', messageId: 'aba-message',
+      getConfig: () => ({ enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['owner'] }),
+      getPolicyRules: () => rules, getPolicyRevision: () => revision,
+      requestApproval: async () => {
+        approvals += 1
+        if (approvals === 1) revision = 'im-v2:3:6'
+        return approvals === 1
+      } })
+    expect(result).toMatchObject({ ok: false, reason: 'approval_rejected' })
+    expect(approvals).toBe(2)
   })
   it('rejects non-owner and remote disabled', () => {
     expect(

@@ -149,6 +149,43 @@ export function createWeChatBundle(deps: {
       if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return false
       return Boolean(await verifyDeferredWeChatAttachment(resolved.workDir, attachmentPath, expectedHash))
     },
+    reauthorizePolicy: async (todo, envelope) => {
+      const context = envelope.executionContext
+      const storage = deps.sessionStorage
+      if (!storage || typeof context.messageId !== 'string' || typeof context.providerRouteId !== 'string' || typeof context.model !== 'string') {
+        throw new Error('DEFERRED_POLICY_RECHECK_MATERIAL_MISSING')
+      }
+      const resolved = resolveWorkDirForSession(storage.queries, todo.originSessionId,
+        () => deps.workDirManager.listProfiles(), () => deps.workDirManager.getActiveProfileId(), () => deps.workDirManager.getActiveWorkDir())
+      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) throw new Error('DEFERRED_POLICY_RECHECK_WORKDIR_CHANGED')
+      const requestedAttachmentPath = typeof envelope.canonicalArgs.imagePath === 'string' ? envelope.canonicalArgs.imagePath
+        : typeof envelope.canonicalArgs.filePath === 'string' ? envelope.canonicalArgs.filePath : undefined
+      const expectedAttachmentHash = envelope.contentVersions.attachmentSha256
+      const deferredAttachmentApproval = requestedAttachmentPath && typeof expectedAttachmentHash === 'string'
+        ? await verifyDeferredWeChatAttachment(resolved.workDir, requestedAttachmentPath, expectedAttachmentHash) : null
+      if (requestedAttachmentPath && !deferredAttachmentApproval) throw new Error('DEFERRED_POLICY_RECHECK_ATTACHMENT_CHANGED')
+      const config = readCfg()
+      const result = await executeDeferredImTool({ db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
+        requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
+        toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs, policyOnly: true,
+        lane: 'wechat', providerRouteId: context.providerRouteId,
+        remoteContext: { source: 'wechat', messageId: context.messageId, userId: todo.ownerId, authOwner: todo.ownerId,
+          originSessionId: todo.originSessionId, workDirProfileId: resolved.profileId, requestId: envelope.requestId,
+          authorizationGeneration: remoteAuthorizationRegistry.getGeneration('wechat'),
+          ...(typeof context.contextToken === 'string' ? { contextToken: context.contextToken } : {}),
+          ...(typeof context.currentUserMessageId === 'string' ? { currentUserMessageId: context.currentUserMessageId } : {}),
+          taskBinding: { workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: todo.planRevision,
+            revision: Number.isSafeInteger(context.taskRevision) ? context.taskRevision as number : todo.planRevision },
+          ...(deferredAttachmentApproval ? { deferredAttachmentApproval } : {}), wechatConfig: config },
+        model: context.model, toolsConfig: deps.getToolsConfig(), workDir: resolved.workDir,
+        userDataDir: deps.getUserDataPath(), getApiKey: deps.getApiKey, getBaseUrl: deps.getBaseUrl,
+        workDirManager: deps.workDirManager, getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
+        getShellConfig: () => readShellConfigFromDb(deps.db), toolChatExtras: { wechatConfig: config }
+      }) as { decision?: { kind?: string; reasonCode?: string }; policy?: { ruleId: string; factsHash: string } }
+      if (!result.decision || !result.policy || !['allow', 'ask', 'deny'].includes(result.decision.kind ?? '')) throw new Error('DEFERRED_POLICY_RECHECK_RESULT_INVALID')
+      return { decision: result.decision.kind as 'allow' | 'ask' | 'deny', rule: result.policy,
+        ...(result.decision.reasonCode ? { reasonSummary: result.decision.reasonCode } : {}) }
+    },
     dispatch: async ({ todo, envelope }) => {
       const context = envelope.executionContext
       const storage = deps.sessionStorage

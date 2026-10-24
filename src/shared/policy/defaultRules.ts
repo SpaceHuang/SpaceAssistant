@@ -87,7 +87,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   {
     id: 'outbound-incomplete-standard-review', when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete', 'policy-tier:standard'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: ['send_email', 'send_message', 'wechat_send', 'wechat_reply', 'run_lark_cli'], actionClass: 'outbound', signals: ['outbound-inspection-incomplete', 'policy-tier:standard'], excludeSignals: ['outbound-evidence-present'] },
     denyClass: 'insufficient-info', action: 'ask', answerer: 'agent', reason: '标准档出站检查不完整，交由安全审核 Agent'
   },
   {
@@ -490,14 +490,16 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     denyClass: 'insufficient-info',
     action: 'ask',
     configRequires: { config: 'actRequiresConfirm', equals: true },
+    askUnless: { config: 'remoteActSkipConfirm', equals: true },
     reason: '低影响浏览器读取/导航动作进入 standard 审核候选'
   },
   {
     id: 'browser-act-ask-desktop',
     when: 'invocation',
-    match: { lane: ['desktop'], toolName: 'browser', signals: ['browser-act'] },
+    match: { lane: ['desktop'], toolName: 'browser', signals: ['browser-act'], excludeSignals: ['browser-act-dangerous'] },
     denyClass: 'insufficient-info',
     action: 'ask',
+    configRequires: { config: 'actRequiresConfirm', equals: true },
     reason: '浏览器 act 需确认'
   },
   // navigate（open 模式）：远程仅在桌面与远程开关都要求时确认（等价现基线+跳过覆写叠加语义）；
@@ -679,7 +681,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'mcp-tool-ask',
     when: 'invocation',
-    match: { signals: ['mcp-tool'] },
+    match: { signals: ['mcp-tool'], excludeSignals: ['mcp-public-read'] },
     denyClass: 'insufficient-info',
     action: 'ask',
     reason: 'MCP 工具调用需确认'

@@ -13,6 +13,7 @@ export type ExecutionAdmissionCoordinator = {
   markPermitConsumed(permitId: string, binding: PermitBinding): void
   beginDispatch(permitId: string, expected: PermitBinding, validatePrepared?: () => boolean | Promise<boolean>): Promise<BeginDispatchResult>
   invalidate(binding: Pick<PermitBinding, 'requestId' | 'invocationId'>, reason: 'cancelled' | 'revoked' | 'authorization-changed'): void
+  clearAuthorizationInvalidation?(binding: Pick<PermitBinding, 'requestId' | 'invocationId'>): void
   settle(permitId: string): void
 }
 
@@ -93,6 +94,11 @@ export class InMemoryExecutionAdmissionCoordinator implements ExecutionAdmission
       }
     }
     for (const controller of this.active.get(binding.requestId)?.get(binding.invocationId) ?? []) controller.abort(reason)
+  }
+
+  clearAuthorizationInvalidation(binding: Pick<PermitBinding, 'requestId' | 'invocationId'>): void {
+    const key = invocationKey(binding.requestId, binding.invocationId)
+    if (this.invalidations.get(key) === 'AUTHORIZATION_STALE') this.invalidations.delete(key)
   }
 
   settle(permitId: string): void {

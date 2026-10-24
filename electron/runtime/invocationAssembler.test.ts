@@ -33,6 +33,7 @@ import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { AgentChannel } from '../confirmation/agentChannel'
 import { RunShellPlanError } from '../tools/runShellPlan'
 import { PlanRejectedError } from '../../packages/agent-sdk/src/turn'
+import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 
 const TEST_USER_DATA_DIR = path.join(os.tmpdir(), 'spaceassistant-invocation-test-user-data')
 
@@ -738,8 +739,55 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     await fs.rm(workDir, { recursive: true, force: true })
   })
 
+  it('refreshes a nested parent rule floor action after a persisted policy revision', async () => {
+    const db = createImPolicyTestDb('nested-parent-policy-floor-refresh')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nested-parent-policy-floor-'))
+    const originalRule = DEFAULT_POLICY_RULES.find(({ id }) => id === 'mcp-tool-ask')!
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'ask' } }, updatedAt: 2,
+      eventId: 'nested-parent-policy-floor-old' })
+    let parentFloorAction: 'ask' | 'allow' = 'ask'
+    const { agentSdk } = assembleInvocation({ requestId: 'nested-parent-policy-floor', sessionId: 'nested-parent-session', lane: 'wechat',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      resolvePolicyRuleFloor: () => [{ ...originalRule, action: parentFloorAction, userOverride: true }] })
+    commitImPolicySnapshot(getDbConnection(db), { expectedRevision: 2, policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'allow' } }, updatedAt: 3,
+      eventId: 'nested-parent-policy-floor-new' })
+    parentFloorAction = 'allow'
+    const binding = { requestId: 'nested-parent-policy-floor', turnId: 'nested-parent-turn', invocationId: 'nested-parent-policy-floor',
+      toolCallId: 'nested-parent-tool', capabilityId: 'mcp.test.create_record', inputSnapshotHash: 'hash', planDigest: 'plan',
+      factsDigest: 'facts', authorizationVersion: 'old', phase: 'initial-compat' as const }
+    const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+      toolName: 'mcp.test.create_record', input: { body: 'record' } })
+    expect(args.effectiveRules.find(({ id }) => id === 'mcp-tool-ask')).toMatchObject({ action: 'allow', userOverride: true })
+    db.close()
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
+  it('keeps an explicit structural parent deny when persisted policy allows the same rule', async () => {
+    const db = createImPolicyTestDb('nested-parent-structural-deny')
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nested-parent-structural-deny-'))
+    const originalRule = DEFAULT_POLICY_RULES.find(({ id }) => id === 'mcp-tool-ask')!
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'allow' } }, updatedAt: 2,
+      eventId: 'nested-parent-structural-deny-revision' })
+    const { agentSdk } = assembleInvocation({ requestId: 'nested-parent-structural-deny', sessionId: 'nested-parent-session', lane: 'wechat',
+      model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir, userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      policyRuleFloor: [{ ...originalRule, action: 'deny', userOverride: true }] })
+    const binding = { requestId: 'nested-parent-structural-deny', turnId: 'nested-parent-turn', invocationId: 'nested-parent-structural-deny',
+      toolCallId: 'nested-parent-tool', capabilityId: 'mcp.test.create_record', inputSnapshotHash: 'hash', planDigest: 'plan',
+      factsDigest: 'facts', authorizationVersion: 'old', phase: 'initial-compat' as const }
+    const args = await agentSdk.resolveGateArgs(binding, { invocationId: binding.invocationId, toolCallId: binding.toolCallId,
+      toolName: 'mcp.test.create_record', input: { body: 'record' } })
+    expect(args.effectiveRules.find(({ id }) => id === 'mcp-tool-ask')).toMatchObject({ action: 'deny' })
+    db.close()
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
   it.each([
-    { override: 'ask' as const, expected: { type: 'require-confirm', answerer: 'user', ruleId: 'mcp-tool-ask', disposition: 'human-required' } },
+    { override: 'ask' as const, expected: { type: 'require-confirm', answerer: 'user', ruleId: 'im-write-ask', disposition: 'human-required' } },
     { override: 'deny' as const, expected: { type: 'deny', ruleId: 'mcp-tool-ask' } }
   ])('honors persisted MCP $override override over the generic IM write candidate after real assembly', async ({ override, expected }) => {
     const db = createImPolicyTestDb(`im-standard-v2-mcp-${override}-override`)

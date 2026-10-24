@@ -21,6 +21,8 @@ export interface SafetyPermitStore {
   consume(permitId: string, expected: PermitBinding): Promise<PermitConsumeResult>
   invalidateInvocation(requestId: string, reason: 'cancelled' | 'revoked' | 'expired'): void
   invalidateBinding(requestId: string, invocationId: string, reason: 'cancelled' | 'revoked' | 'authorization-changed'): void
+  /** Clear only a prior policy-version fence after a fresh binding passed the current-version check. */
+  clearAuthorizationInvalidation(requestId: string, invocationId: string): void
   clearInvocation(requestId: string): void
   settle(permitId: string): void
 }
@@ -87,6 +89,11 @@ export class InMemorySafetyPermitStore implements SafetyPermitStore {
         record.invalidReason = failure
       }
     }
+  }
+
+  clearAuthorizationInvalidation(requestId: string, invocationId: string): void {
+    const key = bindingKey(requestId, invocationId)
+    if (this.invalidBindings.get(key) === 'AUTHORIZATION_STALE') this.invalidBindings.delete(key)
   }
 
   clearInvocation(requestId: string): void {

@@ -107,4 +107,25 @@ describe('按对象批准 exposure ask', () => {
     const unavailable = await filterBuiltinToolsForApiWithApproval({ ...args, requestApproval: async () => { throw new Error('dialog unavailable') } })
     expect(unavailable.map((tool) => tool.name)).not.toContain('wechat_send')
   })
+
+  it('授权代次经历 A→B→A 后丢弃旧 exposure 批准并重新请求', async () => {
+    const rules = [{ id: 'im-no-wechat-send', when: 'exposure' as const,
+      match: { lane: ['wechat', 'feishu'], toolName: 'wechat_send' }, action: 'ask' as const,
+      userOverride: true, reason: 'require approval' } as never]
+    let version = 'im-v2:1:1'
+    let approvals = 0
+    const tools = await filterBuiltinToolsForApiWithApproval({
+      cfg: { enabled: true, deniedTools: [], allowedTools: [] } as never,
+      wechat: { enabled: true } as never,
+      remoteContext: { source: 'wechat', messageId: 'm-aba', confirmPolicy: 'im_confirm' },
+      rules, resolveRules: () => rules, resolveAuthorizationVersion: () => version,
+      requestApproval: async () => {
+        approvals += 1
+        if (approvals === 1) version = 'im-v2:3:3'
+        return approvals === 1
+      }
+    })
+    expect(tools.map((tool) => tool.name)).not.toContain('wechat_send')
+    expect(approvals).toBe(2)
+  })
 })

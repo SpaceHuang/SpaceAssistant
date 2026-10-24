@@ -4,8 +4,11 @@ import { getDbConnection, openDatabase } from '../database'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
+import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
 
 function seed(db: ReturnType<typeof openDatabase>) {
+  commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+    snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'deferred-notification-policy-seed' })
   const todoStore = createDeferredTodoStore(db)
   const now = Date.now()
   const todo = todoStore.create({ todoId: 'delivery-todo', invocationId: 'delivery-invocation', channel: 'feishu',
@@ -87,6 +90,46 @@ describe('deferred approval notification delivery reconciliation contract', () =
       todoId: stores.todo.todoId, notificationVersion: 2, trustedMessageId: 'feishu-message-v2'
     })
     expect(stores.todoStore.get(stores.todo.todoId, { ...scope, originSessionId: stores.todo.originSessionId, rule: stores.todo.rule })?.expiresAt).toBe(stores.todo.expiresAt)
+    temp.db.close()
+    temp.cleanup()
+  })
+
+  it('replaces a stale policy approval with a fresh notification version bound to the new rule', async () => {
+    const temp = createTempDatabase('approval-notification-policy-replacement-')
+    const stores = seed(temp.db)
+    const adapter = { send: vi.fn().mockResolvedValueOnce({ messageId: 'old-policy-message' }).mockResolvedValueOnce({ messageId: 'new-policy-message' }) }
+    const allocateShortCode = vi.fn().mockReturnValueOnce('21').mockReturnValueOnce('22')
+    const audit = vi.fn()
+    const delivery = createDeferredApprovalNotificationDelivery({ db: temp.db, todoStore: stores.todoStore,
+      intentStore: stores.intentStore, adapter, allocateShortCode, audit })
+    await delivery.createAndSend({ todoId: stores.todo.todoId, invocationId: stores.todo.invocationId,
+      ...scope, rule: stores.todo.rule, ...safeContent, reasonSummary: 'old-policy-ask' })
+
+    const updatedRule = { ruleId: 'new-policy-ask', factsHash: 'c'.repeat(64) }
+    commitImPolicySnapshot(getDbConnection(temp.db), { expectedRevision: 1, policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'ask' } }, updatedAt: stores.now + 1,
+      eventId: 'deferred-notification-policy-update' })
+    const rebound = stores.todoStore.rebindAfterPolicyChange(stores.todo.todoId, {
+      ...scope, originSessionId: stores.todo.originSessionId, rule: stores.todo.rule
+    }, updatedRule, stores.now + 1)
+    expect(rebound).toMatchObject({ status: 'pending', rule: updatedRule, policyRevision: 2, policyEpoch: 2 })
+    expect(stores.intentStore.get(stores.todo.invocationId)).toMatchObject({ todoId: stores.todo.todoId, state: 'checkpoint_committed' })
+    await expect(delivery.replaceAndSend({ todoId: stores.todo.todoId, invocationId: stores.todo.invocationId,
+      ...scope, rule: updatedRule, replacesNotificationVersion: 1, ...safeContent, reasonSummary: 'new-policy-ask', now: stores.now + 2 }))
+      .resolves.toMatchObject({ state: 'delivered', notificationVersion: 2 })
+
+    expect(delivery.list(stores.todo.todoId)).toMatchObject([
+      { state: 'superseded', notificationVersion: 1, trustedMessageId: 'old-policy-message', rule: stores.todo.rule },
+      { state: 'delivered', notificationVersion: 2, trustedMessageId: 'new-policy-message', rule: updatedRule }
+    ])
+    expect(delivery.resolveCurrent({ ...scope, shortCode: '21', now: stores.now + 2 })).toBeNull()
+    expect(delivery.resolveCurrent({ ...scope, shortCode: '22', now: stores.now + 2 })).toMatchObject({
+      todoId: stores.todo.todoId, notificationVersion: 2, rule: updatedRule, trustedMessageId: 'new-policy-message'
+    })
+    expect(adapter.send.mock.calls[1]?.[0]).toMatchObject({ sections: expect.arrayContaining([
+      expect.objectContaining({ kind: 'reason-summary', text: 'new-policy-ask' })
+    ]) })
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ event: 'deferred-approval.pending', todoId: stores.todo.todoId }))
     temp.db.close()
     temp.cleanup()
   })

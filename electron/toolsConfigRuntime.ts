@@ -130,6 +130,8 @@ export async function filterBuiltinToolsForApiWithApproval(args: {
   wechat?: WeChatConfig | null
   audit?: AuditSink
   rules?: PolicyRule[]
+  resolveRules?: () => PolicyRule[]
+  resolveAuthorizationVersion?: () => string
   terminalSnapshot?: TerminalProfileSnapshot
   requestApproval: (request: { lane: ExecutionLane; toolName: string; ruleId: string }) => Promise<boolean>
 }): Promise<typeof BUILTIN_TOOL_DEFINITIONS> {
@@ -139,7 +141,8 @@ export async function filterBuiltinToolsForApiWithApproval(args: {
   const sink = args.audit ?? getSecurityAuditLog()
   const allowed = new Set<string>()
   for (const tool of candidates) {
-    const decision = evaluateExposure({ toolName: tool.name, lane, rules: args.rules })
+    let currentRules = args.resolveRules?.() ?? args.rules
+    const decision = evaluateExposure({ toolName: tool.name, lane, rules: currentRules })
     if (decision.allowed) {
       allowed.add(tool.name)
       continue
@@ -150,11 +153,25 @@ export async function filterBuiltinToolsForApiWithApproval(args: {
       continue
     }
     if (decision.action !== 'ask' || !decision.ruleId) continue
-    let approved = false
-    try { approved = await args.requestApproval({ lane, toolName: tool.name, ruleId: decision.ruleId }) } catch { approved = false }
-    if (!approved) continue
-    const permit = issueExposureApprovalPermit({ ruleId: decision.ruleId, toolName: tool.name, lane })
-    if (evaluateExposure({ toolName: tool.name, lane, rules: args.rules, approvedExposure: permit }).allowed) allowed.add(tool.name)
+    let pending = decision
+    for (let attempt = 0; attempt < 4 && pending.action === 'ask' && pending.ruleId; attempt += 1) {
+      let approved = false
+      const approvedRules = JSON.stringify(currentRules ?? [])
+      const approvedVersion = args.resolveAuthorizationVersion?.()
+      try { approved = await args.requestApproval({ lane, toolName: tool.name, ruleId: pending.ruleId }) } catch { approved = false }
+      if (!approved) break
+      currentRules = args.resolveRules?.() ?? args.rules
+      const currentVersion = args.resolveAuthorizationVersion?.()
+      if (JSON.stringify(currentRules ?? []) !== approvedRules || approvedVersion !== currentVersion) {
+        pending = evaluateExposure({ toolName: tool.name, lane, rules: currentRules })
+        if (pending.allowed) { allowed.add(tool.name); break }
+        if (pending.action === 'deny' || pending.action !== 'ask' || !pending.ruleId) break
+        continue
+      }
+      const permit = issueExposureApprovalPermit({ ruleId: pending.ruleId, toolName: tool.name, lane })
+      if (evaluateExposure({ toolName: tool.name, lane, rules: currentRules, approvedExposure: permit }).allowed) allowed.add(tool.name)
+      break
+    }
   }
   return candidates.filter((tool) => allowed.has(tool.name))
 }

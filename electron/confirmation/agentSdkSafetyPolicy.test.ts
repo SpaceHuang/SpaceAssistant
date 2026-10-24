@@ -53,6 +53,18 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', context: { factsProvenance: { factId: snapshot.factId, extractorVersion: snapshot.extractorVersion, completeness: snapshot.completeness, factsRevision: snapshot.factsRevision, policyVersion: snapshot.policyVersion } } })
   })
 
+  it.each([
+    ['new allow', { type: 'auto-allow', ruleId: 'new-policy-allow', reason: 'newly allowed' } as Decision, 'allow'],
+    ['new ask', { type: 'require-confirm', ruleId: 'new-policy-ask', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 } as Decision, 'ask']
+  ])('rejudges an unconfirmed pending ask after a policy revision to %s', async (_label, nextDecision, expectedKind) => {
+    const initial = result({ type: 'require-confirm', ruleId: 'old-ask', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 })
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(result(nextDecision))
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
+    await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask', reasonCode: 'old-ask' })
+    await expect(policy.evaluate({ ...binding, phase: 'recheck', authorizationVersion: 'policy-v2' })).resolves.toMatchObject({ kind: expectedKind })
+    expect(evaluateGate).toHaveBeenCalledTimes(2)
+  })
+
   it('projects prepared Feishu outbound content facts into the policy gate', async () => {
     const toolInput = { args: ['message', 'send', '--text', 'password=supersecret'] }
     const larkBinding = { ...binding, capabilityId: 'run_lark_cli', capability: { state: 'known-authorized' as const, id: 'run_lark_cli' },

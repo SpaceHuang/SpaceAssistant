@@ -128,7 +128,7 @@ export function createAgentSdkSafetyPolicy(input: {
             sameConfirmedDecisionRule && sameFacts
           const sameExecutionMaterials = sameFacts && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget &&
             sameScriptApprovalBinding && sameWriteApprovalConfiguration
-          if (previous.confirmed && !samePolicyDependencies && sameExecutionMaterials) {
+          if (!samePolicyDependencies && sameExecutionMaterials) {
             // A policy revision changes the decision authority, even when host facts and
             // execution targets are identical. Apply the new action now; never carry the
             // old confirmation across the changed dependency fingerprint.

@@ -351,7 +351,6 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     const { querySecurityAuditLog } = await import('../confirmation/securityAuditReader')
     const { getSecurityAuditLogDir } = await import('../confirmation/audit')
     const dir = getSecurityAuditLogDir()
-    if (!dir) return []
     const q = (payload && typeof payload === 'object' ? payload : {}) as {
       since?: number
       until?: number
@@ -360,7 +359,22 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       toolName?: string
       limit?: number
     }
-    return querySecurityAuditLog(dir, q)
+    const fileEntries = dir ? await querySecurityAuditLog(dir, q) : []
+    const conn = (await import('../database')).getDbConnection(ctx.db)
+    const rows = conn.prepare("SELECT event_json FROM policy_audit_events WHERE domain='im' ORDER BY rowid DESC LIMIT 500").all() as Array<{ event_json: string }>
+    const policyEntries = rows.flatMap(({ event_json }) => {
+      try {
+        const event = JSON.parse(event_json) as Record<string, unknown>
+        if (event.changeKind !== 'rule-override' && event.changeKind !== 'rule-reset' && event.changeKind !== 'package') return []
+        const entry = { ...event, ts: event.updatedAt, event: 'settings.policy-change', lane: event.lane, actor: event.actor ?? 'user' }
+        if (q.since !== undefined && typeof entry.ts === 'number' && entry.ts < q.since) return []
+        if (q.until !== undefined && typeof entry.ts === 'number' && entry.ts > q.until) return []
+        if (q.lane && entry.lane !== q.lane) return []
+        if (q.event && entry.event !== q.event) return []
+        return [entry]
+      } catch { return [] }
+    })
+    return [...fileEntries, ...policyEntries].sort((a, b) => Number((b as { ts?: number }).ts ?? 0) - Number((a as { ts?: number }).ts ?? 0)).slice(0, q.limit ?? 500)
   })
 
   ipcMain.handle('security:get-audit-retention', async () => {

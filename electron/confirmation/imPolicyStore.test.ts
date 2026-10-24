@@ -50,6 +50,8 @@ describe('IM policy snapshot atomic transaction', () => {
     })
     expect(db.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='im'").get()).toEqual({ epoch: 2 })
     expect(db.prepare("SELECT status FROM policy_deferred_todos WHERE todo_id='todo-1'").get()).toEqual({ status: 'invalidated' })
+    expect(db.prepare("SELECT domain,status FROM policy_deferred_todos WHERE todo_id='real-todo-1'").get())
+      .toEqual({ domain: 'im', status: 'invalidated' })
     expect(db.prepare("SELECT status FROM policy_authorizations WHERE authorization_id='auth-1'").get()).toEqual({ status: 'revoked' })
     expect(db.prepare("SELECT state FROM deferred_todos WHERE todo_id='real-todo-1'").get()).toEqual({ state: 'invalidated' })
     expect(db.prepare("SELECT state FROM deferred_resume_requests WHERE request_id='real-request-1'").get()).toEqual({ state: 'invalidated' })
@@ -57,7 +59,7 @@ describe('IM policy snapshot atomic transaction', () => {
     expect(db.prepare("SELECT event_id FROM policy_audit_events").get()).toEqual({ event_id: 'e1' })
     const audit = JSON.parse((db.prepare("SELECT event_json FROM policy_audit_events WHERE event_id='e1'").get() as { event_json: string }).event_json)
     expect(audit).toMatchObject({ policyDomain: 'im', actor: 'user', eventKind: 'policy-snapshot-updated',
-      previousRevision: 1, policyRevision: 2, policyBehaviorVersion: 'v2', invalidatedTodoIds: ['todo-1'] })
+      previousRevision: 1, policyRevision: 2, policyBehaviorVersion: 'v2', invalidatedTodoIds: ['real-todo-1', 'todo-1'] })
     expect(db.prepare("SELECT history_id,policy_behavior_version,snapshot_json FROM policy_behavior_snapshot_history").get()).toEqual({ history_id: 'im:1', policy_behavior_version: 'v1', snapshot_json: '{}' })
     db.close()
   })

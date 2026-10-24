@@ -4495,6 +4495,139 @@ describe('runAgentTurn', () => {
     expect(execute).toHaveBeenCalledOnce()
   })
 
+  it.each(['allow', 'deny', 'ask'] as const)('re-gates a pending confirmation after policy change to %s', async (nextAction) => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: `pending-policy-${nextAction}`, stream: () => ++providerCalls === 1 ? stream(
+      { type: 'tool-call', toolCallId: `pending-${nextAction}`, toolName: 'lookup', input: { query: 'weather' } },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) : stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }) })
+    const invocationId = `pending-policy-${nextAction}`
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const execute = vi.fn(async () => ({ output: 'policy revalidated' }))
+    let notifyPolicyChange!: () => void
+    let markConfirmationPending!: () => void
+    const confirmationPending = new Promise<void>((resolve) => { markConfirmationPending = resolve })
+    let confirmationCalls = 0
+    const confirmation = vi.fn(() => ++confirmationCalls > 1
+      ? Promise.resolve({ kind: 'approved' as const, receipt: 'fresh-approval' })
+      : new Promise<import('../src/turn').ToolConfirmationResult>((resolve) => {
+        notifyPolicyChange = () => resolve({ kind: 'authorization-changed' })
+        markConfirmationPending()
+      }))
+    let rechecks = 0
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => {
+      if (binding.phase === 'initial-compat') return { kind: 'ask' as const, confirmationId: `approval-${nextAction}`, answerer: 'user' as const, reasonCode: 'old-ask' }
+      rechecks += 1
+      if (nextAction === 'ask' && rechecks === 1) return { kind: 'ask' as const, confirmationId: 'fresh-approval', answerer: 'user' as const, reasonCode: 'new-ask' }
+      if (nextAction === 'ask') return { kind: 'allow' as const, authorizationVersion: 'policy-v2' }
+      return nextAction === 'allow'
+        ? { kind: 'allow' as const, authorizationVersion: 'policy-v2' }
+        : { kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }
+    } } })
+    const running = runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history, request: { messages: [], maxTokens: 16 }, safetyGate,
+      prepareTool: async (call, stage) => ({ ...toolBinding, requestId: invocationId, invocationId: call.invocationId,
+        toolCallId: call.toolCallId, capabilityId: call.toolName, authorizationVersion: stage.kind === 'initial' ? 'policy-v1' : 'policy-v2',
+        phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: createPermitBoundToolExecutionPort({
+        permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+        resolveExpected: async (call) => ({ ...toolBinding, requestId: invocationId, invocationId: call.invocationId,
+          toolCallId: call.toolCallId, capabilityId: call.toolName, authorizationVersion: 'policy-v2', phase: 'recheck' }),
+        execute
+      }), confirmation, maxModelTurns: 2
+    })
+    await confirmationPending
+    notifyPolicyChange()
+    if (nextAction === 'allow') {
+      await expect(running).resolves.toMatchObject({ modelTurns: 2 })
+      expect(execute).toHaveBeenCalledOnce()
+    } else if (nextAction === 'deny') {
+      await expect(running).rejects.toMatchObject({ code: 'TOOL_DENIED', reasonCode: 'POLICY_DENY' })
+      expect(execute).not.toHaveBeenCalled()
+    } else {
+      await expect(running).resolves.toMatchObject({ modelTurns: 2 })
+      expect(confirmation).toHaveBeenCalledTimes(2)
+      expect(execute).toHaveBeenCalledOnce()
+    }
+    expect(confirmation).toHaveBeenCalledTimes(nextAction === 'ask' ? 2 : 1)
+    const events = (await history.read(invocationId)).events
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ outcome: 'invalidated', cause: 'authorization-changed' }) }))
+  })
+
+  it('rejects a policy change during the final dispatch claim before invoking the executor', async () => {
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register(route, { providerId: 'claim-policy-recheck', stream: () => ++providerCalls === 1 ? stream(
+      { type: 'tool-call', toolCallId: 'claim-policy-call', toolName: 'lookup', input: { query: 'weather' } },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) : stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }) })
+    const invocationId = 'claim-policy-recheck'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const history = new MemoryHistory()
+    const execute = vi.fn(async () => ({ output: 'executed once under fresh policy' }))
+    const confirmation = vi.fn(async () => {
+      return { kind: 'approved' as const, receipt: 'fresh-policy-approval', answerer: 'user' as const }
+    })
+    let authorizationVersion = 'policy-v1'
+    let authorizationListener!: () => void
+    let latestBinding: PermitBinding = { ...toolBinding, requestId: invocationId, invocationId, toolCallId: 'claim-policy-call',
+      authorizationVersion, phase: 'recheck' }
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: {
+      evaluate: async (binding) => {
+        if (binding.authorizationVersion !== 'policy-v2') {
+          return { kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }
+        }
+        return { kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }
+      }
+    } })
+    const baseExecution = createPermitBoundToolExecutionPort({
+      permits, admission, allowedPhase: 'recheck', resolveExpected: async () => latestBinding,
+      currentAuthorizationVersion: () => authorizationVersion,
+      subscribeAuthorizationChange: (_call, listener) => { authorizationListener = listener; return () => undefined },
+      execute
+    })
+    let invalidatedAtClaim = false
+    const toolExecution = {
+      execute(call: Parameters<typeof baseExecution.execute>[0], permitId: string, onDispatchClaimed?: (cancel: () => void) => void | Promise<void>) {
+        return baseExecution.execute(call, permitId, async (cancel) => {
+          await onDispatchClaimed?.(cancel)
+          if (!invalidatedAtClaim) {
+            invalidatedAtClaim = true
+            authorizationVersion = 'policy-v2'
+            authorizationListener()
+          }
+        })
+      }
+    }
+    let recheckCount = 0
+    const running = runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history, request: { messages: [], maxTokens: 16 }, safetyGate,
+      prepareTool: async (call, stage) => {
+        if (stage.kind === 'recheck') recheckCount += 1
+        latestBinding = { ...toolBinding, requestId: invocationId, invocationId: call.invocationId, toolCallId: call.toolCallId,
+          capabilityId: call.toolName, authorizationVersion: stage.kind === 'initial' ? 'policy-v1' : authorizationVersion,
+          phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }
+        return latestBinding
+      },
+      toolExecution, confirmation, maxModelTurns: 2
+    })
+    await expect(running).rejects.toMatchObject({ code: 'TOOL_DENIED', reasonCode: 'AUTHORIZATION_STALE' })
+    expect(recheckCount).toBe(1)
+    expect(execute).not.toHaveBeenCalled()
+    expect(confirmation).not.toHaveBeenCalled()
+    const events = (await history.read(invocationId)).events
+    expect(events.filter(({ kind }) => kind === 'tool-call-started')).toHaveLength(1)
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ reason: 'AUTHORIZATION_STALE' }) }))
+    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+  })
+
   it('discards a freshly issued permit when cancellation wins during recheck', async () => {
     const registry = new ModelProviderRegistry()
     registry.register(route, { providerId: 'fake', stream: () => stream(

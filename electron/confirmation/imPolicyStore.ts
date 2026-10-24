@@ -136,10 +136,19 @@ export function commitImPolicySnapshot(db: DatabaseSync, input: CommitImPolicySn
     // Fence the production durable approval path in the same transaction. The policy_* helper
     // tables remain a compact audit index; deferred_todos is the dispatcher source of truth.
     if (tableExists(db, 'deferred_resume_requests') && tableExists(db, 'deferred_todos')) {
+      const pendingTodos = db.prepare("SELECT todo_id FROM deferred_todos WHERE channel IN ('wechat','feishu') AND state='pending'")
+        .all() as Array<{ todo_id: string }>
+      for (const { todo_id } of pendingTodos) {
+        db.prepare(`INSERT INTO policy_deferred_todos(todo_id,domain,status) VALUES(?,'im','active')
+          ON CONFLICT(todo_id) DO UPDATE SET domain='im'`).run(todo_id)
+      }
       db.prepare(`UPDATE deferred_resume_requests SET state='invalidated',updated_at=? WHERE state='pending' AND todo_id IN (
         SELECT t.todo_id FROM deferred_todos t WHERE t.channel IN ('wechat','feishu') AND t.state='pending'
       )`).run(input.updatedAt)
       db.prepare("UPDATE deferred_todos SET state='invalidated',updated_at=? WHERE channel IN ('wechat','feishu') AND state='pending'").run(input.updatedAt)
+      db.prepare(`UPDATE policy_deferred_todos SET status='invalidated' WHERE domain='im' AND todo_id IN (
+        SELECT todo_id FROM deferred_todos WHERE channel IN ('wechat','feishu') AND state='invalidated'
+      )`).run()
     }
     input.beforeAudit?.()
     const invalidatedTodos = db.prepare("SELECT todo_id FROM policy_deferred_todos WHERE domain='im' AND status='invalidated' ORDER BY todo_id").all() as Array<{ todo_id: string }>

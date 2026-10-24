@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection, setConfigValue } from '../database'
 import { registerPolicyIpc } from './policyIpc'
 import { commitImPolicySnapshot, readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
 import { decide } from '../../src/shared/policy/policyEngine'
+import { deferredPolicyChangeRegistry } from '../remote/deferredPolicyChangeRegistry'
 
 function registeredHandlers(db = createMemoryAppDb('policy-ipc-contract')) {
   const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -13,6 +14,26 @@ function registeredHandlers(db = createMemoryAppDb('policy-ipc-contract')) {
 }
 
 describe('policy domain read IPC contract', () => {
+  it('publishes committed IM revisions to durable deferred recheck listeners on both shared lanes', async () => {
+    const { db, handlers } = registeredHandlers()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'deferred-policy-listener-seed' })
+    const feishu = vi.fn()
+    const wechat = vi.fn()
+    const stopFeishu = deferredPolicyChangeRegistry.subscribe('feishu', feishu)
+    const stopWechat = deferredPolicyChangeRegistry.subscribe('wechat', wechat)
+    try {
+      await handlers.get('policy:write')!({}, { lane: 'wechat', expectedRevision: 1,
+        change: { kind: 'package', package: 'custom' } })
+      expect(feishu).toHaveBeenCalledOnce()
+      expect(wechat).toHaveBeenCalledOnce()
+    } finally {
+      stopFeishu()
+      stopWechat()
+      db.close()
+    }
+  })
+
   it('maps desktop, WeChat, and Feishu views to their trusted domains and returns one shared IM snapshot', async () => {
     const { db, handlers } = registeredHandlers()
     const conn = getDbConnection(db)
@@ -145,6 +166,17 @@ describe('policy domain read IPC contract', () => {
     db.close()
   })
 
+  it('records rule id and before/after actions in the same IM policy audit event', async () => {
+    const { db, handlers } = registeredHandlers()
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'custom' }, updatedAt: 1, eventId: 'audit-seed' })
+    await handlers.get('policy:write')!({}, { lane: 'wechat', expectedRevision: 1,
+      change: { kind: 'rule-override', ruleId: 'mcp-tool-ask', action: 'deny' } })
+    const row = conn.prepare("SELECT event_json FROM policy_audit_events WHERE event_id LIKE 'policy-ipc:%'").get() as { event_json: string }
+    expect(JSON.parse(row.event_json)).toMatchObject({ lane: 'wechat', changeKind: 'rule-override', ruleId: 'mcp-tool-ask', beforeAction: 'ask', afterAction: 'deny', policyRevision: 2 })
+    db.close()
+  })
+
   it('returns a revision conflict without changing snapshot, authorization epoch, or audit', async () => {
     const { db, handlers } = registeredHandlers()
     const conn = getDbConnection(db)
@@ -206,10 +238,14 @@ describe('policy domain read IPC contract', () => {
     await expect(change({}, {
       lane: 'wechat', expectedRevision: 1, change: { kind: 'switch-to-standard', userChoiceConfirmed: false, displayedDiffs }
     })).rejects.toThrow('POLICY_BEHAVIOR_SWITCH_CONFIRMATION_REQUIRED')
+    const deferredRecheck = vi.fn()
+    const stopDeferredRecheck = deferredPolicyChangeRegistry.subscribe('wechat', deferredRecheck)
     const result = await change({}, {
       lane: 'wechat', expectedRevision: 1, change: { kind: 'switch-to-standard', userChoiceConfirmed: true, displayedDiffs }
     })
+    stopDeferredRecheck()
     expect(result).toMatchObject({ status: 'committed', revision: 2 })
+    expect(deferredRecheck).toHaveBeenCalledOnce()
     expect(readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-standard-v2'] })).toMatchObject({
       policyBehaviorVersion: 'im-standard-v2', revision: 2,
       snapshot: { selectedPackage: 'standard', explicitBehaviorSwitch: true, displayedBehaviorDiffs: displayedDiffs }

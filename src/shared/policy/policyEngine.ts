@@ -489,31 +489,58 @@ export function decide(
   if (Array.isArray(deniedTools) && deniedTools.includes(facts.toolName)) {
     return deny('denied-tools', `${facts.toolName} 已在禁用列表`)
   }
-  const customActions = invocationRules.filter((rule) => rule.userOverride && matchedRule(rule))
-  const independentMatchedRules = invocationRules.filter((rule) => !rule.userOverride && matchedRule(rule))
-  const matchedCustomDeny = customActions.find((rule) => rule.action === 'deny')
-  const matchedIndependentDeny = independentMatchedRules.find((rule) => rule.action === 'deny')
-  if (matchedCustomDeny) return deny(matchedCustomDeny.id, matchedCustomDeny.reason)
-  if (matchedIndependentDeny) return deny(matchedIndependentDeny.id, matchedIndependentDeny.reason)
-  if (customActions.length) {
-    const independentRules = independentMatchedRules
-    const byAction = (action: PolicyRule['action']) => customActions
-      .filter((rule) => rule.action === action)
-      .sort((a, b) => a.id.localeCompare(b.id))[0]
-    const selectedDeny = byAction('deny')
-    if (selectedDeny) return deny(selectedDeny.id, selectedDeny.reason)
-    const selectedAsk = byAction('ask') ?? byAction('confirm-every-time') ?? independentRules
-      .filter((rule) => rule.action === 'ask' || rule.action === 'confirm-every-time' || rule.humanRequired)
-      .sort((a, b) => a.id.localeCompare(b.id))[0]
-    if (selectedAsk) return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints, 'user')
-    const selectedAuto = byAction('auto-evaluator')
+  // Resolve matched actions once so deny, explicit user choices and fallback
+  // arbitration use the same effective-action interpretation.
+  const matchedActions = invocationRules
+    .filter(matchedRule)
+    .map((rule) => {
+      const action = rule.userOverride ? rule.action : deps.transform ? deps.transform(rule) : rule.action
+      return { rule, action, transformed: !rule.userOverride && action !== rule.action }
+    })
+  const byAction = (entries: typeof matchedActions, action: PolicyRule['action']) => entries
+    .filter((entry) => entry.action === action || action === 'ask' && entry.action === 'confirm-every-time')
+    .sort((a, b) => Number(b.rule.humanRequired === true) - Number(a.rule.humanRequired === true)
+      || Number(b.rule.locked === true) - Number(a.rule.locked === true)
+      || Number(b.transformed) - Number(a.transformed)
+      || Number(Boolean(b.rule.askUnless)) - Number(Boolean(a.rule.askUnless))
+      || Number((b.rule.match?.signals?.length ?? 0) + (b.rule.match?.toolName ? 1 : 0) + (b.rule.match?.lane?.length ? 1 : 0) + (b.rule.match?.actionClass ? 1 : 0))
+        - Number((a.rule.match?.signals?.length ?? 0) + (a.rule.match?.toolName ? 1 : 0) + (a.rule.match?.lane?.length ? 1 : 0) + (a.rule.match?.actionClass ? 1 : 0))
+      || a.rule.id.localeCompare(b.rule.id))
+    .map(({ rule }) => rule)[0]
+  const selectedDeny = byAction(matchedActions, 'deny')
+  if (selectedDeny) return deny(selectedDeny.id, selectedDeny.reason)
+  const humanFloor = matchedActions
+    .filter(({ rule, action }) => action === 'confirm-every-time' || action === 'ask' && rule.humanRequired)
+    .map(({ rule }) => rule)
+    .sort((a, b) => Number(b.locked === true) - Number(a.locked === true)
+      || Number((b.match?.signals?.length ?? 0) + (b.match?.toolName ? 1 : 0) + (b.match?.lane?.length ? 1 : 0))
+        - Number((a.match?.signals?.length ?? 0) + (a.match?.toolName ? 1 : 0) + (a.match?.lane?.length ? 1 : 0))
+      || a.id.localeCompare(b.id))[0]
+  if (humanFloor) return requireConfirm(humanFloor, facts, context.sessionId, context.lane, constraints, 'user')
+
+  // Explicit rule overrides remain authoritative over previous user memory. When
+  // overrides coexist with independent rules, apply INV-03 before reaching cache.
+  const selectedOverrides = matchedActions.filter(({ rule }) => rule.userOverride)
+  if (selectedOverrides.length > 0 && context.lane !== 'automation') {
+    const selectedAsk = byAction(matchedActions.filter(({ action, rule }) => action !== 'deny' && !rule.humanRequired), 'ask')
+    if (selectedAsk) {
+      if (askUnlessHolds(selectedAsk, deps)) return autoAllow(selectedAsk.id, facts)
+      return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints,
+        selectedAsk.userOverride ? 'user' : selectedAsk.answerer ?? askAnswererFor(context.lane))
+    }
+    const selectedAuto = byAction(selectedOverrides, 'auto-evaluator')
+      ?? byAction(matchedActions.filter(({ action }) => action !== 'deny'), 'auto-evaluator')
     if (selectedAuto) {
       if (deps.autoEvaluator?.(facts, context).approve) return autoAllow(selectedAuto.id, facts)
-      return requireConfirm(selectedAuto, facts, context.sessionId, context.lane, undefined, 'agent')
+      return requireConfirm(selectedAuto, facts, context.sessionId, context.lane, constraints, 'agent')
     }
-    const selectedAllow = byAction('allow')
-    if (selectedAllow && customActions.every((rule) => rule.action === 'allow') && independentRules.length === 0) return autoAllow(selectedAllow.id, facts)
+    const selectedAllow = byAction(selectedOverrides, 'allow')
+    if (selectedAllow) return autoAllow(selectedAllow.id, facts)
   }
+
+  // Automation remains host-owned, but its explicit deny floor is checked above.
+  const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
+  if (cacheHit) return cacheHit
   const larkMessageOutbound = facts.toolName === 'run_lark_cli' && facts.signals.some((signal) =>
     signal.kind === 'lark-subcommand' && signal.category === 'message'
   )
@@ -523,52 +550,59 @@ export function decide(
     )
   )
   const explicitOutboundTier = facts.actionClass === 'outbound' && (!larkMessageOutbound || larkMessageNeedsTier) && context.policyTier && context.policyTier !== 'custom' &&
-    (context.policyTier === 'loose' || context.policyTier === 'strict' || context.policyTier === 'standard' && context.lane === 'desktop') &&
+    (context.policyTier === 'loose' || context.policyTier === 'strict' || context.policyTier === 'standard') &&
     !(facts.toolName === 'browser' || context.lane === 'desktop' && ['read_file', 'grep', 'list_directory'].includes(facts.toolName))
 
-  // 第 1 步：拒绝规则（先于任何缓存查询，缓存信任不能覆盖明确拒绝）
-  const laneHardDeny = invocationRules.find(
-    (r) => r.locked && r.action === 'deny' && matchedRule(r)
-  )
-  if (laneHardDeny) return deny(laneHardDeny.id, laneHardDeny.reason)
-
-  const policyDeny = invocationRules.find(
-    (r) => r.action === 'deny' && matchedRule(r)
-  )
-  if (policyDeny) return deny(policyDeny.id, policyDeny.reason)
-
-  // Human-required is a semantic floor, independent of locked/editability and rule array position.
-  const humanRequiredRule = invocationRules.find(
-    (r) => r.humanRequired === true && matchedRule(r)
-  )
-  if (humanRequiredRule) {
-    return requireConfirm(humanRequiredRule, facts, context.sessionId, context.lane, constraints, 'user')
+  if (explicitOutboundTier) {
+    const tokens = signalTokenSet(policyFacts)
+    const hasOutboundSensitivity = tokens.has('outbound-evidence-present')
+    const hasIncompleteOutboundFacts = tokens.has('outbound-inspection-incomplete')
+    const outboundModes = context.policyTier === 'strict'
+      ? ['outbound-sensitive-strict-human', 'outbound-incomplete-strict-human', 'outbound-mode-strict-human']
+      : context.policyTier === 'standard'
+        ? ['outbound-sensitive-standard-human', 'outbound-incomplete-standard-review', 'outbound-mode-standard-review']
+        : ['outbound-sensitive-loose-review', 'outbound-incomplete-loose-review',
+        `outbound-mode-${context.policyTier}-${context.policyTier === 'loose' ? 'allow' : 'review'}`]
+    const selectedOutboundRuleId = hasOutboundSensitivity
+      ? outboundModes.find((id) => id.includes('sensitive'))
+      : hasIncompleteOutboundFacts ? outboundModes.find((id) => id.includes('incomplete')) : outboundModes.at(-1)
+    const mode = selectedOutboundRuleId ? rules.find((rule) => rule.id === selectedOutboundRuleId) : undefined
+    if (mode && matchedRule(mode)) {
+      const transformed = deps.transform ? deps.transform(mode) : mode.action
+      if (transformed === 'allow') return autoAllow(mode.id, facts)
+      return requireConfirm(mode, facts, context.sessionId, context.lane, constraints)
+    }
   }
 
-  // A concrete MCP ask is an explicit authorization boundary. Generic IM write
-  // auto-review may classify the call, but must not replace that user's choice.
-  const explicitMcpAsk = invocationRules.find(
-    (r) => (context.lane === 'wechat' || context.lane === 'feishu') &&
-      r.id === 'mcp-tool-ask' && r.userOverride === true && r.action === 'ask' &&
-      matchedRule(r)
-  )
-  if (explicitMcpAsk) {
-    return requireConfirm(explicitMcpAsk, facts, context.sessionId, context.lane, constraints, 'user')
-  }
-
-  // 系统 locked confirm-every-time 规则位于缓存之前：即使存在旧 allow cache，也必须逐次确认。
-  const confirmEveryTime = invocationRules.find(
-    (r) => r.locked && r.action === 'confirm-every-time' && matchedRule(r)
-  )
-  if (confirmEveryTime) {
-    // 决策 3：confirm-every-time 始终人工逐次确认（不因 lane 落 agent）
-    return requireConfirm(confirmEveryTime, facts, context.sessionId, context.lane, constraints, 'user')
+  if (context.lane !== 'automation') {
+    // Among remaining default rules, INV-03 is independent of rule array order.
+    const fallbackActions = matchedActions.filter(({ rule }) => !rule.userOverride)
+    // A configured allow is an explicit setting, gated by the current facts; apply
+    // it before generic review candidates so enabling a scoped exception takes effect.
+    const configuredAllow = byAction(fallbackActions.filter(({ action, rule }) => action === 'allow' && rule.configRequires), 'allow')
+    if (configuredAllow) return autoAllow(configuredAllow.id, facts)
+    const selectedAsk = byAction(fallbackActions.filter(({ rule }) => !rule.humanRequired), 'ask')
+    if (selectedAsk) {
+      if (askUnlessHolds(selectedAsk, deps)) return autoAllow(selectedAsk.id, facts)
+      return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints,
+        selectedAsk.answerer ?? askAnswererFor(context.lane))
+    }
+    const autoCandidates = fallbackActions
+      .filter(({ action }) => action === 'auto-evaluator')
+      .map(({ rule }) => rule)
+      .sort((a, b) => a.id.localeCompare(b.id))
+    let lastAutoRule: PolicyRule | undefined
+    for (const rule of autoCandidates) {
+      lastAutoRule = rule
+      if (askUnlessHolds(rule, deps)) return autoAllow(rule.id, facts)
+      if (deps.autoEvaluator?.(facts, context).approve) return autoAllow(rule.id, facts)
+    }
+    if (lastAutoRule) return requireConfirm(lastAutoRule, facts, context.sessionId, context.lane, constraints, 'agent')
+    const selectedAllow = byAction(fallbackActions, 'allow')
+    if (selectedAllow) return autoAllow(selectedAllow.id, facts)
   }
 
   // 第 2 步：缓存命中（会话级键按 context.sessionId 绑定）
-  const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
-  if (cacheHit) return cacheHit
-
   // 第 3 步：自动审批器（auto-evaluator =「自动」动作）。确定性快通道批准即放行；
   // 未裁决 → 交审批 Agent（require-confirm answerer='agent'，§5.2：不再交还默认表问人）。
   const autoRules = invocationRules.filter((r) => r.action === 'auto-evaluator')
@@ -595,26 +629,6 @@ export function decide(
   // （deps.transform = effectiveActionFor 同源）：standard 桌面的 ask → auto-evaluator
   // 走快通道/审批 Agent，且不改变规则间优先级（mcp-readonly-allow 等先命中条目不受影响）。
   const defaultRules = invocationRules.filter((r) => r.action === 'deny' || r.action === 'ask' || r.action === 'allow')
-  if (explicitOutboundTier) {
-    const tokens = signalTokenSet(policyFacts)
-    const hasOutboundSensitivity = tokens.has('outbound-evidence-present')
-    const hasIncompleteOutboundFacts = tokens.has('outbound-inspection-incomplete')
-    const outboundModes = context.policyTier === 'strict'
-      ? ['outbound-sensitive-strict-human', 'outbound-incomplete-strict-human', 'outbound-mode-strict-human']
-      : context.policyTier === 'standard'
-        ? ['outbound-sensitive-standard-human', 'outbound-incomplete-standard-review', 'outbound-mode-standard-review']
-        : ['outbound-sensitive-loose-review', 'outbound-incomplete-loose-review',
-        `outbound-mode-${context.policyTier}-${context.policyTier === 'loose' ? 'allow' : 'review'}`]
-    const selectedOutboundRuleId = hasOutboundSensitivity
-      ? outboundModes.find((id) => id.includes('sensitive'))
-      : hasIncompleteOutboundFacts ? outboundModes.find((id) => id.includes('incomplete')) : outboundModes.at(-1)
-    const mode = selectedOutboundRuleId ? rules.find((rule) => rule.id === selectedOutboundRuleId) : undefined
-    if (mode && matchedRule(mode)) {
-      const transformed = deps.transform ? deps.transform(mode) : mode.action
-      if (transformed === 'allow') return autoAllow(mode.id, facts)
-      return requireConfirm(mode, facts, context.sessionId, context.lane, constraints)
-    }
-  }
   for (const rule of defaultRules) {
     if (!matchedRule(rule)) continue
     const effective = deps.transform ? deps.transform(rule) : rule.action

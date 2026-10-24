@@ -16,7 +16,7 @@ import { resolveWeChatSession } from './weChatSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { resolveClarificationControlMessage, type ClarificationResolverInput, type ClarificationResolverResult } from '../remote/clarificationInbound'
 import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSession, getRemoteAgentLease } from '../remote/remoteAgentRegistry'
-import { authorizeImInboundMessage, evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
+import { authorizeImInboundMessage, evaluateImInboundGuard, readImPolicyAuthorizationRevision, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import { requestImIngressApproval } from '../remote/imIngressApprovalPrompt'
 import { loadEffectivePolicyRules } from '../confirmation/policyRulesRuntime'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
@@ -578,6 +578,7 @@ export class WeChatCommandRouter {
       getConfig: getGuardConfig,
       isLoggedIn: () => Boolean(mergeWeChatConfig(this.deps.getWeChatConfig()).loggedIn),
       getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'wechat'),
+      getPolicyRevision: () => readImPolicyAuthorizationRevision(this.deps.db),
       requestApproval: (request) => requestImIngressApproval({ ...request, messageText: msg.text })
     })
     if (!guard.ok) {

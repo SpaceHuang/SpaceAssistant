@@ -2300,12 +2300,12 @@ describe('evaluateToolCallGate', () => {
       remoteContext: remoteContext({ authOwner: 'ou_owner' }),
       imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
     }))
-    const self = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner'])
-    const other = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other'])
+    const self = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner', '--text', 'hello'])
+    const other = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other', '--text', 'hello'])
     const group = await run(['message', 'send', '--chat-type', 'group', '--receive-id', 'oc_group'])
     const unknown = await run(['message', 'send', '--receive-id-type', 'user_id', '--receive-id', 'user_owner'])
-    expect(self.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
-    expect(other.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-direct-review', answerer: 'agent' })
+    expect(self.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-write-ask', answerer: 'user' })
+    expect(other.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-write-ask', answerer: 'user' })
     expect(group.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-group-human', answerer: 'user' })
     expect(unknown.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-target-unknown-human', answerer: 'user' })
   })
@@ -2328,7 +2328,7 @@ describe('evaluateToolCallGate', () => {
     }))
     expect(missing.facts.actionClass).toBe('outbound')
     expect(missing.facts.signals).toContainEqual({ kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: [] })
-    expect(missing.decision, JSON.stringify(missing.facts)).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
+    expect(missing.decision, JSON.stringify(missing.facts)).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-incomplete-standard-review', answerer: 'agent' })
   })
 
   it('standard Feishu mail send with sensitive text requires human confirmation', async () => {

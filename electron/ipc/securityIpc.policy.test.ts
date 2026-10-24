@@ -64,4 +64,12 @@ describe('security policy action API compatibility contract', () => {
       publish.mockRestore()
     }
   })
+
+  it('includes IM policy action changes in the existing security audit query', async () => {
+    const { db, handlers } = registerHandlers()
+    getDbConnection(db).prepare('INSERT INTO policy_audit_events(event_id,domain,event_json) VALUES(?,?,?)')
+      .run('audit-im-query', 'im', JSON.stringify({ lane: 'wechat', changeKind: 'rule-override', ruleId: 'mcp-tool-ask', beforeAction: 'ask', afterAction: 'deny', policyRevision: 2, updatedAt: 10 }))
+    const result = await handlers.get('security:query-audit')!({}, { lane: 'wechat', limit: 20 }) as Array<Record<string, unknown>>
+    expect(result).toContainEqual(expect.objectContaining({ event: 'settings.policy-change', lane: 'wechat', ruleId: 'mcp-tool-ask', beforeAction: 'ask', afterAction: 'deny' }))
+  })
 })

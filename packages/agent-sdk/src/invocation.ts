@@ -257,6 +257,9 @@ export interface AgentPolicyPorts {
 
 /** 宿主端口集合（P1 立骨架，P2 起承接 storage / usage / tools 等实现）。 */
 export interface AgentHostPorts {
+  /** Host-only live exposure policy readers; implementations remain in the host adapter. */
+  resolveExposureRules?(): PolicyRule[]
+  resolveExposureAuthorizationVersion?(): string
   /** 同一父调用的实际工具执行并发上限，由 Assembly 注入。 */
   toolExecutionConcurrency?: number
   resourceLocks?: {
