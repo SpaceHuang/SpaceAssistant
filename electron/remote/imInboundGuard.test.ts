@@ -78,6 +78,23 @@ describe('imInboundGuard', () => {
     if (result.ok) expect(result.snapshot.policyRevision).toBe(createHash('sha256').update(JSON.stringify(rules)).digest('hex'))
   })
 
+  it('新策略允许时不受旧 ingress prompt 的拒绝结果阻断', async () => {
+    let rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'ingress-direct-other-deny'
+      ? { ...rule, action: 'ask' as const, userOverride: true }
+      : rule)
+    const result = await authorizeImInboundMessage({ channel: 'wechat', senderId: 'external', messageId: 'stale-deny-message',
+      getConfig: () => ({ enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['owner'] }),
+      getPolicyRules: () => rules,
+      requestApproval: async () => {
+        rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'ingress-direct-other-deny'
+          ? { ...rule, action: 'allow' as const, userOverride: true }
+          : rule)
+        return false
+      }
+    })
+    expect(result.ok).toBe(true)
+  })
+
   it('requires a fresh approval after an A→B→A revision change while ingress approval is pending', async () => {
     const rules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'ingress-direct-other-deny'
       ? { ...rule, action: 'ask' as const, userOverride: true } : rule)

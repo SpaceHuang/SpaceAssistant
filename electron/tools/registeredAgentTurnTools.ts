@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
+import { createPermitBoundToolExecutionPort, ToolExecutionRejectedError } from '../../packages/agent-sdk/src/toolExecutionPort'
 import type { ExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import type { PermitBinding, SafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
 import type { ToolPreparationStage } from '../../packages/agent-sdk/src/turn'
@@ -312,20 +312,29 @@ export function createRegisteredAgentTurnTools(input: {
     authorize(initial: PermitBinding, recheck: PermitBinding): Promise<{ kind: 'allow'; permitId: string } | { kind: 'deny'; reasonCode?: string }>
   }): Promise<TurnToolResult> => {
     if (!request.confirmationReceipt.trim()) throw new Error('DEFERRED_CONFIRMATION_RECEIPT_REQUIRED')
-    let dispatchClaimed = false
-    try {
-      const initial = await prepareTool(call, { kind: 'initial' })
-      const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt, answerer: 'user' } })
-      if (!sameRecheckSubject(initial, recheck)) throw new Error('DEFERRED_RECHECK_BINDING_CHANGED')
-      const authorization = await request.authorize(initial, recheck)
-      if (authorization.kind !== 'allow') throw new Error(`DEFERRED_SAFETY_RECHECK_DENIED:${authorization.reasonCode ?? 'POLICY_DENY'}`)
-      return await toolExecution.execute(call, authorization.permitId, () => { dispatchClaimed = true })
-    } catch (error) {
-      if (!dispatchClaimed) throw new DeferredToolPreDispatchError(error)
-      throw error
-    } finally {
-      discardPreparedTool(call)
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let dispatchClaimed = false
+      try {
+        const initial = await prepareTool(call, { kind: 'initial' })
+        const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt, answerer: 'user' } })
+        if (!sameRecheckSubject(initial, recheck)) throw new Error('DEFERRED_RECHECK_BINDING_CHANGED')
+        const authorization = await request.authorize(initial, recheck)
+        if (authorization.kind !== 'allow') throw new Error(`DEFERRED_SAFETY_RECHECK_DENIED:${authorization.reasonCode ?? 'POLICY_DENY'}`)
+        return await toolExecution.execute(call, authorization.permitId, () => { dispatchClaimed = true })
+      } catch (error) {
+        // Final-check boundary: AUTHORIZATION_STALE is emitted before executor entry; rebuild and reauthorize
+        // the same deferred call. Cancellation, revocation, and post-entry failures remain terminal.
+        if (error instanceof ToolExecutionRejectedError && error.reason === 'AUTHORIZATION_STALE' && attempt < 3) {
+          discardPreparedTool(call)
+          continue
+        }
+        if (!dispatchClaimed || error instanceof ToolExecutionRejectedError) throw new DeferredToolPreDispatchError(error)
+        throw error
+      } finally {
+        discardPreparedTool(call)
+      }
     }
+    throw new DeferredToolPreDispatchError(new Error('AUTHORIZATION_STALE'))
   }
 
   return {

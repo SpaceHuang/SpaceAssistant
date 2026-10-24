@@ -68,7 +68,7 @@ export function toRuleViews(
       enabled: (rule.locked && rule.action !== 'deny') || !disabled.has(rule.id),
       locked: rule.locked === true,
       reason: rule.reason,
-      overridden: o != null && o.action !== rule.action,
+      overridden: o != null,
       ...(migrated.has(rule.id) ? { migratedFromLegacyDisabled: true } : {}),
       ...(rule.match?.lane ? { lanes: rule.match.lane } : {}),
       ...(rule.match ? {

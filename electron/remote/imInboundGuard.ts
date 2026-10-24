@@ -168,6 +168,13 @@ export async function authorizeImInboundMessage(args: Parameters<typeof evaluate
     let approved = false
     try { approved = await args.requestApproval(approval) } catch { approved = false }
     if (remoteAuthorizationRegistry.getGeneration(args.channel) !== generation) return { ok: false, reason: 'revoked' }
+    // Policy phase: a prompt answer belongs only to the exact policy revision that opened it.
+    // On drift, discard either answer and evaluate the latest ingress rule before accepting or rejecting.
+    const currentRevision = args.getPolicyRevision?.() ?? createHash('sha256').update(JSON.stringify(args.getPolicyRules?.() ?? [])).digest('hex')
+    if (currentRevision !== policyRevision) {
+      pending = evaluateImInboundGuard(args)
+      continue
+    }
     if (!approved) return { ok: false, reason: 'approval_rejected', ruleId: pending.ruleId }
     pending = evaluateImInboundGuard({ ...args, approvedIngress: approval })
   }

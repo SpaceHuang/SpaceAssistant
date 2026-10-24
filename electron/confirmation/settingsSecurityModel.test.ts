@@ -70,6 +70,13 @@ describe('toRuleViews（规则合并视图）', () => {
       .toMatchObject({ action: 'allow', enabled: true, overridden: true })
   })
 
+  it('即使覆盖动作等于默认动作，也保留覆盖标记以便恢复默认', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [{ id: 'same-action', when: 'invocation' as const, action: 'ask' as const, reason: 'r' }]
+    expect(toRuleViews(rules, [{ ruleId: 'same-action', action: 'ask' }])[0])
+      .toMatchObject({ action: 'ask', defaultAction: 'ask', overridden: true })
+  })
+
   it('projects matched tools and explicit toolkit capability ids for settings display', async () => {
     const { toRuleViews } = await import('./settingsSecurityModel')
     const rules = [{

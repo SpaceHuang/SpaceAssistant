@@ -139,6 +139,49 @@ describe('createRegisteredAgentTurnTools', () => {
     expect(execute).toHaveBeenCalledOnce()
   })
 
+  it('deferred claim 失效后重新授权，并在新 allow 下只派发一次', async () => {
+    const execute = vi.fn(async () => ({ success: true, data: 'retried after fresh authorization' }))
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw, execute }))
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('deferred-stale-invocation', ['write_file'])
+    let authorizationListener: (() => void) | undefined
+    let currentVersion = 'policy-v1'
+    let recheckVersionReads = 0
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: {
+      evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion })
+    } })
+    const tools = createRegisteredAgentTurnTools({ requestId: 'deferred-stale-request', turnId: 'deferred-stale-turn', registry,
+      permits, admission, createExecutionContext: () => ({ sessionId: 's', lane: 'wechat' }),
+      resolveAuthorizationVersion: (_call, stage) => {
+        if (stage.kind === 'recheck' && ++recheckVersionReads === 2 && authorizationListener) {
+          currentVersion = 'policy-v2'
+          authorizationListener()
+        }
+        return currentVersion
+      }, currentAuthorizationVersion: () => currentVersion,
+      subscribeAuthorizationChanges: (_call, listener) => { authorizationListener = listener; return () => { authorizationListener = undefined } } })
+    const call = { invocationId: 'deferred-stale-invocation', toolCallId: 'deferred-stale-call', toolName: 'write_file', input: { path: 'report.txt', content: 'approved' } }
+    let authorizations = 0
+    const authorize = async (initial: import('../../packages/agent-sdk/src/safetyPermit').PermitBinding,
+      recheck: import('../../packages/agent-sdk/src/safetyPermit').PermitBinding) => {
+      const initialDecision = await safetyGate.evaluate(initial)
+      if (initialDecision.kind !== 'allow') return { kind: 'deny' as const, reasonCode: 'POLICY_DENY' }
+      const fresh = await safetyGate.authorize(recheck)
+      if (fresh.kind !== 'allow') return { kind: 'deny' as const, reasonCode: 'POLICY_DENY' }
+      authorizations += 1
+      return fresh
+    }
+
+    await expect(tools.executeDeferred(call, { confirmationReceipt: 'approval:stale-claim', authorize }))
+      .resolves.toMatchObject({ output: { success: true, data: 'retried after fresh authorization' }, isError: false })
+    expect(authorizations).toBe(2)
+    expect(execute).toHaveBeenCalledOnce()
+    expect(admission.executorEntries).toBe(1)
+  })
+
   it('executes a deferred original tool without a model turn, after fresh recheck and one-shot permit admission', async () => {
     const execute = vi.fn(async () => ({ success: true, data: 'approved execution' }))
     const registry = new TypedToolRegistry()

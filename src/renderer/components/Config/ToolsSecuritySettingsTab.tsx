@@ -361,9 +361,14 @@ function PolicyPackageSection({
   const rulesForLane = (lane: (typeof LANES)[number]): SecuritySettingsRuleView[] => {
     const views = model?.rules ?? []
     const hasImOverride = (ruleId: string) => Object.prototype.hasOwnProperty.call(imRuleOverrides, ruleId)
+    const lanePackage = lane === 'wechat'
+      ? imPackageOverride ?? model?.packages.wechat ?? 'standard'
+      : model?.packages[lane] ?? 'standard'
     const laneRules = lane === 'wechat'
       ? views.map((view) => ({ ...view, action: view.defaultAction ?? view.action, userOverride: false }))
-      : views
+      : lane === 'desktop' && lanePackage !== 'custom'
+        ? views.map((view) => ({ ...view, action: view.defaultAction ?? view.action, userOverride: false }))
+        : views
     const packages = lane === 'wechat'
       ? { ...model?.packages, wechat: imPackageOverride ?? model?.packages.wechat ?? 'standard' }
       : model?.packages
@@ -371,7 +376,9 @@ function PolicyPackageSection({
     return effective
       .map((r) => {
         const view = views.find((v) => v.id === r.id) ?? scopeView(r, lane)
-        if (lane !== 'wechat') return view
+        if (lane !== 'wechat') return lane === 'desktop' && lanePackage !== 'custom'
+          ? { ...view, action: r.action as SecuritySettingsRuleView['action'], defaultAction: view.defaultAction ?? view.action }
+          : view
         return {
           ...view,
           action: (hasImOverride(r.id) ? imRuleOverrides[r.id] : r.action) as SecuritySettingsRuleView['action'],

@@ -461,6 +461,22 @@ describe('SecuritySettingsTab（§7 五区）', () => {
 })
 
 describe('生效动作与动作域（P2：显示=实际，动作域按 lane）', () => {
+  it('桌面非自定义套餐显示套餐动作，同时保留休眠覆盖的恢复入口', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, desktop: 'standard' },
+      rules: MODEL.rules.map((rule) => rule.id === 'mcp-tool-ask'
+        ? { ...rule, action: 'deny', defaultAction: 'ask', overridden: true }
+        : rule)
+    })
+    await changeAppLocale('zh-CN')
+    renderTab()
+    const panel = await openLaneTab('桌面')
+    const row = (await within(panel).findByText('mcp-tool-ask')).closest('tr')!
+    expect(within(row as HTMLElement).getByText(/自动/)).toBeTruthy()
+    expect(within(row as HTMLElement).getByRole('button', { name: '恢复默认' })).toBeTruthy()
+  })
+
   it('逐条显示默认动作对应的审批频率说明', { timeout: 20000 }, async () => {
     const scopedRules = [
       { id: 'default-every-time', when: 'invocation', action: 'confirm-every-time', defaultAction: 'confirm-every-time', enabled: true, locked: true,

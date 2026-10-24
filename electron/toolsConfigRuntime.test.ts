@@ -128,4 +128,21 @@ describe('按对象批准 exposure ask', () => {
     expect(tools.map((tool) => tool.name)).not.toContain('wechat_send')
     expect(approvals).toBe(2)
   })
+
+  it('新策略允许时不受旧 exposure prompt 的拒绝结果阻断', async () => {
+    let rules = [{ id: 'im-no-wechat-send', when: 'exposure' as const,
+      match: { lane: ['wechat', 'feishu'], toolName: 'wechat_send' }, action: 'ask' as const,
+      userOverride: true, reason: 'require approval' } as never]
+    const tools = await filterBuiltinToolsForApiWithApproval({
+      cfg: { enabled: true, deniedTools: [], allowedTools: [] } as never,
+      wechat: { enabled: true } as never,
+      remoteContext: { source: 'wechat', messageId: 'stale-deny', confirmPolicy: 'im_confirm' },
+      rules, resolveRules: () => rules,
+      requestApproval: async () => {
+        rules = [{ ...rules[0]!, action: 'allow' }]
+        return false
+      }
+    })
+    expect(tools.map((tool) => tool.name)).toContain('wechat_send')
+  })
 })

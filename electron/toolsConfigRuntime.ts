@@ -159,7 +159,7 @@ export async function filterBuiltinToolsForApiWithApproval(args: {
       const approvedRules = JSON.stringify(currentRules ?? [])
       const approvedVersion = args.resolveAuthorizationVersion?.()
       try { approved = await args.requestApproval({ lane, toolName: tool.name, ruleId: pending.ruleId }) } catch { approved = false }
-      if (!approved) break
+      // Policy phase: an exposure prompt answer is valid only against the snapshot/version it opened on.
       currentRules = args.resolveRules?.() ?? args.rules
       const currentVersion = args.resolveAuthorizationVersion?.()
       if (JSON.stringify(currentRules ?? []) !== approvedRules || approvedVersion !== currentVersion) {
@@ -168,6 +168,7 @@ export async function filterBuiltinToolsForApiWithApproval(args: {
         if (pending.action === 'deny' || pending.action !== 'ask' || !pending.ruleId) break
         continue
       }
+      if (!approved) break
       const permit = issueExposureApprovalPermit({ ruleId: pending.ruleId, toolName: tool.name, lane })
       if (evaluateExposure({ toolName: tool.name, lane, rules: currentRules, approvedExposure: permit }).allowed) allowed.add(tool.name)
       break
