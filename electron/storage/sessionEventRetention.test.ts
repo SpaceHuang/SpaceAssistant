@@ -13,6 +13,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { rebuildClaudeMessagesFromHistory } from '../runtime/canonicalHistory'
 import * as transcriptProjection from '../runtime/sessionTranscriptProjection'
+import type { Message } from '../../src/shared/domainTypes'
 import {
   createSessionLedgerCompactionDependencyGuard,
   createCanonicalSessionProjectionRetentionPreparer,
@@ -29,6 +30,20 @@ import {
 
 let warnSpy: ReturnType<typeof vi.spyOn>
 
+function createRetentionPreparedStorage(db: ReturnType<typeof createMemoryAppDb>) {
+  const history = new SqliteAgentHistory(getDbConnection(db))
+  return {
+    ensureChatBodyV1: async ({ sessionId }: { sessionId: string }) => ({ sessionId }),
+    queries: {
+      readMessages: () => [] as Message[],
+      readPreparedMessages: async ({ sessionId }: { sessionId: string }) => {
+        const result = history.readCanonicalSessionTranscriptForShadow(sessionId)
+        return result.kind === 'matched' ? result.messages as Message[] : []
+      }
+    }
+  } as never
+}
+
 beforeEach(() => {
   warnSpy = vi.spyOn(agentLoggerModule, 'logAgentEvent').mockImplementation(() => undefined)
 })
@@ -38,6 +53,19 @@ afterEach(() => {
 })
 
 describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
+  it('requires the prepared SessionStorage reader instead of falling back to a synchronous transcript read', async () => {
+    const db = createMemoryAppDb()
+    const projectionRead = vi.spyOn(transcriptProjection, 'getProjectedMessages')
+    try {
+      expect(() => createCanonicalSessionProjectionRetentionPreparer(db, undefined as never))
+        .toThrow('SESSION_RETENTION_PREPARED_READER_REQUIRED')
+      expect(projectionRead).not.toHaveBeenCalled()
+    } finally {
+      projectionRead.mockRestore()
+      db.close()
+    }
+  })
+
   it('prepares chatBodyV1 before selecting projected messages for retention', async () => {
     const db = createMemoryAppDb()
     getDbConnection(db).prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
@@ -349,7 +377,7 @@ describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
     }], 0)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id='old'").run()
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id='retention-user'").run()
-    let prepareProjection = createCanonicalSessionProjectionRetentionPreparer(db)
+    let prepareProjection = createCanonicalSessionProjectionRetentionPreparer(db, createRetentionPreparedStorage(db))
     let simulateCrashAfterProjectionCommit = true
     const interrupted = await runSessionEventRetentionMaintenance(db, [root], {
       prepareProjectionForRetention: async (sessionName, workDir) => {
@@ -369,7 +397,7 @@ describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
     db.close()
     db = openDatabase(persistent.dbPath)
     history = new SqliteAgentHistory(getDbConnection(db), 1, () => 101, 'old')
-    prepareProjection = createCanonicalSessionProjectionRetentionPreparer(db)
+    prepareProjection = createCanonicalSessionProjectionRetentionPreparer(db, createRetentionPreparedStorage(db))
 
     const result = await runSessionEventRetentionMaintenance(db, [root], { prepareProjectionForRetention: prepareProjection })
 
