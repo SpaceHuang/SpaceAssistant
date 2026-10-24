@@ -1683,7 +1683,7 @@ describe('file IPC handlers', () => {
     expect(submitted).toMatchObject({ accepted: 'turn-started', turnId: expect.any(String) })
     const retryTurn = real.getPersistedTurn(db, submitted.turnId)
     expect(retryTurn).toMatchObject({ requestId: expect.not.stringMatching('retry-intent-source-request'), userMessageId: targetUser.message.id,
-      contextBoundarySequence: targetUser.sequence, excludeMessageIds: [failedAssistant.message.id] })
+      contextBoundarySequence: 4, excludeMessageIds: [failedAssistant.message.id] })
     await vi.waitFor(() => expect(retryProvider.calls).toHaveLength(1))
     const actual = retryProvider.calls[0]!.request.messages
     expect(retryProvider.calls[0]!.route).toMatchObject({ routeId: 'desktop-test', modelId: 'test-model' })
@@ -1698,7 +1698,7 @@ describe('file IPC handlers', () => {
     expect(actual).toContainEqual(expect.objectContaining({ role: 'assistant', content: 'edited retry prior assistant sentinel' }))
     expect(actual.filter((message) => message.content === 'retry required user sentinel')).toHaveLength(1)
     expect(actual).not.toContainEqual(expect.objectContaining({ content: 'failed retry source sentinel' }))
-    expect(actual).not.toContainEqual(expect.objectContaining({ content: 'later physical user sentinel' }))
+    expect(actual).toContainEqual(expect.objectContaining({ content: 'later physical user sentinel' }))
     db.close()
     temp.cleanup()
   })

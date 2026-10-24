@@ -563,7 +563,6 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
                 requestId: contextIntent.requestId ?? deps.newRequestId(),
                 sessionId,
                 userMessageId: contextIntent.currentUser.message.id,
-                contextBoundarySequence: contextIntent.currentUser.order.sequence,
                 excludeMessageIds: contextIntent.excludeMessageIds ?? [],
                 config: {}
               }
