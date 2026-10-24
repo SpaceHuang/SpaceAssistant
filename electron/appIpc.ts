@@ -17,7 +17,6 @@ import { registerSecurityIpc } from './ipc/securityIpc'
 import { registerSessionIpc } from './ipc/sessionIpc'
 import { registerStorageMaintenanceIpc } from './ipc/storageMaintenanceIpc'
 import { registerPolicyIpc } from './ipc/policyIpc'
-import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
 import { runStorageProfileWorker } from './storageProfile/storageProfileWorkerClient'
 import type { SessionStorage } from './sessionStorage/host/ports'
@@ -30,7 +29,7 @@ export type AppIpcContext = {
   db: AppDatabase
   storageProfileCoordinator?: StorageProfileCoordinator
   /** Bound session capabilities created once at this composition root. */
-  sessionStorage?: SessionStorage
+  sessionStorage: SessionStorage
   /** Security policy/cache persistence adapter bound at this composition root. */
   securitySettingsStorage?: ReturnType<typeof createSecuritySettingsStorage>
   backup: DebouncedSessionBackupManager
@@ -58,7 +57,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): St
     run: (request, options) => runStorageProfileWorker(request, { signal: options.signal })
   })
   const context = { ...ctx, storageProfileCoordinator,
-    sessionStorage: ctx.sessionStorage ?? createSqliteSessionStorage(ctx.db),
+    sessionStorage: ctx.sessionStorage,
     securitySettingsStorage: ctx.securitySettingsStorage ?? createSecuritySettingsStorage(ctx.db) }
   registerDesktopIpc(ipcMain, context)
   registerAgentIpc(ipcMain, context)

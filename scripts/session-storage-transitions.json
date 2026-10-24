@@ -17,18 +17,6 @@
     "evidence": "main.ts; appIpc.ts composition tests"
   },
   {
-    "source": "electron/appIpc.ts",
-    "target": "electron/sessionStorage/sqliteSessionStorage",
-    "symbols": [
-      "createSqliteSessionStorage"
-    ],
-    "typeOnly": false,
-    "owner": "Electron IPC composition root",
-    "reason": "IPC registration receives the concrete SQLite storage adapter at composition time.",
-    "exitStage": "P2",
-    "evidence": "appIpc tests; sessionStorageBoundary.test.ts"
-  },
-  {
     "source": "electron/ipc/agentProtocolIpc.ts",
     "target": "electron/sessionStorage/sqliteSessionStorage",
     "symbols": [
