@@ -24,6 +24,8 @@ import type { SessionStorage } from './sessionStorage/host/ports'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createSessionCommands } from './sessionStorage/commands'
 import { createSessionExecutionStore } from './sessionStorage/execution'
+import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped,
+  verifyAndCompleteSessionMessageContentCleanup } from './sessionStorage/maintenance'
 import { runHostedAgentTurn, type AgentTurnHost } from '../packages/agent-sdk/src/turn'
 import { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
 import { RecordingModelProvider } from '../packages/agent-provider-testing/src'
@@ -149,9 +151,9 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
   }
 }
 
-function makeCtx(): AppIpcContext {
+function makeCtx(db = createMemoryAppDb()): AppIpcContext {
   const ctx: AppIpcContext = {
-    db: createMemoryAppDb(),
+    db,
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),
@@ -408,6 +410,56 @@ describe('file IPC handlers', () => {
     expect(database.updateMessageContent).not.toHaveBeenCalled()
     expect(result).toEqual({ message, sequence: 4 })
     expect(events).toEqual([`ensure:${session.id}`, `select:${session.id}`])
+  })
+
+  it('rejects a real IPC edit after canonical-only cleanup has completed', async () => {
+    vi.restoreAllMocks()
+    const temp = createTempDatabase('canonical-only-ipc-edit-')
+    const real = { ...await vi.importActual<typeof import('./database')>('./database'),
+      ...await vi.importActual<typeof import('./database/operations')>('./database/operations') }
+    ctx.db.close()
+    ctx = makeCtx(temp.db)
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const session = real.createSession(ctx.db, { name: 'canonical-only IPC edit', model: 'test' })
+    const user = real.appendMessage(ctx.db, { id: 'ipc-canonical-only-user', sessionId: session.id, role: 'user',
+      content: 'canonical question', timestamp: 1, status: 'sent' })
+    const assistant = real.appendMessage(ctx.db, { id: 'ipc-canonical-only-assistant', sessionId: session.id, role: 'assistant',
+      content: 'canonical answer', timestamp: 2, status: 'completed' })
+    let history = new SqliteAgentHistory(getActualDbConnection(ctx.db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'ipc-canonical-only-invocation', turnId: 'ipc-canonical-only-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'ipc-canonical-only-context', idempotencyKey: 'ipc-canonical-only-context', kind: 'invocation-context-committed',
+      payload: { messages: [user.message, assistant.message].map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) }
+    }], 0)
+    expect(sessionStorageCutover.certifyCanonicalSessionApiRead(ctx.db, session.id).status).toBe('eligible')
+    sessionStorageCutover.setCanonicalApiReadFeatureEnabled(ctx.db, true)
+    const actualWriteAuthority = await vi.importActual<typeof import('./runtime/sessionContentWriteAuthority')>('./runtime/sessionContentWriteAuthority')
+    expect(actualWriteAuthority.enableCanonicalSessionWriteAuthority(ctx.db, session.id).status).toBe('enabled')
+    expect(markSessionMessageContentWriteStopped(ctx.db, session.id)).toBe(true)
+    expect(beginSessionMessageContentCleanup(ctx.db, session.id)).toBe(true)
+    expect(clearNextSessionMessageContentBatch(ctx.db, session.id, 10).status).toBe('complete')
+    const databasePath = temp.dbPath
+    ctx.db.close()
+    const reopened = real.openDatabase(databasePath)
+    ctx = makeCtx(reopened)
+    history = new SqliteAgentHistory(getActualDbConnection(ctx.db), 1, Date.now, session.id)
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    expect(verifyAndCompleteSessionMessageContentCleanup(ctx.db, session.id)).toBe(true)
+
+    const before = history.readCanonicalSessionTranscriptForShadow(session.id)
+    await expect(ipc.getHandler('message:patch-non-turn')!({}, {
+      sessionId: session.id, messageId: 'ipc-canonical-only-user', patch: { content: 'edited after cleanup' }
+    })).rejects.toThrow('canonical write authority requires a canonical History append')
+
+    expect(history.readCanonicalSessionTranscriptForShadow(session.id)).toEqual(before)
+    expect(getActualDbConnection(ctx.db).prepare('SELECT content,content_storage_state FROM messages WHERE id=?')
+      .get('ipc-canonical-only-user')).toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
+    expect(getActualDbConnection(ctx.db).prepare('SELECT COUNT(*) AS count FROM turns WHERE session_id=?').get(session.id))
+      .toEqual({ count: 0 })
+    ctx.db.close()
+    temp.cleanup()
   })
 
   it('routes toolCalls metadata through its dedicated command and rejects mixed patches', async () => {
