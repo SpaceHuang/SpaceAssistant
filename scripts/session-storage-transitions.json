@@ -28,39 +28,5 @@
     "reason": "A single test-only composition owner binds the production SQLite adapter to AppDatabase fixtures.",
     "exitStage": "P2",
     "evidence": "invocationAssembler and claudeStreamHandlers test support; sessionStorageBoundary.test.ts"
-  },
-  {
-    "source": "electron/runtime/sessionProjectionMigrationCoordinator.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "cancelSessionProjectionMigration",
-      "getSessionProjectionMigrationRun",
-      "pauseSessionProjectionMigration",
-      "resumeSessionProjectionMigration",
-      "runSessionProjectionMigrationBatch",
-      "startSessionProjectionMigration",
-      "SessionProjectionMigrationExecutionReport",
-      "SessionProjectionMigrationItemOutcome",
-      "SessionProjectionMigrationRun",
-      "buildSessionProjectionMigrationInventory"
-    ],
-    "typeOnly": false,
-    "owner": "Session projection migration coordinator",
-    "reason": "The runtime coordinator drives the SQLite-owned durable migration state machine through named bindings.",
-    "exitStage": "P2",
-    "evidence": "sessionProjectionMigrationCoordinator.test.ts; sessionProjectionMigration.test.ts"
-  },
-  {
-    "source": "electron/runtime/sessionProjectionMigrationApplication.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "SessionProjectionMigrationExecutionReport",
-      "SessionProjectionMigrationRun"
-    ],
-    "typeOnly": true,
-    "owner": "Session projection migration application",
-    "reason": "Application lifecycle types are owned by the SQLite migration state machine.",
-    "exitStage": "P2",
-    "evidence": "sessionProjectionMigrationApplication.test.ts"
   }
 ]

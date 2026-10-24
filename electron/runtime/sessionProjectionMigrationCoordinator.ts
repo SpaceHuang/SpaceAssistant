@@ -1,18 +1,4 @@
-import { randomUUID } from 'node:crypto'
-import type { AppDatabase } from '../database/sqliteStore'
-import { getDbConnection } from '../database/sqliteStore'
-import { buildSessionProjectionMigrationInventory } from '../sessionStorage/sqliteRuntimeBindings'
-import {
-  cancelSessionProjectionMigration,
-  getSessionProjectionMigrationRun,
-  pauseSessionProjectionMigration,
-  resumeSessionProjectionMigration,
-  runSessionProjectionMigrationBatch,
-  startSessionProjectionMigration,
-  type SessionProjectionMigrationExecutionReport,
-  type SessionProjectionMigrationItemOutcome,
-  type SessionProjectionMigrationRun,
-} from '../sessionStorage/sqliteRuntimeBindings'
+import type { SessionProjectionMigrationExecutionReport, SessionProjectionMigrationItemOutcome, SessionProjectionMigrationPort, SessionProjectionMigrationRun } from '../sessionStorage/host/ports'
 
 export type SessionProjectionMigrationCoordinatorOptions = Readonly<{
   /** Must be explicitly enabled by the owning application operation; defaults closed. */
@@ -57,7 +43,7 @@ export class SessionProjectionMigrationCoordinator {
   private readonly scheduledRuns = new Map<string, () => void>()
   private readonly activeTicks = new Set<Promise<void>>()
 
-  constructor(private readonly db: AppDatabase, options: SessionProjectionMigrationCoordinatorOptions = {}) {
+  constructor(private readonly migration: SessionProjectionMigrationPort, options: SessionProjectionMigrationCoordinatorOptions = {}) {
     this.executionEnabled = options.executionEnabled ?? (() => false)
     this.now = options.now ?? Date.now
   }
@@ -66,39 +52,10 @@ export class SessionProjectionMigrationCoordinator {
     if (!this.executionEnabled()) throw new Error('session projection migration execution is disabled')
   }
 
-  private findActiveRun(): SessionProjectionMigrationRun | undefined {
-    const row = getDbConnection(this.db).prepare(`SELECT run_id FROM session_projection_migration_runs
-      WHERE status IN ('running','paused','needs_retry') AND cancelled_at IS NULL ORDER BY created_at DESC,run_id DESC LIMIT 1`)
-      .get() as { run_id: string } | undefined
-    return row ? getSessionProjectionMigrationRun(this.db, row.run_id) : undefined
-  }
-
   /** Snapshot and persist a cohort exactly once; repeated application starts reuse its durable active run. */
   createRun(options: Pick<SessionProjectionMigrationCoordinatorRunOptions, 'runId' | 'knownSessionIds' | 'now'> = {}): SessionProjectionMigrationRun {
     this.assertExecutionEnabled()
-    const requestedId = options.runId
-    if (requestedId) {
-      const existing = getDbConnection(this.db).prepare('SELECT 1 AS present FROM session_projection_migration_runs WHERE run_id=?')
-        .get(requestedId)
-      if (existing) return getSessionProjectionMigrationRun(this.db, requestedId)
-    } else {
-      const active = this.findActiveRun()
-      if (active) return active
-    }
-
-    const runId = requestedId ?? randomUUID()
-    const inventory = buildSessionProjectionMigrationInventory(this.db,
-      options.knownSessionIds ? { knownSessionIds: options.knownSessionIds } : {})
-    try {
-      return startSessionProjectionMigration(this.db, inventory, { runId, now: options.now ?? this.now() })
-    } catch (error) {
-      // A second main-process caller may have won the active-run race after this census.
-      if (!requestedId) {
-        const active = this.findActiveRun()
-        if (active) return active
-      }
-      throw error
-    }
+    return this.migration.createOrReuseRun({ ...options, now: options.now ?? this.now() })
   }
 
   /** Run at most a small number of bounded batches, yielding between them so normal session work continues. */
@@ -110,14 +67,14 @@ export class SessionProjectionMigrationCoordinator {
     if (!Number.isSafeInteger(maxBatches) || maxBatches < 1 || maxBatches > 20) {
       throw new RangeError('maxBatches must be an integer from 1 to 20')
     }
-    let run = getSessionProjectionMigrationRun(this.db, runId)
+    let run = this.migration.getRun(runId)
     if (!['running', 'needs_retry'].includes(run.status)) return emptyReport(run)
 
     let batchCount = 0
     const outcomes: SessionProjectionMigrationItemOutcome[] = []
     while (batchCount < maxBatches && ['running', 'needs_retry'].includes(run.status)) {
       if (!this.executionEnabled()) break
-      const batch = await runSessionProjectionMigrationBatch(this.db, runId, {
+      const batch = await this.migration.runBatch(runId, {
         batchSize, rateLimitMs, now: (options.now ?? this.now()) + batchCount,
       })
       batchCount += 1
@@ -147,7 +104,7 @@ export class SessionProjectionMigrationCoordinator {
   /** Schedule recurring, single-batch ticks for an explicitly created run; construction never starts work. */
   schedule(runId: string, options: SessionProjectionMigrationCoordinatorScheduleOptions = {}): () => void {
     this.assertExecutionEnabled()
-    const run = getSessionProjectionMigrationRun(this.db, runId)
+    const run = this.migration.getRun(runId)
     if (!['running', 'needs_retry'].includes(run.status)) return () => undefined
     const existing = this.scheduledRuns.get(runId)
     if (existing) return existing
@@ -219,17 +176,17 @@ export class SessionProjectionMigrationCoordinator {
   }
 
   pause(runId: string, now = this.now()): SessionProjectionMigrationRun {
-    return pauseSessionProjectionMigration(this.db, runId, now)
+    return this.migration.pause(runId, now)
   }
 
   resume(runId: string, now = this.now()): SessionProjectionMigrationRun {
     this.assertExecutionEnabled()
-    return resumeSessionProjectionMigration(this.db, runId, now)
+    return this.migration.resume(runId, now)
   }
 
   /** Stop future claims durably; any currently claimed bounded item may finish before this call takes effect. */
   cancel(runId: string, now = this.now()): SessionProjectionMigrationRun {
-    return cancelSessionProjectionMigration(this.db, runId, now)
+    return this.migration.cancel(runId, now)
   }
 
   async shutdown(): Promise<void> {

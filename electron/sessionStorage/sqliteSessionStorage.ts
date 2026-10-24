@@ -26,6 +26,9 @@ import { readProjectionHistoryChunkInWorker } from './infrastructure/sqlite/proj
 import { reduceProjectionHistoryChunkInWorker } from './infrastructure/sqlite/projectionHistoryReducerWorkerClient'
 import { materializeProjectionFinalViewInWorker } from './infrastructure/sqlite/projectionFinalViewWorkerClient'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
+import { buildSessionProjectionMigrationInventory } from './infrastructure/sqlite/sessionProjectionMigrationInventory'
+import { cancelSessionProjectionMigration, getSessionProjectionMigrationRun, pauseSessionProjectionMigration,
+  resumeSessionProjectionMigration, runSessionProjectionMigrationBatch, startSessionProjectionMigration } from './infrastructure/sqlite/sessionProjectionMigration'
 import { certifyCanonicalSessionApiRead } from './certification'
 import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch,
   getSessionMessageContentCleanupAuthorizationSnapshotSha256, markSessionMessageContentWriteStopped,
@@ -258,6 +261,41 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       begin: (sessionId: string) => beginSessionMessageContentCleanup(db, sessionId),
       clearNextBatch: (sessionId: string, batchSize?: number) => clearNextSessionMessageContentBatch(db, sessionId, batchSize),
       verifyAndComplete: (sessionId: string) => verifyAndCompleteSessionMessageContentCleanup(db, sessionId),
+    }),
+    projectionMigration: Object.freeze({
+      getRun: (runId: string) => getSessionProjectionMigrationRun(db, runId),
+      createOrReuseRun: (input: { runId?: string; knownSessionIds?: readonly string[]; now: number }) => {
+        const requestedId = input.runId
+        if (requestedId) {
+          const existing = getDbConnection(db).prepare('SELECT 1 AS present FROM session_projection_migration_runs WHERE run_id=?')
+            .get(requestedId)
+          if (existing) return getSessionProjectionMigrationRun(db, requestedId)
+        } else {
+          const row = getDbConnection(db).prepare(`SELECT run_id FROM session_projection_migration_runs
+            WHERE status IN ('running','paused','needs_retry') AND cancelled_at IS NULL ORDER BY created_at DESC,run_id DESC LIMIT 1`)
+            .get() as { run_id: string } | undefined
+          if (row) return getSessionProjectionMigrationRun(db, row.run_id)
+        }
+        const runId = requestedId ?? randomUUID()
+        const inventory = buildSessionProjectionMigrationInventory(db,
+          input.knownSessionIds ? { knownSessionIds: input.knownSessionIds } : {})
+        try {
+          return startSessionProjectionMigration(db, inventory, { runId, now: input.now })
+        } catch (error) {
+          if (!requestedId) {
+            const row = getDbConnection(db).prepare(`SELECT run_id FROM session_projection_migration_runs
+              WHERE status IN ('running','paused','needs_retry') AND cancelled_at IS NULL ORDER BY created_at DESC,run_id DESC LIMIT 1`)
+              .get() as { run_id: string } | undefined
+            if (row) return getSessionProjectionMigrationRun(db, row.run_id)
+          }
+          throw error
+        }
+      },
+      runBatch: (runId: string, input: { batchSize: number; rateLimitMs: number; now: number }) =>
+        runSessionProjectionMigrationBatch(db, runId, input),
+      pause: (runId: string, now: number) => pauseSessionProjectionMigration(db, runId, now),
+      resume: (runId: string, now: number) => resumeSessionProjectionMigration(db, runId, now),
+      cancel: (runId: string, now: number) => cancelSessionProjectionMigration(db, runId, now),
     }),
     checkpointProjection: (sessionId: string) => checkpointSessionTranscriptProjection(db, sessionId),
     clearProjectionCaches: () => clearSessionProjectionCaches(db),

@@ -1,11 +1,10 @@
-import type { AppDatabase } from '../database/sqliteStore'
 import {
   SessionProjectionMigrationCoordinator,
   type SessionProjectionMigrationCoordinatorOptions,
   type SessionProjectionMigrationCoordinatorRunOptions,
   type SessionProjectionMigrationCoordinatorScheduleOptions,
 } from './sessionProjectionMigrationCoordinator'
-import type { SessionProjectionMigrationExecutionReport, SessionProjectionMigrationRun } from '../sessionStorage/sqliteRuntimeBindings'
+import type { SessionProjectionMigrationExecutionReport, SessionProjectionMigrationPort, SessionProjectionMigrationRun } from '../sessionStorage/host/ports'
 
 /** Main-process lifecycle owner. It deliberately does not create or schedule a run during initialization. */
 export class SessionProjectionMigrationApplication {
@@ -13,8 +12,8 @@ export class SessionProjectionMigrationApplication {
   private readonly stops = new Set<() => void>()
   private initialized = false
 
-  constructor(db: AppDatabase, options: SessionProjectionMigrationCoordinatorOptions = {}) {
-    this.coordinator = new SessionProjectionMigrationCoordinator(db, options)
+  constructor(migration: SessionProjectionMigrationPort, options: SessionProjectionMigrationCoordinatorOptions = {}) {
+    this.coordinator = new SessionProjectionMigrationCoordinator(migration, options)
   }
 
   initialize(): void {

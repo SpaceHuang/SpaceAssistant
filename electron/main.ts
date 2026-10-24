@@ -736,7 +736,7 @@ app.whenReady().then(async () => {
       : { status: 'deadline-exceeded' as const }
   }
   // Main-process owner only. Execution remains closed until a separately authorized cohort is started.
-  sessionProjectionMigrationApplication = new SessionProjectionMigrationApplication(db)
+  sessionProjectionMigrationApplication = new SessionProjectionMigrationApplication(sessionStorage.projectionMigration)
   sessionProjectionMigrationApplication.initialize()
   initAgentLogger({
     getWorkDir: () => workDirManager?.getActiveWorkDir() ?? (workDirState || recoveryWorkDir),

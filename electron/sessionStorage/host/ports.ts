@@ -91,6 +91,36 @@ export interface SessionCleanupPort {
   verifyAndComplete(sessionId: string): boolean
 }
 
+export type SessionProjectionMigrationRun = Readonly<{
+  runId: string; inventorySha256: string
+  status: 'running' | 'paused' | 'needs_retry' | 'needs_attention' | 'completed' | 'cancelled'
+  cursor: string | null; totalCount: number; migratedCount: number; legacyRequiredCount: number; deletedCount: number
+  deferredCount: number; retryCount: number; databaseSessionCount: number; migrationSessionCount: number
+  excludedInternalHiddenSessionCount: number
+  internalHistory: Readonly<{ sessionCount: number; withHistoryCount: number; healthyCount: number; unhealthyCount: number }>
+  internalHistorySha256: string
+}>
+export type SessionProjectionMigrationItemOutcome = Readonly<{
+  sessionId: string; status: 'migrated' | 'legacy_required' | 'deleted' | 'deferred_active' | 'retry'
+  outcome: 'success' | 'failure' | 'skipped'; reason?: string; error?: string
+}>
+export type SessionProjectionMigrationBatch = SessionProjectionMigrationRun & Readonly<{
+  processedCount: number; successCount: number; failureCount: number; skippedCount: number
+  outcomes: readonly SessionProjectionMigrationItemOutcome[]
+}>
+export type SessionProjectionMigrationExecutionReport = Readonly<{
+  run: SessionProjectionMigrationRun; batchCount: number; processedCount: number; successCount: number
+  failureCount: number; skippedCount: number; outcomes: readonly SessionProjectionMigrationItemOutcome[]
+}>
+export interface SessionProjectionMigrationPort {
+  getRun(runId: string): SessionProjectionMigrationRun
+  createOrReuseRun(input: Readonly<{ runId?: string; knownSessionIds?: readonly string[]; now: number }>): SessionProjectionMigrationRun
+  runBatch(runId: string, input: Readonly<{ batchSize: number; rateLimitMs: number; now: number }>): Promise<SessionProjectionMigrationBatch>
+  pause(runId: string, now: number): SessionProjectionMigrationRun
+  resume(runId: string, now: number): SessionProjectionMigrationRun
+  cancel(runId: string, now: number): SessionProjectionMigrationRun
+}
+
 export interface SessionStorage {
   readonly queries: SessionQueries
   readonly commands: SessionCommands
@@ -99,6 +129,7 @@ export interface SessionStorage {
   readonly recovery: SessionRecoveryPort
   readonly availability: SessionAvailabilityPort
   readonly cleanup: SessionCleanupPort
+  readonly projectionMigration: SessionProjectionMigrationPort
   readCompactionReplay(input: Readonly<{ sessionId: string; workDir: string }>): Promise<CompactionReplay>
   readContextMeterEvents(input: Readonly<{ sessionId: string; workDir: string }>): Promise<readonly CanonicalContextMeterEvent[]>
   ensureLedgerReady?(sessionId: string): Promise<boolean>

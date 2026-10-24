@@ -1,3 +1,4 @@
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { appendMessage, createSession } from '../database/operations'
 import { openDatabase } from '../database'
@@ -27,7 +28,7 @@ describe('session projection migration application coordinator', () => {
     const temp = createTempDatabase('projection-coordinator-disabled-')
     try {
       const session = await addEligibleSession(temp.db, 'disabled')
-      const coordinator = new SessionProjectionMigrationCoordinator(temp.db)
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(temp.db).projectionMigration)
 
       await expect(coordinator.start()).rejects.toThrow('execution is disabled')
       expect(getDbConnection(temp.db).prepare('SELECT COUNT(*) AS count FROM session_projection_migration_runs').get())
@@ -43,7 +44,7 @@ describe('session projection migration application coordinator', () => {
     try {
       const first = await addEligibleSession(temp.db, 'first')
       const second = await addEligibleSession(temp.db, 'second')
-      const coordinator = new SessionProjectionMigrationCoordinator(temp.db, { executionEnabled: () => true })
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => true })
 
       const started = await coordinator.start({ runId: 'coordinator-run', batchSize: 1, maxBatches: 1 })
       expect(started.run).toMatchObject({ runId: 'coordinator-run', inventorySha256: expect.stringMatching(/^[a-f0-9]{64}$/), status: 'running', totalCount: 2 })
@@ -69,14 +70,14 @@ describe('session projection migration application coordinator', () => {
     try {
       await addEligibleSession(db, 'reopen-a')
       await addEligibleSession(db, 'reopen-b')
-      const firstCoordinator = new SessionProjectionMigrationCoordinator(db, { executionEnabled: () => true })
+      const firstCoordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(db).projectionMigration, { executionEnabled: () => true })
       const first = await firstCoordinator.start({ runId: 'reopen-run', batchSize: 1 })
       expect(first.run.status).toBe('running')
       const originalHash = first.run.inventorySha256
 
       db.close()
       db = openDatabase(temp.dbPath)
-      const resumed = await new SessionProjectionMigrationCoordinator(db, { executionEnabled: () => true })
+      const resumed = await new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(db).projectionMigration, { executionEnabled: () => true })
         .start({ batchSize: 1 })
 
       expect(resumed.run.runId).toBe('reopen-run')
@@ -99,7 +100,7 @@ describe('session projection migration application coordinator', () => {
       appendMessage(temp.db, { id: 'active-turn-assistant-message', sessionId: assistant.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
       getDbConnection(temp.db).prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at)
         VALUES('active-turn-id','active-turn-request',?,'active-turn-assistant-message','running',1,1)`).run(active.id)
-      const coordinator = new SessionProjectionMigrationCoordinator(temp.db, { executionEnabled: () => true })
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => true })
 
       const report = await coordinator.start({ runId: 'active-turn-run', batchSize: 10, rateLimitMs: 0 })
 
@@ -122,7 +123,7 @@ describe('session projection migration application coordinator', () => {
     const temp = createTempDatabase('projection-coordinator-scope-drift-')
     try {
       const session = await addEligibleSession(temp.db, 'scope-drift')
-      const coordinator = new SessionProjectionMigrationCoordinator(temp.db, { executionEnabled: () => true })
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => true })
       const run = coordinator.createRun({ runId: 'scope-drift-run' })
       getDbConnection(temp.db).prepare("UPDATE sessions SET ownership='internal',visibility='hidden' WHERE id=?").run(session.id)
 
@@ -142,7 +143,7 @@ describe('session projection migration application coordinator', () => {
     const temp = createTempDatabase('projection-coordinator-retry-')
     try {
       const session = await addEligibleSession(temp.db, 'retry-once')
-      const coordinator = new SessionProjectionMigrationCoordinator(temp.db, { executionEnabled: () => true })
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => true })
       const originalRead = projectionModule.readSessionTranscriptProjection
       let failOnce = true
       const reader = vi.spyOn(projectionModule, 'readSessionTranscriptProjection').mockImplementation((db, sessionId) => {
@@ -177,7 +178,7 @@ describe('session projection migration application coordinator', () => {
       await addEligibleSession(temp.db, 'yield-a')
       await addEligibleSession(temp.db, 'yield-b')
       await addEligibleSession(temp.db, 'yield-c')
-      const coordinator = new SessionProjectionMigrationCoordinator(temp.db, { executionEnabled: () => true })
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => true })
       const run = coordinator.createRun({ runId: 'yield-run' })
       let ordinaryWorkRan = false
       setImmediate(() => {
@@ -201,7 +202,7 @@ describe('session projection migration application coordinator', () => {
     try {
       await addEligibleSession(temp.db, 'schedule-a')
       await addEligibleSession(temp.db, 'schedule-b')
-      const coordinator = new SessionProjectionMigrationCoordinator(temp.db, { executionEnabled: () => true, now: () => 100 })
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => true, now: () => 100 })
       const run = coordinator.createRun({ runId: 'scheduled-run', now: 100 })
       const reports: string[] = []
       const stop = coordinator.schedule(run.runId, {
@@ -243,7 +244,7 @@ describe('session projection migration application coordinator', () => {
       await addEligibleSession(temp.db, 'gate-close-a')
       await addEligibleSession(temp.db, 'gate-close-b')
       let enabled = true
-      const coordinator = new SessionProjectionMigrationCoordinator(temp.db, { executionEnabled: () => enabled, now: () => 100 })
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => enabled, now: () => 100 })
       const run = coordinator.createRun({ runId: 'gate-close-run', now: 100 })
       coordinator.schedule(run.runId, { batchSize: 1, initialDelayMs: 0, intervalMs: 100, rateLimitMs: 0 })
       await vi.advanceTimersByTimeAsync(0)
@@ -268,7 +269,7 @@ describe('session projection migration application coordinator', () => {
       await addEligibleSession(temp.db, 'gate-between-b')
       await addEligibleSession(temp.db, 'gate-between-c')
       let enabled = true
-      const coordinator = new SessionProjectionMigrationCoordinator(temp.db, { executionEnabled: () => enabled })
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => enabled })
       const run = coordinator.createRun({ runId: 'gate-between-run' })
       setImmediate(() => { enabled = false })
 
@@ -289,7 +290,7 @@ describe('session projection migration application coordinator', () => {
     let db = temp.db
     try {
       await addEligibleSession(db, 'cancel')
-      const coordinator = new SessionProjectionMigrationCoordinator(db, { executionEnabled: () => true })
+      const coordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(db).projectionMigration, { executionEnabled: () => true })
       const started = coordinator.createRun({ runId: 'cancel-run' })
       expect(started.status).toBe('running')
 
@@ -298,7 +299,7 @@ describe('session projection migration application coordinator', () => {
 
       db.close()
       db = openDatabase(temp.dbPath)
-      const reopenedCoordinator = new SessionProjectionMigrationCoordinator(db, { executionEnabled: () => true })
+      const reopenedCoordinator = new SessionProjectionMigrationCoordinator(createSqliteSessionStorage(db).projectionMigration, { executionEnabled: () => true })
       const resumed = await reopenedCoordinator.run('cancel-run', { batchSize: 1 })
       expect(resumed.run.status).toBe('cancelled')
       expect(resumed.processedCount).toBe(0)

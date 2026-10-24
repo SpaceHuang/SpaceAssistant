@@ -1,3 +1,4 @@
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { appendMessage, createSession } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
@@ -11,7 +12,7 @@ describe('session projection migration main-process application entry', () => {
   it('initialization and shutdown do not start a cohort or create migration records', () => {
     const temp = createTempDatabase('projection-application-entry-disabled-')
     try {
-      const application = new SessionProjectionMigrationApplication(temp.db)
+      const application = new SessionProjectionMigrationApplication(createSqliteSessionStorage(temp.db).projectionMigration)
       application.initialize()
       application.shutdown()
       expect(getDbConnection(temp.db).prepare('SELECT COUNT(*) AS count FROM session_projection_migration_runs').get())
@@ -35,7 +36,7 @@ describe('session projection migration main-process application entry', () => {
       getDbConnection(temp.db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
         .run(session.id)
       let enabled = false
-      const application = new SessionProjectionMigrationApplication(temp.db, { executionEnabled: () => enabled })
+      const application = new SessionProjectionMigrationApplication(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => enabled })
       application.initialize()
       await expect(application.start({ runId: 'main-entry-run' })).rejects.toThrow('execution is disabled')
       expect(getDbConnection(temp.db).prepare('SELECT COUNT(*) AS count FROM session_projection_migration_runs').get())
@@ -94,7 +95,7 @@ describe('session projection migration main-process application entry', () => {
           .run(session.id)
       }
 
-      const application = new SessionProjectionMigrationApplication(temp.db, { executionEnabled: () => true })
+      const application = new SessionProjectionMigrationApplication(createSqliteSessionStorage(temp.db).projectionMigration, { executionEnabled: () => true })
       application.initialize()
       const run = application.createRun({ runId: 'drain-run' })
       application.schedule(run.runId, { batchSize: 2, rateLimitMs: 100, initialDelayMs: 0, intervalMs: 100 })

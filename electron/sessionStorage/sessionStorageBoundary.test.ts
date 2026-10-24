@@ -228,6 +228,18 @@ describe('session storage module graph rules', () => {
     expect(readFileSync(path.resolve('electron/sessionStorage/host/ports.ts'), 'utf8')).toContain('readonly cleanup: SessionCleanupPort')
   })
 
+  it('keeps projection migration SQLite state behind the injected SessionStorage port', () => {
+    const coordinator = readFileSync(path.resolve('electron/runtime/sessionProjectionMigrationCoordinator.ts'), 'utf8')
+    const application = readFileSync(path.resolve('electron/runtime/sessionProjectionMigrationApplication.ts'), 'utf8')
+    expect(coordinator).not.toContain('sqliteRuntimeBindings')
+    expect(coordinator).not.toContain('getDbConnection')
+    expect(coordinator).not.toContain('buildSessionProjectionMigrationInventory')
+    expect(application).not.toContain('sqliteRuntimeBindings')
+    expect(application).not.toContain('AppDatabase')
+    expect(readFileSync(path.resolve('electron/sessionStorage/host/ports.ts'), 'utf8'))
+      .toContain('readonly projectionMigration: SessionProjectionMigrationPort')
+  })
+
   it('classifies startup History recovery composition as SQLite infrastructure', () => {
     const adapterFile = 'electron/sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost.ts'
     expect(findSessionStorageModuleViolations(adapterFile, readFileSync(path.resolve(adapterFile), 'utf8'))).toEqual([])
