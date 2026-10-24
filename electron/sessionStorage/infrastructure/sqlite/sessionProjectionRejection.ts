@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto'
-import type { AppDatabase } from '../database'
-import type { Message } from '../../src/shared/domainTypes'
-import { getDbConnection } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
-import { encodeChatBodyV1 } from '../sessionStorage/domain/projectionSpec'
-import { currentProcessGeneration } from '../database/processGeneration'
+import type { AppDatabase } from '../../../database'
+import type { Message } from '../../../../src/shared/domainTypes'
+import { getDbConnection } from '../../../database/sqliteStore'
+import { runInTransaction } from '../../../database/transaction'
+import { encodeChatBodyV1 } from '../../domain/projectionSpec'
+import { currentProcessGeneration } from '../../../database/processGeneration'
 import { randomUUID } from 'node:crypto'
-import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
-import { createProjectionService, createSqliteProjectionStateStore } from '../sessionStorage/sqliteRuntimeBindings'
+import { encodeProjectionScopeKey } from '../../domain/scopeKey'
+import { createProjectionService } from '../../application/projectionService'
+import { createSqliteProjectionStateStore } from './sessionProjectionStateStore'
 
 /**
  * P0-② negative-cache verdict row (plan §5 ①/②, v4 M1). The synchronous read path consults

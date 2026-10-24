@@ -161,6 +161,11 @@ export function findSessionStorageModuleViolations(filePath, source) {
           'createSessionLedgerCompactionDependencyGuard', 'createCanonicalSessionProjectionRetentionPreparer'])],
         ['electron/sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost', new Set(['createSqliteStartupHistoryRecoveryBindings'])],
         ['electron/sessionStorage/infrastructure/sqlite/sessionTranscriptSelector', new Set(['selectRecentTurnRoutingMessages', 'selectTurnContext'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionRejection', new Set([
+          'clearProjectionRejection', 'computeLegacyProjectionDigest', 'consultProjectionRejection', 'getProjectionRejection',
+          'listProjectionRejectionWork', 'markProjectionRejectionStale', 'projectionRejectionBackoffDelayMs',
+          'readProjectionO1Metadata', 'recordProjectionRejection', 'ProjectionO1Metadata', 'ProjectionRejectionRow',
+          'ProjectionRejectionVerdict'])],
       ])
       const allowedSymbols = namedBindings.get(edge.resolved)
       return edge.symbols.length > 0 && !!allowedSymbols && edge.symbols.every((symbol) => allowedSymbols.has(symbol))

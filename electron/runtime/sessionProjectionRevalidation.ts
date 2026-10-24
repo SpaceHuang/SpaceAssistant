@@ -3,7 +3,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import {
   clearProjectionRejection, computeLegacyProjectionDigest, getProjectionRejection, listProjectionRejectionWork, recordProjectionRejection,
   projectionRejectionBackoffDelayMs, readProjectionO1Metadata
-} from './sessionProjectionRejection'
+} from '../sessionStorage/sqliteRuntimeBindings'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { drainSessionProjectionRevalidationQueue, enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
 import {

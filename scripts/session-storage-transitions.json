@@ -1,18 +1,5 @@
 [
   {
-    "source": "electron/runtime/sessionProjectionRejection.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "createProjectionService",
-      "createSqliteProjectionStateStore"
-    ],
-    "typeOnly": false,
-    "owner": "SessionStorage projection rejection adapter",
-    "reason": "Runtime rejection operations retain a host binding during projection service integration.",
-    "exitStage": "P2",
-    "evidence": "sessionProjectionRejection.test.ts"
-  },
-  {
     "source": "electron/runtime/sessionProjectionRevalidation.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [
@@ -20,7 +7,15 @@
       "publishTranscriptParityProof",
       "readLegacyProjectionMessages",
       "refreshValidatedProjectionFastPath",
-      "validateCanonicalProjection"
+      "validateCanonicalProjection",
+      "clearProjectionRejection",
+      "computeLegacyProjectionDigest",
+      "getProjectionRejection",
+      "listProjectionRejectionWork",
+      "recordProjectionRejection",
+      "projectionRejectionBackoffDelayMs",
+      "readProjectionO1Metadata",
+      "markProjectionRejectionStale"
     ],
     "typeOnly": false,
     "owner": "SessionStorage projection revalidation adapter",
@@ -115,7 +110,12 @@
       "MessageSearchHit",
       "MessagesPageWithSequence",
       "RetryContextTarget",
-      "SearchCorpusPage"
+      "SearchCorpusPage",
+      "consultProjectionRejection",
+      "clearProjectionRejection",
+      "computeLegacyProjectionDigest",
+      "readProjectionO1Metadata",
+      "recordProjectionRejection"
     ],
     "typeOnly": false,
     "owner": "SessionStorage transcript projection reader",

@@ -4,9 +4,9 @@ import { appendMessage, createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { clearProjectionRejection, getProjectionRejection, readProjectionO1Metadata } from './sessionProjectionRejection'
+import { clearProjectionRejection, getProjectionRejection, readProjectionO1Metadata } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRejection'
 import { getProjectedChatMessagePage, getProjectedMessagesPageWithSequence, readSessionTranscriptProjection } from './sessionTranscriptProjection'
-import { computeLegacyProjectionDigest } from './sessionProjectionRejection'
+import { computeLegacyProjectionDigest } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRejection'
 
 /** Build a mismatched session: legacy holds [A, B] while canonical History folds to [A']. */
 async function createMismatchedSession() {
@@ -212,7 +212,7 @@ describe('negative cache covers non-mismatch unavailable kinds (install-shipping
 
 describe('ProjectionSpec.chatBodyV1 digest', () => {
   it('does not invalidate a body digest when only display status changes', async () => {
-    const { computeLegacyProjectionDigest } = await import('./sessionProjectionRejection')
+    const { computeLegacyProjectionDigest } = await import('../sessionStorage/infrastructure/sqlite/sessionProjectionRejection')
     const message = { id: 'm1', sessionId: 's1', role: 'assistant' as const, content: 'body', timestamp: 1, status: 'completed' as const, schemaVersion: 1 }
     expect(computeLegacyProjectionDigest([{ ...message, status: 'failed' }])).toBe(computeLegacyProjectionDigest([message]))
   })

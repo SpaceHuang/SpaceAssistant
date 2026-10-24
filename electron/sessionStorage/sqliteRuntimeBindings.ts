@@ -20,3 +20,9 @@ export { hasRejectedTranscriptParityStateInConnection } from './infrastructure/s
 export { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer }
   from './infrastructure/sqlite/sessionEventRetentionAdapter'
 export { selectRecentTurnRoutingMessages, selectTurnContext } from './infrastructure/sqlite/sessionTranscriptSelector'
+export {
+  clearProjectionRejection, computeLegacyProjectionDigest, consultProjectionRejection, getProjectionRejection,
+  listProjectionRejectionWork, markProjectionRejectionStale, projectionRejectionBackoffDelayMs,
+  readProjectionO1Metadata, recordProjectionRejection
+} from './infrastructure/sqlite/sessionProjectionRejection'
+export type { ProjectionO1Metadata, ProjectionRejectionRow, ProjectionRejectionVerdict } from './infrastructure/sqlite/sessionProjectionRejection'
