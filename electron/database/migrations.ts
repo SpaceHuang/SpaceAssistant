@@ -212,7 +212,7 @@ function removeApiReadModeFromTrigger(sql: string): string {
         const whereIndex = update[2].search(/\s+WHERE\s+/i)
         const setPart = whereIndex < 0 ? update[2] : update[2].slice(0, whereIndex)
         const wherePart = whereIndex < 0 ? '' : update[2].slice(whereIndex)
-        const assignments = splitSqlList(setPart).filter((assignment) => !/api_read_mode/i.test(assignment) && !/^\s*updated_at\s*=/i.test(assignment))
+        const assignments = splitSqlList(setPart).filter((assignment) => !/api_read_mode/i.test(assignment))
         if (assignments.length === 0) continue
         if (/api_read_mode/i.test(wherePart)) throw new Error('cannot retire api_read_mode from trigger predicate')
         statement = `${update[1]}${assignments.join(', ')}${wherePart}`

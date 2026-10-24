@@ -27,7 +27,8 @@ describe('api_read_mode retirement migration', () => {
           process_generation=NULL,rebuild_token=NULL,failure_case_json=NULL,attempts=0,retry_after=NULL,updated_at=NEW.updated_at
           WHERE session_id=NEW.session_id;
         DELETE FROM session_projection_cache WHERE session_id=NEW.session_id;
-        UPDATE session_message_content_cutover SET api_read_mode='revalidation-required',updated_at=NEW.updated_at WHERE session_id=NEW.session_id;
+        UPDATE session_message_content_cutover SET api_read_mode='revalidation-required',message_revision=message_revision+1,
+          updated_at=NEW.updated_at+1 WHERE session_id=NEW.session_id;
       END;`)
     conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
       message_revision,payload_generation,payload_digest,validated_range_json,source_identity_json,attempts,updated_at)
@@ -38,8 +39,8 @@ describe('api_read_mode retirement migration', () => {
 
     const columns = conn.prepare('PRAGMA table_info(session_message_content_cutover)').all() as Array<{ name: string }>
     expect(columns.map(({ name }) => name)).not.toContain('api_read_mode')
-    expect(conn.prepare('SELECT write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(existing.id))
-      .toEqual({ write_mode: 'legacy', cleanup_state: 'retained' })
+    expect(conn.prepare('SELECT message_revision,write_mode,cleanup_state,updated_at FROM session_message_content_cutover WHERE session_id=?').get(existing.id))
+      .toMatchObject({ message_revision: 0, write_mode: 'legacy', cleanup_state: 'retained', updated_at: expect.any(Number) })
     const triggers = conn.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'").all() as Array<{ name: string; sql: string }>
     expect(triggers.some(({ name }) => name === 'invalidate_session_projection_after_content_revision')).toBe(true)
     expect(triggers.some(({ sql }) => sql.includes('api_read_mode'))).toBe(false)
@@ -47,6 +48,8 @@ describe('api_read_mode retirement migration', () => {
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical',updated_at=2 WHERE session_id=?").run(existing.id)
     expect(conn.prepare("SELECT status FROM session_projection_state WHERE session_id=? AND scope_key='scope:test'").get(existing.id))
       .toEqual({ status: 'invalid' })
+    expect(conn.prepare('SELECT message_revision,write_mode,updated_at FROM session_message_content_cutover WHERE session_id=?').get(existing.id))
+      .toEqual({ message_revision: 1, write_mode: 'canonical', updated_at: 3 })
 
     const next = createSession(db, { name: 'api marker retirement after migration', model: 'test' })
     expect(conn.prepare('SELECT session_generation,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(next.id))
