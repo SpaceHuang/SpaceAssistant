@@ -166,6 +166,12 @@ export function findSessionStorageModuleViolations(filePath, source) {
           'listProjectionRejectionWork', 'markProjectionRejectionStale', 'projectionRejectionBackoffDelayMs',
           'readProjectionO1Metadata', 'recordProjectionRejection', 'ProjectionO1Metadata', 'ProjectionRejectionRow',
           'ProjectionRejectionVerdict'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionMigration', new Set([
+          'cancelSessionProjectionMigration', 'getSessionProjectionMigrationRun', 'listLegacyRequiredSessionProjections',
+          'pauseSessionProjectionMigration', 'resumeSessionProjectionMigration', 'runEligibleSessionProjectionMigration',
+          'runSessionProjectionMigrationBatch', 'startSessionProjectionMigration', 'LegacyRequiredSessionProjection',
+          'LegacyRequiredSessionProjectionReport', 'SessionProjectionMigrationExecutionReport',
+          'SessionProjectionMigrationItemOutcome', 'SessionProjectionMigrationRun'])],
       ])
       const allowedSymbols = namedBindings.get(edge.resolved)
       return edge.symbols.length > 0 && !!allowedSymbols && edge.symbols.every((symbol) => allowedSymbols.has(symbol))
@@ -209,7 +215,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
         edge.resolved === 'electron/storage/spillProtocol' ||
         edge.resolved === 'electron/sessionLedgerIdentity' ||
         ['electron/sessionEvents', 'electron/queueInputFingerprint', 'electron/agentLogger/agentLogger', 'electron/runtime/sqliteAgentHistory',
-          'electron/runtime/sessionProjectionMigrationInventory',
+          'electron/runtime/sessionProjectionMigrationInventory', 'electron/runtime/sessionProjectionLegacyBaseline',
           'electron/runtime/sessionStorageShadow', 'electron/runtime/sessionTranscriptProjection',
           'electron/runtime/sessionContentWriteAuthority', 'electron/runtime/agentContinuation',
           'electron/runtime/continuationSummary', 'electron/runtime/terminalOutcome', 'electron/runtime/canonicalHistory',

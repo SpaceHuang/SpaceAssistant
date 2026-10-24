@@ -12,18 +12,6 @@
     "evidence": "claudeStreamHandlers.callerContract.test.ts; sessionProjectionRevalidation.test.ts"
   },
   {
-    "source": "electron/runtime/sessionProjectionMigration.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "hasCurrentProjectionEligibility"
-    ],
-    "typeOnly": false,
-    "owner": "SessionStorage projection migration",
-    "reason": "Migration inventory uses the current eligibility fact while ownership migration remains in progress.",
-    "exitStage": "P2",
-    "evidence": "sessionProjectionMigration.test.ts"
-  },
-  {
     "source": "electron/runtime/sessionProjectionMigrationInventory.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [
@@ -287,5 +275,38 @@
     "reason": "Session IPC binds the active storage context port through a temporary registry seam.",
     "exitStage": "P2",
     "evidence": "sessionIpc tests; sessionStorageBoundary.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionProjectionMigrationCoordinator.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "cancelSessionProjectionMigration",
+      "getSessionProjectionMigrationRun",
+      "pauseSessionProjectionMigration",
+      "resumeSessionProjectionMigration",
+      "runSessionProjectionMigrationBatch",
+      "startSessionProjectionMigration",
+      "SessionProjectionMigrationExecutionReport",
+      "SessionProjectionMigrationItemOutcome",
+      "SessionProjectionMigrationRun"
+    ],
+    "typeOnly": false,
+    "owner": "Session projection migration coordinator",
+    "reason": "The runtime coordinator drives the SQLite-owned durable migration state machine through named bindings.",
+    "exitStage": "P2",
+    "evidence": "sessionProjectionMigrationCoordinator.test.ts; sessionProjectionMigration.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionProjectionMigrationApplication.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "SessionProjectionMigrationExecutionReport",
+      "SessionProjectionMigrationRun"
+    ],
+    "typeOnly": true,
+    "owner": "Session projection migration application",
+    "reason": "Application lifecycle types are owned by the SQLite migration state machine.",
+    "exitStage": "P2",
+    "evidence": "sessionProjectionMigrationApplication.test.ts"
   }
 ]

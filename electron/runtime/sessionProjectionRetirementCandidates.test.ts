@@ -4,7 +4,7 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import type { SessionProjectionConsistencyAuditReport, SessionProjectionConsistencySession } from '../sessionStorage/infrastructure/sqlite/sessionProjectionConsistencyAudit'
 import { auditSessionProjectionMigration } from '../sessionStorage/infrastructure/sqlite/sessionProjectionConsistencyAudit'
-import { runEligibleSessionProjectionMigration } from './sessionProjectionMigration'
+import { runEligibleSessionProjectionMigration } from '../sessionStorage/infrastructure/sqlite/sessionProjectionMigration'
 import { buildSessionProjectionRetirementCandidates } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRetirementCandidates'
 
 function makeAudit(sessions: SessionProjectionConsistencySession[], overrides: Partial<SessionProjectionConsistencyAuditReport> = {}): SessionProjectionConsistencyAuditReport {

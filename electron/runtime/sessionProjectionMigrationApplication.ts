@@ -5,7 +5,7 @@ import {
   type SessionProjectionMigrationCoordinatorRunOptions,
   type SessionProjectionMigrationCoordinatorScheduleOptions,
 } from './sessionProjectionMigrationCoordinator'
-import type { SessionProjectionMigrationExecutionReport, SessionProjectionMigrationRun } from './sessionProjectionMigration'
+import type { SessionProjectionMigrationExecutionReport, SessionProjectionMigrationRun } from '../sessionStorage/sqliteRuntimeBindings'
 
 /** Main-process lifecycle owner. It deliberately does not create or schedule a run during initialization. */
 export class SessionProjectionMigrationApplication {

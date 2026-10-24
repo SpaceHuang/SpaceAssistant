@@ -12,7 +12,7 @@ import {
   type SessionProjectionMigrationExecutionReport,
   type SessionProjectionMigrationItemOutcome,
   type SessionProjectionMigrationRun,
-} from './sessionProjectionMigration'
+} from '../sessionStorage/sqliteRuntimeBindings'
 
 export type SessionProjectionMigrationCoordinatorOptions = Readonly<{
   /** Must be explicitly enabled by the owning application operation; defaults closed. */

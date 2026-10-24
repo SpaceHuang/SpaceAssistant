@@ -26,3 +26,12 @@ export {
   readProjectionO1Metadata, recordProjectionRejection
 } from './infrastructure/sqlite/sessionProjectionRejection'
 export type { ProjectionO1Metadata, ProjectionRejectionRow, ProjectionRejectionVerdict } from './infrastructure/sqlite/sessionProjectionRejection'
+export {
+  cancelSessionProjectionMigration, getSessionProjectionMigrationRun, listLegacyRequiredSessionProjections,
+  pauseSessionProjectionMigration, resumeSessionProjectionMigration, runEligibleSessionProjectionMigration,
+  runSessionProjectionMigrationBatch, startSessionProjectionMigration
+} from './infrastructure/sqlite/sessionProjectionMigration'
+export type {
+  LegacyRequiredSessionProjection, LegacyRequiredSessionProjectionReport, SessionProjectionMigrationExecutionReport,
+  SessionProjectionMigrationItemOutcome, SessionProjectionMigrationRun
+} from './infrastructure/sqlite/sessionProjectionMigration'

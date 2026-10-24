@@ -18,7 +18,7 @@ import {
   runSessionProjectionMigrationBatch,
   runEligibleSessionProjectionMigration,
   startSessionProjectionMigration
-} from './sessionProjectionMigration'
+} from '../sessionStorage/infrastructure/sqlite/sessionProjectionMigration'
 
 async function addEligibleSession(db: ReturnType<typeof createMemoryAppDb>, name: string,
   scope: Partial<Parameters<typeof createSession>[1]> = {}) {

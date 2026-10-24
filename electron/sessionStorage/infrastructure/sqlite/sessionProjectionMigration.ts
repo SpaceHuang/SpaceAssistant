@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { AppDatabase } from '../database/sqliteStore'
-import { getDbConnection } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
-import { sqlActiveTurnPredicate } from '../sessionStorage/domain/turnState'
-import { buildSessionProjectionMigrationInventory, classifySessionProjectionMigrationScope, type SessionProjectionMigrationInventory, type SessionProjectionMigrationInventoryEntry } from './sessionProjectionMigrationInventory'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
-import { backfillLegacySessionProjectionBaseline } from './sessionProjectionLegacyBaseline'
-import { hasCurrentProjectionEligibility } from '../sessionStorage/sqliteRuntimeBindings'
+import type { AppDatabase } from '../../../database/sqliteStore'
+import { getDbConnection } from '../../../database/sqliteStore'
+import { runInTransaction } from '../../../database/transaction'
+import { sqlActiveTurnPredicate } from '../../domain/turnState'
+import { buildSessionProjectionMigrationInventory, classifySessionProjectionMigrationScope, type SessionProjectionMigrationInventory, type SessionProjectionMigrationInventoryEntry } from '../../../runtime/sessionProjectionMigrationInventory'
+import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
+import { readSessionTranscriptProjection } from '../../../runtime/sessionTranscriptProjection'
+import { backfillLegacySessionProjectionBaseline } from '../../../runtime/sessionProjectionLegacyBaseline'
+import { hasCurrentProjectionEligibility } from './sessionProjectionRevalidationFacts'
 
 export type SessionProjectionMigrationRun = Readonly<{
   runId: string
