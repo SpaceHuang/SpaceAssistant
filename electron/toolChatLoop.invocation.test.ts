@@ -537,12 +537,12 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     expect(requestHeaders).toHaveLength(2)
     expect(requestHeaders[0]).toMatchObject({ toolExecutionCheckpoint: { completedToolUseIds: [] } })
     expect(requestHeaders[1]).toMatchObject({ toolExecutionCheckpoint: { completedToolUseIds: ['sdk-read-1'] } })
-    expect(requestHeaders[1]?.system).toBeUndefined()
-    expect(requestHeaders[1]?.tools).toBeUndefined()
+    expect(requestHeaders[1]?.system).toContain('Trusted approval record')
+    expect(requestHeaders[1]?.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'read_file' })]))
     expect(requestHeaders[1]?.surfaceSnapshot).toMatchObject({
-      systemFingerprint: requestHeaders[0]?.surfaceSnapshot.systemFingerprint,
       toolsFingerprint: requestHeaders[0]?.surfaceSnapshot.toolsFingerprint
     })
+    expect(requestHeaders[1]?.surfaceSnapshot.systemFingerprint).not.toBe(requestHeaders[0]?.surfaceSnapshot.systemFingerprint)
   })
 
   it('uses the invocation-owned SDK provider route and does not construct the legacy Anthropic client', async () => {

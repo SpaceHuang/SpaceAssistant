@@ -43,7 +43,8 @@ describe('turn projection bridge', () => {
     listener?.({ turn: { turnId: 't1', requestId: 'r1', sessionId: 's1', assistantMessage: { ...message, content: 'old' }, version: 1 }, event: { type: 'content-delta' } })
     expect(patch).toHaveBeenCalledTimes(1)
     expect(patch).toHaveBeenCalledWith('s1', 'a1', message)
-    expect(sync).not.toHaveBeenCalled()
+    expect(sync).toHaveBeenCalledTimes(1)
+    expect(sync).toHaveBeenCalledWith({ sessionId: 's1', requestId: 'r1', turnId: 't1', turnVersion: 2, terminal: false, message })
     off()
   })
 
