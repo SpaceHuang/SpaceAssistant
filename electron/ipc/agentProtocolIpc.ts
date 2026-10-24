@@ -993,6 +993,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   const outboundAcceptor = createOutboundAcceptor({
     db: ctx.db,
     sessionQueries,
+    ensureChatBodyV1: sessionStorage.ensureChatBodyV1,
     sessionCommands: sessionStorage.commands,
     sessionExecution: sessionStorage.execution,
     turnRuntime,

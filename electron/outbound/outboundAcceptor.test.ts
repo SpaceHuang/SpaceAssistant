@@ -329,17 +329,36 @@ describe('continuation intent acceptance persistence', () => {
       getDbConnection(temp.db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       getDbConnection(temp.db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
 
+      const storage = createSqliteSessionStorage(temp.db)
+      const preparedView = { sessionId: session.id, sessionGeneration: 'generation-1', sourceIdentityJson: '{"source":1}',
+        scopeKey: 'chatBodyV1', specVersion: 3, payloadGeneration: 'projection-one', payloadDigest: 'a'.repeat(64),
+        validatedRangeJson: '{}', cachePresent: true, stateSourceIdentityJson: '{"source":1}', statePayloadGeneration: 'projection-one',
+        statePayloadDigest: 'a'.repeat(64), stateValidatedRangeJson: '{}' }
+      const ensureChatBodyV1 = vi.fn(async () => preparedView)
+      const readPreparedMessage = vi.fn(async ({ messageId }: { messageId: string }) => messageId === assistant.id
+        ? { ...assistant, content: 'prepared canonical assistant body' } : undefined)
+      const syncReadMessage = vi.fn(storage.queries.readMessage)
+      const sessionQueries = { ...storage.queries, readMessage: syncReadMessage, readPreparedMessage } as never
+      const { createSessionExecutionStore } = await import('../sessionStorage/execution')
+      const sessionExecution = createSessionExecutionStore(temp.db, sessionQueries)
+
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
         listSkills: async () => [], getSkill: async () => null,
         wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
         wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }),
         appendHintMessage: () => undefined, updateSessionState: () => undefined, createSession: () => session,
-        ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: vi.fn(), newRequestId: () => 'generated', audit: () => undefined
-      })
+        ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: vi.fn(), newRequestId: () => 'generated', audit: () => undefined,
+        sessionQueries,
+        sessionExecution,
+        ensureChatBodyV1
+      } as unknown as TestOutboundDeps)
 
       const result = await acceptor.submitOutbound({ sessionId: session.id, text: '继续', requestId: 'accepted-canonical-request' })
-      expect(result).toMatchObject({ accepted: 'turn-started', turnId: 'accepted-canonical-turn', assistantMessage: { content: '已经完成修复', status: 'completed' } })
+      expect(result).toMatchObject({ accepted: 'turn-started', turnId: 'accepted-canonical-turn', assistantMessage: { content: 'prepared canonical assistant body', status: 'completed' } })
+      expect(ensureChatBodyV1).toHaveBeenCalledWith({ sessionId: session.id })
+      expect(readPreparedMessage).toHaveBeenCalledWith({ sessionId: session.id, messageId: assistant.id, prepared: preparedView })
+      expect(syncReadMessage).not.toHaveBeenCalledWith({ sessionId: session.id, messageId: assistant.id })
     } finally { temp.cleanup() }
   })
 

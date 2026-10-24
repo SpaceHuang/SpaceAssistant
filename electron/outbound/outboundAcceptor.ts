@@ -23,7 +23,7 @@ export { summarizeFailedInvocation } from '../runtime/continuationSummary'
 import type { SessionCommands, SessionQueries } from '../sessionStorage/public/ports'
 import type { ContinuationSourceRef } from '../sessionStorage/public/model'
 import type { SessionExecutionStore } from '../sessionStorage/public/execution'
-import { readChatMessagesAfterPreparation } from '../sessionStorage/public/readMessages'
+import { readChatMessageAfterPreparation, readChatMessagesAfterPreparation } from '../sessionStorage/public/readMessages'
 import { TransactionCommitUnknownError } from '../database/transaction'
 
 /** 出站受理时的主进程状态快照（全部由主进程权威源构建，渲染端不再提供其中任何一项） */
@@ -177,6 +177,7 @@ export type OutboundTurnStarter = (input: {
 export type OutboundAcceptorDeps = {
   db: AppDatabase
   sessionQueries: SessionQueries
+  ensureChatBodyV1?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>
   sessionCommands: Pick<SessionCommands, 'enqueue'>
   sessionExecution: Pick<SessionExecutionStore, 'enqueueAndRecordContinuation' | 'readTurnByRequest' | 'readContinuationIntent' | 'resolveContinuationAcceptance' | 'ensureContinuationStatusMessage' | 'requireContinuationSourceSelection' | 'selectOrdinaryContinuation' | 'bindStartedContinuationTurn' | 'repairPreparedContinuationAcceptance' | 'beginContinuationIntent' | 'finalizeContinuationAcceptance'>
   turnRuntime: { listActive(sessionId?: string): Array<{ turnId: string; sessionId: string }> }
@@ -314,9 +315,16 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           // Explicit ordinary fallback is finalized under this request ID below.
           sessionExecution.selectOrdinaryContinuation({ requestId: intent.requestId, sessionId: intent.sessionId, text: intent.text, attachments: intent.attachments, payloadSha256: fingerprint, intentKind: ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(intent.text.trim()) && !intent.attachments?.length ? 'exact-continue' : 'follow-up' })
         }
-        if (resolved.kind === 'continuation') return { accepted: 'local-command', sessionId: intent.sessionId, command: { kind: 'continuation-started', messageId: resolved.message.message.id, sequence: resolved.message.sequence } }
-        if (resolved.kind === 'queued') return { accepted: 'queued', sessionId: intent.sessionId, queued: { requestId: intent.requestId, messageId: resolved.message.message.id, sequence: resolved.message.sequence } }
-        if (resolved.kind === 'turn') return { accepted: 'turn-started', sessionId: resolved.turn.sessionId, turnId: resolved.turn.turnId, assistantMessage: resolved.assistant }
+        if (resolved.kind === 'continuation') return { accepted: 'local-command', sessionId: intent.sessionId, command: { kind: 'continuation-started', messageId: resolved.message.id, sequence: resolved.message.sequence } }
+        if (resolved.kind === 'queued') return { accepted: 'queued', sessionId: intent.sessionId, queued: { requestId: intent.requestId, messageId: resolved.message.id, sequence: resolved.message.sequence } }
+        if (resolved.kind === 'turn') {
+          const assistantMessage = await readChatMessageAfterPreparation(
+            { ensureChatBodyV1: deps.ensureChatBodyV1, queries: sessionQueries },
+            { sessionId: intent.sessionId, messageId: resolved.assistant.id }
+          )
+          if (!assistantMessage) return { rejected: { reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' } }
+          return { accepted: 'turn-started', sessionId: resolved.turn.sessionId, turnId: resolved.turn.turnId, assistantMessage }
+        }
         if (resolved.kind === 'starting') return { rejected: { reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' } }
         if (prior.status === 'rejected_retryable' || prior.status === 'commit_uncertain') return { rejected: { reason: prior.rejectionReason ?? prior.status } }
       }

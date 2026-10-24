@@ -313,16 +313,15 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       if (receipt.status === 'needs_source_selection') return { kind: 'selection-required', receipt }
       if (receipt.status === 'queued') {
         if (!receipt.targetId) return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
-        const entry = queries?.readMessage({ sessionId, messageId: receipt.targetId })
-        const sequence = queries?.readMessageSequence({ sessionId, messageId: receipt.targetId })
-        if (!entry || sequence == null || entry.status !== 'queued') return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
-        return { kind: 'queued', receipt, message: { message: entry, sequence } }
+        const message = queries?.readMessageSkeleton({ sessionId, messageId: receipt.targetId })
+        if (!message || message.status !== 'queued') return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
+        return { kind: 'queued', receipt, message }
       }
       if (receipt.status === 'accepted_turn') {
         if (!receipt.targetId) return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
         const turn = getTurnByRequestId(db, sessionId, requestId)
         if (!turn || turn.turnId !== receipt.targetId) return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
-        const assistant = queries?.readMessage({ sessionId, messageId: turn.assistantMessageId })
+        const assistant = queries?.readMessageSkeleton({ sessionId, messageId: turn.assistantMessageId })
         if (!assistant) return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
         return { kind: 'turn', receipt, turn, assistant }
       }
@@ -333,7 +332,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
         if (!continuation || continuation.requestIdempotencyKey !== requestId || continuation.sessionId !== sessionId || receipt.route !== 'continuation') {
           const turn = getTurnByRequestId(db, sessionId, requestId)
           if (turn?.turnId === receipt.targetId && receipt.route === 'continuation') {
-            const assistant = queries?.readMessage({ sessionId, messageId: turn.assistantMessageId })
+            const assistant = queries?.readMessageSkeleton({ sessionId, messageId: turn.assistantMessageId })
             if (assistant) return { kind: 'turn', receipt, turn, assistant }
           }
           return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
@@ -341,10 +340,9 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
         const source = conn.prepare('SELECT source_invocation_id,source_turn_id,source_sequence FROM continuation_intents WHERE request_id=? AND session_id=?').get(requestId, sessionId) as { source_invocation_id?: string; source_turn_id?: string; source_sequence?: number } | undefined
         if (receipt.route !== 'continuation' || continuation.sourceInvocationId !== source?.source_invocation_id || continuation.sourceTurnId !== source.source_turn_id || continuation.checkpointSequence !== source.source_sequence) return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
         const messageId = `continuation-status-${createHash('sha256').update(`${sessionId}\0${requestId}`).digest('hex')}`
-        const sequence = queries?.readMessageSequence({ sessionId, messageId })
-        const message = queries?.readMessage({ sessionId, messageId })
-        if (sequence == null || !message) return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
-        return { kind: 'continuation', receipt, continuation, message: { message, sequence } }
+        const message = queries?.readMessageSkeleton({ sessionId, messageId })
+        if (!message) return { kind: 'unresolved', receipt, reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' }
+        return { kind: 'continuation', receipt, continuation, message }
       }
       if (receipt.status === 'starting_continuation') {
         const continuation = conn.prepare(`SELECT ac.continuation_id AS continuationId,ac.source_invocation_id AS sourceInvocationId,ac.source_turn_id AS sourceTurnId,ac.checkpoint_sequence AS checkpointSequence,ac.request_idempotency_key AS requestIdempotencyKey,ac.created_by AS createdBy,ac.frozen_config_json AS frozenConfigJson,ac.frozen_config_sha256 AS frozenConfigSha256,ac.target_invocation_id AS targetInvocationId,ac.target_turn_id AS targetTurnId,ac.target_start_token AS targetStartToken,ac.status,ac.created_at AS createdAt,ac.updated_at AS updatedAt,t.session_id AS sessionId

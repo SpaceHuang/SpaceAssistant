@@ -4,7 +4,7 @@ import type { TurnExecutionConfig } from '../../../src/shared/assistantFactAggre
 import type { ClaudeChatMessageWithBlocks } from '../../../src/shared/api'
 import type { PersistedTurnRecord, TurnStarted, TurnStorage } from '../../../src/shared/turnCoordinator'
 import type { EnqueueResult, HostedTranscriptSnapshot, MessageEntry, ContinuationIntentAcceptance,
-  ContinuationIntentReceipt, ContinuationSourceRef, SelectionFence } from './model'
+  ContinuationIntentReceipt, ContinuationSourceRef, SelectionFence, MessageSkeleton } from './model'
 import type { SessionHistoryPort } from './ports'
 
 export type PreparedIdentity = Readonly<{
@@ -32,9 +32,9 @@ export type ContinuationRecordSnapshot = Readonly<{
 export type ContinuationIntentAcceptanceResult =
   | Readonly<{ kind: 'absent' }>
   | Readonly<{ kind: 'selection-required'; receipt: ContinuationIntentReceipt }>
-  | Readonly<{ kind: 'queued'; receipt: ContinuationIntentReceipt; message: MessageEntry }>
-  | Readonly<{ kind: 'turn'; receipt: ContinuationIntentReceipt; turn: PersistedTurnRecord; assistant: Message }>
-  | Readonly<{ kind: 'continuation'; receipt: ContinuationIntentReceipt; continuation: ContinuationRecordSnapshot; message: MessageEntry }>
+  | Readonly<{ kind: 'queued'; receipt: ContinuationIntentReceipt; message: MessageSkeleton }>
+  | Readonly<{ kind: 'turn'; receipt: ContinuationIntentReceipt; turn: PersistedTurnRecord; assistant: MessageSkeleton }>
+  | Readonly<{ kind: 'continuation'; receipt: ContinuationIntentReceipt; continuation: ContinuationRecordSnapshot; message: MessageSkeleton }>
   | Readonly<{ kind: 'starting'; receipt: ContinuationIntentReceipt; continuation?: ContinuationRecordSnapshot }>
   | Readonly<{ kind: 'unresolved'; receipt?: ContinuationIntentReceipt; reason: string }>
 

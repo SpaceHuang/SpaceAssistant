@@ -1831,7 +1831,7 @@ describe('SQLite session storage execution boundary', () => {
     const queued = appendMessage(db, { id: 'queued-message', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'queued' })
 
     expect(execution.resolveContinuationAcceptance({ requestId: 'resolve-intent-request', sessionId: session.id, payloadSha256 }))
-      .toMatchObject({ kind: 'queued', message: { message: { id: queued.message.id, status: 'queued' }, sequence: queued.sequence } })
+      .toMatchObject({ kind: 'queued', message: { id: queued.message.id, status: 'queued', sequence: queued.sequence } })
     expect(execution.resolveContinuationAcceptance({ requestId: 'resolve-intent-request', sessionId: session.id, payloadSha256: 'c'.repeat(64) }))
       .toMatchObject({ kind: 'unresolved', reason: 'CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT' })
     expect(execution.resolveContinuationAcceptance({ requestId: 'resolve-intent-request', sessionId: session.id, payloadSha256: 'd'.repeat(64) }))
