@@ -36,7 +36,9 @@ import { encodeProjectionScopeKey } from './domain/scopeKey'
 import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
 import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
+import { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
 export { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
+export { createSqliteStartupHistoryRecoveryBindings }
 
 /** Host composition binds the private SQLite TurnStorage to the process TurnRuntime. */
 export function createSessionTurnRuntime(storage: SessionStorage, options: Omit<TurnRuntimeOptions, 'storage'>): TurnRuntime {

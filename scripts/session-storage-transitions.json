@@ -1,17 +1,5 @@
 [
   {
-    "source": "electron/main.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "createSqliteStartupHistoryRecoveryBindings"
-    ],
-    "typeOnly": false,
-    "owner": "Electron composition root",
-    "reason": "Startup recovery still constructs the SQLite host adapter at the process boundary.",
-    "exitStage": "P2",
-    "evidence": "electron/main.ts startup recovery composition; sessionHistoryRecoveryHost.test.ts"
-  },
-  {
     "source": "electron/runtime/sessionProjectionConsistencyAudit.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [
@@ -181,7 +169,8 @@
       "createSessionLedgerRecoveryBindings",
       "createSessionTurnRuntime",
       "createSqliteProjectionBuildTask",
-      "createSqliteSessionStorageHost"
+      "createSqliteSessionStorageHost",
+      "createSqliteStartupHistoryRecoveryBindings"
     ],
     "typeOnly": false,
     "owner": "Electron composition root",
