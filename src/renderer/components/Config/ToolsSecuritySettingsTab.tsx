@@ -82,6 +82,8 @@ function PolicyPackageSection({
             : t('toolsSecurity.policy.actionAsk')
 
   const ruleReason = (rule: SecuritySettingsRuleView): string => {
+    const baseRuleId = rule.id.startsWith('scope-') ? rule.id.replace(/^scope-(strict|loose)-/, '') : rule.id
+    const reasonKey = `toolsSecurity.policy.ruleReasons.${baseRuleId}`
     switch (rule.id) {
       case 'mcp-account-unauthorized-deny':
         return t('toolsSecurity.policy.mcpAccountUnauthorizedReason')
@@ -91,7 +93,7 @@ function PolicyPackageSection({
       case 'remote-outbound-budget-pause-lark':
         return t('toolsSecurity.policy.remoteOutboundBudgetExhaustedReason')
       default:
-        return rule.reason
+        return t(reasonKey as never)
     }
   }
 
@@ -358,17 +360,23 @@ function PolicyPackageSection({
    * 无 lane 限定的通用规则对每个链路都适用。 */
   const rulesForLane = (lane: (typeof LANES)[number]): SecuritySettingsRuleView[] => {
     const views = model?.rules ?? []
+    const hasImOverride = (ruleId: string) => Object.prototype.hasOwnProperty.call(imRuleOverrides, ruleId)
+    const laneRules = lane === 'wechat'
+      ? views.map((view) => ({ ...view, action: view.defaultAction ?? view.action, userOverride: false }))
+      : views
     const packages = lane === 'wechat'
       ? { ...model?.packages, wechat: imPackageOverride ?? model?.packages.wechat ?? 'standard' }
       : model?.packages
-    const effective = resolvePolicyRules({ lane, packages, rules: views as PolicyRule[] })
+    const effective = resolvePolicyRules({ lane, packages, rules: laneRules as PolicyRule[] })
     return effective
       .map((r) => {
         const view = views.find((v) => v.id === r.id) ?? scopeView(r, lane)
         if (lane !== 'wechat') return view
         return {
           ...view,
-          action: (imRuleOverrides[r.id] ?? view.action) as SecuritySettingsRuleView['action'],
+          action: (hasImOverride(r.id) ? imRuleOverrides[r.id] : r.action) as SecuritySettingsRuleView['action'],
+          defaultAction: (view.defaultAction ?? view.action) as SecuritySettingsRuleView['action'],
+          overridden: hasImOverride(r.id),
           migratedFromLegacyDisabled: imMigratedLegacyDisabledRuleIds.includes(r.id),
         }
       })
@@ -395,6 +403,21 @@ function PolicyPackageSection({
               ) : null}
             </span>
           )
+        },
+        {
+          title: t('toolsSecurity.policy.defaultColumn'),
+          width: 150,
+          render: (_, r) => {
+            const defaultAction = r.defaultAction ?? r.action
+            const approvalFrequency = defaultAction === 'confirm-every-time'
+              ? t('toolsSecurity.policy.approvalEveryTime')
+              : defaultAction === 'ask'
+                ? t('toolsSecurity.policy.approvalWhenMatched')
+                : defaultAction === 'auto-evaluator'
+                  ? t('toolsSecurity.policy.approvalByAgent')
+                  : t('toolsSecurity.policy.approvalNotRequired')
+            return <span>{actionLabel(defaultAction)}<div className="config-field__hint">{approvalFrequency}</div></span>
+          }
         },
         {
           title: t('toolsSecurity.policy.whenColumn'),
