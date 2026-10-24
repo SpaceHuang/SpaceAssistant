@@ -91,7 +91,6 @@ export function findSessionStorageModuleViolations(filePath, source) {
   const runtimeDatabaseAdapters = new Map([
     ['electron/runtime/sessionProjectionConsistencyAudit.ts', new Set(['getMessages'])],
     ['electron/runtime/sessionProjectionLegacyBaseline.ts', new Set(['getMessages'])],
-    ['electron/runtime/sessionProjectionMigrationInventory.ts', new Set(['getMessages'])],
     ['electron/runtime/sessionStorageShadow.ts', new Set(['getMessages', 'getTurnContextSkeleton', 'iterateRecentTurnRoutingSkeletons', 'StoredMessageSkeleton'])],
     ['electron/runtime/sessionTranscriptProjection.ts', new Set(['getApiContextBaseline', 'getChatMessagePage', 'getMessage', 'getMessageSkeletons',
       'getMessages', 'getMessagesPageWithSequence', 'getSearchCorpusPage', 'resolveRetryContext', 'ApiContextBaselineResult',
@@ -107,10 +106,10 @@ export function findSessionStorageModuleViolations(filePath, source) {
     ['electron/runtime/sessionStorageShadow.ts', new Set(['hasCurrentProjectionEligibility'])],
     ['electron/runtime/sqliteAgentHistory.ts', new Set(['hasRejectedTranscriptParityStateInConnection'])],
     ['electron/runtime/sessionProjectionMigration.ts', new Set(['hasCurrentProjectionEligibility'])],
+    ['electron/runtime/sessionProjectionMigrationInventory.ts', new Set(['hasCurrentProjectionEligibility', 'readLegacyProjectionMessages'])],
     ['electron/runtime/sessionContentWriteAuthority.ts', new Set(['createSqliteSessionApiRouteProjectionFence'])],
     ['electron/runtime/sessionTranscriptProjection.ts', new Set(['resolveSelectedMessageBodies', 'hasCurrentProjectionEligibility',
       'publishTranscriptParityProof', 'refreshValidatedProjectionFastPath'])],
-    ['electron/runtime/sessionProjectionMigrationInventory.ts', new Set(['hasCurrentProjectionEligibility'])],
     ['electron/storage/sessionEventRetention.ts', new Set(['createSessionLedgerCompactionDependencyGuard', 'createCanonicalSessionProjectionRetentionPreparer'])],
     ['electron/storage/sessionProjectionCacheMaintenance.ts', new Set(['createSqliteProjectionStateStore', 'createProjectionService'])],
   ])

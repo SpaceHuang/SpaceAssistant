@@ -58,6 +58,14 @@ describe('session storage module graph rules', () => {
     expect(source).not.toContain('sessionLedgerRecovery')
   })
 
+  it('keeps migration inventory legacy message reads behind the storage-owned binding', () => {
+    const file = 'electron/runtime/sessionProjectionMigrationInventory.ts'
+    const source = readFileSync(path.resolve(file), 'utf8')
+    expect(source).not.toContain("from '../database/operations'")
+    expect(source).toContain('readLegacyProjectionMessages')
+    expect(findSessionStorageModuleViolations(file, source)).toEqual([])
+  })
+
   it('keeps startup ledger repair mechanics behind the SQLite History recovery host', () => {
     const main = readFileSync(path.resolve('electron/main.ts'), 'utf8')
     expect(main).toContain('recoverInterruptedInvocationsWithLedger')

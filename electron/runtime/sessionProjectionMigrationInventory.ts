@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto'
-import { getMessages } from '../database/operations'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
 import { SqliteAgentHistory, type CanonicalSessionTranscriptRead } from './sqliteAgentHistory'
 import { canonicalBackedSessionProjectionMatches } from './sessionTranscriptProjection'
-import { hasCurrentProjectionEligibility } from '../sessionStorage/sqliteRuntimeBindings'
+import { hasCurrentProjectionEligibility, readLegacyProjectionMessages } from '../sessionStorage/sqliteRuntimeBindings'
 
 export type SessionProjectionMigrationDisposition =
   | 'projection_migrated'
@@ -57,7 +56,7 @@ export function classifySessionProjectionMigrationScope(ownership: string | null
 }
 
 function legacyOracleMessages(db: AppDatabase, sessionId: string) {
-  return getMessages(db, sessionId, Number.MAX_SAFE_INTEGER).map(({ id, role, content, timestamp }) => ({
+  return readLegacyProjectionMessages(db, sessionId).map(({ id, role, content, timestamp }) => ({
     id,
     role: role as 'user' | 'assistant',
     content,
