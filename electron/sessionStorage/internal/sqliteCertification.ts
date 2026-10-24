@@ -4,7 +4,7 @@ import { getDbConnection } from '../../database/sqliteStore'
 import { runInTransaction } from '../../database/transaction'
 import { SqliteAgentHistory } from '../../runtime/sqliteAgentHistory'
 import { fieldDifferences, readCanonicalTurnContextCandidate, shadowAcceptedTurnContext, shadowTurnRoutingInput,
-  type CanonicalTurnContextCandidate, type TurnRouteInput } from '../../runtime/sessionStorageShadow'
+  type CanonicalTurnContextCandidate, type TurnRouteInput } from '../infrastructure/sqlite/sessionStorageShadow'
 import { queueInputFingerprint } from '../../queueInputFingerprint'
 import { publishSqliteSessionApiRouteScopes } from '../infrastructure/sqlite/sessionApiRouteProjectionFence'
 import { readProjectionSourceIdentity } from '../infrastructure/sqlite/projectionSourceIdentity'

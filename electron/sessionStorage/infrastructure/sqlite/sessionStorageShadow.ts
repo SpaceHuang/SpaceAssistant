@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import type { Message } from '../../src/shared/domainTypes'
-import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
-import { logAgentEvent } from '../agentLogger/agentLogger'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { queueInputFingerprint } from '../queueInputFingerprint'
-import { hasCurrentProjectionEligibility, iterateLegacyTurnRoutingSkeletons, readLegacyProjectionMessages,
-  readLegacyTurnContextSkeleton } from '../sessionStorage/sqliteRuntimeBindings'
+import type { Message } from '../../../../src/shared/domainTypes'
+import type { AppDatabase } from '../../../database'
+import { getDbConnection } from '../../../database/sqliteStore'
+import { runInTransaction } from '../../../database/transaction'
+import { logAgentEvent } from '../../../agentLogger/agentLogger'
+import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
+import { queueInputFingerprint } from '../../../queueInputFingerprint'
+import { hasCurrentProjectionEligibility } from './sessionProjectionRevalidationFacts'
+import { iterateLegacyTurnRoutingSkeletons, readLegacyProjectionMessages, readLegacyTurnContextSkeleton } from './sessionLegacyQueryAdapter'
 
 export type SessionStorageShadowReport<T = unknown> = Readonly<{
   consumer: 'api-context' | 'turn-routing'

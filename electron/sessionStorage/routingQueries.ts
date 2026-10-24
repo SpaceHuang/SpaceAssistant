@@ -13,7 +13,7 @@ import {
   readCanonicalTurnRoutingInputWithFenceIfEligible,
   type CanonicalApiReadFence
 } from './certification'
-import { shadowTurnRoutingInput } from '../runtime/sessionStorageShadow'
+import { shadowTurnRoutingInput } from './infrastructure/sqlite/sessionStorageShadow'
 import type { RouteInput, RoutingRead, SelectionFence } from './public/model'
 import type { PreparedChatBodyView } from './public/model'
 import type { SessionQueries } from './public/ports'

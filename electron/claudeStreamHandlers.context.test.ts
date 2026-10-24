@@ -7,7 +7,7 @@ import { selectRecoveryMessages } from '../src/shared/overflowRecovery'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { appendSqliteAgentHistoryBatchInTransaction } from './database/agentHistoryStorage'
 import { toCanonicalModelMessages } from './runtime/canonicalHistory'
-import * as sessionStorageShadow from './runtime/sessionStorageShadow'
+import * as sessionStorageShadow from './sessionStorage/infrastructure/sqlite/sessionStorageShadow'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 function loadAuthoritativeTurnContext(
