@@ -3,7 +3,7 @@ import { appendMessage, createSession, deleteSession, deleteQueuedUserMessage, e
 import { updateMessageContent } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { getProjectedMessage } from '../runtime/sessionTranscriptProjection'
-import { writeCanonicalBackedMessageContent } from '../runtime/sessionContentWriteAuthority'
+import { writeCanonicalBackedMessageContent } from './infrastructure/sqlite/sessionContentWriteAuthority'
 import { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED, SESSION_META_TITLE_USER_CUSTOM } from '../sessionMetadataKeys'
 import type { SessionCommands } from './public/ports'
 import type { SessionUsage } from '../../src/shared/sessionUsage'

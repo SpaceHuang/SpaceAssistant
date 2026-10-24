@@ -222,7 +222,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
         ['electron/sessionEvents', 'electron/queueInputFingerprint', 'electron/agentLogger/agentLogger', 'electron/runtime/sqliteAgentHistory',
           'electron/runtime/sessionProjectionMigrationInventory', 'electron/runtime/sessionProjectionLegacyBaseline',
           'electron/runtime/sessionStorageShadow', 'electron/runtime/sessionTranscriptProjection',
-          'electron/runtime/sessionContentWriteAuthority', 'electron/runtime/agentContinuation',
+          'electron/runtime/agentContinuation',
           'electron/runtime/continuationSummary', 'electron/runtime/terminalOutcome', 'electron/runtime/canonicalHistory',
           'electron/turnRuntime', 'electron/chatMessageBuild', 'electron/sessionContextCompaction', 'electron/sessionMetadataKeys'].includes(edge.resolved) ||
         edge.resolved.startsWith('src/shared/') || edge.resolved.startsWith('packages/agent-sdk/') || edge.resolved.startsWith('node:') ||

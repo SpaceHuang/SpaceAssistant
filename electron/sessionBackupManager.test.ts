@@ -14,7 +14,7 @@ import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import type { AppIpcContext } from './appIpc'
 import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } from './sessionStorage/certification'
 import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped, verifyAndCompleteSessionMessageContentCleanup } from './sessionStorage/maintenance'
-import { enableCanonicalSessionWriteAuthority } from './runtime/sessionContentWriteAuthority'
+import { enableCanonicalSessionWriteAuthority } from './sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
 
 function makeSession(over: Partial<Session> = {}): Session {
   return {

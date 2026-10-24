@@ -13,7 +13,7 @@ import * as turnExecutionConfig from './turnExecutionConfig'
 import * as sessionStorageShadow from './sessionStorage/infrastructure/sqlite/sessionStorageShadow'
 import * as sessionStorageCutover from './sessionStorage/certification'
 import * as sessionTranscriptProjection from './runtime/sessionTranscriptProjection'
-import * as sessionContentWriteAuthority from './runtime/sessionContentWriteAuthority'
+import * as sessionContentWriteAuthority from './sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
 import { backupPageReader, loadBackupPayload } from './ipc/ipcShared'
 import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
@@ -86,7 +86,7 @@ vi.mock('./database', () => ({
   getDbConnection: vi.fn(() => ({ exec: vi.fn() }))
 }))
 
-vi.mock('./runtime/sessionContentWriteAuthority', () => ({
+vi.mock('./sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority', () => ({
   writeCanonicalBackedMessageContent: vi.fn()
 }))
 
@@ -434,7 +434,7 @@ describe('file IPC handlers', () => {
     }], 0)
     expect(sessionStorageCutover.certifyCanonicalSessionApiRead(ctx.db, session.id).status).toBe('eligible')
     sessionStorageCutover.setCanonicalApiReadFeatureEnabled(ctx.db, true)
-    const actualWriteAuthority = await vi.importActual<typeof import('./runtime/sessionContentWriteAuthority')>('./runtime/sessionContentWriteAuthority')
+    const actualWriteAuthority = await vi.importActual<typeof import('./sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority')>('./sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority')
     expect(actualWriteAuthority.enableCanonicalSessionWriteAuthority(ctx.db, session.id).status).toBe('enabled')
     expect(markSessionMessageContentWriteStopped(ctx.db, session.id)).toBe(true)
     expect(beginSessionMessageContentCleanup(ctx.db, session.id)).toBe(true)

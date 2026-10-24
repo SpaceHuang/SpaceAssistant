@@ -37,7 +37,7 @@ import { loadAuthoritativeTurnContext } from '../claudeStreamHandlers'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } from '../sessionStorage/certification'
-import { enableCanonicalSessionWriteAuthority } from './sessionContentWriteAuthority'
+import { enableCanonicalSessionWriteAuthority } from '../sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
 
 const route = { routeId: 'desktop-test', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
 

@@ -12,18 +12,6 @@
     "evidence": "claudeStreamHandlers.callerContract.test.ts; sessionProjectionRevalidation.test.ts"
   },
   {
-    "source": "electron/runtime/sessionContentWriteAuthority.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "createSqliteSessionApiRouteProjectionFence"
-    ],
-    "typeOnly": false,
-    "owner": "SessionStorage API route fence",
-    "reason": "The runtime write authority delegates to a SQLite fence factory during port migration.",
-    "exitStage": "P2",
-    "evidence": "sessionContentWriteAuthority.test.ts"
-  },
-  {
     "source": "electron/runtime/sessionTranscriptProjection.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [

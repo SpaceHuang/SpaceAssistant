@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createSession, appendMessage } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
-import { enableCanonicalSessionWriteAuthority } from './sessionContentWriteAuthority'
+import { enableCanonicalSessionWriteAuthority } from '../sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'
 import {

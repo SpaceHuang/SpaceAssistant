@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { toCanonicalModelMessages } from './canonicalHistory'
-import { createSessionCommitService } from '../sessionStorage/host/sessionCommitService'
-import { createSqliteSessionApiRouteProjectionFence } from '../sessionStorage/sqliteRuntimeBindings'
+import type { AppDatabase } from '../../../database'
+import { getDbConnection } from '../../../database/sqliteStore'
+import { runInTransaction } from '../../../database/transaction'
+import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
+import { toCanonicalModelMessages } from '../../../runtime/canonicalHistory'
+import { createSessionCommitService } from '../../host/sessionCommitService'
+import { createSqliteSessionApiRouteProjectionFence } from './sessionApiRouteProjectionFence'
 
 export type CanonicalWriteAuthorityResult = Readonly<{
   status: 'enabled' | 'ineligible'

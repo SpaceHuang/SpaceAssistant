@@ -200,7 +200,7 @@ describe('loadAcceptedTurnMessages Phase 5.2 shadow ordering', () => {
     }], 1)
     sessionStorageCertification.setCanonicalApiReadFeatureEnabled(db, true)
     expect(sessionStorageCertification.certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
-    const { enableCanonicalSessionWriteAuthority } = await import('./sessionContentWriteAuthority')
+    const { enableCanonicalSessionWriteAuthority } = await import('../sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority')
     expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
     createPersistedTurn(db, { turnId: 'accepted-cleanup-terminal-turn', requestId: 'accepted-cleanup-terminal-request', sessionId: session.id,
       userMessageId: user.message.id, assistantMessageId: user.message.id, state: 'terminal', outcome: 'completed' })
