@@ -494,8 +494,8 @@ export function decide(
   const matchedActions = invocationRules
     .filter(matchedRule)
     .map((rule) => {
-      const action = rule.userOverride ? rule.action : deps.transform ? deps.transform(rule) : rule.action
-      return { rule, action, transformed: !rule.userOverride && action !== rule.action }
+      const transformedAction = rule.userOverride ? rule.action : deps.transform ? deps.transform(rule) : rule.action
+      return { rule, action: transformedAction, transformed: !rule.userOverride && transformedAction !== rule.action }
     })
   const byAction = (entries: typeof matchedActions, action: PolicyRule['action']) => entries
     .filter((entry) => entry.action === action || action === 'ask' && entry.action === 'confirm-every-time')
@@ -518,29 +518,24 @@ export function decide(
       || a.id.localeCompare(b.id))[0]
   if (humanFloor) return requireConfirm(humanFloor, facts, context.sessionId, context.lane, constraints, 'user')
 
-  // Explicit rule overrides remain authoritative over previous user memory. When
-  // overrides coexist with independent rules, apply INV-03 before reaching cache.
+  // Every effective action participates in the same priority regardless of
+  // whether it came from a package default, a user override, or a transform.
+  // Explicit rule overrides remain authoritative over previous user memory.
   const selectedOverrides = matchedActions.filter(({ rule }) => rule.userOverride)
-  if (selectedOverrides.length > 0 && context.lane !== 'automation') {
-    const selectedAsk = byAction(matchedActions.filter(({ action, rule }) => action !== 'deny' && !rule.humanRequired), 'ask')
-    if (selectedAsk) {
-      if (askUnlessHolds(selectedAsk, deps)) return autoAllow(selectedAsk.id, facts)
-      return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints,
-        selectedAsk.userOverride ? 'user' : selectedAsk.answerer ?? askAnswererFor(context.lane))
-    }
-    const selectedAuto = byAction(selectedOverrides, 'auto-evaluator')
-      ?? byAction(matchedActions.filter(({ action }) => action !== 'deny'), 'auto-evaluator')
-    if (selectedAuto) {
-      if (deps.autoEvaluator?.(facts, context).approve) return autoAllow(selectedAuto.id, facts)
-      return requireConfirm(selectedAuto, facts, context.sessionId, context.lane, constraints, 'agent')
-    }
-    const selectedAllow = byAction(selectedOverrides, 'allow')
-    if (selectedAllow) return autoAllow(selectedAllow.id, facts)
-  }
-
-  // Automation remains host-owned, but its explicit deny floor is checked above.
+  const actionableAsks = matchedActions.filter(({ rule }) => !rule.humanRequired && rule.id !== 'automation-default-confirm' && !askUnlessHolds(rule, deps))
+  const selectedAsk = byAction(actionableAsks, 'ask')
+  const askUnlessAllows = matchedActions.filter(({ action, rule }) =>
+    !rule.humanRequired && !rule.locked && (action === 'ask' || action === 'auto-evaluator') && askUnlessHolds(rule, deps))
+  // A user-selected ask is an explicit human boundary; do not even consult a
+  // remembered allow for the same invocation.
+  if (selectedAsk?.userOverride) return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints, 'user')
   const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
-  if (cacheHit) return cacheHit
+  if (cacheHit?.type === 'deny') return cacheHit
+  // Existing user memories remain bound to their exact key. A generic MCP tool
+  // memory cannot silently suppress the default MCP ask after a policy change.
+  const mcpCacheMustYield = cacheHit?.type === 'auto-allow' && cacheHit.cacheKey?.kind === 'mcp-tool' &&
+    matchedActions.some(({ rule }) => rule.id === 'mcp-tool-ask')
+  if (cacheHit && !mcpCacheMustYield) return cacheHit
   const larkMessageOutbound = facts.toolName === 'run_lark_cli' && facts.signals.some((signal) =>
     signal.kind === 'lark-subcommand' && signal.category === 'message'
   )
@@ -569,10 +564,36 @@ export function decide(
     const mode = selectedOutboundRuleId ? rules.find((rule) => rule.id === selectedOutboundRuleId) : undefined
     if (mode && matchedRule(mode)) {
       const transformed = deps.transform ? deps.transform(mode) : mode.action
-      if (transformed === 'allow') return autoAllow(mode.id, facts)
-      return requireConfirm(mode, facts, context.sessionId, context.lane, constraints)
+      if (transformed !== 'allow') return requireConfirm(mode, facts, context.sessionId, context.lane, constraints)
     }
   }
+
+  if (selectedAsk) return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints,
+    selectedAsk.answerer ?? askAnswererFor(context.lane))
+
+  if (context.lane !== 'automation') {
+    const overrideAuto = matchedActions.filter(({ action, rule }) => action === 'auto-evaluator' && rule.userOverride)
+      .sort((a, b) => a.rule.id.localeCompare(b.rule.id))
+    const autoCandidates = overrideAuto.length > 0 ? overrideAuto : matchedActions
+      .filter(({ action }) => action === 'auto-evaluator')
+      .sort((a, b) => Number((a.rule.match?.signals?.length ?? 0) + (a.rule.match?.toolName ? 1 : 0) + (a.rule.match?.lane?.length ? 1 : 0))
+        - Number((b.rule.match?.signals?.length ?? 0) + (b.rule.match?.toolName ? 1 : 0) + (b.rule.match?.lane?.length ? 1 : 0))
+        || a.rule.id.localeCompare(b.rule.id))
+    let lastAuto: PolicyRule | undefined
+    for (const { rule } of autoCandidates) {
+      if (askUnlessHolds(rule, deps)) continue
+      lastAuto = rule
+      if (deps.autoEvaluator?.(facts, context).approve) return autoAllow(rule.id, facts)
+    }
+    if (lastAuto) return requireConfirm(lastAuto, facts, context.sessionId, context.lane, constraints, 'agent')
+  }
+  const selectedAskUnlessAllow = askUnlessAllows
+    .sort((a, b) => Number(b.rule.askUnless !== undefined) - Number(a.rule.askUnless !== undefined)
+      || Number((b.rule.match?.signals?.length ?? 0) + (b.rule.match?.toolName ? 1 : 0) + (b.rule.match?.lane?.length ? 1 : 0))
+        - Number((a.rule.match?.signals?.length ?? 0) + (a.rule.match?.toolName ? 1 : 0) + (a.rule.match?.lane?.length ? 1 : 0))
+      || a.rule.id.localeCompare(b.rule.id))[0]?.rule
+  if (selectedAskUnlessAllow) return autoAllow(selectedAskUnlessAllow.id, facts)
+  if (cacheHit) return cacheHit
 
   if (context.lane !== 'automation') {
     // Among remaining default rules, INV-03 is independent of rule array order.
@@ -581,23 +602,6 @@ export function decide(
     // it before generic review candidates so enabling a scoped exception takes effect.
     const configuredAllow = byAction(fallbackActions.filter(({ action, rule }) => action === 'allow' && rule.configRequires), 'allow')
     if (configuredAllow) return autoAllow(configuredAllow.id, facts)
-    const selectedAsk = byAction(fallbackActions.filter(({ rule }) => !rule.humanRequired), 'ask')
-    if (selectedAsk) {
-      if (askUnlessHolds(selectedAsk, deps)) return autoAllow(selectedAsk.id, facts)
-      return requireConfirm(selectedAsk, facts, context.sessionId, context.lane, constraints,
-        selectedAsk.answerer ?? askAnswererFor(context.lane))
-    }
-    const autoCandidates = fallbackActions
-      .filter(({ action }) => action === 'auto-evaluator')
-      .map(({ rule }) => rule)
-      .sort((a, b) => a.id.localeCompare(b.id))
-    let lastAutoRule: PolicyRule | undefined
-    for (const rule of autoCandidates) {
-      lastAutoRule = rule
-      if (askUnlessHolds(rule, deps)) return autoAllow(rule.id, facts)
-      if (deps.autoEvaluator?.(facts, context).approve) return autoAllow(rule.id, facts)
-    }
-    if (lastAutoRule) return requireConfirm(lastAutoRule, facts, context.sessionId, context.lane, constraints, 'agent')
     const selectedAllow = byAction(fallbackActions, 'allow')
     if (selectedAllow) return autoAllow(selectedAllow.id, facts)
   }
@@ -609,7 +613,7 @@ export function decide(
   let lastAutoRule: PolicyRule | undefined
   for (const rule of autoRules) {
     if (!matchedRule(rule)) continue
-    if (askUnlessHolds(rule, deps)) return autoAllow(rule.id, facts)
+    if (askUnlessHolds(rule, deps)) continue
     lastAutoRule = rule
     if (deps.autoEvaluator) {
       const res = deps.autoEvaluator(facts, context)

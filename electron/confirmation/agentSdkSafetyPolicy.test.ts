@@ -65,6 +65,17 @@ describe('createAgentSdkSafetyPolicy', () => {
     expect(evaluateGate).toHaveBeenCalledTimes(2)
   })
 
+  it('保留新版本 allow 的最终复核材料，旧 ask 不确认也可完成同版本 recheck', async () => {
+    const initial = result({ type: 'require-confirm', ruleId: 'old-ask', answerer: 'user', riskLevel: 'low', facts, memoryTiers: [], timeoutMs: 1000 })
+    const freshAllow = result({ type: 'auto-allow', ruleId: 'new-allow', reason: 'new policy allows' })
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(freshAllow)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
+    await expect(policy.evaluate(binding)).resolves.toMatchObject({ kind: 'ask' })
+    await expect(policy.evaluate({ ...binding, phase: 'recheck', authorizationVersion: 'policy-v2' })).resolves.toMatchObject({ kind: 'allow' })
+    await expect(policy.evaluate({ ...binding, phase: 'recheck', authorizationVersion: 'policy-v2' })).resolves.toMatchObject({ kind: 'allow' })
+    expect(evaluateGate).toHaveBeenCalledTimes(3)
+  })
+
   it('projects prepared Feishu outbound content facts into the policy gate', async () => {
     const toolInput = { args: ['message', 'send', '--text', 'password=supersecret'] }
     const larkBinding = { ...binding, capabilityId: 'run_lark_cli', capability: { state: 'known-authorized' as const, id: 'run_lark_cli' },

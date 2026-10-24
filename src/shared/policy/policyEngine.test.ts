@@ -64,6 +64,51 @@ function deps(overrides: Partial<PolicyEngineDeps> = {}): PolicyEngineDeps {
   }
 }
 
+describe('INV-03 unified action arbitration regression probes', () => {
+  const mcpFacts = mkFacts('mcp_tool', 'execute', [{ kind: 'mcp-tool', serverId: 'server', toolName: 'lookup' }], 'low')
+  const validAllowCache: DecisionCacheView = { lookup: (key) => ({ id: 'prior-allow', key, decision: 'allow', lane: '*',
+    scope: 'persistent', createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' }) }
+
+  it('默认 MCP ask 优先于有效的旧 allow 缓存', () => {
+    expect(decide(mcpFacts, { ...mkContext('desktop'), policyTier: 'custom' }, DEFAULT_POLICY_RULES,
+      deps({ cache: validAllowCache, migrationComplete: true })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'user' })
+  })
+
+  it('条件已满足的默认 allow 不绕过另一条独立 ask', () => {
+    const rules = [
+      { id: 'configured-allow', when: 'invocation' as const, action: 'allow' as const,
+        configRequires: { config: 'actRequiresConfirm', equals: false }, reason: 'allow' },
+      { id: 'independent-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'ask' }
+    ]
+    expect(decide(mcpFacts, mkContext('desktop'), rules, deps({ config: { actRequiresConfirm: false } })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'independent-ask' })
+  })
+
+  it('askUnless 只降低本规则动作，不隐藏其他匹配 ask', () => {
+    const rules = [
+      { id: 'a-ask-unless', when: 'invocation' as const, action: 'ask' as const,
+        askUnless: { config: 'larkCliWriteRequiresConfirm', equals: false }, reason: 'conditional' },
+      { id: 'b-user-ask', when: 'invocation' as const, action: 'ask' as const, userOverride: true, reason: 'user ask' }
+    ]
+    expect(decide(mcpFacts, { ...mkContext('desktop'), policyTier: 'custom' }, rules,
+      deps({ config: { larkCliWriteRequiresConfirm: false } })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'b-user-ask', answerer: 'user' })
+  })
+
+  it('用户 MCP deny 仍覆盖由完整事实推导的公开只读调用', () => {
+    const facts = mkFacts('mcp__server__search', 'read', [
+      { kind: 'mcp-tool', serverId: 'server', toolName: 'search' }, { kind: 'mcp-readonly' },
+        { kind: 'mcp-invocation', serverId: 'srv', toolName: 'search', querySource: 'public', accountAuthorization: 'authorized', actionClass: 'read',
+        completeness: 'complete', dataDestinations: [], dataSources: [], sideEffect: 'read' }
+    ] as ContentFacts['signals'], 'low')
+    const rules = resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'custom' },
+      overrides: [{ ruleId: 'mcp-tool-ask', action: 'deny' }], rules: DEFAULT_POLICY_RULES })
+    expect(decide(facts, { ...mkContext('desktop'), policyTier: 'custom' }, rules, deps({ migrationComplete: true })))
+      .toMatchObject({ type: 'deny', ruleId: 'mcp-tool-ask' })
+  })
+})
+
 describe('decide：脚本规则族（规范条目顺序）', () => {
   it('显式 allow 覆盖同一规则的 locked、humanRequired 与逐次确认默认语义', () => {
     const rules = [{ id: 'user-selected', when: 'invocation' as const, action: 'allow' as const,
@@ -662,7 +707,7 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
     expect(lookup).not.toHaveBeenCalled()
   })
 
-  it('legacy default MCP ask remains below a prior explicit session allow cache', () => {
+  it('legacy default MCP ask remains above a prior explicit session allow cache', () => {
     const lookup = vi.fn((key: import('../confirmation/types').CacheKey) => ({
       id: 'session-mcp-allow', key, decision: 'allow' as const, lane: 'wechat' as const, scope: 'session' as const,
       createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' as const
@@ -673,7 +718,7 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
       [{ id: 'mcp-tool-ask', when: 'invocation', match: { signals: ['mcp-tool'] }, action: 'ask', reason: 'MCP tool call requires confirmation' }],
       deps({ cache: { lookup } })
     )
-    expect(decision).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
+    expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'user' })
     expect(lookup).toHaveBeenCalledOnce()
   })
 
@@ -1149,6 +1194,7 @@ describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）',
         completeness: 'complete', missingFacts: [], argNames: ['query'], argsDigest: 'digest', argsTruncated: false
       }
     ])
+    expect(signalTokenSet(trustedFacts).has('mcp-public-read')).toBe(true)
     const imStandard = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
     for (const lane of ['wechat', 'feishu'] as const) {
       expect(decide(trustedFacts, mkContext(lane), DEFAULT_POLICY_RULES, deps({ transform: imStandard })))

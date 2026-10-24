@@ -681,7 +681,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'mcp-tool-ask',
     when: 'invocation',
-    match: { signals: ['mcp-tool'], excludeSignals: ['mcp-public-read'] },
+    match: { signals: ['mcp-tool'] },
     denyClass: 'insufficient-info',
     action: 'ask',
     reason: 'MCP 工具调用需确认'

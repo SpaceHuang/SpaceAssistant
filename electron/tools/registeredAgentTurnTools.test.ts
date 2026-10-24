@@ -51,6 +51,63 @@ const invocationId = 'inv-sdk-host'
 async function* stream(...chunks: StreamChunk[]) { yield* chunks }
 
 describe('createRegisteredAgentTurnTools', () => {
+  it('真实 SDK、注册工具与 Electron policy 在 ask 改为 allow 后完成一次派发', async () => {
+    const execute = vi.fn(async () => ({ success: true, data: 'executed once' }))
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'lookup', actionClass: 'read', parseInput: (value) => value, execute }))
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    let authorizationVersion = 'policy-v1'
+    const tools = createRegisteredAgentTurnTools({ requestId: 'policy-change-e2e', turnId: 'turn', registry,
+      permits, admission, createExecutionContext: () => ({ sessionId: 's', lane: 'desktop' }),
+      resolveAuthorizationVersion: () => authorizationVersion })
+    const facts = { toolName: 'lookup', actionClass: 'read' as const, baseRiskLevel: 'low' as const, signals: [], summary: { text: 'lookup' } }
+    const ask = { type: 'require-confirm' as const, ruleId: 'lookup-ask', answerer: 'user' as const,
+      riskLevel: 'low' as const, facts, memoryTiers: [], timeoutMs: null, disposition: 'human-required' as const }
+    const policy = createAgentSdkSafetyPolicy({ resolveToolCall: tools.getPreparedCall,
+      resolveGateArgs: async (_binding, call) => ({ toolName: call!.toolName, toolInput: call!.input,
+        sessionId: 'policy-change-e2e', workDir: '/tmp', userDataDir: '/tmp', toolsConfig: {}, effectiveRules: [],
+        decisionCache: { lookup: () => null } } as never),
+      evaluateGate: async () => authorizationVersion === 'policy-v1'
+        ? { decision: ask, facts, approvedFactIds: [] }
+        : { decision: { type: 'auto-allow', ruleId: 'fresh-allow', reason: 'fresh policy' }, facts, approvedFactIds: [] } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('policy-change-e2e', ['lookup'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy })
+    const providers = new ModelProviderRegistry()
+    const responses = [
+      stream({ type: 'tool-call', toolCallId: 'policy-change-call', toolName: 'lookup', input: {} },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }),
+      stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    ]
+    providers.register(route, { providerId: 'policy-change-e2e', stream: () => responses.shift()! })
+    const history = new MemoryHistory()
+    try {
+      await runAgentTurn({ registry: providers, routeId: route.routeId, invocationId: 'policy-change-e2e', turnId: 'turn',
+        request: { messages: [{ role: 'user', content: 'lookup' }], maxTokens: 30 }, safetyGate,
+        prepareTool: tools.prepareTool, discardPreparedTool: tools.discardPreparedTool, toolExecution: tools.toolExecution,
+        confirmation: async () => { authorizationVersion = 'policy-v2'; return { kind: 'authorization-changed' } },
+        history, maxModelTurns: 2, maxConcurrentTools: 1 })
+      expect(execute).toHaveBeenCalledOnce()
+      expect(execute).toHaveBeenCalledWith({}, expect.anything())
+    } finally { tools.discardPreparedTool({ invocationId: 'policy-change-e2e', toolCallId: 'policy-change-call', toolName: 'lookup', input: {} }) }
+  })
+
+  it('策略变化后无旧 receipt 的 recheck 仍能刷新真实注册工具计划', async () => {
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'lookup', actionClass: 'read', parseInput: (x: unknown) => x,
+      plan: async (x: unknown) => x, execute: async () => ({ success: true }) }))
+    const tools = createRegisteredAgentTurnTools({ requestId: 'policy-change', turnId: 'turn', registry,
+      permits: new InMemorySafetyPermitStore(), admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ sessionId: 's', lane: 'desktop' }), resolveAuthorizationVersion: () => 'v2' })
+    const call = { invocationId: 'policy-change', toolCallId: 'call', toolName: 'lookup', input: {} }
+    try {
+      await tools.prepareTool(call, { kind: 'initial' })
+      await expect(tools.prepareTool(call, { kind: 'recheck', replanAfterFreshApproval: true, policyChanged: true } as any))
+        .resolves.toMatchObject({ phase: 'recheck' })
+    } finally { tools.discardPreparedTool(call) }
+  })
+
   it('rechecks policy after a policy snapshot changes and accepts a fresh authorization version', async () => {
     const execute = vi.fn(async () => ({ success: true, data: 'fresh policy approved' }))
     const registry = new TypedToolRegistry()

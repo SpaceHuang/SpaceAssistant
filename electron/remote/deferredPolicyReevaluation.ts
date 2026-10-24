@@ -40,6 +40,8 @@ export function createDeferredPolicyReevaluation(input: {
 }) {
   const executionResults = createDeferredExecutionResultStore(input.db)
   const inFlight = new Set<string>()
+  const dirty = new Set<string>()
+  let processing = false
   const policySnapshot = () => {
     const conn = getDbConnection(input.db)
     const snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
@@ -60,6 +62,13 @@ export function createDeferredPolicyReevaluation(input: {
 
   return {
     async processInvalidated() {
+      if (processing) {
+        for (const todo of input.todoStore.listInvalidatedByPolicyChange(input.channel)) {
+          dirty.add(todo.todoId)
+        }
+        return []
+      }
+      processing = true
       const results: Array<{ todoId: string; outcome: 'allow' | 'ask' | 'deny' | 'stale' | 'unavailable' }> = []
       const retryAfterPolicyRace = () => {
         const retry = () => { void this.processInvalidated() }
@@ -67,7 +76,10 @@ export function createDeferredPolicyReevaluation(input: {
         else { const timer = setTimeout(retry, 100); timer.unref?.() }
       }
       for (const todo of input.todoStore.listInvalidatedByPolicyChange(input.channel)) {
-        if (inFlight.has(todo.todoId)) continue
+        if (inFlight.has(todo.todoId)) {
+          dirty.add(todo.todoId)
+          continue
+        }
         inFlight.add(todo.todoId)
         let leaseOwner: string | undefined
         let observedPolicyRevision: number | undefined
@@ -190,6 +202,16 @@ export function createDeferredPolicyReevaluation(input: {
           if (leaseOwner) releaseRemoteSession(todo.originSessionId, leaseOwner)
           inFlight.delete(todo.todoId)
         }
+      }
+      // A notification received during reauthorization or replacement delivery is
+      // not dropped. Schedule a fresh durable scan after this pass releases its
+      // per-todo fence; concurrent notifications only mark work dirty.
+      processing = false
+      if (dirty.size > 0) {
+        dirty.clear()
+        const retry = () => { void this.processInvalidated() }
+        if (input.scheduleRetry) input.scheduleRetry(0, retry)
+        else { const timer = setTimeout(retry, 0); timer.unref?.() }
       }
       return results
     }

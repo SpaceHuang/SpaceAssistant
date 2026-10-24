@@ -247,7 +247,7 @@ export type CanonicalToolExecutionResult = {
 }
 export type ToolPreparationStage =
   | Readonly<{ kind: 'initial'; requestMetadata?: Readonly<Record<string, unknown>> }>
-  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }>; replanAfterFreshApproval?: true; requestMetadata?: Readonly<Record<string, unknown>> }>
+  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }>; replanAfterFreshApproval?: true; policyChanged?: true; requestMetadata?: Readonly<Record<string, unknown>> }>
 export type ToolConfirmationResult = Readonly<{
   answerer?: 'user' | 'agent'
   cause?: string
@@ -1775,7 +1775,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           let refreshedBinding: PermitBinding
           try {
             refreshedBinding = await input.prepareTool(executionCall, {
-              kind: 'recheck', replanAfterFreshApproval: true,
+              kind: 'recheck', replanAfterFreshApproval: true, policyChanged: true,
               ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {})
             })
           } catch (error) {

@@ -135,6 +135,9 @@ export function createAgentSdkSafetyPolicy(input: {
             initial.delete(key)
             if (decision.type === 'auto-allow') {
               await input.onInitialGateResult?.(structuredClone(binding), structuredClone(result), gateArgs)
+              // Keep a fresh, unconfirmed baseline for the SDK's final authorization
+              // after prepare/replan. It carries no prior receipt or approval.
+              initial.set(key, { binding: structuredClone(binding), result: structuredClone(result), args: gateArgs, confirmed: false })
               return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
             }
             if (decision.type === 'require-confirm') {

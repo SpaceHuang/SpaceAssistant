@@ -170,7 +170,7 @@ export function createRegisteredAgentTurnTools(input: {
         record.runtimeContext = { ...refreshed, ...safetyOwned }
       }
       if (stage.replanAfterFreshApproval) {
-        if (!stage.confirmation?.receipt.trim()) throw new Error('FRESH_APPROVAL_REQUIRED_FOR_REPLAN')
+        if (!stage.policyChanged && !stage.confirmation?.receipt.trim()) throw new Error('FRESH_APPROVAL_REQUIRED_FOR_REPLAN')
         const planningContext = {
           requestId: input.requestId,
           toolUseId: call.toolCallId,

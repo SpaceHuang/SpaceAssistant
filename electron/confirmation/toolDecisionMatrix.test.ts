@@ -315,11 +315,12 @@ describe('判定矩阵：MCP 工具', () => {
     expect(d.type).toBe('require-confirm')
     expect(d.ruleId).toBe('scope-strict-mcp-readonly-allow')
   })
-  it('会话信任（sessionId 绑定）→ 放行；其他会话/其他工具不命中', () => {
+  it('MCP 旧会话信任不能跳过默认 ask；其他会话/其他工具同样需要确认', () => {
     const cache = mapCache([
       allowEntry({ kind: 'mcp-tool', serverId: 'srv', toolName: 'tool', sessionId: 's1' }, 'session')
     ])
-    expect(decide(mcpFacts('srv', 'tool', false), ctx('desktop'), DEFAULT_POLICY_RULES, deps({}, cache)).type).toBe('auto-allow')
+    expect(decide(mcpFacts('srv', 'tool', false), ctx('desktop'), DEFAULT_POLICY_RULES, deps({}, cache)))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask' })
     expect(
       decide(mcpFacts('srv', 'tool', false), ctx('desktop', { sessionId: 's2' }), DEFAULT_POLICY_RULES, deps({}, cache)).type
     ).toBe('require-confirm')

@@ -129,4 +129,39 @@ describe('deferred policy re-evaluation', () => {
     expect(stores.todoStore.listInvalidatedByPolicyChange('feishu')).toHaveLength(1)
     stores.db.close(); stores.temp.cleanup()
   })
+
+  it('reprocesses a newer policy wake that arrives while replacing the approval notice', async () => {
+    const stores = setup()
+    await invalidate(stores)
+    let finishSend!: (value: { messageId: string }) => void
+    let markSending!: () => void
+    const sending = new Promise<void>((resolve) => { markSending = resolve })
+    stores.send.mockReset().mockImplementation(() => new Promise((resolve) => { finishSend = resolve; markSending() }))
+    let decision: 'ask' | 'allow' = 'ask'
+    const dispatch = vi.fn(async () => ({ dispatched: true }))
+    const reevaluation = createDeferredPolicyReevaluation({ db: stores.db, channel: 'feishu', todoStore: stores.todoStore,
+      envelopeStore: stores.envelopeStore, notificationDelivery: stores.notificationDelivery, enabled: () => true,
+      authorizationEpoch: () => 4, ownerAuthorized: () => true, recheckTask: () => true,
+      reauthorize: async () => ({ decision, rule: { ruleId: `new-${decision}`, factsHash: 'b'.repeat(64) } }),
+      recheck: async () => ({ allowed: true }), dispatch, maxParallel: 1, wake: vi.fn(), audit: vi.fn() })
+    const first = reevaluation.processInvalidated()
+    try {
+      await sending
+      decision = 'allow'
+      commitImPolicySnapshot(getDbConnection(stores.db), { expectedRevision: 2, policyBehaviorVersion: 'im-standard-v2',
+        snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'allow' } }, updatedAt: stores.now + 2,
+        eventId: 'change-while-replacement-sends' })
+      await reevaluation.processInvalidated()
+      finishSend({ messageId: 'replacement-old-policy' })
+      await first
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+      expect(stores.todoStore.listInvalidatedByPolicyChange('feishu')).toHaveLength(0)
+      expect(stores.send).toHaveBeenCalledOnce()
+      expect(dispatch).toHaveBeenCalledOnce()
+    } finally {
+      finishSend?.({ messageId: 'cleanup' })
+      await first
+      stores.db.close(); stores.temp.cleanup()
+    }
+  })
 })
