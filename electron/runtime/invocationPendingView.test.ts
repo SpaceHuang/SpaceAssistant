@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { appendMessage, createSession } from '../database/operations'
+import { appendMessage, createSession, getMessages } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
@@ -16,7 +16,7 @@ function appendRawEvent(conn: ReturnType<typeof getDbConnection>, sessionId: str
       Number(allocated.lastInsertRowid), sequence)
 }
 
-/** Eligible session whose cached seed is one event behind the live stream. */
+/** Eligible session with an explicit cache seed one event behind the live stream. */
 async function createStaleCacheSession(label: string) {
   const db = createMemoryAppDb()
   const session = createSession(db, { name: `${label} pending view`, model: 'test' })
@@ -28,8 +28,15 @@ async function createStaleCacheSession(label: string) {
     eventId: `${label}-context`, idempotencyKey: `${label}-context`, kind: 'invocation-context-committed',
     payload: { messages: [{ id: `${label}-user`, role: 'user', content: 'question', timestamp: 1 }] }
   }], 0)
-  // 推进缓存到当前 watermark（模拟上一轮的写路径推进），随后把尾部追加在缓存之外。
+  // Transcript reads no longer create cache rows. Seed this low-level L1 test fixture explicitly.
   expect(readSessionTranscriptProjection(db, session.id).source).toMatch(/^canonical:/)
+  const legacyMessages = getMessages(db, session.id).map(({ id, role, content, timestamp }) => ({
+    id, role: role as 'user' | 'assistant', content, timestamp,
+  }))
+  const canonical = history.readCanonicalSessionTranscript(session.id, legacyMessages)
+  expect(canonical.kind).toBe('matched')
+  if (canonical.kind !== 'matched') throw new Error('expected canonical fixture to match its legacy skeleton')
+  expect(history.writeCanonicalSessionCache({ ...canonical, cacheKey: 'transcript', value: JSON.stringify(canonical.messages) })).toBe(true)
   return { db, conn, session, history }
 }
 

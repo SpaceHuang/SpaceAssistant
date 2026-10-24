@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { appendMessage, createSession, deleteSession, getRecentTurnRoutingMessages, getSession, getTurnContext, prepareTurnAtomically, updateMessageContent } from '../database/operations'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
@@ -534,22 +533,12 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
       expect(beginSessionMessageContentCleanup(db, session.id)).toBe(true)
 
       const conn = getDbConnection(db)
-      const cacheRow = conn.prepare(`SELECT session_generation,session_seq,commit_order,watermark_event_id,watermark_invocation_id,event_count,value
-        FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'`).get(session.id) as {
-          session_generation: string; session_seq: number; commit_order: number; watermark_event_id: string | null;
-          watermark_invocation_id: string | null; event_count: number; value: string
-        }
       conn.exec('DROP TRIGGER reject_history_event_update_after_content_write_stop')
       const eventId = `context-${session.id}`
       const event = conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?').get(eventId) as { payload_json: string }
       const payload = JSON.parse(event.payload_json) as { messages: Array<{ id: string; content: string }> }
       payload.messages[0]!.content = 'diverged source body'
       conn.prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?').run(JSON.stringify(payload), eventId)
-      conn.prepare(`INSERT INTO canonical_session_projection_cache(session_id,cache_key,cache_version,session_generation,session_seq,
-        commit_order,watermark_event_id,watermark_invocation_id,event_count,value,value_sha256,updated_at)
-        VALUES(?,'transcript',1,?,?,?,?,?,?,?, ?,?)`).run(session.id, cacheRow.session_generation, cacheRow.session_seq,
-        cacheRow.commit_order, cacheRow.watermark_event_id, cacheRow.watermark_invocation_id, cacheRow.event_count,
-        cacheRow.value, createHash('sha256').update(cacheRow.value).digest('hex'), Date.now())
 
       expect(clearNextSessionMessageContentBatch(db, session.id, 1)).toMatchObject({
         status: 'ineligible', cleanedMessageCount: 0, reason: 'fence-changed'

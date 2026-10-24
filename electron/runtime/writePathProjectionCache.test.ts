@@ -22,8 +22,8 @@ async function createEligibleSession(label: string) {
   return { db, conn, session, history }
 }
 
-describe('write-path incremental projection cache (P1-①)', () => {
-  it('advances the projection cache to the appended watermark inside the append transaction', async () => {
+describe('retired transcript projection cache (P1-①)', () => {
+  it('keeps appends independent of transcript cache and parity eligibility', async () => {
     const { db, session, history } = await createEligibleSession('advance')
     appendMessage(db, { id: 'advance-user-2', sessionId: session.id, role: 'user', content: 'second question', timestamp: 2, status: 'sent' })
 
@@ -37,13 +37,14 @@ describe('write-path incremental projection cache (P1-①)', () => {
         ] }
     }], 1)
 
-    // append 返回即推进 payload cache，但只有 full L2 对拍能发布 transcript parity proof。
-    const cacheRow = getDbConnection(db).prepare(
-      "SELECT session_seq, event_count FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'"
-    ).get(session.id) as { session_seq: number; event_count: number }
-    expect(cacheRow).toMatchObject({ session_seq: 2, event_count: 2 })
+    expect(getDbConnection(db).prepare(
+      "SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'"
+    ).get(session.id)).toBeUndefined()
     expect(getDbConnection(db).prepare("SELECT status FROM session_projection_state WHERE session_id=? AND scope_key=? AND status='valid'")
       .get(session.id, encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toBeUndefined()
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2', messages: [
+      { id: 'advance-user', content: 'first question' }, { id: 'advance-user-2', content: 'second question' },
+    ] })
     db.close()
   })
 
@@ -70,7 +71,7 @@ describe('write-path incremental projection cache (P1-①)', () => {
     db.close()
   })
 
-  it('produces a cache incrementally that equals the full rebuild byte for byte', async () => {
+  it('replays the same canonical transcript on repeated reads without materializing a cache', async () => {
     const { db, session, history } = await createEligibleSession('equivalence')
     const conn = getDbConnection(db)
     appendMessage(db, { id: 'equivalence-user-2', sessionId: session.id, role: 'user', content: 'second question', timestamp: 2, status: 'sent' })
@@ -83,17 +84,14 @@ describe('write-path incremental projection cache (P1-①)', () => {
           { id: 'equivalence-user-2', role: 'user', content: 'second question', timestamp: 2 }
         ] }
     }], 1)
-    const incrementallyCached = conn.prepare(
-      "SELECT value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'"
-    ).get(session.id) as { value: string }
-
-    // 对拍：清缓存后全量重建的投影必须与写路径增量推进的缓存一致。
-    conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
-    const fullyRebuilt = conn.prepare(
-      "SELECT value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'"
-    ).get(session.id) as { value: string }
-    expect(incrementallyCached.value).toBe(fullyRebuilt.value)
+    const first = readSessionTranscriptProjection(db, session.id)
+    const second = readSessionTranscriptProjection(db, session.id)
+    expect(first).toMatchObject({ source: 'canonical:L2', messages: [
+      { id: 'equivalence-user', content: 'first question' }, { id: 'equivalence-user-2', content: 'second question' },
+    ] })
+    expect(second).toEqual(first)
+    expect(conn.prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
+      .toBeUndefined()
     db.close()
   })
 

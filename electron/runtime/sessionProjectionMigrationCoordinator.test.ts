@@ -111,7 +111,8 @@ describe('session projection migration application coordinator', () => {
       expect(getDbConnection(temp.db).prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
         .get(active.id)).toBeUndefined()
       expect(getDbConnection(temp.db).prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'")
-        .get(healthy.id)).toBeDefined()
+        .get(healthy.id)).toBeUndefined()
+      expect(hasCurrentProjectionEligibility(temp.db, healthy.id)).toBe(true)
     } finally {
       temp.cleanup()
     }

@@ -21,7 +21,7 @@ describe('legacy session projection baseline', () => {
     const result = await backfillLegacySessionProjectionBaseline(db, session.id, { now: 3 })
 
     expect(result).toMatchObject({ kind: 'migrated', messageCount: 2 })
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1', messages: [
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2', messages: [
       { id: 'baseline-user', role: 'user', content: 'question', timestamp: 1, status: 'sent', attachments: [{ id: 'attachment' }], imagesDeliveredToApi: true },
       { id: 'baseline-assistant', role: 'assistant', content: 'answer', timestamp: 2, status: 'completed',
         toolCalls: [{ id: 'call-1', status: 'completed', result: { data: 'done', success: true } }],
@@ -175,7 +175,7 @@ describe('legacy session projection baseline', () => {
     temp.db.close()
 
     const reopened = openSqliteDatabase(temp.dbPath)
-    expect(readSessionTranscriptProjection(reopened, session.id)).toMatchObject({ source: 'canonical:L1', messages: [
+    expect(readSessionTranscriptProjection(reopened, session.id)).toMatchObject({ source: 'canonical:L2', messages: [
       { id: 'reopen-user', role: 'user', content: 'persisted body', timestamp: 7, status: 'sent', attachments: [{ id: 'persisted-attachment' }] }
     ] })
     expect(getDbConnection(reopened).prepare('SELECT kind FROM agent_history_events WHERE session_id=?').get(session.id))

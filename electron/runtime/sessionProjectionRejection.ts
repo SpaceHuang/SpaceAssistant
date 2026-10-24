@@ -107,15 +107,25 @@ export function listProjectionRejectionWork(db: AppDatabase, now = Date.now(), l
   const conn = getDbConnection(db)
   const scopeKey = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
   const store = createSqliteProjectionStateStore(db)
-  return store.listDueWork(now, 256, currentProcessGeneration(conn)).filter((work) => work.scopeKey === scopeKey)
-    .flatMap((work) => {
-      const state = store.get(work.sessionId, scopeKey)
-      return state?.status === 'rejected' ? [{ sessionId: work.sessionId, stale: (() => {
-        try { return (JSON.parse(state.failureCaseJson ?? '{}') as Record<string, unknown>).staleMetadata === true } catch { return false }
-      })() }]
-        : state?.status === 'invalid' && state.failureCaseJson?.includes('"staleMetadata":true')
-          ? [{ sessionId: work.sessionId, stale: true }] : []
-    }).slice(0, boundedLimit)
+  const due = store.listDueWork(now, 256, currentProcessGeneration(conn)).filter((work) => work.scopeKey === scopeKey)
+  const candidates = new Map<string, boolean>()
+  for (const work of due) {
+    const state = store.get(work.sessionId, scopeKey)
+    if (!state || (state.status !== 'rejected' && state.status !== 'invalid')) continue
+    let stale = false
+    try { stale = (JSON.parse(state.failureCaseJson ?? '{}') as Record<string, unknown>).staleMetadata === true } catch { /* malformed state is not a stale hint */ }
+    candidates.set(work.sessionId, stale)
+  }
+  // Stale source metadata bypasses backoff and must be recoverable after process reopen.
+  const staleRows = conn.prepare(`SELECT state.session_id FROM session_projection_state state
+    JOIN sessions ON sessions.id=state.session_id AND sessions.generation=state.session_generation
+    WHERE state.scope_key=? AND state.status IN ('invalid','rejected')
+      AND json_valid(state.failure_case_json) AND json_extract(state.failure_case_json,'$.staleMetadata')=1
+    ORDER BY state.updated_at,state.session_id LIMIT 256`).all(scopeKey) as Array<{ session_id: string }>
+  for (const row of staleRows) candidates.set(row.session_id, true)
+  return [...candidates].map(([sessionId, stale]) => ({ sessionId, stale }))
+    .sort((left, right) => Number(right.stale) - Number(left.stale) || left.sessionId.localeCompare(right.sessionId))
+    .slice(0, boundedLimit)
 }
 
 /** Persist a fresh mismatch verdict; the full compare has already been paid by the caller. */
