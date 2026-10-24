@@ -11,7 +11,7 @@ import { createWikiDomainReadService, WikiDomainReadError, type WikiReadCaller, 
 import { createWikiSourceService, WikiSourceError } from './wikiSourceService'
 import { listWikiPageRevisions } from './wikiHistoryService'
 import { createWikiSchemaProposalService, WikiSchemaProposalError } from './wikiSchemaProposal'
-import { createWikiDomainCoordinator, type WikiDomainSchema } from './wikiDomainCoordinator'
+import { createWikiDomainCoordinator, hasRecoverableWikiOperation, type WikiDomainSchema } from './wikiDomainCoordinator'
 import { createWikiHistoryService } from './wikiHistoryService'
 import { parseWikiPageMarker } from './wikiReconciler'
 import { normalizeWikiRelativePath } from './wikiPaths'
@@ -129,7 +129,7 @@ export async function saveWikiPageForContext(input: WikiInput, context: WikiDoma
   if (input.expectedRevision !== undefined && input.pageId === undefined) return { success: false, error: 'wiki_page_id_required_for_update' }
   if (!context.requestId || !context.toolUseId || !context.sessionId) return { success: false, error: 'wiki_invocation_invalid' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { operationIdentity: { requestId: context.requestId, toolUseId: context.toolUseId } })
     if (!(await validateSourceRefs(store, input.sourceRefs as Array<{ sourceId: string; sourceRevision: number }> | undefined))) return { success: false, error: 'source_missing' }
     const runtime = await getHistoryRuntime(store)
     const result = await runtime.coordinator.savePage({
@@ -148,13 +148,12 @@ export async function moveWikiPageForContext(input: WikiInput, context: WikiDoma
     (input.parentPageId !== undefined && input.parentPageId !== null && typeof input.parentPageId !== 'string')) return { success: false, error: 'wiki_page_input_invalid' }
   if (!context.requestId || !context.toolUseId || !context.sessionId) return { success: false, error: 'wiki_invocation_invalid' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { operationIdentity: { requestId: context.requestId, toolUseId: context.toolUseId } })
     const catalog = await store.readCatalog()
     const page = catalog?.pages.find(item => item.pageId === input.pageId)
     if (!page) return { success: false, error: 'page_not_found' }
-    if (page.revision !== input.expectedRevision) return { success: false, error: 'revision_conflict' }
     const parsed = parseWikiPageMarker((await store.readText(page.path)).replace(/\r\n/g, '\n'))
-    if (!parsed.marker || parsed.marker.pageId !== input.pageId || parsed.marker.revision !== input.expectedRevision) return { success: false, error: 'wiki_external_change_conflict' }
+    if (!parsed.marker || parsed.marker.pageId !== input.pageId) return { success: false, error: 'wiki_external_change_conflict' }
     if (!(await validateSourceRefs(store, parsed.marker.sourceRefs))) return { success: false, error: 'source_missing' }
     const title = parsed.body.match(/^#\s+(.+?)\s*#*\s*$/m)?.[1]?.trim()
     if (!title) return { success: false, error: 'wiki_external_change_conflict' }
@@ -517,7 +516,7 @@ async function resolveSourceAttribution(store: WikiFileStore, value: unknown): P
 
 async function getReadyWikiStore(
   context: Pick<WikiDomainContext, 'wikiConfig' | 'userDataDir' | 'appDatabase'>,
-  options: { reconcileExternalChanges?: boolean } = {}
+  options: { reconcileExternalChanges?: boolean; operationIdentity?: { requestId: string; toolUseId: string } } = {}
 ): Promise<WikiFileStore> {
   const wikiConfig = context.wikiConfig ?? (context.appDatabase ? readWikiConfig(context.appDatabase) : undefined)
   if (!wikiConfig) throw new WikiDomainToolError('wiki_lifecycle_unavailable')
@@ -525,7 +524,10 @@ async function getReadyWikiStore(
   const lifecycle = await createWikiLifecycleController(root).read()
   if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') throw new WikiDomainToolError('wiki_lifecycle_not_ready')
   const store = createWikiFileStore(root)
-  if (options.reconcileExternalChanges !== false && await store.identity('SCHEMA.md')) {
+  const recoveringOperation = options.operationIdentity
+    ? await hasRecoverableWikiOperation(store, options.operationIdentity.requestId, options.operationIdentity.toolUseId)
+    : false
+  if (options.reconcileExternalChanges !== false && !recoveringOperation && await store.identity('SCHEMA.md')) {
     const reconciliation = await reconcileExternalWikiChanges(store)
     if (reconciliation.diagnostics.length) throw new WikiDomainToolError('wiki_external_change_conflict')
   }

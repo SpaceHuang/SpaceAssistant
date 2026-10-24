@@ -20,6 +20,15 @@ export interface WikiDomainCoordinator {
   savePage(input: WikiSavePageInput): Promise<WikiSavePageResult>
   movePage(input: WikiSavePageInput & { pageId: string; expectedRevision: number; parentPageId: string | null }): Promise<WikiSavePageResult>
 }
+
+/** Used by the real tool entry to avoid reconciling bytes owned by an interrupted operation before its journal can recover them. */
+export async function hasRecoverableWikiOperation(store: WikiFileStore, requestId: string, toolUseId: string): Promise<boolean> {
+  const operationId = sha(`${requestId}\0${toolUseId}`)
+  const journal = await readJournal(store, `.wiki-service/operations/${operationId}.json`)
+  return journal?.formatVersion === 1 && journal.operationId === operationId && /^wiki\/.+\.md$/i.test(journal.targetPath) &&
+    /^[0-9a-f]{64}$/i.test(journal.newHash) && (journal.status === 'prepared' || journal.status === 'domain_committed')
+}
+
 interface OperationJournal {
   formatVersion: 1; operationId: string; inputFingerprint: string; callerId: string; lane: string; schemaVersion?: number; status: 'prepared' | 'domain_committed' | 'completed' | 'conflict'
   targetPath: string; oldHash: string | null; newHash: string; stagingPath: string; result: WikiSavePageResult; eventMaterial: WikiSuccessEvent; successEvent?: WikiSuccessEvent; errorCode?: string
