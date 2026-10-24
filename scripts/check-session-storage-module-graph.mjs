@@ -90,7 +90,6 @@ export function findSessionStorageModuleViolations(filePath, source) {
   // must go through the session-storage public query surface.
   const runtimeDatabaseAdapters = new Map([
     ['electron/runtime/sessionProjectionConsistencyAudit.ts', new Set(['getMessages'])],
-    ['electron/runtime/sessionProjectionLegacyBaseline.ts', new Set(['getMessages'])],
     ['electron/runtime/sessionStorageShadow.ts', new Set(['getMessages', 'getTurnContextSkeleton', 'iterateRecentTurnRoutingSkeletons', 'StoredMessageSkeleton'])],
     ['electron/runtime/sessionTranscriptProjection.ts', new Set(['getApiContextBaseline', 'getChatMessagePage', 'getMessage', 'getMessageSkeletons',
       'getMessages', 'getMessagesPageWithSequence', 'getSearchCorpusPage', 'resolveRetryContext', 'ApiContextBaselineResult',
@@ -107,6 +106,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
     ['electron/runtime/sqliteAgentHistory.ts', new Set(['hasRejectedTranscriptParityStateInConnection'])],
     ['electron/runtime/sessionProjectionMigration.ts', new Set(['hasCurrentProjectionEligibility'])],
     ['electron/runtime/sessionProjectionMigrationInventory.ts', new Set(['hasCurrentProjectionEligibility', 'readLegacyProjectionMessages'])],
+    ['electron/runtime/sessionProjectionLegacyBaseline.ts', new Set(['readLegacyProjectionMessages'])],
     ['electron/runtime/sessionContentWriteAuthority.ts', new Set(['createSqliteSessionApiRouteProjectionFence'])],
     ['electron/runtime/sessionTranscriptProjection.ts', new Set(['resolveSelectedMessageBodies', 'hasCurrentProjectionEligibility',
       'publishTranscriptParityProof', 'refreshValidatedProjectionFastPath'])],

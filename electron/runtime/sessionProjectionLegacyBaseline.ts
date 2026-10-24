@@ -1,10 +1,10 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
-import { getMessages } from '../database/operations'
 import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
 import { createSessionCommitService } from '../sessionStorage/host/sessionCommitService'
+import { readLegacyProjectionMessages } from '../sessionStorage/sqliteRuntimeBindings'
 
 export type LegacySessionProjectionBaselineResult =
   | Readonly<{ kind: 'migrated' | 'already-migrated'; messageCount: number }>
@@ -34,7 +34,7 @@ export async function backfillLegacySessionProjectionBaseline(
   if (cutover.write_mode !== 'legacy') return { kind: 'rejected', reason: 'history-conflict' }
 
   const history = new SqliteAgentHistory(conn, 1, () => options.now ?? Date.now(), sessionId)
-  const messages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+  const messages = readLegacyProjectionMessages(db, sessionId)
   const nonLegacyRows = conn.prepare(`SELECT 1 FROM messages WHERE session_id=? AND content_storage_state<>'legacy' LIMIT 1`).get(sessionId)
   if (nonLegacyRows) return { kind: 'rejected', reason: 'history-conflict' }
   const existing = conn.prepare(`SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=?`).get(sessionId) as { count: number }
