@@ -37,9 +37,9 @@ describe('prepared turn routing reader', () => {
       messages: ids.map((id) => canonicalBodies.get(id)!).filter(Boolean), workerThreadId: 2
     }))
     const routing = createRoutingQueries(db, { currentSourceIdentity: () => sourceIdentityJson, readBodies, invalidate: vi.fn() })
-    const oldSingleRead = vi.spyOn(await import('../runtime/sessionTranscriptProjection'), 'getProjectedMessage')
+    const oldSingleRead = vi.spyOn(await import('./infrastructure/sqlite/sessionTranscriptProjection'), 'getProjectedMessage')
       .mockImplementation(() => { throw new Error('ROUTING_MUST_NOT_REPLAY_HISTORY') })
-    const oldRecentRead = vi.spyOn(await import('../runtime/sessionTranscriptProjection'), 'getProjectedRecentTurnRoutingMessages')
+    const oldRecentRead = vi.spyOn(await import('./infrastructure/sqlite/sessionTranscriptProjection'), 'getProjectedRecentTurnRoutingMessages')
       .mockImplementation(() => { throw new Error('ROUTING_MUST_NOT_REPLAY_HISTORY') })
 
     const result = await routing.readPreparedRoutingInput!({ sessionId: session.id, requiredUserMessageId: 'route-current-user',

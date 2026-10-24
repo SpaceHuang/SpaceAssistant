@@ -12,42 +12,6 @@
     "evidence": "claudeStreamHandlers.callerContract.test.ts; sessionProjectionRevalidation.test.ts"
   },
   {
-    "source": "electron/runtime/sessionTranscriptProjection.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "resolveSelectedMessageBodies",
-      "hasCurrentProjectionEligibility",
-      "publishTranscriptParityProof",
-      "refreshValidatedProjectionFastPath",
-      "selectRecentTurnRoutingMessages",
-      "selectTurnContext",
-      "readLegacyApiContextBaseline",
-      "readLegacyChatMessagePage",
-      "readLegacyMessage",
-      "readLegacyMessageSkeletons",
-      "readLegacyMessages",
-      "readLegacyMessagesPageWithSequence",
-      "readLegacySearchCorpusPage",
-      "readLegacyRetryContext",
-      "ApiContextBaselineResult",
-      "ChatMessagePage",
-      "MessageSearchHit",
-      "MessagesPageWithSequence",
-      "RetryContextTarget",
-      "SearchCorpusPage",
-      "consultProjectionRejection",
-      "clearProjectionRejection",
-      "computeLegacyProjectionDigest",
-      "readProjectionO1Metadata",
-      "recordProjectionRejection"
-    ],
-    "typeOnly": false,
-    "owner": "SessionStorage transcript projection reader",
-    "reason": "Projection selection and legacy compatibility query orchestration are being moved behind the public History read port.",
-    "exitStage": "P2",
-    "evidence": "sessionTranscriptProjection.test.ts; sessionStorageBoundary.test.ts"
-  },
-  {
     "source": "electron/storage/sessionEventRetention.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [

@@ -24,7 +24,7 @@ import {
   getProjectedTurnContext,
   resolveProjectedRetryContext,
   searchProjectedMessages
-} from '../runtime/sessionTranscriptProjection'
+} from './infrastructure/sqlite/sessionTranscriptProjection'
 import type { SessionQueries } from './public/ports'
 import type { MessageRef, MessageSearchHit, MessageSkeleton, RetryContextTarget } from './public/model'
 import { inspectContinuationSources } from './continuationSources'

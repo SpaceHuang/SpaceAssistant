@@ -137,19 +137,22 @@ describe('session storage module graph rules', () => {
 
   it('keeps transcript selector implementation inside the SQLite adapter', () => {
     const runtimeFile = 'electron/runtime/sessionTranscriptSelector.ts'
-    const projectionFile = 'electron/runtime/sessionTranscriptProjection.ts'
+    const projectionFile = 'electron/sessionStorage/infrastructure/sqlite/sessionTranscriptProjection.ts'
     expect(existsSync(path.resolve(runtimeFile))).toBe(false)
     const source = readFileSync(path.resolve(projectionFile), 'utf8')
-    expect(source).not.toContain("from './sessionTranscriptSelector'")
+    expect(source).toContain("from './sessionTranscriptSelector'")
     expect(source).toContain('selectRecentTurnRoutingMessages')
     expect(source).toContain('selectTurnContext')
   })
 
   it('routes legacy transcript query operations through the storage adapter', () => {
-    const file = 'electron/runtime/sessionTranscriptProjection.ts'
+    const oldFile = 'electron/runtime/sessionTranscriptProjection.ts'
+    const file = 'electron/sessionStorage/infrastructure/sqlite/sessionTranscriptProjection.ts'
     const source = readFileSync(path.resolve(file), 'utf8')
-    expect(source).not.toContain("from '../database/operations'")
-    expect(source).toContain("from '../sessionStorage/sqliteRuntimeBindings'")
+    expect(existsSync(path.resolve(oldFile))).toBe(false)
+    expect(source).not.toContain("from '../../../database/operations'")
+    expect(source).toContain("from './sessionLegacyQueryAdapter'")
+    expect(source).not.toContain('sqliteRuntimeBindings')
     expect(findSessionStorageModuleViolations(file, source)).toEqual([])
   })
 

@@ -3,7 +3,7 @@ import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
 import { listSearchHistory } from './database/operations'
-import * as sessionTranscriptProjection from './runtime/sessionTranscriptProjection'
+import * as sessionTranscriptProjection from './sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createMemoryAppDb } from './database/testHelpers'
 

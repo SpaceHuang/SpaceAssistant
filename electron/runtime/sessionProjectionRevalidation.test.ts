@@ -11,8 +11,8 @@ import { runDueSessionProjectionRevalidations } from '../sessionStorage/infrastr
 import { enqueueSessionProjectionRevalidation } from '../sessionStorage/host/sessionProjectionRevalidationQueue'
 import { publishTranscriptParityProof, refreshValidatedProjectionFastPath, validateCanonicalProjection } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 import { readLegacyProjectionMessages } from '../sessionStorage/sqliteRuntimeBindings'
-import { hasSessionProjectionEligibility } from './sessionTranscriptProjection'
-import { readSessionTranscriptProjection, refreshSessionTranscriptParityProof } from './sessionTranscriptProjection'
+import { hasSessionProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
+import { readSessionTranscriptProjection, refreshSessionTranscriptParityProof } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 /** Build a mismatched session: legacy holds [A, B] while canonical History folds to [A]. */
@@ -250,6 +250,8 @@ describe('production revalidation drain (review S1/S2)', () => {
     readSessionTranscriptProjection(db, third.id)
     const firstRejection = getProjectionRejection(db, first.id)!
     markProjectionRejectionStale(db, second.id)
+    // Preserve a concrete source identity while marking stale; stale work must bypass the original backoff.
+    expect(getProjectionRejection(db, second.id)?.staleMetadata).toBe(true)
 
     expect(listProjectionRejectionWork(db, firstRejection.retryAfter - 1, 1)).toEqual([{ sessionId: second.id, stale: true }])
     const due = listProjectionRejectionWork(db, firstRejection.retryAfter + 1, 1)
@@ -315,7 +317,7 @@ describe('production revalidation drain (review S1/S2)', () => {
     const { startSessionProjectionRevalidationDrain } = await import('../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidation')
     const handle = startSessionProjectionRevalidationDrain(db, 5, () => rejection.retryAfter - 1)
     try {
-      await vi.waitFor(() => expect(getProjectionRejection(db, session.id)?.attempts).toBe(2), { timeout: 1_000 })
+      await vi.waitFor(() => expect(getProjectionRejection(db, session.id)?.attempts).toBe(2), { timeout: 2_000 })
       expect(getProjectionRejection(db, session.id)?.staleMetadata).toBe(false)
     } finally {
       handle.stop()

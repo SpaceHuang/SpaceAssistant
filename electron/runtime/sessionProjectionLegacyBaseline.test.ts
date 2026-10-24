@@ -3,7 +3,7 @@ import { appendMessage, createSession, getMessages } from '../database/operation
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { getDbConnection, openSqliteDatabase } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import { readSessionTranscriptProjection } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { backfillLegacySessionProjectionBaseline } from '../sessionStorage/infrastructure/sqlite/sessionProjectionLegacyBaseline'
 
 describe('legacy session projection baseline', () => {

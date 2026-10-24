@@ -13,7 +13,7 @@ import { cancelQueuedSessionExecution, claimSessionExecution, markSessionExecuti
 import { acceptTurnContext, readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { runInTransaction } from '../database/transaction'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
-import { getProjectedTurnContext } from '../runtime/sessionTranscriptProjection'
+import { getProjectedTurnContext } from './infrastructure/sqlite/sessionTranscriptProjection'
 import { readCanonicalApiContextIfEligible } from './certification'
 import { shadowAcceptedTurnContext } from './infrastructure/sqlite/sessionStorageShadow'
 import type { ContinuationIntentAcceptance, EnqueueResult } from './public/model'

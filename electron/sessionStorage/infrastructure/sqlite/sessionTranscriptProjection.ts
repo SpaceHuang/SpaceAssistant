@@ -1,20 +1,21 @@
-import type { Message } from '../../src/shared/domainTypes'
-import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database/sqliteStore'
-import { runInTransaction } from '../database/transaction'
-import { logAgentEvent } from '../agentLogger/agentLogger'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { consultProjectionRejection, clearProjectionRejection, computeLegacyProjectionDigest, readProjectionO1Metadata, recordProjectionRejection } from '../sessionStorage/sqliteRuntimeBindings'
-import { enqueueSessionProjectionRevalidation } from '../sessionStorage/host/sessionProjectionRevalidationQueue'
-import { resolveSelectedMessageBodies, hasCurrentProjectionEligibility, publishTranscriptParityProof, refreshValidatedProjectionFastPath,
-  selectRecentTurnRoutingMessages, selectTurnContext }
-  from '../sessionStorage/sqliteRuntimeBindings'
+import type { Message } from '../../../../src/shared/domainTypes'
+import type { AppDatabase } from '../../../database'
+import { getDbConnection } from '../../../database/sqliteStore'
+import { runInTransaction } from '../../../database/transaction'
+import { logAgentEvent } from '../../../agentLogger/agentLogger'
+import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
+import { consultProjectionRejection, clearProjectionRejection, computeLegacyProjectionDigest,
+  readProjectionO1Metadata, recordProjectionRejection } from './sessionProjectionRejection'
+import { enqueueSessionProjectionRevalidation } from '../../host/sessionProjectionRevalidationQueue'
+import { resolveSelectedMessageBodies } from '../../internal/messageBodyResolver'
+import { hasCurrentProjectionEligibility, publishTranscriptParityProof, refreshValidatedProjectionFastPath } from './sessionProjectionRevalidationFacts'
+import { selectRecentTurnRoutingMessages, selectTurnContext } from './sessionTranscriptSelector'
 import {
   readLegacyApiContextBaseline, readLegacyChatMessagePage, readLegacyMessage, readLegacyMessageSkeletons,
   readLegacyMessages, readLegacyMessagesPageWithSequence, readLegacySearchCorpusPage, readLegacyRetryContext,
   type ApiContextBaselineResult, type ChatMessagePage, type MessageSearchHit, type MessagesPageWithSequence,
   type RetryContextTarget, type SearchCorpusPage,
-} from '../sessionStorage/sqliteRuntimeBindings'
+} from './sessionLegacyQueryAdapter'
 
 export type SessionTranscriptProjectionRead =
   | Readonly<{ source: 'canonical:L2'; messages: readonly Message[]; replayedEvents: number }>
@@ -105,6 +106,12 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') {
       throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE', { cause: error })
     }
+    // Replay failures are a persisted rejection too; otherwise every open pays the same full replay.
+    if (!canonicalMode && legacyMessages && legacyMessages.every(({ role }) => role === 'user' || role === 'assistant')) {
+      recordProjectionRejection(db, sessionId, 'canonical-read-failed', readProjectionO1Metadata(db, sessionId),
+        computeLegacyProjectionDigest(legacyMessages))
+      return { source: 'legacy', messages: legacyMessages, reason: 'canonical-read-failed' }
+    }
     // Source replay failures retain the existing legacy fallback for non-canonical sessions.
   }
   if (canonicalMode) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
@@ -163,7 +170,7 @@ export function readSessionTranscriptProjection(db: AppDatabase, sessionId: stri
 function mergeCanonicalBackedBodies(
   db: AppDatabase,
   sessionId: string,
-  canonicalMessages: readonly import('../../src/shared/api').ClaudeChatMessageWithBlocks[]
+  canonicalMessages: readonly import('../../../../src/shared/api').ClaudeChatMessageWithBlocks[]
 ): Message[] | undefined {
   const rows = getDbConnection(db).prepare(`SELECT id,content_storage_state,status FROM messages
     WHERE session_id=? ORDER BY sequence ASC`).all(sessionId) as Array<{ id: string; content_storage_state: string; status: string }>
@@ -203,7 +210,7 @@ function mergeCanonicalBackedBodies(
 export function canonicalBackedSessionProjectionMatches(
   db: AppDatabase,
   sessionId: string,
-  canonicalMessages: readonly import('../../src/shared/api').ClaudeChatMessageWithBlocks[]
+  canonicalMessages: readonly import('../../../../src/shared/api').ClaudeChatMessageWithBlocks[]
 ): boolean {
   return mergeCanonicalBackedBodies(db, sessionId, canonicalMessages) !== undefined
 }
@@ -314,7 +321,9 @@ export function getProjectedMessagesPageWithSequence(
   if (states.some((row) => row.content_storage_state !== 'legacy' && row.write_mode !== 'canonical')) {
     throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
   }
-  if (!page.rows.some(({ message }) => stateById.get(message.id) !== 'legacy')) return page
+  const backedIds = new Set(states.filter((row) => row.write_mode === 'canonical' &&
+    ['canonical-backed-dual-write', 'canonical-backed-only'].includes(row.content_storage_state)).map(({ id }) => id))
+  if (backedIds.size === 0) return page
   const transcript = readSessionTranscriptProjection(db, sessionId)
   if (transcript.source === 'legacy') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
   const messagesById = new Map(transcript.messages.map((message) => [message.id, message]))
@@ -417,7 +426,7 @@ export function searchProjectedMessages(db: AppDatabase, query: string, activePr
   })
 }
 
-function mergeCanonicalBodies(canonicalMessages: readonly import('../../src/shared/api').ClaudeChatMessageWithBlocks[],
+function mergeCanonicalBodies(canonicalMessages: readonly import('../../../../src/shared/api').ClaudeChatMessageWithBlocks[],
   skeletons: ReadonlyArray<Omit<Message, 'content'>>): Message[] | undefined {
   if (canonicalMessages.length !== skeletons.length) return undefined
   const canonicalById = new Map(canonicalMessages.map((message) => [message.id, message]))

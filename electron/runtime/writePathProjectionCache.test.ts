@@ -3,7 +3,7 @@ import { appendMessage, createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import { readSessionTranscriptProjection } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 /** Grant the fast path once (exact L2 match), then keep appending through the write path. */

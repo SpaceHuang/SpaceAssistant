@@ -12,7 +12,7 @@ import { appendMessage, setConfigValue } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { rebuildClaudeMessagesFromHistory } from '../runtime/canonicalHistory'
-import * as transcriptProjection from '../runtime/sessionTranscriptProjection'
+import * as transcriptProjection from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import type { Message } from '../../src/shared/domainTypes'
 import {
   createSessionLedgerCompactionDependencyGuard,

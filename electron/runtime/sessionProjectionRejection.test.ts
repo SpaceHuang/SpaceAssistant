@@ -5,7 +5,7 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { clearProjectionRejection, getProjectionRejection, readProjectionO1Metadata } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRejection'
-import { getProjectedChatMessagePage, getProjectedMessagesPageWithSequence, readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import { getProjectedChatMessagePage, getProjectedMessagesPageWithSequence, readSessionTranscriptProjection } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { computeLegacyProjectionDigest } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRejection'
 
 /** Build a mismatched session: legacy holds [A, B] while canonical History folds to [A']. */

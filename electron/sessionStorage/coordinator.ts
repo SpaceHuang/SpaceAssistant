@@ -24,7 +24,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { HistoryCorruptionError } from '../../packages/agent-sdk/src/history'
 import { decodeTerminalOutcome } from '../runtime/terminalOutcome'
-import { getProjectedMessage } from '../runtime/sessionTranscriptProjection'
+import { getProjectedMessage } from './infrastructure/sqlite/sessionTranscriptProjection'
 
 /** 将 coordinator 的持久化端口绑定到 SQLite；requestId 幂等必须跨进程重启由 turns 表保证。 */
 export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {

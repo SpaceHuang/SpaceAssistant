@@ -3,7 +3,7 @@ import { getDbConnection } from '../../../database/sqliteStore'
 import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
 import { readLegacyProjectionMessages } from './sessionLegacyQueryAdapter'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
-import { readSessionTranscriptProjection } from '../../../runtime/sessionTranscriptProjection'
+import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
 import { createSessionCommitService } from '../../host/sessionCommitService'
 
 export type LegacySessionProjectionBaselineResult =

@@ -14,7 +14,7 @@ import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from 
 import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import { publishTranscriptParityProof } from '../sessionStorage/sqliteRuntimeBindings'
 import * as agentLogger from '../agentLogger/agentLogger'
-import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, hasSessionProjectionEligibility, readSessionTranscriptProjection, refreshSessionTranscriptParityProof, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
+import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, hasSessionProjectionEligibility, readSessionTranscriptProjection, refreshSessionTranscriptParityProof, resolveProjectedRetryContext, searchProjectedMessages } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 
 const runStoragePerf = process.env.SPACEASSISTANT_RUN_STORAGE_PERF === '1'
 

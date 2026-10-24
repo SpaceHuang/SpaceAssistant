@@ -5,7 +5,7 @@ import { runInTransaction } from '../../../database/transaction'
 import { sqlActiveTurnPredicate } from '../../domain/turnState'
 import { buildSessionProjectionMigrationInventory, classifySessionProjectionMigrationScope, type SessionProjectionMigrationInventory, type SessionProjectionMigrationInventoryEntry } from './sessionProjectionMigrationInventory'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
-import { readSessionTranscriptProjection } from '../../../runtime/sessionTranscriptProjection'
+import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
 import { backfillLegacySessionProjectionBaseline } from './sessionProjectionLegacyBaseline'
 import { hasCurrentProjectionEligibility } from './sessionProjectionRevalidationFacts'
 

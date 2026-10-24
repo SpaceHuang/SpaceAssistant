@@ -4,10 +4,10 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { buildSessionProjectionMigrationInventory } from '../sessionStorage/infrastructure/sqlite/sessionProjectionMigrationInventory'
 import { listLegacyRequiredSessionProjections, runSessionProjectionMigrationBatch, startSessionProjectionMigration } from '../sessionStorage/infrastructure/sqlite/sessionProjectionMigration'
-import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import { readSessionTranscriptProjection } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { clearNextSessionMessageContentBatch } from '../sessionStorage/maintenance'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import * as projectionModule from './sessionTranscriptProjection'
+import * as projectionModule from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 describe('legacy-required session projection queue', () => {

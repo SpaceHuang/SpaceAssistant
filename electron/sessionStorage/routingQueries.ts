@@ -7,7 +7,7 @@ import {
   hasVisionInTurnRoutingContext,
   type SessionMessageRevisionSnapshot
 } from '../database/operations'
-import { getProjectedMessage, getProjectedRecentTurnRoutingMessages } from '../runtime/sessionTranscriptProjection'
+import { getProjectedMessage, getProjectedRecentTurnRoutingMessages } from './infrastructure/sqlite/sessionTranscriptProjection'
 import {
   isCanonicalApiReadFenceCurrent,
   readCanonicalTurnRoutingInputWithFenceIfEligible,

@@ -67,7 +67,7 @@ import { claimSessionExecution, commitSessionTranscript, readSessionTranscript, 
 import { reconcileStartupSessionTranscripts } from '../sessionStorage/recovery'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
-import { getProjectedMessage, readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import { getProjectedMessage, readSessionTranscriptProjection } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import type { HistoryEvent, HistoryPort, SessionTranscriptCommitIntent } from '../../packages/agent-sdk/src/history'
 
 

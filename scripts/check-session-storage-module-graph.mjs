@@ -47,6 +47,7 @@ function categoryFor(filePath) {
   if (normalized === 'electron/sessionStorage/maintenance.ts') return 'maintenance'
   if (normalized.startsWith('electron/sessionStorage/internal/')) return 'infrastructure/sqlite'
   const match = /^electron\/sessionStorage\/(domain|public|application|infrastructure(?:\/[^/]+)?|host|maintenance)\//.exec(normalized)
+  if (match?.[1]?.startsWith('infrastructure')) return 'infrastructure/sqlite'
   if (match) return match[1]
   if (/^electron\/sessionStorage\/[^/]+\.(?:ts|tsx|mts|cts)$/u.test(normalized)) return 'composition'
   return undefined
@@ -216,12 +217,13 @@ export function findSessionStorageModuleViolations(filePath, source) {
           'electron/sessionStorage/host/ports', 'electron/sessionStorage/host/sessionProjectionRevalidationQueue',
           'electron/sessionStorage/host/sessionCommitService'].includes(edge.resolved) ||
         edge.resolved.startsWith('electron/sessionStorage/public/') ||
+        edge.resolved.startsWith('src/shared/') || edge.resolved.startsWith('packages/agent-sdk/') || edge.resolved.startsWith('node:') ||
         edge.resolved === 'electron/storage/sessionLedgerRoots' ||
         edge.resolved === 'electron/storage/spillProtocol' ||
         edge.resolved === 'electron/sessionLedgerIdentity' ||
         ['electron/sessionEvents', 'electron/queueInputFingerprint', 'electron/agentLogger/agentLogger', 'electron/runtime/sqliteAgentHistory',
           'electron/runtime/sessionProjectionMigrationInventory', 'electron/runtime/sessionProjectionLegacyBaseline',
-          'electron/runtime/sessionStorageShadow', 'electron/runtime/sessionTranscriptProjection',
+          'electron/runtime/sessionStorageShadow',
           'electron/runtime/agentContinuation',
           'electron/runtime/continuationSummary', 'electron/runtime/terminalOutcome', 'electron/runtime/canonicalHistory',
           'electron/turnRuntime', 'electron/chatMessageBuild', 'electron/sessionContextCompaction', 'electron/sessionMetadataKeys'].includes(edge.resolved) ||

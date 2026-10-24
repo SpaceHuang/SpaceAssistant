@@ -5,7 +5,7 @@ import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { SessionProjectionMigrationCoordinator } from './sessionProjectionMigrationCoordinator'
-import * as projectionModule from './sessionTranscriptProjection'
+import * as projectionModule from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { hasCurrentProjectionEligibility } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 
 async function addEligibleSession(db: ReturnType<typeof createTempDatabase>['db'], name: string) {
