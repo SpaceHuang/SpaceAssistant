@@ -478,6 +478,36 @@ describe('projection build coordinator', () => {
       .toEqual([230 * 1024, 30 * 1024])
   })
 
+  it('preserves the committed checkpoint when final view materialization is cancelled', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection final view cancellation', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'final-view-cancel-token', now: () => 4 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-final-cancel', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-final-cancel', sessionGeneration: session.generation })!
+    const event = { invocationId: 'final-cancel-inv', sequence: 1, eventId: 'final-cancel-event', idempotencyKey: 'final-cancel-key',
+      turnId: 'final-cancel-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+    const readChunk: ProjectionHistoryChunkReaderPort = async (permit, input) => input.afterSessionSequence > 0
+      ? { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+      : { kind: 'chunk', permit, afterSessionSequence: 0, nextSessionSequence: 1, events: [event], messageFacts: [],
+        byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: false }
+    const blobs: ProjectionBuildBlobPort = {
+      write: async (payload) => ({ locator: 'final-cancel-output.blob', byteLength: Buffer.byteLength(payload),
+        payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }),
+      materializeFinalView: async () => { throw new Error('PROJECTION_FINAL_VIEW_WORKER_ABORTED') },
+    }
+    const input = { service, lease, specVersion: 1, dbPath: db.filePath, readChunk,
+      historyReducer: { ...historyReducer, finalize: () => ({ outputOperations: [{ type: 'append' as const, messages: [] }] }) },
+      blobs, limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, now: () => 4 }
+    const committed = await runProjectionBuildSlice(input)
+    expect(committed).toMatchObject({ kind: 'checkpointed', checkpoint: { nextSequence: 1 } })
+
+    const cancelled = await runProjectionBuildSlice(input)
+    expect(cancelled).toMatchObject({ kind: 'checkpointed', checkpoint: { nextSequence: 1 } })
+    expect(service.get(session.id, 'scope-final-cancel')).toMatchObject({ status: 'rebuilding', failureCaseJson: null })
+    expect(service.readCheckpoint(session.id, 'scope-final-cancel')).toContain('"nextSequence":1')
+  })
+
   it('preserves a committed checkpoint result when staged blob release throws', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection blob release after publish', model: 'test' })

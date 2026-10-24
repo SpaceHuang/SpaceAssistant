@@ -259,8 +259,16 @@ export async function runProjectionBuildSlice(input: Readonly<{
             if (workerFinalBlob && materialized.payload !== undefined) throw new Error('PROJECTION_FINAL_VIEW_RESULT_AMBIGUOUS')
             if (!workerFinalBlob && typeof materialized.payload !== 'string') throw new Error('PROJECTION_FINAL_VIEW_RESULT_INVALID')
           } catch (error) {
+            if (input.signal?.aborted || (error instanceof Error && /WORKER_ABORTED$/.test(error.message))) {
+              return { kind: 'checkpointed', checkpoint }
+            }
+            const reason = error instanceof Error ? error.message : 'final-view-materialization-failed'
+            if (isRecoverableFinalViewWorkerFailure(reason)) {
+              rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'WORKER_FAILED', input.now, input.retryAfter)
+              return { kind: 'source-unavailable', reason }
+            }
             rejectBuild(service, lease, 'VIEW_REJECTED', 'FINAL_VIEW_MATERIALIZATION_FAILED', input.now, input.retryAfter)
-            return { kind: 'source-unavailable', reason: error instanceof Error ? error.message : 'final-view-materialization-failed' }
+            return { kind: 'source-unavailable', reason }
           }
         } else if (!input.blobs.readVerified) {
           rejectBuild(service, lease, 'CONTENT_UNAVAILABLE', 'PROJECTION_OUTPUT_READER_UNAVAILABLE', input.now, input.retryAfter)
@@ -699,6 +707,10 @@ function rejectBuild(
 
 function isRecoverableReducerWorkerFailure(reason: string): boolean {
   return /^PROJECTION_REDUCER_WORKER_(?:ENTRY_UNAVAILABLE|SPAWN_FAILED|TIMEOUT|TERMINATION_FAILED|ABORT_FAILED|EXIT(?::|$)|PROTOCOL_MISMATCH|RESULT_INVALID|POST_FAILED|RUNTIME_FAILED|ARTIFACT_IO)(?:$|:)/.test(reason)
+}
+
+function isRecoverableFinalViewWorkerFailure(reason: string): boolean {
+  return /^PROJECTION_FINAL_VIEW_WORKER_(?:ENTRY_UNAVAILABLE|SPAWN_FAILED|TIMEOUT|TERMINATION_FAILED|ABORT_FAILED|EXIT(?::|$)|PROTOCOL_MISMATCH|RESULT_INVALID|POST_FAILED|RUNTIME_FAILED)(?:$|:)/.test(reason)
 }
 
 function isJsonString(value: string): boolean {
