@@ -1,18 +1,18 @@
-import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database/sqliteStore'
+import type { AppDatabase } from '../../../database'
+import { getDbConnection } from '../../../database/sqliteStore'
 import {
   clearProjectionRejection, computeLegacyProjectionDigest, getProjectionRejection, listProjectionRejectionWork, recordProjectionRejection,
   projectionRejectionBackoffDelayMs, readProjectionO1Metadata
-} from '../sessionStorage/sqliteRuntimeBindings'
-import { logAgentEvent } from '../agentLogger/agentLogger'
-import { drainSessionProjectionRevalidationQueue, enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
+} from '../../sqliteRuntimeBindings'
+import { logAgentEvent } from '../../../agentLogger/agentLogger'
+import { drainSessionProjectionRevalidationQueue, enqueueSessionProjectionRevalidation } from '../../host/sessionProjectionRevalidationQueue'
 import {
   computeCanonicalProjectionFingerprint as readCanonicalProjectionFingerprint,
   publishTranscriptParityProof,
   readLegacyProjectionMessages,
   refreshValidatedProjectionFastPath,
   validateCanonicalProjection
-} from '../sessionStorage/sqliteRuntimeBindings'
+} from '../../sqliteRuntimeBindings'
 
 /**
  * P0-③ background revalidation executor (plan §4 保障链 / §5 ③). Full rebuild+compare runs

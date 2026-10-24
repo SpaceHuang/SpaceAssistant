@@ -1,4 +1,3 @@
-import type { AppDatabase } from '../database'
 
 /**
  * Process-local revalidation queue (P0-③). Kept dependency-free so both the read path
@@ -7,9 +6,9 @@ import type { AppDatabase } from '../database'
  */
 type QueuedEntry = Readonly<{ stale: boolean }>
 
-const queues = new WeakMap<AppDatabase, Map<string, QueuedEntry>>()
+const queues = new WeakMap<object, Map<string, QueuedEntry>>()
 
-function queueFor(db: AppDatabase): Map<string, QueuedEntry> {
+function queueFor(db: object): Map<string, QueuedEntry> {
   let queue = queues.get(db)
   if (!queue) {
     queue = new Map()
@@ -19,14 +18,14 @@ function queueFor(db: AppDatabase): Map<string, QueuedEntry> {
 }
 
 /** Register one session for background revalidation; duplicates collapse until consumed. */
-export function enqueueSessionProjectionRevalidation(db: AppDatabase, sessionId: string, options: { stale?: boolean } = {}): void {
+export function enqueueSessionProjectionRevalidation(db: object, sessionId: string, options: { stale?: boolean } = {}): void {
   const queue = queueFor(db)
   const existing = queue.get(sessionId)
   queue.set(sessionId, { stale: (existing?.stale ?? false) || options.stale === true })
 }
 
 /** Take every queued entry; the caller owns re-running or dropping them. */
-export function drainSessionProjectionRevalidationQueue(db: AppDatabase): Array<{ sessionId: string; stale: boolean }> {
+export function drainSessionProjectionRevalidationQueue(db: object): Array<{ sessionId: string; stale: boolean }> {
   const queue = queueFor(db)
   const entries = [...queue.entries()].map(([sessionId, entry]) => ({ sessionId, stale: entry.stale }))
   queue.clear()
@@ -34,6 +33,6 @@ export function drainSessionProjectionRevalidationQueue(db: AppDatabase): Array<
 }
 
 /** Count of sessions currently waiting (observability/tests). */
-export function listQueuedSessionProjectionRevalidations(db: AppDatabase): string[] {
+export function listQueuedSessionProjectionRevalidations(db: object): string[] {
   return [...queueFor(db).keys()]
 }

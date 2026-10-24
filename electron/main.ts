@@ -48,7 +48,8 @@ import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask,
-  createSqliteSessionStorageHost, createSqliteStartupHistoryRecoveryBindings } from './sessionStorage/sqliteSessionStorage'
+  createSqliteSessionStorageHost, createSqliteStartupHistoryRecoveryBindings,
+  startSessionProjectionRevalidationDrain } from './sessionStorage/sqliteSessionStorage'
 import { projectionBuildSliceLogFields } from './sessionStorage/host/projectionBuildSliceLog'
 import { createLifecycleTaskHandle } from './sessionStorage/lifecycle'
 import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
@@ -111,7 +112,6 @@ import { initWeChatCliLogger } from './wechat/weChatCliLogger'
 import { encryptSecret } from './secureApiKey'
 import { loadProjectMemory, startMemoryWatcher, stopMemoryWatcher } from './projectMemory'
 import { startEventLoopWatchdog } from './runtime/eventLoopWatchdog'
-import { startSessionProjectionRevalidationDrain } from './runtime/sessionProjectionRevalidation'
 import {
   getActiveLlmService,
   migrateLegacyLlmServicesIfNeeded,

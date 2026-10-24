@@ -1,27 +1,15 @@
 [
   {
-    "source": "electron/runtime/sessionProjectionRevalidation.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "source": "electron/claudeStreamHandlers.ts",
+    "target": "electron/sessionStorage/sqliteSessionStorage",
     "symbols": [
-      "computeCanonicalProjectionFingerprint",
-      "publishTranscriptParityProof",
-      "readLegacyProjectionMessages",
-      "refreshValidatedProjectionFastPath",
-      "validateCanonicalProjection",
-      "clearProjectionRejection",
-      "computeLegacyProjectionDigest",
-      "getProjectionRejection",
-      "listProjectionRejectionWork",
-      "recordProjectionRejection",
-      "projectionRejectionBackoffDelayMs",
-      "readProjectionO1Metadata",
-      "markProjectionRejectionStale"
+      "checkpointSessionTranscriptProjection"
     ],
     "typeOnly": false,
-    "owner": "SessionStorage projection revalidation adapter",
-    "reason": "Revalidation still orchestrates SQLite facts and parity publication through named host bindings.",
+    "owner": "Claude stream terminal checkpoint",
+    "reason": "Terminal transcript verification is owned by the SessionStorage projection revalidation host.",
     "exitStage": "P2",
-    "evidence": "sessionProjectionRevalidation.test.ts"
+    "evidence": "claudeStreamHandlers.callerContract.test.ts; sessionProjectionRevalidation.test.ts"
   },
   {
     "source": "electron/runtime/sessionStorageShadow.ts",
@@ -157,7 +145,8 @@
       "createSessionTurnRuntime",
       "createSqliteProjectionBuildTask",
       "createSqliteSessionStorageHost",
-      "createSqliteStartupHistoryRecoveryBindings"
+      "createSqliteStartupHistoryRecoveryBindings",
+      "startSessionProjectionRevalidationDrain"
     ],
     "typeOnly": false,
     "owner": "Electron composition root",

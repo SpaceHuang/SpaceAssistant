@@ -5,7 +5,7 @@ import { runInTransaction } from '../database/transaction'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { consultProjectionRejection, clearProjectionRejection, computeLegacyProjectionDigest, readProjectionO1Metadata, recordProjectionRejection } from '../sessionStorage/sqliteRuntimeBindings'
-import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
+import { enqueueSessionProjectionRevalidation } from '../sessionStorage/host/sessionProjectionRevalidationQueue'
 import { resolveSelectedMessageBodies, hasCurrentProjectionEligibility, publishTranscriptParityProof, refreshValidatedProjectionFastPath,
   selectRecentTurnRoutingMessages, selectTurnContext }
   from '../sessionStorage/sqliteRuntimeBindings'

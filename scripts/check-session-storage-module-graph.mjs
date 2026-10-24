@@ -203,12 +203,12 @@ export function findSessionStorageModuleViolations(filePath, source) {
         ['electron/sessionStorage/application/ports', 'electron/sessionStorage/application/projectionBuildCoordinator',
           'electron/sessionStorage/application/projectionService', 'electron/sessionStorage/application/projectionChatBodyCacheReader',
           'electron/sessionStorage/application/projectionOutputManifest',
-          'electron/sessionStorage/host/ports'].includes(edge.resolved) ||
+          'electron/sessionStorage/host/ports', 'electron/sessionStorage/host/sessionProjectionRevalidationQueue'].includes(edge.resolved) ||
         edge.resolved.startsWith('electron/sessionStorage/public/') ||
         edge.resolved === 'electron/storage/sessionLedgerRoots' ||
         edge.resolved === 'electron/storage/spillProtocol' ||
         edge.resolved === 'electron/sessionLedgerIdentity' ||
-        ['electron/sessionEvents', 'electron/queueInputFingerprint', 'electron/runtime/sqliteAgentHistory',
+        ['electron/sessionEvents', 'electron/queueInputFingerprint', 'electron/agentLogger/agentLogger', 'electron/runtime/sqliteAgentHistory',
           'electron/runtime/sessionProjectionMigrationInventory',
           'electron/runtime/sessionStorageShadow', 'electron/runtime/sessionTranscriptProjection',
           'electron/runtime/sessionContentWriteAuthority', 'electron/runtime/agentContinuation',

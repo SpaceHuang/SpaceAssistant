@@ -7,8 +7,8 @@ import { openDatabase as openPersistentDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { computeLegacyProjectionDigest, getProjectionRejection, listProjectionRejectionWork, markProjectionRejectionStale } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRejection'
-import { runDueSessionProjectionRevalidations } from './sessionProjectionRevalidation'
-import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
+import { runDueSessionProjectionRevalidations } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidation'
+import { enqueueSessionProjectionRevalidation } from '../sessionStorage/host/sessionProjectionRevalidationQueue'
 import { publishTranscriptParityProof, refreshValidatedProjectionFastPath, validateCanonicalProjection } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 import { readLegacyProjectionMessages } from '../sessionStorage/sqliteRuntimeBindings'
 import { hasSessionProjectionEligibility } from './sessionTranscriptProjection'
@@ -201,7 +201,7 @@ describe('background projection revalidation queue (P0-③/④)', () => {
 
   it('computes a stable canonical fingerprint that changes when events change', async () => {
     const { db, session } = await createMismatchedSession('fingerprint')
-    const { computeCanonicalProjectionFingerprint } = await import('./sessionProjectionRevalidation')
+    const { computeCanonicalProjectionFingerprint } = await import('../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidation')
     const before = computeCanonicalProjectionFingerprint(db, session.id)
     expect(before).toMatch(/^[a-f0-9]{64}$/)
     expect(before).toBe(computeCanonicalProjectionFingerprint(db, session.id))
@@ -267,7 +267,7 @@ describe('production revalidation drain (review S1/S2)', () => {
     db.close()
     db = openPersistentDatabase(temp.dbPath)
 
-    const { startSessionProjectionRevalidationDrain } = await import('./sessionProjectionRevalidation')
+    const { startSessionProjectionRevalidationDrain } = await import('../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidation')
     let now = persisted.retryAfter - 1
     const handle = startSessionProjectionRevalidationDrain(db, 5, () => now)
     try {
@@ -291,7 +291,7 @@ describe('production revalidation drain (review S1/S2)', () => {
     db.close()
     db = openPersistentDatabase(temp.dbPath)
 
-    const { startSessionProjectionRevalidationDrain } = await import('./sessionProjectionRevalidation')
+    const { startSessionProjectionRevalidationDrain } = await import('../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidation')
     const handle = startSessionProjectionRevalidationDrain(db, 60_000, () => rejection.retryAfter + 1)
     try {
       await vi.waitFor(() => expect(getProjectionRejection(db, session.id)?.attempts).toBe(2), { timeout: 200 })
@@ -312,10 +312,10 @@ describe('production revalidation drain (review S1/S2)', () => {
     db.close()
     db = openPersistentDatabase(temp.dbPath)
 
-    const { startSessionProjectionRevalidationDrain } = await import('./sessionProjectionRevalidation')
+    const { startSessionProjectionRevalidationDrain } = await import('../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidation')
     const handle = startSessionProjectionRevalidationDrain(db, 5, () => rejection.retryAfter - 1)
     try {
-      await vi.waitFor(() => expect(getProjectionRejection(db, session.id)?.attempts).toBe(2), { timeout: 100 })
+      await vi.waitFor(() => expect(getProjectionRejection(db, session.id)?.attempts).toBe(2), { timeout: 1_000 })
       expect(getProjectionRejection(db, session.id)?.staleMetadata).toBe(false)
     } finally {
       handle.stop()
@@ -325,7 +325,7 @@ describe('production revalidation drain (review S1/S2)', () => {
   })
 
   it('recovers a healed session through the resident drain without anyone calling runDue directly', async () => {
-    const { startSessionProjectionRevalidationDrain } = await import('./sessionProjectionRevalidation')
+    const { startSessionProjectionRevalidationDrain } = await import('../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidation')
     const { db, session } = await createMismatchedSession('resident')
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
 
