@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import path from 'node:path'
 import os from 'node:os'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { findSessionStorageModuleViolations, findSessionStoragePublicTypeLeaks } from '../../scripts/check-session-storage-module-graph.mjs'
+import { findSessionStorageModuleViolations, findSessionStoragePublicTypeLeaks, validateSessionStorageTransitions } from '../../scripts/check-session-storage-module-graph.mjs'
 
 describe('session storage module graph rules', () => {
   it('requires metadata for each remaining SessionStorage transition edge', () => {
@@ -21,6 +21,9 @@ describe('session storage module graph rules', () => {
       expect(transition.exitStage.trim()).not.toBe('')
       expect(transition.evidence.trim()).not.toBe('')
     }
+    expect(validateSessionStorageTransitions(transitions)).toEqual([])
+    expect(validateSessionStorageTransitions([{ ...transitions[0], owner: '' }])).toContain('transition[0] owner is required')
+    expect(validateSessionStorageTransitions([transitions[0], transitions[0]])).toContain('transition[1] duplicate transition edge')
     const scanner = readFileSync(path.resolve('scripts/check-session-storage-module-graph.mjs'), 'utf8')
     expect(scanner).not.toContain('runtimeBindingCallers')
     expect(scanner).not.toContain('runtimeFacadeCallers')

@@ -15,6 +15,31 @@ const sessionStorageTransitions = JSON.parse(readFileSync(path.join(root, 'scrip
 const transitionByEdge = new Map(sessionStorageTransitions.map((entry) => [`${entry.source}|${entry.target}`, entry]))
 const observedSessionStorageTransitions = new Set()
 
+export function validateSessionStorageTransitions(entries) {
+  if (!Array.isArray(entries)) return ['transition manifest must be an array']
+  const errors = []
+  const seen = new Set()
+  for (const [index, entry] of entries.entries()) {
+    const prefix = `transition[${index}]`
+    if (!entry || typeof entry !== 'object') { errors.push(`${prefix} must be an object`); continue }
+    if (typeof entry.source !== 'string' || !/^electron\//.test(entry.source)) errors.push(`${prefix} source must be an electron path`)
+    if (typeof entry.target !== 'string' || !/^electron\/sessionStorage\//.test(entry.target)) errors.push(`${prefix} target must be a SessionStorage path`)
+    if (!Array.isArray(entry.symbols) || entry.symbols.length === 0 || entry.symbols.some((symbol) => typeof symbol !== 'string' || !symbol.trim())) {
+      errors.push(`${prefix} symbols must contain named exports`)
+    } else if (new Set(entry.symbols).size !== entry.symbols.length) errors.push(`${prefix} symbols contain duplicates`)
+    if (typeof entry.typeOnly !== 'boolean') errors.push(`${prefix} typeOnly must be boolean`)
+    for (const field of ['owner', 'reason', 'exitStage', 'evidence']) {
+      if (typeof entry[field] !== 'string' || !entry[field].trim()) errors.push(`${prefix} ${field} is required`)
+    }
+    if (typeof entry.source === 'string' && typeof entry.target === 'string') {
+      const key = `${entry.source}|${entry.target}`
+      if (seen.has(key)) errors.push(`${prefix} duplicate transition edge`)
+      seen.add(key)
+    }
+  }
+  return errors
+}
+
 function categoryFor(filePath) {
   const normalized = filePath.replaceAll('\\', '/')
   if (/^electron\//.test(normalized) && !normalized.startsWith('electron/sessionStorage/')) return 'external-electron'
@@ -316,6 +341,13 @@ function runIllegalEdgeProbes() {
 }
 
 function main() {
+  const transitionErrors = validateSessionStorageTransitions(sessionStorageTransitions)
+  if (transitionErrors.length) {
+    console.error('[check:session-storage-module-graph] invalid SessionStorage transition manifest:')
+    for (const error of transitionErrors) console.error(`  - ${error}`)
+    process.exitCode = 1
+    return
+  }
   if (!runIllegalEdgeProbes()) {
     process.exitCode = 1
     return
