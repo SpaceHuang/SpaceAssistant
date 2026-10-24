@@ -160,9 +160,10 @@ export function findSessionStorageModuleViolations(filePath, source) {
       const namedBindings = new Map([
         ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts', new Set([
           'computeCanonicalProjectionFingerprint', 'hasCurrentProjectionEligibility', 'publishTranscriptParityProof',
-          'readLegacyProjectionMessages', 'readLegacyTurnContextSkeleton', 'iterateLegacyTurnRoutingSkeletons',
           'refreshValidatedProjectionFastPath', 'validateAndCacheCanonicalProjection',
           'validateCanonicalProjection'])],
+        ['electron/sessionStorage/infrastructure/sqlite/sessionLegacyQueryAdapter', new Set([
+          'readLegacyProjectionMessages', 'readLegacyTurnContextSkeleton', 'iterateLegacyTurnRoutingSkeletons'])],
         ['electron/sessionStorage/internal/messageBodyResolver', new Set(['resolveSelectedMessageBodies'])],
         ['electron/sessionStorage/application/projectionService', new Set(['createProjectionService'])],
         ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionStateStore', new Set(['createSqliteProjectionStateStore'])],
