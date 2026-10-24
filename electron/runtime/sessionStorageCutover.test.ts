@@ -334,6 +334,33 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     db.close()
   })
 
+  it('keeps an accepted turn out of canonical-only cleanup until it reaches a terminal state', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'accepted turn cleanup barrier', model: 'test' })
+      appendMessage(db, { id: 'accepted-cleanup-prior-user', sessionId: session.id, role: 'user', content: 'prior question', timestamp: 1, status: 'sent' })
+      await writeCanonicalMessages(db, session.id, [{ id: 'accepted-cleanup-prior-user', role: 'user', content: 'prior question', timestamp: 1 }])
+      expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
+      const { enableCanonicalSessionWriteAuthority } = await import('../sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority')
+      expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
+      expect(prepareTurnAtomically(db, {
+        user: { id: 'accepted-cleanup-current-user', sessionId: session.id, role: 'user', content: 'accepted question', timestamp: 2, status: 'sent' },
+        assistant: { id: 'accepted-cleanup-current-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 3, status: 'streaming' },
+        turn: { turnId: 'accepted-cleanup-current-turn', requestId: 'accepted-cleanup-current-request', sessionId: session.id,
+          assistantMessageId: 'accepted-cleanup-current-assistant', state: 'prepared', startToken: 'accepted-cleanup-current-token' }
+      })).toMatchObject({
+        user: { message: { id: 'accepted-cleanup-current-user' } },
+        assistant: { message: { id: 'accepted-cleanup-current-assistant' } }
+      })
+
+      expect(markSessionMessageContentWriteStopped(db, session.id)).toBe(false)
+      expect(getDbConnection(db).prepare('SELECT cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+        .toEqual({ cleanup_state: 'retained' })
+      expect(getDbConnection(db).prepare('SELECT state FROM turns WHERE turn_id=?').get('accepted-cleanup-current-turn'))
+        .toEqual({ state: 'prepared' })
+    } finally { db.close() }
+  })
+
   it('enters write-stopped from sealed History without requiring the retired transcript cache', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'write-stop eligible session', model: 'test' })
