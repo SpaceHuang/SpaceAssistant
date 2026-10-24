@@ -213,7 +213,8 @@ export function findSessionStorageModuleViolations(filePath, source) {
         ['electron/sessionStorage/application/ports', 'electron/sessionStorage/application/projectionBuildCoordinator',
           'electron/sessionStorage/application/projectionService', 'electron/sessionStorage/application/projectionChatBodyCacheReader',
           'electron/sessionStorage/application/projectionOutputManifest',
-          'electron/sessionStorage/host/ports', 'electron/sessionStorage/host/sessionProjectionRevalidationQueue'].includes(edge.resolved) ||
+          'electron/sessionStorage/host/ports', 'electron/sessionStorage/host/sessionProjectionRevalidationQueue',
+          'electron/sessionStorage/host/sessionCommitService'].includes(edge.resolved) ||
         edge.resolved.startsWith('electron/sessionStorage/public/') ||
         edge.resolved === 'electron/storage/sessionLedgerRoots' ||
         edge.resolved === 'electron/storage/spillProtocol' ||

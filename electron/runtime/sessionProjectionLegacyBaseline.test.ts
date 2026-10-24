@@ -4,7 +4,7 @@ import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { getDbConnection, openSqliteDatabase } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
-import { backfillLegacySessionProjectionBaseline } from './sessionProjectionLegacyBaseline'
+import { backfillLegacySessionProjectionBaseline } from '../sessionStorage/infrastructure/sqlite/sessionProjectionLegacyBaseline'
 
 describe('legacy session projection baseline', () => {
   it('backfills ordered canonical bodies while retaining the full SQLite message skeleton', async () => {

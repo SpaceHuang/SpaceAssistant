@@ -12,19 +12,6 @@
     "evidence": "claudeStreamHandlers.callerContract.test.ts; sessionProjectionRevalidation.test.ts"
   },
   {
-    "source": "electron/runtime/sessionProjectionLegacyBaseline.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "readLegacyProjectionMessages",
-      "classifySessionProjectionMigrationScope"
-    ],
-    "typeOnly": false,
-    "owner": "SessionStorage migration baseline",
-    "reason": "Baseline capture uses the adapter-owned legacy source query until the baseline port is consolidated.",
-    "exitStage": "P2",
-    "evidence": "sessionProjectionLegacyBaseline.test.ts"
-  },
-  {
     "source": "electron/runtime/sessionContentWriteAuthority.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [

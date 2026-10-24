@@ -1,10 +1,10 @@
-import type { AppDatabase } from '../database/sqliteStore'
-import { getDbConnection } from '../database/sqliteStore'
-import { classifySessionProjectionMigrationScope } from '../sessionStorage/sqliteRuntimeBindings'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
-import { createSessionCommitService } from '../sessionStorage/host/sessionCommitService'
-import { readLegacyProjectionMessages } from '../sessionStorage/sqliteRuntimeBindings'
+import type { AppDatabase } from '../../../database/sqliteStore'
+import { getDbConnection } from '../../../database/sqliteStore'
+import { classifySessionProjectionMigrationScope } from './sessionProjectionMigrationInventory'
+import { readLegacyProjectionMessages } from './sessionLegacyQueryAdapter'
+import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
+import { readSessionTranscriptProjection } from '../../../runtime/sessionTranscriptProjection'
+import { createSessionCommitService } from '../../host/sessionCommitService'
 
 export type LegacySessionProjectionBaselineResult =
   | Readonly<{ kind: 'migrated' | 'already-migrated'; messageCount: number }>

@@ -80,14 +80,15 @@ describe('session storage module graph rules', () => {
     expect(source).not.toContain('sessionLedgerRecovery')
   })
 
-  it.each(['electron/runtime/sessionProjectionLegacyBaseline.ts'])(
-    'keeps %s legacy message reads behind the storage-owned binding', (file) => {
+  it('keeps migration baseline reads and History seed writes in the SQLite owner', () => {
+    const file = 'electron/sessionStorage/infrastructure/sqlite/sessionProjectionLegacyBaseline.ts'
       const source = readFileSync(path.resolve(file), 'utf8')
       expect(source).not.toContain("from '../database/operations'")
       expect(source).toContain('readLegacyProjectionMessages')
+      expect(existsSync(path.resolve('electron/runtime/sessionProjectionLegacyBaseline.ts'))).toBe(false)
+      expect(source).not.toContain('sqliteRuntimeBindings')
       expect(findSessionStorageModuleViolations(file, source)).toEqual([])
-    }
-  )
+  })
 
   it('keeps the migration consistency audit and retirement classification inside the SQLite owner', () => {
     const file = 'electron/sessionStorage/infrastructure/sqlite/sessionProjectionConsistencyAudit.ts'
