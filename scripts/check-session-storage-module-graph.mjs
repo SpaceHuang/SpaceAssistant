@@ -89,7 +89,6 @@ export function findSessionStorageModuleViolations(filePath, source) {
   // staircase itself. Keep their raw reads explicit and symbol-scoped; new consumers
   // must go through the session-storage public query surface.
   const runtimeDatabaseAdapters = new Map([
-    ['electron/runtime/sessionStorageShadow.ts', new Set(['getMessages', 'getTurnContextSkeleton', 'iterateRecentTurnRoutingSkeletons', 'StoredMessageSkeleton'])],
     ['electron/runtime/sessionTranscriptProjection.ts', new Set(['getApiContextBaseline', 'getChatMessagePage', 'getMessage', 'getMessageSkeletons',
       'getMessages', 'getMessagesPageWithSequence', 'getSearchCorpusPage', 'resolveRetryContext', 'ApiContextBaselineResult',
       'ChatMessagePage', 'MessageSearchHit', 'MessagesPageWithSequence', 'RetryContextTarget', 'SearchCorpusPage'])],
@@ -101,7 +100,8 @@ export function findSessionStorageModuleViolations(filePath, source) {
     ['electron/runtime/sessionProjectionRejection.ts', new Set(['createProjectionService', 'createSqliteProjectionStateStore'])],
     ['electron/runtime/sessionProjectionRevalidation.ts', new Set(['computeCanonicalProjectionFingerprint', 'publishTranscriptParityProof',
       'readLegacyProjectionMessages', 'refreshValidatedProjectionFastPath', 'validateCanonicalProjection'])],
-    ['electron/runtime/sessionStorageShadow.ts', new Set(['hasCurrentProjectionEligibility'])],
+    ['electron/runtime/sessionStorageShadow.ts', new Set(['hasCurrentProjectionEligibility', 'readLegacyProjectionMessages',
+      'readLegacyTurnContextSkeleton', 'iterateLegacyTurnRoutingSkeletons'])],
     ['electron/runtime/sqliteAgentHistory.ts', new Set(['hasRejectedTranscriptParityStateInConnection'])],
     ['electron/runtime/sessionProjectionMigration.ts', new Set(['hasCurrentProjectionEligibility'])],
     ['electron/runtime/sessionProjectionMigrationInventory.ts', new Set(['hasCurrentProjectionEligibility', 'readLegacyProjectionMessages'])],
@@ -161,7 +161,8 @@ export function findSessionStorageModuleViolations(filePath, source) {
       const namedBindings = new Map([
         ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts', new Set([
           'computeCanonicalProjectionFingerprint', 'hasCurrentProjectionEligibility', 'publishTranscriptParityProof',
-          'readLegacyProjectionMessages', 'refreshValidatedProjectionFastPath', 'validateAndCacheCanonicalProjection',
+          'readLegacyProjectionMessages', 'readLegacyTurnContextSkeleton', 'iterateLegacyTurnRoutingSkeletons',
+          'refreshValidatedProjectionFastPath', 'validateAndCacheCanonicalProjection',
           'validateCanonicalProjection'])],
         ['electron/sessionStorage/internal/messageBodyResolver', new Set(['resolveSelectedMessageBodies'])],
         ['electron/sessionStorage/application/projectionService', new Set(['createProjectionService'])],

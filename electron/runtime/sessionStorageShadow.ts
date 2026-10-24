@@ -2,13 +2,13 @@ import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Message } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
-import { getMessages, getTurnContextSkeleton, iterateRecentTurnRoutingSkeletons, type StoredMessageSkeleton } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { queueInputFingerprint } from '../queueInputFingerprint'
-import { hasCurrentProjectionEligibility } from '../sessionStorage/sqliteRuntimeBindings'
+import { hasCurrentProjectionEligibility, iterateLegacyTurnRoutingSkeletons, readLegacyProjectionMessages,
+  readLegacyTurnContextSkeleton } from '../sessionStorage/sqliteRuntimeBindings'
 
 export type SessionStorageShadowReport<T = unknown> = Readonly<{
   consumer: 'api-context' | 'turn-routing'
@@ -79,12 +79,12 @@ function readCanonicalBodies(db: AppDatabase, sessionId: string, validateLegacyR
           const canonicalWatermark = { sessionGeneration: watermarkRow.generation,
             sessionSeq: watermarkRow.session_seq ?? -1, commitOrder: watermarkRow.commit_order ?? -1,
             watermarkEventId: watermarkRow.watermark_event_id, watermarkInvocationId: watermarkRow.watermark_invocation_id }
-          const messagesById = new Map(getMessages(db, sessionId, Number.MAX_SAFE_INTEGER).map((message) => [message.id, message]))
+          const messagesById = new Map(readLegacyProjectionMessages(db, sessionId).map((message) => [message.id, message]))
           return { source: 'canonical:L1', messagesById, canonicalWatermark, canonicalSourceValidated: true }
         }
       }
     }
-    const legacyMessages = validateLegacyRoles ? getMessages(db, sessionId, Number.MAX_SAFE_INTEGER) : []
+    const legacyMessages = validateLegacyRoles ? readLegacyProjectionMessages(db, sessionId) : []
     if (legacyMessages.some((message) => message.role !== 'user' && message.role !== 'assistant')) {
       return { source: 'legacy', reason: 'field-not-eligible' }
     }
@@ -133,9 +133,9 @@ export function readCanonicalTurnContextCandidate(
 ): CanonicalTurnContextCandidate {
   try {
     return runInTransaction(getDbConnection(db), () => {
-      let legacySkeleton: StoredMessageSkeleton[]
+      let legacySkeleton
       try {
-        legacySkeleton = getTurnContextSkeleton(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds)
+        legacySkeleton = readLegacyTurnContextSkeleton(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds)
       } catch (error) {
         const message = error instanceof Error ? error.message : ''
         if (message === 'TURN_REQUIRED_USER_INVALID' || message === 'TURN_REQUIRED_USER_EXCLUDED') {
@@ -364,7 +364,7 @@ export function shadowTurnRoutingInput<T extends Readonly<{ userInput: string; r
           legacyHash: hash(input.routeInput), canonicalHash: hash(candidate), candidate
         })
       }
-      for (const skeleton of iterateRecentTurnRoutingSkeletons(db, input.sessionId, input.boundarySequence, [...input.excludeMessageIds])) {
+      for (const skeleton of iterateLegacyTurnRoutingSkeletons(db, input.sessionId, input.boundarySequence, [...input.excludeMessageIds])) {
         const body = canonical.messagesById.get(skeleton.id)
         if (!body || body.id !== skeleton.id || body.role !== skeleton.role || typeof body.content !== 'string') {
           return unavailable({ consumer: 'turn-routing', sessionId: input.sessionId, source: canonical.source, legacy: input.routeInput, reason: 'routing-canonical-body-missing' })

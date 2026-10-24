@@ -1,7 +1,8 @@
 /** Named SQLite host bindings for legacy runtime adapters awaiting full SessionStorage port migration. */
 export {
   computeCanonicalProjectionFingerprint, hasCurrentProjectionEligibility, publishTranscriptParityProof,
-  readLegacyProjectionMessages, refreshValidatedProjectionFastPath, validateCanonicalProjection
+  readLegacyProjectionMessages, readLegacyTurnContextSkeleton, iterateLegacyTurnRoutingSkeletons,
+  refreshValidatedProjectionFastPath, validateCanonicalProjection
 } from './infrastructure/sqlite/sessionProjectionRevalidationFacts'
 export { resolveSelectedMessageBodies } from './internal/messageBodyResolver'
 export { createProjectionService } from './application/projectionService'
