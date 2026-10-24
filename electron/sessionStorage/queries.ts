@@ -12,6 +12,7 @@ import {
   getMessageSkeleton,
   getChatMessagePage,
   getApiContextBaseline,
+  resolveRetryContext as resolveStoredRetryContext,
 } from '../database/operations'
 import {
   getProjectedApiContextBaseline,
@@ -25,7 +26,7 @@ import {
   searchProjectedMessages
 } from '../runtime/sessionTranscriptProjection'
 import type { SessionQueries } from './public/ports'
-import type { MessageRef, MessageSearchHit } from './public/model'
+import type { MessageRef, MessageSearchHit, RetryContextTarget } from './public/model'
 import { inspectContinuationSources } from './continuationSources'
 import { createRoutingQueries } from './routingQueries'
 import { getDbConnection } from '../database/sqliteStore'
@@ -78,6 +79,12 @@ function getTurnByAssistant(db: AppDatabase, sessionId: string, assistantMessage
 function attachTurnIdentity<T extends { failedAssistant: { message: { id: string } } }>(db: AppDatabase, sessionId: string, target: T): T & { sourceInvocationId?: string; sourceTurnId?: string } {
   const turn = getTurnByAssistant(db, sessionId, target.failedAssistant.message.id)
   return { ...target, ...(turn ? { sourceInvocationId: turn.requestId, sourceTurnId: turn.turnId } : {}) }
+}
+
+function selectUniqueFailedAssistantMessageId(db: AppDatabase, sessionId: string): string | null {
+  const row = getDbConnection(db).prepare(`SELECT COUNT(*) AS count, MIN(id) AS id FROM messages
+    WHERE session_id=? AND role='assistant' AND status='failed'`).get(sessionId) as { count: number; id: string | null }
+  return row.count === 1 ? row.id : null
 }
 
 export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonly<{
@@ -276,25 +283,26 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       const view = prepared as PreparedChatBodyView | undefined
       if (!view) return undefined
       const select = () => {
-        if (failedAssistantMessageId) {
-          const target = resolveProjectedRetryContext(db, sessionId, failedAssistantMessageId)
-          return target ? attachTurnIdentity(db, sessionId, target) as ReturnType<SessionQueries['readRetryTarget']> : null
-        }
-        const failed = getProjectedMessages(db, sessionId).filter((item) => item.role === 'assistant' && item.status === 'failed')
-        if (failed.length > 1) return null
-        const message = failed.at(-1)
-        const target = message ? resolveProjectedRetryContext(db, sessionId, message.id) : null
+        let selectedAssistantId = failedAssistantMessageId
+        if (!selectedAssistantId) selectedAssistantId = selectUniqueFailedAssistantMessageId(db, sessionId) ?? undefined
+        const target = selectedAssistantId
+          ? resolveStoredRetryContext(db, sessionId, selectedAssistantId, { allowEmptyContent: true }) : null
         return target ? attachTurnIdentity(db, sessionId, target) : null
       }
+      const hasRetryShape = (target: RetryContextTarget | null): target is RetryContextTarget =>
+        Boolean(target && target.failedAssistant.message.sessionId === sessionId && target.failedAssistant.message.role === 'assistant' &&
+          target.failedAssistant.message.status === 'failed' && target.currentUser.message.sessionId === sessionId && target.currentUser.message.role === 'user')
+      const isUsable = (target: RetryContextTarget | null): target is RetryContextTarget =>
+        hasRetryShape(target) && Boolean(target.currentUser.message.content.trim())
       const selected = runInTransaction(getDbConnection(db), () => {
         if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
         const target = select()
-        if (!target) return { target, canonicalIds: [] as string[] }
+        if (!hasRetryShape(target)) return { target: null, canonicalIds: [] as string[] }
         const messages = [target.failedAssistant.message, target.currentUser.message]
         return { target, canonicalIds: canonicalBodyMessageIds(db, sessionId, messages) }
       })
       if (!selected) return undefined
-      if (!selected.target || selected.canonicalIds.length === 0) return selected.target
+      if (!selected.target || selected.canonicalIds.length === 0) return isUsable(selected.target) ? selected.target : null
       let bodies: PreparedChatBodySelection
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
       catch {
@@ -305,16 +313,17 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
         const latest = select()
         const prior = selected.target!
-        if (!latest || latest.failedAssistant.sequence !== prior.failedAssistant.sequence || latest.currentUser.sequence !== prior.currentUser.sequence ||
+        if (!hasRetryShape(latest) || latest.failedAssistant.sequence !== prior.failedAssistant.sequence || latest.currentUser.sequence !== prior.currentUser.sequence ||
           latest.failedAssistant.message.id !== prior.failedAssistant.message.id || latest.currentUser.message.id !== prior.currentUser.message.id ||
           latest.failedAssistant.message.role !== prior.failedAssistant.message.role || latest.currentUser.message.role !== prior.currentUser.message.role ||
           latest.failedAssistant.message.timestamp !== prior.failedAssistant.message.timestamp || latest.currentUser.message.timestamp !== prior.currentUser.message.timestamp ||
           latest.excludeMessageIds.length !== prior.excludeMessageIds.length || latest.excludeMessageIds.some((id, index) => id !== prior.excludeMessageIds[index]) ||
           latest.sourceInvocationId !== prior.sourceInvocationId || latest.sourceTurnId !== prior.sourceTurnId) return undefined
         const messages = overlayPreparedBodies([latest.failedAssistant.message, latest.currentUser.message], selected.canonicalIds, bodies)
-        return { ...latest,
+        const preparedTarget = { ...latest,
           failedAssistant: { ...latest.failedAssistant, message: messages[0]! },
           currentUser: { ...latest.currentUser, message: messages[1]! } }
+        return isUsable(preparedTarget) ? preparedTarget : null
       })
     } } : {}),
     readChatPage: ({ sessionId, beforeSequence, limit }) => {
@@ -421,10 +430,8 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       return target ? attachTurnIdentity(db, sessionId, target) as ReturnType<SessionQueries['readRetryTarget']> : null
     },
     readLatestRetryTarget: (sessionId) => {
-      const failed = getProjectedMessages(db, sessionId).filter((item) => item.role === 'assistant' && item.status === 'failed')
-      if (failed.length > 1) return null
-      const message = failed.at(-1)
-      const target = message ? resolveProjectedRetryContext(db, sessionId, message.id) : null
+      const failedAssistantMessageId = selectUniqueFailedAssistantMessageId(db, sessionId)
+      const target = failedAssistantMessageId ? resolveProjectedRetryContext(db, sessionId, failedAssistantMessageId) : null
       return target ? attachTurnIdentity(db, sessionId, target) : null
     },
     readMessageSequence: ({ sessionId, messageId }) => getMessageSequence(db, sessionId, messageId),

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Message } from '../../src/shared/domainTypes'
-import { appendMessage, createSession, enqueueQueuedUserMessageInScope, getApiContextBaseline, getChatMessagePage, getMessage, getMessageSkeletons, getMessages, getMessagesPageWithSequence, getRecentTurnRoutingMessages, getSearchCorpusPage, getTurnContext, resolveRetryContext, searchMessages, updateMessageContent, updateSession } from '../database/operations'
+import { appendMessage, createPersistedTurn, createSession, enqueueQueuedUserMessageInScope, getApiContextBaseline, getChatMessagePage, getMessage, getMessageSkeletons, getMessages, getMessagesPageWithSequence, getRecentTurnRoutingMessages, getSearchCorpusPage, getTurnContext, resolveRetryContext, searchMessages, updateMessageContent, updateSession } from '../database/operations'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
@@ -2070,6 +2070,55 @@ describe('session transcript projection P2 read path', () => {
       ])
     } finally {
       await host.lifecycle.stop({ deadlineMs: 5_000 })
+      temp.cleanup()
+    }
+  })
+
+  it('selects a prepared latest retry target without replaying the full transcript', async () => {
+    const temp = createTempDatabase('prepared-retry-target-')
+    const blobRoot = path.join(path.dirname(temp.dbPath), 'retry-target-blobs')
+    let host: ReturnType<typeof createSqliteSessionStorageHost> | undefined
+    try {
+      const session = createSession(temp.db, { name: 'prepared retry target', model: 'test' })
+      const user = appendMessage(temp.db, { id: 'prepared-retry-user', sessionId: session.id, role: 'user', content: 'please retry', timestamp: 1, status: 'sent' }).message
+      const assistant = appendMessage(temp.db, { id: 'prepared-retry-assistant', sessionId: session.id, role: 'assistant', content: 'failed answer', timestamp: 2, status: 'failed' }).message
+      createPersistedTurn(temp.db, { turnId: 'prepared-retry-turn', requestId: 'prepared-retry-request', sessionId: session.id,
+        userMessageId: user.id, assistantMessageId: assistant.id, contextBoundarySequence: 0, state: 'failed', startToken: 'prepared-retry-token' })
+      const conn = getDbConnection(temp.db)
+      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+      await history.appendBatch([{
+        invocationId: 'prepared-retry-request', turnId: 'prepared-retry-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'prepared-retry-context', idempotencyKey: 'prepared-retry-context', kind: 'invocation-context-committed',
+        payload: { messages: [user, assistant].map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) }
+      }, {
+        invocationId: 'prepared-retry-request', turnId: 'prepared-retry-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'prepared-retry-terminal', idempotencyKey: 'prepared-retry-terminal', kind: 'invocation-failed', payload: { status: 'failed' }
+      }], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+      const processGeneration = advanceProcessGeneration(conn)
+      const task = createSqliteProjectionBuildTask({ db: temp.db, dbPath: temp.dbPath, blobRoot,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now })
+      host = createSqliteSessionStorageHost(temp.db, { storage: { projectionBlobRoot: blobRoot },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+      const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
+      if (!prepared) throw new Error('RETRY_FIXTURE_PROJECTION_PREPARATION_UNAVAILABLE')
+      const replay = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow').mockImplementation(() => {
+        throw new Error('PREPARED_RETRY_MUST_NOT_REPLAY_WHOLE_TRANSCRIPT')
+      })
+      try {
+        const target = await host.storage.queries.readPreparedRetryTarget?.({ sessionId: session.id,
+          prepared: prepared as import('../sessionStorage/public/model').PreparedChatBodyView })
+        expect(target).toMatchObject({
+          failedAssistant: { message: { id: assistant.id, content: 'failed answer' } },
+          currentUser: { message: { id: user.id, content: 'please retry' } },
+          sourceInvocationId: 'prepared-retry-request', sourceTurnId: 'prepared-retry-turn'
+        })
+        expect(replay).not.toHaveBeenCalled()
+      } finally { replay.mockRestore() }
+    } finally {
+      await host?.lifecycle.stop({ deadlineMs: 5_000 })
       temp.cleanup()
     }
   })
