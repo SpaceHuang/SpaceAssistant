@@ -824,7 +824,6 @@ export function runMigrations(conn: DatabaseSync): void {
     } else {
       const columns = conn.prepare('PRAGMA table_info(canonical_session_projection_cache)').all() as Array<{ name: string }>
       if (!columns.some(({ name }) => name === 'cache_version')) conn.exec(MIGRATION_V34_CANONICAL_SESSION_CACHE_VERSION_SQL)
-      else conn.prepare('DELETE FROM canonical_session_projection_cache WHERE cache_version <> 1').run()
     }
     version = 34
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
@@ -891,7 +890,6 @@ export function runMigrations(conn: DatabaseSync): void {
     if (hasCache) {
       const columns = conn.prepare('PRAGMA table_info(canonical_session_projection_cache)').all() as Array<{ name: string }>
       if (!columns.some(({ name }) => name === 'value_sha256')) conn.exec(MIGRATION_V43_CANONICAL_TRANSCRIPT_CACHE_CHECKSUM_SQL)
-      conn.exec('DELETE FROM canonical_session_projection_cache')
     }
     version = 43
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)

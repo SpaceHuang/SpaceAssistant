@@ -310,7 +310,7 @@ describe('agent canonical history migration', () => {
 
     runMigrations(conn)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
-    expect(conn.prepare('SELECT value FROM canonical_session_projection_cache').all()).toEqual([])
+    expect(conn.prepare('SELECT session_id,value FROM canonical_session_projection_cache').all()).toEqual([{ session_id: 'session-a', value: '[]' }])
 
     conn.prepare("UPDATE agent_history_events SET payload_json='{}' WHERE event_id='event'").run()
     expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache').all()).toEqual([])
@@ -329,7 +329,7 @@ describe('agent canonical history migration', () => {
     conn.close()
   })
 
-  it('v42 adds transcript cache checksums and discards cache rows created before checksums existed', () => {
+  it('v42 adds transcript cache checksums while preserving retired rows for maintenance reclamation', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
       INSERT INTO schema_meta(key,value) VALUES('schema_version','42');
@@ -341,7 +341,7 @@ describe('agent canonical history migration', () => {
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare('PRAGMA table_info(canonical_session_projection_cache)').all())
       .toEqual(expect.arrayContaining([expect.objectContaining({ name: 'value_sha256', dflt_value: "''" })]))
-    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache').all()).toEqual([])
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache').all()).toEqual([{ session_id: 'session-a' }])
     expect(() => runMigrations(conn)).not.toThrow()
     conn.close()
   })
@@ -407,7 +407,7 @@ describe('agent canonical history migration', () => {
     conn.close()
   })
 
-  it('invalidates old projection cache values when upgrading v33 to v34', () => {
+  it('adds projection cache version metadata without deleting retired rows when upgrading v33 to v34', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
       INSERT INTO schema_meta VALUES('schema_version', '33');
@@ -418,7 +418,7 @@ describe('agent canonical history migration', () => {
       INSERT INTO canonical_session_projection_cache VALUES('s','transcript','generation',1,1,'event','invocation',1,'[]',1);`)
     runMigrations(conn)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
-    expect(conn.prepare('SELECT cache_version FROM canonical_session_projection_cache').all()).toEqual([])
+    expect(conn.prepare('SELECT cache_version FROM canonical_session_projection_cache').all()).toEqual([{ cache_version: 0 }])
     expect((conn.prepare("PRAGMA table_info(canonical_session_projection_cache)").all() as Array<{ name: string }>).map(({ name }) => name)).toContain('cache_version')
     conn.close()
   })

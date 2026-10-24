@@ -907,7 +907,6 @@ CREATE TABLE IF NOT EXISTS canonical_session_projection_cache (
 /** v33 → v34: version projection cache records independently from DB schema. */
 export const MIGRATION_V34_CANONICAL_SESSION_CACHE_VERSION_SQL = `
 ALTER TABLE canonical_session_projection_cache ADD COLUMN cache_version INTEGER NOT NULL DEFAULT 0;
-DELETE FROM canonical_session_projection_cache WHERE cache_version <> 1;
 `
 
 /** v34 → v35：compact receipts make transcript snapshot retries auditable. */
