@@ -5,6 +5,13 @@ export {
 } from './infrastructure/sqlite/sessionProjectionRevalidationFacts'
 export { readLegacyProjectionMessages, readLegacyTurnContextSkeleton, iterateLegacyTurnRoutingSkeletons }
   from './infrastructure/sqlite/sessionLegacyQueryAdapter'
+export {
+  readLegacyApiContextBaseline, readLegacyChatMessagePage, readLegacyMessage, readLegacyMessageSkeletons,
+  readLegacyMessages, readLegacyMessagesPageWithSequence, readLegacySearchCorpusPage, readLegacyRetryContext,
+} from './infrastructure/sqlite/sessionLegacyQueryAdapter'
+export type {
+  ApiContextBaselineResult, ChatMessagePage, MessageSearchHit, MessagesPageWithSequence, RetryContextTarget, SearchCorpusPage,
+} from './infrastructure/sqlite/sessionLegacyQueryAdapter'
 export { resolveSelectedMessageBodies } from './internal/messageBodyResolver'
 export { createProjectionService } from './application/projectionService'
 export { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'

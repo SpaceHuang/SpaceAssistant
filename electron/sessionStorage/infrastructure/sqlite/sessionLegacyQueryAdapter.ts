@@ -1,4 +1,11 @@
-import { getMessages, getTurnContextSkeleton, iterateRecentTurnRoutingSkeletons } from '../../../database/operations'
+import {
+  getApiContextBaseline, getChatMessagePage, getMessage, getMessageSkeletons, getMessages,
+  getMessagesPageWithSequence, getSearchCorpusPage, getTurnContextSkeleton,
+  iterateRecentTurnRoutingSkeletons, resolveRetryContext,
+} from '../../../database/operations'
+export type {
+  ApiContextBaselineResult, ChatMessagePage, MessageSearchHit, MessagesPageWithSequence, RetryContextTarget, SearchCorpusPage,
+} from '../../../database/operations'
 import type { AppDatabase } from '../../../database/sqliteStore'
 
 /** Read the complete legacy projection input owned by the SQLite adapter. */
@@ -17,3 +24,15 @@ export function* iterateLegacyTurnRoutingSkeletons(db: AppDatabase, sessionId: s
   excludeMessageIds: string[] = []) {
   yield* iterateRecentTurnRoutingSkeletons(db, sessionId, boundarySequence, excludeMessageIds)
 }
+
+/** Legacy query operations retained behind the SessionStorage SQLite adapter during owner migration. */
+export const readLegacyApiContextBaseline = getApiContextBaseline
+export const readLegacyChatMessagePage = getChatMessagePage
+export const readLegacyMessage = getMessage
+export const readLegacyMessageSkeletons = getMessageSkeletons
+export function readLegacyMessages(db: AppDatabase, sessionId: string, limit?: number, offset?: number) {
+  return getMessages(db, sessionId, limit, offset)
+}
+export const readLegacyMessagesPageWithSequence = getMessagesPageWithSequence
+export const readLegacySearchCorpusPage = getSearchCorpusPage
+export const readLegacyRetryContext = resolveRetryContext

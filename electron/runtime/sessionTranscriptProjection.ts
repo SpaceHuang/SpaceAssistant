@@ -1,6 +1,5 @@
 import type { Message } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
-import { getApiContextBaseline as getStoredApiContextBaseline, getChatMessagePage, getMessage as getStoredMessage, getMessageSkeletons, getMessages, getMessagesPageWithSequence as getStoredMessagesPageWithSequence, getSearchCorpusPage as getStoredSearchCorpusPage, resolveRetryContext as resolveStoredRetryContext, type ApiContextBaselineResult, type ChatMessagePage, type MessageSearchHit, type MessagesPageWithSequence, type RetryContextTarget, type SearchCorpusPage } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -10,6 +9,12 @@ import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalid
 import { resolveSelectedMessageBodies, hasCurrentProjectionEligibility, publishTranscriptParityProof, refreshValidatedProjectionFastPath,
   selectRecentTurnRoutingMessages, selectTurnContext }
   from '../sessionStorage/sqliteRuntimeBindings'
+import {
+  readLegacyApiContextBaseline, readLegacyChatMessagePage, readLegacyMessage, readLegacyMessageSkeletons,
+  readLegacyMessages, readLegacyMessagesPageWithSequence, readLegacySearchCorpusPage, readLegacyRetryContext,
+  type ApiContextBaselineResult, type ChatMessagePage, type MessageSearchHit, type MessagesPageWithSequence,
+  type RetryContextTarget, type SearchCorpusPage,
+} from '../sessionStorage/sqliteRuntimeBindings'
 
 export type SessionTranscriptProjectionRead =
   | Readonly<{ source: 'canonical:L2'; messages: readonly Message[]; replayedEvents: number }>
@@ -52,7 +57,7 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     WHERE session_id=? AND content_storage_state IN ('canonical-backed-dual-write','canonical-backed-only') LIMIT 1`).get(sessionId) !== undefined
   const legacySnapshot = hasCanonicalBackedRows && cutover?.write_mode === 'canonical'
     ? undefined
-    : getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+    : readLegacyMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
   // Consult persisted rejection before History replay. Stale O(1) metadata still routes to legacy and queues revalidation.
   if (legacySnapshot?.every(({ role }) => role === 'user' || role === 'assistant')) {
     const rejectionVerdict = consultProjectionRejection(db, sessionId, legacySnapshot)
@@ -62,7 +67,7 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     }
   }
   const canonicalMode = hasCanonicalBackedRows && cutover?.write_mode === 'canonical'
-  const legacyMessages = canonicalMode ? undefined : legacySnapshot ?? getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+  const legacyMessages = canonicalMode ? undefined : legacySnapshot ?? readLegacyMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
   if (legacyMessages?.some(({ role }) => role !== 'user' && role !== 'assistant')) {
     return { source: 'legacy', messages: legacyMessages, reason: 'field-not-eligible' }
   }
@@ -89,10 +94,10 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
       const projected = mergeCanonicalBackedBodies(db, sessionId, canonical.messages)
       if (projected) return { source: 'canonical:L2', messages: projected, replayedEvents: canonical.eventCount }
       if (hasCanonicalBackedRows) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-      return { source: 'legacy', messages: getMessages(db, sessionId, Number.MAX_SAFE_INTEGER), reason: 'canonical-backed-identity-mismatch' }
+      return { source: 'legacy', messages: readLegacyMessages(db, sessionId, Number.MAX_SAFE_INTEGER), reason: 'canonical-backed-identity-mismatch' }
     }
     if (canonical.kind === 'matched') {
-      const projected = mergeCanonicalBodies(canonical.messages, getMessageSkeletons(db, sessionId))
+      const projected = mergeCanonicalBodies(canonical.messages, readLegacyMessageSkeletons(db, sessionId))
       if (projected) return { source: 'canonical:L2', messages: projected, replayedEvents: canonical.eventCount }
     }
   } catch (error) {
@@ -162,7 +167,7 @@ function mergeCanonicalBackedBodies(
 ): Message[] | undefined {
   const rows = getDbConnection(db).prepare(`SELECT id,content_storage_state,status FROM messages
     WHERE session_id=? ORDER BY sequence ASC`).all(sessionId) as Array<{ id: string; content_storage_state: string; status: string }>
-  const storedMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+  const storedMessages = readLegacyMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
   if (rows.length !== storedMessages.length) return undefined
   const canonicalById = new Map(canonicalMessages.map((message) => [message.id, message]))
   if (canonicalById.size !== canonicalMessages.length) return undefined
@@ -205,7 +210,7 @@ export function canonicalBackedSessionProjectionMatches(
 
 /** Resolve one persisted message body from the canonical session projection when its row is canonical-backed. */
 export function getProjectedMessage(db: AppDatabase, messageId: string): Message | undefined {
-  const stored = getStoredMessage(db, messageId)
+  const stored = readLegacyMessage(db, messageId)
   if (!stored) return undefined
   return resolveSelectedMessageBodies(db, [stored], (id) => readSessionTranscriptProjection(db, id))[0]
 }
@@ -224,12 +229,12 @@ export function getProjectedTurnContext(
 
 /** Preserve the legacy ascending sequence/limit/offset contract for whole-session consumers. */
 export function getProjectedMessages(db: AppDatabase, sessionId: string, limit = 500, offset = 0): Message[] {
-  return resolveSelectedMessageBodies(db, getMessages(db, sessionId, limit, offset), (id) => readSessionTranscriptProjection(db, id))
+  return resolveSelectedMessageBodies(db, readLegacyMessages(db, sessionId, limit, offset), (id) => readSessionTranscriptProjection(db, id))
 }
 
 /** Preserve the API context baseline's latest-N window and sequence ordering for renderer readers. */
 export function getProjectedApiContextBaseline(db: AppDatabase, sessionId: string, limit = 500): ApiContextBaselineResult {
-  const baseline = getStoredApiContextBaseline(db, sessionId, limit)
+  const baseline = readLegacyApiContextBaseline(db, sessionId, limit)
   const projected = resolveSelectedMessageBodies(db, baseline.entries.map(({ message }) => message), (id) => readSessionTranscriptProjection(db, id))
   const projectedById = new Map(projected.map((message) => [message.id, message]))
   return {
@@ -277,7 +282,7 @@ export function resolveProjectedRetryContext(
   sessionId: string,
   failedAssistantMessageId: string
 ): RetryContextTarget | null {
-  const selected = resolveStoredRetryContext(db, sessionId, failedAssistantMessageId, { allowEmptyContent: true })
+  const selected = readLegacyRetryContext(db, sessionId, failedAssistantMessageId, { allowEmptyContent: true })
   if (!selected) return null
   const [failedAssistant, currentUser] = resolveSelectedMessageBodies(db, [selected.failedAssistant.message, selected.currentUser.message], (id) => readSessionTranscriptProjection(db, id))
   if (!failedAssistant || failedAssistant.sessionId !== sessionId || failedAssistant.role !== 'assistant' || failedAssistant.status !== 'failed' ||
@@ -296,7 +301,7 @@ export function getProjectedMessagesPageWithSequence(
   fromSequence: number,
   pageSize: number
 ): MessagesPageWithSequence {
-  const page = getStoredMessagesPageWithSequence(db, sessionId, fromSequence, pageSize)
+  const page = readLegacyMessagesPageWithSequence(db, sessionId, fromSequence, pageSize)
   if (page.rows.length === 0) return page
   const conn = getDbConnection(db)
   if (typeof conn.prepare !== 'function') return page
@@ -331,7 +336,7 @@ export function getProjectedSearchCorpusPage(
   fromSequence: number,
   pageSize?: number
 ): SearchCorpusPage {
-  const page = getStoredSearchCorpusPage(db, sessionId, fromSequence, pageSize)
+  const page = readLegacySearchCorpusPage(db, sessionId, fromSequence, pageSize)
   if (page.entries.length === 0) return page
   const conn = getDbConnection(db)
   if (typeof conn.prepare !== 'function') return page
@@ -445,12 +450,12 @@ export function refreshSessionTranscriptParityProof(db: AppDatabase, sessionId: 
       clearProjectionRejection(db, sessionId)
       return true
     }
-    const legacyMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+    const legacyMessages = readLegacyMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
     if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) return false
     const verified = history.readCanonicalSessionTranscript(sessionId, legacyMessages.map(({ id, role, content, timestamp }) => ({
       id, role: role as 'user' | 'assistant', content, timestamp
     })))
-    if (verified.kind !== 'matched' || !mergeCanonicalBodies(verified.messages, getMessageSkeletons(db, sessionId))) {
+    if (verified.kind !== 'matched' || !mergeCanonicalBodies(verified.messages, readLegacyMessageSkeletons(db, sessionId))) {
       if (verified.kind === 'unavailable' && verified.reason === 'legacy-mismatch') {
         recordProjectionRejection(db, sessionId, verified.reason, readProjectionO1Metadata(db, sessionId),
           computeLegacyProjectionDigest(legacyMessages))
@@ -479,7 +484,7 @@ export function getProjectedChatMessagePage(
   beforeSequence: number | null | undefined,
   limit?: number
 ): ChatMessagePage {
-  const page = getChatMessagePage(db, sessionId, beforeSequence, limit)
+  const page = readLegacyChatMessagePage(db, sessionId, beforeSequence, limit)
   if (page.entries.length === 0) return page
   const conn = getDbConnection(db)
   const writeMode = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')

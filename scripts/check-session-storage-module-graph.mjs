@@ -85,14 +85,6 @@ export function findSessionStorageModuleViolations(filePath, source) {
   const normalizedFile = filePath.replaceAll('\\', '/')
   const rawSessionMessageReads = new Set(['getMessage', 'getMessages', 'getMessageSkeletons', 'getChatMessagePage',
     'getMessagesPageWithSequence', 'getSearchCorpusPage', 'searchMessages', 'getApiContextBaseline', 'getTurnContext', 'resolveRetryContext'])
-  // These are the remaining runtime host adapters that implement the compatibility
-  // staircase itself. Keep their raw reads explicit and symbol-scoped; new consumers
-  // must go through the session-storage public query surface.
-  const runtimeDatabaseAdapters = new Map([
-    ['electron/runtime/sessionTranscriptProjection.ts', new Set(['getApiContextBaseline', 'getChatMessagePage', 'getMessage', 'getMessageSkeletons',
-      'getMessages', 'getMessagesPageWithSequence', 'getSearchCorpusPage', 'resolveRetryContext', 'ApiContextBaselineResult',
-      'ChatMessagePage', 'MessageSearchHit', 'MessagesPageWithSequence', 'RetryContextTarget', 'SearchCorpusPage'])],
-  ])
   const runtimeBindingCallers = new Map([
     ['electron/main.ts', new Set(['createSqliteStartupHistoryRecoveryBindings'])],
     ['electron/runtime/sessionProjectionConsistencyAudit.ts', new Set(['hasCurrentProjectionEligibility', 'readLegacyProjectionMessages'])],
@@ -107,7 +99,10 @@ export function findSessionStorageModuleViolations(filePath, source) {
     ['electron/runtime/sessionProjectionLegacyBaseline.ts', new Set(['readLegacyProjectionMessages'])],
     ['electron/runtime/sessionContentWriteAuthority.ts', new Set(['createSqliteSessionApiRouteProjectionFence'])],
     ['electron/runtime/sessionTranscriptProjection.ts', new Set(['resolveSelectedMessageBodies', 'hasCurrentProjectionEligibility',
-      'publishTranscriptParityProof', 'refreshValidatedProjectionFastPath', 'selectRecentTurnRoutingMessages', 'selectTurnContext'])],
+      'publishTranscriptParityProof', 'refreshValidatedProjectionFastPath', 'selectRecentTurnRoutingMessages', 'selectTurnContext',
+      'readLegacyApiContextBaseline', 'readLegacyChatMessagePage', 'readLegacyMessage', 'readLegacyMessageSkeletons',
+      'readLegacyMessages', 'readLegacyMessagesPageWithSequence', 'readLegacySearchCorpusPage', 'readLegacyRetryContext',
+      'ApiContextBaselineResult', 'ChatMessagePage', 'MessageSearchHit', 'MessagesPageWithSequence', 'RetryContextTarget', 'SearchCorpusPage'])],
     ['electron/storage/sessionEventRetention.ts', new Set(['createSessionLedgerCompactionDependencyGuard', 'createCanonicalSessionProjectionRetentionPreparer'])],
     ['electron/storage/sessionProjectionCacheMaintenance.ts', new Set(['createSqliteProjectionStateStore', 'createProjectionService'])],
   ])
@@ -134,10 +129,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
   ])
   const allowed = (edge) => {
     if (category === 'external-electron' && edge.resolved === 'electron/database/operations' &&
-      edge.symbols.some((symbol) => rawSessionMessageReads.has(symbol))) {
-      const approved = runtimeDatabaseAdapters.get(normalizedFile)
-      return !!approved && edge.symbols.length > 0 && edge.symbols.every((symbol) => approved.has(symbol))
-    }
+      edge.symbols.some((symbol) => rawSessionMessageReads.has(symbol))) return false
     if (category === 'external-electron' && edge.resolved === 'electron/sessionStorage/sqliteRuntimeBindings') {
       const approved = runtimeBindingCallers.get(normalizedFile)
       return !!approved && !edge.typeOnly && edge.symbols.length > 0 && edge.symbols.every((symbol) => approved.has(symbol))
@@ -163,7 +155,11 @@ export function findSessionStorageModuleViolations(filePath, source) {
           'refreshValidatedProjectionFastPath', 'validateAndCacheCanonicalProjection',
           'validateCanonicalProjection'])],
         ['electron/sessionStorage/infrastructure/sqlite/sessionLegacyQueryAdapter', new Set([
-          'readLegacyProjectionMessages', 'readLegacyTurnContextSkeleton', 'iterateLegacyTurnRoutingSkeletons'])],
+          'readLegacyProjectionMessages', 'readLegacyTurnContextSkeleton', 'iterateLegacyTurnRoutingSkeletons',
+          'readLegacyApiContextBaseline', 'readLegacyChatMessagePage', 'readLegacyMessage', 'readLegacyMessageSkeletons',
+          'readLegacyMessages', 'readLegacyMessagesPageWithSequence', 'readLegacySearchCorpusPage', 'readLegacyRetryContext',
+          'ApiContextBaselineResult', 'ChatMessagePage', 'MessageSearchHit',
+          'MessagesPageWithSequence', 'RetryContextTarget', 'SearchCorpusPage'])],
         ['electron/sessionStorage/internal/messageBodyResolver', new Set(['resolveSelectedMessageBodies'])],
         ['electron/sessionStorage/application/projectionService', new Set(['createProjectionService'])],
         ['electron/sessionStorage/infrastructure/sqlite/sessionProjectionStateStore', new Set(['createSqliteProjectionStateStore'])],
@@ -175,7 +171,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
         ['electron/sessionStorage/infrastructure/sqlite/sessionTranscriptSelector', new Set(['selectRecentTurnRoutingMessages', 'selectTurnContext'])],
       ])
       const allowedSymbols = namedBindings.get(edge.resolved)
-      return !edge.typeOnly && edge.symbols.length > 0 && !!allowedSymbols && edge.symbols.every((symbol) => allowedSymbols.has(symbol))
+      return edge.symbols.length > 0 && !!allowedSymbols && edge.symbols.every((symbol) => allowedSymbols.has(symbol))
     }
     if (category === 'application') {
       return edge.resolved.startsWith('src/shared/') ||

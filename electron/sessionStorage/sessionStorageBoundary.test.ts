@@ -78,6 +78,14 @@ describe('session storage module graph rules', () => {
     expect(source).toContain('selectTurnContext')
   })
 
+  it('routes legacy transcript query operations through the storage adapter', () => {
+    const file = 'electron/runtime/sessionTranscriptProjection.ts'
+    const source = readFileSync(path.resolve(file), 'utf8')
+    expect(source).not.toContain("from '../database/operations'")
+    expect(source).toContain("from '../sessionStorage/sqliteRuntimeBindings'")
+    expect(findSessionStorageModuleViolations(file, source)).toEqual([])
+  })
+
   it('keeps startup ledger repair mechanics behind the SQLite History recovery host', () => {
     const main = readFileSync(path.resolve('electron/main.ts'), 'utf8')
     expect(main).toContain('recoverInterruptedInvocationsWithLedger')
