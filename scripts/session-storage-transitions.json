@@ -24,9 +24,9 @@
     ],
     "typeOnly": false,
     "owner": "Agent protocol IPC composition",
-    "reason": "Agent protocol IPC currently constructs the turn runtime from the storage root facade.",
+    "reason": "IPC fallback creates the SQLite-backed turn runtime when the process composition root did not supply one.",
     "exitStage": "P2",
-    "evidence": "agentProtocolIpc tests"
+    "evidence": "sessionProjectionEnsure.test.ts; agentProtocolIpc tests"
   },
   {
     "source": "electron/testSupport/invocationAssembler.ts",
@@ -139,19 +139,6 @@
     "reason": "Backfill scheduler uses the shared lifecycle handle contract during shutdown migration.",
     "exitStage": "P2",
     "evidence": "spillReferenceBackfillScheduler tests"
-  },
-  {
-    "source": "electron/ipc/sessionIpc.ts",
-    "target": "electron/sessionStorage/contextPortRegistry",
-    "symbols": [
-      "bindSessionStorageContextPort",
-      "createBoundSessionContextAdapter"
-    ],
-    "typeOnly": false,
-    "owner": "Session IPC composition",
-    "reason": "Session IPC binds the active storage context port through a temporary registry seam.",
-    "exitStage": "P2",
-    "evidence": "sessionIpc tests; sessionStorageBoundary.test.ts"
   },
   {
     "source": "electron/runtime/sessionProjectionMigrationCoordinator.ts",

@@ -35,8 +35,6 @@ import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { summarizeSessionContext } from '../sessionContextSummary'
 import { resolveModelContextWindow } from '../../src/shared/llmModelConfig'
 import { readAppLocale } from './ipcShared'
-import { bindSessionStorageContextPort } from '../sessionStorage/contextPortRegistry'
-import { createBoundSessionContextAdapter } from '../sessionStorage/contextPortRegistry'
 import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 
 export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
@@ -83,12 +81,12 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       if (initialMessages.length < 3) return { status: 'no-op' as const }
       const initialCurrentUser = [...initialMessages].reverse().find((message) => message.role === 'user')
       if (!initialCurrentUser) return { status: 'no-op' as const }
-      const { adapter: sessionContextAdapter, messages, windowId } = await createBoundSessionContextAdapter(sessionStorage.contexts, { sessionId, isBusy: busy })
+      const { adapter: sessionContextAdapter, messages, windowId } = await sessionStorage.contexts.createBoundAdapter({ sessionId, isBusy: busy })
       const modelWindow = resolveModelContextWindow(session.model, readStoredModels(ctx.db))
       const trustedContextWindow = modelWindow.trusted ? modelWindow.contextWindow : undefined
       const totalInputBudget = Math.max(1, (trustedContextWindow ?? 100_000) - session.maxTokens)
       const recoveryFacts = sessionStorage.queries.continuationSources.readRecoveryFacts(sessionId)
-      const unbindContext = bindSessionStorageContextPort(sessionStorage.contexts, { kind: 'session', sessionId }, sessionContextAdapter.port)
+      const unbindContext = sessionStorage.contexts.bind({ kind: 'session', sessionId }, sessionContextAdapter.port)
       let result: Awaited<ReturnType<typeof compactSessionContext>>
       try {
       result = await compactSessionContext({

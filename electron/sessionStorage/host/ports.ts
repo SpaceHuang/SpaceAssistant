@@ -1,4 +1,4 @@
-import type { ContextPort } from '../../../packages/agent-sdk/src/context'
+import type { ContextPort, ContextScope, SessionContextAdapter } from '../../../packages/agent-sdk/src/context'
 import type { SessionCommands, SessionQueries } from '../public/ports'
 import type { SessionExecutionStore } from '../public/execution'
 import type { SessionAvailabilityPort, SessionRecoveryPort } from '../application/ports'
@@ -6,6 +6,14 @@ import type { CompactionReplay } from '../../../src/shared/compactionEvents'
 import type { CanonicalContextMeterEvent, PreparedChatBodyView } from '../public/model'
 import type { ProjectionPreparationRequest } from '../public/ports'
 export type { ProjectionPreparationRequest } from '../public/ports'
+
+
+export type SessionContextSurfaceMessage = { id?: string; role: 'user' | 'assistant'; content: unknown; [key: string]: unknown }
+export type BoundSessionContext = Readonly<{ adapter: SessionContextAdapter; messages: SessionContextSurfaceMessage[]; windowId: string }>
+export type SessionContextStoragePort = ContextPort & Readonly<{
+  bind(scope: ContextScope, scopedPort: ContextPort): () => void
+  createBoundAdapter(input: { sessionId: string; isBusy(): boolean }): Promise<BoundSessionContext>
+}>
 
 export type MaintenanceReason = 'startup' | 'window-ready' | 'policy-changed' | 'scope-changed' | 'capacity-pressure' | 'retry'
 export type MaintenanceClass = 'pending-reclamation' | 'retention' | 'derived-index'
@@ -71,7 +79,7 @@ export interface SessionStorage {
   readonly queries: SessionQueries
   readonly commands: SessionCommands
   readonly execution: SessionExecutionStore
-  readonly contexts: ContextPort
+  readonly contexts: SessionContextStoragePort
   readonly recovery: SessionRecoveryPort
   readonly availability: SessionAvailabilityPort
   readCompactionReplay(input: Readonly<{ sessionId: string; workDir: string }>): Promise<CompactionReplay>

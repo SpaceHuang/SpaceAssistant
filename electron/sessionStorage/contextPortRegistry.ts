@@ -1,18 +1,23 @@
 import type { ContextPort, ContextScope } from '../../packages/agent-sdk/src/context'
 import { createContextPortRouter } from '../../packages/agent-sdk/src/context'
-import type { SessionContextSurfaceMessage } from '../sessionContextCompaction'
+import type { BoundSessionContext, SessionContextStoragePort } from './host/ports'
 
-export type BoundSessionContext = Readonly<{ adapter: import('../../packages/agent-sdk/src/context').SessionContextAdapter; messages: SessionContextSurfaceMessage[]; windowId: string }>
 type RouterEntry = Readonly<{
   router: ReturnType<typeof createContextPortRouter>
   createAdapter(input: { sessionId: string; isBusy(): boolean }): Promise<BoundSessionContext>
 }>
 const routers = new WeakMap<ContextPort, RouterEntry>()
 
-export function createSessionStorageContextRouter(createAdapter: RouterEntry['createAdapter']): ContextPort {
+export function createSessionStorageContextRouter(createAdapter: RouterEntry['createAdapter']): SessionContextStoragePort {
   const router = createContextPortRouter()
-  routers.set(router.port, Object.freeze({ router, createAdapter }))
-  return router.port
+  const port = Object.freeze({
+    readCurrent: router.port.readCurrent,
+    commitReplacement: router.port.commitReplacement,
+    bind: (scope: ContextScope, scopedPort: ContextPort) => router.bind(scope, scopedPort),
+    createBoundAdapter: (input: { sessionId: string; isBusy(): boolean }) => createAdapter(input)
+  }) as SessionContextStoragePort
+  routers.set(port, Object.freeze({ router, createAdapter }))
+  return port
 }
 
 export function bindSessionStorageContextPort(storagePort: ContextPort, scope: ContextScope, scopedPort: ContextPort): () => void {
