@@ -423,6 +423,28 @@ describe('agent canonical history migration', () => {
     conn.close()
   })
 
+  it('does not delete legacy projection cache rows in the startup migration chain', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+      INSERT INTO schema_meta VALUES('schema_version', '33');
+      CREATE TABLE canonical_session_projection_cache (
+        session_id TEXT NOT NULL, cache_key TEXT NOT NULL, cache_version INTEGER NOT NULL, session_generation TEXT NOT NULL,
+        session_seq INTEGER NOT NULL, commit_order INTEGER NOT NULL, watermark_event_id TEXT, watermark_invocation_id TEXT,
+        event_count INTEGER NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(session_id, cache_key));
+      INSERT INTO canonical_session_projection_cache VALUES
+        ('valid-version','transcript',1,'g',1,1,'e','i',1,'[]',1),
+        ('retired-version','transcript',0,'g',1,1,'e','i',1,'[]',1);
+      CREATE TRIGGER reject_startup_projection_cache_delete BEFORE DELETE ON canonical_session_projection_cache BEGIN
+        SELECT RAISE(ABORT,'startup migration attempted legacy cache deletion');
+      END;`)
+
+    expect(() => runMigrations(conn)).not.toThrow()
+    expect(conn.prepare('SELECT session_id,cache_version FROM canonical_session_projection_cache ORDER BY session_id').all())
+      .toEqual([{ session_id: 'retired-version', cache_version: 0 }, { session_id: 'valid-version', cache_version: 1 }])
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+    conn.close()
+  })
+
   it('adds compact session turn commit receipts when upgrading v34', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);

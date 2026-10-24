@@ -142,6 +142,30 @@ describe('session storage maintenance', () => {
     }
   })
 
+  it('keeps each retired cache deletion page within the byte budget', async () => {
+    const temp = createTempDatabase('storage-maintenance-cache-bytes-')
+    const db = temp.db
+    const conn = getDbConnection(db)
+    const value = 'x'.repeat(600_000)
+    const insert = conn.prepare(`INSERT INTO canonical_session_projection_cache(session_id,cache_key,cache_version,session_generation,
+      session_seq,commit_order,watermark_event_id,watermark_invocation_id,event_count,value,updated_at)
+      VALUES(?, 'transcript',1,'g',-1,-1,NULL,NULL,0,?,1)`)
+    for (let index = 0; index < 4; index += 1) insert.run(`cache-${String(index).padStart(3, '0')}`, value)
+    conn.exec(`CREATE TRIGGER interrupt_projection_cache_byte_page BEFORE DELETE ON canonical_session_projection_cache
+      WHEN OLD.session_id='cache-002' BEGIN SELECT RAISE(ABORT,'injected byte-budget page interruption'); END`)
+
+    try {
+      await expect(clearSessionProjectionCaches(db)).rejects.toThrow('injected byte-budget page interruption')
+      expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache ORDER BY session_id').all())
+        .toEqual([{ session_id: 'cache-002' }, { session_id: 'cache-003' }])
+      expect(conn.prepare('SELECT SUM(length(CAST(value AS BLOB))) AS bytes FROM canonical_session_projection_cache').get())
+        .toEqual({ bytes: 1_200_000 })
+    } finally {
+      db.close()
+      await fs.rm(path.dirname(temp.dbPath), { recursive: true, force: true })
+    }
+  })
+
   it('archives DB and spill before vacuum, reclaims visible file space, and reports bounded progress', async () => {
     const temp = createTempDatabase('storage-maintenance-vacuum-')
     const userDataDir = path.dirname(temp.dbPath)
