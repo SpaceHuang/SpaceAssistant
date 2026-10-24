@@ -508,6 +508,35 @@ describe('projection build coordinator', () => {
     expect(service.readCheckpoint(session.id, 'scope-final-cancel')).toContain('"nextSequence":1')
   })
 
+  it('records final view worker timeouts as retryable worker failures', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection final view timeout', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'final-view-timeout-token', now: () => 7 })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-final-timeout', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-final-timeout', sessionGeneration: session.generation })!
+    const event = { invocationId: 'final-timeout-inv', sequence: 1, eventId: 'final-timeout-event', idempotencyKey: 'final-timeout-key',
+      turnId: 'final-timeout-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+    const readChunk: ProjectionHistoryChunkReaderPort = async (permit, input) => input.afterSessionSequence > 0
+      ? { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+      : { kind: 'chunk', permit, afterSessionSequence: 0, nextSessionSequence: 1, events: [event], messageFacts: [],
+        byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: false }
+    const blobs: ProjectionBuildBlobPort = {
+      write: async (payload) => ({ locator: 'final-timeout-output.blob', byteLength: Buffer.byteLength(payload),
+        payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }),
+      materializeFinalView: async () => { throw new Error('PROJECTION_FINAL_VIEW_WORKER_TIMEOUT') },
+    }
+    const input = { service, lease, specVersion: 1, dbPath: db.filePath, readChunk,
+      historyReducer: { ...historyReducer, finalize: () => ({ outputOperations: [{ type: 'append' as const, messages: [] }] }) },
+      blobs, limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, now: () => 7, retryAfter: () => 17 }
+    await runProjectionBuildSlice(input)
+
+    const failed = await runProjectionBuildSlice(input)
+    expect(failed).toMatchObject({ kind: 'source-unavailable', reason: 'PROJECTION_FINAL_VIEW_WORKER_TIMEOUT' })
+    expect(service.get(session.id, 'scope-final-timeout')).toMatchObject({ status: 'rejected', retryAfter: 17,
+      failureCaseJson: expect.stringContaining('WORKER_FAILED') })
+  })
+
   it('preserves a committed checkpoint result when staged blob release throws', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection blob release after publish', model: 'test' })
