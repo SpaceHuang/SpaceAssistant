@@ -954,6 +954,27 @@ describe('WeChatCommandRouter', () => {
     await dispatcher.dispose()
   })
 
+  it('恢复 provider 结果未知的终态 wake 时只结算唤醒，不重发模型请求', async () => {
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const session = getSession(db, sessionId)!
+    const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'uncertain-context' } }
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'uncertain-result-message', content: '可能已执行的请求', contextToken: 'uncertain-context' })
+    appendMessage(db, { id: 'uncertain-result-assistant', sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'failed' })
+    createPersistedTurn(db, { turnId: 'uncertain-result-turn', requestId: `wake:${inbox.eventId}`, sessionId,
+      userMessageId: inbox.messageId, assistantMessageId: 'uncertain-result-assistant', state: 'terminal', outcome: 'commit-uncertain' })
+    router = makeRouter()
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(sessionId, { retryExhausted: true })
+
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(getTurnByRequestId(db, sessionId, `wake:${inbox.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'commit-uncertain' })
+    expect(listWakeEvents(db, sessionId).find(({ eventId }) => eventId === inbox.eventId)?.status).toBe('acked')
+    await dispatcher.dispose()
+  })
+
   it('confirm-requested 进入 Core，并保留 WeChat pending-confirm 出站结果', async () => {
     mockRunAgent.mockImplementation(async ({ emitFactEvent }: { emitFactEvent?: (event: unknown) => void }) => {
       emitFactEvent?.({ type: 'confirm-requested', toolUseId: 'tool-wechat-confirm', toolName: 'run_shell' })
