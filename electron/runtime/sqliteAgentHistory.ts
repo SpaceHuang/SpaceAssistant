@@ -20,7 +20,6 @@ import { currentProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { buildCanonicalToolResultProjectionTargets } from '../sessionLedgerOutbox'
 import { commitSessionTranscriptInTransaction } from '../database/sessionTranscript'
-import { hasRejectedTranscriptParityStateInConnection } from '../sessionStorage/sqliteRuntimeBindings'
 import type { SessionTranscriptCommitIntent } from '../../packages/agent-sdk/src/history'
 import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
@@ -745,11 +744,8 @@ export class SqliteAgentHistory implements HistoryPort {
         }
       }
       if (!transcriptCommit) {
-        // P1-②: the cache advances first (its tail validation needs the pending view still
-        // adjacent to the appended events), then the view is folded forward to the new stream
-        // head. Reversing the order makes every in-transaction tail validation miss the view
-        // and degrade to a full-stream readSync (S7).
-        this.advanceProjectionCacheAfterAppend()
+        // The source commit invalidates transcript parity; only a later full comparison may
+        // publish a current proof and refresh the disposable legacy transcript cache.
         this.updateCanonicalInvocationPendingViewInTransaction(events)
         return appended
       }
@@ -805,38 +801,9 @@ export class SqliteAgentHistory implements HistoryPort {
         )
         if (Number(result.changes) !== 1) throw new HistoryBatchError('terminal message mirror target is missing or not an assistant message')
       }
-      this.advanceProjectionCacheAfterAppend()
       this.updateCanonicalInvocationPendingViewInTransaction(events)
       return appended
     })
-  }
-
-  /**
-   * P1-①: advance the transcript projection cache to the just-appended watermark inside the
-   * same transaction (P1 roadmap ①). The write path just mirrored every canonical message into
-   * its legacy row, so a successful incremental tail fold is exactly the consistency proof the
-   * read-time verification used to re-derive; re-grant eligibility here instead of letting the
-   * message-mutation triggers push every read back into a full rebuild. Any ambiguity leaves
-   * the cache untouched — reads keep their existing fail-closed staircase.
-   */
-  private advanceProjectionCacheAfterAppend(): void {
-    if (!this.sessionId) return
-    try {
-      const cutover = this.conn.prepare(`SELECT write_mode FROM session_message_content_cutover WHERE session_id=?`)
-        .get(this.sessionId) as { write_mode: string } | undefined
-      // Canonical-only consumers replay History or use the scoped chatBody projection. Keep the
-      // legacy transcript cache owner confined to legacy/dual-write sessions after cutover.
-      if (cutover?.write_mode === 'canonical') return
-      // S6: a persisted rejection verdict means the canonical-vs-legacy divergence has not been
-      // re-adjudicated by the background revalidator yet. Re-granting eligibility here would
-      // let the next read hit the warm L1 (whose merge does not compare legacy bodies) and
-      // silently mask the divergence, so the write path stays out of the verdict's jurisdiction.
-      if (hasRejectedTranscriptParityStateInConnection(this.conn, this.sessionId)) return
-      const canonical = this.readCanonicalSessionTranscriptWithCache(this.sessionId, 'transcript')
-      if (canonical.kind !== 'matched') return
-      // Eligibility requires a complete canonical-vs-legacy parity proof. Incremental cache folding
-      // alone cannot publish that proof; the next full L2 reader does so through ProjectionService.
-    } catch { /* 任何推进障碍都保持现状兜底：读路径缓存阶梯自行验证。 */ }
   }
 
   /** Fold session-owned canonical snapshots and require exact equality for every legacy field this API can represent. */

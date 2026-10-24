@@ -73,6 +73,30 @@ describe('SqliteAgentHistory', () => {
     db.close()
   })
 
+  it('does not advance the legacy transcript cache on append before parity is revalidated', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'legacy cache append retirement', model: 'test' })
+    const conn = getDbConnection(db)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, session.id)
+    await history.appendBatch([{ ...event('legacy-cache-base', 1), invocationId: 'legacy-cache-base-invocation',
+      kind: 'invocation-context-committed', payload: { messages: [{ id: 'legacy-cache-user', role: 'user', content: 'question', timestamp: 1 }] } }], 0)
+    const baseline = history.readCanonicalSessionTranscriptForShadow(session.id)
+    if (baseline.kind !== 'matched') throw new Error('expected canonical transcript baseline')
+    expect(history.writeCanonicalSessionCache({ ...baseline, cacheKey: 'transcript', value: JSON.stringify(baseline.messages) })).toBe(true)
+    const before = conn.prepare(`SELECT session_seq,event_count,value,value_sha256 FROM canonical_session_projection_cache
+      WHERE session_id=? AND cache_key='transcript'`).get(session.id)
+
+    await history.appendBatch([{ ...event('legacy-cache-tail', 1), invocationId: 'legacy-cache-tail-invocation',
+      kind: 'invocation-context-committed', payload: { messages: [
+        { id: 'legacy-cache-user', role: 'user', content: 'question', timestamp: 1 },
+        { id: 'legacy-cache-assistant', role: 'assistant', content: 'answer', timestamp: 2 }
+      ] } }], 0)
+
+    expect(conn.prepare(`SELECT session_seq,event_count,value,value_sha256 FROM canonical_session_projection_cache
+      WHERE session_id=? AND cache_key='transcript'`).get(session.id)).toEqual(before)
+    db.close()
+  })
+
   it('accepts surviving cursor gaps and unsequenced legacy rows while rejecting pending allocations', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
@@ -1952,14 +1976,13 @@ describe('SqliteAgentHistory', () => {
       ]
     } }], 0)
 
-    // P1-①: the append transaction already folded this suffix into the cache, so the explicit
-    // read replays nothing while still returning the fully folded transcript.
+    // Append no longer owns the cache write; the explicit source-fenced read replays the one-event tail.
     expect(history.readCanonicalSessionTranscriptWithCache('session-l1', 'transcript', [
       { id: 'l1-user-1', role: 'user', content: 'one', timestamp: 1 },
       { id: 'l1-assistant-1', role: 'assistant', content: 'two', timestamp: 2 }
     ])).toMatchObject({ kind: 'matched', source: 'L1', messages: [
       { id: 'l1-user-1' }, { id: 'l1-assistant-1' }
-    ], replayedEvents: 0 })
+    ], replayedEvents: 1 })
     conn.close()
   })
 
@@ -2009,9 +2032,9 @@ describe('SqliteAgentHistory', () => {
     const l1 = history.readCanonicalSessionTranscriptWithCache('session-l1-response', 'transcript', [
       { id: 'l1-response-user', role: 'user', content: 'question', timestamp: 1 },
       { id: 'l1-response-assistant', role: 'assistant', content: 'answer', timestamp: 2 }
-    // P1-①: the append transaction already folded these events into the cache.
+    // The cache reader folds the response and terminal tail from the last verified seed.
     ])
-    expect(l1).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 0, messages: [
+    expect(l1).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 2, messages: [
       { id: 'l1-response-user' }, { id: 'l1-response-assistant', timestamp: 2 }
     ] })
     if (l1.kind !== 'matched') throw new Error('expected cached transcript')
@@ -2092,7 +2115,7 @@ describe('SqliteAgentHistory', () => {
     } }], 0)
     expect(history.readCanonicalSessionTranscriptWithCache('session-empty-cache', 'transcript', [
         { id: 'empty-first-user', role: 'user', content: 'first', timestamp: 1 }
-    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 0 })
+    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 1 })
     conn.close()
   })
 

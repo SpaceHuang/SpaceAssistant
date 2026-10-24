@@ -2363,8 +2363,7 @@ describe('session transcript projection P2 read path', () => {
       payload: { messages: [{ role: 'user', id: 'eligible-row', content: 'same content', timestamp: 1 }] }
     }], 0)
 
-    // P1-①: the write path advanced the cache and granted eligibility during the append, so
-    // even the first read is served from the warm L1 seed.
+    // History append invalidates the parity proof; one full comparison reseeds it, then L1 is eligible.
     expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L2')
     expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L1')
     expect(readSessionTranscriptProjection(db, legacy.id)).toMatchObject({ source: 'legacy', reason: 'history-absent' })
