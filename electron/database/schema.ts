@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 113
+export const DB_SCHEMA_VERSION = 114
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -2347,6 +2347,11 @@ CREATE TABLE IF NOT EXISTS canonical_invocation_pending_views (
   stream_version INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+`
+
+/** v113 → v114: remove the unused invocation pending-view cache after its runtime owner retired. */
+export const MIGRATION_V114_INVOCATION_PENDING_VIEWS_RETIREMENT_SQL = `
+DROP TABLE IF EXISTS canonical_invocation_pending_views;
 `
 
 /**
