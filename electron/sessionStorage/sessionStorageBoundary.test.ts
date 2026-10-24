@@ -11,7 +11,7 @@ describe('session storage module graph rules', () => {
     const transitions = JSON.parse(readFileSync(path.resolve('scripts/session-storage-transitions.json'), 'utf8')) as Array<{
       source: string; target: string; symbols: string[]; typeOnly: boolean; owner: string; reason: string; exitStage: string; evidence: string
     }>
-    expect(transitions.length).toBeGreaterThan(0)
+    expect(transitions).toEqual([])
     for (const transition of transitions) {
       expect(transition.source).toMatch(/^electron\//)
       expect(transition.target).toMatch(/^electron\/sessionStorage\//)
@@ -22,11 +22,26 @@ describe('session storage module graph rules', () => {
       expect(transition.evidence.trim()).not.toBe('')
     }
     expect(validateSessionStorageTransitions(transitions)).toEqual([])
-    expect(validateSessionStorageTransitions([{ ...transitions[0], owner: '' }])).toContain('transition[0] owner is required')
-    expect(validateSessionStorageTransitions([transitions[0], transitions[0]])).toContain('transition[1] duplicate transition edge')
+    const sample = { source: 'electron/example.ts', target: 'electron/sessionStorage/example', symbols: ['sample'], typeOnly: false,
+      owner: 'test', reason: 'test transition', exitStage: 'P2', evidence: 'boundary test' }
+    expect(validateSessionStorageTransitions([{ ...sample, owner: '' }])).toContain('transition[0] owner is required')
+    expect(validateSessionStorageTransitions([sample, sample])).toContain('transition[1] duplicate transition edge')
     const scanner = readFileSync(path.resolve('scripts/check-session-storage-module-graph.mjs'), 'utf8')
     expect(scanner).not.toContain('runtimeBindingCallers')
     expect(scanner).not.toContain('runtimeFacadeCallers')
+  })
+
+  it('allows only exact process and test fixture SQLite composition symbols without transition exceptions', () => {
+    expect(findSessionStorageModuleViolations('electron/main.ts',
+      "import { createSqliteSessionStorageHost } from './sessionStorage/sqliteSessionStorage'")).toEqual([])
+    expect(findSessionStorageModuleViolations('electron/main.ts',
+      "import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'")).toEqual([])
+    expect(findSessionStorageModuleViolations('electron/testSupport/sessionStorageComposition.ts',
+      "import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'")).toEqual([])
+    expect(findSessionStorageModuleViolations('electron/main.ts',
+      "import { createSqliteProjectionStateStore } from './sessionStorage/sqliteSessionStorage'")).toHaveLength(1)
+    expect(findSessionStorageModuleViolations('electron/testSupport/sessionStorageComposition.ts',
+      "import { createSqliteSessionStorageHost } from '../sessionStorage/sqliteSessionStorage'")).toHaveLength(1)
   })
 
   it('retires the legacy scanner and baseline after all exceptions are closed', () => {

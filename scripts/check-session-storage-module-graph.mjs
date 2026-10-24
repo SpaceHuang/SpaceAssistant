@@ -126,6 +126,16 @@ export function findSessionStorageModuleViolations(filePath, source) {
     }
     if (category === 'external-electron' && /^electron\/sessionStorage\/[^/]+$/.test(edge.resolved)) {
       if (edge.resolved === 'electron/sessionStorage/contracts') return edge.typeOnly
+      if (edge.resolved === 'electron/sessionStorage/sqliteSessionStorage' && !edge.typeOnly) {
+        const compositionSymbols = new Map([
+          ['electron/main.ts', new Set(['createSessionLedgerRecoveryBindings', 'createSessionTurnRuntime',
+            'createSqliteProjectionBuildTask', 'createSqliteSessionStorage', 'createSqliteSessionStorageHost',
+            'createSqliteStartupHistoryRecoveryBindings', 'startSessionProjectionRevalidationDrain'])],
+          ['electron/testSupport/sessionStorageComposition.ts', new Set(['createSqliteSessionStorage'])],
+        ])
+        const allowedSymbols = compositionSymbols.get(normalizedFile)
+        if (allowedSymbols && edge.symbols.length > 0 && edge.symbols.every((symbol) => allowedSymbols.has(symbol))) return true
+      }
       const key = `${normalizedFile}|${edge.resolved}`
       const transition = transitionByEdge.get(key)
       const approved = !!transition && transition.typeOnly === edge.typeOnly && edge.symbols.length > 0 && edge.symbols.every((symbol) => transition.symbols.includes(symbol))
@@ -343,6 +353,10 @@ function runIllegalEdgeProbes() {
       ['external implementation re-export import', 'electron/ipc/__gate_probe__.ts', `import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['external SQLite composition re-export import', 'electron/ipc/__gate_probe__.ts', `import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['process composition unregistered SQLite symbol', 'electron/main.ts', `import { createSqliteProjectionStateStore } from './sessionStorage/sqliteSessionStorage'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['test composition unregistered SQLite symbol', 'electron/testSupport/sessionStorageComposition.ts', `import { createSqliteSessionStorageHost } from '../sessionStorage/sqliteSessionStorage'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['template-literal static implementation import', 'electron/ipc/__gate_probe__.ts', 'import(`../sessionStorage/application/readMessages`)',
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
