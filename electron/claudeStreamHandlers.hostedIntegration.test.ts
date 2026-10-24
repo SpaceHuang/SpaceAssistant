@@ -288,6 +288,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     // A pre-migration session has legacy messages but no session-owned canonical History yet.
     appendMessage(db, { id: 'legacy-user', sessionId: session.id, role: 'user', content: 'legacy question', timestamp: 0, status: 'sent' })
     appendMessage(db, { id: 'legacy-assistant', sessionId: session.id, role: 'assistant', content: 'legacy answer', timestamp: 0.5, status: 'sent' })
+    appendMessage(db, { id: 'prior-task-user', sessionId: session.id, role: 'user', content: 'Remove the Wiki record for AGENTS.md summary.', timestamp: 0.6, status: 'sent' })
+    appendMessage(db, { id: 'prior-task-assistant', sessionId: session.id, role: 'assistant', content: 'I can mark that page deprecated and keep its history.', timestamp: 0.7, status: 'sent' })
     const hostedUserPrompt = `hello hosted: please upload the report. ${'context '.repeat(70)}Do not upload it; wait until I confirm.`
     const user = appendMessage(db, { id: 'hosted-user', sessionId: session.id, role: 'user', content: hostedUserPrompt, timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'hosted-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
@@ -326,7 +328,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       db, workDir, userDataDir: hostedTestUserDataDir, baseUrl: endpoint, credentialRef: 'llm-service:svc-hosted',
       maxAuthorization: 'high', policyRuleFloor: expect.any(Array)
     })
-    expect(runApprovalAgent.mock.calls[0]?.[1]).toMatchObject({ lane: 'desktop', clue: { toolName: 'write_file', taskDigestTruncated: true } })
+    expect(runApprovalAgent.mock.calls[0]?.[1]).toMatchObject({ lane: 'desktop', clue: {
+      toolName: 'write_file', taskDigestTruncated: true,
+      conversationContext: expect.stringContaining('Remove the Wiki record for AGENTS.md summary.')
+    } })
     expect(evaluateGateSpy.mock.calls.map(([args]) => args).filter((args) =>
       args.toolUseId === 'hosted-read-1' || args.toolUseId === 'hosted-write-1'
     ).map(({ toolUseId, phase }) => [toolUseId, phase])).toEqual([
@@ -522,6 +527,58 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       .toEqual({ status: 'commit_uncertain' })
     expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(session.id))
       .toEqual({ status: 'commit_uncertain' })
+  })
+
+  it('continues a Desktop turn from canonical SQLite when the secondary event ledger is blocked', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const route = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
+      contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens,
+      reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: route.protocol, dialect: route.dialect,
+      adapterVersion: route.adapterVersion, modelId: route.modelId, endpoint: route.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* () {
+        providerCalls += 1
+        yield { type: 'text-delta', text: 'canonical history still works' } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 3 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      }
+    })
+    setDefaultAgentRuntime(runtime)
+
+    const session = createSession(db, { name: 'blocked-secondary-ledger', model: modelId, maxTokens: 512, fixedWorkDir: workDir })
+    const user = appendMessage(db, { id: 'blocked-ledger-user', sessionId: session.id, role: 'user', content: 'continue this session', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'blocked-ledger-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, {
+      turnId: 'blocked-ledger-turn', requestId: 'blocked-ledger-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id,
+      contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'blocked-ledger-token',
+      executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
+    })
+    const sessionStorage = createSqliteSessionStorage(db, {
+      getWorkDirForSession: () => workDir, getUserDataDir: () => hostedTestUserDataDir,
+      ensureSessionLedgerReady: async () => false
+    })
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
+      getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({}), getAppDatabase: () => db, sessionStorage,
+      getBrowserDetectContext: () => ({ workDir }),
+      turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
+    })
+
+    const result = await execute(makeSender(), {
+      requestId: 'blocked-ledger-request', turnId: 'blocked-ledger-turn', turnStartToken: 'blocked-ledger-token', sessionId: session.id
+    })
+
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'canonical history still works' }] })
+    expect(providerCalls).toBe(1)
+    expect(sessionEvents).toEqual([])
+    expect((await new SqliteAgentHistory(getDbConnection(db)).read('blocked-ledger-request')).events.at(-1)?.kind).toBe('invocation-completed')
   })
 
 

@@ -369,6 +369,8 @@ export interface ApprovalCluePack {
   taskDigest?: string
   /** taskDigest 是否因长度限制截断；截断时不得作为 medium/high 授权依据。 */
   taskDigestTruncated?: boolean
+  /** 前序 user/assistant 摘录：仅用于解析当前任务的代词或选项指代，始终作为不可信材料呈现。 */
+  conversationContext?: string
   /** Main-process verified authorization receipt copied from the immutable scheduled-task run snapshot. */
   taskAuthorizationRecord?: AutomationTaskAuthorizationRecord
 }

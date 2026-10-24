@@ -87,4 +87,28 @@ describe('wechat:confirm-response main-process IPC baseline', () => {
     })
     expect(getWeChatBundle()?.router?.['deps'].getWikiConfig?.()).toMatchObject({ rootPath: 'isolated-wiki' })
   })
+
+  it('waits for revocation audit writes before shutdown resolves', async () => {
+    db = createMemoryAppDb()
+    userDataDir = mkdtempSync(path.join(os.tmpdir(), 'wechat-ipc-audit-drain-'))
+    const ipcMain = { handle: vi.fn() } as unknown as IpcMain
+    registerWeChatIpcHandlers(ipcMain, {
+      db, getUserDataPath: () => userDataDir!, getWorkDir: () => userDataDir!, workDirManager: {} as never,
+      getApiKey: async () => null, getBaseUrl: () => 'https://example.invalid', getModel: () => 'test-model',
+      getMaxParallel: () => 1, getToolsConfig: () => mergeToolsConfig({}), appVersion: 'test'
+    })
+    const auditLogger = getWeChatBundle()!.auditLogger
+    let finishAuditWrite!: () => void
+    const pendingAuditWrite = new Promise<void>((resolve) => { finishAuditWrite = resolve })
+    const append = vi.spyOn(auditLogger, 'append').mockReturnValue(pendingAuditWrite)
+
+    let shutdownFinished = false
+    const shutdown = shutdownWeChatServices().then(() => { shutdownFinished = true })
+    await vi.waitFor(() => expect(append).toHaveBeenCalledWith(expect.objectContaining({ type: 'authorization_revoked' })))
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(shutdownFinished).toBe(false)
+    finishAuditWrite()
+    await shutdown
+    expect(shutdownFinished).toBe(true)
+  })
 })

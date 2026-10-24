@@ -26,12 +26,14 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     const workDir = options.getWorkDirForSession?.(sessionId)
     const userDataDir = options.getUserDataDir?.()
     if (!session || !workDir || !userDataDir) throw new Error('SESSION_CONTEXT_RESOURCES_UNAVAILABLE')
-    if (options.ensureSessionLedgerReady && !(await options.ensureSessionLedgerReady({ session, workDir }))) {
-      throw new Error('SESSION_LEDGER_BLOCKED')
-    }
-    const sink = (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt)
-    const replay = await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
-    return createStorageSessionContextAdapter({ sessionId, session, queries, workDir, userDataDir, replay, sink, isBusy })
+    const ledgerReady = !options.ensureSessionLedgerReady || await options.ensureSessionLedgerReady({ session, workDir })
+    // A blocked JSONL projection falls back to the complete SQLite message surface;
+    // compaction persistence stays disabled until the ledger can be verified again.
+    const sink = ledgerReady ? (options.getSessionEventSink ?? getSessionEventSink)(workDir, session.id, session.createdAt) : undefined
+    const replay = sink
+      ? await (options.readCompactionReplay ?? readCompactionReplay)(sink.eventsPath)
+      : { committed: [], rejected: [] }
+    return createStorageSessionContextAdapter({ sessionId, session, queries, workDir, userDataDir, replay, sink, canPersist: ledgerReady, isBusy })
   })
   const recovery = createSqliteSessionRecoveryPort({ db, queries, execution, getTurnRuntime: options.getTurnRuntime, stages: options.recoveryStages })
   const ensureLedgerReady = async (sessionId: string): Promise<boolean> => {

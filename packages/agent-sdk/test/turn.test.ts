@@ -4284,6 +4284,10 @@ describe('runAgentTurn', () => {
     expect(providerRequests[1]?.find((message) => (message as { role?: string }).role === 'tool')).toMatchObject({
       role: 'tool', toolCallId: 'tc1', content: 'tool result', isError: false
     })
+    expect(providerRequests[1]).toContainEqual(expect.objectContaining({
+      role: 'system',
+      content: expect.stringContaining('the user approved the immediately preceding tool call')
+    }))
   })
 
   it('keeps at most two write approval candidates scheduled until their tool nodes finish', async () => {

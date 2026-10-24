@@ -141,20 +141,24 @@ describe('SQLite session storage public queries', () => {
     expect(bound.messages).toEqual([])
   })
 
-  it('gates only ledger-dependent context replay while canonical chat history remains readable', async () => {
+  it('keeps canonical chat context available when a ledger projection is blocked', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'blocked-ledger-context' })
     appendMessagesAtomically(db, [{ id: 'still-readable', sessionId: session.id, role: 'user', content: 'canonical', timestamp: 1, status: 'sent' }])
-    const getLedger = vi.fn()
+    const sink = { eventsPath: '/unused', appendCritical: vi.fn(), appendChunk: vi.fn(), waitForCapacity: vi.fn(), flush: vi.fn(), close: vi.fn(), indexPath: '/unused-index' }
+    const getLedger = vi.fn(() => sink as never)
+    const readReplay = vi.fn()
     const storage = createSqliteSessionStorage(db, {
       getWorkDirForSession: () => '/tmp/blocked-context', getUserDataDir: () => '/tmp',
       getSessionEventSink: getLedger as never,
+      readCompactionReplay: readReplay as never,
       ensureSessionLedgerReady: async () => false
     })
     expect(storage.queries.readApiBaseline({ sessionId: session.id, limit: 10 }).entries.map(({ message }) => message.content)).toEqual(['canonical'])
-    await expect(createBoundSessionContextAdapter(storage.contexts, { sessionId: session.id, isBusy: () => false }))
-      .rejects.toThrow('SESSION_LEDGER_BLOCKED')
+    const bound = await createBoundSessionContextAdapter(storage.contexts, { sessionId: session.id, isBusy: () => false })
+    expect(bound.messages).toEqual(expect.arrayContaining([expect.objectContaining({ content: 'canonical' })]))
     expect(getLedger).not.toHaveBeenCalled()
+    expect(readReplay).not.toHaveBeenCalled()
   })
 
   it('rebuilds readCurrent from committed compaction shadow after recreating the session adapter', async () => {

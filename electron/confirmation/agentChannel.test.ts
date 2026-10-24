@@ -406,11 +406,12 @@ describe('AgentChannel（P2-3）', () => {
 
 describe('AgentChannel 任务声明透传（D：可信证据）', () => {
   it('deps.taskDigest → invocation.clue.taskDigest 原样透传', async () => {
-    const { ch, invokeApproval } = channel({ taskDigest: '整理报告目录并汇总周报', taskDigestTruncated: true })
+    const { ch, invokeApproval } = channel({ taskDigest: '整理报告目录并汇总周报', taskDigestTruncated: true, conversationContext: '[用户] 前序目标' })
     await ch.request(req())
     const inv = invokeApproval.mock.calls[0]![0] as ApprovalInvocation
     expect(inv.clue.taskDigest).toBe('整理报告目录并汇总周报')
     expect(inv.clue.taskDigestTruncated).toBe(true)
+    expect(inv.clue.conversationContext).toBe('[用户] 前序目标')
   })
 
   it('宿主传入的定时任务授权记录进入安全审核线索包', async () => {

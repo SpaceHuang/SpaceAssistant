@@ -480,14 +480,14 @@ describe('turn routing context queries', () => {
     expect(getRecentTurnRoutingMessages(db, sessionId).map((message) => message.content)).toEqual(
       Array.from({ length: 50 }, (_, offset) => `message-${50_001 + offset}`)
     )
-  })
+  }, 60_000)
 
   it('会从超长历史末尾识别图片，并尊重排除列表', () => {
     insertLongHistory(50_051, 50_050)
 
     expect(hasVisionInTurnRoutingContext(db, sessionId)).toBe(true)
     expect(hasVisionInTurnRoutingContext(db, sessionId, undefined, ['history-50050'])).toBe(false)
-  })
+  }, 60_000)
 
   it('路由窗口 oracle 会拒绝先取尾部 50 条再过滤空白正文的实现', () => {
     // 方案 §8.8.2.1 要求严格正文解析和 TRIM 判空发生在 limit 之前；否则

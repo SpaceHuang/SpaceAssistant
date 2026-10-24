@@ -1648,6 +1648,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
 
     const candidateSlots = new ApprovalCandidateSlots(2, Math.max(toolCalls.length, 1))
     const approvalSlots = new Semaphore(2)
+    const userApprovedToolCalls = new Set<string>()
     let parkRequested = false
     let parkedTodoId: string | undefined
     const primaryWorkDirSwitchId = toolCalls.find((tool) => tool.toolName === 'switch_work_dir')?.toolCallId
@@ -1811,6 +1812,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           throwIfAborted(input.request.signal)
         }
         confirmation = { receipt: result.receipt, answerer: result.answerer ?? initialDecision.answerer }
+        if (confirmation.answerer === 'user') userApprovedToolCalls.add(tool.toolCallId)
       }
 
       let resourceLease: { release(): void } | undefined
@@ -1935,6 +1937,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             throw new ToolDeniedError(reason, freshConfirmation.userMessage)
           }
           confirmation = { receipt: freshConfirmation.receipt, answerer: freshConfirmation.answerer ?? 'user' }
+          if (confirmation.answerer === 'user') userApprovedToolCalls.add(tool.toolCallId)
           try {
             // The first recheck asked again because the previous approval no longer covered current facts.
             // Let the host rebuild its prepared plan against this fresh user decision before authorizing it.
@@ -2229,9 +2232,19 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       throw rejectedTool.reason
     }
     // Keep transcript order tied to the provider's tool-call order, independent of dispatch completion order.
-    messages.push(...settledTools.map((settled) => settled!.status === 'fulfilled'
-      ? settled!.value
-      : deniedToolResults.get(toolCalls[settledTools.indexOf(settled!)]?.toolCallId ?? '')!))
+    for (const [index, settled] of settledTools.entries()) {
+      const tool = toolCalls[index]
+      const result = settled!.status === 'fulfilled'
+        ? settled!.value
+        : deniedToolResults.get(tool?.toolCallId ?? '')!
+      messages.push(result)
+      if (tool && userApprovedToolCalls.has(tool.toolCallId)) {
+        messages.push({
+          role: 'system',
+          content: 'Trusted approval record: the user approved the immediately preceding tool call through the confirmation flow before dispatch. Do not describe that call as unconfirmed or as having bypassed confirmation.'
+        })
+      }
+    }
     dispatchedToolRounds += 1
   }
 

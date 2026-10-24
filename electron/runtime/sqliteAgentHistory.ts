@@ -18,6 +18,7 @@ import { runInTransaction } from '../database/transaction'
 import { currentProcessGeneration } from '../database/processGeneration'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { buildCanonicalToolResultProjectionTargets } from '../sessionLedgerOutbox'
+import { projectChatBodyV1 } from '../sessionStorage/domain/projectionSpec'
 import { commitSessionTranscriptInTransaction } from '../database/sessionTranscript'
 import type { SessionTranscriptCommitIntent } from '../../packages/agent-sdk/src/history'
 import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
@@ -720,21 +721,9 @@ export class SqliteAgentHistory implements HistoryPort {
       }
       const folded = foldClaudeSessionSnapshots(snapshots)
       const canonical = toCanonicalModelMessages(folded)
-      const eligibleLegacy = legacyMessages.map((message) => ({
-        id: message.id, role: message.role, content: message.content, timestamp: message.timestamp,
-        ...(message.thinking !== undefined ? { thinking: message.thinking } : {}),
-        ...(message.contentSegments !== undefined ? { contentSegments: message.contentSegments } : {}),
-        ...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}),
-        ...(message.toolUse !== undefined ? { toolUse: message.toolUse } : {}),
-        ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-        ...(message.status !== undefined ? { status: message.status } : {}),
-        ...(message.sequence !== undefined ? { sequence: message.sequence } : {}),
-        ...(message.imagesDeliveredToApi !== undefined ? { imagesDeliveredToApi: message.imagesDeliveredToApi } : {}),
-        ...(message.skillHints !== undefined ? { skillHints: message.skillHints } : {})
-      }))
-      const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
-        ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, stable(item)])) : value
-      if (JSON.stringify(stable(canonical)) !== JSON.stringify(stable(eligibleLegacy))) return { kind: 'unavailable', reason: 'legacy-mismatch' }
+      const canonicalBody = projectChatBodyV1(canonical as never)
+      const legacyBody = projectChatBodyV1(legacyMessages as never)
+      if (JSON.stringify(canonicalBody) !== JSON.stringify(legacyBody)) return { kind: 'unavailable', reason: 'legacy-mismatch' }
       const watermark = rows.at(-1)!
       const anchor = this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id
         FROM agent_history_events WHERE session_id=? AND session_seq=?`).get(sessionId, watermark.session_seq) as
@@ -1256,16 +1245,9 @@ export class SqliteAgentHistory implements HistoryPort {
                   sessionSeq: cacheRow.session_seq, commitOrder: cacheRow.commit_order, messages: seed }] : []), ...tailSnapshots])
               : seed
             const canonical = toCanonicalModelMessages(folded)
-            const legacyCanonical = legacyMessages?.map((message) => ({ id: message.id, role: message.role, content: message.content, timestamp: message.timestamp,
-              ...(message.thinking !== undefined ? { thinking: message.thinking } : {}), ...(message.contentSegments !== undefined ? { contentSegments: message.contentSegments } : {}),
-              ...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}), ...(message.toolUse !== undefined ? { toolUse: message.toolUse } : {}),
-              ...(message.attachments !== undefined ? { attachments: message.attachments } : {}), ...(message.status !== undefined ? { status: message.status } : {}),
-              ...(message.sequence !== undefined ? { sequence: message.sequence } : {}), ...(message.imagesDeliveredToApi !== undefined ? { imagesDeliveredToApi: message.imagesDeliveredToApi } : {}),
-              ...(message.skillHints !== undefined ? { skillHints: message.skillHints } : {}) }))
-            const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
-              ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)])) : value
-            const transcriptLegacy = legacyCanonical?.map(({ toolCalls: _toolCalls, toolUse: _toolUse, ...message }) => message)
-            if (legacyCanonical === undefined || JSON.stringify(stable(canonical)) === JSON.stringify(stable(transcriptLegacy))) {
+            const canonicalBody = projectChatBodyV1(canonical as never)
+            const legacyBody = legacyMessages === undefined ? undefined : projectChatBodyV1(legacyMessages as never)
+            if (legacyBody === undefined || JSON.stringify(canonicalBody) === JSON.stringify(legacyBody)) {
               const lastTail = tailRows.at(-1)
               const watermarkEventId = lastTail?.event_id ?? cacheRow.watermark_event_id
               const watermarkInvocationId = lastTail?.invocation_id ?? cacheRow.watermark_invocation_id

@@ -15,7 +15,8 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
   workDir: string
   userDataDir: string
   replay: CompactionReplay
-  sink: SessionEventSink
+  sink?: SessionEventSink
+  canPersist: boolean
   isBusy(): boolean
 }>): Promise<Readonly<{ adapter: SessionContextAdapter; messages: SessionContextSurfaceMessage[]; windowId: string }>> {
   const registrar = createContextRegistrar()
@@ -63,6 +64,7 @@ export async function createStorageSessionContextAdapter(input: Readonly<{
     persist: async ({ expectedSurfaceFingerprint, historyPayload }) => {
       if (input.isBusy()) return { status: 'busy' as const }
       if (await latestFingerprint() !== expectedSurfaceFingerprint) return { status: 'stale' as const }
+      if (!input.canPersist || !input.sink) return { status: 'uncompressible' as const }
       const transaction = historyPayload as { start?: Record<string, unknown>; summary?: Record<string, unknown> }
       if (!transaction.start || !transaction.summary) throw new Error('SESSION_CONTEXT_TRANSACTION_REQUIRED')
       await appendCompactionTransaction(input.sink, transaction.start, transaction.summary)

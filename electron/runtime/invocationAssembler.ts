@@ -142,6 +142,8 @@ export interface AgentInvocationMaterials {
   maxToolLoopRounds?: number
   approvalTaskDigest?: string
   approvalTaskDigestTruncated?: boolean
+  /** 有界前序会话摘录，仅供安全审批解析 follow-up 指代；不形成授权。 */
+  approvalConversationContext?: string
   remoteContext?: import('../tools/types').RemoteContext
   /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
   onRemoteTextActivity?: (text: string) => void
@@ -1053,6 +1055,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(materials.deadlineAt !== undefined ? { deadlineAt: materials.deadlineAt } : {}),
         ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
         ...(materials.approvalTaskDigestTruncated ? { taskDigestTruncated: true } : {}),
+        ...(materials.approvalConversationContext ? { conversationContext: materials.approvalConversationContext } : {}),
         ...(materials.taskAccessPermissions?.authorizationRecord ? { taskAuthorizationRecord: materials.taskAccessPermissions.authorizationRecord } : {}),
         invokeApproval: (invocation) => {
           if (!db) return Promise.resolve({ ok: false as const, cause: 'unavailable' as const })

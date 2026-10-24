@@ -89,13 +89,13 @@ describe('SqliteAgentHistory', () => {
     expect(target).toMatchObject({ projection_kind: 'tool-result', canonical_event_id: 'outbox-result', origin: 'legacy', state: 'dirty' })
     expect(JSON.parse((target as { expected_event_ids_json: string }).expected_event_ids_json)).toEqual(['tool_result:outbox-tool'])
     expect(JSON.parse((target as { expected_events_json: string }).expected_events_json)).toEqual([{
-      type: 'tool_result', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } }
+      type: 'tool_result', schemaVersion: 2, payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', turnId: 'turn-1', result: { success: true, data: 'ok' } }
     }])
     const proposalTarget = conn.prepare(`SELECT projection_kind,canonical_event_id,expected_events_json FROM session_ledger_projection_outbox
       WHERE canonical_event_id='outbox-proposal'`).get() as { projection_kind: string; canonical_event_id: string; expected_events_json: string }
     expect(proposalTarget).toMatchObject({ projection_kind: 'tool-call:outbox-tool', canonical_event_id: 'outbox-proposal' })
     expect(JSON.parse(proposalTarget.expected_events_json)).toEqual([{
-      type: 'tool_call', payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', name: 'read_file', args: { path: 'a.txt' }, turnId: 'turn-1' }
+      type: 'tool_call', schemaVersion: 2, payload: { toolUseId: 'outbox-tool', stepId: 'outbox-step', name: 'read_file', args: { path: 'a.txt' }, turnId: 'turn-1' }
     }])
     await fs.rm(workDir, { recursive: true, force: true })
     conn.close()
@@ -1802,8 +1802,8 @@ describe('SqliteAgentHistory', () => {
       { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
       { id: 'assistant-1', role: 'assistant', content: 'answer revised', timestamp: 2, attachments: [{ name: 'not-canonical' }] },
       { id: 'user-2', role: 'user', content: 'second', timestamp: 3 }
-    ])).toEqual({ kind: 'unavailable', reason: 'legacy-mismatch' })
-    for (const unsupported of [
+    ])).toMatchObject({ kind: 'matched' })
+    for (const displayOrExecutionMetadata of [
       { thinking: { content: 'thinking', isVisible: false, startTime: 1 } },
       { contentSegments: [{ type: 'text', text: 'first', startTime: 1 }] },
       { toolCalls: [{ id: 'tool', toolName: 'read_file', input: {}, status: 'completed' }] },
@@ -1812,9 +1812,9 @@ describe('SqliteAgentHistory', () => {
     ]) {
       expect(history.readCanonicalSessionTranscript('session-fold', [
         { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
-        { id: 'assistant-1', role: 'assistant', content: 'answer revised', timestamp: 2, ...unsupported },
+        { id: 'assistant-1', role: 'assistant', content: 'answer revised', timestamp: 2, ...displayOrExecutionMetadata },
         { id: 'user-2', role: 'user', content: 'second', timestamp: 3 }
-      ])).toEqual({ kind: 'unavailable', reason: 'legacy-mismatch' })
+      ])).toMatchObject({ kind: 'matched' })
     }
     const matched = folded as Extract<typeof folded, { kind: 'matched' }>
     expect(history.readCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content' })).toEqual({ kind: 'miss', reason: 'cache-missing' })

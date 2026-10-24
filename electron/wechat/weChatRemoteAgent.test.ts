@@ -1315,7 +1315,7 @@ describe('runWeChatRemoteAgent', () => {
     }
   })
 
-  it('WeChat Hosted history.read preserves the unavailable result when Remote history facts are absent', async () => {
+  it('WeChat Hosted history.read can recover persisted Remote conversation messages', async () => {
     const previousRuntime = getDefaultAgentRuntime()
     const runtime = createDesktopAgentRuntime()
     setDefaultAgentRuntime(runtime)
@@ -1344,7 +1344,7 @@ describe('runWeChatRemoteAgent', () => {
           yield { type: 'finish', reason: 'tool-calls' } as const
           return
         }
-        yield { type: 'text-delta', text: '当前远程会话没有可供回查的压缩历史。' } as const
+        yield { type: 'text-delta', text: '已读取远程会话消息。' } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
         yield { type: 'finish', reason: 'stop' } as const
       } })
@@ -1358,17 +1358,17 @@ describe('runWeChatRemoteAgent', () => {
       })).result
     })
     try {
-      await expect(runWeChatRemoteAgent(context)).resolves.toMatchObject({ ok: true, summary: '当前远程会话没有可供回查的压缩历史。' })
+      await expect(runWeChatRemoteAgent(context)).resolves.toMatchObject({ ok: true, summary: '已读取远程会话消息。' })
       expect(providerCalls).toBe(2)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({
-        toolCallId: 'wechat-history-read-unavailable', result: { success: false, error: '没有可回查的压缩历史；这只表示缺少压缩检查点，请检查本次请求已提供的消息，不要据此判断对话上下文缺失。' }
+        toolCallId: 'wechat-history-read-unavailable', result: { success: true, data: { entries: [expect.objectContaining({ text: 'hello' })] } }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
-          toolUseId: 'wechat-history-read-unavailable', result: { success: false, error: '没有可回查的压缩历史；这只表示缺少压缩检查点，请检查本次请求已提供的消息，不要据此判断对话上下文缺失。' }
+          toolUseId: 'wechat-history-read-unavailable', result: { success: true, data: { entries: [expect.objectContaining({ text: 'hello' })] } }
         })
       } finally { await sink.close() }
     } finally {

@@ -3782,13 +3782,15 @@ describe('runImRemoteAgent', () => {
     }
   })
 
-  it('Feishu Hosted history.read preserves the existing unavailable result when Remote history facts are absent', async () => {
+  it('Feishu Hosted history.read can recover prior committed Remote conversation messages', async () => {
     const previousRuntime = getDefaultAgentRuntime()
     const runtime = createDesktopAgentRuntime()
     setDefaultAgentRuntime(runtime)
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'feishu-hosted-history-read-unavailable-'))
     const args = baseArgs()
     const session = createSession(args.db, { name: 'feishu-hosted-history-read-unavailable', model: SUPPORTED_ANTHROPIC_MODEL })
+    appendMessage(args.db, { id: 'history-prior-user', sessionId: session.id, role: 'user', content: 'Schema proposal id is proposal-context-42', timestamp: 1, status: 'sent' })
+    appendMessage(args.db, { id: 'history-current-user', sessionId: session.id, role: 'user', content: 'Please apply my saved schema proposal', timestamp: 2, status: 'sent' })
     const sessionArgs = {
       ...args, sessionId: session.id, workDir,
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
@@ -3803,7 +3805,7 @@ describe('runImRemoteAgent', () => {
       runtime.modelProviders.register(route.profile, { providerId: 'feishu-history-read-unavailable-fixture', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
-          yield { type: 'tool-call', toolCallId: 'feishu-history-read-unavailable', toolName: 'history.read', input: { limit: 1 } } as const
+          yield { type: 'tool-call', toolCallId: 'feishu-history-read-unavailable', toolName: 'history.read', input: { query: 'proposal-context-42', limit: 5 } } as const
           yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
           yield { type: 'finish', reason: 'tool-calls' } as const
           return
@@ -3829,14 +3831,14 @@ describe('runImRemoteAgent', () => {
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({
         toolCallId: 'feishu-history-read-unavailable',
-        result: { success: false, error: '没有可回查的压缩历史；这只表示缺少压缩检查点，请检查本次请求已提供的消息，不要据此判断对话上下文缺失。' }
+        result: { success: true, data: { entries: [expect.objectContaining({ id: 'history-prior-user', text: expect.stringContaining('proposal-context-42') })] } }
       })
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
           toolUseId: 'feishu-history-read-unavailable',
-          result: { success: false, error: '没有可回查的压缩历史；这只表示缺少压缩检查点，请检查本次请求已提供的消息，不要据此判断对话上下文缺失。' }
+          result: { success: true, data: { entries: [expect.objectContaining({ id: 'history-prior-user', text: expect.stringContaining('proposal-context-42') })] } }
         })
       } finally { await sink.close() }
     } finally {

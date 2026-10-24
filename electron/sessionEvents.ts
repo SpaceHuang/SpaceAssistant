@@ -6,13 +6,14 @@ import type { SessionUsage } from '../src/shared/sessionUsage'
 import { foldCompactionEvents, projectCompactionMarkers, type CompactionReplay, type CompactionMarker } from '../src/shared/compactionEvents'
 import { withTransientLockRetry } from './safeAtomicWrite'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
-import { toolCallProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
+import { sessionEventProjectionMatches } from './sessionLedgerProjectionCompatibility'
+import { currentSessionEventSchemaVersion, SESSION_EVENT_TYPES, type SessionEventType } from './sessionEventSchema'
 import { isSessionLedgerLifecycleLockHeld, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 
 export type SessionEventPayload = Record<string, unknown>
-export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'compaction_start' | 'compaction_summary' | 'compaction_end' | 'session_end_seed'
-export type SessionEvent = { schemaVersion?: number; seq: number; time: number; type: SessionEventType; payload: SessionEventPayload }
-export type SessionEventInput = { type: SessionEventType; payload: SessionEventPayload }
+export type { SessionEventType } from './sessionEventSchema'
+export type SessionEvent = { schemaVersion?: number; seq: number; time: number; type: string; payload: SessionEventPayload; unsupportedSchema?: true }
+export type SessionEventInput = { schemaVersion?: number; type: SessionEventType; payload: SessionEventPayload }
 export type SessionEventSinkOptions = {
   maxBatchEvents: number
   maxBatchBytes: number
@@ -91,7 +92,9 @@ export async function ensureCompactionTransaction(
   const compactionId = typeof summary.compactionId === 'string' ? summary.compactionId : undefined
   if (!compactionId || start.compactionId !== compactionId) throw new Error('compaction transaction identity mismatch')
   const events = await readSessionEvents(sink.eventsPath)
-  const transactionEvents = events.filter((event) => event.payload.compactionId === compactionId && (event.type === 'compaction_start' || event.type === 'compaction_summary' || event.type === 'compaction_end'))
+  const transactionCandidates = events.filter((event) => event.payload.compactionId === compactionId && (event.type === 'compaction_start' || event.type === 'compaction_summary' || event.type === 'compaction_end'))
+  assertSupportedEvents(transactionCandidates)
+  const transactionEvents = transactionCandidates
   const existingStart = transactionEvents.find((event) => event.type === 'compaction_start')
   const existingSummary = transactionEvents.find((event) => event.type === 'compaction_summary')
   const existingEnd = transactionEvents.find((event) => event.type === 'compaction_end' && event.payload.status === 'committed')
@@ -117,11 +120,7 @@ export async function ensureCompactionTransaction(
 /** Idempotently repairs a tool result projection using its canonical History envelope. */
 export async function ensureToolResultEvent(
   sink: SessionEventSink,
-  input: {
-    toolUseId: string; stepId: string; result: Record<string, unknown>; turnId?: string; requestId?: string; invocationRequestId?: string; lane?: string
-    executionOutcome?: import('../src/shared/domainTypes').ToolCallResultPersisted['executionOutcome']
-    executorEntry?: import('../src/shared/domainTypes').ToolCallResultPersisted['executorEntry']
-  }
+  input: { toolUseId: string; stepId: string; result: Record<string, unknown>; turnId?: string; requestId?: string; invocationRequestId?: string; lane?: string }
 ): Promise<CommittedEvent | undefined> {
   if (!input.toolUseId || !input.stepId || !input.result || typeof input.result !== 'object' || Array.isArray(input.result)) {
     throw new Error('tool result ledger identity is invalid')
@@ -130,25 +129,24 @@ export async function ensureToolResultEvent(
   // Dispatch-failure context is deliberately stored as a tool_result-shaped diagnostic
   // for safe recovery, but it is not the canonical result projection.
   const matching = events.filter((event) => event.type === 'tool_result' && event.payload.toolUseId === input.toolUseId && !('diagnosticType' in event.payload))
+  assertSupportedEvents(matching)
   if (matching.length > 1) throw new Error(`duplicate tool result ledger event: ${input.toolUseId}`)
   const existing = matching[0]
   const payload = {
     toolUseId: input.toolUseId, ...(input.turnId ? { turnId: input.turnId } : {}), stepId: input.stepId,
     ...(input.requestId ? { requestId: input.requestId } : {}), ...(input.invocationRequestId ? { invocationRequestId: input.invocationRequestId } : {}),
-    ...(input.lane ? { lane: input.lane } : {}), result: input.result,
-    ...(input.executionOutcome ? { executionOutcome: input.executionOutcome } : {}),
-    ...(input.executorEntry ? { executorEntry: input.executorEntry } : {})
+    ...(input.lane ? { lane: input.lane } : {}), result: input.result
   }
   if (existing) {
     const existingPayload = { ...existing.payload }
     // Pre-turn-owner projections are compatible with canonical sidecars that have no turnId.
     if (input.turnId === undefined) delete existingPayload.turnId
-    if (!isDeepStrictEqual(existingPayload, payload)) {
+    if (!sessionEventProjectionMatches({ ...existing, payload: existingPayload }, { type: 'tool_result', schemaVersion: 2, payload })) {
       throw new Error(`conflicting tool result ledger event: ${input.toolUseId}`)
     }
     return existing
   }
-  return sink.appendCritical({ type: 'tool_result', payload })
+  return sink.appendCritical({ type: 'tool_result', schemaVersion: 2, payload })
 }
 
 /** Idempotently repairs a tool proposal projection from its canonical model-response envelope. */
@@ -161,6 +159,7 @@ export async function ensureToolCallEvent(
   }
   const events = await readSessionEvents(sink.eventsPath)
   const matching = events.filter((event) => event.type === 'tool_call' && event.payload.toolUseId === input.toolUseId)
+  assertSupportedEvents(matching)
   if (matching.length > 1) throw new Error(`duplicate tool call ledger event: ${input.toolUseId}`)
   const existing = matching[0]
   const payload = {
@@ -172,12 +171,12 @@ export async function ensureToolCallEvent(
     const existingPayload = { ...existing.payload }
     // Pre-turn-owner projections are compatible with canonical sidecars that have no turnId.
     if (input.turnId === undefined) delete existingPayload.turnId
-    if (!toolCallProjectionPayloadMatches(existingPayload, payload)) {
+    if (!sessionEventProjectionMatches({ ...existing, payload: existingPayload }, { type: 'tool_call', schemaVersion: 2, payload })) {
       throw new Error(`conflicting tool call ledger event: ${input.toolUseId}`)
     }
     return existing
   }
-  return sink.appendCritical({ type: 'tool_call', payload })
+  return sink.appendCritical({ type: 'tool_call', schemaVersion: 2, payload })
 }
 
 /** Repairs the legacy turn boundary from a canonical terminal History record. */
@@ -185,6 +184,7 @@ export async function ensureTurnStartEvent(sink: SessionEventSink, turnId: strin
   if (!turnId.trim()) throw new Error('invocation turn start identity is invalid')
   const events = await readSessionEvents(sink.eventsPath)
   const starts = events.filter((event) => event.type === 'turn_start' && event.payload.turnId === turnId)
+  assertSupportedEvents(starts)
   if (starts.length > 1) throw new Error(`duplicate invocation turn_start projection: ${turnId}`)
   if (starts[0]) return starts[0]
   if (events.some((event) => event.type === 'turn_end' && event.payload.turnId === turnId)) {
@@ -200,9 +200,11 @@ export async function ensureTurnEndEvent(sink: SessionEventSink, turnId: string,
   }
   const events = await readSessionEvents(sink.eventsPath)
   const starts = events.filter((event) => event.type === 'turn_start' && event.payload.turnId === turnId)
+  assertSupportedEvents(starts)
   if (!starts.length) throw new Error('canonical invocation terminal has no matching session turn_start')
   if (starts.length > 1) throw new Error(`duplicate invocation turn_start projection: ${turnId}`)
   const matching = events.filter((event) => event.type === 'turn_end' && event.payload.turnId === turnId)
+  assertSupportedEvents(matching)
   if (matching.length > 1) throw new Error(`duplicate invocation terminal projection: ${turnId}`)
   const existing = matching[0]
   if (existing) {
@@ -230,6 +232,7 @@ export async function ensureRequestUsageEvent(
   }
   const events = await readSessionEvents(sink.eventsPath)
   const matching = events.filter((event) => event.type === 'request_usage' && event.payload.requestId === payload.requestId)
+  assertSupportedEvents(matching)
   if (matching.length > 1) throw new Error(`duplicate request usage ledger event: ${payload.requestId}`)
   const existing = matching[0]
   if (existing) {
@@ -250,6 +253,7 @@ export async function ensureRequestRetryEvent(
   }
   const events = await readSessionEvents(sink.eventsPath)
   const matching = events.filter((event) => event.type === 'request_retry' && event.payload.requestId === payload.requestId && event.payload.attempt === payload.attempt)
+  assertSupportedEvents(matching)
   if (matching.length > 1) throw new Error(`duplicate request retry ledger event: ${payload.requestId}:${payload.attempt}`)
   const existing = matching[0]
   if (existing) {
@@ -270,6 +274,7 @@ export async function ensureFinalRequestContextEvent(
   }
   const events = await readSessionEvents(sink.eventsPath)
   const sameIdentity = events.filter((event) => event.type === 'request_context' && event.payload.requestId === payload.requestId && event.payload.attempt === payload.attempt)
+  assertSupportedEvents(sameIdentity)
   if (sameIdentity.filter((event) => event.payload.projectionStage === 'final').length > 1) {
     throw new Error(`duplicate final request context ledger event: ${payload.requestId}:${payload.attempt}`)
   }
@@ -305,6 +310,7 @@ export async function ensureRequestProjectionEvents(
   const ensure = async (type: 'request_header' | 'request_context', payload: Record<string, unknown>) => {
     const matching = events.filter((event) => event.type === type && event.payload.requestId === requestId && event.payload.attempt === attempt &&
       (type !== 'request_context' || event.payload.projectionStage !== 'final'))
+    assertSupportedEvents(matching)
     if (matching.length > 1) throw new Error(`duplicate ${type} ledger event: ${requestId}:${attempt}`)
     const existing = matching[0]
     if (existing) {
@@ -326,8 +332,6 @@ const DEFAULT_OPTIONS: SessionEventSinkOptions = {
   hardPendingEvents: 512,
   hardPendingBytes: 1024 * 1024
 }
-const EVENT_TYPES = new Set<SessionEventType>(['turn_start', 'turn_end', 'step_start', 'step_end', 'assistant_chunk', 'tool_call', 'tool_result', 'request_header', 'request_context', 'request_usage', 'request_retry', 'compaction_start', 'compaction_summary', 'compaction_end', 'session_end_seed'])
-
 /**
  * R1（评审复验）：assistant_chunk 的 tool_call_delta.partialJson 是工具入参原文的流式分片
  * ——chunk 顺序拼接即可还原 toolkit 凭据明文，且台账无任何重放消费者（tool_call 事件的
@@ -344,12 +348,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object')
 }
 
+function assertSupportedEvents(events: readonly SessionEvent[]): void {
+  if (events.some((event) => event.unsupportedSchema)) throw new Error('SESSION_EVENT_SCHEMA_UNSUPPORTED')
+}
+
 export function parseSessionEvent(value: unknown): SessionEvent {
   if (!isObject(value)) throw new Error('Invalid session event')
   const event = value as Partial<SessionEvent>
-  if (event.schemaVersion !== undefined && event.schemaVersion !== 1) throw new Error('Unsupported session event schema')
-  if (typeof event.seq !== 'number' || !Number.isSafeInteger(event.seq) || event.seq < 1 || typeof event.time !== 'number' || typeof event.type !== 'string' || !EVENT_TYPES.has(event.type as SessionEventType) || !isObject(event.payload)) throw new Error('Invalid session event')
-  return event as SessionEvent
+  const schemaVersion = event.schemaVersion ?? 1
+  if (typeof event.seq !== 'number' || !Number.isSafeInteger(event.seq) || event.seq < 1 || typeof event.time !== 'number' ||
+    typeof event.type !== 'string' || !Number.isSafeInteger(schemaVersion) || schemaVersion < 1 || !isObject(event.payload)) throw new Error('Invalid session event')
+  const currentVersion = currentSessionEventSchemaVersion(event.type)
+  const supported = SESSION_EVENT_TYPES.includes(event.type as SessionEventType) && currentVersion !== undefined && schemaVersion <= currentVersion
+  return { ...event, ...(supported ? {} : { unsupportedSchema: true }) } as SessionEvent
 }
 
 function sessionDir(sessionId: string, createdAt: number): string {
@@ -357,7 +368,8 @@ function sessionDir(sessionId: string, createdAt: number): string {
 }
 
 function eventInputBytes(input: SessionEventInput): number {
-  return Buffer.byteLength(JSON.stringify(input), 'utf8') + 1
+  const schemaVersion = input.schemaVersion ?? currentSessionEventSchemaVersion(input.type)
+  return Buffer.byteLength(JSON.stringify({ ...input, ...(schemaVersion ? { schemaVersion } : {}) }), 'utf8') + 1
 }
 
 function eventPaths(workDir: string, sessionId: string, createdAt: number): { sessionsRoot: string; directory: string; eventsPath: string; indexPath: string; bootstrapPath: string } {
@@ -581,6 +593,7 @@ export async function reconcileInterruptedSessionEventLedger(input: {
   const toolResults = new Map<string, SessionEvent>()
   const openTurns = new Set<string>()
   for (const event of read.events) {
+    if (event.unsupportedSchema) continue
     const payload = event.payload
     if (event.type === 'turn_start') openTurns.add(String(payload.turnId))
     if (event.type === 'turn_end') openTurns.delete(String(payload.turnId))
@@ -715,7 +728,7 @@ export type SessionRecoverySummary = {
 }
 /** 事件流唯一的压缩重放入口；未提交候选不会改变模型面。 */
 export function replayCompactionEvents(events: readonly SessionEvent[]): CompactionReplay {
-  return foldCompactionEvents(events.filter((event) => event.type === 'compaction_start' || event.type === 'compaction_summary' || event.type === 'compaction_end').map((event) => ({ seq: event.seq, type: event.type as 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: event.payload })))
+  return foldCompactionEvents(events.filter((event) => !event.unsupportedSchema && (event.type === 'compaction_start' || event.type === 'compaction_summary' || event.type === 'compaction_end')).map((event) => ({ seq: event.seq, type: event.type as 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: event.payload })))
 }
 
 export async function readCompactionMarkers(eventsPath: string, windowId?: string): Promise<CompactionMarker[]> {
@@ -970,7 +983,7 @@ export class SessionEventWriter implements SessionEventSink {
     if (!inputs.length) return []
     this.assertHealthy()
     await this.ensureInitialized()
-    const events = inputs.map((input, index) => ({ schemaVersion: 1, seq: this.seq + index + 1, time: Date.now(), type: input.type, payload: input.payload }))
+    const events = inputs.map((input, index) => ({ schemaVersion: input.schemaVersion ?? currentSessionEventSchemaVersion(input.type) ?? 1, seq: this.seq + index + 1, time: Date.now(), type: input.type, payload: input.payload }))
     const data = events.map((event) => JSON.stringify(event)).join('\n') + '\n'
     let lineState: { bytes: number; terminated: boolean }
     try {
@@ -1303,6 +1316,7 @@ export function reconcileSessionEvents(events: SessionEvent[], startSeq = events
   const openSteps = new Map<string, { turnId: string; stepId: string }>()
   const tools = new Set<string>(), results = new Set<string>()
   for (const e of events) {
+    if (e.unsupportedSchema) continue
     const p = e.payload
     if (e.type === 'turn_start') openTurns.add(String(p.turnId))
     if (e.type === 'turn_end') openTurns.delete(String(p.turnId))
@@ -1324,7 +1338,7 @@ export function reconcileSessionEvents(events: SessionEvent[], startSeq = events
 
 export function computeSessionUsageFromEvents(events: SessionEvent[], options?: { onInvalidUsage?: (event: SessionEvent, reason: string) => void }): SessionUsage {
   const out: SessionUsage = { input_tokens: 0, output_tokens: 0 }
-  for (const e of events) if (e.type === 'request_usage') {
+  for (const e of events) if (!e.unsupportedSchema && e.type === 'request_usage') {
     const rawUsage = e.payload.usage
     if (!isObject(rawUsage)) {
       options?.onInvalidUsage?.(e, 'usage must be an object')
