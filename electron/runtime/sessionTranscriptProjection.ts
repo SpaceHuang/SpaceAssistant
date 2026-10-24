@@ -12,7 +12,7 @@ import { resolveSelectedMessageBodies, hasCurrentProjectionEligibility, publishT
 import { selectRecentTurnRoutingMessages, selectTurnContext } from './sessionTranscriptSelector'
 
 export type SessionTranscriptProjectionRead =
-  | Readonly<{ source: 'canonical:L1' | 'canonical:L2'; messages: readonly Message[]; replayedEvents: number }>
+  | Readonly<{ source: 'canonical:L2'; messages: readonly Message[]; replayedEvents: number }>
   | Readonly<{ source: 'legacy'; messages: readonly Message[]; reason: string }>
 
 function sqliteLikeContainsLiteral(value: string, query: string): boolean {
@@ -44,7 +44,7 @@ export function hasSessionProjectionEligibility(db: AppDatabase, sessionId: stri
   return hasCurrentProjectionEligibility(db, sessionId)
 }
 
-/** Read the complete transcript through the cache staircase, falling back per session on any ambiguity. */
+/** Read the complete transcript from source facts; the retired transcript L1 is never consulted or rebuilt. */
 function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string): SessionTranscriptProjectionRead {
   const cutover = getDbConnection(db).prepare(`SELECT write_mode FROM session_message_content_cutover WHERE session_id=?`)
     .get(sessionId) as { write_mode: string } | undefined
@@ -53,8 +53,7 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
   const legacySnapshot = hasCanonicalBackedRows && cutover?.write_mode === 'canonical'
     ? undefined
     : getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
-  // Consult persisted rejection before any transcript-cache read so a warm L1 cannot bypass
-  // the verdict or force another full fold. Stale O(1) metadata still routes to legacy and queues revalidation.
+  // Consult persisted rejection before History replay. Stale O(1) metadata still routes to legacy and queues revalidation.
   if (legacySnapshot?.every(({ role }) => role === 'user' || role === 'assistant')) {
     const rejectionVerdict = consultProjectionRejection(db, sessionId, legacySnapshot)
     if (rejectionVerdict) {
@@ -62,100 +61,65 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
       return { source: 'legacy', messages: legacySnapshot, reason: 'projection-rejected' }
     }
   }
-  let canonical: ReturnType<SqliteAgentHistory['readCanonicalSessionTranscriptWithCache']> |
-    ReturnType<SqliteAgentHistory['readCanonicalSessionTranscriptForShadow']>
+  const canonicalMode = hasCanonicalBackedRows && cutover?.write_mode === 'canonical'
+  const legacyMessages = canonicalMode ? undefined : legacySnapshot ?? getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+  if (legacyMessages?.some(({ role }) => role !== 'user' && role !== 'assistant')) {
+    return { source: 'legacy', messages: legacyMessages, reason: 'field-not-eligible' }
+  }
+  let canonical: ReturnType<SqliteAgentHistory['readCanonicalSessionTranscript']> |
+    ReturnType<SqliteAgentHistory['readCanonicalSessionTranscriptForShadow']> | undefined
   try {
     const history = new SqliteAgentHistory(getDbConnection(db))
-    // Once message bodies are canonical-only, the legacy projection cache is not an authority
-    // source: its value can be self-consistent while disagreeing with History. Replay source
-    // truth directly until the scoped projection reader owns this route.
-    if (hasCanonicalBackedRows && cutover?.write_mode === 'canonical') {
+    if (canonicalMode) {
       canonical = history.readCanonicalSessionTranscriptForShadow(sessionId)
-    } else if (!hasSessionProjectionEligibility(db, sessionId)) {
-      // A legacy transcript cache is only an L1 candidate after the current source-fenced
-      // parity proof exists. Without it, go straight to the one authoritative L2 compare.
-      canonical = { kind: 'unavailable', reason: 'legacy-mismatch' }
     } else {
-      const legacyMessages = legacySnapshot ?? getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
-      canonical = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript', legacyMessages.map(({ id, role, content, timestamp }) => ({
-        id, role: role as 'user' | 'assistant', content, timestamp
-      })))
+      const conn = getDbConnection(db)
+      canonical = runInTransaction(conn, () => {
+        const verified = history.readCanonicalSessionTranscript(sessionId, legacyMessages!.map(({ id, role, content, timestamp }) => ({
+          id, role: role as 'user' | 'assistant', content, timestamp
+        })))
+        if (verified.kind === 'matched') {
+          publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages!))
+        }
+        return verified
+      })
     }
-    const canonicalSource = 'source' in canonical ? canonical.source : 'L2'
-    const replayedEvents = canonical.kind !== 'matched' ? 0 :
-      ('replayedEvents' in canonical ? canonical.replayedEvents : canonical.eventCount)
-    if (canonical.kind === 'matched' && cutover?.write_mode === 'canonical') {
+    if (canonical.kind === 'matched' && canonicalMode) {
       history.validateCanonicalSessionSourceTruthSpills(sessionId)
       const projected = mergeCanonicalBackedBodies(db, sessionId, canonical.messages)
-      if (projected) return { source: `canonical:${canonicalSource}`, messages: projected, replayedEvents }
+      if (projected) return { source: 'canonical:L2', messages: projected, replayedEvents: canonical.eventCount }
       if (hasCanonicalBackedRows) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
       return { source: 'legacy', messages: getMessages(db, sessionId, Number.MAX_SAFE_INTEGER), reason: 'canonical-backed-identity-mismatch' }
     }
-    if (canonical.kind === 'matched' && hasSessionProjectionEligibility(db, sessionId)) {
-      const skeletons = getMessageSkeletons(db, sessionId)
-      const projected = mergeCanonicalBodies(canonical.messages, skeletons)
-      if (projected) return { source: `canonical:${canonicalSource}`, messages: projected, replayedEvents }
+    if (canonical.kind === 'matched') {
+      const projected = mergeCanonicalBodies(canonical.messages, getMessageSkeletons(db, sessionId))
+      if (projected) return { source: 'canonical:L2', messages: projected, replayedEvents: canonical.eventCount }
     }
   } catch (error) {
     if (error instanceof Error && error.message === 'CANONICAL_SESSION_CONTENT_UNAVAILABLE') throw error
     if (error && typeof error === 'object' && 'code' in error && error.code === 'SPILL_CONTENT_UNAVAILABLE') {
       throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE', { cause: error })
     }
-    // A cache read is fail-soft; continue by validating the full legacy transcript below.
+    // Source replay failures retain the existing legacy fallback for non-canonical sessions.
   }
-
-  // A canonical-backed session can rebuild a disposable L1 projection from History alone. Requiring
-  // a legacy body as the L2 oracle here would reject the exact session whose body was reclaimed.
-  if (hasCanonicalBackedRows && cutover?.write_mode === 'canonical') {
-    try {
-      const history = new SqliteAgentHistory(getDbConnection(db))
-      const authoritative = history.readCanonicalSessionTranscriptForShadow(sessionId)
-      if (authoritative.kind !== 'matched') throw new Error('canonical transcript unavailable')
-      const projected = mergeCanonicalBackedBodies(db, sessionId, authoritative.messages)
-      if (!projected) throw new Error('canonical transcript does not match message skeletons')
-      return { source: 'canonical:L2', messages: projected, replayedEvents: authoritative.eventCount }
-    } catch {
-      throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-    }
-  }
-
-  const legacyMessages = legacySnapshot ?? getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
-  if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) {
-    return { source: 'legacy', messages: legacyMessages, reason: 'field-not-eligible' }
-  }
-  try {
-    const conn = getDbConnection(db)
-    const history = new SqliteAgentHistory(conn)
-    canonical = runInTransaction(conn, () => {
-      const verified = history.readCanonicalSessionTranscript(sessionId, legacyMessages.map(({ id, role, content, timestamp }) => ({
-        id, role: role as 'user' | 'assistant', content, timestamp
-      })))
-      if (verified.kind !== 'matched') return verified
-      // This detached transcript is only an L1 acceleration and is written from this exact L2 fold.
-      // It remains unreadable until the independent parity proof publishes for this source fence.
-      history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })
-      publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
-      return { kind: 'matched' as const, source: 'L2' as const, messages: verified.messages, replayedEvents: verified.eventCount, watermark: verified }
-    })
-  } catch {
-    if (hasCanonicalBackedRows) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-    return { source: 'legacy', messages: legacyMessages, reason: 'canonical-read-failed' }
-  }
-  if (canonical.kind === 'unavailable') {
+  if (canonicalMode) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+  if (!legacyMessages) return { source: 'legacy', messages: [], reason: 'canonical-read-failed' }
+  if (!canonical || canonical.kind === 'unavailable') {
+    const reason = canonical?.kind === 'unavailable' ? canonical.reason : 'canonical-read-failed'
     // 任何 canonical 不可用形态（legacy-mismatch / snapshot-invalid / order-invalid …）都落
     // 负缓存 verdict：canonical 流当前不可信，读路径按结论路由（legacy 直返），后台重验裁决。
     // 仅 session-missing（会话不存在）不落。可回退 legacy 的会话（无 canonical-backed 行）才能落。
-    if (canonical.reason !== 'session-missing' && canonical.reason !== 'history-absent' && !hasCanonicalBackedRows) {
-      recordProjectionRejection(db, sessionId, canonical.reason, readProjectionO1Metadata(db, sessionId),
+    if (reason !== 'session-missing' && reason !== 'history-absent' && !hasCanonicalBackedRows) {
+      recordProjectionRejection(db, sessionId, reason, readProjectionO1Metadata(db, sessionId),
         computeLegacyProjectionDigest(legacyMessages))
     }
     if (hasCanonicalBackedRows) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-    return { source: 'legacy', messages: legacyMessages, reason: canonical.reason }
+    return { source: 'legacy', messages: legacyMessages, reason }
   }
   const projected = mergeCanonicalBodies(canonical.messages, legacyMessages)
   if (!projected && hasCanonicalBackedRows) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
   return projected
-    ? { source: `canonical:${canonical.source}`, messages: projected, replayedEvents: canonical.replayedEvents }
+    ? { source: 'canonical:L2', messages: projected, replayedEvents: canonical.eventCount }
     : { source: 'legacy', messages: legacyMessages, reason: 'message-identity-mismatch' }
 }
 
@@ -472,8 +436,8 @@ export function refreshSessionTranscriptProjectionFastPath(db: AppDatabase, sess
   return refreshValidatedProjectionFastPath(db, sessionId)
 }
 
-/** Best-effort explicit checkpoint; the turn-terminal path uses the queued checkpoint instead. */
-export function refreshSessionTranscriptProjectionCache(db: AppDatabase, sessionId: string): boolean {
+/** Best-effort source-fenced parity proof refresh; it never reads or writes the retired transcript cache. */
+export function refreshSessionTranscriptParityProof(db: AppDatabase, sessionId: string): boolean {
   try {
     const history = new SqliteAgentHistory(getDbConnection(db))
     if (refreshSessionTranscriptProjectionFastPath(db, sessionId)) {
@@ -498,7 +462,6 @@ export function refreshSessionTranscriptProjectionCache(db: AppDatabase, session
     }
     const conn = getDbConnection(db)
     return runInTransaction(conn, () => {
-      history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })
       const published = publishTranscriptParityProof(db, sessionId, verified, computeLegacyProjectionDigest(legacyMessages))
       if (published) clearProjectionRejection(db, sessionId)
       return published

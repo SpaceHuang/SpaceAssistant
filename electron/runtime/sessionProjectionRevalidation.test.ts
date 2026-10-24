@@ -11,7 +11,7 @@ import { runDueSessionProjectionRevalidations } from './sessionProjectionRevalid
 import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
 import { publishTranscriptParityProof, readLegacyProjectionMessages, refreshValidatedProjectionFastPath, validateCanonicalProjection } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRevalidationFacts'
 import { hasSessionProjectionEligibility } from './sessionTranscriptProjection'
-import { readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache } from './sessionTranscriptProjection'
+import { readSessionTranscriptProjection, refreshSessionTranscriptParityProof } from './sessionTranscriptProjection'
 import { encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
 
 /** Build a mismatched session: legacy holds [A, B] while canonical History folds to [A]. */
@@ -117,7 +117,7 @@ describe('background projection revalidation queue (P0-③/④)', () => {
 
     expect(getProjectionRejection(db, session.id)).toBeUndefined()
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
     db.close()
   })
 
@@ -209,7 +209,7 @@ describe('background projection revalidation queue (P0-③/④)', () => {
 
   it('revalidates through the terminal checkpoint path when a turn ends on a mismatched session', async () => {
     const { db, session } = await createMismatchedSession('checkpoint')
-    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(false)
+    expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(false)
     expect(getProjectionRejection(db, session.id)?.attempts).toBe(1)
 
     // 终态检查点失败必须登记后台重验（每轮至多一次），退避到期后执行，下一轮读不再重付全款。
@@ -358,7 +358,7 @@ describe('production revalidation drain (review S1/S2)', () => {
 
     expect(getProjectionRejection(db, session.id)).toBeUndefined()
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
     db.close()
   })
 

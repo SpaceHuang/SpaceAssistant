@@ -14,7 +14,7 @@ import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from 
 import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import { publishTranscriptParityProof } from '../sessionStorage/sqliteRuntimeBindings'
 import * as agentLogger from '../agentLogger/agentLogger'
-import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, hasSessionProjectionEligibility, readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
+import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, hasSessionProjectionEligibility, readSessionTranscriptProjection, refreshSessionTranscriptParityProof, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
 
 const runStoragePerf = process.env.SPACEASSISTANT_RUN_STORAGE_PERF === '1'
 
@@ -64,18 +64,32 @@ describe('session transcript projection P2 read path', () => {
       eventId: 'forged-dual-context', idempotencyKey: 'forged-dual-context', kind: 'invocation-context-committed',
       payload: { messages: [message] }
     }], 0)
-    expect(readSessionTranscriptProjection(db, session.id).messages[0]?.content).toBe(message.content)
-    expect(hasSessionProjectionEligibility(db, session.id)).toBe(true)
-    const conn = getDbConnection(db)
-    const forgedValue = JSON.stringify([{ ...message, content: 'forged cache body' }])
-    conn.prepare(`UPDATE canonical_session_projection_cache SET value=?,value_sha256=?
-      WHERE session_id=? AND cache_key='transcript'`).run(forgedValue,
-      createHash('sha256').update(forgedValue, 'utf8').digest('hex'), session.id)
+    const legacyCacheSpies: Array<{ mockRestore(): void }> = []
+    try {
+      expect(readSessionTranscriptProjection(db, session.id).messages[0]?.content).toBe(message.content)
+      expect(hasSessionProjectionEligibility(db, session.id)).toBe(true)
+      const verified = history.readCanonicalSessionTranscript(session.id, [message])
+      expect(verified.kind).toBe('matched')
+      if (verified.kind !== 'matched') throw new Error('expected a matched fixture transcript')
+      expect(history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })).toBe(true)
+      const conn = getDbConnection(db)
+      const forgedValue = JSON.stringify([{ ...message, content: 'forged cache body' }])
+      conn.prepare(`UPDATE canonical_session_projection_cache SET value=?,value_sha256=?
+        WHERE session_id=? AND cache_key='transcript'`).run(forgedValue,
+        createHash('sha256').update(forgedValue, 'utf8').digest('hex'), session.id)
 
-    const result = readSessionTranscriptProjection(db, session.id)
+      const legacyCacheRead = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptWithCache')
+      const legacyCacheWrite = vi.spyOn(SqliteAgentHistory.prototype, 'writeCanonicalSessionCache')
+      legacyCacheSpies.push(legacyCacheRead, legacyCacheWrite)
+      const result = readSessionTranscriptProjection(db, session.id)
 
-    expect(result).toMatchObject({ source: 'canonical:L2', messages: [expect.objectContaining({ id: message.id, content: message.content })] })
-    db.close()
+      expect(result).toMatchObject({ source: 'canonical:L2', messages: [expect.objectContaining({ id: message.id, content: message.content })] })
+      expect(legacyCacheRead).not.toHaveBeenCalled()
+      expect(legacyCacheWrite).not.toHaveBeenCalled()
+    } finally {
+      legacyCacheSpies.forEach((spy) => spy.mockRestore())
+      db.close()
+    }
   })
 
   it('does not expose a self-consistent legacy cache tool call that disagrees with the message row', async () => {
@@ -96,6 +110,10 @@ describe('session transcript projection P2 read path', () => {
     const initial = readSessionTranscriptProjection(db, session.id)
     expect(initial.messages.find(({ id }) => id === assistant.id)?.toolCalls?.[0]?.toolName).toBe('lookup')
     const conn = getDbConnection(db)
+    const verified = history.readCanonicalSessionTranscript(session.id, [user, assistant])
+    expect(verified.kind).toBe('matched')
+    if (verified.kind !== 'matched') throw new Error('expected a matched fixture transcript')
+    expect(history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })).toBe(true)
     const cache = conn.prepare("SELECT value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id) as { value: string }
     const forgedMessages = JSON.parse(cache.value) as Array<Record<string, unknown>>
     const forgedAssistant = forgedMessages.find(({ id }) => id === assistant.id)!
@@ -278,7 +296,7 @@ describe('session transcript projection P2 read path', () => {
     }
   })
 
-  it('refreshes the cache watermark after a terminal append without a full legacy-body read', async () => {
+  it('refreshes source parity without rebuilding the retired transcript cache', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'turn-end projection', model: 'test' })
     appendMessage(db, { id: 'turn-end-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
@@ -289,9 +307,9 @@ describe('session transcript projection P2 read path', () => {
       payload: { messages: [{ role: 'user', id: 'turn-end-user', content: 'question', timestamp: 1 }] }
     }], 0)
 
-    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
-    expect(getDbConnection(db).prepare("SELECT session_seq,commit_order FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
-      .toEqual({ session_seq: 1, commit_order: 1 })
+    expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
+    expect(getDbConnection(db).prepare("SELECT 1 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
+      .toBeUndefined()
     db.close()
   })
 
@@ -308,7 +326,11 @@ describe('session transcript projection P2 read path', () => {
     }], 0)
 
     return append('old-incarnation', 'old-watermark-event', 'old-user', 'stale cached body').then(async () => {
-      expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
+      expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
+      const fixture = history.readCanonicalSessionTranscript(session.id, [{ id: 'old-user', role: 'user', content: 'stale cached body', timestamp: 1 }])
+      expect(fixture.kind).toBe('matched')
+      if (fixture.kind !== 'matched') throw new Error('expected a matched fixture transcript')
+      expect(history.writeCanonicalSessionCache({ ...fixture, cacheKey: 'transcript', value: JSON.stringify(fixture.messages) })).toBe(true)
       conn.prepare('DELETE FROM agent_history_events WHERE session_id=?').run(session.id)
       conn.prepare('DELETE FROM agent_history_streams WHERE session_id=?').run(session.id)
       conn.prepare('DELETE FROM session_event_cursor WHERE session_id=?').run(session.id)
@@ -357,7 +379,7 @@ describe('session transcript projection P2 read path', () => {
       { invocationId: 'malformed-cache-invocation', turnId: 'malformed-cache-turn', sequence: 2, schemaVersion: 1,
         eventId: 'malformed-cache-terminal', idempotencyKey: 'malformed-cache-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
     ], 0)
-    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
+    expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
@@ -384,7 +406,7 @@ describe('session transcript projection P2 read path', () => {
       { invocationId: 'post-terminal-invocation', turnId: 'post-terminal-turn', sequence: 2, schemaVersion: 1,
         eventId: 'post-terminal-terminal', idempotencyKey: 'post-terminal-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
     ], 0)
-    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
+    expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
 
@@ -422,7 +444,7 @@ describe('session transcript projection P2 read path', () => {
       { invocationId, turnId, sequence: 2, schemaVersion: 1, eventId: `${prefix}-terminal`, idempotencyKey: `${prefix}-terminal`,
         kind: terminalKind, payload: terminalPayload }
     ], 0)
-    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
+    expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
     conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
     conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
@@ -1635,7 +1657,7 @@ describe('session transcript projection P2 read path', () => {
   })
 
 
-  it('uses canonical bodies after full identity/body/order match and validates the warm L1 path', async () => {
+  it('uses canonical bodies after full identity/body/order match without a warm legacy cache', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'canonical projection', model: 'test' })
     appendMessage(db, { id: 'projection-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
@@ -1655,7 +1677,7 @@ describe('session transcript projection P2 read path', () => {
       { id: 'projection-user', content: 'question', status: 'sent' },
       { id: 'projection-assistant', content: 'answer', status: 'sent' }
     ] })
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1' })
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L2' })
     const skeletons = getMessageSkeletons(db, session.id)
     expect(skeletons).toHaveLength(2)
     expect(skeletons.every((message) => !Object.hasOwn(message, 'content'))).toBe(true)
@@ -1673,8 +1695,8 @@ describe('session transcript projection P2 read path', () => {
     // P0-② negative-cache semantics: the repaired legacy body invalidates the persisted verdict,
     // but recovery is checkpoint-driven (background/terminal revalidation), not a synchronous L2
     // retry inside the read path. The refresh clears the verdict and re-grants eligibility.
-    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
     db.close()
   })
 
@@ -2488,7 +2510,7 @@ describe('session transcript projection P2 read path', () => {
 
     // History append invalidates the parity proof; one full comparison reseeds it, then L1 is eligible.
     expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L2')
-    expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L2')
     expect(readSessionTranscriptProjection(db, legacy.id)).toMatchObject({ source: 'legacy', reason: 'history-absent' })
     expect(getProjectedChatMessagePage(db, eligible.id, null, 20).entries[0]?.message.content).toBe('same content')
     expect(getProjectedChatMessagePage(db, legacy.id, null, 20).entries[0]?.message.content).toBe('same content')
@@ -2561,7 +2583,7 @@ describe('session transcript projection P2 read path', () => {
     expect(columns.map(({ name }) => name)).not.toContain('activity_json')
     const original = getProjectedChatMessagePage(db, session.id, null, 20)
     expect(original.entries[1]?.message.activity).toBeUndefined()
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
     expect(getProjectedChatMessagePage(db, session.id, null, 20)).toMatchObject({ entries: original.entries })
     db.close()
   })

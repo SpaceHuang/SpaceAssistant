@@ -135,7 +135,7 @@ describe('session projection migration worker', () => {
 
     expect(result).toMatchObject({ status: 'completed', processedCount: 1, successCount: 1, skippedCount: 0,
       outcomes: [expect.objectContaining({ sessionId: compatible.id, status: 'migrated', outcome: 'success' })] })
-    expect(readSessionTranscriptProjection(db, compatible.id).source).toBe('canonical:L1')
+    expect(readSessionTranscriptProjection(db, compatible.id).source).toBe('canonical:L2')
     expect(getDbConnection(db).prepare('SELECT kind FROM agent_history_events WHERE session_id=?').get(compatible.id)).toMatchObject({ kind: 'invocation-context-committed' })
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE session_id=?').get(unsupported.id)).toMatchObject({ count: 0 })
     expect(getDbConnection(db).prepare('SELECT status,reason FROM session_projection_migration_items WHERE run_id=? AND session_id=?')
@@ -341,7 +341,7 @@ describe('session projection migration worker', () => {
     const secondResult = await runSessionProjectionMigrationBatch(db, run.runId, { batchSize: 10, rateLimitMs: 0, now: 13 })
     expect(secondResult).toMatchObject({ processedCount: 1, status: 'completed', migratedCount: 2 })
     const conn = getDbConnection(db)
-    expect(conn.prepare("SELECT COUNT(*) AS count FROM canonical_session_projection_cache WHERE cache_key='transcript'").get()).toMatchObject({ count: 2 })
+    expect(conn.prepare("SELECT COUNT(*) AS count FROM canonical_session_projection_cache WHERE cache_key='transcript'").get()).toMatchObject({ count: 0 })
     expect(readSessionTranscriptProjection(db, first.id)).toMatchObject({ source: expect.stringMatching(/^canonical:/), messages: [expect.objectContaining({ id: 'user-batch-first', content: 'body-batch-first' })] })
     expect([first.id, second.id]).toContain(getSessionProjectionMigrationRun(db, run.runId).cursor)
     db.close()
@@ -437,7 +437,7 @@ describe('session projection migration worker', () => {
         expect.objectContaining({ sessionId: assistant.id, outcome: 'skipped', reason: 'active-turn-or-queue' })
       ]) })
     expect(getDbConnection(db).prepare("SELECT 1 AS ok FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(active.id)).toBeUndefined()
-    expect(getDbConnection(db).prepare("SELECT 1 AS ok FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(healthy.id)).toMatchObject({ ok: 1 })
+    expect(getDbConnection(db).prepare("SELECT 1 AS ok FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(healthy.id)).toBeUndefined()
     db.close()
   })
 
@@ -455,7 +455,7 @@ describe('session projection migration worker', () => {
     const result = await runSessionProjectionMigrationBatch(db, run.runId, { batchSize: 10, rateLimitMs: 0, now: 2 })
     expect(result).toMatchObject({ processedCount: 2, successCount: 1, failureCount: 1, skippedCount: 0, migratedCount: 1, retryCount: 1,
       status: 'needs_retry', outcomes: expect.arrayContaining([expect.objectContaining({ sessionId: broken.id, outcome: 'failure', error: 'injected projection failure' })]) })
-    expect(getDbConnection(db).prepare("SELECT 1 AS ok FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(healthy.id)).toMatchObject({ ok: 1 })
+    expect(getDbConnection(db).prepare("SELECT 1 AS ok FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(healthy.id)).toBeUndefined()
     vi.restoreAllMocks()
     expect(await runSessionProjectionMigrationBatch(db, run.runId, { batchSize: 10, rateLimitMs: 0, now: 3 }))
       .toMatchObject({ processedCount: 1, migratedCount: 2, retryCount: 0, status: 'completed' })
@@ -476,7 +476,7 @@ describe('session projection migration worker', () => {
       internalHistorySha256: expect.stringMatching(/^[a-f0-9]{64}$/)
     })
     expect(await runSessionProjectionMigrationBatch(reopened, run.runId, { batchSize: 1, rateLimitMs: 0, now: 5 })).toMatchObject({ migratedCount: 1, status: 'completed' })
-    expect(getDbConnection(reopened).prepare("SELECT 1 AS ok FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id)).toMatchObject({ ok: 1 })
+    expect(getDbConnection(reopened).prepare("SELECT 1 AS ok FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id)).toBeUndefined()
     reopened.close()
     temp.cleanup()
   })

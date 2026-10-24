@@ -6,7 +6,7 @@ import { openDatabase } from '../database'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { refreshSessionTranscriptProjectionCache } from './sessionTranscriptProjection'
+import { refreshSessionTranscriptParityProof } from './sessionTranscriptProjection'
 import { fieldDifferences, readCanonicalTurnContextCandidate, shadowAcceptedTurnContext, shadowTurnRoutingInput } from './sessionStorageShadow'
 import { projectAgentLogFields } from '../agentLogger/agentLogProjection'
 import * as agentLogger from '../agentLogger/agentLogger'
@@ -36,7 +36,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
       eventId: 'shadow-proof-fast-context', idempotencyKey: 'shadow-proof-fast-context', kind: 'invocation-context-committed',
       payload: { messages: [{ id: user.message.id, role: 'user', content: 'question', timestamp: 1 }] }
     }], 0)
-    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
+    expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
     const replay = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
 
     const candidate = readCanonicalTurnContextCandidate(db, session.id, undefined, user.message.id, [])
@@ -57,7 +57,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
       eventId: 'shadow-proof-drift-context', idempotencyKey: 'shadow-proof-drift-context', kind: 'invocation-context-committed',
       payload: { messages: [{ id: user.message.id, role: 'user', content: 'question', timestamp: 1 }] }
     }], 0)
-    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
+    expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
     getDbConnection(db).prepare(`UPDATE agent_history_events SET payload_json=replace(payload_json,'question','canonical changed')
       WHERE event_id='shadow-proof-drift-context'`).run()
 
@@ -829,7 +829,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     }], 0)
     const legacyRead = () => getTurnContext(db, session.id, boundarySequence, requiredUserId, [])
     const canonicalRead = () => readCanonicalTurnContextCandidate(db, session.id, boundarySequence, requiredUserId, [])
-    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
+    expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
     for (let warm = 0; warm < 10; warm += 1) {
       const legacy = legacyRead()
       const candidate = canonicalRead()
