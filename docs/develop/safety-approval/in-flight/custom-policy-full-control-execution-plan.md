@@ -363,7 +363,7 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
   - **产物：** 外部验收记录（测试版本/账号环境、用例、结果、审批失效和 executor 未调用证据、迁移前后备份 hash、回滚结果）。
   - **完成判据：** 桌面自定义动作能控制真实调用；共享 IM 修改在两个 channel 正确生效；待审批/迟到批准按新策略收敛；已开始执行不被误称取消；存量 disabled 用户升级迁移与重启保持结果；正式包可启动并保存设置。
   - **验证方式：** 手工桌面与真实 IM scenario；目标平台 packaged app smoke test；存量数据库仅在隔离副本执行。
-- **最新 T10 复探（2026-10-24）：** `diskutil info /dev/disk26s1` 确认该项目诊断镜像没有文件系统、未挂载；对应 backing file 已不存在，helper PID 50644 仍存活。仅对该项目设备执行 `hdiutil detach /dev/disk26`，12 秒超时。当前源码重建 arm64 DMG：`npx electron-builder --mac dmg --arm64 --publish never` 完成 app 打包与 ad-hoc 签名，进入 `target=DMG` / APFS 创建后 90 秒超时，已终止该调用进程组，没有生成 DMG。完整 `npm run build` 已通过，但不能替代 DMG/系统安装/正式签名平台验收。T10 保持进行中；真实 IM owner 验收尚未开始。
+- **最新 T10 复探（2026-10-24）：** `diskutil info /dev/disk26s1` 确认该项目诊断镜像没有文件系统、未挂载；对应 backing file 已不存在，helper PID 50644 仍存活。仅对该项目设备执行 `hdiutil detach /dev/disk26`，12 秒超时。当前源码重建 arm64 DMG：`npx electron-builder --mac dmg --arm64 --publish never` 完成 app 打包与 ad-hoc 签名，进入 `target=DMG` / APFS 创建后 90 秒超时，已终止该调用进程组，没有生成 DMG。另以 Rosetta x86_64 直接对当前 arm64 app 执行 `hdiutil create -srcfolder ... -format UDZO`，90 秒超时并返回 `hdiutil: create failed - 无子进程`，同样无 DMG 产物。完整 `npm run build` 已通过，但不能替代 DMG/系统安装/正式签名平台验收。CUA 仍报告 macOS 锁屏，当前源码动作显示/恢复入口的手工 GUI 复核待解锁后进行；不需 IM 登录。T10 保持进行中；真实 IM owner 验收尚未开始。
 
 ## 最终完成定义
 
