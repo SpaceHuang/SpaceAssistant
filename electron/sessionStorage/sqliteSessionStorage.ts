@@ -28,6 +28,7 @@ import { materializeProjectionFinalViewInWorker } from './infrastructure/sqlite/
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
 import { createProjectionScopeHistoryReducer } from './infrastructure/sqlite/projectionScopeHistoryReducer'
 import { createProjectionService } from './application/projectionService'
+import { checkpointSessionTranscriptProjection, startSessionProjectionRevalidationDrain } from './infrastructure/sqlite/sessionProjectionRevalidation'
 import { CHAT_BODY_PROJECTION_SPEC_VERSION, projectionScopeKind, projectionScopeSpecVersion } from './domain/scopeKey'
 import { createProjectionBuildLifecycleTask } from './host/projectionBuildTask'
 import { createEnsureView } from './application/ensureView'
@@ -37,10 +38,9 @@ import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
 import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
 import { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
-import { checkpointSessionTranscriptProjection, startSessionProjectionRevalidationDrain } from './infrastructure/sqlite/sessionProjectionRevalidation'
 export { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
 export { createSqliteStartupHistoryRecoveryBindings }
-export { checkpointSessionTranscriptProjection, startSessionProjectionRevalidationDrain }
+export { startSessionProjectionRevalidationDrain }
 
 /** Host composition binds the private SQLite TurnStorage to the process TurnRuntime. */
 export function createSessionTurnRuntime(storage: SessionStorage, options: Omit<TurnRuntimeOptions, 'storage'>): TurnRuntime {
@@ -244,6 +244,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const readContextMeterEventsForSession = async (input: Readonly<{ sessionId: string; workDir: string }>): Promise<readonly CanonicalContextMeterEvent[]> =>
     readContextMeterEventsForLocation(input.sessionId, input.workDir)
   return Object.freeze({ queries, commands: createSessionCommands(db), execution, contexts, recovery, availability, ensureLedgerReady,
+    checkpointProjection: (sessionId: string) => checkpointSessionTranscriptProjection(db, sessionId),
     readCompactionReplay: readCompactionReplayForSession,
     readContextMeterEvents: readContextMeterEventsForSession,
     ...(options.prepareProjection ? { ensureChatBodyV1 } : {}),

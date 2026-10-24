@@ -77,6 +77,7 @@ export interface SessionStorage {
   readCompactionReplay(input: Readonly<{ sessionId: string; workDir: string }>): Promise<CompactionReplay>
   readContextMeterEvents(input: Readonly<{ sessionId: string; workDir: string }>): Promise<readonly CanonicalContextMeterEvent[]>
   ensureLedgerReady?(sessionId: string): Promise<boolean>
+  checkpointProjection?(sessionId: string): boolean
   prepareProjection?(input: ProjectionPreparationRequest): Promise<void>
   ensureChatBodyV1?(input: Readonly<{ sessionId: string; signal?: AbortSignal }>): Promise<PreparedChatBodyView>
 }

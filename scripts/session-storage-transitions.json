@@ -1,17 +1,5 @@
 [
   {
-    "source": "electron/claudeStreamHandlers.ts",
-    "target": "electron/sessionStorage/sqliteSessionStorage",
-    "symbols": [
-      "checkpointSessionTranscriptProjection"
-    ],
-    "typeOnly": false,
-    "owner": "Claude stream terminal checkpoint",
-    "reason": "Terminal transcript verification is owned by the SessionStorage projection revalidation host.",
-    "exitStage": "P2",
-    "evidence": "claudeStreamHandlers.callerContract.test.ts; sessionProjectionRevalidation.test.ts"
-  },
-  {
     "source": "electron/storage/sessionEventRetention.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [
