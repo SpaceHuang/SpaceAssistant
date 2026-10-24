@@ -4,8 +4,6 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { type SessionRecoveryFailure } from '../sessionEvents'
 import { resolveRetentionPolicyFromDb, type RetentionPolicy } from './retentionPolicy'
 import type { AppDatabase } from '../database'
-import { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer } from '../sessionStorage/sqliteRuntimeBindings'
-export { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer } from '../sessionStorage/sqliteRuntimeBindings'
 
 /**
  * 会话事件台账保留期(S3,偏差 24):自 sessionEvents.ts(Core 文件)归位 Storage。

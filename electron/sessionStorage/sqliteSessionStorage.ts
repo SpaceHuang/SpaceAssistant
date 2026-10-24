@@ -26,6 +26,7 @@ import { readProjectionHistoryChunkInWorker } from './infrastructure/sqlite/proj
 import { reduceProjectionHistoryChunkInWorker } from './infrastructure/sqlite/projectionHistoryReducerWorkerClient'
 import { materializeProjectionFinalViewInWorker } from './infrastructure/sqlite/projectionFinalViewWorkerClient'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
+import { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer } from './infrastructure/sqlite/sessionEventRetentionAdapter'
 import { createProjectionScopeHistoryReducer } from './infrastructure/sqlite/projectionScopeHistoryReducer'
 import { createProjectionService } from './application/projectionService'
 import { checkpointSessionTranscriptProjection, startSessionProjectionRevalidationDrain } from './infrastructure/sqlite/sessionProjectionRevalidation'
@@ -243,12 +244,17 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     (await readCompactionReplayForLocation(input.sessionId, input.workDir)).replay
   const readContextMeterEventsForSession = async (input: Readonly<{ sessionId: string; workDir: string }>): Promise<readonly CanonicalContextMeterEvent[]> =>
     readContextMeterEventsForLocation(input.sessionId, input.workDir)
-  return Object.freeze({ queries, commands: createSessionCommands(db), execution, contexts, recovery, availability, ensureLedgerReady,
+  const storagePorts: SessionStorage = {
+    queries, commands: createSessionCommands(db), execution, contexts, recovery, availability, ensureLedgerReady,
     checkpointProjection: (sessionId: string) => checkpointSessionTranscriptProjection(db, sessionId),
+    shouldRetainSessionEventDirectory: createSessionLedgerCompactionDependencyGuard(db),
     readCompactionReplay: readCompactionReplayForSession,
     readContextMeterEvents: readContextMeterEventsForSession,
     ...(options.prepareProjection ? { ensureChatBodyV1 } : {}),
-    ...(options.prepareProjection ? { prepareProjection: options.prepareProjection } : {}) })
+    ...(options.prepareProjection ? { prepareProjection: options.prepareProjection } : {})
+  }
+  return Object.freeze({ ...storagePorts,
+    prepareSessionEventRetentionProjection: createCanonicalSessionProjectionRetentionPreparer(db, storagePorts) })
 }
 
 function contextMeterEventIdentity(event: CanonicalContextMeterEvent): string {

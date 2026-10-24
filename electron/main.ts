@@ -60,7 +60,7 @@ import { cancelAllToolConfirmsForRequest } from './toolConfirmRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
 import { beginSessionEventShutdown, withSessionEventWriterDrain, flushAllSessionEventSinks, getSessionEventSink, hasActiveSessionEventSink, setSessionEventCommitObserver } from './sessionEvents'
-import { createCanonicalSessionProjectionRetentionPreparer, createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
+import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
 import { createSpillStore, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance, scheduleSourceTruthSpillGcMaintenance } from './storage/spillStore'
@@ -601,8 +601,8 @@ app.whenReady().then(async () => {
       }, (handle) => { requestMcpArtifactCapacitySweep = () => handle.request?.('capacity-pressure') }),
       ...recoveryWorkDirs.map((workDir) => dailyRetentionTask(`session-event-retention-${createHash('sha256').update(workDir).digest('hex').slice(0, 12)}`,
         () => JSON.stringify(resolveRetentionPolicyFromDb(db).sessionEventMaxSessions), () => workDir, async () => {
-        const shouldRetain = createSessionLedgerCompactionDependencyGuard(db)
-        const prepareProjectionForRetention = createCanonicalSessionProjectionRetentionPreparer(db, sessionStorageHost.storage)
+        const shouldRetain = sessionStorageHost.storage.shouldRetainSessionEventDirectory
+        const prepareProjectionForRetention = sessionStorageHost.storage.prepareSessionEventRetentionProjection
         const result = await runSessionEventRetentionMaintenance(db, workDir, {
           prepareProjectionForRetention, shouldRetainSessionDir: shouldRetain,
           withSessionLifecycleLock: async (sessionName, root, operation) => {

@@ -16,11 +16,9 @@ import * as transcriptProjection from '../sessionStorage/infrastructure/sqlite/s
 import type { Message } from '../../src/shared/domainTypes'
 import {
   createSessionLedgerCompactionDependencyGuard,
-  createCanonicalSessionProjectionRetentionPreparer,
-  enforceSessionEventRetention,
-  enforceSessionEventRetentionDetailed,
-  runSessionEventRetentionMaintenance
-} from './sessionEventRetention'
+  createCanonicalSessionProjectionRetentionPreparer
+} from '../sessionStorage/infrastructure/sqlite/sessionEventRetentionAdapter'
+import { enforceSessionEventRetention, enforceSessionEventRetentionDetailed, runSessionEventRetentionMaintenance } from './sessionEventRetention'
 
 /**
  * S3(偏差 24):会话事件台账保留期从 sessionEvents.ts(Core 文件)归位 Storage——

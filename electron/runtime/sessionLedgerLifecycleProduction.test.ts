@@ -11,7 +11,8 @@ import { bootstrapEmptySessionEventLedger, getSessionEventSink, readSessionEvent
 import { ensureLegacyLedgerReadiness, refreshSessionLedgerReadyProof } from '../sessionLedgerReadiness'
 import { ensureSessionLedgerReady } from '../sessionLedgerLifecycle'
 import { createProductionSessionLedgerLifecycleDependencies } from './sessionLedgerLifecycleProduction'
-import { createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from '../storage/sessionEventRetention'
+import { createSessionLedgerCompactionDependencyGuard } from '../sessionStorage/infrastructure/sqlite/sessionEventRetentionAdapter'
+import { runSessionEventRetentionMaintenance } from '../storage/sessionEventRetention'
 import { computeCompactionSummaryHash } from '../../src/shared/compactionEvents'
 
 describe('production session ledger lifecycle', () => {

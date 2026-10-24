@@ -78,6 +78,8 @@ export interface SessionStorage {
   readContextMeterEvents(input: Readonly<{ sessionId: string; workDir: string }>): Promise<readonly CanonicalContextMeterEvent[]>
   ensureLedgerReady?(sessionId: string): Promise<boolean>
   checkpointProjection?(sessionId: string): boolean
+  shouldRetainSessionEventDirectory?(sessionName: string, workDir: string): Promise<boolean>
+  prepareSessionEventRetentionProjection?(sessionName: string, workDir: string): Promise<void>
   prepareProjection?(input: ProjectionPreparationRequest): Promise<void>
   ensureChatBodyV1?(input: Readonly<{ sessionId: string; signal?: AbortSignal }>): Promise<PreparedChatBodyView>
 }

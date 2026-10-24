@@ -1,18 +1,5 @@
 [
   {
-    "source": "electron/storage/sessionEventRetention.ts",
-    "target": "electron/sessionStorage/sqliteRuntimeBindings",
-    "symbols": [
-      "createSessionLedgerCompactionDependencyGuard",
-      "createCanonicalSessionProjectionRetentionPreparer"
-    ],
-    "typeOnly": false,
-    "owner": "SessionStorage retention adapter",
-    "reason": "Retention delegates projection and ledger dependency preparation to named SQLite participants.",
-    "exitStage": "P2",
-    "evidence": "sessionEventRetention.test.ts"
-  },
-  {
     "source": "electron/storage/sessionProjectionCacheMaintenance.ts",
     "target": "electron/sessionStorage/sqliteRuntimeBindings",
     "symbols": [

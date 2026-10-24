@@ -17,8 +17,6 @@ export { createProjectionService } from './application/projectionService'
 export { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 export { createSqliteSessionApiRouteProjectionFence } from './infrastructure/sqlite/sessionApiRouteProjectionFence'
 export { hasRejectedTranscriptParityStateInConnection } from './infrastructure/sqlite/sessionProjectionEligibility'
-export { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer }
-  from './infrastructure/sqlite/sessionEventRetentionAdapter'
 export { selectRecentTurnRoutingMessages, selectTurnContext } from './infrastructure/sqlite/sessionTranscriptSelector'
 export {
   clearProjectionRejection, computeLegacyProjectionDigest, consultProjectionRejection, getProjectionRejection,
