@@ -141,6 +141,121 @@ function retireLegacySessionProjectionTables(conn: DatabaseSync): void {
   }
 }
 
+function splitSqlList(value: string): string[] {
+  const parts: string[] = []
+  let start = 0
+  let depth = 0
+  let quote: string | undefined
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]
+    const next = value[index + 1]
+    if (quote) {
+      if (char === quote) {
+        if (next === quote) index += 1
+        else quote = undefined
+      }
+      continue
+    }
+    if (char === "'" || char === '"' || char === '`') { quote = char; continue }
+    if (char === '(') depth += 1
+    else if (char === ')') depth -= 1
+    else if (char === ',' && depth === 0) { parts.push(value.slice(start, index)); start = index + 1 }
+  }
+  parts.push(value.slice(start))
+  return parts
+}
+
+function splitTriggerBody(value: string): string[] {
+  const statements: string[] = []
+  let start = 0
+  let quote: string | undefined
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]
+    const next = value[index + 1]
+    if (quote) {
+      if (char === quote) {
+        if (next === quote) index += 1
+        else quote = undefined
+      }
+      continue
+    }
+    if (char === "'" || char === '"' || char === '`') { quote = char; continue }
+    if (char === ';') { statements.push(value.slice(start, index)); start = index + 1 }
+  }
+  const tail = value.slice(start)
+  if (tail.trim()) statements.push(tail)
+  return statements
+}
+
+function removeApiReadModeFromTrigger(sql: string): string {
+  const initialBegin = /\bBEGIN\b/i.exec(sql)
+  let rewritten = sql
+  if (initialBegin) {
+    const header = sql.slice(0, initialBegin.index)
+      .replace(/,\s*api_read_mode(?=\s*,)/gi, '')
+      .replace(/\bapi_read_mode\s*,\s*/gi, '')
+      .replace(/OLD\.api_read_mode\s+IS\s+NOT\s+NEW\.api_read_mode\s+OR\s*/gi, '')
+    rewritten = `${header}${sql.slice(initialBegin.index)}`
+  }
+  const begin = /\bBEGIN\b/i.exec(rewritten)
+  const end = /\bEND\s*;?\s*$/i.exec(rewritten)
+  if (begin && end && end.index > begin.index + begin[0].length) {
+    const bodyStart = begin.index + begin[0].length
+    const bodyEnd = end.index
+    const statements = splitTriggerBody(rewritten.slice(bodyStart, bodyEnd))
+    const cleanedStatements: string[] = []
+    for (const raw of statements) {
+      let statement = raw.trim()
+      if (!statement) continue
+      const update = /^(UPDATE\s+session_message_content_cutover\s+SET\s+)([\s\S]+)$/i.exec(statement)
+      if (update && /api_read_mode/i.test(update[2])) {
+        const whereIndex = update[2].search(/\s+WHERE\s+/i)
+        const setPart = whereIndex < 0 ? update[2] : update[2].slice(0, whereIndex)
+        const wherePart = whereIndex < 0 ? '' : update[2].slice(whereIndex)
+        const assignments = splitSqlList(setPart).filter((assignment) => !/api_read_mode/i.test(assignment) && !/^\s*updated_at\s*=/i.test(assignment))
+        if (assignments.length === 0) continue
+        if (/api_read_mode/i.test(wherePart)) throw new Error('cannot retire api_read_mode from trigger predicate')
+        statement = `${update[1]}${assignments.join(', ')}${wherePart}`
+      }
+      const insert = /^(INSERT(?:\s+OR\s+IGNORE)?\s+INTO\s+session_message_content_cutover\s*\()([\s\S]+?)(\)\s*VALUES\s*\()([\s\S]+?)(\)\s*)$/i.exec(statement)
+      if (insert && /api_read_mode/i.test(insert[2])) {
+        const columns = splitSqlList(insert[2])
+        const values = splitSqlList(insert[4])
+        const apiIndex = columns.findIndex((column) => /\bapi_read_mode\b/i.test(column))
+        if (apiIndex < 0 || values.length !== columns.length) throw new Error('invalid api_read_mode trigger insert')
+        columns.splice(apiIndex, 1)
+        values.splice(apiIndex, 1)
+        statement = `${insert[1]}${columns.join(',')}${insert[3]}${values.join(',')}${insert[5]}`
+      }
+      if (/api_read_mode/i.test(statement)) throw new Error(`unhandled api_read_mode trigger SQL: ${statement}`)
+      cleanedStatements.push(statement)
+    }
+    const body = cleanedStatements.length ? ` ${cleanedStatements.join('; ')}; ` : ' '
+    rewritten = `${rewritten.slice(0, bodyStart)}${body}${rewritten.slice(bodyEnd)}`
+  }
+  if (/api_read_mode/i.test(rewritten)) throw new Error(`unhandled api_read_mode trigger SQL: ${rewritten}`)
+  return rewritten
+}
+
+/** Retire the obsolete API eligibility marker while preserving each trigger's remaining duties. */
+function retireApiReadModeColumn(conn: DatabaseSync): void {
+  if (!hasColumn(conn, 'session_message_content_cutover', 'api_read_mode')) return
+  // Older migration fixtures and abandoned user databases can contain transitional trigger
+  // bodies before the full History tables are installed. Keep their legacy column until the
+  // trigger dependency set is complete; a production database always has these source fields.
+  if (!hasColumn(conn, 'agent_history_events', 'session_id') || !hasColumn(conn, 'agent_history_events', 'invocation_id')) return
+  if (!['session_generation','message_revision','write_mode','cleanup_state','updated_at']
+    .every((column) => hasColumn(conn, 'session_message_content_cutover', column))) return
+  const rows = conn.prepare(`SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql LIKE '%api_read_mode%'`).all() as
+    Array<{ name: string; sql: string }>
+  for (const { name, sql } of rows) {
+    const rewritten = removeApiReadModeFromTrigger(sql)
+    conn.exec(`DROP TRIGGER IF EXISTS "${name.replace(/"/g, '""')}"`)
+    if (!/\bBEGIN\s*END\s*;?\s*$/i.test(rewritten)) conn.exec(rewritten)
+  }
+  conn.exec('ALTER TABLE session_message_content_cutover DROP COLUMN api_read_mode')
+}
+
 /**
  * The remote main and the local Track branch both advanced schema versions from the same
  * base. An origin/main database can therefore report v86 while not having run local Track
@@ -2213,6 +2328,13 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 114
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  // v114 → v115: paired scope proofs own API eligibility; retire the obsolete marker column.
+  if (version === 114) runInTransaction(conn, () => {
+    retireApiReadModeColumn(conn)
+    version = 115
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version >= 115) runInTransaction(conn, () => retireApiReadModeColumn(conn))
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {

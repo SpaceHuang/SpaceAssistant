@@ -86,10 +86,10 @@ describe('session content cutover schema', () => {
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare('SELECT content, content_storage_state FROM messages WHERE id=?').get('legacy-message'))
       .toEqual({ content: 'preserve this body', content_storage_state: 'legacy' })
-    expect(conn.prepare('SELECT session_id, session_generation, message_revision, api_read_mode, write_mode, cleanup_state FROM session_message_content_cutover ORDER BY session_id').all())
+    expect(conn.prepare('SELECT session_id, session_generation, message_revision, write_mode, cleanup_state FROM session_message_content_cutover ORDER BY session_id').all())
       .toEqual([
-        { session_id: 'legacy-session', session_generation: 'gen-1', message_revision: 0, api_read_mode: 'legacy', write_mode: 'legacy', cleanup_state: 'retained' },
-        { session_id: 'second-session', session_generation: 'gen-2', message_revision: 0, api_read_mode: 'legacy', write_mode: 'legacy', cleanup_state: 'retained' }
+        { session_id: 'legacy-session', session_generation: 'gen-1', message_revision: 0, write_mode: 'legacy', cleanup_state: 'retained' },
+        { session_id: 'second-session', session_generation: 'gen-2', message_revision: 0, write_mode: 'legacy', cleanup_state: 'retained' }
       ])
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_session_api_context_eligibility'").get()).toBeUndefined()
     conn.close()
@@ -126,7 +126,7 @@ describe('session content cutover schema', () => {
     expect(upgrade.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name='guard_session_content_cleanup_complete_ledger_delete'").get())
       .toEqual({ name: 'guard_session_content_cleanup_complete_ledger_delete' })
     expect(upgrade.prepare('SELECT session_id,session_generation,message_revision,api_read_mode,write_mode,cleanup_state,updated_at FROM session_message_content_cutover').get())
-      .toEqual({ session_id: 's',session_generation: 'g',message_revision: 7,api_read_mode: 'canonical',write_mode: 'canonical',cleanup_state: 'retained',updated_at: 123 })
+      .toEqual({ session_id: 's',session_generation: 'g',message_revision: 7,api_read_mode:'canonical',write_mode:'canonical',cleanup_state:'retained',updated_at:123 })
     expect(() => upgrade.prepare("UPDATE session_message_content_cutover SET cleanup_state='unknown' WHERE session_id='s'").run()).toThrow()
     expect(() => upgrade.prepare("UPDATE session_message_content_cutover SET cleanup_state='write-stopped' WHERE session_id='s'").run()).not.toThrow()
     expect(() => upgrade.prepare("UPDATE session_message_content_cutover SET cleanup_state='pending' WHERE session_id='s'").run())
@@ -188,19 +188,14 @@ describe('session content cutover schema', () => {
         VALUES('inv-1',1,'event-1','key-1','turn-1',1,'transcript-compacted','{}',1,'legacy-session',1,1);
     `)
     const grant = () => {
-      conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id='legacy-session'").run()
       seedApiRouteScopes(conn, 'legacy-session', 'gen-1', 0)
     }
-    const assertRevoked = () => {
-      expectNoValidApiRouteScopes(conn, 'legacy-session')
-      expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get('legacy-session'))
-        .toEqual({ api_read_mode: 'revalidation-required' })
-    }
+    const assertRevoked = () => expectNoValidApiRouteScopes(conn, 'legacy-session')
     grant()
     conn.prepare("UPDATE agent_history_events SET payload_json='changed' WHERE event_id='event-1'").run()
     assertRevoked()
     grant()
-    conn.prepare("INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at) VALUES('inv-1',2,'event-2','key-2','turn-1',1,'replay-message','{}',2)").run()
+    conn.prepare("INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at,session_id) VALUES('inv-1',2,'event-2','key-2','turn-1',1,'replay-message','{}',2,'legacy-session')").run()
     assertRevoked()
     grant()
     conn.prepare("DELETE FROM agent_history_events WHERE event_id='event-2'").run()
@@ -208,10 +203,6 @@ describe('session content cutover schema', () => {
     grant()
     conn.prepare("UPDATE agent_history_streams SET session_id='second-session' WHERE invocation_id='inv-1'").run()
     expectNoValidApiRouteScopes(conn, 'legacy-session')
-    expect(conn.prepare("SELECT api_read_mode FROM session_message_content_cutover WHERE session_id='legacy-session'").get())
-      .toEqual({ api_read_mode: 'revalidation-required' })
-    expect(conn.prepare("SELECT api_read_mode FROM session_message_content_cutover WHERE session_id='second-session'").get())
-      .toEqual({ api_read_mode: 'legacy' })
     conn.close()
   })
 
@@ -219,41 +210,40 @@ describe('session content cutover schema', () => {
     const conn = makeV37Database()
     runMigrations(conn)
     const regrant = (revision: number) => {
-      conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id='legacy-session'").run()
       seedApiRouteScopes(conn, 'legacy-session', 'gen-1', revision)
       seedTranscriptParity(conn, 'legacy-session', 'gen-1', revision)
     }
-    const state = () => conn.prepare('SELECT message_revision,api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get('legacy-session')
+    const state = () => conn.prepare('SELECT message_revision,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get('legacy-session')
     regrant(0)
     conn.exec('BEGIN IMMEDIATE')
     conn.prepare("UPDATE messages SET content='rolled back body' WHERE id='legacy-message'").run()
     expectNoValidApiRouteScopes(conn, 'legacy-session')
-    expect(state()).toMatchObject({ message_revision: 1, api_read_mode: 'revalidation-required' })
+    expect(state()).toMatchObject({ message_revision: 1 })
     conn.exec('ROLLBACK')
     expect(conn.prepare("SELECT COUNT(*) AS count FROM session_projection_state WHERE session_id='legacy-session' AND status='valid'").get())
       .toEqual({ count: 3 })
-    expect(state()).toMatchObject({ message_revision: 0, api_read_mode: 'canonical' })
+    expect(state()).toMatchObject({ message_revision: 0 })
 
     conn.prepare("UPDATE messages SET content='edited body' WHERE id='legacy-message'").run()
-    expect(state()).toMatchObject({ message_revision: 1, api_read_mode: 'revalidation-required' })
+    expect(state()).toMatchObject({ message_revision: 1 })
     expectNoValidApiRouteScopes(conn, 'legacy-session')
     expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE session_id='legacy-session' AND status='valid'").all()).toHaveLength(0)
 
     regrant(1)
     conn.prepare("INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence) VALUES('new-message','legacy-session','assistant','new body','completed',1,2,2)").run()
-    expect(state()).toMatchObject({ message_revision: 2, api_read_mode: 'revalidation-required' })
+    expect(state()).toMatchObject({ message_revision: 2 })
     expectNoValidApiRouteScopes(conn, 'legacy-session')
     expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE scope_key=? AND status='valid'").all(encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toEqual([])
 
     regrant(2)
     conn.prepare("DELETE FROM messages WHERE id='new-message'").run()
-    expect(state()).toMatchObject({ message_revision: 3, api_read_mode: 'revalidation-required' })
+    expect(state()).toMatchObject({ message_revision: 3 })
     expectNoValidApiRouteScopes(conn, 'legacy-session')
     expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE scope_key=? AND status='valid'").all(encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toEqual([])
 
     regrant(3)
     conn.prepare("UPDATE messages SET attachments='[{\"id\":\"edited-attachment\"}]' WHERE id='legacy-message'").run()
-    expect(state()).toMatchObject({ message_revision: 4, api_read_mode: 'revalidation-required' })
+    expect(state()).toMatchObject({ message_revision: 4 })
     expectNoValidApiRouteScopes(conn, 'legacy-session')
     expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE scope_key=? AND status='valid'").all(encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toEqual([])
     conn.close()
@@ -262,21 +252,18 @@ describe('session content cutover schema', () => {
   it('session generation change revokes old-generation eligibility; new sessions start in legacy mode', () => {
     const conn = makeV37Database()
     runMigrations(conn)
-    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id='legacy-session'").run()
     seedApiRouteScopes(conn, 'legacy-session', 'gen-1', 0)
     seedTranscriptParity(conn, 'legacy-session', 'gen-1', 0)
 
     conn.prepare("UPDATE sessions SET generation='gen-3' WHERE id='legacy-session'").run()
     expect(conn.prepare('SELECT session_generation,message_revision FROM session_message_content_cutover WHERE session_id=?').get('legacy-session'))
       .toEqual({ session_generation: 'gen-3', message_revision: 1 })
-    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get('legacy-session'))
-      .toEqual({ api_read_mode: 'revalidation-required' })
     expectNoValidApiRouteScopes(conn, 'legacy-session')
     expect(conn.prepare("SELECT session_id FROM session_projection_state WHERE scope_key=? AND status='valid'").all(encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toEqual([])
 
     conn.prepare("INSERT INTO sessions(id,generation) VALUES('new-session','gen-new')").run()
-    expect(conn.prepare('SELECT session_generation,api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get('new-session'))
-      .toEqual({ session_generation: 'gen-new', api_read_mode: 'legacy', write_mode: 'legacy', cleanup_state: 'retained' })
+    expect(conn.prepare('SELECT session_generation,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get('new-session'))
+      .toEqual({ session_generation: 'gen-new', write_mode: 'legacy', cleanup_state: 'retained' })
     conn.close()
   })
 
@@ -300,7 +287,7 @@ describe('session content cutover schema', () => {
   it('rerunning migration preserves generation, revision, and already-recorded rollout state', () => {
     const conn = makeV37Database()
     runMigrations(conn)
-    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write',message_revision=9 WHERE session_id='legacy-session'").run()
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='dual-write',message_revision=9 WHERE session_id='legacy-session'").run()
     conn.exec(`DROP TRIGGER IF EXISTS reject_message_insert_after_content_write_stop;
       DROP TRIGGER IF EXISTS reject_message_content_update_after_content_write_stop;
       DROP TRIGGER IF EXISTS reject_message_content_update_after_write_stop;
@@ -344,7 +331,8 @@ describe('session content cutover schema', () => {
         api_read_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(api_read_mode IN ('legacy','canonical','revalidation-required')),
         write_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(write_mode IN ('legacy','dual-write','canonical')),
         cleanup_state TEXT NOT NULL DEFAULT 'retained' CHECK(cleanup_state IN ('retained','write-stopped','pending','complete')),updated_at INTEGER NOT NULL DEFAULT 0);
-      INSERT INTO session_message_content_cutover_v43 SELECT * FROM session_message_content_cutover;
+      INSERT INTO session_message_content_cutover_v43(session_id,session_generation,message_revision,api_read_mode,write_mode,cleanup_state,updated_at)
+        SELECT session_id,session_generation,message_revision,'legacy',write_mode,cleanup_state,updated_at FROM session_message_content_cutover;
       DROP TABLE session_message_content_cutover;
       ALTER TABLE session_message_content_cutover_v43 RENAME TO session_message_content_cutover;`)
     conn.prepare("UPDATE session_message_content_cutover SET cleanup_state='write-stopped' WHERE session_id='legacy-session'").run()
@@ -354,8 +342,8 @@ describe('session content cutover schema', () => {
     ) VALUES('legacy-session','gen-1',9,0,0,1,0,'manifest',1)`).run()
     conn.prepare("UPDATE session_message_content_cutover SET cleanup_state='pending' WHERE session_id='legacy-session'").run()
     runMigrations(conn)
-    expect(conn.prepare('SELECT session_generation,message_revision,api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get('legacy-session'))
-      .toEqual({ session_generation: 'gen-1', message_revision: 9, api_read_mode: 'canonical', write_mode: 'dual-write', cleanup_state: 'pending' })
+    expect(conn.prepare('SELECT session_generation,message_revision,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get('legacy-session'))
+      .toEqual({ session_generation: 'gen-1', message_revision: 9, write_mode: 'dual-write', cleanup_state: 'pending' })
     conn.close()
   })
 
@@ -390,6 +378,7 @@ describe('session content cutover schema', () => {
     conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL); INSERT INTO schema_meta VALUES('schema_version','1');")
     runMigrations(conn)
     conn.prepare('INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(?)').run(1)
+    conn.exec("ALTER TABLE session_message_content_cutover ADD COLUMN api_read_mode TEXT NOT NULL DEFAULT 'legacy'")
     conn.exec(`
       DROP TRIGGER track_pending_history_cursor_allocation;
       DROP TRIGGER settle_pending_history_cursor_allocation;
@@ -503,6 +492,7 @@ describe('session content cutover schema', () => {
       'track_pending_history_cursor_allocation','settle_pending_history_cursor_allocation',
       'invalidate_session_projections_after_history_cursor_update','invalidate_session_projections_after_history_cursor_delete'
     )`).all()).toHaveLength(4)
+    conn.exec("ALTER TABLE session_message_content_cutover ADD COLUMN api_read_mode TEXT NOT NULL DEFAULT 'legacy'")
     conn.exec(`
       UPDATE schema_meta SET value='40' WHERE key='schema_version';
       CREATE TRIGGER fail_replayed_v41_version_update BEFORE UPDATE OF value ON schema_meta

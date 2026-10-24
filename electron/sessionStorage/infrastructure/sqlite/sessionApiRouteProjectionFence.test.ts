@@ -64,6 +64,7 @@ describe('SQLite API and route projection fence', () => {
     const before = store.readSourceIdentity(session.id, session.generation)
     const conn = getDbConnection(db)
 
+    conn.exec("ALTER TABLE session_message_content_cutover ADD COLUMN api_read_mode TEXT NOT NULL DEFAULT 'legacy'")
     conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='revalidation-required' WHERE session_id=?").run(session.id)
 
     expect(store.readSourceIdentity(session.id, session.generation)).toBe(before)

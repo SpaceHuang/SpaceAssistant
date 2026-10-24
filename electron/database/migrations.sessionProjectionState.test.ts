@@ -31,7 +31,7 @@ describe('session projection state schema', () => {
     const upgraded = openSqliteDatabase(dbPath)
     const upgradedConn = getDbConnection(upgraded)
     expect(upgradedConn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
-      .toEqual({ value: '113' })
+      .toEqual({ value: '115' })
 
     const columns = (table: string) => (upgradedConn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(({ name }) => name)
     expect(columns('session_projection_state')).toEqual(expect.arrayContaining([
@@ -64,7 +64,7 @@ describe('session projection state schema', () => {
     upgraded.close()
     const reopened = openSqliteDatabase(dbPath)
     expect(getDbConnection(reopened).prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion))
-      .toEqual({ value: '113' })
+      .toEqual({ value: '115' })
     expect(getDbConnection(reopened).prepare('SELECT COUNT(*) AS count FROM session_projection_state').get()).toEqual({ count: 0 })
     reopened.close()
   })

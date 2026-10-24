@@ -3,7 +3,7 @@ import path from 'path'
 import { DatabaseSync } from 'node:sqlite'
 import { createDebouncedDbSave } from '../dbSaveScheduler'
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { CREATE_TABLES_SQL } from './schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
 import { runMigrations } from './migrations'
 
 /**
@@ -80,7 +80,14 @@ function configureConnection(conn: DatabaseSync): void {
 }
 
 function initSchema(conn: DatabaseSync): void {
-  conn.exec(CREATE_TABLES_SQL)
+  const hasSchemaMeta = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_meta'").get() !== undefined
+  const row = hasSchemaMeta
+    ? conn.prepare('SELECT value FROM schema_meta WHERE key=?').get(SCHEMA_META_KEYS.schemaVersion) as { value: string } | undefined
+    : undefined
+  const version = row ? Number.parseInt(row.value, 10) : 0
+  // Once the current schema is established, replaying the historical CREATE script would
+  // recreate retired columns and trigger bodies. Versioned migrations own later upgrades.
+  if (!Number.isSafeInteger(version) || version < DB_SCHEMA_VERSION) conn.exec(CREATE_TABLES_SQL)
   runMigrations(conn)
 }
 
