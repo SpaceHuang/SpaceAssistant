@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder'
 import { PROJECTION_SPECS } from '../../domain/projectionSpec'
 import type { VerifiedChatBody } from './projectionChatBodyCachePayload'
 
@@ -5,7 +6,8 @@ const MAX_METADATA_VALUE_BYTES = 64 * 1024
 const MAX_SEARCH_RESULTS = 10_000
 const ENVELOPE_FIELDS = new Set(['formatVersion', 'scopeKey', 'specVersion', 'sessionId', 'sessionGeneration',
   'sourceIdentityJson', 'historyWatermarkJson', 'messages'])
-const MESSAGE_FIELDS = [...PROJECTION_SPECS.chatBodyV1.outputFields].sort().join(',')
+const MESSAGE_FIELD_NAMES = [...PROJECTION_SPECS.chatBodyV1.outputFields].sort()
+const MESSAGE_FIELDS = new Set<string>(MESSAGE_FIELD_NAMES)
 
 type StreamOperation = Readonly<{ kind: 'select'; messageIds: readonly string[] }> |
   Readonly<{ kind: 'search'; query: string; limit: number }>
@@ -53,7 +55,7 @@ export async function readVerifiedChatBodyPayloadStream(
         await reader.skipWhitespace()
         if (await reader.peek() !== 0x5d) {
           while (true) {
-            const message = validateMessage(await reader.readJsonValue(), messageCount, ids)
+            const message = validateMessage(await reader.readMessage(), messageCount, ids)
             if (input.operation.kind === 'select') {
               if (wanted!.has(message.id)) selected.set(message.id, message)
             } else if (needle && foldAscii(message.content).includes(needle)) {
@@ -137,7 +139,8 @@ function validateEnvelope(metadata: Record<string, unknown>, messagesSeen: boole
 function validateMessage(value: unknown, _ordinal: number, ids: Set<string>): VerifiedChatBody {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_INVALID')
   const message = value as Record<string, unknown>
-  if (Object.keys(message).sort().join(',') !== MESSAGE_FIELDS || typeof message.id !== 'string' || !message.id || ids.has(message.id) ||
+  if (Object.keys(message).length !== MESSAGE_FIELD_NAMES.length || Object.keys(message).some((key) => !MESSAGE_FIELDS.has(key)) ||
+    typeof message.id !== 'string' || !message.id || ids.has(message.id) ||
     (message.role !== 'user' && message.role !== 'assistant') || typeof message.content !== 'string' || !Number.isSafeInteger(message.timestamp)) {
     throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_INVALID')
   }
@@ -188,6 +191,98 @@ class JsonValueStreamReader {
     const raw = await this.readRawValue(maxBytes)
     try { return JSON.parse(raw.toString('utf8')) as unknown }
     catch { throw new Error('PROJECTION_CHAT_BODY_CACHE_ENVELOPE_INVALID') }
+  }
+
+  async readJsonString(maxBytes = Number.POSITIVE_INFINITY): Promise<string> {
+    await this.expect('"')
+    const fragments: string[] = []
+    let decoder = new StringDecoder('utf8')
+    let rawBytes = 0
+    const countBytes = (count: number) => {
+      rawBytes += count
+      if (rawBytes > maxBytes) throw new Error('PROJECTION_CHAT_BODY_CACHE_METADATA_LIMIT_EXCEEDED')
+    }
+    const append = (buffer: Buffer) => {
+      countBytes(buffer.byteLength)
+      const decoded = decoder.write(buffer)
+      if (decoded) fragments.push(decoded)
+    }
+
+    while (true) {
+      await this.ensureChunk()
+      if (this.offset >= this.chunk.byteLength) throw new Error('PROJECTION_CHAT_BODY_CACHE_ENVELOPE_INVALID')
+      const start = this.offset
+      while (this.offset < this.chunk.byteLength) {
+        const byte = this.chunk[this.offset]!
+        if (byte === 0x22 || byte === 0x5c || byte < 0x20) break
+        this.offset += 1
+      }
+      append(this.chunk.subarray(start, this.offset))
+      if (this.offset >= this.chunk.byteLength) continue
+      const delimiter = await this.read()
+      if (delimiter === 0x22) {
+        const tail = decoder.end()
+        if (tail) fragments.push(tail)
+        return fragments.join('')
+      }
+      if (delimiter === 0x5c) {
+        countBytes(2)
+        const tail = decoder.end()
+        if (tail) fragments.push(tail)
+        const escaped = await this.read()
+        const escapeMap: Record<number, string> = {
+          0x22: '"', 0x5c: '\\', 0x2f: '/', 0x62: '\b', 0x66: '\f', 0x6e: '\n', 0x72: '\r', 0x74: '\t'
+        }
+        if (escaped === 0x75) {
+          countBytes(4)
+          let codeUnit = 0
+          for (let index = 0; index < 4; index += 1) {
+            const hex = await this.read()
+            const digit = hex === undefined ? -1 : parseInt(String.fromCharCode(hex), 16)
+            if (digit < 0 || digit > 15) throw new Error('PROJECTION_CHAT_BODY_CACHE_ENVELOPE_INVALID')
+            codeUnit = codeUnit * 16 + digit
+          }
+          fragments.push(String.fromCharCode(codeUnit))
+        } else if (escaped !== undefined && Object.hasOwn(escapeMap, escaped)) {
+          fragments.push(escapeMap[escaped]!)
+        } else {
+          throw new Error('PROJECTION_CHAT_BODY_CACHE_ENVELOPE_INVALID')
+        }
+        decoder = new StringDecoder('utf8')
+        continue
+      }
+      throw new Error('PROJECTION_CHAT_BODY_CACHE_ENVELOPE_INVALID')
+    }
+  }
+
+  async readMessage(): Promise<unknown> {
+    await this.skipWhitespace()
+    await this.expect('{')
+    const value: Record<string, unknown> = Object.create(null) as Record<string, unknown>
+    const fields = new Set<string>()
+    await this.skipWhitespace()
+    if (await this.peek() !== 0x7d) {
+      while (true) {
+        const key = await this.readJsonString(1024)
+        if (fields.has(key) || !MESSAGE_FIELDS.has(key)) throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_INVALID')
+        fields.add(key)
+        await this.skipWhitespace()
+        await this.expect(':')
+        await this.skipWhitespace()
+        value[key] = key === 'content' || key === 'id' || key === 'role'
+          ? await this.readJsonString(key === 'content' ? Number.POSITIVE_INFINITY : 64 * 1024)
+          : await this.readJsonValue(64)
+        await this.skipWhitespace()
+        const separator = await this.read()
+        if (separator === 0x7d) break
+        if (separator !== 0x2c) throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_INVALID')
+        await this.skipWhitespace()
+      }
+    } else {
+      await this.expect('}')
+    }
+    if (fields.size !== MESSAGE_FIELD_NAMES.length) throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_INVALID')
+    return value
   }
 
   private async readRawValue(maxBytes: number): Promise<Buffer> {

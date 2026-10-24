@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { encodeProjectionScopeKey } from '../../domain/scopeKey'
 import { readVerifiedChatBodyPayloadStream } from './projectionChatBodyCacheStream'
 
@@ -64,5 +64,25 @@ describe('stream-verified chatBodyV1 payload reader', () => {
       operation: { kind: 'search', query: 'needle', limit: -1 } })).rejects.toThrow('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
     await expect(readVerifiedChatBodyPayloadStream(source(), { ...input,
       operation: { kind: 'search', query: 'needle', limit: 10_001 } })).rejects.toThrow('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
+  })
+
+  it('does not JSON.parse an entire large message while scanning a spill stream', async () => {
+    const content = `前缀\n"引号"\\反斜线\u0000${'large-message-'.repeat(16_384)}尾部😀`
+    const messages = [{ id: 'large-message', role: 'assistant', content, timestamp: 1 }]
+    const payload = payloadFor(messages)
+    const parse = vi.spyOn(JSON, 'parse')
+    async function* source() {
+      for (let offset = 0; offset < payload.bytes.byteLength; offset += 257) yield payload.bytes.subarray(offset, offset + 257)
+    }
+
+    try {
+      const result = await readVerifiedChatBodyPayloadStream(source(), { ...payload, byteLength: payload.bytes.byteLength,
+        operation: { kind: 'select', messageIds: ['large-message'] } })
+
+      expect(result).toEqual(messages)
+      expect(Math.max(...parse.mock.calls.map(([value]) => String(value).length))).toBeLessThan(1024)
+    } finally {
+      parse.mockRestore()
+    }
   })
 })
