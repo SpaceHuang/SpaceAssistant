@@ -135,7 +135,7 @@ export async function runImRemoteAgent(args: {
     const turn = getDbConnection(args.db).prepare('SELECT session_id,assistant_message_id FROM turns WHERE turn_id=? AND track_id=?')
       .get(turnId, track.trackId) as { session_id: string; assistant_message_id: string } | undefined
     if (!turn) throw new Error('TRACK_TERMINAL_TURN_BINDING_MISSING')
-    const assistant = storage.queries.readMessage({ sessionId: turn.session_id, messageId: turn.assistant_message_id })
+    const assistant = storage.queries.readMessageSkeleton({ sessionId: turn.session_id, messageId: turn.assistant_message_id })
     if (assistant?.role === 'assistant') {
       recordTrackModelMessage(args.db, { trackId: track.trackId, eventId: `track-model:${turnId}:${assistant.id}`,
         idempotencyKey: `track-model:${turnId}:${assistant.id}`, sessionId: turn.session_id, messageId: assistant.id,

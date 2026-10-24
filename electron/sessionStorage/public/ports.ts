@@ -5,7 +5,7 @@ import type { SessionDirectoryGrantRecord } from '../../../src/shared/sessionDir
 import type { SessionUsage } from '../../../src/shared/sessionUsage'
 import type { EnqueueResult, MessageEntry, RemoteSessionIdentityUpdate, ContinuationSourceInspection,
   ContinuationRecoveryFacts, MessageRef, ChatMessagePage, ApiContextBaseline, ContextHistorySummaryBaseline, CanonicalContextMeterEvent,
-  RoutingRead, RouteInput, SelectionFence, ExportPage, SearchCorpusPage, MessageSearchHit, RetryContextTarget,
+  RoutingRead, RouteInput, SelectionFence, ExportPage, SearchCorpusPage, MessageSearchHit, MessageSkeleton, RetryContextTarget,
   PreparedChatBodyView,
 } from './model'
 import type { HistoryPort, HistorySnapshot } from '../../../packages/agent-sdk/src/history'
@@ -117,6 +117,8 @@ export interface SessionQueries {
   readSessionUsage(sessionId: string): SessionUsage | undefined
   listSessions(options?: { view?: 'all' | 'user-visible' }): Session[]
   readMessage(ref: MessageRef): Message | undefined
+  /** Read control metadata without materializing message content. */
+  readMessageSkeleton(ref: MessageRef): MessageSkeleton | undefined
   readMessages(input: { sessionId: string; limit?: number; offset?: number }): Message[]
   /** Counts queued user rows from the message index without materializing transcript bodies. */
   countQueuedMessages?(sessionId: string): number

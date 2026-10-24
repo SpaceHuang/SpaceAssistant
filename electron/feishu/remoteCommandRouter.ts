@@ -279,7 +279,7 @@ export class RemoteCommandRouter {
       const acceptedSnapshot = readAcceptedTurn(this.deps.db, session.id, requestId)
       if (priorTurn?.state === 'terminal' && priorTurn.userMessageId === messageId &&
         acceptedSnapshot?.currentUserMessageId === messageId && !queuedView && !channelContext.clarificationWorkId) {
-        const terminalMessage = this.deps.sessionStorage.queries.readMessage({ sessionId: session.id, messageId })
+        const terminalMessage = this.deps.sessionStorage.queries.readMessageSkeleton({ sessionId: session.id, messageId })
         if (terminalMessage?.role !== 'user' || terminalMessage.status !== 'sent') throw new Error('FEISHU_WAKE_TERMINAL_MESSAGE_INVALID')
         if (channelContext.trackId) convergeRemoteTrackTerminal(this.deps.db, { trackId: channelContext.trackId,
           target: priorTurn.outcome === 'completed' || priorTurn.outcome === 'parked' ? 'completed' : priorTurn.outcome === 'cancelled' ? 'cancelled' : 'failed',

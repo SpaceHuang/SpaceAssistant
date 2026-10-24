@@ -195,6 +195,10 @@ describe('SQLite session storage public queries', () => {
     expect(previousPage.entries.map(({ message }) => message.id)).toEqual(['message-1', 'message-2', 'message-3', 'message-4'])
     expect(previousPage).toMatchObject({ oldestSequence: 0, hasMoreBefore: false })
     expect(storage.queries.readMessage({ sessionId: session.id, messageId: 'message-2' })?.content).toBe('body-2')
+    expect(storage.queries.readMessageSkeleton({ sessionId: session.id, messageId: 'message-2' })).toEqual({
+      id: 'message-2', sessionId: session.id, role: 'assistant', timestamp: 2, status: 'completed', sequence: 1
+    })
+    expect(storage.queries.readMessageSkeleton({ sessionId: 'another-session', messageId: 'message-2' })).toBeUndefined()
     expect(storage.queries.readMessage({ sessionId: 'another-session', messageId: 'message-2' })).toBeUndefined()
     expect(storage.queries.readMessages({ sessionId: session.id, limit: 2, offset: 1 }).map(({ id }) => id))
       .toEqual(['message-2', 'message-3'])

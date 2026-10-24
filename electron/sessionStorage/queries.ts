@@ -26,7 +26,7 @@ import {
   searchProjectedMessages
 } from '../runtime/sessionTranscriptProjection'
 import type { SessionQueries } from './public/ports'
-import type { MessageRef, MessageSearchHit, RetryContextTarget } from './public/model'
+import type { MessageRef, MessageSearchHit, MessageSkeleton, RetryContextTarget } from './public/model'
 import { inspectContinuationSources } from './continuationSources'
 import { createRoutingQueries } from './routingQueries'
 import { getDbConnection } from '../database/sqliteStore'
@@ -101,6 +101,14 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
     readMessage: ({ sessionId, messageId }: MessageRef) => {
       const message = getProjectedMessage(db, messageId)
       return message?.sessionId === sessionId ? message : undefined
+    },
+    readMessageSkeleton: ({ sessionId, messageId }: MessageRef): MessageSkeleton | undefined => {
+      const skeleton = getMessageSkeleton(db, messageId)
+      if (!skeleton || skeleton.sessionId !== sessionId) return undefined
+      const sequence = getMessageSequence(db, sessionId, messageId)
+      if (sequence === null) return undefined
+      return { id: skeleton.id, sessionId: skeleton.sessionId, role: skeleton.role, timestamp: skeleton.timestamp,
+        status: skeleton.status, sequence }
     },
     readMessages: ({ sessionId, limit, offset }) => getProjectedMessages(db, sessionId, limit, offset),
     countQueuedMessages: (sessionId) => Number(getDbConnection(db).prepare(`SELECT COUNT(*) AS count FROM messages
