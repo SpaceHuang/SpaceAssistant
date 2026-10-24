@@ -716,12 +716,11 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'im-write-ask',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], actionClass: 'write', excludeSignals: [
-      'write-target-new', 'write-target-existing',
-      // Classified Feishu CLI writes have their own rule family (including the
-      // legacy larkCliWriteRequiresConfirm gate); keep them out of the unknown-write fallback.
-      'lark-standard-low-write', 'lark-message-target:self', 'lark-message-target:direct-other'
-    ] },
+    match: { lane: ['wechat', 'feishu'], actionClass: 'write', excludeSignals: ['write-target-new', 'write-target-existing'] },
+    // Classified Feishu CLI writes have a dedicated default rule family. Keep
+    // them out of this default fallback while preserving the original override
+    // match domain for user deny/ask/allow actions.
+    defaultActionExcludeSignals: ['lark-standard-low-write', 'lark-message-target:self', 'lark-message-target:direct-other'],
     denyClass: 'insufficient-info',
     action: 'ask', cacheableAsk: true,
     reason: '未被低风险分类或人工确认底线覆盖的 IM 写入，交由标准档审核 Agent 评估'

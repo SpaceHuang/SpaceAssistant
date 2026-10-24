@@ -107,6 +107,20 @@ describe('INV-03 unified action arbitration regression probes', () => {
     expect(decide(facts, { ...mkContext('desktop'), policyTier: 'custom' }, rules, deps({ migrationComplete: true })))
       .toMatchObject({ type: 'deny', ruleId: 'mcp-tool-ask' })
   })
+
+  it.each(['doc_write', 'calendar'] as const)('用户 IM 写入 deny 保留原匹配域：%s', (category) => {
+    const lane = 'feishu' as const
+    const rules = resolvePolicyRules({ lane, packages: { [lane]: 'custom' },
+      overrides: [{ ruleId: 'im-write-ask', action: 'deny' }], rules: DEFAULT_POLICY_RULES })
+    const facts = mkFacts('run_lark_cli', 'write', [{ kind: 'lark-subcommand', impact: 'low_write', category, completeness: 'complete' } as never], 'low')
+    const defaults = resolvePolicyRules({ lane, packages: { [lane]: 'custom' }, rules: DEFAULT_POLICY_RULES })
+    expect(decide(facts, { ...mkContext(lane), policyTier: 'custom' }, defaults,
+      deps({ config: { larkCliWriteRequiresConfirm: false }, migrationComplete: true })))
+      .toMatchObject({ type: 'auto-allow', ruleId: 'im-lark-low-write-review' })
+    expect(decide(facts, { ...mkContext(lane), policyTier: 'custom' }, rules,
+      deps({ config: { larkCliWriteRequiresConfirm: false }, migrationComplete: true })))
+      .toMatchObject({ type: 'deny', ruleId: 'im-write-ask' })
+  })
 })
 
 describe('decide：脚本规则族（规范条目顺序）', () => {

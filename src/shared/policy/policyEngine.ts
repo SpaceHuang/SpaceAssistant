@@ -492,7 +492,12 @@ export function decide(
   // Resolve matched actions once so deny, explicit user choices and fallback
   // arbitration use the same effective-action interpretation.
   const matchedActions = invocationRules
-    .filter(matchedRule)
+    .filter((rule) => {
+      if (!matchedRule(rule)) return false
+      if (rule.userOverride || !rule.defaultActionExcludeSignals?.some((signal) => signalTokenSet(policyFacts).has(signal))) return true
+      const effectiveAction = deps.transform ? deps.transform(rule) : rule.action
+      return effectiveAction !== 'ask' && effectiveAction !== 'auto-evaluator'
+    })
     .map((rule) => {
       const transformedAction = rule.userOverride ? rule.action : deps.transform ? deps.transform(rule) : rule.action
       return { rule, action: transformedAction, transformed: !rule.userOverride && transformedAction !== rule.action }
