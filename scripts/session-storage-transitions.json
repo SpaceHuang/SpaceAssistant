@@ -1,0 +1,341 @@
+[
+  {
+    "source": "electron/main.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "createSqliteStartupHistoryRecoveryBindings"
+    ],
+    "typeOnly": false,
+    "owner": "Electron composition root",
+    "reason": "Startup recovery still constructs the SQLite host adapter at the process boundary.",
+    "exitStage": "P2",
+    "evidence": "electron/main.ts startup recovery composition; sessionHistoryRecoveryHost.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionProjectionConsistencyAudit.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "hasCurrentProjectionEligibility",
+      "readLegacyProjectionMessages"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage projection consistency audit",
+    "reason": "Audit compatibility reads remain while the audit is migrated behind the application port.",
+    "exitStage": "P2",
+    "evidence": "sessionProjectionConsistencyAudit.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionProjectionRejection.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "createProjectionService",
+      "createSqliteProjectionStateStore"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage projection rejection adapter",
+    "reason": "Runtime rejection operations retain a host binding during projection service integration.",
+    "exitStage": "P2",
+    "evidence": "sessionProjectionRejection.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionProjectionRevalidation.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "computeCanonicalProjectionFingerprint",
+      "publishTranscriptParityProof",
+      "readLegacyProjectionMessages",
+      "refreshValidatedProjectionFastPath",
+      "validateCanonicalProjection"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage projection revalidation adapter",
+    "reason": "Revalidation still orchestrates SQLite facts and parity publication through named host bindings.",
+    "exitStage": "P2",
+    "evidence": "sessionProjectionRevalidation.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionStorageShadow.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "hasCurrentProjectionEligibility",
+      "readLegacyProjectionMessages",
+      "readLegacyTurnContextSkeleton",
+      "iterateLegacyTurnRoutingSkeletons"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage shadow adapter",
+    "reason": "Shadow compatibility selection remains in runtime until its query contract is fully ported.",
+    "exitStage": "P2",
+    "evidence": "sessionStorageShadow.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionProjectionMigration.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "hasCurrentProjectionEligibility"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage projection migration",
+    "reason": "Migration inventory uses the current eligibility fact while ownership migration remains in progress.",
+    "exitStage": "P2",
+    "evidence": "sessionProjectionMigration.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionProjectionMigrationInventory.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "hasCurrentProjectionEligibility",
+      "readLegacyProjectionMessages"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage migration inventory",
+    "reason": "Inventory retains a named legacy source reader pending its read-port migration.",
+    "exitStage": "P2",
+    "evidence": "sessionProjectionMigrationInventory.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionProjectionLegacyBaseline.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "readLegacyProjectionMessages"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage migration baseline",
+    "reason": "Baseline capture uses the adapter-owned legacy source query until the baseline port is consolidated.",
+    "exitStage": "P2",
+    "evidence": "sessionProjectionLegacyBaseline.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionContentWriteAuthority.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "createSqliteSessionApiRouteProjectionFence"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage API route fence",
+    "reason": "The runtime write authority delegates to a SQLite fence factory during port migration.",
+    "exitStage": "P2",
+    "evidence": "sessionContentWriteAuthority.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionTranscriptProjection.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "resolveSelectedMessageBodies",
+      "hasCurrentProjectionEligibility",
+      "publishTranscriptParityProof",
+      "refreshValidatedProjectionFastPath",
+      "selectRecentTurnRoutingMessages",
+      "selectTurnContext",
+      "readLegacyApiContextBaseline",
+      "readLegacyChatMessagePage",
+      "readLegacyMessage",
+      "readLegacyMessageSkeletons",
+      "readLegacyMessages",
+      "readLegacyMessagesPageWithSequence",
+      "readLegacySearchCorpusPage",
+      "readLegacyRetryContext",
+      "ApiContextBaselineResult",
+      "ChatMessagePage",
+      "MessageSearchHit",
+      "MessagesPageWithSequence",
+      "RetryContextTarget",
+      "SearchCorpusPage"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage transcript projection reader",
+    "reason": "Projection selection and legacy compatibility query orchestration are being moved behind the public History read port.",
+    "exitStage": "P2",
+    "evidence": "sessionTranscriptProjection.test.ts; sessionStorageBoundary.test.ts"
+  },
+  {
+    "source": "electron/storage/sessionEventRetention.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "createSessionLedgerCompactionDependencyGuard",
+      "createCanonicalSessionProjectionRetentionPreparer"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage retention adapter",
+    "reason": "Retention delegates projection and ledger dependency preparation to named SQLite participants.",
+    "exitStage": "P2",
+    "evidence": "sessionEventRetention.test.ts"
+  },
+  {
+    "source": "electron/storage/sessionProjectionCacheMaintenance.ts",
+    "target": "electron/sessionStorage/sqliteRuntimeBindings",
+    "symbols": [
+      "createSqliteProjectionStateStore",
+      "createProjectionService"
+    ],
+    "typeOnly": false,
+    "owner": "SessionStorage projection cache maintenance",
+    "reason": "Maintenance currently assembles storage-backed cache retirement participants.",
+    "exitStage": "P2",
+    "evidence": "sessionStorageMaintenance.test.ts"
+  },
+  {
+    "source": "electron/main.ts",
+    "target": "electron/sessionStorage/sqliteSessionStorage",
+    "symbols": [
+      "createSessionLedgerRecoveryBindings",
+      "createSessionTurnRuntime",
+      "createSqliteProjectionBuildTask",
+      "createSqliteSessionStorageHost"
+    ],
+    "typeOnly": false,
+    "owner": "Electron composition root",
+    "reason": "The process composition root constructs concrete SessionStorage host services.",
+    "exitStage": "P2",
+    "evidence": "main.ts; appIpc.ts composition tests"
+  },
+  {
+    "source": "electron/appIpc.ts",
+    "target": "electron/sessionStorage/sqliteSessionStorage",
+    "symbols": [
+      "createSqliteSessionStorage"
+    ],
+    "typeOnly": false,
+    "owner": "Electron IPC composition root",
+    "reason": "IPC registration receives the concrete SQLite storage adapter at composition time.",
+    "exitStage": "P2",
+    "evidence": "appIpc tests; sessionStorageBoundary.test.ts"
+  },
+  {
+    "source": "electron/ipc/agentProtocolIpc.ts",
+    "target": "electron/sessionStorage/sqliteSessionStorage",
+    "symbols": [
+      "createSessionTurnRuntime"
+    ],
+    "typeOnly": false,
+    "owner": "Agent protocol IPC composition",
+    "reason": "Agent protocol IPC currently constructs the turn runtime from the storage root facade.",
+    "exitStage": "P2",
+    "evidence": "agentProtocolIpc tests"
+  },
+  {
+    "source": "electron/testSupport/invocationAssembler.ts",
+    "target": "electron/sessionStorage/sqliteSessionStorage",
+    "symbols": [
+      "createSqliteSessionStorage"
+    ],
+    "typeOnly": false,
+    "owner": "Test support composition",
+    "reason": "Test support constructs the same SQLite storage adapter used by production composition.",
+    "exitStage": "P2",
+    "evidence": "sessionStorageBoundary.test.ts"
+  },
+  {
+    "source": "electron/testSupport/claudeStreamHandlers.ts",
+    "target": "electron/sessionStorage/sqliteSessionStorage",
+    "symbols": [
+      "createSqliteSessionStorage"
+    ],
+    "typeOnly": false,
+    "owner": "Test support composition",
+    "reason": "Stream test support constructs the SQLite storage adapter for integration fixtures.",
+    "exitStage": "P2",
+    "evidence": "sessionStorageBoundary.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionStorageCleanupAuthorization.ts",
+    "target": "electron/sessionStorage/certification",
+    "symbols": [
+      "certifyCanonicalSessionApiRead"
+    ],
+    "typeOnly": false,
+    "owner": "Session content cleanup authorization",
+    "reason": "Authorization checks current projection certification through the named certification surface.",
+    "exitStage": "P2",
+    "evidence": "sessionStorageCleanupAuthorization tests"
+  },
+  {
+    "source": "electron/runtime/sessionStorageCleanupProduction.ts",
+    "target": "electron/sessionStorage/certification",
+    "symbols": [
+      "certifyCanonicalSessionApiRead"
+    ],
+    "typeOnly": false,
+    "owner": "Session content cleanup production",
+    "reason": "Cleanup production rechecks certification before destructive cleanup transitions.",
+    "exitStage": "P2",
+    "evidence": "sessionMessageContentCleanupMaintenance.test.ts"
+  },
+  {
+    "source": "electron/runtime/sessionStorageCleanupAuthorization.ts",
+    "target": "electron/sessionStorage/maintenance",
+    "symbols": [
+      "getSessionMessageContentCleanupAuthorizationSnapshotSha256"
+    ],
+    "typeOnly": false,
+    "owner": "Session content cleanup authorization",
+    "reason": "Authorization binds its decision to the maintenance participant snapshot digest.",
+    "exitStage": "P2",
+    "evidence": "sessionStorageCleanupAuthorization tests"
+  },
+  {
+    "source": "electron/runtime/sessionStorageCleanupProduction.ts",
+    "target": "electron/sessionStorage/maintenance",
+    "symbols": [
+      "beginSessionMessageContentCleanup",
+      "clearNextSessionMessageContentBatch",
+      "markSessionMessageContentWriteStopped",
+      "verifyAndCompleteSessionMessageContentCleanup",
+      "SessionMessageContentCleanupBatchResult"
+    ],
+    "typeOnly": false,
+    "owner": "Session content cleanup production",
+    "reason": "Runtime cleanup orchestration invokes named bounded maintenance participants.",
+    "exitStage": "P2",
+    "evidence": "sessionMessageContentCleanupMaintenance.test.ts"
+  },
+  {
+    "source": "electron/main.ts",
+    "target": "electron/sessionStorage/lifecycle",
+    "symbols": [
+      "createLifecycleTaskHandle"
+    ],
+    "typeOnly": false,
+    "owner": "Electron lifecycle composition",
+    "reason": "Application shutdown composition owns lifecycle task handle construction.",
+    "exitStage": "P2",
+    "evidence": "main.ts lifecycle tests"
+  },
+  {
+    "source": "electron/storage/maintenanceScheduler.ts",
+    "target": "electron/sessionStorage/lifecycle",
+    "symbols": [
+      "createLifecycleTaskHandle"
+    ],
+    "typeOnly": false,
+    "owner": "Storage maintenance scheduler",
+    "reason": "Scheduler uses the shared lifecycle handle contract during shutdown migration.",
+    "exitStage": "P2",
+    "evidence": "maintenanceScheduler tests"
+  },
+  {
+    "source": "electron/storage/spillReferenceBackfillScheduler.ts",
+    "target": "electron/sessionStorage/lifecycle",
+    "symbols": [
+      "createLifecycleTaskHandle"
+    ],
+    "typeOnly": false,
+    "owner": "Spill reference backfill scheduler",
+    "reason": "Backfill scheduler uses the shared lifecycle handle contract during shutdown migration.",
+    "exitStage": "P2",
+    "evidence": "spillReferenceBackfillScheduler tests"
+  },
+  {
+    "source": "electron/ipc/sessionIpc.ts",
+    "target": "electron/sessionStorage/contextPortRegistry",
+    "symbols": [
+      "bindSessionStorageContextPort",
+      "createBoundSessionContextAdapter"
+    ],
+    "typeOnly": false,
+    "owner": "Session IPC composition",
+    "reason": "Session IPC binds the active storage context port through a temporary registry seam.",
+    "exitStage": "P2",
+    "evidence": "sessionIpc tests; sessionStorageBoundary.test.ts"
+  }
+]

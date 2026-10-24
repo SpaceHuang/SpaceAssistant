@@ -7,6 +7,25 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { findSessionStorageModuleViolations, findSessionStoragePublicTypeLeaks } from '../../scripts/check-session-storage-module-graph.mjs'
 
 describe('session storage module graph rules', () => {
+  it('requires metadata for each remaining SessionStorage transition edge', () => {
+    const transitions = JSON.parse(readFileSync(path.resolve('scripts/session-storage-transitions.json'), 'utf8')) as Array<{
+      source: string; target: string; symbols: string[]; typeOnly: boolean; owner: string; reason: string; exitStage: string; evidence: string
+    }>
+    expect(transitions.length).toBeGreaterThan(0)
+    for (const transition of transitions) {
+      expect(transition.source).toMatch(/^electron\//)
+      expect(transition.target).toMatch(/^electron\/sessionStorage\//)
+      expect(transition.symbols.length).toBeGreaterThan(0)
+      expect(transition.owner.trim()).not.toBe('')
+      expect(transition.reason.trim()).not.toBe('')
+      expect(transition.exitStage.trim()).not.toBe('')
+      expect(transition.evidence.trim()).not.toBe('')
+    }
+    const scanner = readFileSync(path.resolve('scripts/check-session-storage-module-graph.mjs'), 'utf8')
+    expect(scanner).not.toContain('runtimeBindingCallers')
+    expect(scanner).not.toContain('runtimeFacadeCallers')
+  })
+
   it('retires the legacy scanner and baseline after all exceptions are closed', () => {
     const packageJson = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8')) as { scripts: Record<string, string> }
     expect(packageJson.scripts['check:session-storage-boundary']).toBe('node scripts/check-session-storage-module-graph.mjs')

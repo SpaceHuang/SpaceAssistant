@@ -11,6 +11,9 @@ const exceptionEntries = JSON.parse(readFileSync(path.join(root, 'scripts/sessio
 const crossDirectoryExceptions = new Map(exceptionEntries.map((entry) => [
   `${entry.source}|${entry.target}|${entry.symbols.join(',')}|${entry.typeOnly}`, entry]))
 const observedCrossDirectoryExceptions = new Set()
+const sessionStorageTransitions = JSON.parse(readFileSync(path.join(root, 'scripts/session-storage-transitions.json'), 'utf8'))
+const transitionByEdge = new Map(sessionStorageTransitions.map((entry) => [`${entry.source}|${entry.target}`, entry]))
+const observedSessionStorageTransitions = new Set()
 
 function categoryFor(filePath) {
   const normalized = filePath.replaceAll('\\', '/')
@@ -85,59 +88,23 @@ export function findSessionStorageModuleViolations(filePath, source) {
   const normalizedFile = filePath.replaceAll('\\', '/')
   const rawSessionMessageReads = new Set(['getMessage', 'getMessages', 'getMessageSkeletons', 'getChatMessagePage',
     'getMessagesPageWithSequence', 'getSearchCorpusPage', 'searchMessages', 'getApiContextBaseline', 'getTurnContext', 'resolveRetryContext'])
-  const runtimeBindingCallers = new Map([
-    ['electron/main.ts', new Set(['createSqliteStartupHistoryRecoveryBindings'])],
-    ['electron/runtime/sessionProjectionConsistencyAudit.ts', new Set(['hasCurrentProjectionEligibility', 'readLegacyProjectionMessages'])],
-    ['electron/runtime/sessionProjectionRejection.ts', new Set(['createProjectionService', 'createSqliteProjectionStateStore'])],
-    ['electron/runtime/sessionProjectionRevalidation.ts', new Set(['computeCanonicalProjectionFingerprint', 'publishTranscriptParityProof',
-      'readLegacyProjectionMessages', 'refreshValidatedProjectionFastPath', 'validateCanonicalProjection'])],
-    ['electron/runtime/sessionStorageShadow.ts', new Set(['hasCurrentProjectionEligibility', 'readLegacyProjectionMessages',
-      'readLegacyTurnContextSkeleton', 'iterateLegacyTurnRoutingSkeletons'])],
-    ['electron/runtime/sqliteAgentHistory.ts', new Set(['hasRejectedTranscriptParityStateInConnection'])],
-    ['electron/runtime/sessionProjectionMigration.ts', new Set(['hasCurrentProjectionEligibility'])],
-    ['electron/runtime/sessionProjectionMigrationInventory.ts', new Set(['hasCurrentProjectionEligibility', 'readLegacyProjectionMessages'])],
-    ['electron/runtime/sessionProjectionLegacyBaseline.ts', new Set(['readLegacyProjectionMessages'])],
-    ['electron/runtime/sessionContentWriteAuthority.ts', new Set(['createSqliteSessionApiRouteProjectionFence'])],
-    ['electron/runtime/sessionTranscriptProjection.ts', new Set(['resolveSelectedMessageBodies', 'hasCurrentProjectionEligibility',
-      'publishTranscriptParityProof', 'refreshValidatedProjectionFastPath', 'selectRecentTurnRoutingMessages', 'selectTurnContext',
-      'readLegacyApiContextBaseline', 'readLegacyChatMessagePage', 'readLegacyMessage', 'readLegacyMessageSkeletons',
-      'readLegacyMessages', 'readLegacyMessagesPageWithSequence', 'readLegacySearchCorpusPage', 'readLegacyRetryContext',
-      'ApiContextBaselineResult', 'ChatMessagePage', 'MessageSearchHit', 'MessagesPageWithSequence', 'RetryContextTarget', 'SearchCorpusPage'])],
-    ['electron/storage/sessionEventRetention.ts', new Set(['createSessionLedgerCompactionDependencyGuard', 'createCanonicalSessionProjectionRetentionPreparer'])],
-    ['electron/storage/sessionProjectionCacheMaintenance.ts', new Set(['createSqliteProjectionStateStore', 'createProjectionService'])],
-  ])
-  // Root facades that still re-export host/SQLite implementations are caller- and symbol-scoped.
-  // New application modules must consume SessionStorage ports instead of acquiring these capabilities.
-  const runtimeFacadeCallers = new Map([
-    ['electron/main.ts|electron/sessionStorage/sqliteSessionStorage', new Set([
-      'createSessionLedgerRecoveryBindings', 'createSessionTurnRuntime', 'createSqliteProjectionBuildTask', 'createSqliteSessionStorageHost'])],
-    ['electron/appIpc.ts|electron/sessionStorage/sqliteSessionStorage', new Set(['createSqliteSessionStorage'])],
-    ['electron/ipc/agentProtocolIpc.ts|electron/sessionStorage/sqliteSessionStorage', new Set(['createSessionTurnRuntime'])],
-    ['electron/testSupport/invocationAssembler.ts|electron/sessionStorage/sqliteSessionStorage', new Set(['createSqliteSessionStorage'])],
-    ['electron/testSupport/claudeStreamHandlers.ts|electron/sessionStorage/sqliteSessionStorage', new Set(['createSqliteSessionStorage'])],
-    ['electron/runtime/sessionStorageCleanupAuthorization.ts|electron/sessionStorage/certification', new Set(['certifyCanonicalSessionApiRead'])],
-    ['electron/runtime/sessionStorageCleanupProduction.ts|electron/sessionStorage/certification', new Set(['certifyCanonicalSessionApiRead'])],
-    ['electron/runtime/sessionStorageCleanupAuthorization.ts|electron/sessionStorage/maintenance', new Set(['getSessionMessageContentCleanupAuthorizationSnapshotSha256'])],
-    ['electron/runtime/sessionStorageCleanupProduction.ts|electron/sessionStorage/maintenance', new Set([
-      'beginSessionMessageContentCleanup', 'clearNextSessionMessageContentBatch', 'markSessionMessageContentWriteStopped',
-      'verifyAndCompleteSessionMessageContentCleanup', 'SessionMessageContentCleanupBatchResult'])],
-    ['electron/main.ts|electron/sessionStorage/lifecycle', new Set(['createLifecycleTaskHandle'])],
-    ['electron/storage/maintenanceScheduler.ts|electron/sessionStorage/lifecycle', new Set(['createLifecycleTaskHandle'])],
-    ['electron/storage/spillReferenceBackfillScheduler.ts|electron/sessionStorage/lifecycle', new Set(['createLifecycleTaskHandle'])],
-    ['electron/ipc/sessionIpc.ts|electron/sessionStorage/contextPortRegistry', new Set([
-      'bindSessionStorageContextPort', 'createBoundSessionContextAdapter'])],
-  ])
   const allowed = (edge) => {
     if (category === 'external-electron' && edge.resolved === 'electron/database/operations' &&
       edge.symbols.some((symbol) => rawSessionMessageReads.has(symbol))) return false
     if (category === 'external-electron' && edge.resolved === 'electron/sessionStorage/sqliteRuntimeBindings') {
-      const approved = runtimeBindingCallers.get(normalizedFile)
-      return !!approved && !edge.typeOnly && edge.symbols.length > 0 && edge.symbols.every((symbol) => approved.has(symbol))
+      const key = `${normalizedFile}|${edge.resolved}`
+      const transition = transitionByEdge.get(key)
+      const approved = !!transition && transition.typeOnly === edge.typeOnly && edge.symbols.length > 0 && edge.symbols.every((symbol) => transition.symbols.includes(symbol))
+      if (approved) observedSessionStorageTransitions.add(key)
+      return approved
     }
     if (category === 'external-electron' && /^electron\/sessionStorage\/[^/]+$/.test(edge.resolved)) {
       if (edge.resolved === 'electron/sessionStorage/contracts') return edge.typeOnly
-      const approved = runtimeFacadeCallers.get(`${normalizedFile}|${edge.resolved}`)
-      return !!approved && edge.symbols.length > 0 && edge.symbols.every((symbol) => approved.has(symbol))
+      const key = `${normalizedFile}|${edge.resolved}`
+      const transition = transitionByEdge.get(key)
+      const approved = !!transition && transition.typeOnly === edge.typeOnly && edge.symbols.length > 0 && edge.symbols.every((symbol) => transition.symbols.includes(symbol))
+      if (approved) observedSessionStorageTransitions.add(key)
+      return approved
     }
     if (category === 'external-electron') return !/^electron\/sessionStorage\/(?:application|infrastructure|internal)\//.test(edge.resolved)
     if (category === 'domain') return edge.resolved === 'src/shared/domainTypes'
@@ -356,6 +323,7 @@ function main() {
   if (process.argv.includes('--probe-illegal-edge')) return
   const sourceRoot = path.join(root, 'electron/sessionStorage')
   observedCrossDirectoryExceptions.clear()
+  observedSessionStorageTransitions.clear()
   const files = [...rootProductionFiles(sourceRoot), ...['domain', 'public', 'application', 'infrastructure', 'host', 'maintenance', 'internal'].flatMap((category) => filesUnder(path.join(sourceRoot, category))),
     ...ts.sys.readDirectory(path.join(root, 'electron'), ['.ts', '.tsx', '.mts', '.cts'], ['**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts', '**/*.spec.tsx'], undefined)
       .filter((file) => !path.relative(root, file).replaceAll('\\', '/').startsWith('electron/sessionStorage/'))]
@@ -379,6 +347,13 @@ function main() {
   if (staleExceptions.length) {
     console.error('[check:session-storage-module-graph] stale cross-directory exceptions:')
     for (const key of staleExceptions) console.error(`  - ${key}`)
+    process.exitCode = 1
+    return
+  }
+  const staleTransitions = [...transitionByEdge.keys()].filter((key) => !observedSessionStorageTransitions.has(key))
+  if (staleTransitions.length) {
+    console.error('[check:session-storage-module-graph] stale SessionStorage transitions:')
+    for (const key of staleTransitions) console.error(`  - ${key}`)
     process.exitCode = 1
     return
   }
