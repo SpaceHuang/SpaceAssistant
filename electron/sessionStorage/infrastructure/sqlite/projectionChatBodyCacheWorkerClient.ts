@@ -6,15 +6,20 @@ import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
 import type { PreparedChatBodyView } from '../../public/model'
-import { selectVerifiedChatBodyPayload } from './projectionChatBodyCachePayload'
+import { searchVerifiedChatBodyPayload, selectVerifiedChatBodyPayload } from './projectionChatBodyCachePayload'
 
 export type PreparedChatBodySelection = Readonly<{
   messages: readonly Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>[]
   /** Zero identifies a fully verified <=256 KiB inline payload read on the caller thread. */
   workerThreadId: number
 }>
+export type PreparedChatBodySearch = PreparedChatBodySelection
 
 const MAX_CACHE_WORKER_MS = 30_000
+const pendingSearchRequests = new Map<string, Readonly<{
+  resolve(value: PreparedChatBodySearch): void; reject(error: Error): void; timer: NodeJS.Timeout; limit: number
+}>>()
+let preparedSearchWorker: Worker | undefined
 
 function resolveWorkerPath(): string | undefined {
   const compiled = path.join(__dirname, 'projectionChatBodyCacheWorker.js')
@@ -49,13 +54,130 @@ export function readPreparedChatBodiesInWorker(input: Readonly<{
   messageIds: readonly string[]
   signal?: AbortSignal
 }>): Promise<PreparedChatBodySelection> {
+  return readPreparedChatBodyCache({ ...input, operation: 'select' })
+}
+
+/** Search a verified prepared snapshot, returning only bounded matches from the cache worker. */
+export function searchPreparedChatBodiesInWorker(input: Readonly<{
+  root: string
+  view: PreparedChatBodyView
+  query: string
+  limit: number
+  signal?: AbortSignal
+}>): Promise<PreparedChatBodySearch> {
+  if (input.view.inlinePayload !== undefined) return readPreparedChatBodyCache({ ...input, operation: 'search' })
+  return searchWithPreparedCacheWorker(input)
+}
+
+function searchWithPreparedCacheWorker(input: Readonly<{
+  root: string; view: PreparedChatBodyView; query: string; limit: number; signal?: AbortSignal
+}>): Promise<PreparedChatBodySearch> {
+  if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
+  const workerPath = path.join(__dirname, 'projectionChatBodyCacheSearchWorker.js')
+  const sourcePath = path.join(__dirname, 'projectionChatBodyCacheSearchWorker.ts')
+  const resolvedPath = fs.existsSync(workerPath) ? workerPath : fs.existsSync(sourcePath) ? sourcePath : undefined
+  if (!resolvedPath) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ENTRY_UNAVAILABLE'))
+  try {
+    if (!preparedSearchWorker) {
+      const worker = resolvedPath.endsWith('.ts') ? spawnSourceWorker(resolvedPath) : new Worker(resolvedPath, {
+        resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 }
+      })
+      preparedSearchWorker = worker
+      worker.on('message', (message: { requestId?: string; error?: string; result?: PreparedChatBodySearch }) => {
+        if (!message || typeof message.requestId !== 'string') return
+        const pending = pendingSearchRequests.get(message.requestId)
+        if (!pending) return
+        pendingSearchRequests.delete(message.requestId)
+        clearTimeout(pending.timer)
+        if (message.error) { pending.reject(new Error(message.error)); return }
+        const result = message.result
+        if (!result || !Array.isArray(result.messages) || result.messages.length > Math.max(0, pending.limit) ||
+          !Number.isSafeInteger(result.workerThreadId) || result.workerThreadId <= 0 ||
+          result.messages.some((item, index) => !item || typeof item.id !== 'string' || !item.id ||
+            (item.role !== 'user' && item.role !== 'assistant') || typeof item.content !== 'string' || !Number.isSafeInteger(item.timestamp) ||
+            (index > 0 && item.timestamp > result.messages[index - 1]!.timestamp))) {
+          pending.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_RESULT_INVALID'))
+          return
+        }
+        pending.resolve(result)
+      })
+      const fail = (error: Error) => {
+        if (preparedSearchWorker !== worker) return
+        preparedSearchWorker = undefined
+        for (const pending of pendingSearchRequests.values()) { clearTimeout(pending.timer); pending.reject(error) }
+        pendingSearchRequests.clear()
+      }
+      worker.once('error', fail)
+      worker.once('exit', (code) => fail(new Error(`PROJECTION_CHAT_BODY_CACHE_SEARCH_WORKER_EXIT:${code}`)))
+      // This worker is a bounded, reusable search service; its requests do not represent worker completion.
+      worker.unref()
+    }
+  } catch (error) {
+    preparedSearchWorker = undefined
+    return Promise.reject(new Error(`PROJECTION_CHAT_BODY_CACHE_WORKER_SPAWN_FAILED:${error instanceof Error ? error.message : String(error)}`))
+  }
+  const worker = preparedSearchWorker!
+  const requestId = randomUUID()
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      for (const [id, pending] of pendingSearchRequests) {
+        clearTimeout(pending.timer)
+        if (id !== requestId) pending.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_TIMEOUT'))
+      }
+      pendingSearchRequests.clear()
+      const failedWorker = preparedSearchWorker
+      preparedSearchWorker = undefined
+      if (failedWorker) void failedWorker.terminate()
+      reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_TIMEOUT'))
+    }, MAX_CACHE_WORKER_MS)
+    const onAbort = () => {
+      const pending = pendingSearchRequests.get(requestId)
+      if (!pending) return
+      pendingSearchRequests.delete(requestId)
+      clearTimeout(pending.timer)
+      reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
+    }
+    input.signal?.addEventListener('abort', onAbort, { once: true })
+    const settleResolve = (value: PreparedChatBodySearch) => { input.signal?.removeEventListener('abort', onAbort); resolve(value) }
+    const settleReject = (error: Error) => { input.signal?.removeEventListener('abort', onAbort); reject(error) }
+    pendingSearchRequests.set(requestId, { resolve: settleResolve, reject: settleReject, timer, limit: input.limit })
+    try { worker.postMessage({ requestId, root: input.root, sessionId: input.view.sessionId,
+      sessionGeneration: input.view.sessionGeneration, scopeKey: input.view.scopeKey, specVersion: input.view.specVersion,
+      sourceIdentityJson: input.view.sourceIdentityJson, payloadDigest: input.view.payloadDigest,
+      validatedRangeJson: input.view.validatedRangeJson, inlinePayload: input.view.inlinePayload,
+      blobLocator: input.view.blobLocator, blobByteLength: input.view.blobByteLength, query: input.query, limit: input.limit }) }
+    catch (error) {
+      pendingSearchRequests.delete(requestId)
+      clearTimeout(timer)
+      settleReject(error instanceof Error ? error : new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_WORKER_POST_FAILED'))
+    }
+  })
+}
+
+function readPreparedChatBodyCache(input: Readonly<{
+  root: string
+  view: PreparedChatBodyView
+  operation: 'select' | 'search'
+  messageIds?: readonly string[]
+  query?: string
+  limit?: number
+  signal?: AbortSignal
+}>): Promise<PreparedChatBodySelection> {
+  if (input.operation === 'select' && !input.messageIds) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID'))
+  if (input.operation === 'search' && (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit))) {
+    return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID'))
+  }
   if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
   if (input.view.inlinePayload !== undefined && Buffer.byteLength(input.view.inlinePayload, 'utf8') <= 256 * 1024) {
     try {
-      return Promise.resolve({ messages: selectVerifiedChatBodyPayload({ payload: Buffer.from(input.view.inlinePayload, 'utf8'),
+      const payload = { payload: Buffer.from(input.view.inlinePayload, 'utf8'),
         sessionId: input.view.sessionId, sessionGeneration: input.view.sessionGeneration, scopeKey: input.view.scopeKey,
         specVersion: input.view.specVersion, sourceIdentityJson: input.view.sourceIdentityJson,
-        payloadDigest: input.view.payloadDigest, validatedRangeJson: input.view.validatedRangeJson, messageIds: input.messageIds }),
+        payloadDigest: input.view.payloadDigest, validatedRangeJson: input.view.validatedRangeJson }
+      const messages = input.operation === 'select'
+        ? selectVerifiedChatBodyPayload({ ...payload, messageIds: input.messageIds! })
+        : searchVerifiedChatBodyPayload({ ...payload, query: input.query!, limit: input.limit! })
+      return Promise.resolve({ messages,
       workerThreadId: 0 })
     } catch (error) { return Promise.reject(error instanceof Error ? error : new Error('PROJECTION_CHAT_BODY_CACHE_INLINE_READ_FAILED')) }
   }
@@ -97,9 +219,12 @@ export function readPreparedChatBodiesInWorker(input: Readonly<{
       if (message.requestId !== requestId) { terminateWithError(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_PROTOCOL_MISMATCH')); return }
       if (message.error) { terminateWithError(new Error(message.error)); return }
       const result = message.result
-      if (!result || !Array.isArray(result.messages) || result.messages.length !== input.messageIds.length ||
+      if (!result || !Array.isArray(result.messages) || (input.operation === 'select' && result.messages.length !== input.messageIds!.length) ||
+        (input.operation === 'search' && ((input.limit! >= 0 && result.messages.length > input.limit!) || result.messages.some((item, index) =>
+          index > 0 && item.timestamp > result.messages[index - 1]!.timestamp))) ||
         !Number.isSafeInteger(result.workerThreadId) || result.workerThreadId <= 0 ||
-        result.messages.some((item, index) => !item || item.id !== input.messageIds[index] ||
+        result.messages.some((item, index) => !item || typeof item.id !== 'string' || !item.id ||
+          (input.operation === 'select' && item.id !== input.messageIds![index]) ||
           (item.role !== 'user' && item.role !== 'assistant') || typeof item.content !== 'string' || !Number.isSafeInteger(item.timestamp))) {
         terminateWithError(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_RESULT_INVALID'))
         return
@@ -111,7 +236,8 @@ export function readPreparedChatBodiesInWorker(input: Readonly<{
       if (!settled) finish(candidateError ?? (abortRequested ? new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED') :
         candidateResult && code === 0 ? undefined : new Error(`PROJECTION_CHAT_BODY_CACHE_WORKER_EXIT:${code}`)), candidateResult)
     })
-    try { worker.postMessage({ requestId, root: input.root, sessionId: input.view.sessionId,
+    try { worker.postMessage({ requestId, operation: input.operation, query: input.query, limit: input.limit,
+      root: input.root, sessionId: input.view.sessionId,
       sessionGeneration: input.view.sessionGeneration, scopeKey: input.view.scopeKey, specVersion: input.view.specVersion,
       sourceIdentityJson: input.view.sourceIdentityJson, payloadDigest: input.view.payloadDigest,
       validatedRangeJson: input.view.validatedRangeJson, inlinePayload: input.view.inlinePayload,

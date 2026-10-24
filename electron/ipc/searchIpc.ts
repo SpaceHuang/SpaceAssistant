@@ -5,6 +5,7 @@ import { SearchResult } from '../../src/shared/domainTypes'
 import { appendSearchHistory, listSearchHistory } from '../database/operations'
 import { searchFilesUnder } from './ipcShared'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
+import type { MessageSearchHit } from '../sessionStorage/public/model'
 
 export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 
@@ -16,15 +17,35 @@ export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const results: SearchResult[] = []
     const activeProfileId = ctx.workDirManager.getActiveProfileId()
     const storage = ctx.sessionStorage!
-    let hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })
-    if (storage.ensureChatBodyV1) {
-      const sessionIds = [...new Set(hits.filter((hit) => hit.requiresProjectionPreparation).map(({ sessionId }) => sessionId))]
-      if (sessionIds.length) {
-        for (const sessionId of sessionIds) await prepareChatBodyForRead(storage.ensureChatBodyV1, sessionId)
-        // Cross-session preparation may change a source between reads; rerun the full query
-        // so final candidates, body authority, ordering, and limit share a fresh SQLite snapshot.
-        hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })
+    let hits: MessageSearchHit[] = []
+    if (storage.queries.listCanonicalSearchSessions && storage.ensureChatBodyV1 && storage.queries.searchPreparedMessages) {
+      let usedPreparedSearch = false
+      for (let attempt = 0; attempt < 2 && !usedPreparedSearch; attempt++) {
+        const canonicalSessions = storage.queries.listCanonicalSearchSessions(activeProfileId)
+        if (!canonicalSessions.length) {
+          hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })
+          usedPreparedSearch = true
+          break
+        }
+        const preparedBySession = new Map<string, import('../sessionStorage/public/model').PreparedChatBodyView>()
+        let complete = true
+        for (const sessionId of canonicalSessions) {
+          const prepared = await prepareChatBodyForRead(storage.ensureChatBodyV1, sessionId)
+          if (!prepared) { complete = false; break }
+          preparedBySession.set(sessionId, prepared as import('../sessionStorage/public/model').PreparedChatBodyView)
+        }
+        if (!complete) break
+        try {
+          hits = await storage.queries.searchPreparedMessages({ query: q, activeProfileId, limit: 50, preparedBySession })
+          usedPreparedSearch = true
+        } catch (error) {
+          if (error instanceof Error && error.message === 'GLOBAL_SEARCH_SOURCE_CHANGED' && attempt === 0) continue
+          throw error
+        }
       }
+      if (!usedPreparedSearch) hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })
+    } else {
+      hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })
     }
     for (const hit of hits) {
       results.push({

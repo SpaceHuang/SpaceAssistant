@@ -3,8 +3,7 @@ import { PROJECTION_SPECS } from '../../domain/projectionSpec'
 
 export type VerifiedChatBody = Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>
 
-/** Validate the complete cache envelope before returning selected bodies to either reader. */
-export function selectVerifiedChatBodyPayload(input: Readonly<{
+type VerifiedPayloadInput = Readonly<{
   payload: Buffer
   sessionId: string
   sessionGeneration: string
@@ -13,10 +12,9 @@ export function selectVerifiedChatBodyPayload(input: Readonly<{
   sourceIdentityJson: string
   payloadDigest: string
   validatedRangeJson: string
-  messageIds: readonly string[]
-}>): readonly VerifiedChatBody[] {
-  if (!Array.isArray(input.messageIds) || input.messageIds.some((id) => typeof id !== 'string' || !id) ||
-    new Set(input.messageIds).size !== input.messageIds.length) throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
+}>
+
+export function readVerifiedChatBodyPayload(input: VerifiedPayloadInput): readonly VerifiedChatBody[] {
   if (createHash('sha256').update(input.payload).digest('hex') !== input.payloadDigest) {
     throw new Error('PROJECTION_CHAT_BODY_CACHE_DIGEST_MISMATCH')
   }
@@ -35,10 +33,9 @@ export function selectVerifiedChatBodyPayload(input: Readonly<{
   if (JSON.stringify(envelope.historyWatermarkJson) !== JSON.stringify(source.historyWatermark ?? null)) {
     throw new Error('PROJECTION_CHAT_BODY_CACHE_WATERMARK_INVALID')
   }
-  const wanted = new Set(input.messageIds)
-  const selected = new Map<string, VerifiedChatBody>()
   const ids = new Set<string>()
   const fields = [...PROJECTION_SPECS.chatBodyV1.outputFields].sort().join(',')
+  const messages: VerifiedChatBody[] = []
   for (const item of envelope.messages) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_INVALID')
     const message = item as Record<string, unknown>
@@ -47,9 +44,37 @@ export function selectVerifiedChatBodyPayload(input: Readonly<{
       throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_INVALID')
     }
     ids.add(message.id)
-    if (wanted.has(message.id)) selected.set(message.id, Object.freeze({ id: message.id, role: message.role,
-      content: message.content, timestamp: message.timestamp as number }))
+    messages.push(Object.freeze({ id: message.id, role: message.role, content: message.content, timestamp: message.timestamp as number }))
   }
+  return Object.freeze(messages)
+}
+
+/** Validate the complete cache envelope before returning selected bodies to either reader. */
+export function selectVerifiedChatBodyPayload(input: VerifiedPayloadInput & Readonly<{
+  messageIds: readonly string[]
+}>): readonly VerifiedChatBody[] {
+  if (!Array.isArray(input.messageIds) || input.messageIds.some((id) => typeof id !== 'string' || !id) ||
+    new Set(input.messageIds).size !== input.messageIds.length) throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
+  const messages = readVerifiedChatBodyPayload(input)
+  const wanted = new Set(input.messageIds)
+  const selected = new Map(messages.filter(({ id }) => wanted.has(id)).map((message) => [message.id, message]))
   if (selected.size !== wanted.size) throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_MISSING')
   return Object.freeze(input.messageIds.map((id) => selected.get(id)!))
+}
+
+/** Search verified canonical bodies using SQLite LIKE's literal, ASCII-case-insensitive semantics. */
+export function searchVerifiedChatBodyPayload(input: VerifiedPayloadInput & Readonly<{ query: string; limit: number }>): readonly VerifiedChatBody[] {
+  if (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit)) throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
+  if (!input.query || input.limit === 0) return Object.freeze([])
+  return searchVerifiedChatBodies(readVerifiedChatBodyPayload(input), input.query, input.limit)
+}
+
+export function searchVerifiedChatBodies(messages: readonly VerifiedChatBody[], query: string, limit: number): readonly VerifiedChatBody[] {
+  if (typeof query !== 'string' || !Number.isSafeInteger(limit)) throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
+  if (!query || limit === 0) return Object.freeze([])
+  const foldAscii = (value: string) => value.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+  const needle = foldAscii(query)
+  const matches = messages.filter(({ content }) => foldAscii(content).includes(needle))
+    .sort((left, right) => right.timestamp - left.timestamp)
+  return Object.freeze(limit < 0 ? matches : matches.slice(0, limit))
 }

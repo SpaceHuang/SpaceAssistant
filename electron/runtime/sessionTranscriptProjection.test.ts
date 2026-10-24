@@ -168,7 +168,8 @@ describe('session transcript projection P2 read path', () => {
   })
 
   it.skipIf(!runStoragePerf)('keeps warm L1 projection latency within the P2 database-read budget on a large transcript', async () => {
-    const { db, cleanup } = createTempDatabase('session-projection-perf-')
+    const { db, dbPath, cleanup } = createTempDatabase('session-projection-perf-')
+    let host: ReturnType<typeof createSqliteSessionStorageHost> | undefined
     try {
       const session = createSession(db, { name: 'projection performance', model: 'test' })
       const count = 1200
@@ -236,12 +237,23 @@ describe('session transcript projection P2 read path', () => {
       const conn = getDbConnection(db)
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+      const projectionBlobRoot = path.join(path.dirname(dbPath), 'projection-search-perf-blobs')
+      const processGeneration = advanceProcessGeneration(conn)
+      const task = createSqliteProjectionBuildTask({ db, dbPath, blobRoot: projectionBlobRoot,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now })
+      host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+      const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
+      if (!prepared) throw new Error('PERF_FIXTURE_PROJECTION_PREPARATION_UNAVAILABLE')
+      const preparedBySession = new Map([[session.id, prepared as import('../sessionStorage/public/model').PreparedChatBodyView]])
       expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
       const legacySearchSamples: number[] = []
       const canonicalSearchSamples: number[] = []
       for (let warmup = 0; warmup < 10; warmup += 1) {
         expect(searchMessages(db, 'query-with-no-matches', '', 50)).toEqual([])
-        expect(searchProjectedMessages(db, 'query-with-no-matches', '', 50)).toEqual([])
+        expect(await host.storage.queries.searchPreparedMessages!({ query: 'query-with-no-matches', activeProfileId: '',
+          limit: 50, preparedBySession })).toEqual([])
       }
       for (let iteration = 0; iteration < 30; iteration += 1) {
         const legacyStarted = performance.now()
@@ -249,17 +261,19 @@ describe('session transcript projection P2 read path', () => {
         legacySearchSamples.push(performance.now() - legacyStarted)
 
         const canonicalStarted = performance.now()
-        expect(searchProjectedMessages(db, 'query-with-no-matches', '', 50)).toEqual([])
+        expect(await host.storage.queries.searchPreparedMessages!({ query: 'query-with-no-matches', activeProfileId: '',
+          limit: 50, preparedBySession })).toEqual([])
         canonicalSearchSamples.push(performance.now() - canonicalStarted)
       }
       const legacySearchP95 = p95(legacySearchSamples)
       const canonicalSearchP95 = p95(canonicalSearchSamples)
-      console.info(`canonical-global-search-p95 legacy=${legacySearchP95.toFixed(2)}ms candidate=${canonicalSearchP95.toFixed(2)}ms samples=30 rows=${count} query=no-match`)
+      console.info(`canonical-global-search-prepared-p95 legacy=${legacySearchP95.toFixed(2)}ms candidate=${canonicalSearchP95.toFixed(2)}ms samples=30 rows=${count} query=no-match`)
       // Canonical search must stay below 20ms p95 for the 1200-row full-scan workload;
       // the broader 50ms response budget still includes IPC and renderer work.
       expect(canonicalSearchP95, `canonical global search p95 ${canonicalSearchP95.toFixed(2)}ms; budget 20ms`)
         .toBeLessThanOrEqual(20)
     } finally {
+      await host?.lifecycle.stop({ deadlineMs: 5_000 })
       cleanup()
     }
   })
@@ -1879,6 +1893,9 @@ describe('session transcript projection P2 read path', () => {
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
           recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
       await expect(readChatMessagesAfterPreparation(host.storage, { sessionId: session.id, limit: 50 })).resolves.toHaveLength(40)
+      const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
+      if (!prepared) throw new Error('PERF_FIXTURE_PROJECTION_PREPARATION_UNAVAILABLE')
+      const preparedBySession = new Map([[session.id, prepared as import('../sessionStorage/public/model').PreparedChatBodyView]])
 
       const measureP95 = (samples: number[]) => {
         samples.sort((left, right) => left - right)
@@ -1896,7 +1913,8 @@ describe('session transcript projection P2 read path', () => {
         expect(read).toHaveLength(40)
 
         started = performance.now()
-        const hits = searchProjectedMessages(temp.db, 'multi-spill-needle', '', 20)
+        const hits = await host!.storage.queries.searchPreparedMessages!({ query: 'multi-spill-needle', activeProfileId: '',
+          limit: 20, preparedBySession })
         searchSamples.push(performance.now() - started)
         expect(hits).toHaveLength(20)
       }
@@ -1910,8 +1928,10 @@ describe('session transcript projection P2 read path', () => {
     }
   })
 
-  it.skipIf(!runStoragePerf)('measures cold-L1 canonical global search across multiple sessions and a large match set', async () => {
+  it.skipIf(!runStoragePerf)('measures prepared canonical global search across multiple sessions and a large match set', async () => {
     const temp = createTempDatabase('canonical-global-search-multisession-perf-')
+    const blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    let host: ReturnType<typeof createSqliteSessionStorageHost> | undefined
     try {
       const conn = getDbConnection(temp.db)
       const sessions = Array.from({ length: 3 }, (_, sessionIndex) => createSession(temp.db, {
@@ -1940,30 +1960,42 @@ describe('session transcript projection P2 read path', () => {
         conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
         conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
       }
+      const processGeneration = advanceProcessGeneration(conn)
+      const task = createSqliteProjectionBuildTask({ db: temp.db, dbPath: temp.dbPath, blobRoot,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now })
+      host = createSqliteSessionStorageHost(temp.db, { storage: { projectionBlobRoot: blobRoot },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+      const preparedBySession = new Map<string, import('../sessionStorage/public/model').PreparedChatBodyView>()
+      for (const session of sessions) {
+        const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
+        if (!prepared) throw new Error('PERF_FIXTURE_PROJECTION_PREPARATION_UNAVAILABLE')
+        preparedBySession.set(session.id, prepared as import('../sessionStorage/public/model').PreparedChatBodyView)
+      }
 
       const measureP95 = (samples: number[]) => {
         samples.sort((left, right) => left - right)
         return samples[Math.ceil(samples.length * 0.95) - 1]!
       }
       const samples: number[] = []
-      const sampleSearch = () => {
-        // Delete only the disposable transcript projections: every sample must rebuild each session from canonical L2.
-        conn.prepare("DELETE FROM canonical_session_projection_cache WHERE cache_key='transcript'").run()
+      const sampleSearch = async () => {
         const started = performance.now()
-        const hits = searchProjectedMessages(temp.db, 'global-search-needle', '', 60)
+        const hits = await host!.storage.queries.searchPreparedMessages!({ query: 'global-search-needle', activeProfileId: '',
+          limit: 60, preparedBySession })
         samples.push(performance.now() - started)
         expect(hits).toHaveLength(60)
         expect(new Set(hits.map(({ sessionId }) => sessionId)).size).toBe(3)
         expect(hits[0]?.messageId).toBe('global-search-2-239')
         expect(hits.every(({ content }) => content.includes('global-search-needle'))).toBe(true)
       }
-      for (let warmup = 0; warmup < 10; warmup += 1) sampleSearch()
+      for (let warmup = 0; warmup < 10; warmup += 1) await sampleSearch()
       samples.length = 0
-      for (let iteration = 0; iteration < 30; iteration += 1) sampleSearch()
+      for (let iteration = 0; iteration < 30; iteration += 1) await sampleSearch()
       const p95 = measureP95(samples)
-      console.info(`canonical-global-search-cold-l1-p95=${p95.toFixed(2)}ms rows=${messages.length} sessions=${sessions.length} matches=60 samples=30`)
-      expect(p95, `multi-session cold-L1 canonical global search p95 ${p95.toFixed(2)}ms; budget 20ms`).toBeLessThanOrEqual(20)
+      console.info(`canonical-global-search-prepared-p95=${p95.toFixed(2)}ms rows=${messages.length} sessions=${sessions.length} matches=60 samples=30`)
+      expect(p95, `multi-session prepared canonical global search p95 ${p95.toFixed(2)}ms; budget 20ms`).toBeLessThanOrEqual(20)
     } finally {
+      await host?.lifecycle.stop({ deadlineMs: 5_000 })
       temp.cleanup()
     }
   })
@@ -1998,6 +2030,48 @@ describe('session transcript projection P2 read path', () => {
     expect(searchProjectedMessages(db, 'Ä', '', 20).map(({ messageId }) => messageId)).toEqual(['search-canonical-user'])
     expect(searchProjectedMessages(db, 'ä', '', 20)).toEqual([])
     db.close()
+  })
+
+  it('searches prepared canonical bodies and merges them with legacy hits without replaying History', async () => {
+    const temp = createTempDatabase('prepared-global-search-')
+    let host: ReturnType<typeof createSqliteSessionStorageHost> | undefined
+    const db = temp.db
+    const canonicalSession = createSession(db, { name: 'prepared canonical result' })
+    const canonicalBody = 'NEEDLE canonical literal %_'
+    appendMessage(db, { id: 'prepared-canonical-user', sessionId: canonicalSession.id, role: 'user', content: canonicalBody, timestamp: 100, status: 'sent' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, canonicalSession.id)
+    await history.appendBatch([{
+      invocationId: 'prepared-search-invocation', turnId: 'prepared-search-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'prepared-search-context', idempotencyKey: 'prepared-search-context', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'prepared-canonical-user', role: 'user', content: canonicalBody, timestamp: 100 }] }
+    }], 0)
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(canonicalSession.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run('prepared-canonical-user')
+    const legacySession = createSession(db, { name: 'prepared legacy result' })
+    appendMessage(db, { id: 'prepared-legacy-user', sessionId: legacySession.id, role: 'user', content: 'needle legacy', timestamp: 200, status: 'sent' })
+    const blobRoot = path.join(path.dirname(temp.dbPath), 'prepared-search-blobs')
+    const processGeneration = advanceProcessGeneration(conn)
+    const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot,
+      processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now })
+    host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: blobRoot },
+      startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+        recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+    try {
+      const queries = host.storage.queries
+      expect(queries.listCanonicalSearchSessions!('')).toEqual([canonicalSession.id])
+      const view = await host.storage.ensureChatBodyV1?.({ sessionId: canonicalSession.id })
+      expect(view).toBeTruthy()
+      const hits = await queries.searchPreparedMessages!({ query: 'needle', activeProfileId: '', limit: 2,
+        preparedBySession: new Map([[canonicalSession.id, view as import('../sessionStorage/public/model').PreparedChatBodyView]]) })
+
+      expect(hits.map(({ messageId, content }) => [messageId, content])).toEqual([
+        ['prepared-legacy-user', 'needle legacy'], ['prepared-canonical-user', canonicalBody]
+      ])
+    } finally {
+      await host.lifecycle.stop({ deadlineMs: 5_000 })
+      temp.cleanup()
+    }
   })
 
   it('enumerates cross-session candidates and reads canonical bodies within one SQLite snapshot', async () => {

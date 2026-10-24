@@ -6,7 +6,7 @@ import { threadId } from 'node:worker_threads'
 import { afterEach, describe, expect, it } from 'vitest'
 import { encodeProjectionScopeKey } from '../../domain/scopeKey'
 import type { PreparedChatBodyView } from '../../public/model'
-import { readPreparedChatBodiesInWorker } from './projectionChatBodyCacheWorkerClient'
+import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from './projectionChatBodyCacheWorkerClient'
 
 describe('projection chat body cache worker client', () => {
   let roots: string[] = []
@@ -36,6 +36,9 @@ describe('projection chat body cache worker client', () => {
 
     expect(result.workerThreadId).toBe(0)
     expect(result.messages).toEqual([{ id: 'inline-requested', role: 'assistant', content: 'selected body', timestamp: 3 }])
+    const search = await searchPreparedChatBodiesInWorker({ root: '', view, query: 'body', limit: 1 })
+    expect(search.workerThreadId).toBe(0)
+    expect(search.messages).toEqual([{ id: 'inline-requested', role: 'assistant', content: 'selected body', timestamp: 3 }])
     await expect(readPreparedChatBodiesInWorker({ root: '', view: { ...view,
       inlinePayload: inlinePayload.replace('selected body', 'tampered body') }, messageIds: ['inline-requested'] }))
       .rejects.toThrow('PROJECTION_CHAT_BODY_CACHE_DIGEST_MISMATCH')
@@ -51,7 +54,7 @@ describe('projection chat body cache worker client', () => {
     const envelope = { formatVersion: 1, scopeKey, specVersion: 3, sessionId, sessionGeneration, sourceIdentityJson,
       historyWatermarkJson: { sessionSeq: 4 }, messages: [
         { id: 'requested', role: 'assistant', content: 'selected body', timestamp: 3 },
-        { id: 'large-unselected', role: 'user', content: 'x'.repeat(300 * 1024), timestamp: 2 }
+        { id: 'large-unselected', role: 'user', content: `selected body ${'x'.repeat(300 * 1024)}`, timestamp: 2 }
       ] }
     const payload = JSON.stringify(envelope)
     const bytes = Buffer.from(payload)
@@ -75,5 +78,12 @@ describe('projection chat body cache worker client', () => {
     expect(result.workerThreadId).toBeGreaterThan(0)
     expect(result.workerThreadId).not.toBe(threadId)
     expect(result.messages).toEqual([{ id: 'requested', role: 'assistant', content: 'selected body', timestamp: 3 }])
+    const search = await searchPreparedChatBodiesInWorker({ root, view, query: 'selected', limit: 1 })
+    expect(search.workerThreadId).toBeGreaterThan(0)
+    expect(search.workerThreadId).not.toBe(threadId)
+    expect(search.messages).toEqual([{ id: 'requested', role: 'assistant', content: 'selected body', timestamp: 3 }])
+    const repeatedSearch = await searchPreparedChatBodiesInWorker({ root, view, query: 'selected', limit: 2 })
+    expect(repeatedSearch.workerThreadId).toBe(search.workerThreadId)
+    expect(repeatedSearch.messages.map(({ id }) => id)).toEqual(['requested', 'large-unselected'])
   })
 })

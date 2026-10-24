@@ -35,7 +35,7 @@ import { invalidatePreparedChatBodyView, preparedChatBodyViewFromSnapshot, readP
 import { encodeProjectionScopeKey } from './domain/scopeKey'
 import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
-import { readPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
+import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
 export { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
 
 /** Host composition binds the private SQLite TurnStorage to the process TurnRuntime. */
@@ -97,6 +97,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
         ? snapshot.currentSourceIdentityJson ?? undefined : undefined
     },
     readBodies: (view, messageIds) => readPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', view, messageIds }),
+    searchBodies: (view, query, limit) => searchPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', view, query, limit }),
     invalidate: (view) => invalidatePreparedChatBodyView(view, cacheStore)
   })
   const ensureView = createEnsureView()

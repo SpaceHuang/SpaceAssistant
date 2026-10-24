@@ -177,17 +177,46 @@ describe('search:execute IPC handler', () => {
     ]
     ctx.sessionStorage = {
       ...base,
-      ensureChatBodyV1: vi.fn(async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`) }),
-      queries: { ...base.queries, searchMessages: vi.fn(() => { events.push('search'); return hits }) }
+      ensureChatBodyV1: vi.fn(async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`); return { sessionId } }),
+      queries: { ...base.queries,
+        listCanonicalSearchSessions: vi.fn(() => ['s1', 's2']),
+        searchMessages: vi.fn(() => { events.push('sync-search'); return hits }),
+        searchPreparedMessages: vi.fn(async ({ preparedBySession }: { preparedBySession: ReadonlyMap<string, unknown> }) => {
+          events.push(`prepared-search:${[...preparedBySession.keys()].join(',')}`)
+          return hits
+        })
+      }
     }
     try {
       registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
 
       const results = await ipc.getHandler('search:execute')!({}, 'needle')
 
-      expect(events).toEqual(['search', 'ensure:s1', 'ensure:s2', 'search'])
+      expect(events).toEqual(['ensure:s1', 'ensure:s2', 'prepared-search:s1,s2'])
       expect(results).toHaveLength(4)
     } finally { db.close() }
+  })
+
+  it('falls back to the History reader when prepared search is unavailable', async () => {
+    const ctx = makeCtx()
+    const base = ctx.sessionStorage!
+    const hit = { messageId: 'history-hit', sessionId: 'canonical', content: 'needle from History', sessionName: 'canonical' }
+    ctx.sessionStorage = {
+      ...base,
+      ensureChatBodyV1: vi.fn(async () => undefined),
+      queries: { ...base.queries,
+        listCanonicalSearchSessions: vi.fn(() => ['canonical']),
+        searchMessages: vi.fn(() => [hit]),
+        searchPreparedMessages: vi.fn()
+      }
+    }
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+    const results = await ipc.getHandler('search:execute')!({}, 'needle')
+
+    expect(ctx.sessionStorage.queries.searchPreparedMessages).not.toHaveBeenCalled()
+    expect(ctx.sessionStorage.queries.searchMessages).toHaveBeenCalledWith({ query: 'needle', activeProfileId: 'default', limit: 50 })
+    expect(results).toMatchObject([{ messageId: 'history-hit', preview: 'needle from History' }])
   })
 
   it('returns file results with path', async () => {

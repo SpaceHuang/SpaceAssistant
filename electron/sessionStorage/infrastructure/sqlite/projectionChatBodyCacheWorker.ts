@@ -1,12 +1,13 @@
 import path from 'node:path'
 import { parentPort, threadId } from 'node:worker_threads'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
-import { selectVerifiedChatBodyPayload } from './projectionChatBodyCachePayload'
+import { searchVerifiedChatBodyPayload, selectVerifiedChatBodyPayload } from './projectionChatBodyCachePayload'
 
 if (!parentPort) throw new Error('projection chat body cache worker requires a parent port')
 
 type Input = Readonly<{
-  requestId: string; root: string; sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number
+  requestId: string; operation: 'select' | 'search'; query?: string; limit?: number
+  root: string; sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number
   sourceIdentityJson: string; payloadDigest: string; validatedRangeJson: string; inlinePayload?: string
   blobLocator?: string; blobByteLength?: number; messageIds: readonly string[]
 }>
@@ -27,13 +28,20 @@ async function readPayload(input: Input): Promise<Buffer> {
 
 parentPort.once('message', async (input: Input) => {
   try {
-    if (!Array.isArray(input.messageIds) || input.messageIds.some((id) => typeof id !== 'string' || !id) ||
-      new Set(input.messageIds).size !== input.messageIds.length) throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
+    if (input.operation === 'select' && (!Array.isArray(input.messageIds) || input.messageIds.some((id) => typeof id !== 'string' || !id) ||
+      new Set(input.messageIds).size !== input.messageIds.length)) throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
+    if (input.operation === 'search' && (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit))) {
+      throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
+    }
+    if (input.operation !== 'select' && input.operation !== 'search') throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
     const payloadBytes = await readPayload(input)
-    const messages = selectVerifiedChatBodyPayload({ payload: payloadBytes, sessionId: input.sessionId,
+    const payload = { payload: payloadBytes, sessionId: input.sessionId,
       sessionGeneration: input.sessionGeneration, scopeKey: input.scopeKey, specVersion: input.specVersion,
       sourceIdentityJson: input.sourceIdentityJson, payloadDigest: input.payloadDigest,
-      validatedRangeJson: input.validatedRangeJson, messageIds: input.messageIds })
+      validatedRangeJson: input.validatedRangeJson }
+    const messages = input.operation === 'select'
+      ? selectVerifiedChatBodyPayload({ ...payload, messageIds: input.messageIds! })
+      : searchVerifiedChatBodyPayload({ ...payload, query: input.query!, limit: input.limit! })
     parentPort!.postMessage({ requestId: input.requestId, result: { messages, workerThreadId: threadId } })
   } catch (error) {
     parentPort!.postMessage({ requestId: input.requestId, error: error instanceof Error ? error.message : 'PROJECTION_CHAT_BODY_CACHE_READ_FAILED' })

@@ -145,6 +145,8 @@ export interface SessionQueries {
   readSelectionSnapshot(sessionId: string, fence: SelectionFence): Readonly<{ sessionId: string; generation: string; messageRevision: number }> | undefined
   readExportPage(input: { sessionId: string; fromSequence: number; pageSize: number }): ExportPage
   readSearchCorpusPage(input: { sessionId: string; fromSequence: number; pageSize?: number }): SearchCorpusPage
+  listCanonicalSearchSessions?(activeProfileId: string): string[]
+  searchPreparedMessages?(input: { query: string; activeProfileId: string; limit?: number; preparedBySession: ReadonlyMap<string, PreparedChatBodyView> }): Promise<MessageSearchHit[]>
   searchMessages(input: { query: string; activeProfileId: string; limit?: number }): MessageSearchHit[]
   readRetryTarget(input: { sessionId: string; failedAssistantMessageId: string }): RetryContextTarget | null
   readLatestRetryTarget(sessionId: string): RetryContextTarget | null
