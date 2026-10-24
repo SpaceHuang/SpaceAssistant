@@ -219,6 +219,15 @@ describe('session storage module graph rules', () => {
     }
   })
 
+  it('routes cleanup certification and mutations through the storage cleanup port', () => {
+    for (const file of ['electron/runtime/sessionStorageCleanupAuthorization.ts', 'electron/runtime/sessionStorageCleanupProduction.ts']) {
+      const source = readFileSync(path.resolve(file), 'utf8')
+      expect(source).not.toContain("from '../sessionStorage/certification'")
+      expect(source).not.toContain("from '../sessionStorage/maintenance'")
+    }
+    expect(readFileSync(path.resolve('electron/sessionStorage/host/ports.ts'), 'utf8')).toContain('readonly cleanup: SessionCleanupPort')
+  })
+
   it('classifies startup History recovery composition as SQLite infrastructure', () => {
     const adapterFile = 'electron/sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost.ts'
     expect(findSessionStorageModuleViolations(adapterFile, readFileSync(path.resolve(adapterFile), 'utf8'))).toEqual([])

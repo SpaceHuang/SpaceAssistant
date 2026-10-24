@@ -26,6 +26,10 @@ import { readProjectionHistoryChunkInWorker } from './infrastructure/sqlite/proj
 import { reduceProjectionHistoryChunkInWorker } from './infrastructure/sqlite/projectionHistoryReducerWorkerClient'
 import { materializeProjectionFinalViewInWorker } from './infrastructure/sqlite/projectionFinalViewWorkerClient'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
+import { certifyCanonicalSessionApiRead } from './certification'
+import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch,
+  getSessionMessageContentCleanupAuthorizationSnapshotSha256, markSessionMessageContentWriteStopped,
+  verifyAndCompleteSessionMessageContentCleanup } from './maintenance'
 import { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionProjectionRetentionPreparer } from './infrastructure/sqlite/sessionEventRetentionAdapter'
 import { clearSessionProjectionCaches } from './infrastructure/sqlite/sessionProjectionCacheMaintenance'
 import { createProjectionScopeHistoryReducer } from './infrastructure/sqlite/projectionScopeHistoryReducer'
@@ -247,6 +251,14 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     readContextMeterEventsForLocation(input.sessionId, input.workDir)
   const storagePorts: SessionStorage = {
     queries, commands: createSessionCommands(db), execution, contexts, recovery, availability, ensureLedgerReady,
+    cleanup: Object.freeze({
+      certifyCanonicalRead: (sessionId: string) => certifyCanonicalSessionApiRead(db, sessionId).status === 'eligible',
+      authorizationSnapshotSha256: (sessionId: string) => getSessionMessageContentCleanupAuthorizationSnapshotSha256(db, sessionId),
+      markWriteStopped: (sessionId: string) => markSessionMessageContentWriteStopped(db, sessionId),
+      begin: (sessionId: string) => beginSessionMessageContentCleanup(db, sessionId),
+      clearNextBatch: (sessionId: string, batchSize?: number) => clearNextSessionMessageContentBatch(db, sessionId, batchSize),
+      verifyAndComplete: (sessionId: string) => verifyAndCompleteSessionMessageContentCleanup(db, sessionId),
+    }),
     checkpointProjection: (sessionId: string) => checkpointSessionTranscriptProjection(db, sessionId),
     clearProjectionCaches: () => clearSessionProjectionCaches(db),
     shouldRetainSessionEventDirectory: createSessionLedgerCompactionDependencyGuard(db),

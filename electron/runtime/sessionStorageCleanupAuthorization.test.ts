@@ -5,6 +5,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { enableCanonicalSessionWriteAuthority } from '../sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import {
   approveSessionStorageCleanupScope,
   createSessionStorageCleanupScopeProposal,
@@ -39,6 +40,7 @@ describe('session content cleanup authorization scope', () => {
     try {
       const approved = createSession(temp.db, { name: 'approved', model: 'test' })
       const rejected = createSession(temp.db, { name: 'not approved', model: 'test' })
+      const cleanup = createSqliteSessionStorage(temp.db).cleanup
       await makeEligible(temp.db, approved.id)
       await makeEligible(temp.db, rejected.id)
 
@@ -46,15 +48,15 @@ describe('session content cleanup authorization scope', () => {
         sessionIds: [approved.id],
         validFrom: 1_800_000_000_000,
         validUntil: 1_800_000_060_000,
-      })
+      }, cleanup)
       approveSessionStorageCleanupScope(temp.db, proposal, {
         approvalReference: 'maintenance-review/42',
         approvedScopeSha256: proposal.scopeSha256,
-      })
+      }, cleanup)
 
-      expect(getSessionStorageCleanupScopeAuthorization(temp.db, approved.id, 1_800_000_030_000))
+      expect(getSessionStorageCleanupScopeAuthorization(temp.db, approved.id, cleanup, 1_800_000_030_000))
         .toMatchObject({ allowed: true, approvalReference: 'maintenance-review/42' })
-      expect(getSessionStorageCleanupScopeAuthorization(temp.db, rejected.id, 1_800_000_030_000))
+      expect(getSessionStorageCleanupScopeAuthorization(temp.db, rejected.id, cleanup, 1_800_000_030_000))
         .toMatchObject({ allowed: false, reason: 'session-not-authorized' })
     } finally {
       temp.cleanup()
@@ -65,33 +67,34 @@ describe('session content cleanup authorization scope', () => {
     const temp = createTempDatabase('session-cleanup-scope-reject-')
     try {
       const session = createSession(temp.db, { name: 'scoped', model: 'test' })
+      const cleanup = createSqliteSessionStorage(temp.db).cleanup
       await makeEligible(temp.db, session.id)
       const proposal = createSessionStorageCleanupScopeProposal(temp.db, {
         sessionIds: [session.id], validFrom: 10, validUntil: 20,
-      })
+      }, cleanup)
       expect(() => approveSessionStorageCleanupScope(temp.db, proposal, {
         approvalReference: 'review/43', approvedScopeSha256: '0'.repeat(64),
-      })).toThrow(/approved scope digest/)
+      }, cleanup)).toThrow(/approved scope digest/)
 
       approveSessionStorageCleanupScope(temp.db, proposal, {
         approvalReference: 'review/43', approvedScopeSha256: proposal.scopeSha256,
-      })
-      expect(getSessionStorageCleanupScopeAuthorization(temp.db, session.id, 20))
+      }, cleanup)
+      expect(getSessionStorageCleanupScopeAuthorization(temp.db, session.id, cleanup, 20))
         .toMatchObject({ allowed: false, reason: 'authorization-expired' })
-      expect(getSessionStorageCleanupScopeAuthorization(temp.db, session.id, 9))
+      expect(getSessionStorageCleanupScopeAuthorization(temp.db, session.id, cleanup, 9))
         .toMatchObject({ allowed: false, reason: 'authorization-not-yet-valid' })
 
       const profileId = getDbConnection(temp.db).prepare(`SELECT value FROM schema_meta WHERE key='session_storage_profile_id'`)
         .get() as { value: string }
       getDbConnection(temp.db).prepare(`UPDATE schema_meta SET value=? WHERE key='session_storage_profile_id'`)
         .run('6f3a0d45-358f-4b4c-9194-f8ed6646aa52')
-      expect(getSessionStorageCleanupScopeAuthorization(temp.db, session.id, 15))
+      expect(getSessionStorageCleanupScopeAuthorization(temp.db, session.id, cleanup, 15))
         .toMatchObject({ allowed: false, reason: 'profile-identity-mismatch' })
       getDbConnection(temp.db).prepare(`UPDATE schema_meta SET value=? WHERE key='session_storage_profile_id'`)
         .run(profileId.value)
 
       getDbConnection(temp.db).prepare(`UPDATE sessions SET preview='drift' WHERE id=?`).run(session.id)
-      expect(getSessionStorageCleanupScopeAuthorization(temp.db, session.id, 15))
+      expect(getSessionStorageCleanupScopeAuthorization(temp.db, session.id, cleanup, 15))
         .toMatchObject({ allowed: false, reason: 'session-snapshot-mismatch' })
     } finally {
       temp.cleanup()
@@ -103,13 +106,14 @@ describe('session content cleanup authorization scope', () => {
     let db = temp.db
     try {
       const session = createSession(db, { name: 'scoped', model: 'test' })
+      let cleanup = createSqliteSessionStorage(db).cleanup
       await makeEligible(db, session.id)
       const proposal = createSessionStorageCleanupScopeProposal(db, {
         sessionIds: [session.id], validFrom: 1, validUntil: 100,
-      })
+      }, cleanup)
       approveSessionStorageCleanupScope(db, proposal, {
         approvalReference: 'review/44', approvedScopeSha256: proposal.scopeSha256,
-      })
+      }, cleanup)
       const scopeRow = getDbConnection(db).prepare(`SELECT value FROM schema_meta WHERE key='session_storage_cleanup_scope'`)
         .get() as { value: string }
       const record = JSON.parse(scopeRow.value) as { proposal: { profileId: string } }
@@ -119,13 +123,14 @@ describe('session content cleanup authorization scope', () => {
       db.close()
       const { openDatabase } = await import('../database')
       db = openDatabase(temp.dbPath)
-      expect(getSessionStorageCleanupScopeAuthorization(db, session.id, 50))
+      cleanup = createSqliteSessionStorage(db).cleanup
+      expect(getSessionStorageCleanupScopeAuthorization(db, session.id, cleanup, 50))
         .toMatchObject({ allowed: false, reason: 'authorization-revoked' })
 
       const altered = { ...proposal, profileId: 'different-profile' } as SessionStorageCleanupScopeProposal
       expect(() => approveSessionStorageCleanupScope(db, altered, {
         approvalReference: 'review/45', approvedScopeSha256: proposal.scopeSha256,
-      })).toThrow(/profile identity/)
+      }, cleanup)).toThrow(/profile identity/)
     } finally {
       try { db.close() } catch { /* already closed */ }
       temp.cleanup()

@@ -1,14 +1,7 @@
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
-import {
-  beginSessionMessageContentCleanup,
-  clearNextSessionMessageContentBatch,
-  markSessionMessageContentWriteStopped,
-  verifyAndCompleteSessionMessageContentCleanup,
-  type SessionMessageContentCleanupBatchResult,
-} from '../sessionStorage/maintenance'
-import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'
+import type { SessionCleanupPort, SessionMessageContentCleanupBatch } from '../sessionStorage/host/ports'
 import {
   evaluateSessionStorageCleanupReleaseGate,
   type SessionStorageCleanupReleaseGateResult,
@@ -35,7 +28,7 @@ export type SessionStorageCleanupProductionResult =
   | Readonly<{
       status: 'executed'
       gate: SessionStorageCleanupReleaseGateResult
-      result: boolean | SessionMessageContentCleanupBatchResult
+      result: boolean | SessionMessageContentCleanupBatch
   }>
 
 export type SessionStorageCleanupProductionBoundary = (
@@ -50,6 +43,7 @@ type LoadSessionStorageCleanupReleaseGateInput = () => ReturnType<typeof readSes
 
 function runSessionStorageCleanupProductionStep(
   db: AppDatabase,
+  cleanup: SessionCleanupPort,
   sessionId: string,
   loadGateInput: LoadSessionStorageCleanupReleaseGateInput,
   step: SessionStorageCleanupProductionStep,
@@ -59,20 +53,20 @@ function runSessionStorageCleanupProductionStep(
   return runInTransaction(getDbConnection(db), () => {
     const gate = evaluateSessionStorageCleanupReleaseGate(loadGateInput())
     if (!gate.allowed) return { status: 'blocked', gate }
-    const authorization = getSessionStorageCleanupScopeAuthorization(db, sessionId)
+    const authorization = getSessionStorageCleanupScopeAuthorization(db, sessionId, cleanup)
     if (!authorization.allowed) return { status: 'blocked', gate, scopeReason: authorization.reason }
 
     switch (step.kind) {
       case 'certify':
-        return { status: 'executed', gate, result: certifyCanonicalSessionApiRead(db, sessionId).status === 'eligible' }
+        return { status: 'executed', gate, result: cleanup.certifyCanonicalRead(sessionId) }
       case 'write-stop':
-        return { status: 'executed', gate, result: markSessionMessageContentWriteStopped(db, sessionId) }
+        return { status: 'executed', gate, result: cleanup.markWriteStopped(sessionId) }
       case 'begin':
-        return { status: 'executed', gate, result: beginSessionMessageContentCleanup(db, sessionId) }
+        return { status: 'executed', gate, result: cleanup.begin(sessionId) }
       case 'batch':
-        return { status: 'executed', gate, result: clearNextSessionMessageContentBatch(db, sessionId, step.batchSize) }
+        return { status: 'executed', gate, result: cleanup.clearNextBatch(sessionId, step.batchSize) }
       case 'verify-complete':
-        return { status: 'executed', gate, result: verifyAndCompleteSessionMessageContentCleanup(db, sessionId) }
+        return { status: 'executed', gate, result: cleanup.verifyAndComplete(sessionId) }
     }
   })
 }
@@ -80,18 +74,15 @@ function runSessionStorageCleanupProductionStep(
 /** 创建唯一生产清理边界；每个破坏性步骤都会重读 bundle release 配置并重新验证 gate。 */
 export function createSessionStorageCleanupProductionBoundary(
   releaseConfig: ReadSessionStorageCleanupReleaseGateInputOptions,
+  cleanupForDatabase: (db: AppDatabase) => SessionCleanupPort,
 ): SessionStorageCleanupProductionBoundary {
   const loadGateInput = () => readSessionStorageCleanupReleaseGateInput(releaseConfig)
-  const run = ((db: AppDatabase, sessionId: string, step: SessionStorageCleanupProductionStep) => runSessionStorageCleanupProductionStep(
-    db,
-    sessionId,
-    loadGateInput,
-    step,
-  )) as SessionStorageCleanupProductionBoundary
+  const run = ((db: AppDatabase, sessionId: string, step: SessionStorageCleanupProductionStep) =>
+    runSessionStorageCleanupProductionStep(db, cleanupForDatabase(db), sessionId, loadGateInput, step)) as SessionStorageCleanupProductionBoundary
   return Object.assign(run, {
     checkGate: () => evaluateSessionStorageCleanupReleaseGate(loadGateInput()),
     checkAuthorizationScope: (db: AppDatabase, now?: number) => getActiveSessionStorageCleanupScope(db, now),
     checkSessionAuthorization: (db: AppDatabase, sessionId: string, now?: number) =>
-      getSessionStorageCleanupScopeAuthorization(db, sessionId, now),
+      getSessionStorageCleanupScopeAuthorization(db, sessionId, cleanupForDatabase(db), now),
   })
 }

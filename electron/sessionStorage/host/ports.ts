@@ -75,6 +75,22 @@ export interface SessionStorageStartupCoordination {
   recoverSessionLedgers(): Promise<SessionLedgerStartupRecoverySummary>
 }
 
+export type SessionMessageContentCleanupBatch = Readonly<{
+  status: 'advanced' | 'complete' | 'ineligible'
+  cleanedMessageCount: number
+  nextSequence?: number
+  afterMessageId?: string | null
+  reason?: 'session-or-progress-missing' | 'fence-changed' | 'active-control' | 'history-unavailable' | 'message-mismatch'
+}>
+export interface SessionCleanupPort {
+  certifyCanonicalRead(sessionId: string): boolean
+  authorizationSnapshotSha256(sessionId: string): string | undefined
+  markWriteStopped(sessionId: string): boolean
+  begin(sessionId: string): boolean
+  clearNextBatch(sessionId: string, batchSize?: number): SessionMessageContentCleanupBatch
+  verifyAndComplete(sessionId: string): boolean
+}
+
 export interface SessionStorage {
   readonly queries: SessionQueries
   readonly commands: SessionCommands
@@ -82,6 +98,7 @@ export interface SessionStorage {
   readonly contexts: SessionContextStoragePort
   readonly recovery: SessionRecoveryPort
   readonly availability: SessionAvailabilityPort
+  readonly cleanup: SessionCleanupPort
   readCompactionReplay(input: Readonly<{ sessionId: string; workDir: string }>): Promise<CompactionReplay>
   readContextMeterEvents(input: Readonly<{ sessionId: string; workDir: string }>): Promise<readonly CanonicalContextMeterEvent[]>
   ensureLedgerReady?(sessionId: string): Promise<boolean>

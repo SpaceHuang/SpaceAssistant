@@ -48,7 +48,7 @@ import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask,
-  createSqliteSessionStorageHost, createSqliteStartupHistoryRecoveryBindings,
+  createSqliteSessionStorage, createSqliteSessionStorageHost, createSqliteStartupHistoryRecoveryBindings,
   startSessionProjectionRevalidationDrain } from './sessionStorage/sqliteSessionStorage'
 import { projectionBuildSliceLogFields } from './sessionStorage/host/projectionBuildSliceLog'
 import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
@@ -687,7 +687,7 @@ app.whenReady().then(async () => {
             spillFormatVersion: SESSION_STORAGE_SPILL_FORMAT_VERSION,
             platform: process.platform,
             arch: process.arch,
-          })
+          }, (targetDb) => targetDb === db ? sessionStorage.cleanup : createSqliteSessionStorage(targetDb).cleanup)
           const cleanupGate = cleanupBoundary.checkGate()
           if (!cleanupGate.allowed) {
             if (cleanupGate.reason !== 'deployment-disabled') console.warn('[storage] session content cleanup remains disabled:', cleanupGate.reason)

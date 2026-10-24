@@ -8,13 +8,14 @@
       "createSqliteProjectionBuildTask",
       "createSqliteSessionStorageHost",
       "createSqliteStartupHistoryRecoveryBindings",
-      "startSessionProjectionRevalidationDrain"
+      "startSessionProjectionRevalidationDrain",
+      "createSqliteSessionStorage"
     ],
     "typeOnly": false,
     "owner": "Electron composition root",
     "reason": "The process composition root constructs concrete SessionStorage host services.",
     "exitStage": "P2",
-    "evidence": "main.ts; appIpc.ts composition tests"
+    "evidence": "main.ts process composition; cleanup boundary per-database port composition; appIpc composition tests"
   },
   {
     "source": "electron/testSupport/sessionStorageComposition.ts",
@@ -27,58 +28,6 @@
     "reason": "A single test-only composition owner binds the production SQLite adapter to AppDatabase fixtures.",
     "exitStage": "P2",
     "evidence": "invocationAssembler and claudeStreamHandlers test support; sessionStorageBoundary.test.ts"
-  },
-  {
-    "source": "electron/runtime/sessionStorageCleanupAuthorization.ts",
-    "target": "electron/sessionStorage/certification",
-    "symbols": [
-      "certifyCanonicalSessionApiRead"
-    ],
-    "typeOnly": false,
-    "owner": "Session content cleanup authorization",
-    "reason": "Authorization checks current projection certification through the named certification surface.",
-    "exitStage": "P2",
-    "evidence": "sessionStorageCleanupAuthorization tests"
-  },
-  {
-    "source": "electron/runtime/sessionStorageCleanupProduction.ts",
-    "target": "electron/sessionStorage/certification",
-    "symbols": [
-      "certifyCanonicalSessionApiRead"
-    ],
-    "typeOnly": false,
-    "owner": "Session content cleanup production",
-    "reason": "Cleanup production rechecks certification before destructive cleanup transitions.",
-    "exitStage": "P2",
-    "evidence": "sessionMessageContentCleanupMaintenance.test.ts"
-  },
-  {
-    "source": "electron/runtime/sessionStorageCleanupAuthorization.ts",
-    "target": "electron/sessionStorage/maintenance",
-    "symbols": [
-      "getSessionMessageContentCleanupAuthorizationSnapshotSha256"
-    ],
-    "typeOnly": false,
-    "owner": "Session content cleanup authorization",
-    "reason": "Authorization binds its decision to the maintenance participant snapshot digest.",
-    "exitStage": "P2",
-    "evidence": "sessionStorageCleanupAuthorization tests"
-  },
-  {
-    "source": "electron/runtime/sessionStorageCleanupProduction.ts",
-    "target": "electron/sessionStorage/maintenance",
-    "symbols": [
-      "beginSessionMessageContentCleanup",
-      "clearNextSessionMessageContentBatch",
-      "markSessionMessageContentWriteStopped",
-      "verifyAndCompleteSessionMessageContentCleanup",
-      "SessionMessageContentCleanupBatchResult"
-    ],
-    "typeOnly": false,
-    "owner": "Session content cleanup production",
-    "reason": "Runtime cleanup orchestration invokes named bounded maintenance participants.",
-    "exitStage": "P2",
-    "evidence": "sessionMessageContentCleanupMaintenance.test.ts"
   },
   {
     "source": "electron/runtime/sessionProjectionMigrationCoordinator.ts",

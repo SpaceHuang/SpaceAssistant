@@ -6,6 +6,7 @@ import { DB_SCHEMA_VERSION } from '../database/schema'
 import { getDbConnection } from '../database/sqliteStore'
 import { enableCanonicalSessionWriteAuthority } from '../sessionStorage/infrastructure/sqlite/sessionContentWriteAuthority'
 import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSessionStorageCleanupProductionBoundary } from '../runtime/sessionStorageCleanupProduction'
 import {
@@ -46,7 +47,7 @@ const compatibilityRecord: SessionStorageCleanupCompatibilityRecord = {
   },
 }
 
-function createBoundary(allowContentCleanup: boolean) {
+function createBoundary(allowContentCleanup: boolean, db?: ReturnType<typeof createTempDatabase>['db']) {
   const resources = new Map([
     ['session-storage-build-identity.json', JSON.stringify({
       formatVersion: 2, version: currentVersion, commitSha: currentCommit, sourceTreeClean: true,
@@ -70,6 +71,9 @@ function createBoundary(allowContentCleanup: boolean) {
       if (!value) throw new Error('ENOENT')
       return value
     },
+  }, (targetDb) => db && targetDb === db ? createSqliteSessionStorage(db).cleanup : targetDb ? createSqliteSessionStorage(targetDb).cleanup : {
+    certifyCanonicalRead: () => false, authorizationSnapshotSha256: () => undefined, markWriteStopped: () => false,
+    begin: () => false, clearNextBatch: () => ({ status: 'ineligible' as const, cleanedMessageCount: 0 }), verifyAndComplete: () => false,
   })
 }
 
@@ -91,15 +95,16 @@ async function appendCanonicalTranscript(
 }
 
 function approveCleanupScope(db: ReturnType<typeof createTempDatabase>['db'], sessionIds: readonly string[]): void {
+  const cleanup = createSqliteSessionStorage(db).cleanup
   const proposal = createSessionStorageCleanupScopeProposal(db, {
     sessionIds,
     validFrom: Date.now() - 1_000,
     validUntil: Date.now() + 60 * 60_000,
-  })
+  }, cleanup)
   approveSessionStorageCleanupScope(db, proposal, {
     approvalReference: 'isolated-fixture-approval',
     approvedScopeSha256: proposal.scopeSha256,
-  })
+  }, cleanup)
 }
 
 async function prepareCanonicalSession(db: ReturnType<typeof createTempDatabase>['db'], name: string, suffix: string): Promise<string> {
@@ -144,7 +149,7 @@ describe('会话正文清理维护 worker', () => {
       appendMessage(temp.db, { id: 'cleanup-unapproved-user', sessionId: session.id, role: 'user', content: 'keep me', timestamp: 1, status: 'sent' })
       const before = getDbConnection(temp.db).prepare(`SELECT content,content_storage_state FROM messages WHERE id=?`)
         .get('cleanup-unapproved-user')
-      const result = runSessionMessageContentCleanupMaintenance(temp.db, createBoundary(true))
+      const result = runSessionMessageContentCleanupMaintenance(temp.db, createBoundary(true, temp.db))
 
       expect(result).toMatchObject({ status: 'blocked', gateReason: 'authorization-missing', scanned: 0 })
       expect(getDbConnection(temp.db).prepare(`SELECT content,content_storage_state FROM messages WHERE id=?`)
@@ -174,7 +179,7 @@ describe('会话正文清理维护 worker', () => {
       approveCleanupScope(db, [session.id])
 
       const options = { batchSize: 1, maxSessionsPerRun: 10, maxBatchesPerSession: 1 }
-      const boundary = createBoundary(true)
+      let boundary = createBoundary(true, db)
       const first = runSessionMessageContentCleanupMaintenance(db, boundary, options)
       expect(first).toMatchObject({ status: 'processed', writeStopped: 1, pendingStarted: 1, batches: 1, completed: 0 })
       expect(getDbConnection(db).prepare('SELECT cleanup_state FROM session_message_content_cutover WHERE session_id=?')
@@ -191,6 +196,7 @@ describe('会话正文清理维护 worker', () => {
 
       db.close()
       db = openDatabase(temp.dbPath)
+      boundary = createBoundary(true, db)
       const resumed = runSessionMessageContentCleanupMaintenance(db, boundary, options)
       expect(resumed).toMatchObject({ status: 'processed', batches: 1, completed: 1 })
       expect(getDbConnection(db).prepare('SELECT cleanup_state FROM session_message_content_cutover WHERE session_id=?')
@@ -224,7 +230,7 @@ describe('会话正文清理维护 worker', () => {
       getDbConnection(temp.db).prepare(`UPDATE session_message_content_cutover SET api_read_mode='revalidation-required' WHERE session_id=?`).run(session.id)
       approveCleanupScope(temp.db, [session.id])
 
-      const result = runSessionMessageContentCleanupMaintenance(temp.db, createBoundary(true), {
+      const result = runSessionMessageContentCleanupMaintenance(temp.db, createBoundary(true, temp.db), {
         batchSize: 10, maxSessionsPerRun: 10, maxBatchesPerSession: 1,
       })
 
@@ -245,7 +251,7 @@ describe('会话正文清理维护 worker', () => {
       approveCleanupScope(temp.db, [approvedA, driftedD])
       getDbConnection(temp.db).prepare(`UPDATE sessions SET preview='post-approval drift' WHERE id=?`).run(driftedD)
       const addedC = await prepareCanonicalSession(temp.db, 'added C', 'scope-c')
-      const boundary = createBoundary(true)
+      const boundary = createBoundary(true, temp.db)
 
       for (const step of [
         { kind: 'certify' }, { kind: 'write-stop' }, { kind: 'begin' },
@@ -318,13 +324,13 @@ describe('会话正文清理维护 worker', () => {
       const now = Date.now()
       const proposal = createSessionStorageCleanupScopeProposal(temp.db, {
         sessionIds: [sessionId], validFrom: now - 1_000, validUntil: now + 500,
-      })
+      }, createSqliteSessionStorage(temp.db).cleanup)
       approveSessionStorageCleanupScope(temp.db, proposal, {
         approvalReference: 'isolated-expiring-approval', approvedScopeSha256: proposal.scopeSha256,
-      })
+      }, createSqliteSessionStorage(temp.db).cleanup)
 
       vi.useFakeTimers()
-      const boundary = createBoundary(true)
+      const boundary = createBoundary(true, temp.db)
       const checkGate = vi.spyOn(boundary, 'checkGate')
       const onResult = vi.fn()
       const stop = scheduleSessionMessageContentCleanupMaintenance(temp.db, boundary, {

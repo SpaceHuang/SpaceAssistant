@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSessionStorageCleanupProductionBoundary, type SessionStorageCleanupProductionStep } from './sessionStorageCleanupProduction'
+import type { SessionCleanupPort } from '../sessionStorage/host/ports'
 
 const resourceFiles = new Map([
   ['session-storage-build-identity.json', JSON.stringify({
@@ -12,6 +13,10 @@ const resourceFiles = new Map([
   ['session-storage-cleanup-compatibility.json', 'null'],
 ])
 
+const noopCleanup: SessionCleanupPort = {
+  certifyCanonicalRead: () => false, authorizationSnapshotSha256: () => undefined, markWriteStopped: () => false,
+  begin: () => false, clearNextBatch: () => ({ status: 'ineligible', cleanedMessageCount: 0 }), verifyAndComplete: () => false,
+}
 const createBoundary = () => createSessionStorageCleanupProductionBoundary({
   resourcesPath: '/bundle/resources', appVersion: '0.2.4', schemaVersion: 48,
   historyFormatVersion: 1, spillFormatVersion: 1, platform: 'darwin', arch: 'arm64',
@@ -20,7 +25,7 @@ const createBoundary = () => createSessionStorageCleanupProductionBoundary({
     if (!value) throw new Error('ENOENT')
     return value
   },
-})
+}, () => noopCleanup)
 
 describe('会话正文清理生产边界', () => {
   it.each<SessionStorageCleanupProductionStep>([

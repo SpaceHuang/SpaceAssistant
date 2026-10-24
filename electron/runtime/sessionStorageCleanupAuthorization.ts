@@ -2,8 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { AppDatabase } from '../database'
 import { getDbConnection, getSchemaMeta, setSchemaMeta } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
-import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'
-import { getSessionMessageContentCleanupAuthorizationSnapshotSha256 } from '../sessionStorage/maintenance'
+import type { SessionCleanupPort } from '../sessionStorage/host/ports'
 
 const PROFILE_ID_KEY = 'session_storage_profile_id'
 const CLEANUP_SCOPE_KEY = 'session_storage_cleanup_scope'
@@ -98,6 +97,7 @@ function isWellFormedProposal(value: unknown): value is SessionStorageCleanupSco
 export function createSessionStorageCleanupScopeProposal(
   db: AppDatabase,
   input: Readonly<{ sessionIds: readonly string[]; validFrom: number; validUntil: number }>,
+  cleanup: SessionCleanupPort,
 ): SessionStorageCleanupScopeProposal {
   if (!Number.isSafeInteger(input.validFrom) || !Number.isSafeInteger(input.validUntil) || input.validFrom < 0 || input.validUntil <= input.validFrom) {
     throw new RangeError('cleanup scope validity window is invalid')
@@ -109,12 +109,10 @@ export function createSessionStorageCleanupScopeProposal(
   const sessions = sessionIds.map((sessionId) => {
     const cleanupState = getDbConnection(db).prepare(`SELECT cleanup_state FROM session_message_content_cutover WHERE session_id=?`)
       .get(sessionId) as { cleanup_state: string } | undefined
-    const certification = cleanupState?.cleanup_state === 'retained'
-      ? certifyCanonicalSessionApiRead(db, sessionId)
-      : undefined
-    const snapshotSha256 = getSessionMessageContentCleanupAuthorizationSnapshotSha256(db, sessionId)
+    const certified = cleanupState?.cleanup_state === 'retained' ? cleanup.certifyCanonicalRead(sessionId) : false
+    const snapshotSha256 = cleanup.authorizationSnapshotSha256(sessionId)
     const resumable = cleanupState?.cleanup_state === 'write-stopped' || cleanupState?.cleanup_state === 'pending'
-    if ((!resumable && certification?.status !== 'eligible') || !snapshotSha256) {
+    if ((!resumable && !certified) || !snapshotSha256) {
       throw new Error(`session is not certifiable for cleanup authorization: ${sessionId}`)
     }
     return { sessionId, snapshotSha256 }
@@ -134,6 +132,7 @@ export function approveSessionStorageCleanupScope(
   db: AppDatabase,
   proposal: SessionStorageCleanupScopeProposal,
   approval: Readonly<{ approvalReference: string; approvedScopeSha256: string }>,
+  cleanup: SessionCleanupPort,
 ): void {
   const currentProfileId = readOrCreateProfileId(db)
   if (proposal.profileId !== currentProfileId) throw new Error('cleanup scope profile identity mismatch')
@@ -146,12 +145,10 @@ export function approveSessionStorageCleanupScope(
   for (const session of proposal.sessions) {
     const cleanupState = getDbConnection(db).prepare(`SELECT cleanup_state FROM session_message_content_cutover WHERE session_id=?`)
       .get(session.sessionId) as { cleanup_state: string } | undefined
-    const certification = cleanupState?.cleanup_state === 'retained'
-      ? certifyCanonicalSessionApiRead(db, session.sessionId)
-      : undefined
+    const certified = cleanupState?.cleanup_state === 'retained' ? cleanup.certifyCanonicalRead(session.sessionId) : false
     const resumable = cleanupState?.cleanup_state === 'write-stopped' || cleanupState?.cleanup_state === 'pending'
-    const snapshotSha256 = getSessionMessageContentCleanupAuthorizationSnapshotSha256(db, session.sessionId)
-    if ((!resumable && certification?.status !== 'eligible') || snapshotSha256 !== session.snapshotSha256) {
+    const snapshotSha256 = cleanup.authorizationSnapshotSha256(session.sessionId)
+    if ((!resumable && !certified) || snapshotSha256 !== session.snapshotSha256) {
       throw new Error(`cleanup scope certification changed: ${session.sessionId}`)
     }
   }
@@ -208,13 +205,14 @@ function readValidRecord(db: AppDatabase, now: number):
 export function getSessionStorageCleanupScopeAuthorization(
   db: AppDatabase,
   sessionId: string,
+  cleanup: SessionCleanupPort,
   now = Date.now(),
 ): SessionStorageCleanupScopeAuthorization {
   const scope = readValidRecord(db, now)
   if ('allowed' in scope) return scope
   const session = scope.record.proposal.sessions.find((item) => item.sessionId === sessionId)
   if (!session) return { allowed: false, reason: 'session-not-authorized' }
-  const currentSnapshot = getSessionMessageContentCleanupAuthorizationSnapshotSha256(db, sessionId)
+  const currentSnapshot = cleanup.authorizationSnapshotSha256(sessionId)
   if (!currentSnapshot || currentSnapshot !== session.snapshotSha256) return { allowed: false, reason: 'session-snapshot-mismatch' }
   return {
     allowed: true,
