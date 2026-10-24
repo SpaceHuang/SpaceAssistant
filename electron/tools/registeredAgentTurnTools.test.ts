@@ -104,7 +104,7 @@ describe('createRegisteredAgentTurnTools', () => {
     try {
       await tools.prepareTool(call, { kind: 'initial' })
       await expect(tools.prepareTool(call, { kind: 'recheck', replanAfterFreshApproval: true, policyChanged: true } as any))
-        .resolves.toMatchObject({ phase: 'recheck' })
+        .resolves.toMatchObject({ phase: 'recheck', policyChanged: true })
     } finally { tools.discardPreparedTool(call) }
   })
 

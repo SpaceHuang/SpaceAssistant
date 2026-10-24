@@ -8,6 +8,8 @@ export type PermitBinding = Readonly<{
   planDigest: string
   factsDigest: string
   authorizationVersion: string
+  /** Marks a fresh policy pass after an executor-not-entered authorization invalidation. */
+  policyChanged?: true
   phase: 'initial-compat' | 'recheck'
 }>
 
@@ -113,7 +115,7 @@ function bindingKey(requestId: string, invocationId: string): string { return JS
 function sameBinding(a: PermitBinding, b: PermitBinding): boolean {
   const keys: Array<keyof PermitBinding> = [
     'requestId', 'turnId', 'invocationId', 'toolCallId', 'capabilityId', 'inputSnapshotHash',
-    'planDigest', 'factsDigest', 'authorizationVersion', 'phase'
+    'planDigest', 'factsDigest', 'authorizationVersion', 'policyChanged', 'phase'
   ]
   return keys.every((key) => a[key] === b[key])
 }

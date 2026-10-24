@@ -2086,14 +2086,13 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             // tool-call-started is committed before the dispatch lease's final abort check.
             // A rejection here proves the executor was never entered, so settle the
             // proposal as not-dispatched even if that start projection already exists.
-            toolDispatchStates.set(tool.toolCallId, 'pending')
             if (error.reason === 'CANCELLED' || input.request.signal?.aborted) {
+              toolDispatchStates.set(tool.toolCallId, 'pending')
               await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
               throw abortErrorForSignal(input.request.signal)
             }
             if (error.reason === 'AUTHORIZATION_STALE') {
               const hadStartedProjection = toolDispatchStates.get(tool.toolCallId) === 'started'
-              toolDispatchStates.set(tool.toolCallId, 'pending')
               if (hadStartedProjection) {
                 await appendHistory([{ kind: 'tool-call-not-dispatched', payload: {
                   toolCallId: tool.toolCallId,
@@ -2106,11 +2105,13 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
                   executionOutcome: 'not-dispatched'
                 } }])
               }
+              toolDispatchStates.set(tool.toolCallId, 'pending')
               confirmation = undefined
               activeApprovalId = undefined
               policyChangedDuringDispatch = true
               continue dispatchAuthorization
             }
+            toolDispatchStates.set(tool.toolCallId, 'pending')
             await markNotDispatched(tool, error.reason)
             if (error.reason.startsWith('VERIFY_ONLY_') || error.reason.startsWith('RECOVERY_')) {
               return { role: 'tool', toolCallId: tool.toolCallId, content: `Tool call was not dispatched (${error.reason}).`, isError: true } satisfies CanonicalTurnMessage

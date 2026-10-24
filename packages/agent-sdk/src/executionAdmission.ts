@@ -115,5 +115,5 @@ export class InMemoryExecutionAdmissionCoordinator implements ExecutionAdmission
 function invocationKey(requestId: string, invocationId: string): string { return JSON.stringify([requestId, invocationId]) }
 
 function sameBinding(a: PermitBinding, b: PermitBinding): boolean {
-  return Object.keys(a).every((key) => a[key as keyof PermitBinding] === b[key as keyof PermitBinding])
+  return Object.keys(a).every((key) => a[key as keyof PermitBinding] === b[key as keyof PermitBinding]) && a.policyChanged === b.policyChanged
 }

@@ -397,6 +397,7 @@ async function createBinding(input: {
     planDigest: handle.prepared.planDigest,
     factsDigest: handle.prepared.factsDigest,
     authorizationVersion,
+    ...(stage.kind === 'recheck' && stage.policyChanged ? { policyChanged: true as const } : {}),
     phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck'
   })
 }
@@ -422,7 +423,7 @@ function sameCall(left: TurnToolCall, right: TurnToolCall): boolean {
 }
 
 function sameBinding(left: PermitBinding, right: PermitBinding): boolean {
-  return left.requestId === right.requestId && left.turnId === right.turnId && left.invocationId === right.invocationId && left.toolCallId === right.toolCallId && left.capabilityId === right.capabilityId && left.inputSnapshotHash === right.inputSnapshotHash && left.planDigest === right.planDigest && left.factsDigest === right.factsDigest && left.authorizationVersion === right.authorizationVersion && left.phase === right.phase
+  return left.requestId === right.requestId && left.turnId === right.turnId && left.invocationId === right.invocationId && left.toolCallId === right.toolCallId && left.capabilityId === right.capabilityId && left.inputSnapshotHash === right.inputSnapshotHash && left.planDigest === right.planDigest && left.factsDigest === right.factsDigest && left.authorizationVersion === right.authorizationVersion && left.policyChanged === right.policyChanged && left.phase === right.phase
 }
 
 function stableSerialize(value: unknown): string {
