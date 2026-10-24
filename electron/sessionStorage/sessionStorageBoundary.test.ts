@@ -199,6 +199,17 @@ describe('session storage module graph rules', () => {
     expect(appIpc).toMatch(/turnRuntime:\s*TurnRuntime/)
   })
 
+  it('routes test SQLite storage construction through the test composition owner', () => {
+    for (const file of ['electron/testSupport/invocationAssembler.ts', 'electron/testSupport/claudeStreamHandlers.ts']) {
+      const source = readFileSync(path.resolve(file), 'utf8')
+      expect(source).not.toContain('sqliteSessionStorage')
+      expect(source).toContain("from './sessionStorageComposition'")
+    }
+    const composition = 'electron/testSupport/sessionStorageComposition.ts'
+    expect(existsSync(path.resolve(composition))).toBe(true)
+    expect(findSessionStorageModuleViolations(composition, readFileSync(path.resolve(composition), 'utf8'))).toEqual([])
+  })
+
   it('classifies startup History recovery composition as SQLite infrastructure', () => {
     const adapterFile = 'electron/sessionStorage/infrastructure/sqlite/sessionHistoryRecoveryHost.ts'
     expect(findSessionStorageModuleViolations(adapterFile, readFileSync(path.resolve(adapterFile), 'utf8'))).toEqual([])

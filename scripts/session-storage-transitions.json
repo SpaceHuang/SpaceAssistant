@@ -17,28 +17,16 @@
     "evidence": "main.ts; appIpc.ts composition tests"
   },
   {
-    "source": "electron/testSupport/invocationAssembler.ts",
+    "source": "electron/testSupport/sessionStorageComposition.ts",
     "target": "electron/sessionStorage/sqliteSessionStorage",
     "symbols": [
       "createSqliteSessionStorage"
     ],
     "typeOnly": false,
-    "owner": "Test support composition",
-    "reason": "Test support constructs the same SQLite storage adapter used by production composition.",
+    "owner": "Test SessionStorage composition",
+    "reason": "A single test-only composition owner binds the production SQLite adapter to AppDatabase fixtures.",
     "exitStage": "P2",
-    "evidence": "sessionStorageBoundary.test.ts"
-  },
-  {
-    "source": "electron/testSupport/claudeStreamHandlers.ts",
-    "target": "electron/sessionStorage/sqliteSessionStorage",
-    "symbols": [
-      "createSqliteSessionStorage"
-    ],
-    "typeOnly": false,
-    "owner": "Test support composition",
-    "reason": "Stream test support constructs the SQLite storage adapter for integration fixtures.",
-    "exitStage": "P2",
-    "evidence": "sessionStorageBoundary.test.ts"
+    "evidence": "invocationAssembler and claudeStreamHandlers test support; sessionStorageBoundary.test.ts"
   },
   {
     "source": "electron/runtime/sessionStorageCleanupAuthorization.ts",
