@@ -6,6 +6,7 @@ import { openDatabase } from '../database'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { refreshSessionTranscriptProjectionCache } from './sessionTranscriptProjection'
 import { fieldDifferences, readCanonicalTurnContextCandidate, shadowAcceptedTurnContext, shadowTurnRoutingInput } from './sessionStorageShadow'
 import { projectAgentLogFields } from '../agentLogger/agentLogProjection'
 import * as agentLogger from '../agentLogger/agentLogger'
@@ -26,6 +27,46 @@ function expectNoValidApiRouteScopes(conn: ReturnType<typeof getDbConnection>, s
 }
 
 describe('Phase 5.2 canonical shadow reads', () => {
+  it('uses a current parity proof for selected legacy-backed API bodies without replaying History again', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'shadow proof fast path', model: 'test' })
+    const user = appendMessage(db, { id: 'shadow-proof-fast-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
+    await new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).appendBatch([{
+      invocationId: 'shadow-proof-fast-invocation', turnId: 'shadow-proof-fast-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'shadow-proof-fast-context', idempotencyKey: 'shadow-proof-fast-context', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: user.message.id, role: 'user', content: 'question', timestamp: 1 }] }
+    }], 0)
+    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
+    const replay = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
+
+    const candidate = readCanonicalTurnContextCandidate(db, session.id, undefined, user.message.id, [])
+
+    expect(candidate).toMatchObject({ status: 'available', source: 'canonical:L1', messages: [{ id: user.message.id, content: 'question' }] })
+    expect(candidate.canonicalSourceValidated).toBe(true)
+    expect(replay).not.toHaveBeenCalled()
+    replay.mockRestore()
+    db.close()
+  })
+
+  it('falls back to History when event payloads drift without changing the watermark', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'shadow proof payload drift', model: 'test' })
+    const user = appendMessage(db, { id: 'shadow-proof-drift-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
+    await new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).appendBatch([{
+      invocationId: 'shadow-proof-drift-invocation', turnId: 'shadow-proof-drift-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'shadow-proof-drift-context', idempotencyKey: 'shadow-proof-drift-context', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: user.message.id, role: 'user', content: 'question', timestamp: 1 }] }
+    }], 0)
+    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
+    getDbConnection(db).prepare(`UPDATE agent_history_events SET payload_json=replace(payload_json,'question','canonical changed')
+      WHERE event_id='shadow-proof-drift-context'`).run()
+
+    const candidate = readCanonicalTurnContextCandidate(db, session.id, undefined, user.message.id, [])
+
+    expect(candidate).toMatchObject({ status: 'available', source: 'canonical:L2', messages: [{ id: user.message.id, content: 'canonical changed' }] })
+    db.close()
+  })
+
   it('keeps canonical API fold, watermark and cache validation in one SQLite snapshot', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'api shadow snapshot', model: 'test' })
@@ -163,7 +204,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     expect(noCache.legacyHash).toMatch(/^[a-f0-9]{64}$/)
     expect(noCache.canonicalHash).toBe(noCache.legacyHash)
     expect(getDbConnection(db).prepare("SELECT value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
-      .toEqual({ value: 'not-json' })
+      .toBeUndefined()
     // History append does not establish complete transcript parity; shadow reads stay read-only.
     expect(getDbConnection(db).prepare("SELECT COUNT(*) AS n FROM session_projection_state WHERE session_id=? AND scope_key=? AND status='valid'")
       .get(session.id, encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 }))).toMatchObject({ n: 0 })
@@ -250,9 +291,8 @@ describe('Phase 5.2 canonical shadow reads', () => {
     if (afterAppend.kind !== 'matched') throw new Error('expected compacted canonical transcript')
     expect(conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id))
       .toEqual({ message_revision: skeletonRevision })
-    // P1-①: the append transaction advanced the cache to the compaction watermark, so the
-    // shadow observes a fresh seed; its independent fold still drives the mismatch verdict.
-    expect(history.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'hit' })
+    // History append no longer advances the retired cache; its old watermark must miss.
+    expect(history.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'miss' })
     const report = shadowAcceptedTurnContext(db, session.id, legacy)
     expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L2', fields: ['content'], candidate: [{ content: 'provider summary' }] })
     expect(getMessage(db, user.message.id)?.content).toBe('full UI body')
@@ -305,8 +345,8 @@ describe('Phase 5.2 canonical shadow reads', () => {
       const afterAppend = reopenedHistory.readCanonicalSessionTranscriptForShadow(session.id)
       expect(afterAppend.kind).toBe('matched')
       if (afterAppend.kind !== 'matched') throw new Error('expected compacted canonical transcript')
-      // P1-①: the reopened connection's append advanced the cache to the compaction watermark.
-      expect(reopenedHistory.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'hit' })
+      // The reopened connection's append does not advance the retired cache; its old watermark misses.
+      expect(reopenedHistory.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'miss' })
       const report = shadowAcceptedTurnContext(reopened, session.id, legacyAfterReopen)
       expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L2', fields: ['content'], candidate: [{ content: 'provider summary' }] })
       expect(getMessage(reopened, user.message.id)?.content).toBe('full UI body')
@@ -789,6 +829,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     }], 0)
     const legacyRead = () => getTurnContext(db, session.id, boundarySequence, requiredUserId, [])
     const canonicalRead = () => readCanonicalTurnContextCandidate(db, session.id, boundarySequence, requiredUserId, [])
+    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
     for (let warm = 0; warm < 10; warm += 1) {
       const legacy = legacyRead()
       const candidate = canonicalRead()
@@ -842,6 +883,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     const originalRead = history.readCanonicalSessionTranscript(session.id, expectedTranscript)
     expect(originalRead.kind).toBe('matched')
     if (originalRead.kind !== 'matched') throw new Error('expected canonical L2 snapshot')
+    expect(history.readCanonicalSessionTranscriptWithCache(session.id, 'transcript', expectedTranscript)).toMatchObject({ kind: 'matched', source: 'L2' })
     expect(history.readCanonicalSessionTranscriptWithCache(session.id, 'transcript', expectedTranscript)).toMatchObject({ kind: 'matched', source: 'L1' })
     const firstReport = shadowAcceptedTurnContext(db, session.id, legacyBeforeClose)
     expect(firstReport).toMatchObject({ status: 'matched', source: 'canonical:L2', differenceCount: 0 })

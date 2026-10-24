@@ -8,6 +8,7 @@ import { runInTransaction } from '../database/transaction'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { queueInputFingerprint } from '../queueInputFingerprint'
+import { hasCurrentProjectionEligibility } from '../sessionStorage/sqliteRuntimeBindings'
 
 export type SessionStorageShadowReport<T = unknown> = Readonly<{
   consumer: 'api-context' | 'turn-routing'
@@ -61,6 +62,28 @@ function hasSqliteTrimmedContent(value: string): boolean {
 
 function readCanonicalBodies(db: AppDatabase, sessionId: string, validateLegacyRoles = true): CanonicalBodyRead {
   try {
+    if (!validateLegacyRoles && hasCurrentProjectionEligibility(db, sessionId)) {
+      const conn = getDbConnection(db)
+      const canonicalOnly = conn.prepare(`SELECT 1 FROM messages WHERE session_id=?
+        AND content_storage_state='canonical-backed-only' LIMIT 1`).get(sessionId)
+      if (!canonicalOnly) {
+        const watermarkRow = conn.prepare(`SELECT sessions.generation,
+            (SELECT session_seq FROM agent_history_events WHERE session_id=sessions.id ORDER BY session_seq DESC,commit_order DESC LIMIT 1) AS session_seq,
+            (SELECT commit_order FROM agent_history_events WHERE session_id=sessions.id ORDER BY session_seq DESC,commit_order DESC LIMIT 1) AS commit_order,
+            (SELECT event_id FROM agent_history_events WHERE session_id=sessions.id ORDER BY session_seq DESC,commit_order DESC LIMIT 1) AS watermark_event_id,
+            (SELECT invocation_id FROM agent_history_events WHERE session_id=sessions.id ORDER BY session_seq DESC,commit_order DESC LIMIT 1) AS watermark_invocation_id,
+            (SELECT COUNT(*) FROM agent_history_events WHERE session_id=sessions.id) AS event_count
+          FROM sessions WHERE id=?`).get(sessionId) as { generation: string; session_seq: number | null; commit_order: number | null;
+            watermark_event_id: string | null; watermark_invocation_id: string | null; event_count: number } | undefined
+        if (watermarkRow) {
+          const canonicalWatermark = { sessionGeneration: watermarkRow.generation,
+            sessionSeq: watermarkRow.session_seq ?? -1, commitOrder: watermarkRow.commit_order ?? -1,
+            watermarkEventId: watermarkRow.watermark_event_id, watermarkInvocationId: watermarkRow.watermark_invocation_id }
+          const messagesById = new Map(getMessages(db, sessionId, Number.MAX_SAFE_INTEGER).map((message) => [message.id, message]))
+          return { source: 'canonical:L1', messagesById, canonicalWatermark, canonicalSourceValidated: true }
+        }
+      }
+    }
     const legacyMessages = validateLegacyRoles ? getMessages(db, sessionId, Number.MAX_SAFE_INTEGER) : []
     if (legacyMessages.some((message) => message.role !== 'user' && message.role !== 'assistant')) {
       return { source: 'legacy', reason: 'field-not-eligible' }

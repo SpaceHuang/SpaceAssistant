@@ -104,6 +104,7 @@ export function findSessionStorageModuleViolations(filePath, source) {
     ['electron/runtime/sessionProjectionRejection.ts', new Set(['createProjectionService', 'createSqliteProjectionStateStore'])],
     ['electron/runtime/sessionProjectionRevalidation.ts', new Set(['computeCanonicalProjectionFingerprint', 'publishTranscriptParityProof',
       'readLegacyProjectionMessages', 'refreshValidatedProjectionFastPath', 'validateCanonicalProjection'])],
+    ['electron/runtime/sessionStorageShadow.ts', new Set(['hasCurrentProjectionEligibility'])],
     ['electron/runtime/sqliteAgentHistory.ts', new Set(['hasRejectedTranscriptParityStateInConnection'])],
     ['electron/runtime/sessionProjectionMigration.ts', new Set(['hasCurrentProjectionEligibility'])],
     ['electron/runtime/sessionContentWriteAuthority.ts', new Set(['createSqliteSessionApiRouteProjectionFence'])],

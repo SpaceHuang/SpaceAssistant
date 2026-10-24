@@ -116,6 +116,7 @@ describe('background projection revalidation queue (P0-③/④)', () => {
     expect(await runDueSessionProjectionRevalidations(db)).toMatchObject({ revalidated: 1 })
 
     expect(getProjectionRejection(db, session.id)).toBeUndefined()
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
     db.close()
   })
@@ -356,6 +357,7 @@ describe('production revalidation drain (review S1/S2)', () => {
     handle.stop()
 
     expect(getProjectionRejection(db, session.id)).toBeUndefined()
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
     db.close()
   })
