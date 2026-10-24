@@ -53,6 +53,8 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
   const legacySnapshot = hasCanonicalBackedRows && cutover?.write_mode === 'canonical'
     ? undefined
     : getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+  // Consult persisted rejection before any transcript-cache read so a warm L1 cannot bypass
+  // the verdict or force another full fold. Stale O(1) metadata still routes to legacy and queues revalidation.
   if (legacySnapshot?.every(({ role }) => role === 'user' || role === 'assistant')) {
     const rejectionVerdict = consultProjectionRejection(db, sessionId, legacySnapshot)
     if (rejectionVerdict) {
@@ -120,15 +122,6 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
   const legacyMessages = legacySnapshot ?? getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
   if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) {
     return { source: 'legacy', messages: legacyMessages, reason: 'field-not-eligible' }
-  }
-  // P0-② negative cache: a persisted mismatch verdict routes the read to legacy without
-  // re-paying the full rebuild+compare. A stale verdict (O(1) metadata drift) still returns
-  // legacy immediately and re-queues itself; the consumer runs on the turn-terminal checkpoint
-  // (每轮至多一次后台重验), never on the read path.
-  const rejectionVerdict = consultProjectionRejection(db, sessionId, legacyMessages)
-  if (rejectionVerdict) {
-    if (rejectionVerdict === 'stale') enqueueSessionProjectionRevalidation(db, sessionId, { stale: true })
-    return { source: 'legacy', messages: legacyMessages, reason: 'projection-rejected' }
   }
   try {
     const conn = getDbConnection(db)
