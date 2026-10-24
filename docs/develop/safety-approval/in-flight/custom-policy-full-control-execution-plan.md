@@ -1,7 +1,7 @@
 # 自定义安全策略完整可配置执行计划
 
 - **日期：** 2026-10-22
-- **状态：** Phase 0–5 源码阶段已关闭；T10 本机非 IM 验收已收敛，剩余真实 IM owner 场景与正式安装/DMG/目标平台验收。
+- **状态：** 2026-10-24 重审后，Phase 3 / T5 / T6 已按新增 caller 组合回归重新关闭；本轮源码接口修正后，T9 本机最终验收复跑通过。T10 本机非 IM 验收已收敛；最后还需真实 IM owner 场景与正式安装/DMG/目标平台验收。
 - **方案真源：** [自定义安全策略完整可配置开发计划](./custom-policy-full-control-development-plan.md)
 - **验收与不变量真源：** 方案 INV-01–INV-10；产品行为 AC-1–AC-22 以需求稿为准
 - **代码基线：** `109a938404124235d632e4cdbd4f9e06eaa48728`
@@ -9,6 +9,10 @@
 本轮执行记录（2026-10-23）：T0 逐条盘点 101 条规则并核验 writer/consumer/批准后续路径；T1b 对照基线 `109a9384` 记录 UI 范围（追溯记录，时间偏晚已注明）。Phase 0 收尾 5 文件 / 178 项通过；Phase 1 收尾 19 文件 / 347 项通过（含 deniedTools 不可绕过与同级 ask 稳定选择）；Phase 2 收尾 9 文件 / 89 项通过，包含旧 toggle 兼容 shim 的 allow/reset 两条路径，以及 shared/renderer 类型检查。Phase 3 合并集合 15 文件 / 471 项通过；另有 Desktop Hosted policy-change 用例 1 项通过，`typecheck:shared` 与 Electron incremental build 通过。Phase 4 renderer 合并用例 21 项通过，i18n normal/strict 与 renderer typecheck 通过；Impeccable detector 返回 `[]`。Phase 5 T8 已删除旧 rule-enabled shim，并完成 AC/INV 矩阵；跨域集合 40 文件 / 802 项通过。Strict i18n 报出的 1714 条均位于测试文件（符合仓库例外），源码为 0。T9 隔离 SQLite 回滚演练与全仓最终验收已完成。T10 已尝试 macOS 包验收：x64 app bundle 构建并通过 ad-hoc signature verification，app.asar SHA-256=`7f1975aa8c7b1700000cdf8b70c6aa9b49f8e1ca5badf59eaee340fd71b0fcc1`；DMG 创建时 electron-builder 与直接 hdiutil 均超时。随后直接运行发布流水线使用的 `npx electron-builder --mac pkg --x64 --publish never` 成功生成 199 MB x64 PKG，SHA-256=`60fa15fe35424a91a01b53d983a232477c56225b63be50365ee89bdcf35a5c1c`；干净树重建身份为 commit `5a9739c25e84df4906b585fdef1cd86308a3949d`、buildId `4e936b85-22e6-4f2e-8084-a996ae2d1bab`、`sourceTreeClean=true`；`verify:macos-app` 与 `verify:rg:package` 通过，PKG payload 包含 app。PKG 未签名，app 为 ad-hoc 签名，当前 DMG/arm64 均未验收。以上为早期记录；后续已完成隔离包 GUI、启动迁移和重启持久性验证，数据库与自动化回归进展见 T10 最新状态。
 
 本轮计划评审（2026-10-22）处理：B1 全规则覆盖及消费点、B4 T4/T7/T8 的兼容接口顺序；B2/B3/B5 分别在 T6/T5/T4 按最小范围补充。负责人确认 ingress 消息须经批准后才进入处理，exposure 对象须经批准后才暴露；这是本期必做能力，见需求 AC-21/AC-22。
+
+2026-10-24 重审修复记录：R1–R4 的 adapter 新策略转换、同步 waiter 先取消竞态、父 floor 授权上界、自动审核与 automation deny 缓存顺序已修复；合并 14 个相关测试文件 / 526 项通过。IM deferred policy-change 的持久 todo 重判已接线：策略提交通知 bundle runtime，Feishu/WeChat lane 以真实 `executeDeferredImTool` gate 重评；allow 继续同一原 envelope，ask 替换旧审批，deny 收束且不派发，启动恢复会处理失效 todo。新增 IPC 策略写入→runtime→真实 gate→原 executor 组合矩阵，覆盖两条 lane 的 allow/ask/deny 与 claim 后再改 deny；Phase 3 定向 15 文件 / 260 项通过，T5/T6 与 Phase 3 关闭。T7 补齐 101 条默认规则原因的 zh-CN/en-US 文案及 scope 规则映射；renderer 31 项通过、renderer build/typecheck、i18n normal/strict 通过；隔离打包 GUI 已核验 Desktop 与 Remote IM 英文显示完整一致。重审契约复验 `policyEngine`、`invocationAssembler`、`agentSdkSafetyPolicy`、`deferredImBundleRuntime`、`agentSdkConfirmationPort` 5 文件 / 285 tests passed，覆盖显式父 deny、显式 auto 对旧 allow 缓存、automation 明确 deny、策略变更后的 ask/allow/deny 及真实 caller 组合。另已用当前源码完成 macOS arm64 PKG，SHA-256=`cc4eb8ae3bc4e45221e7709fcae3057c9e1cebbec674351500b6a4d754375342`；payload app.asar SHA-256=`9357548aff0c05e7ad2d97705f3c3239c3064084ac63a595572a88bfa5d0bd5a`，PKG 无签名、app ad-hoc 签名校验通过。从展开 payload 以独立 profile 启动成功，GUI 核验 Desktop/IM 设置中文显示及逐次真人确认文案，没有登录或发送 IM。全仓最终验收、真实 IM 与正式发布平台验收仍待后续计划阶段。
+
+2026-10-24 本机最终复验：修正共享 invocation 契约不允许函数属性这一边界后，host-only exposure policy reader 改为 `AgentHostPorts` 接口方法，由 Electron assembler 提供实现，不进入可序列化 invocation 契约。契约形状 + invocation assembler / tool loop 定向回归 3 files / 96 tests passed。`npm run test:renderer` 348 files passed，2558 passed / 2 skipped；`npm run test:electron` 726 files passed / 1 skipped，7807 passed / 110 skipped。最终 `typecheck:shared`、`typecheck:renderer`、`check:system-invariant-registry`（10 registrations / 37 refs）、`check:agent-sdk`、`i18n:check`、`i18n:check:strict` 与 `build:electron:incremental` 通过；i18n 命中 1748 条均在测试、源码 0；`git diff --check` 通过。T9 本机源码及自动化门禁收敛；当前未做真实 IM 登录/发送。T10 仍只剩真实微信/飞书 owner 场景，以及系统级安装、DMG 与目标发布平台验收；PKG 无 Developer ID 签名，DMG 受当前 DiskImages 子系统无响应影响，未声称发布关闭。
 
 > 本文只维护任务状态、依赖和执行证据。需求行为、阶段边界与回退语义不在本文另行定义。状态只用 `- [ ]` 未开始、`- [～]` 进行中、`- [x]` 有证据完成。
 
@@ -242,21 +246,21 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
   - **产物：** desktop epoch 与 IM revision/epoch；审批对象绑定策略域/revision/调用事实；明确由 `deferredResumeCoordinator`（IM deferred）及 T0 盘点出的对应 desktop caller 接收策略变化并重入 gate；新 gate 结果替换旧等待状态。
   - **完成判据：** 等待人工批准或自动审核时保存策略，旧结果不可恢复；正常运行中原调用由具体变化通知接收者重新送入 facts/policy gate：新动作 deny 收束调用，allow/direct 进入后续派发，ask 创建新的审批，auto 使用新策略审核；原请求标识与一次性 resume 防止同一调用重复 dispatch；迟到旧批准稳定返回 stale；不新增本期未要求的持久化恢复队列；桌面/IM 域不串扰；嵌套 floor 由最新父策略重建。
   - **验证命令：** `npm exec vitest run electron/confirmation/imPolicyStore.test.ts electron/confirmation/deferredTodoStore.test.ts electron/confirmation/deferredResumeRequestStore.test.ts electron/remote/deferredResumeCoordinator.test.ts electron/confirmation/deferredApprovalAdapter.test.ts electron/confirmation/agentSdkSafetyPolicy.test.ts electron/confirmation/policyFloor.test.ts electron/tools/agentSdkTurnDispatch.test.ts`。
-  - **阶段证据：** 合并集合覆盖 revision 变化后的 gate 重入、ask/allow/deny 新结果、迟到批准与单次 resume；IM deferred coordinator 及 Desktop Hosted caller 均有边界测试。
-  - **环境 / 状态：** 本机 / 已完成；完成 AC-13、AC-14、AC-18、AC-19，INV-05、INV-07。
+-  - **阶段证据：** 本轮 T5/T6 集合 15 个文件 / 260 项通过。`deferredImBundleRuntime.test.ts` 将策略 IPC 提交、registry 通知、持久失效 todo、真实 `executeDeferredImTool` gate 与原注册工具 executor 组合；Feishu/WeChat 两条 lane 均覆盖新 allow 继续同一 envelope 一次、新 ask 替换通知、new deny 不派发。`deferredPolicyReevaluation.test.ts` 覆盖重启恢复及策略竞争；`imDeferredToolExecutor.test.ts` 验证 policy-only gate 不执行工具或调用模型。迟到旧批准、一次性 resume、桌面与 IM 域隔离、嵌套 floor 刷新另由本任务定向集合覆盖。
+-  - **环境 / 状态：** 本机 / 已完成；AC-13、AC-14、AC-18、AC-19 与 INV-05、INV-07 的 deferred/recheck 边界已由 caller 组合及邻接测试覆盖。
 
 - [x] **T6 · 覆盖 claim 后到 executor 进入前的策略变化窗口**
   - **目标文件：** `packages/agent-sdk/src/executionAdmission.ts`、`toolExecutionPort.ts`、`electron/tools/registeredAgentTurnTools.ts`、`permitBoundCoordinatorDispatch.ts`、`electron/runtime/invocationAssembler.ts`、remote/desktop caller adapters 及相应 caller tests。
   - **产物：** 现有 revision/失效通知在 `onDispatchClaimed` 异步窗口后的最终检查位置；两种顺序的 barrier tests 与 executor spy。
   - **完成判据：** `claim` 后暂停 `onDispatchClaimed`，保存新策略再恢复时，executor 零调用且调用返回 T5 gate/recheck；executor 已进入后保存时不伪称撤销；异步 validatePrepared 窗口同样检查当前 revision；无 revision 或检查失败不使用旧授权。不得把 claim 当作 executor 已开始；final-check 只核验批准对象、permit、材料与版本，不重新计算业务风险。若实现引入锁/等待，记录实际锁持有边界并确保锁内不等待审批、长执行或回调。
   - **验证命令：** `npm exec vitest run packages/agent-sdk/test/executionAdmission.test.ts packages/agent-sdk/test/toolExecutionPort.test.ts electron/confirmation/agentSdkSafetyPolicy.test.ts electron/confirmation/policyFloor.test.ts electron/tools/permitBoundCoordinatorDispatch.test.ts electron/tools/registeredAgentTurnTools.test.ts electron/runtime/hostedAgentTurnHost.test.ts`；屏障测试断言保存与派发两种顺序均可完成。
-  - **阶段证据：** claim/`onDispatchClaimed` 与 validatePrepared 异步屏障用例断言策略失效时 executor 不进入；executor 已进入后的 Hosted policy-change 用例验证只中断运行，不报告未派发。
-  - **环境 / 状态：** 本机 / 已完成；完成 AC-15–AC-18，INV-05、INV-06。
+-  - **阶段证据：** `executionAdmission`、`toolExecutionPort`、Hosted turn 与 registered tool 用例覆盖 claim/`onDispatchClaimed`、validatePrepared 异步屏障及策略失效后 executor 不进入；SDK 在 stale authorization 后重入新 gate 的 allow/ask/deny 定向用例通过；executor 已进入后的 Hosted policy-change 用例只报告运行中断，不伪称未派发。新增 Feishu/WeChat lane 组合屏障用例在新 allow 已被 claim 后提交 deny，真实 gate 拒绝旧确认，原 executor 调用数为 0；正常 allow 顺序仍恰好派发一次。
+-  - **环境 / 状态：** 本机 / 已完成；AC-15–AC-18、INV-05、INV-06 的 claim/final-check 与 IM deferred 竞争边界通过。
 
 - [x] **Phase 3 关闭门槛**
   - **证据来源：** T5 revision invalidation tests；T6 barriers 与 executor spy；每个生产 caller 的 caller-level test 证据。
   - **完成判据：** T5 证明策略变化通知可驱动原调用重新过 gate；T6 证明 claim 后异步窗口出现策略变化时旧 executor 不进入；desktop Hosted、direct registered tools、IM synchronous、IM deferred/resume 实际入口均覆盖。无锁实现不要求假想死锁测试；若实现引入锁，则按实际持有范围验证。
-  - **阶段收尾证据：** T5/T6 合并集合 15 files / 471 tests passed；Desktop Hosted policy-change 回归 1 项通过；`typecheck:shared` 通过；`npm run build:electron:incremental` 通过。Phase 3 源码与阶段状态随本阶段提交关闭。
+  - **阶段收尾证据：** T5/T6 定向集合 15 个文件 / 260 项通过，包含真实策略提交→两条 IM lane→gate→executor 组合与 claim 后二次改 deny 的屏障；`check:agent-sdk`、`check:system-invariant-registry`、shared/renderer typecheck、`npm run build:electron:incremental` 通过。Hosted、direct registered、同步等待与 durable deferred/resume 路径均有回归证据。Phase 3 关闭。
 
 ### Phase 4：设置 UI 与本地化
 
@@ -267,7 +271,7 @@ T0 与 T1a 可并行，T1b 在 T0 完成后开展；T1b 只作为 T7 的 UI 实�
   - **产物：** 规则 action selector、逐条 reset、默认人工批准频率说明、旧停用迁移说明、IM shared-domain notice、pending/success/failure/conflict UI、语言同步。
   - **完成判据：** 每条规则（含 ingress/exposure）动作集合准确；不出现 locked 只读行或启停开关；成功后才更新显示；revision 冲突重新读取；所有文案经 `t()`；实现后 `$impeccable` 检查完成。自动化/静态检查作为本机门禁；真实 Electron 窗口窄布局手工结果记录为外部验收 T10，不阻塞源码阶段。
   - **验证命令：** `npm exec vitest run src/renderer/components/Config/ToolsSecuritySettingsTab.test.tsx`；`npm run i18n:generate-types`；`npm run i18n:check`；`npm run typecheck:renderer`。
-  - **阶段证据：** renderer 组件 21 tests passed；`i18n:generate-types` 已运行；`i18n:check`、`i18n:check:strict`、renderer typecheck 通过；Impeccable detector 返回 `[]`。未改现有页面布局；桌面真实窗口窄布局归 T10。
+  - **阶段证据：** 原 renderer 组件 21 tests passed；2026-10-24 新增四种默认频率说明与规则原因双语探针后，组件 31 tests passed；101 条默认规则及 scope 规则原因经隔离英文 GUI 抽查 Desktop/Remote IM，`i18n:generate-types`、`i18n:check`、`i18n:check:strict`、renderer typecheck/build 通过。Impeccable detector 原结果为 `[]`。未改现有页面布局；真实 IM GUI 归 T10。
   - **环境 / 状态：** 本机自动化 / 已完成；完成 AC-1、AC-7–AC-9、AC-19，INV-08。真实窗口检查归 T10。
 
 - [x] **Phase 4 关闭门槛**
