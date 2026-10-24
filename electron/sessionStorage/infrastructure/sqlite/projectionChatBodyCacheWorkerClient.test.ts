@@ -86,4 +86,36 @@ describe('projection chat body cache worker client', () => {
     expect(repeatedSearch.workerThreadId).toBe(search.workerThreadId)
     expect(repeatedSearch.messages.map(({ id }) => id)).toEqual(['requested', 'large-unselected'])
   })
+
+  it('streams a cache larger than the search worker LRU and returns bounded results', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'projection-chat-body-cache-stream-worker-'))
+    roots.push(root)
+    const sessionId = 'stream-worker-chat-session'
+    const sessionGeneration = 'stream-worker-chat-generation'
+    const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 3 })
+    const sourceIdentityJson = JSON.stringify({ historyWatermark: { sessionSeq: 500 }, messageRevision: 2 })
+    const messages = Array.from({ length: 70 }, (_, index) => ({
+      id: `stream-${index}`, role: index % 2 ? 'user' as const : 'assistant' as const,
+      content: `${index === 0 ? 'needle' : 'other'} ${'x'.repeat(256 * 1024)}`, timestamp: index
+    }))
+    const envelope = { formatVersion: 1, scopeKey, specVersion: 3, sessionId, sessionGeneration, sourceIdentityJson,
+      historyWatermarkJson: { sessionSeq: 500 }, messages }
+    const bytes = Buffer.from(JSON.stringify(envelope))
+    expect(bytes.byteLength).toBeGreaterThan(16 * 1024 * 1024)
+    const payloadDigest = createHash('sha256').update(bytes).digest('hex')
+    const blobLocator = 'projection-123e4567-e89b-12d3-a456-426614174000.blob'
+    await fs.writeFile(path.join(root, blobLocator), bytes, { mode: 0o600 })
+    const validatedRangeJson = JSON.stringify({ formatVersion: 1, specVersion: 3, sourceIdentityJson,
+      fromSequence: 0, nextSequence: messages.length, payloadDigest, blobByteLength: bytes.byteLength })
+    const view: PreparedChatBodyView = { sessionId, sessionGeneration, scopeKey, specVersion: 3, sourceIdentityJson,
+      payloadGeneration: `projection-${payloadDigest}`, payloadDigest, validatedRangeJson,
+      cachePresent: true, stateSourceIdentityJson: sourceIdentityJson,
+      statePayloadGeneration: `projection-${payloadDigest}`, statePayloadDigest: payloadDigest,
+      stateValidatedRangeJson: validatedRangeJson, blobLocator, blobByteLength: bytes.byteLength }
+
+    const selected = await readPreparedChatBodiesInWorker({ root, view, messageIds: ['stream-0'] })
+    expect(selected.messages).toEqual([{ id: 'stream-0', role: 'assistant', content: `needle ${'x'.repeat(256 * 1024)}`, timestamp: 0 }])
+    const search = await searchPreparedChatBodiesInWorker({ root, view, query: 'needle', limit: 1 })
+    expect(search.messages.map(({ id }) => id)).toEqual(['stream-0'])
+  })
 })

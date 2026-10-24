@@ -16,6 +16,7 @@ export type PreparedChatBodySelection = Readonly<{
 export type PreparedChatBodySearch = PreparedChatBodySelection
 
 const MAX_CACHE_WORKER_MS = 30_000
+const MAX_CHAT_BODY_SEARCH_RESULTS = 10_000
 const pendingSearchRequests = new Map<string, Readonly<{
   resolve(value: PreparedChatBodySearch): void; reject(error: Error): void; timer: NodeJS.Timeout; limit: number
 }>>()
@@ -164,7 +165,8 @@ function readPreparedChatBodyCache(input: Readonly<{
   signal?: AbortSignal
 }>): Promise<PreparedChatBodySelection> {
   if (input.operation === 'select' && !input.messageIds) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID'))
-  if (input.operation === 'search' && (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit))) {
+  if (input.operation === 'search' && (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit) ||
+    input.limit! < 0 || input.limit! > MAX_CHAT_BODY_SEARCH_RESULTS)) {
     return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID'))
   }
   if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))

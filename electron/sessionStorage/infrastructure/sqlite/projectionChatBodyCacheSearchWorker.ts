@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { parentPort, threadId } from 'node:worker_threads'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
+import { readVerifiedChatBodyPayloadStream } from './projectionChatBodyCacheStream'
 import { readVerifiedChatBodyPayload, searchVerifiedChatBodies, type VerifiedChatBody } from './projectionChatBodyCachePayload'
 
 if (!parentPort) throw new Error('projection chat body cache search worker requires a parent port')
@@ -13,6 +14,7 @@ type Input = Readonly<{
 type Cached = Readonly<{ key: string; byteLength: number; messages: readonly VerifiedChatBody[] }>
 
 const MAX_CACHED_PAYLOAD_BYTES = 16 * 1024 * 1024
+const MAX_SEARCH_RESULTS = 10_000
 const cache = new Map<string, Cached>()
 let cachedBytes = 0
 let queue = Promise.resolve()
@@ -31,10 +33,28 @@ async function readPayload(input: Input): Promise<Buffer> {
   return Buffer.from(payload, 'utf8')
 }
 
+async function searchLargePayload(input: Input): Promise<readonly VerifiedChatBody[]> {
+  if (input.inlinePayload !== undefined || !input.blobLocator || !Number.isSafeInteger(input.blobByteLength) || input.blobByteLength! <= MAX_CACHED_PAYLOAD_BYTES) {
+    throw new Error('PROJECTION_CHAT_BODY_CACHE_LOCATOR_INVALID')
+  }
+  return createSessionProjectionBlobStore(input.root).withVerifiedReadStream({ locator: input.blobLocator,
+    byteLength: input.blobByteLength!, payloadDigest: input.payloadDigest }, (stream) =>
+    readVerifiedChatBodyPayloadStream(stream, { byteLength: input.blobByteLength!, sessionId: input.sessionId,
+      sessionGeneration: input.sessionGeneration, scopeKey: input.scopeKey, specVersion: input.specVersion,
+      sourceIdentityJson: input.sourceIdentityJson, payloadDigest: input.payloadDigest,
+      validatedRangeJson: input.validatedRangeJson, operation: { kind: 'search', query: input.query, limit: input.limit } }))
+}
+
 async function handle(input: Input): Promise<void> {
   try {
-    if (!input || typeof input.requestId !== 'string' || typeof input.query !== 'string' || !Number.isSafeInteger(input.limit)) {
+    if (!input || typeof input.requestId !== 'string' || typeof input.query !== 'string' || !Number.isSafeInteger(input.limit) ||
+      input.limit < 0 || input.limit > MAX_SEARCH_RESULTS) {
       throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
+    }
+    if (input.inlinePayload === undefined && Number.isSafeInteger(input.blobByteLength) && input.blobByteLength! > MAX_CACHED_PAYLOAD_BYTES) {
+      const messages = await searchLargePayload(input)
+      parentPort!.postMessage({ requestId: input.requestId, result: { messages, workerThreadId: threadId } })
+      return
     }
     const key = `${input.sessionId}\0${input.sessionGeneration}\0${input.sourceIdentityJson}\0${input.payloadDigest}`
     let entry = cache.get(key)

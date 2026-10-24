@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { Transform, type TransformCallback } from 'node:stream'
 import type { DatabaseSync } from 'node:sqlite'
 import acquireFileLock from './projectionBlobLock'
 import { runInTransaction } from '../../../database/transaction'
@@ -200,6 +201,54 @@ export function createSessionProjectionBlobStore(root: string) {
         operationFailed = true
         throw error
       } finally {
+        try { await releaseFence() }
+        catch (error) { if (!operationFailed) throw error }
+      }
+    },
+    async withVerifiedReadStream<T>(
+      input: Readonly<{ locator: string; byteLength: number; payloadDigest: string }>,
+      consume: (stream: AsyncIterable<Buffer>) => Promise<T>
+    ): Promise<T> {
+      const locator = assertLocator(input.locator)
+      if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 1 || !/^[a-f0-9]{64}$/.test(input.payloadDigest)) {
+        throw blobError('PROJECTION_BLOB_REFERENCE_INVALID', 'projection blob length or digest is invalid')
+      }
+      const releaseFence = await acquireFence()
+      let operationFailed = false
+      const filePath = path.join(root, locator)
+      let source: ReturnType<typeof createReadStream> | undefined
+      let verified: Transform | undefined
+      try {
+        const stat = await fs.lstat(filePath).catch((cause: NodeJS.ErrnoException) => {
+          if (cause.code === 'ENOENT') throw blobError('PROJECTION_BLOB_MISSING', 'projection blob is missing')
+          throw cause
+        })
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== input.byteLength) {
+          throw blobError('PROJECTION_BLOB_CORRUPT', 'projection blob type or length mismatch')
+        }
+        const hash = createHash('sha256')
+        let bytesRead = 0
+        source = createReadStream(filePath)
+        verified = new Transform({ transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
+          bytesRead += chunk.byteLength
+          hash.update(chunk)
+          callback(null, chunk)
+        }, flush(callback: TransformCallback) {
+          if (bytesRead !== input.byteLength || hash.digest('hex') !== input.payloadDigest) {
+            callback(blobError('PROJECTION_BLOB_CORRUPT', 'projection blob length or digest mismatch'))
+            return
+          }
+          callback()
+        } })
+        source.once('error', (error) => verified?.destroy(error))
+        source.pipe(verified)
+        return await consume(verified)
+      } catch (error) {
+        operationFailed = true
+        throw error
+      } finally {
+        source?.destroy()
+        verified?.destroy()
         try { await releaseFence() }
         catch (error) { if (!operationFailed) throw error }
       }

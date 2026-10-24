@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { parentPort, threadId } from 'node:worker_threads'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
+import { readVerifiedChatBodyPayloadStream } from './projectionChatBodyCacheStream'
 import { searchVerifiedChatBodyPayload, selectVerifiedChatBodyPayload } from './projectionChatBodyCachePayload'
 
 if (!parentPort) throw new Error('projection chat body cache worker requires a parent port')
@@ -12,18 +13,32 @@ type Input = Readonly<{
   blobLocator?: string; blobByteLength?: number; messageIds: readonly string[]
 }>
 
-async function readPayload(input: Input): Promise<Buffer> {
+function readInlinePayload(input: Input): Buffer {
   if ((input.inlinePayload === undefined) === (input.blobLocator === undefined)) throw new Error('PROJECTION_CHAT_BODY_CACHE_REFERENCE_INVALID')
+  if (input.inlinePayload === undefined) throw new Error('PROJECTION_CHAT_BODY_CACHE_LOCATOR_INVALID')
+  const bytes = Buffer.from(input.inlinePayload, 'utf8')
+  if (bytes.byteLength > 256 * 1024) throw new Error('PROJECTION_CHAT_BODY_CACHE_INLINE_LIMIT_EXCEEDED')
+  return bytes
+}
+
+async function readMessages(input: Input): Promise<readonly import('./projectionChatBodyCachePayload').VerifiedChatBody[]> {
+  const metadata = { sessionId: input.sessionId, sessionGeneration: input.sessionGeneration, scopeKey: input.scopeKey,
+    specVersion: input.specVersion, sourceIdentityJson: input.sourceIdentityJson, payloadDigest: input.payloadDigest,
+    validatedRangeJson: input.validatedRangeJson }
   if (input.inlinePayload !== undefined) {
-    const bytes = Buffer.from(input.inlinePayload, 'utf8')
-    if (bytes.byteLength > 256 * 1024) throw new Error('PROJECTION_CHAT_BODY_CACHE_INLINE_LIMIT_EXCEEDED')
-    return bytes
+    const payload = { ...metadata, payload: readInlinePayload(input) }
+    return input.operation === 'select'
+      ? selectVerifiedChatBodyPayload({ ...payload, messageIds: input.messageIds })
+      : searchVerifiedChatBodyPayload({ ...payload, query: input.query!, limit: input.limit! })
   }
   if (!input.blobLocator || !/^projection-[0-9a-f-]{36}\.blob$/.test(input.blobLocator) || path.basename(input.blobLocator) !== input.blobLocator ||
     !Number.isSafeInteger(input.blobByteLength) || input.blobByteLength! < 1) throw new Error('PROJECTION_CHAT_BODY_CACHE_LOCATOR_INVALID')
-  const payload = await createSessionProjectionBlobStore(input.root).readVerified({ locator: input.blobLocator,
-    byteLength: input.blobByteLength!, payloadDigest: input.payloadDigest })
-  return Buffer.from(payload, 'utf8')
+  const operation = input.operation === 'select'
+    ? { kind: 'select' as const, messageIds: input.messageIds }
+    : { kind: 'search' as const, query: input.query!, limit: input.limit! }
+  return createSessionProjectionBlobStore(input.root).withVerifiedReadStream({ locator: input.blobLocator,
+    byteLength: input.blobByteLength!, payloadDigest: input.payloadDigest }, (stream) =>
+    readVerifiedChatBodyPayloadStream(stream, { ...metadata, byteLength: input.blobByteLength!, operation }))
 }
 
 parentPort.once('message', async (input: Input) => {
@@ -34,14 +49,7 @@ parentPort.once('message', async (input: Input) => {
       throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
     }
     if (input.operation !== 'select' && input.operation !== 'search') throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
-    const payloadBytes = await readPayload(input)
-    const payload = { payload: payloadBytes, sessionId: input.sessionId,
-      sessionGeneration: input.sessionGeneration, scopeKey: input.scopeKey, specVersion: input.specVersion,
-      sourceIdentityJson: input.sourceIdentityJson, payloadDigest: input.payloadDigest,
-      validatedRangeJson: input.validatedRangeJson }
-    const messages = input.operation === 'select'
-      ? selectVerifiedChatBodyPayload({ ...payload, messageIds: input.messageIds! })
-      : searchVerifiedChatBodyPayload({ ...payload, query: input.query!, limit: input.limit! })
+    const messages = await readMessages(input)
     parentPort!.postMessage({ requestId: input.requestId, result: { messages, workerThreadId: threadId } })
   } catch (error) {
     parentPort!.postMessage({ requestId: input.requestId, error: error instanceof Error ? error.message : 'PROJECTION_CHAT_BODY_CACHE_READ_FAILED' })

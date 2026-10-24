@@ -49,6 +49,52 @@ describe('session projection derived blob store', () => {
     expect(await blobs.readVerified(promoted)).toBe(payload)
   })
 
+  it('streams a verified blob while holding the GC fence until the consumer reaches EOF', async () => {
+    temp = createTempDatabase('projection-verified-stream-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const payload = 'verified-stream-payload\n'.repeat(20_000)
+    const staged = await blobs.write(payload)
+    await staged.release()
+    let entered!: () => void
+    let resume!: () => void
+    const enteredRead = new Promise<void>((resolve) => { entered = resolve })
+    const readGate = new Promise<void>((resolve) => { resume = resolve })
+    const reading = blobs.withVerifiedReadStream(staged, async (stream) => {
+      const chunks: Buffer[] = []
+      let first = true
+      for await (const chunk of stream) {
+        chunks.push(Buffer.from(chunk))
+        if (first) { first = false; entered(); await readGate }
+      }
+      return Buffer.concat(chunks).toString('utf8')
+    })
+    await enteredRead
+    let gcSettled = false
+    const gc = blobs.collectGarbage(getDbConnection(temp.db)).then((result) => { gcSettled = true; return result })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(gcSettled).toBe(false)
+    resume()
+    await expect(reading).resolves.toBe(payload)
+    await expect(gc).resolves.toMatchObject({ removedCount: 1 })
+  })
+
+  it('rejects a streamed digest mismatch and releases the GC fence', async () => {
+    temp = createTempDatabase('projection-verified-stream-corrupt-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const staged = await blobs.write('original stream payload')
+    await staged.release()
+    await fs.writeFile(path.join(root, staged.locator), 'tampered stream payload')
+
+    await expect(blobs.withVerifiedReadStream(staged, async (stream) => {
+      for await (const _chunk of stream) { /* consume to EOF to trigger digest verification */ }
+      return 'unreachable'
+    })).rejects.toMatchObject({ code: 'PROJECTION_BLOB_CORRUPT' })
+
+    await expect(blobs.collectGarbage(getDbConnection(temp.db))).resolves.toMatchObject({ removedCount: 1 })
+  })
+
   it('allocates and promotes multiple worker artifacts while retaining the fence until checkpoint release', async () => {
     temp = createTempDatabase('projection-worker-stage-batch-')
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')
