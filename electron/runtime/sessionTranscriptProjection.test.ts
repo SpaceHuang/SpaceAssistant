@@ -459,6 +459,162 @@ describe('session transcript projection P2 read path', () => {
     }
   }, 120_000)
 
+  it.skipIf(!runStoragePerf)('measures file-backed reads and canonical writes during projection backfill', async () => {
+    const temp = createTempDatabase('session-projection-concurrent-write-perf-')
+    const blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    let host: ReturnType<typeof createSqliteSessionStorageHost> | undefined
+    const db = temp.db
+    const conn = getDbConnection(db)
+    const processGeneration = advanceProcessGeneration(conn)
+    const sliceSamples: Array<{ sourceRows: number; sourceBytes: number; sourceSnapshotDurationMs: number }> = []
+    const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot,
+      processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now,
+      onSlice: (sample) => sliceSamples.push(sample) })
+    host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: blobRoot },
+      startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+        recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+    const pendingPreparations: Promise<void>[] = []
+    const readStorage = { ...host.storage, requestChatBodyV1: (input: { sessionId: string }) => {
+      const pending = host!.storage.requestChatBodyV1!(input)
+      pendingPreparations.push(pending)
+      return pending
+    } }
+    const stateStore = createSqliteProjectionStateStore(db)
+    const bodyScopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
+    const authorityReads: number[] = []
+    const candidateReads: number[] = []
+    const baselineWrites: number[] = []
+    const concurrentWrites: number[] = []
+    const candidateMainHistoryReads: number[] = []
+    const maxMainBlockSamples: number[] = []
+    const readHistory = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+    const readHistoryShadow = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
+    const eventLoopDelay = monitorEventLoopDelay({ resolution: 1 })
+    eventLoopDelay.enable()
+    const memoryBefore = process.memoryUsage()
+    const walBytesBefore = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
+    const createParitySession = async (suffix: string) => {
+      const session = createSession(db, { name: `concurrent projection ${suffix}`, model: 'test' })
+      const initialMessages = Array.from({ length: 40 }, (_, index) => ({
+        id: `concurrent-backfill-${suffix}-${index}`, sessionId: session.id,
+        role: (index % 2 ? 'assistant' : 'user') as 'user' | 'assistant',
+        content: `concurrent backfill body ${index} ${'source message '.repeat(8)}`, timestamp: index + 1,
+        status: (index % 2 ? 'completed' : 'sent') as 'completed' | 'sent'
+      }))
+      const { appendMessagesAtomically } = await import('../database/operations')
+      appendMessagesAtomically(db, initialMessages)
+      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+      const invocationId = `concurrent-backfill-${suffix}`
+      await history.appendBatch([
+        { invocationId, turnId: invocationId, sequence: 1, schemaVersion: 1,
+          eventId: `${invocationId}-context`, idempotencyKey: `${invocationId}-context`, kind: 'invocation-context-committed',
+          payload: { messages: initialMessages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) } },
+        { invocationId, turnId: invocationId, sequence: 2, schemaVersion: 1,
+          eventId: `${invocationId}-terminal`, idempotencyKey: `${invocationId}-terminal`,
+          kind: 'invocation-completed', payload: { status: 'completed' } }
+      ], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+      expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
+      return { session, history, initialMessages }
+    }
+    const appendCanonicalUser = async (sessionId: string, historyWriter: SqliteAgentHistory, suffix: string, timestamp: number) => {
+      const message = { id: `concurrent-write-${suffix}`, sessionId, role: 'user' as const,
+        content: `concurrent source addition ${suffix} ${'write fence '.repeat(8)}`, timestamp, status: 'sent' as const }
+      appendMessage(db, message)
+      await historyWriter.appendBatch([
+        { invocationId: `concurrent-write-${suffix}`, turnId: `concurrent-write-${suffix}`, sequence: 1, schemaVersion: 1,
+          eventId: `concurrent-write-${suffix}-context`, idempotencyKey: `concurrent-write-${suffix}-context`,
+          kind: 'invocation-context-committed',
+          payload: { messages: [{ id: message.id, role: message.role, content: message.content, timestamp: message.timestamp }] } },
+        { invocationId: `concurrent-write-${suffix}`, turnId: `concurrent-write-${suffix}`, sequence: 2, schemaVersion: 1,
+          eventId: `concurrent-write-${suffix}-terminal`, idempotencyKey: `concurrent-write-${suffix}-terminal`,
+          kind: 'invocation-completed', payload: { status: 'completed' } }
+      ], 0)
+    }
+    const percentile = (values: number[], fraction: number) => {
+      const sorted = [...values].sort((left, right) => left - right)
+      return sorted[Math.ceil(sorted.length * fraction) - 1]!
+    }
+    try {
+      for (let sample = 0; sample < 30; sample += 1) {
+        const baseline = await createParitySession(`baseline-${sample}`)
+        const candidate = await createParitySession(`candidate-${sample}`)
+        let started = performance.now()
+        const authorityBeforeWrite = readSessionTranscriptProjection(db, baseline.session.id)
+        authorityReads.push(performance.now() - started)
+        expect(authorityBeforeWrite.source).toBe('canonical:L2')
+        started = performance.now()
+        await appendCanonicalUser(baseline.session.id, baseline.history, `baseline-${sample}`, 10_000 + sample * 2)
+        baselineWrites.push(performance.now() - started)
+
+        const authority = readSessionTranscriptProjection(db, candidate.session.id)
+        expect(authority.source).toBe('canonical:L2')
+        stateStore.invalidateInTransaction({ sessionId: candidate.session.id, scopeKey: bodyScopeKey,
+          sessionGeneration: candidate.session.generation, now: 20_000 + sample })
+        const historyReadsBeforeCandidate = readHistory.mock.calls.length + readHistoryShadow.mock.calls.length
+        const candidateStarted = performance.now()
+        eventLoopDelay.reset()
+        let candidateResolvedAt: number | undefined
+        const candidatePromise = readChatMessagesAfterPreparation(readStorage, { sessionId: candidate.session.id, limit: 500 })
+          .then((messages) => { candidateResolvedAt = performance.now(); return messages })
+        const writeStarted = performance.now()
+        const concurrentWrite = appendCanonicalUser(candidate.session.id, candidate.history, `candidate-${sample}`, 10_001 + sample * 2)
+        const [read] = await Promise.all([candidatePromise, concurrentWrite])
+        if (candidateResolvedAt === undefined) throw new Error('CONCURRENT_PROJECTION_READ_DID_NOT_RESOLVE')
+        candidateReads.push(candidateResolvedAt - candidateStarted)
+        concurrentWrites.push(performance.now() - writeStarted)
+        maxMainBlockSamples.push(eventLoopDelay.max / 1_000_000)
+        candidateMainHistoryReads.push(readHistory.mock.calls.length + readHistoryShadow.mock.calls.length - historyReadsBeforeCandidate)
+        expect(read.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
+          .toEqual(authority.messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
+        expect(candidateMainHistoryReads.at(-1)).toBe(0)
+
+        await pendingPreparations.at(-1)?.catch(() => undefined)
+        const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: candidate.session.id })
+        if (!prepared) throw new Error('CONCURRENT_PROJECTION_PREPARED_VIEW_UNAVAILABLE')
+        const current = await host.storage.queries.readPreparedMessages?.({ sessionId: candidate.session.id, limit: 500, prepared })
+        expect(current?.map(({ id }) => id)).toContain(`concurrent-write-candidate-${sample}`)
+        expect(current).toHaveLength(authority.messages.length + 1)
+        const state = stateStore.get(candidate.session.id, bodyScopeKey)
+        expect(state?.status).toBe('valid')
+        expect(state?.sourceIdentityJson).toBe(stateStore.readSourceIdentity(candidate.session.id, candidate.session.generation))
+      }
+      const memoryAfter = process.memoryUsage()
+      const walBytes = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
+      const maxMainBlockMs = Math.max(...maxMainBlockSamples)
+      const quiesceStarted = performance.now()
+      const quiesce = await host.lifecycle.stop({ deadlineMs: 5_000 })
+      const quiesceMs = performance.now() - quiesceStarted
+      eventLoopDelay.disable()
+      process.stdout.write(`file-backed-backfill-write authorityP50=${percentile(authorityReads, 0.5).toFixed(2)}ms ` +
+        `authorityP95=${percentile(authorityReads, 0.95).toFixed(2)}ms candidateP50=${percentile(candidateReads, 0.5).toFixed(2)}ms ` +
+        `candidateP95=${percentile(candidateReads, 0.95).toFixed(2)}ms baselineWriteP95=${percentile(baselineWrites, 0.95).toFixed(2)}ms ` +
+        `concurrentWriteP95=${percentile(concurrentWrites, 0.95).toFixed(2)}ms samples=30 messages=40 ` +
+        `candidateMainHistoryReads=${candidateMainHistoryReads.reduce((sum, value) => sum + value, 0)} ` +
+        `workerSlices=${sliceSamples.length} sourceRows=${sliceSamples.reduce((sum, slice) => sum + slice.sourceRows, 0)} ` +
+        `sourceBytes=${sliceSamples.reduce((sum, slice) => sum + slice.sourceBytes, 0)} ` +
+        `sourceSnapshotMs=${sliceSamples.reduce((sum, slice) => sum + slice.sourceSnapshotDurationMs, 0).toFixed(2)}ms ` +
+        `mainBlockMax=${maxMainBlockMs.toFixed(2)}ms heapDelta=${memoryAfter.heapUsed - memoryBefore.heapUsed} ` +
+        `rssDelta=${memoryAfter.rss - memoryBefore.rss} walBytes=${walBytes} walDeltaBytes=${walBytes - walBytesBefore} ` +
+        `quiesce=${quiesce.status}:${quiesceMs.toFixed(2)}ms\n`)
+      expect(authorityReads).toHaveLength(30)
+      expect(candidateReads).toHaveLength(30)
+      expect(baselineWrites).toHaveLength(30)
+      expect(concurrentWrites).toHaveLength(30)
+      expect(candidateMainHistoryReads.every((count) => count === 0)).toBe(true)
+      expect(sliceSamples.length).toBeGreaterThan(0)
+      expect(quiesce.status).toBe('quiescent')
+      expect(percentile(candidateReads, 0.95)).toBeLessThanOrEqual(percentile(authorityReads, 0.95) * 2 + 5)
+      expect(percentile(concurrentWrites, 0.95)).toBeLessThanOrEqual(percentile(baselineWrites, 0.95) * 2 + 5)
+    } finally {
+      eventLoopDelay.disable()
+      vi.restoreAllMocks()
+      await host?.lifecycle.stop({ deadlineMs: 5_000 })
+      temp.cleanup()
+    }
+  }, 120_000)
+
   it('refreshes source parity without rebuilding the retired transcript cache', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'turn-end projection', model: 'test' })
