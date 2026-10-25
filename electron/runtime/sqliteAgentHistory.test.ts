@@ -1180,7 +1180,7 @@ describe('SqliteAgentHistory', () => {
       ] }], requiredUserMessage: { id: 'atomic-required-user-unsupported', message: { role: 'user', content: [
         { type: 'text', text: 'same visible text' }, { type: 'audio', data: 'different unsupported payload' }
       ] } } } }], 0))
-      .rejects.toThrow('canonical invocation context payload is invalid')
+      .rejects.toThrow('canonical invocation context payload is invalid (content-block-unsupported)')
     expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-unsupported-event'))
       .toEqual({ count: 0 })
     db.close()

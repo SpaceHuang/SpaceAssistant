@@ -5,7 +5,7 @@ import type { SessionEventInput } from './sessionEvents'
 import type { HistoryEvent } from '../packages/agent-sdk/src/history'
 import { ensureLegacyLedgerReadiness } from './sessionLedgerReadiness'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
-import { toolCallProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
+import { toolCallProjectionPayloadMatches, toolResultProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
 
 export type CanonicalLedgerProjectionTarget = {
   ledgerLocationKey: string
@@ -283,6 +283,13 @@ export function acknowledgeCanonicalLedgerProjectionTarget(conn: DatabaseSync, t
 }
 
 function projectionEventsMatch(kind: string, expected: readonly SessionEventInput[], observed: readonly SessionEventInput[]): boolean {
+  if (kind === 'tool-result') {
+    return expected.length === observed.length && expected.every((expectedEvent, index) => {
+      const actual = observed[index]
+      return expectedEvent?.type === 'tool_result' && actual?.type === 'tool_result' &&
+        toolResultProjectionPayloadMatches(actual.payload, expectedEvent.payload)
+    })
+  }
   if (kind.startsWith('tool-call:')) {
     return expected.length === observed.length && expected.every((expectedEvent, index) => {
       const actual = observed[index]

@@ -449,6 +449,8 @@ describe('runImRemoteAgent', () => {
     const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, args.requestId, 'deferred-continuation-turn')
     await runImRemoteAgent({ ...args, turnId: acceptedTurn.turnId, acceptedTurn })
     const materials = invocationMaterialsCapture.last as { messages: Array<{ role: string; toolCallId?: string; content?: unknown; toolCalls?: Array<{ id: string }> }> } | null
+    expect(materials?.messages.filter((message) => message.role === 'assistant').flatMap((message) => message.toolCalls ?? []).filter((tool) => tool.id === 'tool-1')).toHaveLength(1)
+    expect(materials?.messages.filter((message) => message.role === 'tool' && message.toolCallId === 'tool-1')).toHaveLength(1)
     expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: [expect.objectContaining({ id: 'tool-1', name: 'send_message' })] }))
     expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'tool-1', isError: false, content: expect.stringContaining('TOOL_RESULT_4321') }))
     expect(JSON.stringify(materials?.messages)).toContain('TOOL_RESULT_4321')
