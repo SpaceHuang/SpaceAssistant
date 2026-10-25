@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { createWikiFileStore } from './wiki/wikiFileStore'
 import { createWikiDomainCoordinator } from './wiki/wikiDomainCoordinator'
 import { createWikiLifecycleController } from './wiki/wikiLifecycle'
-import { saveWikiPageForContext, moveWikiPageForContext, searchWikiForContext, getWikiSchemaForContext, proposeWikiSchemaChangeForContext, updateWikiSchemaForContext, openWikiPageForContext, readWikiPageForContext } from './wiki/wikiDomainTools'
+import { saveWikiPageForContext, moveWikiPageForContext, searchWikiForContext, getWikiSchemaForContext, proposeWikiSchemaChangeForContext, updateWikiSchemaForContext, openWikiPageForContext, readWikiPageForContext, listWikiPageRevisionsForContext } from './wiki/wikiDomainTools'
 import { DEFAULT_WIKI_CONFIG } from '../src/shared/domainTypes'
 
 const roots: string[] = []
@@ -175,3 +175,47 @@ for (const existingPage of [false, true]) {
     await expect(store.readText(`.wiki-service/page-history/${operation.result.pageId}/${catalogPage.revision}.md`)).resolves.toContain('external-after-commit')
   })
 }
+
+it('preserves every same-page committed journal in revision order before reconciling an external edit', async () => {
+  const { store, coordinator, context } = await fixture()
+  const first = await coordinator.savePage({ ...material, requestId: 'initial', toolUseId: 'initial', callerId: 'review:local', lane: 'desktop' })
+  const second = { ...material, pageId: first.pageId, expectedRevision: 1, markdown: 'committed-two' }
+  await expect(coordinator.savePage({ ...second, requestId: 'second', toolUseId: 'second', callerId: 'review:local', lane: 'desktop', crashAt: 'after-log-write' })).rejects.toThrow('injected crash')
+  const secondOperationId = createHash('sha256').update('second\0second').digest('hex')
+  let thirdRequestId = ''
+  for (let index = 0; index < 100 && !thirdRequestId; index += 1) {
+    const candidate = `third-${index}`
+    const candidateOperationId = createHash('sha256').update(`${candidate}\0third`).digest('hex')
+    if (candidateOperationId < secondOperationId) thirdRequestId = candidate
+  }
+  expect(thirdRequestId).not.toBe('')
+  await expect(coordinator.savePage({ ...material, pageId: first.pageId, expectedRevision: 2, markdown: 'committed-three', requestId: thirdRequestId, toolUseId: 'third', callerId: 'review:local', lane: 'desktop', crashAt: 'after-domain-commit' })).rejects.toThrow('injected crash')
+  const thirdOperationId = createHash('sha256').update(`${thirdRequestId}\0third`).digest('hex')
+  const thirdJournal = JSON.parse(await store.readText(`.wiki-service/operations/${thirdOperationId}.json`)) as { targetPath: string; result: { pageId: string; revision: number } }
+  await store.write(thirdJournal.targetPath, (await store.readText(thirdJournal.targetPath)).replace('committed-three', 'external-four'))
+
+  const search = await searchWikiForContext({ query: 'external-four' }, context)
+
+  expect(search).toMatchObject({ success: true, data: { matches: [{ pageId: first.pageId, revision: 4 }] } })
+  await expect(store.readText(`.wiki-service/page-history/${first.pageId}/2.md`)).resolves.toContain('committed-two')
+  await expect(store.readText(`.wiki-service/page-history/${first.pageId}/3.md`)).resolves.toContain('committed-three')
+  await expect(store.readText(`.wiki-service/page-history/${first.pageId}/4.md`)).resolves.toContain('external-four')
+})
+
+it('keeps a deleted domain-committed update readable on repeated scans', async () => {
+  const { store, coordinator, context } = await fixture()
+  const first = await coordinator.savePage({ ...material, requestId: 'initial', toolUseId: 'initial', callerId: 'review:local', lane: 'desktop' })
+  await expect(coordinator.savePage({ ...material, pageId: first.pageId, expectedRevision: 1, markdown: 'committed-before-delete', requestId: 'update', toolUseId: 'update', callerId: 'review:local', lane: 'desktop', crashAt: 'after-domain-commit' })).rejects.toThrow('injected crash')
+  const operationId = createHash('sha256').update('update\0update').digest('hex')
+  const journal = JSON.parse(await store.readText(`.wiki-service/operations/${operationId}.json`)) as { targetPath: string }
+  await store.remove(journal.targetPath)
+
+  expect((await searchWikiForContext({ query: 'anything' }, context)).success).toBe(true)
+  expect((await searchWikiForContext({ query: 'anything' }, context)).success).toBe(true)
+  expect((await store.readCatalog())?.tombstones).toContainEqual({ pageId: first.pageId, path: journal.targetPath, revision: 2, deleted: true })
+  expect(await listWikiPageRevisionsForContext({ pageId: first.pageId }, context)).toMatchObject({ success: true, data: expect.arrayContaining([expect.objectContaining({ revision: 1 }), expect.objectContaining({ revision: 2 })]) })
+  const opened = await openWikiPageForContext({ pageId: first.pageId, revision: 2 }, context)
+  expect(opened).toMatchObject({ success: true, data: { revision: 2 } })
+  const readHandle = (opened as { data: { readHandle: string } }).data.readHandle
+  expect(await readWikiPageForContext({ readHandle }, context)).toMatchObject({ success: true, data: { text: 'committed-before-delete\n' } })
+})
