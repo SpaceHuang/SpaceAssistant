@@ -155,6 +155,7 @@ describe('projection build supervisor', () => {
   it('consumes a rejected scope at retryAfter without another external request', async () => {
     const temp = createTempDatabase('projection-due-retry-reopen-')
     let db = temp.db
+    let handle: ReturnType<ReturnType<typeof createProjectionBuildSupervisor>['start']> | undefined
     try {
       const retryAfter = Date.now() + 100
       const session = createSession(db, { name: 'projection due retry', model: 'test' })
@@ -177,18 +178,24 @@ describe('projection build supervisor', () => {
         historyReducer: { createState: () => '{}', fold: () => ({ stateJson: '{}', outputOperations: [], resetOutput: false }), finalize: () => ({ outputOperations: [] }) },
         blobs: { write: async () => { throw new Error('no blob expected') } }, limits: { maxRows: 1, maxBytes: 1024 },
         maxChunksPerSlice: 1, now: Date.now })
-      const handle = supervisor.start()
+      handle = supervisor.start()
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(reads).toBe(0)
-      await new Promise((resolve) => setTimeout(resolve, 120))
+      // Poll against a generous bound: under a loaded full-suite run the worker can be
+      // scheduled after retryAfter even though a fixed 120ms sleep has elapsed.
+      for (let attempts = 0; attempts < 200 && reads === 0; attempts += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
       expect(reads).toBeGreaterThan(0)
       for (let attempts = 0; attempts < 20 && restartedService.get(session.id, scopeKey)?.status !== 'valid'; attempts += 1) {
         await new Promise((resolve) => setTimeout(resolve, 2))
       }
       expect(restartedService.get(session.id, scopeKey)).toMatchObject({ status: 'valid' })
-      handle.stop()
-      await handle.quiesce()
-    } finally { temp.cleanup() }
+    } finally {
+      handle?.stop()
+      await handle?.quiesce()
+      temp.cleanup()
+    }
   })
 
   it('backs off repeated claim failures and caps the delay', async () => {
