@@ -1,6 +1,6 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
-import { getSession } from '../database/operations'
+import { getMessages, getSession } from '../database/operations'
 import { createSpillStoreForDatabase } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict, type SpillDescriptor } from '../storage/spillProtocol'
 import { randomUUID } from 'node:crypto'
@@ -51,6 +51,22 @@ import { createProjectionBlobGcTask } from './infrastructure/sqlite/projectionBl
 export { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
 export { createSqliteStartupHistoryRecoveryBindings }
 export { startSessionProjectionRevalidationDrain }
+
+function hasCurrentPriorChatBodyAuthority(conn: ReturnType<typeof getDbConnection>, sessionId: string): boolean {
+  const session = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
+  if (!session) return false
+  const cutover = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
+    .get(sessionId) as { write_mode: string } | undefined
+  if (!cutover || !['legacy', 'canonical'].includes(cutover.write_mode)) return false
+  if (cutover.write_mode === 'canonical' && conn.prepare("SELECT 1 FROM messages WHERE session_id=? AND content_storage_state='canonical-backed-only' LIMIT 1")
+    .get(sessionId)) return false
+  const sourceIdentityJson = readProjectionSourceIdentity(conn, sessionId, session.generation)
+  if (!sourceIdentityJson) return false
+  const parityScopeKey = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
+  const proof = conn.prepare(`SELECT status,source_identity_json FROM session_projection_state WHERE session_id=? AND scope_key=?`)
+    .get(sessionId, parityScopeKey) as { status: string; source_identity_json: string | null } | undefined
+  return proof?.status === 'valid' && proof.source_identity_json === sourceIdentityJson
+}
 
 /** Host composition binds the private SQLite TurnStorage to the process TurnRuntime. */
 export function createSessionTurnRuntime(storage: SessionStorage, options: Omit<TurnRuntimeOptions, 'storage'>): TurnRuntime {
@@ -163,16 +179,32 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     invalidate: (view) => invalidatePreparedChatBodyView(view, cacheStore)
   })
   const ensureView = createEnsureView()
+  const readPreparedChatBodyV1: NonNullable<SessionStorage['readPreparedChatBodyV1']> = ({ sessionId }) => {
+    const result = readProjectionChatBodyCacheManifest({ sessionId, scopeKey: bodyScopeKey,
+      specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }, cacheStore)
+    return result.kind === 'ready' ? preparedChatBodyViewFromSnapshot(result.snapshot) : undefined
+  }
+  const canReadChatBodyBeforePreparation: NonNullable<SessionStorage['canReadChatBodyBeforePreparation']> = (sessionId) => {
+    const conn = getDbConnection(db)
+    return runInTransaction(conn, () => hasCurrentPriorChatBodyAuthority(conn, sessionId))
+  }
+  const readChatMessagesBeforePreparation: NonNullable<SessionStorage['readChatMessagesBeforePreparation']> =
+    ({ sessionId, limit, offset }) => {
+      const conn = getDbConnection(db)
+      return runInTransaction(conn, () => hasCurrentPriorChatBodyAuthority(conn, sessionId)
+        ? getMessages(db, sessionId, limit ?? 500, offset ?? 0) : undefined)
+    }
   const ensureChatBodyV1: NonNullable<SessionStorage['ensureChatBodyV1']> = ({ sessionId, signal }) => {
     if (!options.prepareProjection) return Promise.reject(new Error('PROJECTION_PREPARATION_UNAVAILABLE'))
     return ensureView<PreparedChatBodyView>({ sessionId, scopeKey: bodyScopeKey, signal,
       read: async () => {
-        const result = readProjectionChatBodyCacheManifest({ sessionId, scopeKey: bodyScopeKey,
-          specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }, cacheStore)
-        const value = result.kind === 'ready' ? preparedChatBodyViewFromSnapshot(result.snapshot) : undefined
+        const value = readPreparedChatBodyV1({ sessionId })
         return value ? { ready: true as const, value } : { ready: false as const }
       },
       prepare: () => options.prepareProjection!({ sessionId, scopeKey: bodyScopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }) })
+  }
+  const requestChatBodyV1: NonNullable<SessionStorage['requestChatBodyV1']> = async ({ sessionId }) => {
+    await ensureChatBodyV1({ sessionId })
   }
   const execution = createSessionExecutionStore(db, queries, { getTurnRuntime: options.getTurnRuntime, ensureChatBodyV1 })
   const contexts = createSessionStorageContextRouter(async ({ sessionId, isBusy }) => {
@@ -303,6 +335,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     readContextMeterEventsForLocation(input.sessionId, input.workDir)
   const storagePorts: SessionStorage = {
     queries, commands: createSessionCommands(db), execution, contexts, recovery, availability, ensureLedgerReady,
+    readPreparedChatBodyV1, canReadChatBodyBeforePreparation, requestChatBodyV1, readChatMessagesBeforePreparation,
     cleanup: createSqliteSessionCleanupPort(db),
     projectionMigration: Object.freeze({
       getRun: (runId: string) => getSessionProjectionMigrationRun(db, runId),

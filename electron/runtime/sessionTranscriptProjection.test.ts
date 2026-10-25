@@ -12,6 +12,9 @@ import { advanceProcessGeneration } from '../database/processGeneration'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from '../sessionStorage/sqliteSessionStorage'
+import { createSqliteProjectionStateStore } from '../sessionStorage/infrastructure/sqlite/sessionProjectionStateStore'
+import { CHAT_BODY_PROJECTION_SPEC_VERSION, encodeProjectionScopeKey } from '../sessionStorage/domain/scopeKey'
+import { createStorageLifecycleControl } from '../sessionStorage/lifecycle'
 import { readChatMessagesAfterPreparation } from '../sessionStorage/application/readChatMessages'
 import { publishTranscriptParityProof } from '../sessionStorage/sqliteRuntimeBindings'
 import * as agentLogger from '../agentLogger/agentLogger'
@@ -220,6 +223,147 @@ describe('session transcript projection P2 read path', () => {
       cleanup()
     }
   })
+
+  it.skipIf(!runStoragePerf)('measures file-backed cold C-scope visits after a valid legacy proof and no-op startup', async () => {
+    const temp = createTempDatabase('session-projection-cold-scope-perf-')
+    const blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    let host: ReturnType<typeof createSqliteSessionStorageHost> | undefined
+    const lifecycleControls: Array<ReturnType<typeof createStorageLifecycleControl>> = []
+    try {
+      const db = temp.db
+      const conn = getDbConnection(db)
+      const session = createSession(db, { name: 'cold C scope after B proof', model: 'test' })
+      const messages = Array.from({ length: 80 }, (_, index) => ({
+        id: `cold-scope-${index}`, sessionId: session.id,
+        role: (index % 2 ? 'assistant' : 'user') as 'user' | 'assistant',
+        content: `cold-scope body ${index} ${'legacy proof '.repeat(8)}`, timestamp: index + 1,
+        status: (index % 2 ? 'completed' : 'sent') as 'completed' | 'sent'
+      }))
+      const { appendMessagesAtomically } = await import('../database/operations')
+      appendMessagesAtomically(db, messages)
+      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+      await history.appendBatch([{
+        invocationId: 'cold-scope-invocation', turnId: 'cold-scope-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'cold-scope-context', idempotencyKey: 'cold-scope-context', kind: 'invocation-context-committed',
+        payload: { messages: messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) }
+      }], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+      expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
+      expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
+      expect(conn.prepare(`SELECT status FROM session_projection_state WHERE session_id=?
+        AND scope_key='session-projection:%5B%22transcriptParityV1%22%2C1%2Cnull%2Cnull%5D'`).get(session.id))
+        .toMatchObject({ status: 'valid' })
+
+      const processGeneration = advanceProcessGeneration(conn)
+      const makeTask = () => createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now,
+        onSlice: (sample) => sliceSamples.push(sample) })
+      const sliceSamples: Array<{ sourceRows: number; sourceBytes: number; sourceSnapshotDurationMs: number }> = []
+      const baselineStartupSamples: number[] = []
+      const candidateStartupSamples: number[] = []
+      const baselineQuiesceSamples: number[] = []
+      const candidateQuiesceSamples: number[] = []
+      for (let sample = 0; sample < 30; sample += 1) {
+        const baseline = createStorageLifecycleControl({ tasks: [] })
+        lifecycleControls.push(baseline)
+        let started = performance.now()
+        baseline.allowBackgroundWork()
+        baselineStartupSamples.push(performance.now() - started)
+        started = performance.now()
+        await baseline.stop({ deadlineMs: 5_000 })
+        baselineQuiesceSamples.push(performance.now() - started)
+
+        const candidate = createStorageLifecycleControl({ tasks: [makeTask()] })
+        lifecycleControls.push(candidate)
+        started = performance.now()
+        candidate.allowBackgroundWork()
+        candidateStartupSamples.push(performance.now() - started)
+        started = performance.now()
+        await candidate.stop({ deadlineMs: 5_000 })
+        candidateQuiesceSamples.push(performance.now() - started)
+      }
+
+      host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: blobRoot },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [makeTask()] })
+      const backgroundPreparations: Promise<void>[] = []
+      const readStorage = { ...host.storage, requestChatBodyV1: (input: { sessionId: string }) => {
+        const pending = host!.storage.requestChatBodyV1!(input)
+        backgroundPreparations.push(pending)
+        return pending
+      } }
+      const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
+      const stateStore = createSqliteProjectionStateStore(db)
+      const authoritySamples: number[] = []
+      const coldVisitSamples: number[] = []
+      const mainBlockSamples: number[] = []
+      const eventLoopDelay = monitorEventLoopDelay({ resolution: 1 })
+      eventLoopDelay.enable()
+      const memoryBefore = process.memoryUsage()
+      const walBytesBefore = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
+      const historySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+      historySpy.mockClear()
+      let candidateHistoryReads = 0
+      for (let sample = 0; sample < 30; sample += 1) {
+        const authorityStarted = performance.now()
+        const authority = readSessionTranscriptProjection(db, session.id)
+        authoritySamples.push(performance.now() - authorityStarted)
+        expect(authority.source).toBe('canonical:L2')
+        expect(authority.messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
+          .toEqual(messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
+
+        const historyReadsBeforeCandidate = historySpy.mock.calls.length
+        const started = performance.now()
+        eventLoopDelay.reset()
+        const prepared = await readChatMessagesAfterPreparation(readStorage, { sessionId: session.id, limit: 80 })
+        coldVisitSamples.push(performance.now() - started)
+        mainBlockSamples.push(eventLoopDelay.max / 1_000_000)
+        expect(prepared.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
+          .toEqual(authority.messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
+        candidateHistoryReads += historySpy.mock.calls.length - historyReadsBeforeCandidate
+        expect(historySpy.mock.calls.length).toBe(historyReadsBeforeCandidate)
+        await backgroundPreparations.at(-1)
+        const current = stateStore.get(session.id, scopeKey)
+        expect(current?.status).toBe('valid')
+        stateStore.invalidateInTransaction({ sessionId: session.id, scopeKey, sessionGeneration: session.generation, now: sample + 1 })
+      }
+      const percentile = (values: number[], fraction: number) => {
+        const sorted = [...values].sort((left, right) => left - right)
+        return sorted[Math.ceil(sorted.length * fraction) - 1]!
+      }
+      const memoryAfter = process.memoryUsage()
+      const walBytes = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
+      const maxMainBlockMs = Math.max(...mainBlockSamples)
+      const historyReads = historySpy.mock.calls.length
+      eventLoopDelay.disable()
+      process.stdout.write(`cold-C-scope authorityP50=${percentile(authoritySamples, 0.5).toFixed(2)}ms ` +
+        `authorityP95=${percentile(authoritySamples, 0.95).toFixed(2)}ms preparedP50=${percentile(coldVisitSamples, 0.5).toFixed(2)}ms ` +
+        `preparedP95=${percentile(coldVisitSamples, 0.95).toFixed(2)}ms samples=30 messages=${messages.length} ` +
+        `legacyProof=valid newScope=chatBodyV1 noOpStartupBP95=${percentile(baselineStartupSamples, 0.95).toFixed(2)}ms ` +
+        `noOpStartupCP95=${percentile(candidateStartupSamples, 0.95).toFixed(2)}ms mainBlockMax=${maxMainBlockMs.toFixed(2)}ms ` +
+        `heapDelta=${memoryAfter.heapUsed - memoryBefore.heapUsed} rssDelta=${memoryAfter.rss - memoryBefore.rss} walBytes=${walBytes} ` +
+        `walDeltaBytes=${walBytes - walBytesBefore} mainHistoryReadsB=${historyReads} mainHistoryEventsB=${historyReads} ` +
+        `mainHistoryReadsC=${candidateHistoryReads} mainHistoryEventsC=${candidateHistoryReads} ` +
+        `sourceRows=${sliceSamples.reduce((sum, sample) => sum + sample.sourceRows, 0)} ` +
+        `sourceBytes=${sliceSamples.reduce((sum, sample) => sum + sample.sourceBytes, 0)} ` +
+        `sourceSnapshotMs=${sliceSamples.reduce((sum, sample) => sum + sample.sourceSnapshotDurationMs, 0).toFixed(2)}ms ` +
+        `quiesceBP95=${percentile(baselineQuiesceSamples, 0.95).toFixed(2)}ms ` +
+        `quiesceCP95=${percentile(candidateQuiesceSamples, 0.95).toFixed(2)}ms samples=30\n`)
+      expect(historyReads).toBeGreaterThan(0)
+      expect(candidateHistoryReads).toBe(0)
+      expect(coldVisitSamples).toHaveLength(30)
+      expect(candidateStartupSamples).toHaveLength(30)
+      expect(sliceSamples.reduce((sum, sample) => sum + sample.sourceRows, 0)).toBeGreaterThan(0)
+      expect(percentile(coldVisitSamples, 0.95)).toBeLessThanOrEqual(percentile(authoritySamples, 0.95) * 2 + 5)
+      expect(percentile(candidateStartupSamples, 0.95)).toBeLessThanOrEqual(50)
+    } finally {
+      vi.restoreAllMocks()
+      for (const lifecycle of lifecycleControls) await lifecycle.stop({ deadlineMs: 5_000 })
+      await host?.lifecycle.stop({ deadlineMs: 5_000 })
+      temp.cleanup()
+    }
+  }, 120_000)
 
   it('refreshes source parity without rebuilding the retired transcript cache', async () => {
     const db = createMemoryAppDb()

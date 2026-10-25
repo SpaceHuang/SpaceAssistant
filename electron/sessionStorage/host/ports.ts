@@ -139,6 +139,10 @@ export interface SessionStorage {
   prepareSessionEventRetentionProjection?(sessionName: string, workDir: string): Promise<void>
   prepareProjection?(input: ProjectionPreparationRequest): Promise<void>
   ensureChatBodyV1?(input: Readonly<{ sessionId: string; signal?: AbortSignal }>): Promise<PreparedChatBodyView>
+  readPreparedChatBodyV1?(input: Readonly<{ sessionId: string }>): PreparedChatBodyView | undefined
+  canReadChatBodyBeforePreparation?(sessionId: string): boolean
+  requestChatBodyV1?(input: Readonly<{ sessionId: string }>): Promise<void>
+  readChatMessagesBeforePreparation?(input: Readonly<{ sessionId: string; limit?: number; offset?: number }>): import('../../../src/shared/domainTypes').Message[] | undefined
 }
 
 export type LifecycleTaskHandle = Readonly<{
