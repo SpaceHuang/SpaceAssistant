@@ -95,15 +95,6 @@ export function toLegacyBoundaryMessages(
 export function toCanonicalModelMessages(messages: readonly ClaudeChatMessageWithBlocks[]): CanonicalModelMessage[] {
   const canonical: CanonicalModelMessage[] = []
   for (const message of messages) {
-    if ((message as { role: string }).role === 'tool') {
-      const toolMessage = message as unknown as { toolCallId?: unknown; content?: unknown; isError?: unknown }
-      if (typeof toolMessage.toolCallId !== 'string' || !toolMessage.toolCallId.trim() || typeof toolMessage.isError !== 'boolean' || !Object.hasOwn(toolMessage, 'content')) {
-        throw new Error('invalid host tool-result message')
-      }
-      canonical.push({ role: 'tool', toolCallId: toolMessage.toolCallId, content: toolMessage.content,
-        isError: toolMessage.isError })
-      continue
-    }
     if (typeof message.content === 'string') {
       canonical.push({ role: message.role, content: message.content, ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}), ...(message.id ? { id: message.id } : {}) })
       continue

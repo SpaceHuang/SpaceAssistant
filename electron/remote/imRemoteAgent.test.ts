@@ -452,11 +452,15 @@ describe('runImRemoteAgent', () => {
     const materials = invocationMaterialsCapture.last as { messages: Array<{ role: string; toolCallId?: string; content?: unknown }> } | null
     expect(materials?.messages.filter((message) => message.role === 'assistant').flatMap((message) => Array.isArray(message.content) ? message.content : []).filter((block) =>
       block && typeof block === 'object' && (block as { type?: string; id?: string }).type === 'tool_use' && (block as { id?: string }).id === 'tool-1')).toHaveLength(1)
-    expect(materials?.messages.filter((message) => message.role === 'tool' && message.toolCallId === 'tool-1')).toHaveLength(1)
+    expect(materials?.messages.filter((message) => message.role === 'user').flatMap((message) => Array.isArray(message.content) ? message.content : []).filter((block) =>
+      block && typeof block === 'object' && (block as { type?: string; tool_use_id?: string }).type === 'tool_result' && (block as { tool_use_id?: string }).tool_use_id === 'tool-1')).toHaveLength(1)
     expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'assistant', content: [expect.objectContaining({ type: 'tool_use', id: 'tool-1', name: 'send_message' })] }))
-    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'tool-1', isError: false, content: expect.stringContaining('TOOL_RESULT_4321') }))
+    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'user', content: [expect.objectContaining({ type: 'tool_result', tool_use_id: 'tool-1', is_error: false, content: expect.stringContaining('TOOL_RESULT_4321') })] }))
     expect(JSON.stringify(materials?.messages)).toContain('TOOL_RESULT_4321')
-    const canonical = toCanonicalModelMessages(materials?.messages as never)
+    // toolChatLoop keeps only role/content on the Anthropic request surface; assert that this boundary
+    // still carries the deferred result's call identity through canonical persistence.
+    const apiMessages = materials?.messages.map(({ role, content }) => ({ role, content })) ?? []
+    const canonical = toCanonicalModelMessages(apiMessages as never)
     expect(canonical).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: [expect.objectContaining({ id: 'tool-1' })] }))
     expect(canonical).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'tool-1' }))
     db.close()
