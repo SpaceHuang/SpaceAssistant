@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { appendMessage, createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
@@ -7,6 +7,19 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { clearProjectionRejection, getProjectionRejection, readProjectionO1Metadata } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRejection'
 import { getProjectedChatMessagePage, getProjectedMessagesPageWithSequence, readSessionTranscriptProjection } from '../sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { computeLegacyProjectionDigest } from '../sessionStorage/infrastructure/sqlite/sessionProjectionRejection'
+
+afterEach(() => { vi.restoreAllMocks() })
+
+function spyCanonicalReadsFor(sessionId: string) {
+  let calls = 0
+  const original = SqliteAgentHistory.prototype.readCanonicalSessionTranscript
+  const spy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript').mockImplementation(
+    function (this: SqliteAgentHistory, candidateSessionId, ...args) {
+      if (candidateSessionId === sessionId) calls += 1
+      return original.call(this, candidateSessionId, ...args)
+    })
+  return { spy, calls: () => calls }
+}
 
 /** Build a mismatched session: legacy holds [A, B] while canonical History folds to [A']. */
 async function createMismatchedSession() {
@@ -80,28 +93,28 @@ describe('session projection rejection negative cache (P0-②)', () => {
   it('routes the next read by the persisted verdict without repeating the full rebuild', async () => {
     const { db, session } = await createMismatchedSession()
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
-    const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+    const rebuildSpy = spyCanonicalReadsFor(session.id)
 
     const second = readSessionTranscriptProjection(db, session.id)
 
     expect(second).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
-    expect(rebuildSpy).not.toHaveBeenCalled()
-    rebuildSpy.mockRestore()
+    expect(rebuildSpy.calls()).toBe(0)
+    rebuildSpy.spy.mockRestore()
     db.close()
   })
 
   it('keeps routing by the verdict while the O(1) metadata is unchanged', async () => {
     const { db, session } = await createMismatchedSession()
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
-    const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+    const rebuildSpy = spyCanonicalReadsFor(session.id)
 
     for (let round = 0; round < 3; round += 1) {
       expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
     }
 
-    expect(rebuildSpy).not.toHaveBeenCalled()
+    expect(rebuildSpy.calls()).toBe(0)
     expect(getProjectionRejection(db, session.id)?.attempts).toBe(1)
-    rebuildSpy.mockRestore()
+    rebuildSpy.spy.mockRestore()
     db.close()
   })
 
@@ -109,7 +122,7 @@ describe('session projection rejection negative cache (P0-②)', () => {
     const { db, session } = await createMismatchedSession()
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
     const before = getProjectionRejection(db, session.id)
-    const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+    const rebuildSpy = spyCanonicalReadsFor(session.id)
 
     // 新输入改变 legacy 行数与 canonical 事件数：结论过期，但读路径必须立即走 legacy。
     appendMessage(db, { id: 'mismatch-user-c', sessionId: session.id, role: 'user', content: 'legacy-c', timestamp: 3, status: 'sent' })
@@ -117,9 +130,9 @@ describe('session projection rejection negative cache (P0-②)', () => {
     expect(after.legacyMessageCount).toBe((before?.legacyMessageCount ?? 0) + 1)
 
     expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
-    expect(rebuildSpy).not.toHaveBeenCalled()
+    expect(rebuildSpy.calls()).toBe(0)
     expect(getProjectionRejection(db, session.id)).toMatchObject({ staleMetadata: true })
-    rebuildSpy.mockRestore()
+    rebuildSpy.spy.mockRestore()
     db.close()
   })
 
@@ -148,31 +161,31 @@ describe('session projection rejection negative cache (P0-②)', () => {
 describe('first-screen entry regression on a mismatched session (P0-⑦)', () => {
   it('keeps the chat message page fast after the first full compare establishes the verdict', async () => {
     const { db, session } = await createMismatchedSession('first-screen')
-    const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+    const rebuildSpy = spyCanonicalReadsFor(session.id)
 
     // 首屏第一次分页：负缓存未命中，付一次全款建立结论。
     const firstPage = getProjectedChatMessagePage(db, session.id, null, 20)
-    expect(rebuildSpy).toHaveBeenCalledTimes(1)
+    expect(rebuildSpy.calls()).toBe(1)
     expect(firstPage.entries.map(({ message }) => message.content)).toEqual(['legacy-a', 'legacy-b'])
 
     // 首屏重放 / 会话切回：结论直返，不再全量重建。
     const secondPage = getProjectedChatMessagePage(db, session.id, null, 20)
-    expect(rebuildSpy).toHaveBeenCalledTimes(1)
+    expect(rebuildSpy.calls()).toBe(1)
     expect(secondPage.entries.map(({ message }) => message.content)).toEqual(['legacy-a', 'legacy-b'])
-    rebuildSpy.mockRestore()
+    rebuildSpy.spy.mockRestore()
     db.close()
   })
 
   it('returns legacy sequence pages directly for sessions without canonical-backed rows', async () => {
     const { db, session } = await createMismatchedSession('seq-page')
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
-    const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+    const rebuildSpy = spyCanonicalReadsFor(session.id)
 
     // 会话切换路径：无 canonical-backed 行的分页经内联守卫快速返回，零全量重建。
     const page = getProjectedMessagesPageWithSequence(db, session.id, 0, 20)
     expect(page.rows.map(({ message }) => message.content)).toEqual(['legacy-a', 'legacy-b'])
-    expect(rebuildSpy).not.toHaveBeenCalled()
-    rebuildSpy.mockRestore()
+    expect(rebuildSpy.calls()).toBe(0)
+    rebuildSpy.spy.mockRestore()
     db.close()
   })
 })
@@ -195,17 +208,17 @@ describe('negative cache covers non-mismatch unavailable kinds (install-shipping
     ], 0)
     // canonical 流处于 snapshot-invalid（completed tool terminal 与 result success 矛盾）。
 
-    const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+    const rebuildSpy = spyCanonicalReadsFor(session.id)
     const first = readSessionTranscriptProjection(db, session.id)
     expect(first).toMatchObject({ source: 'legacy', reason: 'snapshot-invalid' })
-    expect(rebuildSpy).toHaveBeenCalledTimes(1)
+    expect(rebuildSpy.calls()).toBe(1)
     expect(getProjectionRejection(db, session.id)).toMatchObject({ lastReason: 'snapshot-invalid' })
 
     // 第二次读（重开/刷新会话）：负缓存直返，不再重付全量 rebuild+对比。
     const second = readSessionTranscriptProjection(db, session.id)
     expect(second).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
-    expect(rebuildSpy).toHaveBeenCalledTimes(1)
-    rebuildSpy.mockRestore()
+    expect(rebuildSpy.calls()).toBe(1)
+    rebuildSpy.spy.mockRestore()
     db.close()
   })
 })
