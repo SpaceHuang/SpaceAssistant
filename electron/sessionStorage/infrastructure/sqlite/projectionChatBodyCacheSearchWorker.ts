@@ -3,6 +3,7 @@ import { parentPort, threadId } from 'node:worker_threads'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { readVerifiedChatBodyPayloadStream } from './projectionChatBodyCacheStream'
 import { readVerifiedChatBodyPayload, searchVerifiedChatBodies, type VerifiedChatBody } from './projectionChatBodyCachePayload'
+import { readSourceTruthSpillSync, type SpillDescriptor } from '../../../storage/spillProtocol'
 
 if (!parentPort) throw new Error('projection chat body cache search worker requires a parent port')
 
@@ -10,6 +11,7 @@ type Input = Readonly<{
   requestId: string; root: string; sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number
   sourceIdentityJson: string; payloadDigest: string; validatedRangeJson: string; inlinePayload?: string
   blobLocator?: string; blobByteLength?: number; query: string; limit: number
+  sourceSpillRoot?: string; sourceTruthSpills?: readonly SpillDescriptor[]
 }>
 type Cached = Readonly<{ key: string; byteLength: number; messages: readonly VerifiedChatBody[] }>
 
@@ -47,6 +49,12 @@ async function searchLargePayload(input: Input): Promise<readonly VerifiedChatBo
 
 async function handle(input: Input): Promise<void> {
   try {
+    const spills = input?.sourceTruthSpills ?? []
+    if (spills.length) {
+      if (!input.sourceSpillRoot) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+      try { for (const descriptor of spills) readSourceTruthSpillSync(input.sourceSpillRoot, descriptor) }
+      catch { throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE') }
+    }
     if (!input || typeof input.requestId !== 'string' || typeof input.query !== 'string' || !Number.isSafeInteger(input.limit) ||
       input.limit < 0 || input.limit > MAX_SEARCH_RESULTS) {
       throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')

@@ -400,6 +400,8 @@ describe('SQLite projection build task composition', () => {
           kind: 'invocation-completed', payload: { status: 'completed' } },
       ], 0)
       const conn = getDbConnection(db)
+      conn.prepare(`UPDATE spill_reference_backfill_state SET status='complete',verified_generation=(SELECT meta_value FROM spill_reference_meta WHERE meta_key='canonical_change_generation')
+        WHERE owner_table='agent_history_events'`).run()
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
       const stagedHistoryRow = conn.prepare('SELECT length(CAST(payload_json AS BLOB)) AS byte_length, instr(payload_json,\'__spaceassistant_spill_v1\') AS has_spill FROM agent_history_events WHERE event_id=?')

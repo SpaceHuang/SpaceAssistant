@@ -1,6 +1,8 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
 import { getSession } from '../database/operations'
+import { createSpillStoreForDatabase } from '../storage/spillStore'
+import { collectSpillDescriptorsStrict, type SpillDescriptor } from '../storage/spillProtocol'
 import { randomUUID } from 'node:crypto'
 import type { SessionStorage, SessionStorageHost, SessionStorageStartupCoordination } from './host/ports'
 import { createSessionCommands } from './commands'
@@ -22,6 +24,7 @@ import type { TurnRuntime, TurnRuntimeOptions } from '../turnRuntime'
 import { createTurnRuntimeForSessionExecution } from './execution'
 import { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { createSqliteProjectionChatBodyCacheStore } from './infrastructure/sqlite/sessionProjectionStateStore'
+import { readProjectionSourceIdentity } from './infrastructure/sqlite/projectionSourceIdentity'
 import { readProjectionHistoryChunkInWorker } from './infrastructure/sqlite/projectionHistoryChunkWorkerClient'
 import { reduceProjectionHistoryChunkInWorker } from './infrastructure/sqlite/projectionHistoryReducerWorkerClient'
 import { materializeProjectionFinalViewInWorker } from './infrastructure/sqlite/projectionFinalViewWorkerClient'
@@ -100,14 +103,62 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const bodyScopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
   const cacheStore = createSqliteProjectionChatBodyCacheStore(db)
   const cacheBlobs = options.projectionBlobRoot ? createSessionProjectionBlobStore(options.projectionBlobRoot) : undefined
+  const readSourceTruthSpillsForPreparedView = (sessionId: string, sessionGeneration: string, expectedIdentity: string):
+    Readonly<{ root?: string; descriptors: readonly SpillDescriptor[] }> => {
+    const conn = getDbConnection(db)
+    const evidence = runInTransaction(conn, () => {
+      if (readProjectionSourceIdentity(conn, sessionId, sessionGeneration) !== expectedIdentity) return undefined
+      const state = conn.prepare(`SELECT status,verified_generation FROM spill_reference_backfill_state
+        WHERE owner_table='agent_history_events'`).get() as { status: string; verified_generation: number | null } | undefined
+      const generation = conn.prepare("SELECT meta_value FROM spill_reference_meta WHERE meta_key='canonical_change_generation'")
+        .get() as { meta_value: number } | undefined
+      if (!state || !generation || !Number.isSafeInteger(generation.meta_value) ||
+        (state.status === 'complete' && (!Number.isSafeInteger(state.verified_generation) || state.verified_generation! > generation.meta_value))) return undefined
+      if (state.status !== 'complete') {
+        const hasSpillMarker = conn.prepare(`SELECT 1 AS present FROM agent_history_events
+          WHERE session_id=? AND payload_json LIKE '%__spaceassistant_%spill%' LIMIT 1`).get(sessionId)
+        if (hasSpillMarker) return undefined
+        return [] as SpillDescriptor[]
+      }
+      const rows = conn.prepare(`SELECT refs.owner_revision AS ownerRevision,events.spill_reference_revision AS currentRevision,
+          refs.descriptor_json AS descriptorJson
+        FROM agent_history_events events JOIN spill_reference_index refs
+          ON refs.owner_table='agent_history_events' AND refs.owner_key=json_array(events.invocation_id,events.event_id)
+        WHERE events.session_id=? AND refs.kind='source-of-truth' ORDER BY events.session_seq,refs.descriptor_path`).all(sessionId) as
+        Array<{ ownerRevision: string; currentRevision: number; descriptorJson: string }>
+      if (rows.some(({ ownerRevision, currentRevision }) => ownerRevision !== String(currentRevision))) return undefined
+      const descriptors: SpillDescriptor[] = []
+      for (const { descriptorJson } of rows) {
+        let parsed: unknown
+        try { parsed = JSON.parse(descriptorJson) } catch { return undefined }
+        const found = collectSpillDescriptorsStrict({ __spaceassistant_spill_v1: parsed })
+        if (found.length !== 1 || found[0]?.kind !== 'source-of-truth') return undefined
+        descriptors.push(found[0])
+      }
+      return descriptors
+    })
+    if (!evidence) throw new Error('PROJECTION_SOURCE_SPILL_INDEX_UNAVAILABLE')
+    if (!evidence.length) return { descriptors: evidence }
+    const sourceSpillStore = createSpillStoreForDatabase(conn)
+    if (!sourceSpillStore) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+    return { root: sourceSpillStore.root, descriptors: evidence }
+  }
   const queries = createSessionQueries(db, {
     currentSourceIdentity: (sessionId, sessionGeneration) => {
       const snapshot = cacheStore.readSnapshot(sessionId, bodyScopeKey)
       return snapshot?.sessionGeneration === sessionGeneration && snapshot.currentSessionGeneration === sessionGeneration
         ? snapshot.currentSourceIdentityJson ?? undefined : undefined
     },
-    readBodies: (view, messageIds, signal) => readPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', view, messageIds, signal }),
-    searchBodies: (view, query, limit) => searchPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', view, query, limit }),
+    readBodies: (view, messageIds, signal) => {
+      const source = readSourceTruthSpillsForPreparedView(view.sessionId, view.sessionGeneration, view.sourceIdentityJson)
+      return readPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', sourceSpillRoot: source.root,
+        sourceTruthSpills: source.descriptors, view, messageIds, signal })
+    },
+    searchBodies: (view, query, limit) => {
+      const source = readSourceTruthSpillsForPreparedView(view.sessionId, view.sessionGeneration, view.sourceIdentityJson)
+      return searchPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', sourceSpillRoot: source.root,
+        sourceTruthSpills: source.descriptors, view, query, limit })
+    },
     invalidate: (view) => invalidatePreparedChatBodyView(view, cacheStore)
   })
   const ensureView = createEnsureView()

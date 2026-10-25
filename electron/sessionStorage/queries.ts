@@ -454,7 +454,10 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
               }
               let search: PreparedChatBodySearch
               try { search = await preparedChatBody.searchBodies(view, q, limit > 0 ? limit - results.length : Number.MAX_SAFE_INTEGER) }
-              catch {
+              catch (error) {
+                if (error instanceof Error && error.message === 'PROJECTION_SOURCE_SPILL_INDEX_UNAVAILABLE') {
+                  throw new Error('PREPARED_SEARCH_UNAVAILABLE')
+                }
                 preparedChatBody.invalidate(view)
                 throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
               }

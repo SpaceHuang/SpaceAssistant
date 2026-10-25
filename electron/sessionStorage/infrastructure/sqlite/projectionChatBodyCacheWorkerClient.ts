@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
 import type { PreparedChatBodyView } from '../../public/model'
 import { searchVerifiedChatBodyPayload, selectVerifiedChatBodyPayload } from './projectionChatBodyCachePayload'
+import type { SpillDescriptor } from '../../../storage/spillProtocol'
 
 export type PreparedChatBodySelection = Readonly<{
   messages: readonly Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>[]
@@ -51,6 +52,8 @@ anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(
 
 export function readPreparedChatBodiesInWorker(input: Readonly<{
   root: string
+  sourceSpillRoot?: string
+  sourceTruthSpills?: readonly SpillDescriptor[]
   view: PreparedChatBodyView
   messageIds: readonly string[]
   signal?: AbortSignal
@@ -61,6 +64,8 @@ export function readPreparedChatBodiesInWorker(input: Readonly<{
 /** Search a verified prepared snapshot, returning only bounded matches from the cache worker. */
 export function searchPreparedChatBodiesInWorker(input: Readonly<{
   root: string
+  sourceSpillRoot?: string
+  sourceTruthSpills?: readonly SpillDescriptor[]
   view: PreparedChatBodyView
   query: string
   limit: number
@@ -71,7 +76,8 @@ export function searchPreparedChatBodiesInWorker(input: Readonly<{
 }
 
 function searchWithPreparedCacheWorker(input: Readonly<{
-  root: string; view: PreparedChatBodyView; query: string; limit: number; signal?: AbortSignal
+  root: string; sourceSpillRoot?: string; sourceTruthSpills?: readonly SpillDescriptor[]
+  view: PreparedChatBodyView; query: string; limit: number; signal?: AbortSignal
 }>): Promise<PreparedChatBodySearch> {
   if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
   const workerPath = path.join(__dirname, 'projectionChatBodyCacheSearchWorker.js')
@@ -146,7 +152,8 @@ function searchWithPreparedCacheWorker(input: Readonly<{
       sessionGeneration: input.view.sessionGeneration, scopeKey: input.view.scopeKey, specVersion: input.view.specVersion,
       sourceIdentityJson: input.view.sourceIdentityJson, payloadDigest: input.view.payloadDigest,
       validatedRangeJson: input.view.validatedRangeJson, inlinePayload: input.view.inlinePayload,
-      blobLocator: input.view.blobLocator, blobByteLength: input.view.blobByteLength, query: input.query, limit: input.limit }) }
+      blobLocator: input.view.blobLocator, blobByteLength: input.view.blobByteLength, query: input.query, limit: input.limit,
+      sourceSpillRoot: input.sourceSpillRoot, sourceTruthSpills: input.sourceTruthSpills }) }
     catch (error) {
       pendingSearchRequests.delete(requestId)
       clearTimeout(timer)
@@ -157,6 +164,8 @@ function searchWithPreparedCacheWorker(input: Readonly<{
 
 function readPreparedChatBodyCache(input: Readonly<{
   root: string
+  sourceSpillRoot?: string
+  sourceTruthSpills?: readonly SpillDescriptor[]
   view: PreparedChatBodyView
   operation: 'select' | 'search'
   messageIds?: readonly string[]
@@ -170,7 +179,7 @@ function readPreparedChatBodyCache(input: Readonly<{
     return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID'))
   }
   if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
-  if (input.view.inlinePayload !== undefined && Buffer.byteLength(input.view.inlinePayload, 'utf8') <= 256 * 1024) {
+  if (!input.sourceTruthSpills?.length && input.view.inlinePayload !== undefined && Buffer.byteLength(input.view.inlinePayload, 'utf8') <= 256 * 1024) {
     try {
       const payload = { payload: Buffer.from(input.view.inlinePayload, 'utf8'),
         sessionId: input.view.sessionId, sessionGeneration: input.view.sessionGeneration, scopeKey: input.view.scopeKey,
@@ -243,7 +252,8 @@ function readPreparedChatBodyCache(input: Readonly<{
       sessionGeneration: input.view.sessionGeneration, scopeKey: input.view.scopeKey, specVersion: input.view.specVersion,
       sourceIdentityJson: input.view.sourceIdentityJson, payloadDigest: input.view.payloadDigest,
       validatedRangeJson: input.view.validatedRangeJson, inlinePayload: input.view.inlinePayload,
-      blobLocator: input.view.blobLocator, blobByteLength: input.view.blobByteLength, messageIds: input.messageIds }) }
+      blobLocator: input.view.blobLocator, blobByteLength: input.view.blobByteLength, messageIds: input.messageIds,
+      sourceSpillRoot: input.sourceSpillRoot, sourceTruthSpills: input.sourceTruthSpills }) }
     catch (error) { terminateWithError(error instanceof Error ? error : new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_POST_FAILED')) }
   })
 }
