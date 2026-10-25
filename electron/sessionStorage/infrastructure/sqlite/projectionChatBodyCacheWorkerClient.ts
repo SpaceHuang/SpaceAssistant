@@ -19,7 +19,8 @@ export type PreparedChatBodySearch = PreparedChatBodySelection
 const MAX_CACHE_WORKER_MS = 30_000
 const MAX_CHAT_BODY_SEARCH_RESULTS = 10_000
 const pendingSearchRequests = new Map<string, Readonly<{
-  resolve(value: PreparedChatBodySearch): void; reject(error: Error): void; timer: NodeJS.Timeout; limit: number
+  resolve(value: PreparedChatBodySearch): void; reject(error: Error): void; timer: NodeJS.Timeout
+  operation: 'select' | 'search'; limit?: number; messageIds?: readonly string[]
 }>>()
 let preparedSearchWorker: Worker | undefined
 
@@ -58,7 +59,9 @@ export function readPreparedChatBodiesInWorker(input: Readonly<{
   messageIds: readonly string[]
   signal?: AbortSignal
 }>): Promise<PreparedChatBodySelection> {
-  return readPreparedChatBodyCache({ ...input, operation: 'select' })
+  return !input.sourceTruthSpills?.length && input.view.inlinePayload !== undefined
+    ? readPreparedChatBodyCache({ ...input, operation: 'select' })
+    : readWithPreparedCacheWorker({ ...input, operation: 'select' })
 }
 
 /** Search a verified prepared snapshot, returning only bounded matches from the cache worker. */
@@ -71,13 +74,14 @@ export function searchPreparedChatBodiesInWorker(input: Readonly<{
   limit: number
   signal?: AbortSignal
 }>): Promise<PreparedChatBodySearch> {
-  if (input.view.inlinePayload !== undefined) return readPreparedChatBodyCache({ ...input, operation: 'search' })
-  return searchWithPreparedCacheWorker(input)
+  return !input.sourceTruthSpills?.length && input.view.inlinePayload !== undefined
+    ? readPreparedChatBodyCache({ ...input, operation: 'search' })
+    : readWithPreparedCacheWorker({ ...input, operation: 'search' })
 }
 
-function searchWithPreparedCacheWorker(input: Readonly<{
+function readWithPreparedCacheWorker(input: Readonly<{
   root: string; sourceSpillRoot?: string; sourceTruthSpills?: readonly SpillDescriptor[]
-  view: PreparedChatBodyView; query: string; limit: number; signal?: AbortSignal
+  view: PreparedChatBodyView; operation: 'select' | 'search'; query?: string; limit?: number; messageIds?: readonly string[]; signal?: AbortSignal
 }>): Promise<PreparedChatBodySearch> {
   if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
   const workerPath = path.join(__dirname, 'projectionChatBodyCacheSearchWorker.js')
@@ -98,11 +102,14 @@ function searchWithPreparedCacheWorker(input: Readonly<{
         clearTimeout(pending.timer)
         if (message.error) { pending.reject(new Error(message.error)); return }
         const result = message.result
-        if (!result || !Array.isArray(result.messages) || result.messages.length > Math.max(0, pending.limit) ||
+        if (!result || !Array.isArray(result.messages) ||
+          (pending.operation === 'search' && result.messages.length > Math.max(0, pending.limit ?? 0)) ||
+          (pending.operation === 'select' && result.messages.length !== pending.messageIds?.length) ||
           !Number.isSafeInteger(result.workerThreadId) || result.workerThreadId <= 0 ||
           result.messages.some((item, index) => !item || typeof item.id !== 'string' || !item.id ||
+            (pending.operation === 'select' && item.id !== pending.messageIds?.[index]) ||
             (item.role !== 'user' && item.role !== 'assistant') || typeof item.content !== 'string' || !Number.isSafeInteger(item.timestamp) ||
-            (index > 0 && item.timestamp > result.messages[index - 1]!.timestamp))) {
+            (pending.operation === 'search' && index > 0 && item.timestamp > result.messages[index - 1]!.timestamp))) {
           pending.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_RESULT_INVALID'))
           return
         }
@@ -147,12 +154,15 @@ function searchWithPreparedCacheWorker(input: Readonly<{
     input.signal?.addEventListener('abort', onAbort, { once: true })
     const settleResolve = (value: PreparedChatBodySearch) => { input.signal?.removeEventListener('abort', onAbort); resolve(value) }
     const settleReject = (error: Error) => { input.signal?.removeEventListener('abort', onAbort); reject(error) }
-    pendingSearchRequests.set(requestId, { resolve: settleResolve, reject: settleReject, timer, limit: input.limit })
+    pendingSearchRequests.set(requestId, { resolve: settleResolve, reject: settleReject, timer,
+      operation: input.operation, ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      ...(input.messageIds ? { messageIds: input.messageIds } : {}) })
     try { worker.postMessage({ requestId, root: input.root, sessionId: input.view.sessionId,
       sessionGeneration: input.view.sessionGeneration, scopeKey: input.view.scopeKey, specVersion: input.view.specVersion,
       sourceIdentityJson: input.view.sourceIdentityJson, payloadDigest: input.view.payloadDigest,
       validatedRangeJson: input.view.validatedRangeJson, inlinePayload: input.view.inlinePayload,
-      blobLocator: input.view.blobLocator, blobByteLength: input.view.blobByteLength, query: input.query, limit: input.limit,
+      blobLocator: input.view.blobLocator, blobByteLength: input.view.blobByteLength, operation: input.operation,
+      query: input.query, limit: input.limit, messageIds: input.messageIds,
       sourceSpillRoot: input.sourceSpillRoot, sourceTruthSpills: input.sourceTruthSpills }) }
     catch (error) {
       pendingSearchRequests.delete(requestId)

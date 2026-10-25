@@ -1320,6 +1320,9 @@ describe('session transcript projection P2 read path', () => {
         eventId: 'multi-spill-context', idempotencyKey: 'multi-spill-context', kind: 'invocation-context-committed',
         payload: { messages: messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) }
       }], 0)
+      conn.prepare(`UPDATE spill_reference_backfill_state SET status='complete',
+        verified_generation=(SELECT meta_value FROM spill_reference_meta WHERE meta_key='canonical_change_generation')
+        WHERE owner_table='agent_history_events'`).run()
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
       conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
@@ -1359,7 +1362,8 @@ describe('session transcript projection P2 read path', () => {
       }
       const preparedP95 = measureP95(preparedSamples)
       const searchP95 = measureP95(searchSamples)
-      console.info(`canonical-multi-spill-p95 prepared=${preparedP95.toFixed(2)}ms search=${searchP95.toFixed(2)}ms bytes=${Buffer.byteLength(body, 'utf8')} rounds=20 samples=30`)
+      process.stdout.write(`canonical-multi-spill-p95 prepared=${preparedP95.toFixed(2)}ms search=${searchP95.toFixed(2)}ms bytes=${Buffer.byteLength(body, 'utf8')} rounds=20 samples=30\n`)
+      expect(preparedP95, `20-round multi-spill prepared-read p95 ${preparedP95.toFixed(2)}ms`).toBeLessThanOrEqual(50)
       expect(searchP95, `20-round multi-spill search p95 ${searchP95.toFixed(2)}ms`).toBeLessThanOrEqual(20)
     } finally {
       await host?.lifecycle.stop({ deadlineMs: 5_000 })

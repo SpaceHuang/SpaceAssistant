@@ -171,8 +171,19 @@ function enumerableKeys(value: unknown): string[] {
   return value !== null && typeof value === 'object' ? Object.keys(value) : []
 }
 
+function shallowEnumerableEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(left) || Array.isArray(right) ||
+    Object.getPrototypeOf(left) !== Object.prototype || Object.getPrototypeOf(right) !== Object.prototype ||
+    Object.getOwnPropertySymbols(left).length > 0 || Object.getOwnPropertySymbols(right).length > 0) return false
+  const leftRecord = left as Record<string, unknown>, rightRecord = right as Record<string, unknown>
+  const leftKeys = Object.keys(leftRecord), rightKeys = Object.keys(rightRecord)
+  return leftKeys.length === rightKeys.length && leftKeys.every((key) => Object.hasOwn(rightRecord, key) && Object.is(leftRecord[key], rightRecord[key]))
+}
+
 export function fieldDifferences<T>(legacy: T, candidate: T): string[] {
-  if (isDeepStrictEqual(legacy, candidate)) return []
+  if (shallowEnumerableEqual(legacy, candidate)) return []
+  if (!Array.isArray(legacy) && !Array.isArray(candidate) && isDeepStrictEqual(legacy, candidate)) return []
   if (Array.isArray(legacy) && Array.isArray(candidate)) {
     const differences = new Set<string>()
     if (legacy.length !== candidate.length) differences.add('length')
@@ -180,7 +191,7 @@ export function fieldDifferences<T>(legacy: T, candidate: T): string[] {
     for (let index = 0; index < count; index += 1) {
       const leftItem = legacy[index]
       const rightItem = candidate[index]
-      if (isDeepStrictEqual(leftItem, rightItem) &&
+      if ((shallowEnumerableEqual(leftItem, rightItem) || isDeepStrictEqual(leftItem, rightItem)) &&
         Object.prototype.hasOwnProperty.call(legacy, index) === Object.prototype.hasOwnProperty.call(candidate, index)) continue
       const beforeItem = differences.size
       if (Object.prototype.hasOwnProperty.call(legacy, index) !== Object.prototype.hasOwnProperty.call(candidate, index)) {
@@ -190,7 +201,7 @@ export function fieldDifferences<T>(legacy: T, candidate: T): string[] {
       for (const field of new Set([...enumerableKeys(leftItem), ...enumerableKeys(rightItem)])) {
         const left = (leftItem as Record<string, unknown> | null)?.[field]
         const right = (rightItem as Record<string, unknown> | null)?.[field]
-        if (!isDeepStrictEqual(left, right)) differences.add(field)
+        if (!Object.is(left, right) && !isDeepStrictEqual(left, right)) differences.add(field)
       }
       if (differences.size === beforeItem) differences.add(`[${index}]`)
     }
@@ -201,7 +212,7 @@ export function fieldDifferences<T>(legacy: T, candidate: T): string[] {
   const fields = [...new Set([...enumerableKeys(legacy), ...enumerableKeys(candidate)])].filter((field) => {
     const left = leftValue?.[field]
     const right = rightValue?.[field]
-    return !isDeepStrictEqual(left, right)
+    return !Object.is(left, right) && !isDeepStrictEqual(left, right)
   })
   return fields.length > 0 ? fields : ['$value']
 }
@@ -306,10 +317,11 @@ export function shadowAcceptedTurnContext(
           fields.push('accepted-input-fingerprint')
         }
       }
+      const legacyHash = hash(legacyMessages)
       return emitReport({
         consumer: 'api-context', sessionId, source: canonical.source,
         status: fields.length === 0 ? 'matched' : 'mismatched', differenceCount: fields.length, fields,
-        legacyHash: hash(legacyMessages), canonicalHash: hash(candidate),
+        legacyHash, canonicalHash: fields.length === 0 ? legacyHash : hash(candidate),
         canonicalWatermark: canonical.canonicalWatermark,
         canonicalSourceValidated: canonical.canonicalSourceValidated,
         ...(acceptedInputFingerprint ? { acceptedInputFingerprint } : {}), candidate

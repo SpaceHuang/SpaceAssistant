@@ -85,6 +85,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     const report = shadowAcceptedTurnContext(db, session.id, getTurnContext(db, session.id, undefined, user.message.id, []))
 
     expect(report).toMatchObject({ status: 'matched', differenceCount: 0 })
+    expect(report.canonicalHash).toBe(report.legacyHash)
     expect(diagnosticObservedSnapshot).toBe(true)
     logSpy.mockRestore()
     db.close()

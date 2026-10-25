@@ -53,13 +53,17 @@ export function readVerifiedChatBodyPayload(input: VerifiedPayloadInput): readon
 export function selectVerifiedChatBodyPayload(input: VerifiedPayloadInput & Readonly<{
   messageIds: readonly string[]
 }>): readonly VerifiedChatBody[] {
-  if (!Array.isArray(input.messageIds) || input.messageIds.some((id) => typeof id !== 'string' || !id) ||
-    new Set(input.messageIds).size !== input.messageIds.length) throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
   const messages = readVerifiedChatBodyPayload(input)
-  const wanted = new Set(input.messageIds)
+  return selectVerifiedChatBodies(messages, input.messageIds)
+}
+
+export function selectVerifiedChatBodies(messages: readonly VerifiedChatBody[], messageIds: readonly string[]): readonly VerifiedChatBody[] {
+  if (!Array.isArray(messageIds) || messageIds.some((id) => typeof id !== 'string' || !id) ||
+    new Set(messageIds).size !== messageIds.length) throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
+  const wanted = new Set(messageIds)
   const selected = new Map(messages.filter(({ id }) => wanted.has(id)).map((message) => [message.id, message]))
   if (selected.size !== wanted.size) throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_MISSING')
-  return Object.freeze(input.messageIds.map((id) => selected.get(id)!))
+  return Object.freeze(messageIds.map((id) => selected.get(id)!))
 }
 
 /** Search verified canonical bodies using SQLite LIKE's literal, ASCII-case-insensitive semantics. */
