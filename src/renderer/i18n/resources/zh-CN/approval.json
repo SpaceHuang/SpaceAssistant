@@ -1,0 +1,16 @@
+{
+  "ingressWechatTitle": "微信消息需要批准",
+  "ingressFeishuTitle": "飞书消息需要批准",
+  "ingressMessage": "规则「{{ruleId}}」要求批准这条消息后才能进入处理。",
+  "ingressDetails": "发送者：{{senderId}}\n消息编号：{{messageId}}\n\n消息内容：{{excerpt}}",
+  "emptyMessage": "（空消息）",
+  "ingressApprove": "批准并继续处理此消息",
+  "reject": "拒绝",
+  "exposureTitle": "确认开放工具",
+  "exposureMessage": "规则「{{ruleId}}」要求批准后才能向{{lane}}链路开放此工具。",
+  "exposureDetails": "链路：{{lane}}\n工具：{{toolName}}\n\n批准仅对本次请求中的此工具生效。",
+  "exposureApprove": "批准并开放此工具",
+  "feishuLane": "飞书",
+  "wechatLane": "微信",
+  "desktopLane": "桌面"
+}

@@ -49,50 +49,54 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function validateCanonicalInvocationMessages(value: unknown): value is unknown[] {
-  if (!Array.isArray(value)) return false
+function canonicalInvocationMessagesValidationError(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return 'messages-not-array'
   const pendingToolCalls = new Set<string>()
   for (const rawMessage of value) {
-    if (!isRecord(rawMessage)) return false
+    if (!isRecord(rawMessage)) return 'message-not-object'
     const role = rawMessage.role
     if ((rawMessage.id !== undefined && (typeof rawMessage.id !== 'string' || !rawMessage.id.trim())) ||
-      (rawMessage.timestamp !== undefined && (typeof rawMessage.timestamp !== 'number' || !Number.isFinite(rawMessage.timestamp)))) return false
+      (rawMessage.timestamp !== undefined && (typeof rawMessage.timestamp !== 'number' || !Number.isFinite(rawMessage.timestamp)))) return 'message-identity-invalid'
     if (role === 'system' || role === 'user' || role === 'assistant') {
       const content = rawMessage.content
       const toolCalls = rawMessage.toolCalls
-      if (role === 'system' && (typeof content !== 'string' || toolCalls !== undefined)) return false
-      if (role === 'user' && toolCalls !== undefined) return false
-      if (role === 'assistant' && content === undefined && (!Array.isArray(toolCalls) || toolCalls.length === 0)) return false
-      if (content !== undefined && typeof content !== 'string' && !Array.isArray(content)) return false
+      if (role === 'system' && (typeof content !== 'string' || toolCalls !== undefined)) return 'system-message-invalid'
+      if (role === 'user' && toolCalls !== undefined) return 'user-message-has-tool-calls'
+      if (role === 'assistant' && content === undefined && (!Array.isArray(toolCalls) || toolCalls.length === 0)) return 'empty-assistant-message'
+      if (content !== undefined && typeof content !== 'string' && !Array.isArray(content)) return 'message-content-invalid'
       if (Array.isArray(content)) {
         for (const rawBlock of content) {
-          if (!isRecord(rawBlock)) return false
+          if (!isRecord(rawBlock)) return 'content-block-invalid'
           if (rawBlock.type === 'text' && typeof rawBlock.text === 'string') continue
           if (rawBlock.type === 'thinking' && typeof rawBlock.thinking === 'string' &&
             (rawBlock.thinkingSignature === undefined || typeof rawBlock.thinkingSignature === 'string') &&
             (rawBlock.redacted === undefined || typeof rawBlock.redacted === 'boolean')) continue
           if (rawBlock.type === 'image' && typeof rawBlock.data === 'string' &&
             ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(String(rawBlock.mimeType))) continue
-          return false
+          return 'content-block-unsupported'
         }
       }
       if (role === 'assistant' && toolCalls !== undefined) {
-        if (!Array.isArray(toolCalls)) return false
+        if (!Array.isArray(toolCalls)) return 'assistant-tool-calls-invalid'
         for (const rawTool of toolCalls) {
           if (!isRecord(rawTool) || typeof rawTool.id !== 'string' || !rawTool.id.trim() ||
             typeof rawTool.name !== 'string' || !rawTool.name.trim() || !isRecord(rawTool.input) ||
-            (rawTool.thoughtSignature !== undefined && typeof rawTool.thoughtSignature !== 'string') ||
-            pendingToolCalls.has(rawTool.id)) return false
+            (rawTool.thoughtSignature !== undefined && typeof rawTool.thoughtSignature !== 'string')) return 'assistant-tool-call-invalid'
+          if (pendingToolCalls.has(rawTool.id)) return 'duplicate-tool-call-id'
           pendingToolCalls.add(rawTool.id)
         }
-      } else if (rawMessage.toolCalls !== undefined) return false
+      } else if (rawMessage.toolCalls !== undefined) return 'non-assistant-message-has-tool-calls'
       continue
     }
     if (role === 'tool' && typeof rawMessage.toolCallId === 'string' && rawMessage.toolCallId.trim() &&
       typeof rawMessage.isError === 'boolean' && Object.hasOwn(rawMessage, 'content') && pendingToolCalls.delete(rawMessage.toolCallId)) continue
-    return false
+    return role === 'tool' ? 'tool-result-unpaired-or-invalid' : 'message-role-unsupported'
   }
-  return true
+  return undefined
+}
+
+function validateCanonicalInvocationMessages(value: unknown): value is unknown[] {
+  return canonicalInvocationMessagesValidationError(value) === undefined
 }
 
 function assistantLegacyTextProjection(content: unknown): string | undefined {
@@ -471,10 +475,11 @@ export class SqliteAgentHistory implements HistoryPort {
           }
           const payload = event.payload as Record<string, unknown>
           if (event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted') {
-            if (!validateCanonicalInvocationMessages(payload.messages)) {
+            const messagesError = canonicalInvocationMessagesValidationError(payload.messages)
+            if (messagesError) {
               throw new HistoryBatchError(event.kind === 'transcript-compacted'
-                ? 'canonical transcript snapshot payload is invalid'
-                : 'canonical invocation context payload is invalid')
+                ? `canonical transcript snapshot payload is invalid (${messagesError})`
+                : `canonical invocation context payload is invalid (${messagesError})`)
             }
             if (event.kind === 'transcript-compacted') continue
             if (!('requiredUserMessage' in payload)) {
@@ -2373,6 +2378,12 @@ export class SqliteAgentHistory implements HistoryPort {
         state = { invocationId, state: 'interrupted', lastEventId: lastEvent.eventId }
       }
       if (state?.state !== 'interrupted') {
+        flushRepairOutcomes()
+        continue
+      }
+      // Parked invocations have durable deferred-approval state. A projection-repair row may
+      // bring one into this loop, but process restart must not append a second terminal event.
+      if (snapshot.events.at(-1)?.kind === 'invocation-parked') {
         flushRepairOutcomes()
         continue
       }

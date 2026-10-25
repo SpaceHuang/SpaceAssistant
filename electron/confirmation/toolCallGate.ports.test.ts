@@ -151,8 +151,7 @@ describe('evaluateToolCallGate 端口语义等价（与 appDb 路径同判）', 
       decisionCache: materials.decisionCache,
       shellPrecheck: materials.shellPrecheck
     }))
-    expect(r.decision.type).toBe('auto-allow')
-    if (r.decision.type === 'auto-allow') expect(r.decision.ruleId).toBe('cache-hit')
+    expect(r.decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask' })
     expect(materials.audit.events.some((e) => e.event === 'cache.hit')).toBe(true)
   })
 

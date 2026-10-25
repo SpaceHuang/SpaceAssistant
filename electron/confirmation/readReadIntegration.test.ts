@@ -73,6 +73,30 @@ async function approveRead(root: string, file: string, requestId: string, toolUs
 }
 
 describe('V1 confirmed read executor integration', () => {
+  it('deferred re-evaluation reuses only the exact pending sensitive-read registration and can mint a fresh permit', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-deferred-registration-')))
+    try {
+      const file = path.join(root, '.env')
+      await fs.writeFile(file, 'SAFE_TEST_VALUE=1')
+      const requestId = 'read-deferred-registration-request'
+      const toolUseId = 'read-deferred-registration-tool'
+      const registry = new ReadConfirmationRegistry()
+      const input = { path: file }
+      const first = await evaluateToolCallGate(gateDeps(root, input, requestId, toolUseId, registry))
+      expect(first.decision).toMatchObject({ type: 'require-confirm', ruleId: 'path-sensitive-read-confirm' })
+
+      // A deferred runtime rebuild evaluates the exact same call before applying its persisted owner receipt.
+      const resumed = await evaluateToolCallGate(gateDeps(root, input, requestId, toolUseId, registry))
+      expect(resumed.decision).toMatchObject({ type: 'require-confirm', ruleId: 'path-sensitive-read-confirm' })
+      expect(resumed.readTargetMapping).toEqual(first.readTargetMapping)
+      const permit = finalizeReadConfirmation({ toolName: 'read_file', toolInput: input, requestId, toolUseId,
+        outcome: 'approved', answerer: 'user', readPathFact: resumed.readPathFact, approvedTargets: resumed.readTargetMapping }, registry)
+      expect(permit).toMatchObject({ toolName: 'read_file', requestId, toolUseId, decisionRuleId: 'path-sensitive-read-confirm' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('Hosted read gate + production grep executor uses walk fallback when ripgrep is unavailable', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'hosted-grep-fallback-')))
     try {

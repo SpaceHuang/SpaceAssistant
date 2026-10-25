@@ -279,6 +279,72 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(channel.cancel).toHaveBeenCalledWith('tool-1', 'cancelled')
   })
 
+  it('策略授权版本变化时取消旧 waiter 并返回可重判信号', async () => {
+    let version = 'policy-v1'
+    let notify!: () => void
+    const cancel = vi.fn()
+    const channel: ConfirmationChannel = { request: vi.fn(async () => new Promise(() => undefined)), cancel: vi.fn() }
+    const port = createAgentSdkConfirmationPort({
+      createChannel: () => channel, publish: async () => undefined, cancel,
+      currentAuthorizationVersion: () => version,
+      subscribeAuthorizationChange: (_call, listener) => { notify = listener; return () => undefined }
+    })
+    const pending = port({ call: { invocationId: 'inv', toolCallId: 'policy-change-tool', toolName: 'write_file', input: {} },
+      confirmationId: 'policy-change-tool', answerer: 'user', reasonCode: 'human', context })
+    await vi.waitFor(() => expect(channel.request).toHaveBeenCalledOnce())
+    version = 'policy-v2'
+    notify()
+    await expect(pending).resolves.toEqual({ kind: 'authorization-changed' })
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(channel.cancel).toHaveBeenCalledWith('policy-change-tool', 'cancelled')
+  })
+
+  it('策略变化时同步结束的 channel waiter 仍返回授权变化信号', async () => {
+    let version = 'policy-v1'
+    let notify!: () => void
+    let finish!: (outcome: ConfirmOutcome) => void
+    const channel: ConfirmationChannel = {
+      request: vi.fn(() => new Promise((resolve) => { finish = resolve })),
+      cancel: vi.fn(() => finish({ kind: 'rejected', cause: 'cancelled', answererKind: 'user' }))
+    }
+    const port = createAgentSdkConfirmationPort({
+      createChannel: () => channel, publish: async () => undefined, cancel: vi.fn(),
+      currentAuthorizationVersion: () => version,
+      subscribeAuthorizationChange: (_call, listener) => { notify = listener; return () => undefined }
+    })
+    const pending = port({ call: { invocationId: 'inv', toolCallId: 'sync-policy-change', toolName: 'read_file', input: {} },
+      confirmationId: 'sync-policy-change', answerer: 'user', reasonCode: 'human', context })
+    await vi.waitFor(() => expect(channel.request).toHaveBeenCalledOnce())
+    version = 'policy-v2'
+    notify()
+    await expect(pending).resolves.toEqual({ kind: 'authorization-changed' })
+  })
+
+  it('策略变化先取消同步 waiter 时仍以授权变化信号收敛', async () => {
+    let version = 'policy-v1'
+    let notify!: () => void
+    let finish!: (outcome: ConfirmOutcome) => void
+    const channel: ConfirmationChannel = {
+      request: vi.fn(() => new Promise((resolve) => { finish = resolve })),
+      cancel: vi.fn((id, cause) => {
+        if (cause !== 'cancelled') return
+        finish({ kind: 'rejected', cause: 'cancelled', answererKind: 'user' })
+        version = 'policy-v2'
+        notify()
+      })
+    }
+    const port = createAgentSdkConfirmationPort({
+      createChannel: () => channel, publish: async () => undefined, cancel: vi.fn(),
+      currentAuthorizationVersion: () => version,
+      subscribeAuthorizationChange: (_call, listener) => { notify = listener; return () => undefined }
+    })
+    const pending = port({ call: { invocationId: 'inv', toolCallId: 'cancel-first-policy-change', toolName: 'read_file', input: {} },
+      confirmationId: 'cancel-first-policy-change', answerer: 'user', reasonCode: 'human', context })
+    await vi.waitFor(() => expect(channel.request).toHaveBeenCalledOnce())
+    channel.cancel('cancel-first-policy-change', 'cancelled')
+    await expect(pending).resolves.toEqual({ kind: 'authorization-changed' })
+  })
+
   it('passes snapshot provenance intact to the confirmation channel', async () => {
     const channel = { request: vi.fn(async () => ({ kind: 'rejected' as const, cause: 'agent-deny' as const, answererKind: 'agent' as const })), cancel: vi.fn() }
     const publish = vi.fn()

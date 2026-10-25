@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { ReadConfirmationRegistry } from './readConfirmationRegistry'
 
 describe('ReadConfirmationRegistry', () => {
+  it('只允许完全匹配且仍 pending 的原读取登记被 deferred 重判复用', () => {
+    const r = new ReadConfirmationRegistry({ now: () => 10 })
+    const entry = { requestId: 'deferred-request', toolUseId: 'deferred-call', inputDigest: 'input-a', factIds: ['fact-a'], ruleId: 'read-confirm', expiresAt: 100 }
+    expect(r.register(entry)).toBe(true)
+    expect(r.matchesPending({ ...entry, expiresAt: 90 })).toBe(true)
+    expect(r.matchesPending({ ...entry, inputDigest: 'input-b' })).toBe(false)
+    expect(r.matchesPending({ ...entry, ruleId: 'other-rule' })).toBe(false)
+    expect(r.matchesPending({ ...entry, factIds: ['fact-b'] })).toBe(false)
+    expect(r.settle(entry.requestId, entry.toolUseId, 'rejected')).toBe(true)
+    expect(r.matchesPending(entry)).toBe(false)
+  })
+
   it('大量终结调用只保留有容量上限的轻量墓碑，近期同键重放仍被拒绝', () => {
     const r = new ReadConfirmationRegistry({ now: () => 10 }, { maxEntries: 4, maxTombstones: 8, tombstoneTtlMs: 100 })
     for (let i = 0; i < 100; i++) {

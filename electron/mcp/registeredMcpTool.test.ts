@@ -195,7 +195,7 @@ describe('createRegisteredMcpTool', () => {
     await manager.shutdown()
   })
 
-  it('real Hosted Host blocks MCP executor when authorization version changes before dispatch claim', async () => {
+  it('real Hosted Host re-evaluates MCP authorization version changes before dispatch claim', async () => {
     const route = { routeId: 'mcp-hosted-version-barrier', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
     const requestId = 'mcp-hosted-version-request'
     const toolName = 'mcp_docs_search'
@@ -216,7 +216,7 @@ describe('createRegisteredMcpTool', () => {
     }
     const permits = new InMemorySafetyPermitStore()
     const manager = new McpConnectionManager()
-    const execute = vi.fn(async () => ({ success: true, data: 'must not execute' }))
+    const execute = vi.fn(async () => ({ success: true, data: 'freshly authorized execution' }))
     const toolSnapshot: McpToolSnapshot = {
       entries: new Map([[toolName, { mappedName: toolName, serverId: 'docs', serverName: 'Docs', originalName: 'search', description: 'Search docs', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }]]),
       budgetDropped: []
@@ -267,12 +267,13 @@ describe('createRegisteredMcpTool', () => {
     authorizationVersion = 'mcp-policy-v2'
     releaseClaim()
     await expect(turn).resolves.toMatchObject({ text: 'authorization changed before dispatch' })
-    expect(execute).not.toHaveBeenCalled()
+    expect(execute).toHaveBeenCalledOnce()
     expect(providerCalls).toBe(2)
     expect(admissionLedger.activeLeaseCount(requestId)).toBe(0)
     const events = (await history.read(requestId)).events
-    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'mcp-version-call' }) }))
-    expect(events.some(({ kind }) => kind === 'tool-call-started' || kind === 'tool-call-finished')).toBe(false)
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({
+      toolCallId: 'mcp-version-call', success: true, executionOutcome: 'succeeded'
+    }) }))
     await manager.shutdown()
   })
 

@@ -227,6 +227,22 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
       return todo ? this.get(todo.todoId, context, now) : null
     },
 
+    listInvalidatedByPolicyChange(channel: 'feishu' | 'wechat'): DeferredTodoRecord[] {
+      const rows = liveConn().prepare(`SELECT t.todo_id FROM deferred_todos t
+        JOIN policy_deferred_todos p ON p.todo_id=t.todo_id
+        WHERE t.channel=? AND t.state='invalidated' AND p.domain='im' AND p.status='invalidated'
+          AND t.policy_behavior_version IS NOT NULL AND t.policy_revision IS NOT NULL AND t.policy_epoch IS NOT NULL
+        ORDER BY t.created_at,t.todo_id`).all(channel) as Array<{ todo_id: string }>
+      return rows.map(({ todo_id }) => find(todo_id)).filter((todo): todo is DeferredTodoRecord => todo !== null)
+    },
+
+    completePolicyInvalidation(todoId: string): boolean {
+      const changed = liveConn().prepare("UPDATE policy_deferred_todos SET status='completed' WHERE todo_id=? AND domain='im' AND status='invalidated'")
+        .run(todoId)
+      if (Number(changed.changes) === 1) db.save()
+      return Number(changed.changes) === 1
+    },
+
     claimForDispatch(todoId: string, context: DeferredTodoAuthorization, now = Date.now()): DeferredTodoRecord | null {
       const conn = liveConn()
       return runInTransaction(conn, () => {
@@ -244,8 +260,70 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
       return transition(todoId, 'dispatching', 'consumed', now)
     },
 
+    /**
+     * final-check outcome: reopen only the stable FRESH_APPROVAL_REQUIRED known-not-dispatched case.
+     * The resume coordinator then re-enters current IM policy and replaces the stale owner notice.
+     * Boundary coverage: deferredResumeCoordinator.test.ts and deferredImBundleRuntime.test.ts.
+     */
+    requeueConsumedAfterPolicyChange(todoId: string, now = Date.now()): boolean {
+      const conn = liveConn()
+      return runInTransaction(conn, () => {
+        const todo = find(todoId)
+        if (!todo || todo.status !== 'consumed') return false
+        const updated = conn.prepare("UPDATE deferred_todos SET state='invalidated',updated_at=? WHERE todo_id=? AND state='consumed'")
+          .run(now, todoId)
+        if (Number(updated.changes) !== 1) return false
+        // A policy commit can race with a todo that has already moved to consumed,
+        // so it may not have created the compact policy index row for this todo.
+        // This method is reached only after the executor proves the call did not start.
+        const policy = conn.prepare(`INSERT INTO policy_deferred_todos(todo_id,domain,status) VALUES(?,'im','invalidated')
+          ON CONFLICT(todo_id) DO UPDATE SET status='invalidated' WHERE policy_deferred_todos.domain='im'`).run(todoId)
+        if (Number(policy.changes) !== 1) throw new Error('DEFERRED_POLICY_REQUEUE_FENCE_MISSING')
+        if (todo.trackId) {
+          conn.prepare(`UPDATE remote_track_children SET state='invalidated',updated_at=?
+            WHERE track_id=? AND child_kind='async-todo' AND child_id=?`).run(now, todo.trackId, todoId)
+          conn.prepare('UPDATE remote_tracks SET version=version+1,updated_at=? WHERE track_id=?').run(now, todo.trackId)
+        }
+        db.save()
+        return true
+      })
+    },
+
     invalidate(todoId: string, now = Date.now()): boolean {
       return transition(todoId, 'pending', 'invalidated', now)
+    },
+
+    /** Restore a todo invalidated by an IM policy commit only after a caller has re-evaluated its facts. */
+    rebindAfterPolicyChange(todoId: string, previous: DeferredTodoAuthorization,
+      nextRule: { ruleId: string; factsHash: string }, now = Date.now()): DeferredTodoRecord | null {
+      if (![nextRule.ruleId, nextRule.factsHash].every((value) => typeof value === 'string' && value.trim())) return null
+      const conn = liveConn()
+      return runInTransaction(conn, () => {
+        const todo = find(todoId)
+        if (!todo || todo.status !== 'invalidated' || !isAuthorized(todo, previous) || todo.expiresAt <= now ||
+          !todo.policyBehaviorVersion || typeof todo.policyRevision !== 'number' || !Number.isSafeInteger(todo.policyRevision) ||
+          typeof todo.policyEpoch !== 'number' || !Number.isSafeInteger(todo.policyEpoch)) return null
+        const policyInvalidation = conn.prepare("SELECT 1 FROM policy_deferred_todos WHERE todo_id=? AND domain='im' AND status='invalidated'")
+          .get(todoId)
+        if (!policyInvalidation) return null
+        const snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+        const epoch = conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='im'").get() as { epoch?: number } | undefined
+        if (!epoch || typeof epoch.epoch !== 'number' || !Number.isSafeInteger(epoch.epoch) || snapshot.revision <= todo.policyRevision ||
+          !Number.isSafeInteger(snapshot.revision) || snapshot.policyBehaviorVersion.trim() === '') return null
+        const changed = conn.prepare(`UPDATE deferred_todos SET state='pending',rule_id=?,facts_hash=?,policy_behavior_version=?,
+          policy_revision=?,policy_epoch=?,updated_at=? WHERE todo_id=? AND state='invalidated' AND rule_id=? AND facts_hash=?`)
+          .run(nextRule.ruleId, nextRule.factsHash, snapshot.policyBehaviorVersion, snapshot.revision, epoch.epoch,
+            now, todoId, previous.rule.ruleId, previous.rule.factsHash)
+        if (Number(changed.changes) !== 1) return null
+        conn.prepare("UPDATE policy_deferred_todos SET status='active' WHERE todo_id=? AND domain='im' AND status='invalidated'").run(todoId)
+        if (todo.trackId) {
+          conn.prepare(`UPDATE remote_track_children SET state='pending',updated_at=?
+            WHERE track_id=? AND child_kind='async-todo' AND child_id=?`).run(now, todo.trackId, todoId)
+          conn.prepare('UPDATE remote_tracks SET version=version+1,updated_at=? WHERE track_id=?').run(now, todo.trackId)
+        }
+        db.save()
+        return find(todoId)
+      })
     },
 
     invalidateDispatching(todoId: string, now = Date.now()): boolean {

@@ -14,6 +14,48 @@ describe('deferred resume request boundary', () => {
     resetRunningRemoteAgentRegistryForTests()
   })
 
+  it.each(['feishu', 'wechat'] as const)(
+    're-enters policy reevaluation after a known pre-dispatch policy rejection on %s', async (channel) => {
+      const db = createMemoryAppDb()
+      const conn = getDbConnection(db)
+      commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+        updatedAt: 1, eventId: `fresh-approval-${channel}-seed` })
+      const sessionId = createSession(db, { name: `fresh-approval-${channel}` }).id
+      const todoStore = createDeferredTodoStore(db)
+      const rule = { ruleId: 'old-ask', factsHash: 'a'.repeat(64) }
+      const todo = todoStore.create({ todoId: `fresh-approval-${channel}-todo`, invocationId: `fresh-approval-${channel}-invocation`,
+        channel, identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 3, rule, workflowId: 'workflow', taskId: 'task',
+        stepId: 'step', planRevision: 1, originSessionId: sessionId, createdAt: 10, expiresAt: Date.now() + 60_000 }).todo
+      const intents = createSecurityActionIntentStore(db)
+      intents.prepare({ invocationId: todo.invocationId, envelopeInvocationId: todo.invocationId, sessionId,
+        workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: 1 })
+      intents.linkTodo(todo.invocationId, todo.todoId)
+      intents.commitCheckpoint(todo.invocationId, { checkpointId: `fresh-approval-${channel}-checkpoint`, workflowRevision: 1 })
+      const envelopeStore = createDeferredEnvelopeStore(db)
+      envelopeStore.put({ invocationId: todo.invocationId, toolName: 'write_file', canonicalArgs: {}, contentVersions: {},
+        executionContext: { sessionId, workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId,
+          toolName: 'write_file', toolInput: {}, ruleId: rule.ruleId, factsHash: rule.factsHash,
+          policyBehaviorVersion: todo.policyBehaviorVersion, policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch } })
+      const reauthorize = vi.fn(async () => undefined)
+      const coordinator = createDeferredResumeCoordinator({ db, channel, todoStore, envelopeStore, dispatch: async () => ({
+        dispatched: false, failureCode: 'FRESH_APPROVAL_REQUIRED'
+      }), maxParallel: 1, requirePolicyFence: true, recheck: async () => ({ allowed: true }),
+      onFreshApprovalRequired: reauthorize })
+      const requeue = vi.spyOn(todoStore, 'requeueConsumedAfterPolicyChange')
+      await coordinator.requestResume({ requestId: `fresh-approval-${channel}-request`, todoId: todo.todoId, sessionId,
+        channel, identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch,
+        rule, notificationVersion: 1, messageId: 'owner-approved', reasonKey: 'owner-approved' })
+
+      const result = await coordinator.dispatchPending(sessionId)
+      expect(requeue).toHaveBeenCalledOnce()
+      expect(result).toEqual([{ requestId: `fresh-approval-${channel}-request`, status: 'invalidated' }])
+      expect(coordinator.getResumeRequest(`fresh-approval-${channel}-request`)?.state).toBe('invalidated')
+      expect(todoStore.listInvalidatedByPolicyChange(channel)).toHaveLength(1)
+      expect(reauthorize).toHaveBeenCalledOnce()
+      db.close()
+    }
+  )
+
   it('persists an authenticated resume request while the session lease is busy, leaving todo pending without dispatch', async () => {
     const db = createMemoryAppDb()
     const sessionId = createSession(db, { name: 'resume-request-busy' }).id

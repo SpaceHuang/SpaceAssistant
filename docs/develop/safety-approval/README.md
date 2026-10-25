@@ -19,6 +19,7 @@
 
 ## 在途（in-flight）
 
+- [custom-policy-full-control-development-plan.md](./in-flight/custom-policy-full-control-development-plan.md) + [custom-policy-full-control-execution-plan.md](./in-flight/custom-policy-full-control-execution-plan.md) —— **开发方案与执行清单草稿（未实施）**：自定义套餐开放全部现有策略动作、统一多规则裁决、旧停用状态迁移与执行派发生效边界；执行前置条件含界面归属卡负责人审批。
 - [security-policy-three-stage-architecture-development-plan.md](./in-flight/security-policy-three-stage-architecture-development-plan.md) —— **草稿（未实施）**：安全策略三阶段架构与硬编码规则收敛开发计划（2026-10-15，`main` 新增）；自述「已审批，可以进入源码实施阶段」，但**尚未开始代码实现**。
 - [denial-diagnosability-and-auto-approved-write-facts-improvement-plan.md](./in-flight/denial-diagnosability-and-auto-approved-write-facts-improvement-plan.md) —— **草稿（决策已定，未实施；已按两轮评审 R-1 / R-2 / R-3 修订）**：拒绝原因可诊断性（模型侧只收到 `POLICY_DENY`）+ 免确认写入审计事实失真（`autoApprovedWrite` 全 0 / 错对象）优化计划（2026-10-17，基线 `8c7dce0e`，评审复核 `1f22be0f`）；决议 **D1=C**（人话 + 粗类别）、**D2=A**（修好记录：权威目标 + 执行器产出统计）、**D3=B**（统一文案映射机制，本期只填有证据的一条）。评审报告：`docs/review/2026-10-17-denial-diagnosability-and-auto-approved-write-facts-improvement-plan-review.md`（R-1 假行数、R-2 历史丢解释）、`…-review-v2.md`（R-3 收尾依赖闭合，已把 A-05 依赖改为 A-04）。
 - [automation-task-document-output-improvement-plan.md](./in-flight/automation-task-document-output-improvement-plan.md) —— **草稿（未实施、待裁决）**：定时任务在绑定工作目录内创建新文档，并在显式要求文件时校验产物；D-1 决定是否开放受限写入，D-2 决定是否增加显式文件交付要求。

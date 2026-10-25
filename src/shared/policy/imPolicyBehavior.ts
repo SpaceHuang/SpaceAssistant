@@ -70,6 +70,7 @@ const IM_SCENARIO_BY_RULE_ID: Readonly<Record<string, ImPolicyScenario>> = {
   'im-low-risk-edit': 'low-risk-edit',
   'im-write-sensitive-path-confirm': 'human-required',
   'im-write-ask': 'unknown-write-execute',
+  'script-unmodeled-path-ask': 'unknown-write-execute',
   'browser-act-ask-remote': 'ordinary-browser-action',
   'browser-navigate-ask-remote': 'ordinary-navigation',
   'im-mcp-public-read-review': 'public-search',

@@ -1,11 +1,9 @@
 import type { PolicyAction, PolicyRule } from '../confirmation/types'
 
 /**
- * P3（偏差 3 语义收口）：locked 底线与嵌套交集的纯函数实现。
+ * 受信任的用户自定义动作不受默认 locked action width 限制；保留规则结构检查与嵌套授权交集。
  *
- * - 「可收紧不可放宽」：动作宽度序 deny < confirm-every-time < ask < auto-evaluator < allow；
- *   相对底线放宽任何 locked 条目（改宽或移除）= 违规。locked deny 可由显式管理员设置停用，
- *   只有调用方传入受信任的 disabled id 时才允许该 deny 缺席；locked ask 无此例外。
+ * - 系统安全 invariant 与用户策略动作分开；只校验默认规则的身份与 when/match 结构。
  * - 嵌套交集：子调用放行集合只能取交集（授权不继承：替换 + 上界）。
  */
 
@@ -38,6 +36,7 @@ export function validatePolicyRulesFloor(
 ): { ok: true } | { ok: false; violations: string[] } {
   const byId = new Map(rules.map((r) => [r.id, r]))
   const explicitlyDisabled = new Set(disabledDenyRuleIds)
+  const userOverrides = new Set(rules.filter((rule) => rule.userOverride === true).map((rule) => rule.id))
   const violations: string[] = []
   for (const base of floor) {
     if (!base.locked) continue
@@ -49,7 +48,7 @@ export function validatePolicyRulesFloor(
       violations.push(base.id)
       continue
     }
-    if (isActionWider(incoming.action, base.action)) violations.push(base.id)
+    if (!userOverrides.has(base.id) && isActionWider(incoming.action, base.action)) violations.push(base.id)
     if (conditionSignature(incoming) !== conditionSignature(base)) violations.push(base.id)
   }
   return violations.length > 0 ? { ok: false, violations } : { ok: true }

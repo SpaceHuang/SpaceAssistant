@@ -300,10 +300,10 @@ describe('判定矩阵：MCP 工具', () => {
     expect(d.type).toBe('require-confirm')
     expect(d.ruleId).toBe('mcp-tool-ask')
   })
-  it('安全注解（mcp-readonly 信号）→ 命中 mcp-readonly-allow 放行（先于 mcp-tool-ask）', () => {
+  it('安全注解（mcp-readonly 信号）仍受通用 MCP ask 优先级约束', () => {
     const d = decide(mcpFacts('srv', 'tool', true), ctx('desktop'), DEFAULT_POLICY_RULES, deps())
-    expect(d.type).toBe('auto-allow')
-    expect(d.ruleId).toBe('mcp-readonly-allow')
+    expect(d.type).toBe('require-confirm')
+    expect(d.ruleId).toBe('mcp-tool-ask')
   })
   it('strict 范围档：mcp-readonly-allow 被范围条目取代 → 安全注解工具转询问（S1，偏差 15）', () => {
     const strictRules = resolvePolicyRules({
@@ -315,11 +315,12 @@ describe('判定矩阵：MCP 工具', () => {
     expect(d.type).toBe('require-confirm')
     expect(d.ruleId).toBe('scope-strict-mcp-readonly-allow')
   })
-  it('会话信任（sessionId 绑定）→ 放行；其他会话/其他工具不命中', () => {
+  it('MCP 旧会话信任不能跳过默认 ask；其他会话/其他工具同样需要确认', () => {
     const cache = mapCache([
       allowEntry({ kind: 'mcp-tool', serverId: 'srv', toolName: 'tool', sessionId: 's1' }, 'session')
     ])
-    expect(decide(mcpFacts('srv', 'tool', false), ctx('desktop'), DEFAULT_POLICY_RULES, deps({}, cache)).type).toBe('auto-allow')
+    expect(decide(mcpFacts('srv', 'tool', false), ctx('desktop'), DEFAULT_POLICY_RULES, deps({}, cache)))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask' })
     expect(
       decide(mcpFacts('srv', 'tool', false), ctx('desktop', { sessionId: 's2' }), DEFAULT_POLICY_RULES, deps({}, cache)).type
     ).toBe('require-confirm')

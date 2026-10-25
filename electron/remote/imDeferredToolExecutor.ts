@@ -17,7 +17,9 @@ export async function executeDeferredImTool(input: {
   toolCallId: string
   toolName: string
   input: Record<string, unknown>
-  confirmationReceipt: string
+  confirmationReceipt?: string
+  confirmationPolicyRevision?: string
+  policyOnly?: boolean
   lane: 'feishu' | 'wechat'
   remoteContext: RemoteContext
   model: string
@@ -69,12 +71,25 @@ export async function executeDeferredImTool(input: {
     authorizedToolNames: new Set([input.toolName])
   })
   try {
+    if (input.policyOnly) {
+      const call = { invocationId: input.invocationId, toolCallId: input.toolCallId, toolName: input.toolName,
+        input: structuredClone(input.input) }
+      try {
+        const binding = await runtime.registeredTools.prepareTool(call, { kind: 'initial' })
+        const decision = await runtime.policy.evaluate({ ...binding,
+          capability: { state: 'known-authorized', id: binding.capabilityId } })
+        return { decision, policy: runtime.registeredTools.getPolicyDecisionMetadata(call) }
+      } finally {
+        runtime.registeredTools.discardPreparedTool(call)
+      }
+    }
+    if (!input.confirmationReceipt?.trim()) throw new Error('DEFERRED_CONFIRMATION_RECEIPT_REQUIRED')
     return await runtime.executeDeferred({
       invocationId: input.invocationId,
       toolCallId: input.toolCallId,
       toolName: input.toolName,
       input: structuredClone(input.input)
-    }, input.confirmationReceipt)
+    }, input.confirmationReceipt, input.confirmationPolicyRevision)
   } finally {
     await runtime.dispose()
   }

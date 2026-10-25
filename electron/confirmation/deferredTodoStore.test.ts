@@ -26,6 +26,36 @@ const trustedTodo = {
 }
 
 describe('deferred todo authorization binding', () => {
+  it('rebinds a policy-invalidated pending todo only to fresh facts at the current IM revision', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'todo-rebind-seed' })
+    const store = createDeferredTodoStore(db)
+    const createdAt = Date.now()
+    const original = store.create({ ...trustedTodo, todoId: 'policy-rebind-todo', invocationId: 'policy-rebind-invocation',
+      createdAt, expiresAt: createdAt + 60_000 }).todo
+    commitImPolicySnapshot(conn, { expectedRevision: 1, policyBehaviorVersion: 'im-standard-v2',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'ask' } }, updatedAt: 2, eventId: 'todo-rebind-update' })
+    const nextRule = { ruleId: 'new-policy-ask', factsHash: 'c'.repeat(64) }
+
+    const rebound = store.rebindAfterPolicyChange(original.todoId, {
+      channel: original.channel, identityKey: original.identityKey, ownerId: original.ownerId,
+      authorizationEpoch: original.authorizationEpoch, originSessionId: original.originSessionId, rule: original.rule
+    }, nextRule)
+
+    expect(rebound).toMatchObject({ status: 'pending', rule: nextRule, policyBehaviorVersion: 'im-standard-v2', policyRevision: 2, policyEpoch: 2 })
+    expect(store.get(original.todoId, {
+      channel: original.channel, identityKey: original.identityKey, ownerId: original.ownerId,
+      authorizationEpoch: original.authorizationEpoch, originSessionId: original.originSessionId, rule: nextRule
+    })).toMatchObject({ status: 'pending', rule: nextRule, policyRevision: 2, policyEpoch: 2 })
+    expect(store.get(original.todoId, {
+      channel: original.channel, identityKey: original.identityKey, ownerId: original.ownerId,
+      authorizationEpoch: original.authorizationEpoch, originSessionId: original.originSessionId, rule: original.rule
+    })).toBeNull()
+    expect(conn.prepare('SELECT state FROM deferred_resume_requests WHERE todo_id=?').all(original.todoId)).toEqual([])
+    db.close()
+  })
+
   it('persists the shared IM policy version, revision, and epoch captured at todo creation', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)

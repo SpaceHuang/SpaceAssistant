@@ -35,4 +35,20 @@ describe('InMemorySafetyPermitStore', () => {
     expect(await store.consume(first, binding)).toEqual({ ok: false, reason: 'UNKNOWN' })
     expect(await store.consume(sibling, siblingBinding)).toEqual({ ok: true })
   })
+
+  it('clears only a policy-stale binding fence so a fresh permit can be consumed', async () => {
+    const store = new InMemorySafetyPermitStore()
+    store.invalidateBinding(binding.requestId, binding.invocationId, 'authorization-changed')
+    const freshBinding = { ...binding, authorizationVersion: 'auth-2' }
+    const freshPermit = store.issue(freshBinding, Date.now() + 10_000)
+    expect(await store.consume(freshPermit, freshBinding)).toEqual({ ok: false, reason: 'AUTHORIZATION_STALE' })
+    store.clearAuthorizationInvalidation(binding.requestId, binding.invocationId)
+    const currentPermit = store.issue(freshBinding, Date.now() + 10_000)
+    expect(await store.consume(currentPermit, freshBinding)).toEqual({ ok: true })
+
+    store.invalidateBinding(binding.requestId, binding.invocationId, 'cancelled')
+    store.clearAuthorizationInvalidation(binding.requestId, binding.invocationId)
+    const afterCancel = store.issue(freshBinding, Date.now() + 10_000)
+    expect(await store.consume(afterCancel, freshBinding)).toEqual({ ok: false, reason: 'CANCELLED' })
+  })
 })

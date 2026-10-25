@@ -76,7 +76,7 @@ describe('policyPackages（§4 第 1 区 套餐解析）', () => {
     }
   })
 
-  it('custom 套餐：应用动作覆盖；locked 与未知 id 被忽略；wechat 拒绝 auto-evaluator 覆盖（B2 引擎层）', () => {
+  it('custom 套餐：应用动作覆盖；未知 id 被忽略；wechat 拒绝 auto-evaluator 覆盖（B2 引擎层）', () => {
     const out = resolvePolicyRules({
       lane: 'feishu',
       packages: { feishu: 'custom' },
@@ -84,18 +84,49 @@ describe('policyPackages（§4 第 1 区 套餐解析）', () => {
         { ruleId: 'ask-1', action: 'allow' },
         { ruleId: 'allow-1', action: 'auto-evaluator' },
         { ruleId: 'locked-deny', action: 'allow' },
+        { ruleId: 'locked-ask', action: 'allow' },
         { ruleId: 'nope', action: 'deny' }
       ],
       rules: RULES
     })
     expect(out.map((r) => [r.id, r.action])).toEqual([
-      ['locked-deny', 'deny'],
-      ['locked-ask', 'ask'],
+      ['locked-deny', 'allow'],
+      ['locked-ask', 'allow'],
       ['auto-1', 'auto-evaluator'],
       ['ask-1', 'allow'],
       // allow-1 的 auto-evaluator 覆盖不在 feishu 动作域内 → 丢弃（fail-closed）
       ['allow-1', 'allow']
     ])
+  })
+
+  it('custom 套餐：locked invocation、ingress 与 exposure 规则均使用显式覆盖并剥离同规则默认门控', () => {
+    const rules: PolicyRule[] = [
+      { id: 'locked-invocation', when: 'invocation', action: 'confirm-every-time', locked: true, humanRequired: true, reason: 'r' },
+      { id: 'locked-ingress', when: 'ingress', action: 'deny', locked: true, reason: 'r' },
+      { id: 'locked-exposure', when: 'exposure', action: 'deny', locked: true, reason: 'r' }
+    ]
+    const resolved = resolvePolicyRules({
+      lane: 'desktop', packages: { desktop: 'custom' },
+      overrides: rules.map((rule) => ({ ruleId: rule.id, action: 'allow' })), rules
+    })
+    expect(resolved.map((rule) => [rule.action, rule.userOverride, rule.humanRequired])).toEqual([
+      ['allow', true, undefined], ['allow', true, undefined], ['allow', true, undefined]
+    ])
+  })
+
+  it('custom 套餐解析应用所有 when 类型的 verified overrides，非 custom 保留套餐动作', () => {
+    const rules: PolicyRule[] = [
+      { id: 'inv', when: 'invocation', action: 'confirm-every-time', locked: true, humanRequired: true, reason: 'i' },
+      { id: 'in', when: 'ingress', action: 'deny', locked: true, reason: 'in' },
+      { id: 'ex', when: 'exposure', action: 'deny', locked: true, reason: 'ex' }
+    ]
+    const overrides = rules.map((rule) => ({ ruleId: rule.id, action: 'allow' as const }))
+    expect(resolvePolicyRules({ lane: 'wechat', packages: { wechat: 'custom' }, overrides, rules })
+      .map((rule) => [rule.id, rule.action, rule.userOverride])).toEqual([
+      ['inv', 'allow', true], ['in', 'allow', true], ['ex', 'allow', true]
+    ])
+    expect(resolvePolicyRules({ lane: 'wechat', packages: { wechat: 'standard' }, overrides, rules }))
+      .toEqual(rules)
   })
 
   it('desktop custom：auto-evaluator 在动作域内，覆盖生效（B2）', () => {
@@ -108,8 +139,8 @@ describe('policyPackages（§4 第 1 区 套餐解析）', () => {
     expect(out.find((r) => r.id === 'allow-1')?.action).toBe('auto-evaluator')
   })
 
-  it('validateRuleOverride：locked 不可改、未知规则拒绝；动作域按 lane（B2）', () => {
-    expect(validateRuleOverride(RULES, 'locked-deny', 'allow').ok).toBe(false)
+  it('validateRuleOverride：locked 可覆盖、未知规则拒绝；动作域按 lane（B2）', () => {
+    expect(validateRuleOverride(RULES, 'locked-deny', 'allow').ok).toBe(true)
     expect(validateRuleOverride(RULES, 'missing', 'ask').ok).toBe(false)
     // wechat/feishu 拒绝 auto-evaluator（3 态）；desktop 接受（4 态）
     expect(validateRuleOverride(RULES, 'ask-1', 'auto-evaluator', 'wechat').ok).toBe(false)
@@ -187,9 +218,9 @@ describe('fail-closed 兜底规则必须 locked（评审中等项）', () => {
     }
   })
 
-  it('locked 规则拒绝规则覆盖（validateRuleOverride）', () => {
+  it('locked 规则允许规则覆盖（validateRuleOverride）', () => {
     for (const id of FAIL_CLOSED_IDS) {
-      expect(validateRuleOverride(DEFAULT_POLICY_RULES, id, 'allow').ok).toBe(false)
+      expect(validateRuleOverride(DEFAULT_POLICY_RULES, id, 'allow').ok).toBe(true)
     }
   })
 })

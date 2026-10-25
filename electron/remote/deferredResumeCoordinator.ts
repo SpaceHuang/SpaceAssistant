@@ -16,6 +16,7 @@ type TodoStore = {
   get(todoId: string, context: DeferredTodoAuthorization, now?: number): DeferredTodoRecord | null
   claimForDispatch(todoId: string, context: DeferredTodoAuthorization, now?: number): DeferredTodoRecord | null
   markConsumed(todoId: string, context: DeferredTodoAuthorization, now?: number): boolean
+  requeueConsumedAfterPolicyChange?(todoId: string, now?: number): boolean
   invalidate(todoId: string, now?: number): boolean
   invalidateDispatching?(todoId: string, now?: number): boolean
   invalidateByScope(scope: { channel: 'feishu' | 'wechat'; identityKey: string; ownerId: string; originSessionId: string }, now?: number): { invalidatedTodoIds: string[]; dispatchingTodoIds: string[] }
@@ -46,7 +47,8 @@ export function createDeferredResumeCoordinator(input: {
   requirePolicyFence?: boolean
   envelopeStore: { get(invocationId: string): DeferredCallEnvelope | null }
   recheck(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ allowed: boolean }>
-  dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ dispatched: boolean }>
+  dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ dispatched: boolean; failureCode?: string }>
+  onFreshApprovalRequired?(todo: DeferredTodoRecord): void | Promise<void>
   audit?(event: SecurityAuditEvent): void
 }) {
   const requests = createDeferredResumeRequestStore(input.db)
@@ -212,6 +214,18 @@ export function createDeferredResumeCoordinator(input: {
           try {
             const dispatched = await input.dispatch(request, todo, envelope)
             if (!dispatched.dispatched) {
+              if (dispatched.failureCode === 'FRESH_APPROVAL_REQUIRED' && input.todoStore.requeueConsumedAfterPolicyChange) {
+                const requeued = runInTransaction(getDbConnection(input.db), () => {
+                  if (!input.todoStore.requeueConsumedAfterPolicyChange!(todo.todoId)) return false
+                  return requests.setState(request.requestId, 'dispatching', 'invalidated')
+                })
+                if (requeued) {
+                  try { await input.onFreshApprovalRequired?.(todo) }
+                  catch { console.error('[deferredResumeCoordinator] fresh approval reevaluation unavailable') }
+                  results.push({ requestId: request.requestId, status: 'invalidated' })
+                  continue
+                }
+              }
               requests.setState(request.requestId, 'dispatching', 'outcome_unknown')
               input.audit?.(buildDeferredApprovalAuditEvent({ kind: 'result', lane: todo.channel, sessionId: todo.originSessionId,
                 todoId: todo.todoId, invocationId: todo.invocationId, executionState: 'outcome_unknown' }))

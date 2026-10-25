@@ -190,7 +190,7 @@ setDefaultAgentRuntime(
   })
 )
 
-describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail-closed ask 不可禁用）', () => {
+describe('legacy desktop rule toggle removal', () => {
   let ipc: ReturnType<typeof mockIpcMain>
 
   beforeEach(() => {
@@ -201,86 +201,8 @@ describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx())
   })
 
-  const invoke = (payload: Record<string, unknown>) =>
-    ipc.getHandler('security:set-rule-enabled')?.(null, payload) as Promise<{ ok: boolean; error?: string }>
-
-  it('locked+deny 保护规则可切换（既有行为）', async () => {
-    const r = await invoke({ ruleId: 'remote-shell-disabled', enabled: false })
-    expect(r.ok).toBe(true)
-    expect(mockWriteDisabledIds).toHaveBeenCalled()
-  })
-
-  it.each(['lark-high-impact-ask', 'lark-unknown-ask', 'script-uncertified-ask-remote'])(
-    'fail-closed ask 规则 %s 拒绝禁用',
-    async (ruleId) => {
-      const r = await invoke({ ruleId, enabled: false })
-      expect(r.ok).toBe(false)
-      expect(mockWriteDisabledIds).not.toHaveBeenCalled()
-    }
-  )
-
-  it('切换成功后重推 exposure:tools-changed（三条链路）', async () => {
-    const r = await invoke({ ruleId: 'remote-shell-disabled', enabled: false })
-    expect(r.ok).toBe(true)
-    expect(mockPushExposure.mock.calls.map(([lane]) => lane).sort()).toEqual(['desktop', 'feishu', 'wechat'])
-  })
-
-  it('变更远程专属保护规则只发布受影响 lane 的授权版本', async () => {
-    const desktop = vi.fn()
-    const wechat = vi.fn()
-    const feishu = vi.fn()
-    const automation = vi.fn()
-    const unsubscribe = [
-      policyAuthorizationChanges.subscribe('desktop-request', 'desktop', desktop),
-      policyAuthorizationChanges.subscribe('wechat-request', 'wechat', wechat),
-      policyAuthorizationChanges.subscribe('feishu-request', 'feishu', feishu),
-      policyAuthorizationChanges.subscribe('automation-request', 'automation', automation)
-    ]
-    try {
-      const result = await invoke({ ruleId: 'remote-shell-disabled', enabled: false })
-      expect(result.ok).toBe(true)
-      expect(desktop).not.toHaveBeenCalled()
-      expect(wechat).toHaveBeenCalledOnce()
-      expect(feishu).toHaveBeenCalledOnce()
-      expect(automation).not.toHaveBeenCalled()
-    } finally {
-      unsubscribe.forEach((remove) => remove())
-    }
-  })
-
-  it('变更 automation 专属保护规则只发布 automation lane 的授权版本', async () => {
-    const desktop = vi.fn()
-    const wechat = vi.fn()
-    const feishu = vi.fn()
-    const automation = vi.fn()
-    const unsubscribe = [
-      policyAuthorizationChanges.subscribe('desktop-automation-rule', 'desktop', desktop),
-      policyAuthorizationChanges.subscribe('wechat-automation-rule', 'wechat', wechat),
-      policyAuthorizationChanges.subscribe('feishu-automation-rule', 'feishu', feishu),
-      policyAuthorizationChanges.subscribe('automation-rule', 'automation', automation)
-    ]
-    try {
-      const result = await invoke({ ruleId: 'automation-sensitive-path-deny', enabled: false })
-      expect(result.ok).toBe(true)
-      expect(desktop).not.toHaveBeenCalled()
-      expect(wechat).not.toHaveBeenCalled()
-      expect(feishu).not.toHaveBeenCalled()
-      expect(automation).toHaveBeenCalledOnce()
-    } finally {
-      unsubscribe.forEach((remove) => remove())
-    }
-  })
-
-  it('策略已 flush 后审计失败仍先撤销受影响 lane 的活动授权', async () => {
-    const wechat = vi.fn()
-    const remove = policyAuthorizationChanges.subscribe('wechat-active', 'wechat', wechat)
-    mockRecordSettingsChange.mockImplementationOnce(() => { throw new Error('audit unavailable') })
-    try {
-      await expect(invoke({ ruleId: 'remote-shell-disabled', enabled: false })).rejects.toThrow('audit unavailable')
-      expect(wechat).toHaveBeenCalledOnce()
-    } finally {
-      remove()
-    }
+  it('does not register the old security:set-rule-enabled channel', () => {
+    expect(ipc.getHandler('security:set-rule-enabled')).toBeUndefined()
   })
 
   it.each([
@@ -326,13 +248,13 @@ describe('security:set-rule-override / set-policy-package：B2 动作域与档�
     expect(mockSetOverride).not.toHaveBeenCalled()
   })
 
-  it('desktop lane 提交 auto-evaluator 覆盖被接受（4 态动作域）', async () => {
+  it('desktop rule write rejects a missing expected revision before persistence', async () => {
     const handler = ipc.getHandler('security:set-rule-override')!
     const res = (await handler(null, { ruleId: 'mcp-tool-ask', action: 'auto-evaluator', lane: 'desktop' })) as {
       ok: boolean
     }
-    expect(res.ok).toBe(true)
-    expect(mockSetOverride).toHaveBeenCalled()
+    expect(res).toMatchObject({ ok: false, error: 'POLICY_REVISION_INVALID' })
+    expect(mockSetOverride).not.toHaveBeenCalled()
   })
 
   it('automation lane 提交 loose 套餐被拒（仅提供 standard，§2.1）', async () => {

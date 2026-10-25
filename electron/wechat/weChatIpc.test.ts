@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IpcMain } from 'electron'
 import { mergeToolsConfig } from '../../src/shared/domainTypes'
 import type { ConfirmRequest } from '../../src/shared/confirmation/types'
+import { getConfigValue, setConfigValue } from '../database'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getWeChatBundle, registerWeChatIpcHandlers, shutdownWeChatServices } from './weChatIpc'
 import { WeChatImChannel } from './weChatImChannel'
@@ -71,5 +72,47 @@ describe('wechat:confirm-response main-process IPC baseline', () => {
     imChannel.tryResolveFromInboundMessage({ userId: 'wx-owner', messageId: 'wechat-answer', quotedMessageId: 'wechat-prompt-1', text: `Y ${pending.confirmId}` }, { allowedUserIds: ['wx-owner'] })
     await expect(outcome).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
     expect(imChannel.listPending()).toHaveLength(0)
+  })
+
+  it('repairs a stale disabled channel flag when a logged-in owner starts listening', async () => {
+    db = createMemoryAppDb()
+    userDataDir = mkdtempSync(path.join(os.tmpdir(), 'wechat-ipc-poll-start-'))
+    setConfigValue(db, 'config.wechat', JSON.stringify({
+      enabled: false,
+      loggedIn: true,
+      remoteEnabled: false,
+      remoteSenderAllowlist: ['wx-owner-test'],
+    }))
+    const handlers = new Map<string, (...args: any[]) => unknown>()
+    const ipcMain = { handle: (channel: string, handler: (...args: any[]) => unknown) => handlers.set(channel, handler) } as unknown as IpcMain
+    mkdirSync(path.join(userDataDir, 'logs'), { recursive: true })
+    registerWeChatIpcHandlers(ipcMain, {
+      db,
+      getUserDataPath: () => userDataDir!,
+      getWorkDir: () => userDataDir!,
+      workDirManager: {} as never,
+      getApiKey: async () => null,
+      getBaseUrl: () => 'https://example.invalid',
+      getModel: () => 'test-model',
+      getMaxParallel: () => 1,
+      getToolsConfig: () => mergeToolsConfig({}),
+      appVersion: 'test'
+    })
+    const bundle = getWeChatBundle()!
+    vi.spyOn(bundle.botService, 'startPoll').mockResolvedValue({
+      loggedIn: true,
+      boundUserId: 'wx-owner-test',
+      pollState: 'polling',
+    })
+
+    await handlers.get('wechat:poll-start')!({})
+
+    const stored = JSON.parse(getConfigValue(db, 'config.wechat')!)
+    expect(stored).toMatchObject({
+      enabled: true,
+      loggedIn: true,
+      remoteEnabled: true,
+      remoteSenderAllowlist: ['wx-owner-test'],
+    })
   })
 })

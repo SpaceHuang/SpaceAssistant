@@ -39,6 +39,7 @@ import { appendRemoteTrackEvent, createRemoteTrack, mapRemoteTrackMessage } from
 import { finishClarificationSendAttempt, startClarificationSendAttempt } from '../database/clarificationStore'
 import { createDeferredApprovalRuntime } from '../remote/deferredApprovalRuntime'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { loadEffectivePolicyRules } from '../confirmation/policyRulesRuntime'
 import { FeishuImChannel } from './feishuImChannel'
 import { assertImOutboundAllowed, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 
@@ -813,6 +814,24 @@ describe('RemoteCommandRouter workdir binding', () => {
       })
     )
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { name: 'non-owner DM', reason: 'non_owner', chatType: 'p2p' as const, ruleId: 'ingress-direct-other-deny', senderOpenId: 'external-user' },
+    { name: 'group message', reason: 'group_disabled', chatType: 'group' as const, ruleId: 'ingress-feishu-group-deny', senderOpenId: 'user-1' }
+  ])('passes a $name through the Feishu ingress policy when its rule is allow', async ({ reason, chatType, ruleId, senderOpenId }) => {
+    const { db, manager } = setupDbAndManager()
+    const session = createSession(db, { name: 'Feishu non-owner policy allow' })
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-v1.6',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { [ruleId]: 'allow' } }, updatedAt: 1,
+      eventId: `feishu-ingress-${ruleId}-allow` })
+    expect(loadEffectivePolicyRules(db, 'feishu').find(({ id }) => id === ruleId)?.action).toBe('allow')
+    mockShouldAcceptInbound.mockReturnValue({ accept: false, reason })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ ok: true, summary: 'done' })
+    const { router } = makeRouter(db, manager)
+    await router.handleInbound(makeInbound({ messageId: `${reason}-allowed`, chatType, senderOpenId }))
+    expect(mockRunFeishuRemoteAgent).toHaveBeenCalledOnce()
   })
 })
 

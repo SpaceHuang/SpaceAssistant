@@ -642,8 +642,12 @@ export interface PolicyRule {
   when: PolicyWhen
   match?: PolicyRuleMatch
   action: PolicyAction
+  /** 仅默认动作适用的信号排除；显式用户覆盖仍沿用规则原匹配域。 */
+  defaultActionExcludeSignals?: string[]
   /** Trusted main-process marker: this action came from a validated persisted user override. */
   userOverride?: true
+  /** This ask explicitly supports its declared user memory tier (for example exact script trust). */
+  cacheableAsk?: true
   /** 安全语义标记：即使 rule.action 被档位映射为 auto-evaluator，也必须原渠道逐次人工确认。 */
   humanRequired?: boolean
   /** Explicit reviewer for an ask rule; defaults to the lane's established reviewer. */

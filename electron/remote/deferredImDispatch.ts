@@ -33,7 +33,7 @@ export function createDeferredImDispatchPorts(input: {
   isOwnerAuthorized(todo: DeferredTodoRecord): boolean
   recheckTask(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean
   recheckAttachment?(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean | Promise<boolean>
-  dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string }>
+  dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string; failureCode?: string }>
 }) {
   const recheck = async (_request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope) => {
     const context = envelope.executionContext
@@ -75,6 +75,15 @@ export function createDeferredImDispatchPorts(input: {
 
   return {
     recheck,
+    async dispatchClaimed(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope) {
+      if (input.db) {
+        const closure = getDbConnection(input.db).prepare(`SELECT state,authorization_epoch FROM deferred_approval_closures
+          WHERE channel=? AND identity_key=? AND owner_id=? AND session_id=?`)
+          .get(todo.channel, todo.identityKey, todo.ownerId, todo.originSessionId) as { state: string; authorization_epoch: number } | undefined
+        if (closure && closure.state !== 'closed') return { dispatched: false, failureReason: '授权关闭流程正在处理中，本次操作未执行。' }
+      }
+      return input.dispatch(request, todo, envelope)
+    },
     async dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope) {
       if (input.db) {
         const closure = getDbConnection(input.db).prepare(`SELECT state,authorization_epoch FROM deferred_approval_closures

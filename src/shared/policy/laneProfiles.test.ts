@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ExecutionLane, PolicyAction, PolicyPackage } from '../confirmation/types'
-import { LANE_PROFILES, effectiveActionFor } from './policyPackages'
+import { LANE_PROFILES, effectiveActionFor, validateRuleOverride } from './policyPackages'
+import { DEFAULT_POLICY_RULES } from './defaultRules'
 
 /** 全部基线动作（§2.1 变换表的输入域）。 */
 const BASELINE_ACTIONS: PolicyAction[] = ['deny', 'allow', 'ask', 'auto-evaluator', 'confirm-every-time']
@@ -50,6 +51,32 @@ describe('LANE_PROFILES（§2.1 链路档位表）', () => {
     expect(LANE_PROFILES.wechat.availableActions).toEqual(['deny', 'allow', 'ask'])
     expect(LANE_PROFILES.feishu.availableActions).toEqual(['deny', 'allow', 'ask'])
     expect(LANE_PROFILES.automation.availableActions).toEqual([])
+  })
+
+  it('每个 lane 的所有规则（含 locked、ingress、exposure）都必须通过其动作域覆盖校验', () => {
+    const rules: import('../confirmation/types').PolicyRule[] = [
+      { id: 'locked-invocation', when: 'invocation' as const, action: 'deny' as const, locked: true, reason: 'r' },
+      { id: 'ingress-rule', when: 'ingress' as const, action: 'deny' as const, reason: 'r' },
+      { id: 'exposure-rule', when: 'exposure' as const, action: 'deny' as const, locked: true, reason: 'r' }
+    ]
+    for (const lane of ['desktop', 'wechat', 'feishu'] as const) {
+      for (const rule of rules) {
+        for (const action of LANE_PROFILES[lane].availableActions) {
+          expect(validateRuleOverride(rules, rule.id, action, lane), `${lane}/${rule.id}/${action}`).toMatchObject({ ok: true })
+        }
+      }
+    }
+  })
+
+  it('complete action matrix is accepted for every displayed default rule and applicable lane, independent of when/locked', () => {
+    const rules = DEFAULT_POLICY_RULES
+    for (const lane of ['desktop', 'wechat', 'feishu'] as const) {
+      for (const rule of rules.filter((candidate) => candidate.match?.lane?.includes(lane) ?? true)) {
+        for (const action of LANE_PROFILES[lane].availableActions) {
+          expect(validateRuleOverride(rules, rule.id, action, lane), `${lane}/${rule.id}/${action}`).toMatchObject({ ok: true })
+        }
+      }
+    }
   })
 
   for (const lane of ALL_LANES) {

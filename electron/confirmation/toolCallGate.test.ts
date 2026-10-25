@@ -168,7 +168,7 @@ describe('IM standard policy override is final at the gate', () => {
     const db = openDb()
     commitImPolicySnapshot(getDbConnection(db), {
       policyBehaviorVersion: 'im-standard-v2',
-      snapshot: { selectedPackage: 'standard', ruleOverrides: { 'im-time-query-review': 'ask' } },
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'im-time-query-review': 'ask' } },
       updatedAt: 1,
       eventId: 'time-query-user-ask-override'
     })
@@ -228,6 +228,16 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
     expect(event).not.toHaveProperty('fallbackCause')
     expect(event).not.toHaveProperty('todoId')
     expect(event).not.toHaveProperty('dispatchKey')
+  })
+
+  it('persists desktop policy revision and epoch in the decision fingerprint evidence', async () => {
+    const audit = auditSink()
+    const result = await evaluateToolCallGate(base({ audit, lane: 'desktop', policyBinding: {
+      domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 12, epoch: 4
+    } }))
+    const event = audit.events.find((entry) => entry.event === 'policy.decision')
+    expect(event).toMatchObject({ policyDomain: 'desktop', policyBehaviorVersion: 'desktop-v1', policyRevision: 12, policyEpoch: 4 })
+    expect(result.policyDecision).toMatchObject({ policyDomain: 'desktop', policyVersion: 'desktop-v1', policyRevision: 12 })
   })
 
   it('records reported completeness from extracted MCP facts instead of assuming completeness', async () => {
@@ -399,7 +409,7 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
     expect(ev?.reason).toContain('construction')
   })
 
-  it('T-R3-3：注解安全 → actionClass=read + annotations-readonly（ask/deny 结论不变：desktop 落 mcp-readonly-allow）', async () => {
+  it('T-R3-3：只读注解与默认 MCP ask 同时命中时仍需确认', async () => {
     const r = await evaluateToolCallGate(base({
       toolName: 'mcp_example_fetch_url',
       toolInput: { url: 'https://example.com' },
@@ -407,7 +417,7 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
       mcpAccountAuthorization: 'authorized',
       mcpEntry: mcpEntry({ annotations: { readOnlyHint: true, destructiveHint: false } })
     }))
-    expect(r.decision.type).toBe('auto-allow')
+    expect(r.decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask' })
     expect(r.facts.signals).toContainEqual({ kind: 'mcp-readonly', serverId: 'srv1', toolName: 'fetch_url' })
     const sig = r.facts.signals.find((x) => x.kind === 'mcp-invocation')
     if (sig?.kind === 'mcp-invocation') {
@@ -1413,7 +1423,7 @@ describe('evaluateToolCallGate', () => {
       toolName: 'run_script',
       toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)' }
     }))
-    expect(declaredWhenEnabled.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-declared-path-scope-allow-desktop' })
+    expect(declaredWhenEnabled.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
 
     const declaredWithSensitivePath = await evaluateToolCallGate(base({
       appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
@@ -1467,6 +1477,23 @@ describe('evaluateToolCallGate', () => {
     expect(unsupported.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'unknown', status: 'unverified' })
     expect(unsupported.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: expect.any(String) }))
     expect(unsupported.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
+  })
+
+  it.each([
+    { action: 'deny' as const, expected: { type: 'deny', ruleId: 'script-unverified-language-confirm' } },
+    { action: 'allow' as const, expected: { type: 'auto-allow', ruleId: 'script-unverified-language-confirm' } },
+    { action: 'ask' as const, expected: { type: 'require-confirm', ruleId: 'script-unverified-language-confirm', answerer: 'user' } }
+  ])('custom desktop override $action replaces the unverified-language default confirmation', async ({ action, expected }) => {
+    const effectiveRules = DEFAULT_POLICY_RULES.map((rule) => rule.id === 'script-unverified-language-confirm'
+      ? { ...rule, action, userOverride: true as const }
+      : rule)
+    const gate = await evaluateToolCallGate(base({
+      toolName: 'run_script',
+      toolInput: { language: 'javascript', code: "console.log('hello')" },
+      lanePackage: 'custom',
+      effectiveRules
+    }))
+    expect(gate.decision).toMatchObject(expected)
   })
 
   it('T4-1 自定义敏感前缀由 gate facts 和策略环境读取同一 shellConfig', async () => {
@@ -2273,12 +2300,12 @@ describe('evaluateToolCallGate', () => {
       remoteContext: remoteContext({ authOwner: 'ou_owner' }),
       imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
     }))
-    const self = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner'])
-    const other = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other'])
+    const self = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner', '--text', 'hello'])
+    const other = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other', '--text', 'hello'])
     const group = await run(['message', 'send', '--chat-type', 'group', '--receive-id', 'oc_group'])
     const unknown = await run(['message', 'send', '--receive-id-type', 'user_id', '--receive-id', 'user_owner'])
-    expect(self.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
-    expect(other.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-direct-review', answerer: 'agent' })
+    expect(self.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-write-ask', answerer: 'user' })
+    expect(other.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-write-ask', answerer: 'user' })
     expect(group.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-group-human', answerer: 'user' })
     expect(unknown.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-target-unknown-human', answerer: 'user' })
   })
@@ -2301,7 +2328,7 @@ describe('evaluateToolCallGate', () => {
     }))
     expect(missing.facts.actionClass).toBe('outbound')
     expect(missing.facts.signals).toContainEqual({ kind: 'outbound-content', inspectionCoverage: 'unavailable', evidenceKinds: [] })
-    expect(missing.decision, JSON.stringify(missing.facts)).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
+    expect(missing.decision, JSON.stringify(missing.facts)).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-incomplete-standard-review', answerer: 'agent' })
   })
 
   it('standard Feishu mail send with sensitive text requires human confirmation', async () => {
@@ -2508,7 +2535,7 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('MCP 需确认工具 → require-confirm(mcp-tool-ask)；缓存命中后 → auto-allow(cache-hit)', async () => {
+  it('MCP 需确认工具的旧会话 allow 缓存不能跳过默认 ask', async () => {
     const db = openDb()
     const mcpEntry = {
       serverId: 'srv1',
@@ -2548,12 +2575,11 @@ describe('evaluateToolCallGate', () => {
     const r2 = await evaluateToolCallGate(
       base({ toolName: mcpEntry.mappedName, toolInput: {}, mcpEntry, appDb: db, audit })
     )
-    expect(r2.decision.type).toBe('auto-allow')
-    expect(r2.decision.ruleId).toBe('cache-hit')
+    expect(r2.decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask' })
     expect(audit.events.some((e) => e.event === 'cache.hit')).toBe(true)
   })
 
-  it('MCP 安全注解工具 → auto-allow(mcp-readonly-allow)；无注解 → require-confirm(mcp-tool-ask)', async () => {
+  it('MCP 只读注解仍受通用 ask 规则约束；无注解同样需要确认', async () => {
     const db = openDb()
     const readonlyEntry = {
       serverId: 'srv1',
@@ -2567,12 +2593,11 @@ describe('evaluateToolCallGate', () => {
       descriptorHash: hashMcpToolDescription({ serverId: 'srv1', originalName: 'list_issues', description: '', inputSchema: {},
         annotations: { readOnlyHint: true, destructiveHint: false } })
     }
-    // 注解安全：额外产 mcp-readonly 信号 → 命中 mcp-readonly-allow 放行，actionClass 降 read
+    // 注解安全：额外产 mcp-readonly 信号并降低 actionClass，但通用 MCP ask 仍覆盖其原匹配域。
     const r1 = await evaluateToolCallGate(
       base({ toolName: readonlyEntry.mappedName, toolInput: {}, mcpQuerySource: 'public', mcpAccountAuthorization: 'authorized', mcpEntry: readonlyEntry, appDb: db })
     )
-    expect(r1.decision.type).toBe('auto-allow')
-    expect(r1.decision.ruleId).toBe('mcp-readonly-allow')
+    expect(r1.decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask' })
 
     // destructiveHint:true 不算安全注解 → 仍确认
     const r2 = await evaluateToolCallGate(
