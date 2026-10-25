@@ -440,6 +440,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
           }>
         const results: MessageSearchHit[] = []
         const searchedBySession = new Map<string, Map<string, PreparedChatBodySearch['messages'][number]>>()
+        const visitedSources = new Map<string, { sessionGeneration: string; sourceIdentityJson: string }>()
         for (const candidate of candidates) {
           const canonicalBacked = ['canonical-backed-dual-write', 'canonical-backed-only'].includes(candidate.content_storage_state)
           let canonical: PreparedChatBodySearch['messages'][number] | undefined
@@ -452,6 +453,10 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
               if (preparedChatBody.currentSourceIdentity(candidate.session_id, view.sessionGeneration) !== view.sourceIdentityJson) {
                 throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
               }
+              visitedSources.set(candidate.session_id, {
+                sessionGeneration: view.sessionGeneration,
+                sourceIdentityJson: view.sourceIdentityJson
+              })
               let search: PreparedChatBodySearch
               try { search = await preparedChatBody.searchBodies(view, q, limit > 0 ? limit - results.length : Number.MAX_SAFE_INTEGER) }
               catch (error) {
@@ -475,20 +480,27 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
             ...(canonicalBacked ? { requiresProjectionPreparation: true } : {}) })
           if (limit > 0 && results.length >= limit) break
         }
-        const latestCandidates = getDbConnection(db).prepare(`SELECT m.id,m.session_id,m.role,m.content,m.content_storage_state,
+        const sourceStillCurrent = runInTransaction(getDbConnection(db), () => {
+          const latestCandidates = getDbConnection(db).prepare(`SELECT m.id,m.session_id,m.role,m.content,m.content_storage_state,
             cutover.write_mode,s.name AS session_name,m.timestamp
           FROM messages m JOIN sessions s ON s.id=m.session_id
           LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=m.session_id
           WHERE (m.content LIKE ? ESCAPE '\\' OR m.content_storage_state IN ('canonical-backed-dual-write','canonical-backed-only'))
             AND (s.work_dir_profile_id IS NULL OR s.work_dir_profile_id=?)
             AND (s.ownership IS NULL OR s.ownership!='internal')
-          ORDER BY m.timestamp DESC`).all(`%${escaped}%`, activeProfileId) as typeof candidates
-        if (latestCandidates.length !== candidates.length || latestCandidates.some((row, index) => {
-          const prior = candidates[index]
-          return !prior || row.id !== prior.id || row.session_id !== prior.session_id || row.role !== prior.role ||
-            row.content !== prior.content || row.content_storage_state !== prior.content_storage_state || row.write_mode !== prior.write_mode ||
-            row.session_name !== prior.session_name || row.timestamp !== prior.timestamp
-        })) throw new Error('GLOBAL_SEARCH_SOURCE_CHANGED')
+            ORDER BY m.timestamp DESC`).all(`%${escaped}%`, activeProfileId) as typeof candidates
+          if (latestCandidates.length !== candidates.length || latestCandidates.some((row, index) => {
+            const prior = candidates[index]
+            return !prior || row.id !== prior.id || row.session_id !== prior.session_id || row.role !== prior.role ||
+              row.content !== prior.content || row.content_storage_state !== prior.content_storage_state || row.write_mode !== prior.write_mode ||
+              row.session_name !== prior.session_name || row.timestamp !== prior.timestamp
+          })) return false
+          for (const [sessionId, source] of visitedSources) {
+            if (preparedChatBody.currentSourceIdentity(sessionId, source.sessionGeneration) !== source.sourceIdentityJson) return false
+          }
+          return true
+        })
+        if (!sourceStillCurrent) throw new Error('GLOBAL_SEARCH_SOURCE_CHANGED')
         return results
       }
     } : {}),
