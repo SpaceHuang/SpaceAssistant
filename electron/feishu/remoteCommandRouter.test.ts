@@ -27,7 +27,7 @@ import { appendMessage as appendMessageOperation, createPersistedTurn, listQueue
 import { listWakeEvents } from '../database/wakeEvents'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { getDbConnection } from '../database/sqliteStore'
-import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, listImInboxMessages, parkImInboxMessageForClarification } from '../database/imInbox'
+import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, listImInboxMessages, parkImInboxMessageForClarification } from '../database/imInbox'
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
@@ -1155,6 +1155,37 @@ describe('RemoteCommandRouter busy guard', () => {
     expect((mockRunFeishuRemoteAgent.mock.calls[0]?.[0] as { acceptedTurn: { turnId: string; config: { model: string; llmServiceId: string } } }).acceptedTurn)
       .toMatchObject({ turnId: 'feishu-prepared-turn', config: { model: 'claude-sonnet-4-20250514', llmServiceId: TEST_SERVICE_ID } })
     expect(getTurnByRequestId(db, session.id, `wake:${inbox.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'completed' })
+    expect(listWakeEvents(db, session.id)).toMatchObject([{ eventId: inbox.eventId, status: 'acked' }])
+    await dispatcher.dispose()
+  })
+
+  it('provider 结果未知的终态 Feishu wake 只结算唤醒，不重发模型请求', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu uncertain terminal wake', metadata: {
+      source: 'feishu', feishuChatId: 'chat-1', feishuSenderOpenId: 'user-1'
+    } })
+    const queueScope = buildImQueueScope('feishu', session.id) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope,
+      channelMessageId: 'feishu-uncertain-platform-message', content: '可能已执行的请求' })
+    const requestId = `wake:${inbox.eventId}`
+    const frozenConfig = { lane: 'feishu' as const, model: TEST_MODEL_NAME, llmServiceId: TEST_SERVICE_ID,
+      thinkingEffort: 'low' as const, maximumContextTrusted: true, enableThinking: false }
+    appendMessageOperation(db, { id: 'feishu-uncertain-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'failed' })
+    createPersistedTurn(db, { turnId: 'feishu-uncertain-turn', requestId, sessionId: session.id,
+      userMessageId: inbox.messageId, assistantMessageId: 'feishu-uncertain-assistant', state: 'terminal', outcome: 'commit-uncertain',
+      startToken: 'feishu-uncertain-token', executionConfig: frozenConfig })
+    acceptTurnContext(db, createAcceptedTurn({ turnId: 'feishu-uncertain-turn', requestId, sessionId: session.id,
+      lane: 'feishu', startToken: 'feishu-uncertain-token', currentUserMessageId: inbox.messageId, transcriptVersion: 0, config: frozenConfig }))
+    const inboxClaim = claimImInboxMessage(db, { queueScope, messageId: inbox.messageId, ownerId: 'prior-feishu-run' })
+    expect(inboxClaim).not.toBeNull()
+    expect(ackImInboxMessage(db, { queueScope, messageId: inbox.messageId, ownerId: 'prior-feishu-run' })).toBe(true)
+    const { router } = makeRouter(db, manager)
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(session.id, { retryExhausted: true })
+
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+    expect(getTurnByRequestId(db, session.id, requestId)).toMatchObject({ state: 'terminal', outcome: 'commit-uncertain' })
     expect(listWakeEvents(db, session.id)).toMatchObject([{ eventId: inbox.eventId, status: 'acked' }])
     await dispatcher.dispose()
   })
