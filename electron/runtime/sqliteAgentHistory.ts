@@ -2381,6 +2381,12 @@ export class SqliteAgentHistory implements HistoryPort {
         flushRepairOutcomes()
         continue
       }
+      // Parked invocations have durable deferred-approval state. A projection-repair row may
+      // bring one into this loop, but process restart must not append a second terminal event.
+      if (snapshot.events.at(-1)?.kind === 'invocation-parked') {
+        flushRepairOutcomes()
+        continue
+      }
       if (snapshot.events.at(-1)?.kind !== 'invocation-interrupted') {
         const lastEvent = snapshot.events.at(-1)
         if (!lastEvent) continue
