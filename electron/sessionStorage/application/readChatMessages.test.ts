@@ -179,6 +179,19 @@ describe('readSearchCorpusPageAfterPreparation', () => {
 })
 
 describe('readExportPageAfterPreparation', () => {
+  it('forwards cancellation to the prepared export worker reader', async () => {
+    const controller = new AbortController()
+    const page = { rows: [], nextSequence: 0 }
+    const readPreparedExportPage = vi.fn(async ({ signal }: { signal?: AbortSignal }) => {
+      expect(signal).toBe(controller.signal)
+      return page as never
+    })
+    await expect(readExportPageAfterPreparation({ ensureChatBodyV1: async () => 'prepared',
+      queries: { readPreparedExportPage, readExportPage: () => page } },
+    { sessionId: 'export-session', fromSequence: 0, pageSize: 25, signal: controller.signal })).resolves.toBe(page)
+    expect(readPreparedExportPage).toHaveBeenCalledOnce()
+  })
+
   it('prepares each cursor page and preserves authority paging when the cache reader misses', async () => {
     const events: string[] = []
     const page = { rows: [{ sequence: 22, message: { id: 'export-row', content: 'body' } }], nextSequence: 23 }

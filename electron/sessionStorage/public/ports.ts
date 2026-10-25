@@ -133,7 +133,7 @@ export interface SessionQueries {
   /** Async ASC search corpus page lookup; undefined means selection must use the existing authority reader. */
   readPreparedSearchCorpusPage?(input: { sessionId: string; fromSequence: number; pageSize?: number; prepared?: PreparedChatBodyView }): Promise<SearchCorpusPage | undefined>
   /** Async export page lookup; undefined means selection must use the existing authority reader. */
-  readPreparedExportPage?(input: { sessionId: string; fromSequence: number; pageSize: number; prepared?: PreparedChatBodyView }): Promise<ExportPage | undefined>
+  readPreparedExportPage?(input: { sessionId: string; fromSequence: number; pageSize: number; prepared?: PreparedChatBodyView; signal?: AbortSignal }): Promise<ExportPage | undefined>
   /** Async retry-context lookup; undefined means selection must use the existing authority reader. */
   readPreparedRetryTarget?(input: { sessionId: string; failedAssistantMessageId?: string; prepared?: PreparedChatBodyView }): Promise<RetryContextTarget | null | undefined>
   /** Async accepted-turn context lookup; undefined means the execution adapter must use its authority reader. */

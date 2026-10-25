@@ -60,6 +60,8 @@ function canonicalBodyMessageIds(db: AppDatabase, sessionId: string, messages: r
   return canonicalIds
 }
 
+class PreparedChatBodyMismatchError extends Error {}
+
 function overlayPreparedBodies(messages: readonly Message[], canonicalIds: readonly string[], bodies: PreparedChatBodySelection): Message[] {
   const canonicalIdSet = new Set(canonicalIds)
   const bodyById = new Map(bodies.messages.map((message) => [message.id, message]))
@@ -67,10 +69,26 @@ function overlayPreparedBodies(messages: readonly Message[], canonicalIds: reado
     if (!canonicalIdSet.has(message.id)) return message
     const canonical = bodyById.get(message.id)
     if (!canonical || canonical.role !== message.role || canonical.timestamp !== message.timestamp) {
-      throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+      throw new PreparedChatBodyMismatchError('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
     }
     return { ...message, content: canonical.content }
   })
+}
+
+function tryOverlayPreparedBodies(
+  messages: readonly Message[], canonicalIds: readonly string[], bodies: PreparedChatBodySelection, invalidate: () => void
+): Message[] | undefined {
+  try { return overlayPreparedBodies(messages, canonicalIds, bodies) }
+  catch (error) {
+    if (!(error instanceof PreparedChatBodyMismatchError)) throw error
+    invalidate()
+    return undefined
+  }
+}
+
+function propagatePreparedReadCancellation(error: unknown, signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason ?? error
+  if (error instanceof Error && (error.name === 'AbortError' || /(?:^|_)WORKER_(?:ABORTED|CANCELLED)$/.test(error.message))) throw error
 }
 
 function getTurnByAssistant(db: AppDatabase, sessionId: string, assistantMessageId: string): { requestId: string; turnId: string } | undefined {
@@ -128,7 +146,8 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       if (selected.canonicalIds.length === 0) return selected.messages
       let bodies: PreparedChatBodySelection
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
-      catch {
+      catch (error) {
+        propagatePreparedReadCancellation(error)
         preparedChatBody.invalidate(view)
         return undefined
       }
@@ -136,7 +155,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
         const latest = getMessages(db, sessionId, limit ?? 500, offset ?? 0)
         if (latest.length !== selected.messages.length || latest.some((message, index) => message.id !== selected.messages[index]?.id)) return undefined
-        return overlayPreparedBodies(latest, selected.canonicalIds, bodies)
+        return tryOverlayPreparedBodies(latest, selected.canonicalIds, bodies, () => preparedChatBody.invalidate(view))
       })
     } } : {}),
     ...(preparedChatBody ? { readPreparedMessage: async ({ sessionId, messageId, prepared }) => {
@@ -153,7 +172,8 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       if (selected.canonicalIds.length === 0) return getMessage(db, messageId)
       let bodies: PreparedChatBodySelection
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
-      catch {
+      catch (error) {
+        propagatePreparedReadCancellation(error)
         preparedChatBody.invalidate(view)
         return undefined
       }
@@ -162,7 +182,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         const latest = getMessageSkeleton(db, messageId)
         if (!latest || latest.sessionId !== sessionId || latest.id !== selected.skeleton!.id ||
           latest.role !== selected.skeleton!.role || latest.timestamp !== selected.skeleton!.timestamp || latest.status !== selected.skeleton!.status) return undefined
-        return overlayPreparedBodies([latest as Message], selected.canonicalIds, bodies)[0]
+        return tryOverlayPreparedBodies([latest as Message], selected.canonicalIds, bodies, () => preparedChatBody.invalidate(view))?.[0]
       })
     } } : {}),
     ...(preparedChatBody ? { readPreparedChatPage: async ({ sessionId, beforeSequence, limit, prepared }) => {
@@ -179,7 +199,8 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         entries: projectMessageEntriesV1('chatMessageV1', selected.page.entries) }
       let bodies: PreparedChatBodySelection
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
-      catch {
+      catch (error) {
+        propagatePreparedReadCancellation(error)
         preparedChatBody.invalidate(view)
         return undefined
       }
@@ -192,7 +213,9 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
             return !prior || entry.sequence !== prior.sequence || entry.message.id !== prior.message.id ||
               entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
           })) return undefined
-        const messages = overlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies)
+        const messages = tryOverlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies,
+          () => preparedChatBody.invalidate(view))
+        if (!messages) return undefined
         const entries = latest.entries.map((entry, index) => ({ ...entry, message: messages[index]! }))
         return { ...latest, entries: projectMessageEntriesV1('chatMessageV1', entries) }
       })
@@ -210,7 +233,8 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         entries: projectMessageEntriesV1('apiBaselineV1', selected.baseline.entries) }
       let bodies: PreparedChatBodySelection
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
-      catch {
+      catch (error) {
+        propagatePreparedReadCancellation(error)
         preparedChatBody.invalidate(view)
         return undefined
       }
@@ -222,7 +246,9 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
           return !prior || entry.sequence !== prior.sequence || entry.message.id !== prior.message.id ||
             entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
         })) return undefined
-        const messages = overlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies)
+        const messages = tryOverlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies,
+          () => preparedChatBody.invalidate(view))
+        if (!messages) return undefined
         const entries = latest.entries.map((entry, index) => ({ ...entry, message: messages[index]! }))
         return { ...latest, entries: projectMessageEntriesV1('apiBaselineV1', entries) }
       })
@@ -240,7 +266,8 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       if (selected.canonicalIds.length === 0) return { ...selected.page, entries: projectMessageEntriesV1('searchCorpusV1', selected.page.entries) }
       let bodies: PreparedChatBodySelection
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
-      catch {
+      catch (error) {
+        propagatePreparedReadCancellation(error)
         preparedChatBody.invalidate(view)
         return undefined
       }
@@ -253,12 +280,14 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
             return !prior || entry.sequence !== prior.sequence || entry.message.id !== prior.message.id ||
               entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
           })) return undefined
-        const messages = overlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies)
+        const messages = tryOverlayPreparedBodies(latest.entries.map(({ message }) => message), selected.canonicalIds, bodies,
+          () => preparedChatBody.invalidate(view))
+        if (!messages) return undefined
         const entries = latest.entries.map((entry, index) => ({ ...entry, message: messages[index]! }))
         return { ...latest, entries: projectMessageEntriesV1('searchCorpusV1', entries) }
       })
     } } : {}),
-    ...(preparedChatBody ? { readPreparedExportPage: async ({ sessionId, fromSequence, pageSize, prepared }) => {
+    ...(preparedChatBody ? { readPreparedExportPage: async ({ sessionId, fromSequence, pageSize, prepared, signal }) => {
       const view = prepared as PreparedChatBodyView | undefined
       if (!view) return undefined
       const select = () => getProjectedMessagesPageWithSequence(db, sessionId, fromSequence, pageSize)
@@ -270,8 +299,9 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       if (!selected) return undefined
       if (selected.canonicalIds.length === 0) return { ...selected.page, rows: projectMessageEntriesV1('exportMessageV1', selected.page.rows) }
       let bodies: PreparedChatBodySelection
-      try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
-      catch {
+      try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds, signal) }
+      catch (error) {
+        propagatePreparedReadCancellation(error, signal)
         preparedChatBody.invalidate(view)
         return undefined
       }
@@ -283,7 +313,9 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
           return !prior || entry.sequence !== prior.sequence || entry.message.id !== prior.message.id ||
             entry.message.role !== prior.message.role || entry.message.timestamp !== prior.message.timestamp
         })) return undefined
-        const messages = overlayPreparedBodies(latest.rows.map(({ message }) => message), selected.canonicalIds, bodies)
+        const messages = tryOverlayPreparedBodies(latest.rows.map(({ message }) => message), selected.canonicalIds, bodies,
+          () => preparedChatBody.invalidate(view))
+        if (!messages) return undefined
         const rows = latest.rows.map((entry, index) => ({ ...entry, message: messages[index]! }))
         return { ...latest, rows: projectMessageEntriesV1('exportMessageV1', rows) }
       })
@@ -314,7 +346,8 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       if (!selected.target || selected.canonicalIds.length === 0) return isUsable(selected.target) ? selected.target : null
       let bodies: PreparedChatBodySelection
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
-      catch {
+      catch (error) {
+        propagatePreparedReadCancellation(error)
         preparedChatBody.invalidate(view)
         return undefined
       }
@@ -328,7 +361,9 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
           latest.failedAssistant.message.timestamp !== prior.failedAssistant.message.timestamp || latest.currentUser.message.timestamp !== prior.currentUser.message.timestamp ||
           latest.excludeMessageIds.length !== prior.excludeMessageIds.length || latest.excludeMessageIds.some((id, index) => id !== prior.excludeMessageIds[index]) ||
           latest.sourceInvocationId !== prior.sourceInvocationId || latest.sourceTurnId !== prior.sourceTurnId) return undefined
-        const messages = overlayPreparedBodies([latest.failedAssistant.message, latest.currentUser.message], selected.canonicalIds, bodies)
+        const messages = tryOverlayPreparedBodies([latest.failedAssistant.message, latest.currentUser.message], selected.canonicalIds, bodies,
+          () => preparedChatBody.invalidate(view))
+        if (!messages) return undefined
         const preparedTarget = { ...latest,
           failedAssistant: { ...latest.failedAssistant, message: messages[0]! },
           currentUser: { ...latest.currentUser, message: messages[1]! } }
@@ -351,7 +386,8 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         if (selected.canonicalIds.length === 0) return selected.messages
         let bodies: PreparedChatBodySelection
         try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
-        catch {
+        catch (error) {
+          propagatePreparedReadCancellation(error)
           preparedChatBody.invalidate(view)
           return undefined
         }
@@ -360,7 +396,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
           const latest = select()
           if (latest.length !== selected.messages.length || latest.some((message, index) =>
             JSON.stringify(message) !== JSON.stringify(selected.messages[index]))) return undefined
-          return overlayPreparedBodies(latest, selected.canonicalIds, bodies)
+          return tryOverlayPreparedBodies(latest, selected.canonicalIds, bodies, () => preparedChatBody.invalidate(view))
         })
       }
     } : {}),
