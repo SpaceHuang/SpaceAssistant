@@ -76,6 +76,12 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const locked = await withSessionContextCompactionLock(sessionId, async () => {
       const busy = () => sessionStorage.execution.hasActiveTurn(sessionId) || Boolean(ctx.turnRuntime?.coordinator.listActive(sessionId).length) || isRemoteAgentRunning(sessionId)
       if (busy()) return { status: 'busy' as const }
+      const availability = sessionStorage.availability.inspect(sessionId)
+      if (availability.globalFence.state === 'pending' || availability.globalFence.state === 'blocked' ||
+        availability.content.state === 'unavailable' || availability.execution.state === 'pending-recovery' ||
+        availability.execution.state === 'commit-uncertain' || availability.execution.state === 'blocked') {
+        return { status: 'unavailable' as const }
+      }
       const baseline = await readApiBaselineAfterPreparation(sessionStorage, { sessionId, limit: 500 })
       const initialMessages = baseline.entries.map((entry) => entry.message)
       if (initialMessages.length < 3) return { status: 'no-op' as const }

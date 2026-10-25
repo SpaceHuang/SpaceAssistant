@@ -42,9 +42,17 @@ describe('manual context compaction IPC ContextPort integration', () => {
       getWorkDirForSession: () => '/tmp', getUserDataDir: () => '/tmp',
       getSessionEventSink: () => sink as never, readCompactionReplay: async () => ({ committed: [], rejected: [] } as never)
     })
+    await baseStorage.recovery.recover()
+    const observedAvailability = baseStorage.availability.inspect(session.id)
+    const healthyAvailability = { ...observedAvailability,
+      globalFence: { state: 'ready' as const, source: { recoveryState: 'ready' as const } },
+      content: { ...observedAvailability.content, state: 'readable' as const },
+      execution: { ...observedAvailability.execution, state: 'ready' as const } }
+    const inspectAvailability = vi.fn((_sessionId: string) => healthyAvailability)
     const projectionReadEvents: string[] = []
     const storage = {
       ...baseStorage,
+      availability: { inspect: inspectAvailability },
       ensureChatBodyV1: vi.fn(async () => { projectionReadEvents.push('ensure') }),
       queries: { ...baseStorage.queries, readApiBaseline: vi.fn((input: { sessionId: string; limit?: number }) => {
         projectionReadEvents.push('select')
@@ -72,6 +80,12 @@ describe('manual context compaction IPC ContextPort integration', () => {
     expect(appendCompactionTransaction).toHaveBeenCalledOnce()
     expect(appendCompactionTransaction).toHaveBeenCalledWith(sink, expect.objectContaining({ reason: 'user_compact' }), expect.objectContaining({ candidate: expect.objectContaining({ kind: 'summary' }) }))
     expect(storage.contexts).toMatchObject({ readCurrent: expect.any(Function), commitReplacement: expect.any(Function) })
+    expect(inspectAvailability).toHaveBeenCalledWith(session.id)
+    inspectAvailability.mockReturnValue({ ...healthyAvailability,
+      globalFence: { state: 'pending', source: { recoveryState: 'pending' } } })
+    await expect(handlers.get('chat:compact-session-context')!({ sender: window.webContents },
+      { sessionId: session.id, requestId: 'ipc-compact-recovery-pending' })).resolves.toEqual({ status: 'unavailable' })
+    expect(summarizeSessionContext).toHaveBeenCalledOnce()
     await expect(handlers.get('chat:get-session-compaction-markers')!({ sender: window.webContents }, session.id)).resolves.toEqual([
       { compactionId: (result as { compactionId: string }).compactionId, windowId: (result as { windowId: string }).windowId,
         outputSurfaceFingerprint: (result as { outputSurfaceFingerprint: string }).outputSurfaceFingerprint }
