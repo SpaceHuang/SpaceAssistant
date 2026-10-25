@@ -153,6 +153,10 @@ describe('Feishu prepared wake to real provider integration', () => {
     db.close()
     db = openDatabase(dbPath)
 
+    expect(appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope: scope,
+      channelMessageId: 'feishu-prepared-platform-message', content: inputText }))
+      .toEqual({ messageId: userMessageId, eventId: inbox.eventId, duplicate: true })
+
     let sequence = 0
     const turnRuntime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 100 + sequence, id: () => `unexpected-new-turn-${++sequence}` } })
     const runner = { run: vi.fn(async () => ({ stdout: JSON.stringify({ code: 0, data: { message_id: 'feishu-prepared-wake-reply' } }), stderr: '', exitCode: 0 })) }
@@ -316,6 +320,10 @@ describe('Feishu prepared wake to real provider integration', () => {
     getDbConnection(db).prepare('UPDATE im_inbox_claims SET lease_expires_at=0 WHERE message_id=?').run(userMessageId)
     db.close()
     db = openDatabase(dbPath)
+    expect(appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope: scope,
+      channelMessageId: 'feishu-track-wake-platform', content: 'Track A accepted input sentinel', trackId: attribution.context.trackId,
+      trackEventId: attribution.context.attributionEventId }))
+      .toEqual({ messageId: inbox.messageId, eventId: inbox.eventId, duplicate: true })
     let sequence = 0
     const turnRuntime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 100 + sequence, id: () => `unexpected-track-turn-${++sequence}` } })
     const manager = createWorkDirManager({ db, getWorkDir: () => tempDirPath, setWorkDir: () => undefined })

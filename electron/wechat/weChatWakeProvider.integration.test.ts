@@ -129,6 +129,10 @@ describe('WeChat prepared wake to real provider integration', () => {
     db.close()
     db = openDatabase(dbPath)
 
+    expect(appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'wechat', queueScope: scope,
+      channelMessageId: 'wechat-prepared-platform-message', content: 'prepared wake accepted input sentinel', contextToken: 'wake-context-token' }))
+      .toEqual({ messageId: inbox.messageId, eventId: inbox.eventId, duplicate: true })
+
     let sequence = 0
     const turnRuntime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 100 + sequence, id: () => `unexpected-new-turn-${++sequence}` } })
     const reply = vi.fn(async () => undefined)
@@ -279,6 +283,10 @@ describe('WeChat prepared wake to real provider integration', () => {
     getDbConnection(db).prepare('UPDATE im_inbox_claims SET lease_expires_at=0 WHERE message_id=?').run(inbox.messageId)
     db.close()
     db = openDatabase(dbPath)
+    expect(appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'wechat', queueScope: scope,
+      channelMessageId: 'wechat-track-wake-platform', content: 'Track A accepted input sentinel', contextToken: 'track-wake-context',
+      trackId: attribution.context.trackId, trackEventId: attribution.context.attributionEventId }))
+      .toEqual({ messageId: inbox.messageId, eventId: inbox.eventId, duplicate: true })
 
     let sequence = 0
     const turnRuntime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 100 + sequence, id: () => `unexpected-track-turn-${++sequence}` } })
