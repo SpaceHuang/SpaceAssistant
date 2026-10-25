@@ -78,6 +78,9 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
     if (existing && existing.path === operation.targetPath && existing.revision === operation.revision && existing.contentHash === operation.newHash) {
       continue
     }
+    // A domain-committed operation is semantically saved. Keep its landed bytes
+    // in reconciliation so schema validation and catalog repair see the page.
+    if (operation.status === 'domain_committed') continue
     if (operation.oldHash === null) {
       if (existing) {
         diagnostics.push({ code: 'wiki-pending-operation-baseline-conflict', path: file.path, pageId: operation.pageId, message: 'Pending page creation conflicts with an existing catalog entry.' })
@@ -177,6 +180,9 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
     const source = files.find(file => file.path === page.path)!
     const parsed = parseWikiPageMarker(source.content)
     if (!parsed.marker) continue
+    const pending = pendingByPath.get(page.path)
+    const domainCommitted = pending?.status === 'domain_committed' && pending.pageId === page.pageId &&
+      pending.revision === page.revision && pending.newHash === hashText(source.content)
     let revision = page.revision
     let updated = serializeWikiPageMarker({ ...parsed.marker, revision }) + `\n${parsed.body.replace(/^\s+/, '')}`
     while (await store.identity(`.wiki-service/page-history/${page.pageId}/${revision}.md`)) {
@@ -192,6 +198,10 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
     if (!(await store.identity(historyPath))) await store.writeImmutable(historyPath, Buffer.from(updated))
     else if (hashText(await store.readText(historyPath)) !== hashText(updated)) {
       return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-history-conflict', path: page.path, pageId: page.pageId, message: 'An immutable revision snapshot already exists with different content.' }] }
+    }
+    if (domainCommitted) {
+      if (updated !== source.content) await store.write(page.path, updated, source.identity)
+      continue
     }
     const revisionMetadataPath = `.wiki-service/page-revision-metadata/${page.pageId}/${page.revision}.json`
     const revisionMetadata = { formatVersion: 1, pageId: page.pageId, revision: page.revision, externalEdit: true, changeSummary: `外部编辑：${page.title}` }

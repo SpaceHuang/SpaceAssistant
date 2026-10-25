@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { createWikiFileStore } from './wiki/wikiFileStore'
 import { createWikiDomainCoordinator } from './wiki/wikiDomainCoordinator'
 import { createWikiLifecycleController } from './wiki/wikiLifecycle'
-import { saveWikiPageForContext, moveWikiPageForContext, searchWikiForContext, getWikiSchemaForContext } from './wiki/wikiDomainTools'
+import { saveWikiPageForContext, moveWikiPageForContext, searchWikiForContext, getWikiSchemaForContext, proposeWikiSchemaChangeForContext, updateWikiSchemaForContext, openWikiPageForContext, readWikiPageForContext } from './wiki/wikiDomainTools'
 import { DEFAULT_WIKI_CONFIG } from '../src/shared/domainTypes'
 
 const roots: string[] = []
@@ -111,4 +111,45 @@ it('replays a completed move after a later ordinary content edit', async () => {
   expect(moved.success).toBe(true)
   expect((await saveWikiPageForContext({ ...material, pageId: first.pageId, expectedRevision: 2, title: 'Edited', markdown: 'new content' }, { ...context, requestId: 'edit', toolUseId: 'edit' })).success).toBe(true)
   expect(await moveWikiPageForContext(input, context)).toEqual(moved)
+})
+
+it('returns search text from the same committed revision that open and read use', async () => {
+  const { store, coordinator, context } = await fixture()
+  const first = await coordinator.savePage({ ...material, requestId: 'initial', toolUseId: 'initial', callerId: 'review:local', lane: 'desktop' })
+  const update = { ...material, pageId: first.pageId, expectedRevision: 1, markdown: 'pending-exclusive-marker' }
+  await expect(coordinator.savePage({ ...update, requestId: 'r', toolUseId: 't', callerId: 'review:local', lane: 'desktop', crashAt: 'after-target-write' })).rejects.toThrow('injected crash')
+
+  const uncommittedSearch = await searchWikiForContext({ query: 'pending-exclusive-marker' }, context)
+  expect(uncommittedSearch).toMatchObject({ success: true, data: { matches: [] } })
+  const committedSearch = await searchWikiForContext({ query: 'body' }, context)
+  expect(committedSearch).toMatchObject({ success: true, data: { matches: [{ pageId: first.pageId, revision: 1, snippet: 'body' }] } })
+  const opened = await openWikiPageForContext({ pageId: first.pageId, revision: 1 }, context)
+  expect(opened).toMatchObject({ success: true, data: { revision: 1 } })
+  const readHandle = (opened as { data: { readHandle: string } }).data.readHandle
+  expect(await readWikiPageForContext({ readHandle }, context)).toMatchObject({ success: true, data: { text: 'body\n' } })
+  await expect(store.readText(`.wiki-service/page-history/${first.pageId}/1.md`)).resolves.toContain('body')
+})
+
+it('includes a domain-committed pending page when applying a schema proposal', async () => {
+  const { store, coordinator, context } = await fixture()
+  expect((await getWikiSchemaForContext(context)).success).toBe(true)
+  await expect(coordinator.savePage({ ...material, requestId: 'r', toolUseId: 't', callerId: 'review:local', lane: 'desktop', crashAt: 'after-domain-commit' })).rejects.toThrow('injected crash')
+  const content = (await store.readText('SCHEMA.md')).replace(/topic/g, 'other')
+  const proposed = await proposeWikiSchemaChangeForContext({ content, expectedSchemaVersion: 1 }, { ...context, requestId: 'schema-proposal', toolUseId: 'schema-proposal' })
+  expect(proposed.success).toBe(true)
+  const data = proposed.data as { proposalId: string; diff: { before: string; after: string } }
+  const applied = await updateWikiSchemaForContext({ proposalId: data.proposalId, proposalDiff: data.diff, expectedSchemaVersion: 1 }, {
+    ...context, requestId: 'schema-apply', toolUseId: 'schema-apply', toolUserConfirmed: true, userConfirmationAnswerer: 'user'
+  })
+  expect(applied.success).toBe(false)
+  expect(await getWikiSchemaForContext(context)).toMatchObject({ success: true, data: { schemaVersion: 1 } })
+})
+
+it('does not complete a domain-committed page under an incompatible external schema', async () => {
+  const { store, coordinator, context } = await fixture()
+  expect((await getWikiSchemaForContext(context)).success).toBe(true)
+  await expect(coordinator.savePage({ ...material, requestId: 'r', toolUseId: 't', callerId: 'review:local', lane: 'desktop', crashAt: 'after-domain-commit' })).rejects.toThrow('injected crash')
+  await store.write('SCHEMA.md', (await store.readText('SCHEMA.md')).replace(/topic/g, 'other'))
+  const result = await saveWikiPageForContext(material, context)
+  expect(result.success).toBe(false)
 })

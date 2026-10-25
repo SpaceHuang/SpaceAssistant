@@ -441,12 +441,28 @@ export async function searchWikiCatalog(store: WikiFileStore, input: WikiInput) 
     if (categoryId && page.categoryId !== categoryId) continue
     let body = ''
     let sourceRefs = page.sourceRefs ?? []
+    const revision = page.revision ?? 1
     try {
-      const stored = await store.readText(page.path)
-      const parsed = parseWikiPageMarker(stored)
-      if (!parsed.marker || parsed.marker.pageId === page.pageId) {
-        if (!page.sourceRefs?.length && parsed.marker) sourceRefs = parsed.marker.sourceRefs
-        body = parsed.body.replace(/^#\s+.+?\s*#*\s*$(?:\r?\n)?/m, '').replace(/^\r?\n/, '')
+      const snapshotPath = `.wiki-service/page-history/${page.pageId}/${revision}.md`
+      let stored: string | undefined
+      try { stored = await store.readText(snapshotPath) }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      if (stored === undefined) {
+        // Legacy catalogs may predate immutable snapshots. Fall back only when
+        // the page file itself proves it is exactly the catalog revision.
+        const current = await store.readText(page.path)
+        const currentParsed = parseWikiPageMarker(current)
+        if (currentParsed.marker?.pageId === page.pageId && currentParsed.marker.revision === revision &&
+          (!page.contentHash || hash(current) === page.contentHash)) stored = current
+      }
+      if (stored !== undefined && (!page.contentHash || hash(stored) === page.contentHash)) {
+        const parsed = parseWikiPageMarker(stored)
+        if (parsed.marker?.pageId === page.pageId && parsed.marker.revision === revision) {
+          if (!page.sourceRefs?.length) sourceRefs = parsed.marker.sourceRefs
+          body = parsed.body.replace(/^#\s+.+?\s*#*\s*$(?:\r?\n)?/m, '').replace(/^\r?\n/, '')
+        }
       }
     } catch { /* catalog metadata remains searchable when a page disappears before reconciliation */ }
     const titleText = (page.title ?? '').normalize('NFKC').toLocaleLowerCase()

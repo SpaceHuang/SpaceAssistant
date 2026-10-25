@@ -22,7 +22,7 @@ export interface WikiDomainCoordinator {
   movePage(input: WikiSavePageInput & { pageId: string; expectedRevision: number; parentPageId: string | null }): Promise<WikiSavePageResult>
 }
 
-export interface PendingWikiOperationTarget { targetPath: string; newHash: string; oldHash: string | null; pageId: string; revision: number }
+export interface PendingWikiOperationTarget { targetPath: string; newHash: string; oldHash: string | null; pageId: string; revision: number; status: 'prepared' | 'domain_committed' }
 
 export interface WikiMoveRequestIdentity { requestId: string; toolUseId: string; callerId: string; lane: string; pageId: string; expectedRevision: number; parentPageId: string | null }
 
@@ -58,7 +58,7 @@ export async function listPendingWikiOperationTargets(store: WikiFileStore): Pro
       !/^wiki\/.+\.md$/i.test(journal.targetPath) || !/^[0-9a-f]{64}$/i.test(journal.newHash) ||
       !(journal.oldHash === null || /^[0-9a-f]{64}$/i.test(journal.oldHash)) || journal.result?.operationId !== operationId ||
       typeof journal.result.pageId !== 'string' || !Number.isSafeInteger(journal.result.revision) || journal.result.revision < 1) continue
-    targets.push({ targetPath: journal.targetPath, newHash: journal.newHash, oldHash: journal.oldHash, pageId: journal.result.pageId, revision: journal.result.revision })
+    targets.push({ targetPath: journal.targetPath, newHash: journal.newHash, oldHash: journal.oldHash, pageId: journal.result.pageId, revision: journal.result.revision, status: journal.status as 'prepared' | 'domain_committed' })
   }
   return targets
 }
