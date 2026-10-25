@@ -198,13 +198,19 @@ describe('SQLite projection build task composition', () => {
       })
       const replaySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
       const shadowReplaySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
+      const fullHistoryReadSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readSync')
 
-      const actual = await host.storage.execution.loadAcceptedMessagesAsync({ sessionId: session.id, turnId: 'prepared-accepted-turn' })
-      expect(actual).toMatchObject([{ id: user.message.id, content: 'accepted canonical body' }])
-      expect(replaySpy).not.toHaveBeenCalled()
-      expect(shadowReplaySpy).not.toHaveBeenCalled()
-      replaySpy.mockRestore()
-      shadowReplaySpy.mockRestore()
+      try {
+        const actual = await host.storage.execution.loadAcceptedMessagesAsync({ sessionId: session.id, turnId: 'prepared-accepted-turn' })
+        expect(actual).toMatchObject([{ id: user.message.id, content: 'accepted canonical body' }])
+        expect(fullHistoryReadSpy).not.toHaveBeenCalled()
+        expect(replaySpy).not.toHaveBeenCalled()
+        expect(shadowReplaySpy).not.toHaveBeenCalled()
+      } finally {
+        fullHistoryReadSpy.mockRestore()
+        replaySpy.mockRestore()
+        shadowReplaySpy.mockRestore()
+      }
     } finally { temp.cleanup() }
   })
 

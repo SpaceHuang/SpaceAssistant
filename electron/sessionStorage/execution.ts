@@ -1,4 +1,5 @@
 import type { AppDatabase } from '../database/sqliteStore'
+import { Buffer } from 'node:buffer'
 import type { PersistedTurn } from '../database/operations'
 import { enqueueQueuedUserMessage, getNextQueuedMessage, getPersistedTurn, getTurnByRequestId, hasActiveTurn, listPersistedTurns, setPersistedTurnExecutionConfig, failConfiguringTurn } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
@@ -21,7 +22,7 @@ import type { PreparedIdentity, ContinuationRecordSnapshot, SessionExecutionStor
 import type { SessionHistoryPort } from './public/ports'
 import type { SessionQueries } from './public/ports'
 import type { PreparedChatBodyView } from './public/model'
-import type { HistoryPort } from '../../packages/agent-sdk/src/history'
+import type { HistoryEvent, HistoryPort } from '../../packages/agent-sdk/src/history'
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
 import { createTurnCoordinatorStorage } from './coordinator'
@@ -432,9 +433,15 @@ function getPersistedTurnInSession(db: AppDatabase, sessionId: string, turnId: s
 function validateAcceptedMessagesInTransaction(db: AppDatabase, turn: PersistedTurn, queries: SessionQueries | undefined,
   messages: Message[], usePrepared: boolean): Message[] {
   const conn = getDbConnection(db)
-  const history = new SqliteAgentHistory(conn, 1, Date.now, turn.sessionId)
-  let events = history.readSync(turn.turnId).events
-  if (events.length === 0 && turn.requestId !== turn.turnId) events = history.readSync(turn.requestId).events
+  let events: readonly HistoryEvent[]
+  if (usePrepared) {
+    events = readAcceptedInputEventsForPreparedContext(db, turn)
+  } else {
+    const history = new SqliteAgentHistory(conn, 1, Date.now, turn.sessionId)
+    let fallbackEvents = history.readSync(turn.turnId).events
+    if (fallbackEvents.length === 0 && turn.requestId !== turn.turnId) fallbackEvents = history.readSync(turn.requestId).events
+    events = fallbackEvents
+  }
   const acceptedInputs = events.filter((event) => event.kind === 'session-input-committed')
   if (acceptedInputs.length > 0 && (acceptedInputs.length !== 1 || events[0] !== acceptedInputs[0])) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
   if (acceptedInputs.length === 0 && (turn.acceptedInputHistoryVersion ?? 0) > 0) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
@@ -445,7 +452,9 @@ function validateAcceptedMessagesInTransaction(db: AppDatabase, turn: PersistedT
     const userMessage = messages.find((message) => message.id === turn.userMessageId)
     if (acceptedInput.turnId !== turn.turnId || !userMessage || payload.sessionId !== turn.sessionId || payload.messageId !== userMessage.id || payload.role !== 'user' ||
       typeof payload.inputFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(payload.inputFingerprint) ||
-      queueInputFingerprint({ text: userMessage.content, attachments: userMessage.attachments }) !== payload.inputFingerprint) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+      queueInputFingerprint({ text: userMessage.content, attachments: userMessage.attachments }) !== payload.inputFingerprint) {
+      throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    }
     acceptedInputForShadow = { messageId: userMessage.id, fingerprint: payload.inputFingerprint }
   }
   let acceptedMessages = messages
@@ -462,6 +471,53 @@ function validateAcceptedMessagesInTransaction(db: AppDatabase, turn: PersistedT
     }
   }
   return acceptedMessages
+}
+
+/**
+ * A prepared view already proves the complete History fold for its source fence. The handoff
+ * still verifies the small accepted-input receipt in SQLite, without replaying body-bearing
+ * invocation events on the main thread.
+ */
+function readAcceptedInputEventsForPreparedContext(db: AppDatabase, turn: PersistedTurn): readonly HistoryEvent[] {
+  const maxReceiptPayloadBytes = 4_096
+  const conn = getDbConnection(db)
+  const readStream = (invocationId: string): { eventCount: number; acceptedInputs: HistoryEvent[] } => {
+    const stream = conn.prepare('SELECT version, schema_version, session_id FROM agent_history_streams WHERE invocation_id=?')
+      .get(invocationId) as { version: number; schema_version: number; session_id: string | null } | undefined
+    const eventCountRow = conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE invocation_id=?')
+      .get(invocationId) as { count: number }
+    const eventCount = Number(eventCountRow.count)
+    if (!stream) {
+      if (eventCount !== 0) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+      return { eventCount: 0, acceptedInputs: [] }
+    }
+    if (stream.session_id !== turn.sessionId || stream.schema_version !== 1 || stream.version !== eventCount) {
+      throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    }
+    if (eventCount === 0) return { eventCount, acceptedInputs: [] }
+    const markerCountRow = conn.prepare(`SELECT COUNT(*) AS count FROM agent_history_events
+      WHERE invocation_id=? AND kind='session-input-committed'`).get(invocationId) as { count: number }
+    const markerCount = Number(markerCountRow.count)
+    if (markerCount === 0) return { eventCount, acceptedInputs: [] }
+    if (markerCount !== 1) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    const marker = conn.prepare(`SELECT sequence, event_id, idempotency_key, turn_id, schema_version, session_id, payload_json
+      FROM agent_history_events WHERE invocation_id=? AND kind='session-input-committed' LIMIT 1`)
+      .get(invocationId) as { sequence: number; event_id: string; idempotency_key: string; turn_id: string;
+        schema_version: number; session_id: string | null; payload_json: string } | undefined
+    if (!marker || marker.sequence !== 1 || marker.turn_id !== turn.turnId || marker.schema_version !== stream.schema_version ||
+      (marker.session_id !== null && marker.session_id !== turn.sessionId) || Buffer.byteLength(marker.payload_json, 'utf8') > maxReceiptPayloadBytes) {
+      throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    }
+    let payload: unknown
+    try { payload = JSON.parse(marker.payload_json) } catch { throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH') }
+    return { eventCount, acceptedInputs: [{ invocationId, sequence: marker.sequence, eventId: marker.event_id,
+      idempotencyKey: marker.idempotency_key, turnId: marker.turn_id, schemaVersion: marker.schema_version,
+      kind: 'session-input-committed', payload } as HistoryEvent] }
+  }
+
+  let result = readStream(turn.turnId)
+  if (result.eventCount === 0 && turn.requestId !== turn.turnId) result = readStream(turn.requestId)
+  return result.acceptedInputs
 }
 
 function selectAcceptedTurnMessages(db: AppDatabase, turn: PersistedTurn, queries?: SessionQueries): Message[] {
