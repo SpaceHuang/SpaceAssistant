@@ -304,7 +304,8 @@ describe('WeChatCommandRouter', () => {
     getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify({ ...session.metadata, source: 'wechat',
       wechatMeta: { userId: 'wx-user@test', lastContextToken: 'track-wake-context' } }), sessionId)
     const attribution = await attributeAndPersistRemoteMessage(db, { channel: 'wechat', identityKey: 'wx-user@test', ownerId: 'wx-user@test',
-      authorizationEpoch: 1, platformMessageId: 'track-wake-platform', text: 'persisted track task', now: 1, originSessionId: sessionId }, { classify: vi.fn() })
+      authorizationEpoch: 1, platformMessageId: 'track-wake-platform', text: 'persisted track task', now: 1, originSessionId: sessionId }, { classify: vi.fn() },
+      { sessionQueries: createSqliteSessionStorage(db).queries })
     if (attribution.kind !== 'attributed') throw new Error('expected a Track for zero candidates')
     const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
       channelMessageId: 'track-wake-platform', content: 'persisted track task', contextToken: 'track-wake-context',

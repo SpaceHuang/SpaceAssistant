@@ -270,7 +270,8 @@ describe('Feishu prepared wake to real provider integration', () => {
     appendMessageOperation(db, { id: 'feishu-track-prior-assistant', sessionId: session.id, role: 'assistant', content: 'Track A prior assistant sentinel', timestamp: 2, status: 'sent' })
     appendMessageOperation(db, { id: 'feishu-track-other-user', sessionId: session.id, role: 'user', content: 'Track B secret sentinel', timestamp: 3, status: 'sent' })
     const attribution = await attributeAndPersistRemoteMessage(db, { channel: 'feishu', identityKey: 'feishu-track-chat', ownerId: 'feishu-track-owner',
-      authorizationEpoch: 1, platformMessageId: 'feishu-track-wake-platform', text: 'Track A accepted input sentinel', now: 4, originSessionId: session.id }, { classify: vi.fn() })
+      authorizationEpoch: 1, platformMessageId: 'feishu-track-wake-platform', text: 'Track A accepted input sentinel', now: 4, originSessionId: session.id }, { classify: vi.fn() },
+      { sessionQueries: createSqliteSessionStorage(db).queries })
     if (attribution.kind !== 'attributed') throw new Error('expected an attributed Track')
     const scope = buildImQueueScope('feishu', session.id) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
     const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope: scope,
@@ -285,9 +286,9 @@ describe('Feishu prepared wake to real provider integration', () => {
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir }) as never
     })
     recordTrackModelMessage(db, { trackId: attribution.context.trackId, eventId: 'feishu-track-prior-user-event', idempotencyKey: 'feishu-track-prior-user-event',
-      sessionId: session.id, messageId: 'feishu-track-prior-user', invocationId: 'prior-track-turn', occurredAt: 1, parentEventId: attribution.context.attributionEventId })
+      sessionId: session.id, messageId: 'feishu-track-prior-user', invocationId: 'prior-track-turn', occurredAt: 1, parentEventId: attribution.context.attributionEventId }, createSqliteSessionStorage(db).queries)
     recordTrackModelMessage(db, { trackId: attribution.context.trackId, eventId: 'feishu-track-prior-assistant-event', idempotencyKey: 'feishu-track-prior-assistant-event',
-      sessionId: session.id, messageId: 'feishu-track-prior-assistant', invocationId: 'prior-track-turn', occurredAt: 2, parentEventId: attribution.context.attributionEventId })
+      sessionId: session.id, messageId: 'feishu-track-prior-assistant', invocationId: 'prior-track-turn', occurredAt: 2, parentEventId: attribution.context.attributionEventId }, createSqliteSessionStorage(db).queries)
     const userMessageId = inbox.messageId
     const turnRuntimeBeforeRestart = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 10, id: () => 'feishu-track-prepared-turn' } })
     const tempDirPath = workDir

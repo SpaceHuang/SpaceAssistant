@@ -1043,7 +1043,7 @@ app.whenReady().then(async () => {
     try {
       if (!getSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt)) {
         const backfillWorkDirs = [workDirState, ...workDirManager!.listProfiles().map((profile) => profile.path)]
-        const backfill = backfillUsageStats(db, Array.from(new Set(backfillWorkDirs.filter((dir) => dir))))
+        const backfill = backfillUsageStats(db, Array.from(new Set(backfillWorkDirs.filter((dir) => dir))), sessionStorage.queries)
         setSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt, String(Date.now()))
         logAgentEvent('info', 'usageStats.backfill.completed', {
           scannedSessionDirs: backfill.scannedSessionDirs,

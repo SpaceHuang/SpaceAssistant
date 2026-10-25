@@ -1,10 +1,24 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
+import type { AppDatabase } from '../database'
 import { createRemoteTrack, mapRemoteTrackMessage } from '../database/remoteTrackStore'
 import { getDbConnection } from '../database'
 import { createSession, deleteSession } from '../database/operations'
-import { attributeAndPersistRemoteMessage, listRemoteTrackAttributionCandidates, observeRemoteMessageAttribution, readRemoteTrackContextForInbound } from './remoteTrackAttributionService'
+import { attributeAndPersistRemoteMessage as persistRemoteAttribution, listRemoteTrackAttributionCandidates as listRemoteCandidates,
+  observeRemoteMessageAttribution as observeRemoteAttribution, readRemoteTrackContextForInbound } from './remoteTrackAttributionService'
 import type { IntentAttributor } from './trackAttribution'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+
+function listRemoteTrackAttributionCandidates(db: AppDatabase, scope: Parameters<typeof listRemoteCandidates>[1]) {
+  return listRemoteCandidates(db, scope, createSqliteSessionStorage(db).queries)
+}
+function observeRemoteMessageAttribution(db: AppDatabase, scope: Parameters<typeof observeRemoteAttribution>[1], classifier: IntentAttributor) {
+  return observeRemoteAttribution(db, scope, classifier, createSqliteSessionStorage(db).queries)
+}
+function attributeAndPersistRemoteMessage(db: AppDatabase, scope: Parameters<typeof persistRemoteAttribution>[1], classifier: IntentAttributor,
+  options: Omit<Parameters<typeof persistRemoteAttribution>[3], 'sessionQueries'> = {}) {
+  return persistRemoteAttribution(db, scope, classifier, { ...options, sessionQueries: createSqliteSessionStorage(db).queries })
+}
 
 describe('remote Track attribution persistence boundary', () => {
   it('rejects attribution candidates and stale references after the origin session is deleted', async () => {

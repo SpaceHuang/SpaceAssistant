@@ -1,6 +1,7 @@
 import type { AppDatabase } from '../database'
+import { getDbConnection } from '../database'
 import { prepareChatBodiesForSessions, readChatMessageAfterPreparation, readChatMessagesAfterPreparation } from '../sessionStorage/public/readMessages'
-import { getConfigValue, getDbConnection } from '../database'
+import { getConfigValue } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation, type AgentInvocationMaterials } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
@@ -132,14 +133,13 @@ export async function runImRemoteAgent(args: {
     const track = args.remoteContext.trackContext
     if (!track) return
     if (!turnId) throw new Error('TRACK_TERMINAL_TURN_ID_REQUIRED')
-    const turn = getDbConnection(args.db).prepare('SELECT session_id,assistant_message_id FROM turns WHERE turn_id=? AND track_id=?')
-      .get(turnId, track.trackId) as { session_id: string; assistant_message_id: string } | undefined
-    if (!turn) throw new Error('TRACK_TERMINAL_TURN_BINDING_MISSING')
-    const assistant = storage.queries.readMessageSkeleton({ sessionId: turn.session_id, messageId: turn.assistant_message_id })
+    const turn = storage.queries.readTurnById({ turnId })
+    if (!turn || turn.trackId !== track.trackId) throw new Error('TRACK_TERMINAL_TURN_BINDING_MISSING')
+    const assistant = storage.queries.readMessageSkeleton({ sessionId: turn.sessionId, messageId: turn.assistantMessageId })
     if (assistant?.role === 'assistant') {
       recordTrackModelMessage(args.db, { trackId: track.trackId, eventId: `track-model:${turnId}:${assistant.id}`,
-        idempotencyKey: `track-model:${turnId}:${assistant.id}`, sessionId: turn.session_id, messageId: assistant.id,
-        invocationId: turnId, occurredAt: Date.now(), parentEventId: track.attributionEventId })
+        idempotencyKey: `track-model:${turnId}:${assistant.id}`, sessionId: turn.sessionId, messageId: assistant.id,
+        invocationId: turnId, occurredAt: Date.now(), parentEventId: track.attributionEventId }, storage.queries)
     }
     requestRemoteTrackTerminal(args.db, {
       trackId: track.trackId,
@@ -253,7 +253,7 @@ export async function runImRemoteAgent(args: {
         trackId: track.trackId, sessionId: args.sessionId, acceptedUserMessageId, currentInvocationId,
         channel: track.channel, identityKey: track.identityKey, ownerId: track.ownerId, authorizationEpoch: track.authorizationEpoch,
         rootMessageId: track.rootMessageId, attributionEventId: track.attributionEventId
-      })
+      }, storage.queries)
       if (persistedView.completeness !== 'complete' || persistedView.viewVersion !== view.viewVersion || persistedView.contentHash !== view.contentHash ||
         JSON.stringify(persistedView.includedMessageIds) !== JSON.stringify(view.includedMessageIds) ||
         JSON.stringify(persistedView.includedEventIds) !== JSON.stringify(view.includedEventIds) ||

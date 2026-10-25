@@ -7,11 +7,16 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { createSession } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import type { AppDatabase } from '../database'
-import { backfillUsageStats } from './usageStatsBackfill'
+import { backfillUsageStats as runBackfillUsageStats } from './usageStatsBackfill'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { getUsageStepFactsForTurn, getUsageTurnFact, upsertUsageTurnFact } from '../database/operations'
 
 const T_FIRST = new Date(2026, 8, 13, 9, 30).getTime()
 const T_THIRD = new Date(2026, 8, 13, 9, 31).getTime()
+
+function backfillUsageStats(db: AppDatabase, workDirs: string[]) {
+  return runBackfillUsageStats(db, workDirs, createSqliteSessionStorage(db).queries)
+}
 
 function jsonlLine(event: Record<string, unknown>): string {
   return JSON.stringify(event)

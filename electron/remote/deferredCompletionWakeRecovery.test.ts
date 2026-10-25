@@ -10,6 +10,7 @@ import { appendImInboxMessageWithWakeEvent } from '../database/imInbox'
 import { decideDeferredCompletionWakeRecovery, deliverInterruptedDeferredCompletionNotice } from './deferredCompletionWakeRecovery'
 import { readDeferredCompletionWake } from './deferredCompletionWake'
 import { buildImQueueScope } from '../../src/shared/queueScope'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 describe('deferred completion wake recovery', () => {
   it('reconstructs a deferred continuation Track context from the todo and its original attributed inbox message', async () => {
@@ -18,7 +19,7 @@ describe('deferred completion wake recovery', () => {
       const session = createSession(db, { name: 'deferred-track-completion' })
       const attribution = await attributeAndPersistRemoteMessage(db, { channel: 'wechat', identityKey: 'alice', ownerId: 'alice',
         authorizationEpoch: 1, platformMessageId: 'deferred-track-source', text: '执行并在完成后总结', originSessionId: session.id, now: 1 },
-      { classify: vi.fn() })
+      { classify: vi.fn() }, { sessionQueries: createSqliteSessionStorage(db).queries })
       if (attribution.kind !== 'attributed') throw new Error('expected Track attribution')
       const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'wechat',
         queueScope: buildImQueueScope('wechat', session.id), channelMessageId: 'deferred-track-source', content: '执行并在完成后总结',

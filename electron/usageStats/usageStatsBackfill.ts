@@ -2,8 +2,8 @@ import fs from 'fs'
 import path from 'path'
 import { computeTotalRequestInputTokens } from '../../src/shared/contextUsageEstimate'
 import type { AppDatabase } from '../database'
-import { getUsageTurnFact, insertUsageStepFact, upsertUsageTurnFact } from '../database/operations'
-import { getDbConnection } from '../database/sqliteStore'
+import { countUsageStepFactsForTurn, getUsageTurnFact, insertUsageStepFact, upsertUsageTurnFact } from '../database/operations'
+import type { SessionQueries } from '../sessionStorage/public/ports'
 import { localDayString } from './usageStatsRecorder'
 
 export type UsageBackfillResult = {
@@ -21,21 +21,15 @@ type TurnAccumulator = {
   hasCleanTurnEnd: boolean
 }
 
-const TURN_EXEC_CONFIG_SQL =
-  'SELECT execution_config_json FROM turns WHERE session_id = ? AND turn_id = ?'
-const SESSION_MODEL_SQL = 'SELECT model FROM sessions WHERE id = ?'
-
 function readExecConfig(
-  conn: ReturnType<typeof getDbConnection>,
+  sessionQueries: Pick<SessionQueries, 'readTurnById'>,
   sessionId: string,
   turnId: string
 ): { model?: string; llmServiceId?: string } | undefined {
   try {
-    const row = conn.prepare(TURN_EXEC_CONFIG_SQL).get(sessionId, turnId) as
-      | { execution_config_json: string | null }
-      | undefined
-    if (!row?.execution_config_json) return undefined
-    const parsed = JSON.parse(row.execution_config_json) as { model?: unknown; llmServiceId?: unknown }
+    const turn = sessionQueries.readTurnById({ turnId })
+    if (!turn || turn.sessionId !== sessionId || !turn.executionConfig) return undefined
+    const parsed = turn.executionConfig as { model?: unknown; llmServiceId?: unknown }
     return {
       ...(typeof parsed.model === 'string' ? { model: parsed.model } : {}),
       ...(typeof parsed.llmServiceId === 'string' ? { llmServiceId: parsed.llmServiceId } : {})
@@ -45,10 +39,9 @@ function readExecConfig(
   }
 }
 
-function readSessionModelFallback(conn: ReturnType<typeof getDbConnection>, sessionId: string): string | undefined {
+function readSessionModelFallback(sessionQueries: Pick<SessionQueries, 'readSession'>, sessionId: string): string | undefined {
   try {
-    const row = conn.prepare(SESSION_MODEL_SQL).get(sessionId) as { model: string } | undefined
-    return row?.model
+    return sessionQueries.readSession(sessionId)?.model
   } catch {
     return undefined
   }
@@ -90,8 +83,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * 幂等：step 行按 UNIQUE 键覆盖；turn 行**只在不存在时写入** —— 实时统计行
  * （内存变量判定，能区分未执行 / 执行失败）优先于台账重算。
  */
-export function backfillUsageStats(db: AppDatabase, workDirs: string[]): UsageBackfillResult {
-  const conn = getDbConnection(db)
+export function backfillUsageStats(db: AppDatabase, workDirs: string[], sessionQueries: Pick<SessionQueries, 'readTurnById' | 'readSession'>): UsageBackfillResult {
   const result: UsageBackfillResult = {
     scannedSessionDirs: 0,
     stepRowsWritten: 0,
@@ -104,11 +96,11 @@ export function backfillUsageStats(db: AppDatabase, workDirs: string[]): UsageBa
   const resolveModelFields = (sessionId: string, turnId: string): { model?: string; llmServiceId?: string } => {
     const cacheKey = `${sessionId}:${turnId}`
     if (!execConfigCache.has(cacheKey)) {
-      execConfigCache.set(cacheKey, readExecConfig(conn, sessionId, turnId))
+      execConfigCache.set(cacheKey, readExecConfig(sessionQueries, sessionId, turnId))
     }
     const frozen = execConfigCache.get(cacheKey)
     if (frozen?.model || frozen?.llmServiceId) return frozen
-    return { ...(frozen ?? {}), ...(frozen?.model ? {} : { model: readSessionModelFallback(conn, sessionId) }) }
+    return { ...(frozen ?? {}), ...(frozen?.model ? {} : { model: readSessionModelFallback(sessionQueries, sessionId) }) }
   }
 
   for (const workDir of workDirs) {
@@ -274,9 +266,5 @@ export function backfillUsageStats(db: AppDatabase, workDirs: string[]): UsageBa
 }
 
 function countStepFacts(db: AppDatabase, sessionId: string, turnId: string): number {
-  const conn = getDbConnection(db)
-  const row = conn
-    .prepare('SELECT COUNT(*) AS c FROM usage_step_facts WHERE session_id = ? AND turn_id = ?')
-    .get(sessionId, turnId) as { c: number }
-  return row.c
+  return countUsageStepFactsForTurn(db, sessionId, turnId)
 }

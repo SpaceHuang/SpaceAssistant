@@ -6,6 +6,7 @@ import {
   getContextHistorySummaryBaseline,
   getMessageSequence,
   getTurnByRequestId,
+  getPersistedTurn,
   listTurnErrorsByAssistantMessageIds,
   getMessages,
   getMessage,
@@ -529,6 +530,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
     },
     readMessageSequence: ({ sessionId, messageId }) => getMessageSequence(db, sessionId, messageId),
     readTurnByRequest: ({ sessionId, requestId }) => getTurnByRequestId(db, sessionId, requestId),
+    readTurnById: ({ turnId }) => getPersistedTurn(db, turnId),
     listTurnErrorsByAssistantMessageIds: (assistantMessageIds) => listTurnErrorsByAssistantMessageIds(db, assistantMessageIds)
   }
   return Object.freeze(queries)

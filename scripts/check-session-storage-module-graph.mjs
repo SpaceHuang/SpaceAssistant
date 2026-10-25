@@ -42,6 +42,9 @@ export function validateSessionStorageTransitions(entries) {
 
 function categoryFor(filePath) {
   const normalized = filePath.replaceAll('\\', '/')
+  if (normalized.startsWith('electron/database/')) return 'database-adapter'
+  if (normalized === 'electron/runtime/sessionStorageCleanupAuthorization.ts') return 'session-cleanup-host'
+  if (normalized === 'electron/runtime/agentContinuation.ts') return 'session-history-host'
   if (/^electron\//.test(normalized) && !normalized.startsWith('electron/sessionStorage/')) return 'external-electron'
   if (normalized === 'electron/sessionStorage/sqliteRuntimeBindings.ts') return 'sqlite-host-bindings'
   if (normalized === 'electron/sessionStorage/maintenance.ts') return 'maintenance'
@@ -106,21 +109,78 @@ function nonStaticModuleLoads(sourceFile) {
   return loads
 }
 
+function referencesSessionStorageSql(sourceFile) {
+  const tableAccess = /\b(?:FROM|JOIN|INTO|UPDATE|TABLE|DELETE\s+FROM)\s+(?:main\.)?(?:sessions|messages|turns|agent_history_[a-z_]+|session_[a-z_]+)\b/iu
+  const constants = new Map()
+  const evaluateString = (node) => {
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
+    if (ts.isIdentifier(node)) return constants.get(node.text)
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = evaluateString(node.left)
+      const right = evaluateString(node.right)
+      return left !== undefined && right !== undefined ? left + right : undefined
+    }
+    if (ts.isTemplateExpression(node)) {
+      let value = node.head.text
+      for (const span of node.templateSpans) {
+        const expression = evaluateString(span.expression)
+        if (expression === undefined) return undefined
+        value += expression + span.literal.text
+      }
+      return value
+    }
+    return undefined
+  }
+  const collectConstants = (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const value = evaluateString(node.initializer)
+      if (value !== undefined) constants.set(node.name.text, value)
+    }
+    ts.forEachChild(node, collectConstants)
+  }
+  // Resolve local literal constants before evaluating SQL expressions so common
+  // aliasing, concatenation, and template interpolation cannot hide table names.
+  for (let pass = 0; pass < 3; pass++) collectConstants(sourceFile)
+  let found = false
+  const visit = (node) => {
+    const value = evaluateString(node)
+    if (value !== undefined && tableAccess.test(value)) found = true
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return found
+}
+
 /** Resolve imports using the repository TypeScript configuration and enforce categorized module rules. */
 export function findSessionStorageModuleViolations(filePath, source) {
   const category = categoryFor(filePath)
   if (!category) return []
   const sourceFile = ts.createSourceFile(path.resolve(root, filePath), source, ts.ScriptTarget.Latest, true)
   const normalizedFile = filePath.replaceAll('\\', '/')
+  const sessionStorageSql = referencesSessionStorageSql(sourceFile)
   const rawSessionMessageReads = new Set(['getMessage', 'getMessages', 'getMessageSkeletons', 'getChatMessagePage',
     'getMessagesPageWithSequence', 'getSearchCorpusPage', 'searchMessages', 'getApiContextBaseline', 'getTurnContext', 'resolveRetryContext'])
+  const rawSessionMessageWrites = new Set(['appendMessage', 'updateMessageContent', 'deleteMessage', 'deleteMessages',
+    'updateMessageStatus', 'updateMessageMetadata'])
   const allowed = (edge) => {
-    if (category === 'external-electron' && normalizedFile.startsWith('electron/ipc/')) {
-      if (edge.resolved === 'electron/database/sqliteStore' || edge.resolved === 'electron/runtime/sqliteAgentHistory' ||
-        edge.resolved === 'electron/database/operations') return false
-      if (edge.resolved === 'electron/database' && (edge.symbols.includes('*') || edge.symbols.includes('getDbConnection'))) return false
+    if (category === 'database-adapter') return true
+    if (category === 'session-cleanup-host') return edge.resolved.startsWith('electron/database/') || edge.resolved === 'electron/database' ||
+      edge.resolved.startsWith('electron/sessionStorage/') || edge.resolved.startsWith('electron/runtime/') || edge.resolved.startsWith('src/shared/') ||
+      edge.resolved.startsWith('node:')
+    if (category === 'session-history-host') return edge.resolved.startsWith('electron/database/') || edge.resolved === 'electron/database' ||
+      edge.resolved.startsWith('electron/runtime/') || edge.resolved === 'electron/turnRuntime' || edge.resolved.startsWith('electron/sessionStorage/') || edge.resolved.startsWith('src/shared/') ||
+      edge.resolved.startsWith('packages/agent-sdk/') || edge.resolved.startsWith('node:')
+    if (category === 'external-electron') {
+      const storageImplementation = normalizedFile.startsWith('electron/storage/') && !normalizedFile.includes('__gate_probe__')
+      const databaseConnectionEdge = (edge.resolved === 'electron/database/sqliteStore' || edge.resolved === 'electron/database') &&
+        (edge.symbols.includes('*') || edge.symbols.includes('getDbConnection'))
+      if (!storageImplementation && databaseConnectionEdge && sessionStorageSql && normalizedFile !== 'electron/main.ts') return false
+      if (edge.resolved === 'electron/runtime/sqliteAgentHistory' && !normalizedFile.endsWith('/agentContinuation.ts')) return false
+      if (edge.resolved === 'electron/database' && edge.symbols.includes('*')) return false
+      if (!storageImplementation && edge.resolved === 'electron/database/operations' &&
+        edge.symbols.some((symbol) => rawSessionMessageWrites.has(symbol))) return false
     }
-    if (category === 'external-electron' && edge.resolved === 'electron/database/operations' &&
+    if (category === 'external-electron' && !normalizedFile.startsWith('electron/storage/') && edge.resolved === 'electron/database/operations' &&
       edge.symbols.some((symbol) => rawSessionMessageReads.has(symbol))) return false
     if (category === 'external-electron' && edge.resolved === 'electron/sessionStorage/sqliteRuntimeBindings') {
       const key = `${normalizedFile}|${edge.resolved}`
@@ -357,13 +417,23 @@ function runIllegalEdgeProbes() {
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['external implementation re-export import', 'electron/ipc/__gate_probe__.ts', `import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
-      ['IPC raw database connection', 'electron/ipc/__gate_probe__.ts', `import { getDbConnection } from '../database/sqliteStore'`,
+      ['IPC raw database connection to session tables', 'electron/ipc/__gate_probe__.ts', `import { getDbConnection } from '../database/sqliteStore'; export const read = (db) => getDbConnection(db).prepare('SELECT id FROM messages').all()`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['IPC History implementation', 'electron/ipc/__gate_probe__.ts', `import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['IPC database namespace barrel', 'electron/ipc/__gate_probe__.ts', `import * as database from '../database'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['IPC low-level session write', 'electron/ipc/__gate_probe__.ts', `import { appendMessage } from '../database/operations'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['remote raw database connection to session tables', 'electron/remote/__gate_probe__.ts', `import { getDbConnection } from '../database/sqliteStore'; export const read = (db) => getDbConnection(db).prepare('SELECT id FROM messages').all()`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['aliased raw connection with composed session SQL', 'electron/remote/__gate_probe__.ts', `import { getDbConnection as openConnection } from '../database/sqliteStore'; const table = 'messages'; const sql = \`SELECT id FROM \${table}\`; export const read = (db) => openConnection(db).prepare(sql).all()`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['remote History implementation', 'electron/remote/__gate_probe__.ts', `import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['remote database namespace barrel', 'electron/remote/__gate_probe__.ts', `import * as database from '../database'; export const read = (db) => database.getDbConnection(db).prepare('SELECT id FROM sessions').all()`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['remote low-level session write', 'electron/remote/__gate_probe__.ts', `import { appendMessage } from '../database/operations'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['external SQLite composition re-export import', 'electron/ipc/__gate_probe__.ts', `import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],

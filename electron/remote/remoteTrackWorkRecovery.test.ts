@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canResumePreparedRemoteTurn, decideRemoteTrackWorkRecovery, inspectRemoteTrackWorkRecovery, isRemoteTrackWorkSettled, settleRemoteTrackWorkFromTurn, type RemoteTrackWorkRecoveryFacts } from './remoteTrackWorkRecovery'
+import { canResumePreparedRemoteTurn, decideRemoteTrackWorkRecovery, inspectRemoteTrackWorkRecovery as inspectRemoteTrackWorkRecoveryWithStorage, isRemoteTrackWorkSettled, settleRemoteTrackWorkFromTurn, type RemoteTrackWorkRecoveryFacts } from './remoteTrackWorkRecovery'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { appendRemoteTrackEvent, bindRemoteTrackToTurn, claimRemoteTrackWork, createRemoteTrack, recordRemoteTrackChild } from '../database/remoteTrackStore'
 import { getDbConnection } from '../database/sqliteStore'
@@ -7,7 +7,19 @@ import { appendMessage, createPersistedTurn, createSession } from '../database/o
 import { acceptTurnContext } from '../database/acceptedTurnStorage'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { createClarification } from '../database/clarificationStore'
-import { recordTrackModelMessage, buildTrackModelInputViewRef } from './trackModelInputViewStore'
+import { recordTrackModelMessage as persistTrackModelMessage, buildTrackModelInputViewRef as buildTrackModelInputView } from './trackModelInputViewStore'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import type { AppDatabase } from '../database'
+
+function inspectRemoteTrackWorkRecovery(db: AppDatabase, workId: string) {
+  return inspectRemoteTrackWorkRecoveryWithStorage(db, workId, createSqliteSessionStorage(db).queries)
+}
+function recordTrackModelMessage(db: AppDatabase, input: Parameters<typeof persistTrackModelMessage>[1]) {
+  return persistTrackModelMessage(db, input, createSqliteSessionStorage(db).queries)
+}
+function buildTrackModelInputViewRef(db: AppDatabase, input: Parameters<typeof buildTrackModelInputView>[1]) {
+  return buildTrackModelInputView(db, input, createSqliteSessionStorage(db).queries)
+}
 
 const base: RemoteTrackWorkRecoveryFacts = {
   workState: 'claimed', hasStableMapping: true, frozenConfigAvailable: true, modelInputViewAvailable: true,

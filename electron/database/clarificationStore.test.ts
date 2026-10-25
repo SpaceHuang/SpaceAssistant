@@ -13,6 +13,7 @@ import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeSto
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { readDeferredCompletionWake } from '../remote/deferredCompletionWake'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 function createCandidate(db: ReturnType<typeof createMemoryAppDb>, input: { id: string; state?: 'open' | 'completed'; epoch?: number } = { id: 'candidate-1' }) {
   const state = input.state ?? 'open'
@@ -228,7 +229,7 @@ describe('durable Track clarification protocol', () => {
       expect(result).toEqual({ kind: 'resolved', trackId: 'successor-track', workId: 'work-1', parentTrackId: 'completed-parent' })
       expect(getDbConnection(db).prepare("SELECT state,parent_track_id,origin_session_id FROM remote_tracks WHERE track_id='successor-track'").get())
         .toEqual({ state: 'open', parent_track_id: 'completed-parent', origin_session_id: originSessionId })
-      expect(listRemoteTrackAttributionCandidates(db, { channel: 'wechat', identityKey: 'alice', ownerId: 'owner-a', authorizationEpoch: 1 }))
+      expect(listRemoteTrackAttributionCandidates(db, { channel: 'wechat', identityKey: 'alice', ownerId: 'owner-a', authorizationEpoch: 1 }, createSqliteSessionStorage(db).queries))
         .toContainEqual(expect.objectContaining({ trackId: 'successor-track' }))
       appendRemoteTrackEvent(db, { eventId: 'successor-outbound-event', trackId: 'successor-track', eventKind: 'track.outbound.message',
         idempotencyKey: 'successor-outbound', messageId: 'successor-platform-message', occurredAt: 151 })

@@ -274,7 +274,7 @@ export class WeChatCommandRouter {
       let queued = listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 }).find((item) => item.messageId === messageId)
       const pendingMessageContext = getImInboxMessageContext(this.deps.db, messageId)
       const workRecovery = pendingMessageContext?.clarificationWorkId
-        ? inspectRemoteTrackWorkRecovery(this.deps.db, pendingMessageContext.clarificationWorkId) : null
+        ? inspectRemoteTrackWorkRecovery(this.deps.db, pendingMessageContext.clarificationWorkId, this.deps.sessionStorage!.queries) : null
       const acceptedSnapshot = readAcceptedTurn(this.deps.db, session.id, requestId)
       const canResumePrepared = priorTurn !== undefined && (pendingMessageContext?.clarificationWorkId
         ? workRecovery?.decision.kind === 'resume-prepared-turn'
@@ -422,9 +422,9 @@ export class WeChatCommandRouter {
         eventId: remoteTrackTurnBindingEventId(track.trackId, prepared.turnId), occurredAt: Date.now() })
       recordTrackModelMessage(this.deps.db, { trackId: track.trackId, eventId: `track-model:${prepared.turnId}:${input.userMessageId}`,
         idempotencyKey: `track-model:${prepared.turnId}:${input.userMessageId}`, sessionId: input.sessionId, messageId: input.userMessageId,
-        invocationId: prepared.turnId, occurredAt: Date.now(), parentEventId: track.attributionEventId })
+        invocationId: prepared.turnId, occurredAt: Date.now(), parentEventId: track.attributionEventId }, this.deps.sessionStorage!.queries)
       trackModelInputView = buildTrackModelInputViewRef(this.deps.db, { ...track, sessionId: input.sessionId,
-        acceptedUserMessageId: input.userMessageId, currentInvocationId: prepared.turnId })
+        acceptedUserMessageId: input.userMessageId, currentInvocationId: prepared.turnId }, this.deps.sessionStorage!.queries)
       if (trackModelInputView.completeness !== 'complete') throw new Error('WECHAT_TRACK_MODEL_INPUT_VIEW_UNAVAILABLE')
     }
     if (input.clarificationWork) bindRemoteTrackWorkExecution(this.deps.db, { workId: input.clarificationWork.workId,
@@ -811,7 +811,7 @@ export class WeChatCommandRouter {
           authorizationEpoch: readDurableRemoteTrackEpoch(this.deps.db, 'wechat'), platformMessageId: msg.messageId,
           ...(msg.quotedMessageId ? { replyToPlatformMessageId: msg.quotedMessageId } : {}), text: content
         }, createModelIntentAttributor({ getApiKey: this.deps.getApiKey, getBaseUrl: this.deps.getBaseUrl, getModel: this.deps.getModel,
-          estimateCostUsd: createRemoteTrackClassifierCostEstimator(this.deps.db, { baseUrl: this.deps.getBaseUrl(), model: this.deps.getModel() }) }))
+          estimateCostUsd: createRemoteTrackClassifierCostEstimator(this.deps.db, { baseUrl: this.deps.getBaseUrl(), model: this.deps.getModel() }) }), this.deps.sessionStorage!.queries)
           .then(({ decision, created, latencyMs }) => {
             logWeChatCliEvent('info', 'wechat.track_attribution.shadow_observed', {
               decision: decision.kind, created, latencyMs
@@ -830,7 +830,7 @@ export class WeChatCommandRouter {
           resolveNewTrackSession: async () => (await resolveSession()).sessionId
         }, createModelIntentAttributor({ getApiKey: this.deps.getApiKey, getBaseUrl: this.deps.getBaseUrl, getModel: this.deps.getModel,
           estimateCostUsd: createRemoteTrackClassifierCostEstimator(this.deps.db, { baseUrl: this.deps.getBaseUrl(), model: this.deps.getModel() }) }),
-        { semanticEnabled: trackGates.semanticContinuation, shadowObservationEnabled: trackGates.shadowAttribution, onPersisted: (context) => {
+        { semanticEnabled: trackGates.semanticContinuation, shadowObservationEnabled: trackGates.shadowAttribution, sessionQueries: this.deps.sessionStorage!.queries, onPersisted: (context) => {
           if (!context.originSessionId) throw new Error('WECHAT_TRACK_INBOX_SESSION_MISSING')
           const trackQueueScope = buildImQueueScope('wechat', context.originSessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
           appendImInboxMessageWithWakeEvent(this.deps.db, { sessionId: context.originSessionId, channel: 'wechat', queueScope: trackQueueScope,
@@ -844,7 +844,7 @@ export class WeChatCommandRouter {
             isNew = resolved.isNew
             const epoch = readDurableRemoteTrackEpoch(this.deps.db, 'wechat')
             const byId = new Map(listRemoteTrackAttributionCandidates(this.deps.db, { channel: 'wechat', identityKey: msg.userId,
-              ownerId: authSnapshot.owner, authorizationEpoch: epoch }).map((candidate) => [candidate.trackId, candidate]))
+              ownerId: authSnapshot.owner, authorizationEpoch: epoch }, this.deps.sessionStorage!.queries).map((candidate) => [candidate.trackId, candidate]))
             const candidates = attribution.decision.candidateTrackIds.flatMap((trackId, index) => {
               const candidate = byId.get(trackId)
               return candidate ? [{ trackId, option: index + 1, label: candidate.summary.trim().slice(0, 120) || '未命名任务', stateAtIssue: candidate.state }] : []
@@ -1118,9 +1118,9 @@ export class WeChatCommandRouter {
             authorizationEpoch: trackContext.authorizationEpoch, eventId: remoteTrackTurnBindingEventId(trackContext.trackId, prepared.turnId), occurredAt: Date.now() })
           recordTrackModelMessage(this.deps.db, { trackId: trackContext.trackId, eventId: `track-model:${prepared.turnId}:${prepared.userMessage.id}`,
             idempotencyKey: `track-model:${prepared.turnId}:${prepared.userMessage.id}`, sessionId, messageId: prepared.userMessage.id,
-            invocationId: prepared.turnId, occurredAt: Date.now(), parentEventId: trackContext.attributionEventId })
+            invocationId: prepared.turnId, occurredAt: Date.now(), parentEventId: trackContext.attributionEventId }, this.deps.sessionStorage!.queries)
           trackModelInputView = buildTrackModelInputViewRef(this.deps.db, { ...trackContext, sessionId,
-            acceptedUserMessageId: prepared.userMessage.id, currentInvocationId: prepared.turnId })
+            acceptedUserMessageId: prepared.userMessage.id, currentInvocationId: prepared.turnId }, this.deps.sessionStorage!.queries)
           if (trackModelInputView.completeness !== 'complete') throw new Error('WECHAT_TRACK_MODEL_INPUT_VIEW_UNAVAILABLE')
         }
 

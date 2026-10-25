@@ -11,6 +11,15 @@ import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import { reconcileStartupSessionTranscripts } from '../sessionStorage/recovery'
 import { ensureImTurnTaskControl, getTaskControlRecord, putTaskControlRecord, commitDeferredTaskCheckpoint } from '../database/taskControl'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { buildTrackModelInputViewRef as buildTrackModelInputView, recordTrackModelMessage as persistTrackModelMessage } from './trackModelInputViewStore'
+
+function recordTrackModelMessage(db: AppDatabase, input: Parameters<typeof persistTrackModelMessage>[1]) {
+  return persistTrackModelMessage(db, input, createSqliteSessionStorage(db).queries)
+}
+function buildTrackModelInputViewRef(db: AppDatabase, input: Parameters<typeof buildTrackModelInputView>[1]) {
+  return buildTrackModelInputView(db, input, createSqliteSessionStorage(db).queries)
+}
 
 const mockRunToolChatSession = vi.fn()
 const mockResolveLlmCredentialsForModel = vi.fn()
@@ -146,7 +155,6 @@ import { setCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { HostedTurnFinalizedError } from '../runtime/hostedTurnFinalization'
 import { recoverTurnCoordinatorForStartup } from '../sessionStorage/recoveryHelpers'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
-import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TurnRuntime } from '../turnRuntime'
 import { listPersistedTurns } from '../database/operations'
 import { claimSessionExecution, readSessionTranscript } from '../database/sessionTranscript'
@@ -1115,7 +1123,6 @@ describe('runImRemoteAgent', () => {
       turn: { turnId: 'track-a-turn', requestId: 'track-a-request', sessionId: session.id, assistantMessageId: 'track-a-assistant', state: 'prepared', startToken: 'track-a-token' }
     })
     const { bindRemoteTrackToTurn, createRemoteTrack, remoteTrackTurnBindingEventId } = await import('../database/remoteTrackStore')
-    const { buildTrackModelInputViewRef, recordTrackModelMessage } = await import('./trackModelInputViewStore')
     createRemoteTrack(db, {
       trackId: 'track-a', eventId: 'track-a-root', idempotencyKey: 'track-a-inbound', channel: 'feishu',
       identityKey: 'sender-a', ownerId: 'owner-a', authorizationEpoch: 1, rootMessageId: 'track-a-user', originSessionId: session.id, occurredAt: 1
@@ -1186,7 +1193,6 @@ describe('runImRemoteAgent', () => {
       turn: { turnId: 'track-current-turn', requestId: 'track-current-request', sessionId: current.id, assistantMessageId: 'track-current-assistant', state: 'prepared', startToken: 'track-current-token' }
     })
     const { createRemoteTrack } = await import('../database/remoteTrackStore')
-    const { buildTrackModelInputViewRef, recordTrackModelMessage } = await import('./trackModelInputViewStore')
     createRemoteTrack(db, { trackId: 'cross-session-track', eventId: 'cross-session-root', idempotencyKey: 'cross-session-root-key', channel: 'feishu',
       identityKey: 'sender-a', ownerId: 'owner-a', authorizationEpoch: 1, rootMessageId: 'track-origin-user', originSessionId: origin.id, occurredAt: 1 })
     for (const [eventId, messageId, sessionId, turnId] of [

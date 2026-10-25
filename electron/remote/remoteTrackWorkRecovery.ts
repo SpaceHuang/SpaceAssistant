@@ -2,6 +2,7 @@ import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
 import { getPersistedTurn } from '../database/operations'
 import { readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { buildTrackModelInputViewRef } from './trackModelInputViewStore'
+import type { SessionQueries } from '../sessionStorage/public/ports'
 import { settleRemoteTrackWork, type RemoteTrackWorkClaim } from '../database/remoteTrackStore'
 
 export type RemoteTrackWorkRecoveryFacts = Readonly<{
@@ -56,7 +57,8 @@ export type InspectedRemoteTrackWorkRecovery = Readonly<{
 }>
 
 /** Reads durable recovery evidence. It never mutates the work lease or replays a turn. */
-export function inspectRemoteTrackWorkRecovery(db: AppDatabase, workId: string): InspectedRemoteTrackWorkRecovery | null {
+export function inspectRemoteTrackWorkRecovery(db: AppDatabase, workId: string,
+  sessionQueries: Pick<SessionQueries, 'readMessage' | 'readMessageSkeleton'>): InspectedRemoteTrackWorkRecovery | null {
   const conn = getDbConnection(db)
   const row = conn.prepare(`SELECT work.work_id,work.track_id,work.clarification_id,work.state AS work_state,
       work.session_id,work.request_id,work.turn_id,work.user_message_id,work.model_view_version,
@@ -81,7 +83,7 @@ export function inspectRemoteTrackWorkRecovery(db: AppDatabase, workId: string):
         const view = buildTrackModelInputViewRef(db, { trackId: row.track_id, sessionId: row.session_id,
           acceptedUserMessageId: row.user_message_id, currentInvocationId: row.turn_id, channel: row.channel,
           identityKey: row.identity_key, ownerId: row.owner_id, authorizationEpoch: row.authorization_epoch,
-          rootMessageId: row.root_message_id, attributionEventId: attribution.event_id })
+          rootMessageId: row.root_message_id, attributionEventId: attribution.event_id }, sessionQueries)
         modelInputViewAvailable = view.completeness === 'complete' && view.viewVersion === row.model_view_version
       } catch { modelInputViewAvailable = false }
     }

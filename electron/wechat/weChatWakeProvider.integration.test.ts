@@ -251,7 +251,8 @@ describe('WeChat prepared wake to real provider integration', () => {
     appendMessageOperation(db, { id: 'wechat-track-prior-assistant', sessionId: session.id, role: 'assistant', content: 'Track A prior assistant sentinel', timestamp: 2, status: 'sent' })
     appendMessageOperation(db, { id: 'wechat-track-other-user', sessionId: session.id, role: 'user', content: 'Track B secret sentinel', timestamp: 3, status: 'sent' })
     const attribution = await attributeAndPersistRemoteMessage(db, { channel: 'wechat', identityKey: 'wechat-track-owner', ownerId: 'wechat-track-owner',
-      authorizationEpoch: 1, platformMessageId: 'wechat-track-wake-platform', text: 'Track A accepted input sentinel', now: 4, originSessionId: session.id }, { classify: vi.fn() })
+      authorizationEpoch: 1, platformMessageId: 'wechat-track-wake-platform', text: 'Track A accepted input sentinel', now: 4, originSessionId: session.id }, { classify: vi.fn() },
+      { sessionQueries: createSqliteSessionStorage(db).queries })
     if (attribution.kind !== 'attributed') throw new Error('expected an attributed Track')
     const scope = buildImQueueScope('wechat', session.id) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
     const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'wechat', queueScope: scope,
@@ -266,9 +267,9 @@ describe('WeChat prepared wake to real provider integration', () => {
       getApiKey: async () => 'test-key', setApiKey: async () => undefined, getBrowserDetectContext: () => ({ workDir }) as never
     })
     recordTrackModelMessage(db, { trackId: attribution.context.trackId, eventId: 'wechat-track-prior-user-event', idempotencyKey: 'wechat-track-prior-user-event',
-      sessionId: session.id, messageId: 'wechat-track-prior-user', invocationId: 'prior-track-turn', occurredAt: 1, parentEventId: attribution.context.attributionEventId })
+      sessionId: session.id, messageId: 'wechat-track-prior-user', invocationId: 'prior-track-turn', occurredAt: 1, parentEventId: attribution.context.attributionEventId }, createSqliteSessionStorage(db).queries)
     recordTrackModelMessage(db, { trackId: attribution.context.trackId, eventId: 'wechat-track-prior-assistant-event', idempotencyKey: 'wechat-track-prior-assistant-event',
-      sessionId: session.id, messageId: 'wechat-track-prior-assistant', invocationId: 'prior-track-turn', occurredAt: 2, parentEventId: attribution.context.attributionEventId })
+      sessionId: session.id, messageId: 'wechat-track-prior-assistant', invocationId: 'prior-track-turn', occurredAt: 2, parentEventId: attribution.context.attributionEventId }, createSqliteSessionStorage(db).queries)
     const requestId = `wake:${inbox.eventId}`
     appendMessageOperation(db, { id: 'wechat-track-wake-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 5, status: 'streaming' })
     const frozenConfig = { lane: 'wechat' as const, model, llmServiceId: serviceId, thinkingEffort: 'low' as const }

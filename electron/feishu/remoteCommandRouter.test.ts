@@ -1049,7 +1049,8 @@ describe('RemoteCommandRouter busy guard', () => {
       feishuChatId: 'chat-1', feishuSenderOpenId: 'user-1' }), session.id)
     const scope = buildImQueueScope('feishu', session.id) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
     const attribution = await attributeAndPersistRemoteMessage(db, { channel: 'feishu', identityKey: 'chat-1', ownerId: 'user-1',
-      authorizationEpoch: 1, platformMessageId: 'feishu-track-wake-platform', text: 'queued research', now: 1, originSessionId: session.id }, { classify: vi.fn() })
+      authorizationEpoch: 1, platformMessageId: 'feishu-track-wake-platform', text: 'queued research', now: 1, originSessionId: session.id }, { classify: vi.fn() },
+      { sessionQueries: createSqliteSessionStorage(db).queries })
     if (attribution.kind !== 'attributed') throw new Error('expected a Track for zero candidates')
     const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope: scope,
       channelMessageId: 'feishu-track-wake-platform', content: 'queued research', trackId: attribution.context.trackId,

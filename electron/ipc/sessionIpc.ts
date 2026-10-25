@@ -355,5 +355,5 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('usage-stats:latest-attribution', (_e, sessionId: string) =>
     queryLatestUsageAttribution(ctx.db, sessionId))
 
-  ipcMain.handle('usage-stats:dimensions', (): UsageDimensions => queryUsageDimensions(ctx.db))
+  ipcMain.handle('usage-stats:dimensions', (): UsageDimensions => queryUsageDimensions(ctx.db, sessionStorage.queries))
 }

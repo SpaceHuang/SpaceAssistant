@@ -24,7 +24,14 @@ import { persistLlmServices } from '../llmServiceResolver'
 import { appendMessage as appendMessageOperation } from '../database/operations'
 import { createTempDatabase } from '../database/testHelpers'
 import { bindRemoteTrackToTurn, createRemoteTrack, remoteTrackTurnBindingEventId } from '../database/remoteTrackStore'
-import { buildTrackModelInputViewRef, recordTrackModelMessage } from './trackModelInputViewStore'
+import { buildTrackModelInputViewRef as buildTrackModelInputView, recordTrackModelMessage as persistTrackModelMessage } from './trackModelInputViewStore'
+
+function recordTrackModelMessage(db: AppDatabase, input: Parameters<typeof persistTrackModelMessage>[1]) {
+  return persistTrackModelMessage(db, input, createSqliteSessionStorage(db).queries)
+}
+function buildTrackModelInputViewRef(db: AppDatabase, input: Parameters<typeof buildTrackModelInputView>[1]) {
+  return buildTrackModelInputView(db, input, createSqliteSessionStorage(db).queries)
+}
 import { registerAgentIpc } from '../ipc/agentProtocolIpc'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 

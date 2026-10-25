@@ -1,5 +1,6 @@
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
+import type { SessionQueries } from '../sessionStorage/public/ports'
 import {
   calculateAttributionCoverage,
   emptyTurnToolDimension,
@@ -237,7 +238,7 @@ export function queryUsageSummary(db: AppDatabase, args: UsageStatsRangeArgs): U
   }
 }
 
-export function queryUsageDimensions(db: AppDatabase): UsageDimensions {
+export function queryUsageDimensions(db: AppDatabase, sessionQueries: Pick<SessionQueries, 'listSessions'>): UsageDimensions {
   const conn = getDbConnection(db)
 
   const modelRows = conn
@@ -258,27 +259,24 @@ export function queryUsageDimensions(db: AppDatabase): UsageDimensions {
     )
     .all() as Array<{ app_version: string }>
 
-  // 会话枚举取自两表 distinct session_id（跨 workDir 全量）；已删除会话 name 为 null。
-  const sessionRows = conn
+  // Usage facts supplies historical IDs; SessionStorage supplies current user-visible session metadata.
+  const sessionIds = conn
     .prepare(
-      `SELECT session_id AS sessionId, MAX(sessions.name) AS name
-       FROM (
-         SELECT DISTINCT s.session_id, NULL AS alias_name FROM usage_step_facts s
-         UNION
-         SELECT DISTINCT t.session_id, NULL AS alias_name FROM usage_turn_facts t
-       )
-       LEFT JOIN sessions ON sessions.id = session_id
-       -- 中2（评审）：内部/隐藏会话（审批 Agent、automation 内部会话）不进筛选下拉
-       WHERE (sessions.ownership IS NULL OR sessions.ownership != 'internal')
-         AND (sessions.visibility IS NULL OR sessions.visibility != 'hidden')
-       GROUP BY session_id
-       ORDER BY session_id`
+      `SELECT session_id AS sessionId
+       FROM (SELECT DISTINCT session_id FROM usage_step_facts UNION SELECT DISTINCT session_id FROM usage_turn_facts)
+       GROUP BY session_id ORDER BY session_id`
     )
-    .all() as Array<{ sessionId: string; name: string | null }>
+    .all() as Array<{ sessionId: string }>
+  const allSessions = sessionQueries.listSessions({ view: 'all' })
+  const allSessionIds = new Set(allSessions.map(({ id }) => id))
+  const visibleSessions = new Map(sessionQueries.listSessions({ view: 'user-visible' }).map(({ id, name }) => [id, name]))
 
   return {
     models: modelRows.map((row) => ({ model: row.model, llmServiceId: row.llmServiceId ?? undefined })),
-    sessions: sessionRows.map((row) => ({ sessionId: row.sessionId, name: row.name ?? null })),
+    sessions: sessionIds.flatMap(({ sessionId }) => {
+      if (allSessionIds.has(sessionId) && !visibleSessions.has(sessionId)) return []
+      return [{ sessionId, name: visibleSessions.get(sessionId) ?? null }]
+    }),
     appVersions: versionRows.map((row) => row.app_version)
   }
 }

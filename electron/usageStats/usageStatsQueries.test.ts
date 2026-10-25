@@ -3,6 +3,7 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { createSession, insertUsageStepFact, upsertUsageTurnFact } from '../database/operations'
 import type { AppDatabase } from '../database'
 import { queryUsageDaily, queryUsageDimensions, queryUsageSummary } from './usageStatsQueries'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 function step(overrides: Parameters<typeof insertUsageStepFact>[1] extends never ? never : Partial<Parameters<typeof insertUsageStepFact>[1]> & { sessionId?: string }) {
   return {
@@ -178,7 +179,7 @@ describe('queryUsageDimensions 筛选值枚举', () => {
     insertUsageStepFact(db, step({ sessionId: 'sess-gone', turnId: 't2', stepId: 'r2', inputTokens: 10, model: 'm2', llmServiceId: 'svc-b', appVersion: 'unknown' }))
     upsertUsageTurnFact(db, turn({ sessionId: live.id, turnId: 't1', model: 'm1', llmServiceId: 'svc-a', appVersion: '0.1.5' }))
 
-    const dims = queryUsageDimensions(db)
+    const dims = queryUsageDimensions(db, createSqliteSessionStorage(db).queries)
     expect(dims.models).toEqual([
       { model: 'm1', llmServiceId: 'svc-a' },
       { model: 'm2', llmServiceId: 'svc-b' }
@@ -190,5 +191,14 @@ describe('queryUsageDimensions 筛选值枚举', () => {
     ]))
     expect(dims.sessions).toHaveLength(2)
     db.close()
+  })
+
+  it('does not expose internal or hidden sessions in usage filters', () => {
+    const internal = createSession(db, { name: '内部会话', ownership: 'internal' })
+    insertUsageStepFact(db, step({ sessionId: internal.id, turnId: 'internal-turn', stepId: 'internal-step' }))
+
+    const dims = queryUsageDimensions(db, createSqliteSessionStorage(db).queries)
+
+    expect(dims.sessions).not.toContainEqual(expect.objectContaining({ sessionId: internal.id }))
   })
 })

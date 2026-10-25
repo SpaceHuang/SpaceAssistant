@@ -1009,7 +1009,7 @@ export function claimQueuedTurnAtomically(
 }
 
 export type PersistedTurn = {
-  turnId: string; requestId: string; sessionId: string; assistantMessageId: string; retryOfMessageId?: string; retryOfInvocationId?: string; state: string
+  turnId: string; requestId: string; sessionId: string; assistantMessageId: string; trackId?: string; retryOfMessageId?: string; retryOfInvocationId?: string; state: string
   userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; version: number; acceptedInputHistoryVersion?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string
 }
 
@@ -1027,7 +1027,7 @@ function decodePersistedTurnRow(row: PersistedTurnRow): PersistedTurn {
   return turn
 }
 
-const TURN_SELECT = 'turn_id AS turnId, request_id AS requestId, session_id AS sessionId, assistant_message_id AS assistantMessageId, user_message_id AS userMessageId, context_boundary_sequence AS contextBoundarySequence, exclude_message_ids_json AS excludeMessageIdsJson, execution_config_json AS executionConfigJson, retry_of_message_id AS retryOfMessageId, retry_of_invocation_id AS retryOfInvocationId, state, version, accepted_input_history_version AS acceptedInputHistoryVersion, outcome, COALESCE(terminal_usage_json, usage_json) AS usageJson, error_json AS errorJson, intent_fingerprint AS intentFingerprint, start_token AS startToken'
+const TURN_SELECT = 'turn_id AS turnId, request_id AS requestId, session_id AS sessionId, assistant_message_id AS assistantMessageId, track_id AS trackId, user_message_id AS userMessageId, context_boundary_sequence AS contextBoundarySequence, exclude_message_ids_json AS excludeMessageIdsJson, execution_config_json AS executionConfigJson, retry_of_message_id AS retryOfMessageId, retry_of_invocation_id AS retryOfInvocationId, state, version, accepted_input_history_version AS acceptedInputHistoryVersion, outcome, COALESCE(terminal_usage_json, usage_json) AS usageJson, error_json AS errorJson, intent_fingerprint AS intentFingerprint, start_token AS startToken'
 
 function decodeTurnContextRow(row: PersistedTurnRow & { excludeMessageIdsJson?: string; executionConfigJson?: string }): PersistedTurn {
   const { excludeMessageIdsJson, executionConfigJson, ...persistedRow } = row
@@ -2284,6 +2284,12 @@ export function getUsageStepFactsForTurn(db: AppDatabase, sessionId: string, tur
     .prepare('SELECT * FROM usage_step_facts WHERE session_id = ? AND turn_id = ? ORDER BY created_at, id')
     .all(sessionId, turnId) as UsageStepFactSqlRow[]
   return rows.map(rowToUsageStepFact)
+}
+
+export function countUsageStepFactsForTurn(db: AppDatabase, sessionId: string, turnId: string): number {
+  const row = getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM usage_step_facts WHERE session_id = ? AND turn_id = ?')
+    .get(sessionId, turnId) as { count: number }
+  return row.count
 }
 
 export type UsageTurnFactInput = {

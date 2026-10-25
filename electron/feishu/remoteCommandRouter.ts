@@ -293,7 +293,7 @@ export class RemoteCommandRouter {
         continue
       }
       const canResumePrepared = priorTurn !== undefined && (channelContext.clarificationWorkId
-        ? inspectRemoteTrackWorkRecovery(this.deps.db, channelContext.clarificationWorkId)?.decision.kind === 'resume-prepared-turn'
+        ? inspectRemoteTrackWorkRecovery(this.deps.db, channelContext.clarificationWorkId, this.deps.sessionStorage!.queries)?.decision.kind === 'resume-prepared-turn'
         : canResumePreparedRemoteTurn({ turnState: priorTurn.state, turnId: priorTurn.turnId, requestId: priorTurn.requestId,
           sessionId: priorTurn.sessionId, userMessageId: priorTurn.userMessageId, turnConfig: priorTurn.executionConfig, accepted: acceptedSnapshot }))
       const queued = queuedView ?? await (async () => {
@@ -318,7 +318,7 @@ export class RemoteCommandRouter {
       const lease = claimImInboxMessage(this.deps.db, { queueScope: scope, messageId: queued.messageId, ownerId: input.ownerId })
       if (!lease) throw new Error('FEISHU_WAKE_INBOX_CLAIM_FAILED')
       const workRecovery = channelContext.clarificationWorkId
-        ? inspectRemoteTrackWorkRecovery(this.deps.db, channelContext.clarificationWorkId) : null
+        ? inspectRemoteTrackWorkRecovery(this.deps.db, channelContext.clarificationWorkId, this.deps.sessionStorage!.queries) : null
       if (priorTurn && priorTurn.state !== 'terminal' && !canResumePrepared) {
         this.deps.turnRuntime?.recover()
         priorTurn = this.deps.sessionStorage!.queries.readTurnByRequest({ sessionId: session.id, requestId })
@@ -399,9 +399,9 @@ export class RemoteCommandRouter {
         eventId: remoteTrackTurnBindingEventId(track.trackId, prepared.turnId), occurredAt: Date.now() })
       recordTrackModelMessage(this.deps.db, { trackId: track.trackId, eventId: `track-model:${prepared.turnId}:${input.userMessageId}`,
         idempotencyKey: `track-model:${prepared.turnId}:${input.userMessageId}`, sessionId: input.sessionId, messageId: input.userMessageId,
-        invocationId: prepared.turnId, occurredAt: Date.now(), parentEventId: track.attributionEventId })
+        invocationId: prepared.turnId, occurredAt: Date.now(), parentEventId: track.attributionEventId }, this.deps.sessionStorage!.queries)
       trackModelInputView = buildTrackModelInputViewRef(this.deps.db, { ...track, sessionId: input.sessionId,
-        acceptedUserMessageId: input.userMessageId, currentInvocationId: prepared.turnId })
+        acceptedUserMessageId: input.userMessageId, currentInvocationId: prepared.turnId }, this.deps.sessionStorage!.queries)
       if (trackModelInputView.completeness !== 'complete') throw new Error('FEISHU_TRACK_MODEL_INPUT_VIEW_UNAVAILABLE')
     }
     if (input.clarificationWork) bindRemoteTrackWorkExecution(this.deps.db, { workId: input.clarificationWork.workId,
@@ -962,7 +962,7 @@ export class RemoteCommandRouter {
           authorizationEpoch: readDurableRemoteTrackEpoch(this.deps.db, 'feishu'), platformMessageId: msg.messageId,
           ...(msg.replyToMessageId ? { replyToPlatformMessageId: msg.replyToMessageId } : {}), text: content
         }, createModelIntentAttributor({ getApiKey: this.deps.getApiKey, getBaseUrl: this.deps.getBaseUrl, getModel: this.deps.getModel,
-          estimateCostUsd: createRemoteTrackClassifierCostEstimator(this.deps.db, { baseUrl: this.deps.getBaseUrl(), model: this.deps.getModel() }) }))
+          estimateCostUsd: createRemoteTrackClassifierCostEstimator(this.deps.db, { baseUrl: this.deps.getBaseUrl(), model: this.deps.getModel() }) }), this.deps.sessionStorage!.queries)
           .then(({ decision, created, latencyMs }) => {
             logFeishuCliEvent('info', 'feishu.track_attribution.shadow_observed', {
               decision: decision.kind, created, latencyMs
@@ -981,7 +981,7 @@ export class RemoteCommandRouter {
           resolveNewTrackSession: async () => (await resolveSession()).sessionId
         }, createModelIntentAttributor({ getApiKey: this.deps.getApiKey, getBaseUrl: this.deps.getBaseUrl, getModel: this.deps.getModel,
           estimateCostUsd: createRemoteTrackClassifierCostEstimator(this.deps.db, { baseUrl: this.deps.getBaseUrl(), model: this.deps.getModel() }) }),
-        { semanticEnabled: trackGates.semanticContinuation, shadowObservationEnabled: trackGates.shadowAttribution, onPersisted: (context) => {
+        { semanticEnabled: trackGates.semanticContinuation, shadowObservationEnabled: trackGates.shadowAttribution, sessionQueries: this.deps.sessionStorage!.queries, onPersisted: (context) => {
           if (!context.originSessionId) throw new Error('FEISHU_TRACK_INBOX_SESSION_MISSING')
           const trackQueueScope = buildImQueueScope('feishu', context.originSessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
           appendImInboxMessageWithWakeEvent(this.deps.db, { sessionId: context.originSessionId, channel: 'feishu', queueScope: trackQueueScope,
@@ -994,7 +994,7 @@ export class RemoteCommandRouter {
             isNew = resolved.isNew
             const epoch = readDurableRemoteTrackEpoch(this.deps.db, 'feishu')
             const byId = new Map(listRemoteTrackAttributionCandidates(this.deps.db, { channel: 'feishu', identityKey: msg.chatId,
-              ownerId: authSnapshot.owner, authorizationEpoch: epoch }).map((candidate) => [candidate.trackId, candidate]))
+              ownerId: authSnapshot.owner, authorizationEpoch: epoch }, this.deps.sessionStorage!.queries).map((candidate) => [candidate.trackId, candidate]))
             const candidates = attribution.decision.candidateTrackIds.flatMap((trackId, index) => {
               const candidate = byId.get(trackId)
               return candidate ? [{ trackId, option: index + 1, label: candidate.summary.trim().slice(0, 120) || '未命名任务', stateAtIssue: candidate.state }] : []
@@ -1252,9 +1252,9 @@ export class RemoteCommandRouter {
             authorizationEpoch: trackContext.authorizationEpoch, eventId: remoteTrackTurnBindingEventId(trackContext.trackId, prepared.turnId), occurredAt: Date.now() })
           recordTrackModelMessage(this.deps.db, { trackId: trackContext.trackId, eventId: `track-model:${prepared.turnId}:${prepared.userMessage.id}`,
             idempotencyKey: `track-model:${prepared.turnId}:${prepared.userMessage.id}`, sessionId, messageId: prepared.userMessage.id,
-            invocationId: prepared.turnId, occurredAt: Date.now(), parentEventId: trackContext.attributionEventId })
+            invocationId: prepared.turnId, occurredAt: Date.now(), parentEventId: trackContext.attributionEventId }, this.deps.sessionStorage!.queries)
           trackModelInputView = buildTrackModelInputViewRef(this.deps.db, { ...trackContext, sessionId,
-            acceptedUserMessageId: prepared.userMessage.id, currentInvocationId: prepared.turnId })
+            acceptedUserMessageId: prepared.userMessage.id, currentInvocationId: prepared.turnId }, this.deps.sessionStorage!.queries)
           if (trackModelInputView.completeness !== 'complete') throw new Error('FEISHU_TRACK_MODEL_INPUT_VIEW_UNAVAILABLE')
         }
 

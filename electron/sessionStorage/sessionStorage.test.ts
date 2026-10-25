@@ -873,13 +873,17 @@ describe('SQLite session storage public queries', () => {
       turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: session.id,
       assistantMessageId: 'accepted-assistant', userMessageId: 'accepted-user', state: 'executing', excludeMessageIds: []
     })
-    const execution = createSqliteSessionStorage(db).execution
+    const storage = createSqliteSessionStorage(db)
+    const execution = storage.execution
 
     expect(execution.loadAcceptedMessages({ sessionId: session.id, turnId: 'accepted-turn' }).map(({ id }) => id))
       .toEqual(['accepted-user'])
     expect(execution.readTurn({ sessionId: session.id, turnId: 'accepted-turn' })).toMatchObject({ sessionId: session.id, requestId: 'accepted-request' })
     expect(execution.readTurn({ sessionId: 'wrong-session', turnId: 'accepted-turn' })).toBeUndefined()
     expect(execution.readTurnByRequest({ sessionId: session.id, requestId: 'accepted-request' })).toMatchObject({ turnId: 'accepted-turn' })
+    expect(storage.queries.readTurnById({ turnId: 'accepted-turn' })).toMatchObject({
+      sessionId: session.id, requestId: 'accepted-request', assistantMessageId: 'accepted-assistant'
+    })
     expect(execution.hasActiveTurn(session.id)).toBe(true)
     expect(execution.hasActiveTurn('wrong-session')).toBe(false)
     expect(() => execution.loadAcceptedMessages({ sessionId: 'wrong-session', turnId: 'accepted-turn' })).toThrow('TURN_NOT_FOUND')

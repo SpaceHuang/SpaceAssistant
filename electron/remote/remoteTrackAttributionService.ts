@@ -8,6 +8,7 @@ import { attributeRemoteMessage, REMOTE_TRACK_ATTRIBUTION_POLICY_VERSION, REMOTE
   REMOTE_TRACK_CONTINUATION_SCORE_THRESHOLD, type IntentAttributor, type IntentAttributorMetering, type TrackCandidateSummary,
   type RemoteAttributionDecision } from './trackAttribution'
 import { recordRemoteTrackAttributionObservation } from '../database/remoteTrackAttributionObservationStore'
+import type { SessionQueries } from '../sessionStorage/public/ports'
 
 type AttributionScope = {
   channel: RemoteTrackChannel
@@ -28,7 +29,8 @@ export type RemoteAttributionObservationScope = Omit<AttributionScope, 'originSe
 export async function observeRemoteMessageAttribution(
   db: AppDatabase,
   scope: RemoteAttributionObservationScope,
-  classifier: IntentAttributor
+  classifier: IntentAttributor,
+  sessionQueries: Pick<SessionQueries, 'readMessage' | 'readSession'>
 ): Promise<{ decision: RemoteAttributionDecision; created: boolean; latencyMs: number }> {
   if (!scope.platformMessageId.trim() || !scope.identityKey.trim() || !scope.ownerId.trim() ||
     !Number.isSafeInteger(scope.authorizationEpoch) || scope.authorizationEpoch <= 0) {
@@ -47,7 +49,7 @@ export async function observeRemoteMessageAttribution(
     return { decision: { kind: 'rejected', reasonCode: 'observation-already-recorded' }, created: false, latencyMs: 0 }
   }
 
-  const candidates = readCandidates(db, { ...scope, text: scope.text })
+  const candidates = readCandidates(db, { ...scope, text: scope.text }, sessionQueries)
   let explicitReference: Parameters<typeof attributeRemoteMessage>[0]['explicitReference']
   if (scope.replyToPlatformMessageId) {
     const reference = resolveRemoteTrackMessageReference(db, { channel: scope.channel,
@@ -99,24 +101,28 @@ function stateForCandidate(state: string): TrackCandidateSummary['state'] | null
   return null
 }
 
-function readCandidates(db: AppDatabase, scope: AttributionScope): TrackCandidateSummary[] {
+function readCandidates(db: AppDatabase, scope: AttributionScope, sessionQueries: Pick<SessionQueries, 'readMessage' | 'readSession'>): TrackCandidateSummary[] {
   const conn = getDbConnection(db)
-  const rows = conn.prepare(`SELECT track.track_id,track.state,track.updated_at,
-      COALESCE((SELECT message.content FROM remote_track_events event JOIN messages message ON message.id=event.message_id
-        WHERE event.track_id=track.track_id AND event.event_kind='track.model.message'
-        ORDER BY event.occurred_at DESC,event.event_id DESC LIMIT 1), root.content, '') AS summary
+  const rows = conn.prepare(`SELECT track.track_id,track.state,track.updated_at,track.origin_session_id,
+      COALESCE((SELECT event.message_id FROM remote_track_events event WHERE event.track_id=track.track_id AND event.event_kind='track.model.message'
+        ORDER BY event.occurred_at DESC,event.event_id DESC LIMIT 1),track.root_message_id) AS summary_message_id,
+      COALESCE((SELECT json_extract(event.payload_json,'$.sessionId') FROM remote_track_events event WHERE event.track_id=track.track_id AND event.event_kind='track.model.message'
+        ORDER BY event.occurred_at DESC,event.event_id DESC LIMIT 1),track.origin_session_id) AS summary_session_id
     FROM remote_tracks track
-    LEFT JOIN messages root ON root.id=track.root_message_id
     WHERE track.channel=? AND track.identity_key=? AND track.owner_id=? AND track.authorization_epoch=?
       AND (track.state IN ('open','processing','waiting-user','waiting-async-approval','resuming') OR
         (track.state='completed' AND track.updated_at>=?))
-      AND track.origin_session_id IS NOT NULL AND EXISTS (SELECT 1 FROM sessions WHERE sessions.id=track.origin_session_id)
+      AND track.origin_session_id IS NOT NULL
     ORDER BY track.updated_at DESC,track.track_id LIMIT 10`).all(
     scope.channel, scope.identityKey, scope.ownerId, scope.authorizationEpoch, (scope.now ?? Date.now()) - 30 * 60_000
-  ) as Array<{ track_id: string; state: string; updated_at: number; summary: string }>
+  ) as Array<{ track_id: string; state: string; updated_at: number; origin_session_id: string | null; summary_message_id: string | null; summary_session_id: string | null }>
   return rows.flatMap((row) => {
     const state = stateForCandidate(row.state)
-    return state ? [{ trackId: row.track_id, state, summary: row.summary.slice(0, 240), updatedAt: row.updated_at }] : []
+    if (!state) return []
+    const sessionId = row.summary_session_id ?? row.origin_session_id
+    const summary = sessionId && sessionQueries.readSession(sessionId) && row.summary_message_id
+      ? sessionQueries.readMessage({ sessionId, messageId: row.summary_message_id })?.content ?? '' : ''
+    return [{ trackId: row.track_id, state, summary: summary.slice(0, 240), updatedAt: row.updated_at }]
   })
 }
 
@@ -154,7 +160,8 @@ export async function attributeAndPersistRemoteMessage(
   db: AppDatabase,
   scope: AttributionScope,
   classifier: IntentAttributor,
-  options: { semanticEnabled?: boolean; shadowObservationEnabled?: boolean; onPersisted?: (context: RemoteTrackContext) => void } = {}
+  options: { semanticEnabled?: boolean; shadowObservationEnabled?: boolean; onPersisted?: (context: RemoteTrackContext) => void;
+    sessionQueries: Pick<SessionQueries, 'readMessage' | 'readSession'> }
 ): Promise<PersistedRemoteAttribution> {
   if (!scope.platformMessageId.trim() || !scope.identityKey.trim() || !scope.ownerId.trim() ||
     !Number.isSafeInteger(scope.authorizationEpoch) || scope.authorizationEpoch <= 0) {
@@ -166,7 +173,7 @@ export async function attributeAndPersistRemoteMessage(
   if (!durableEpoch || durableEpoch.epoch !== scope.authorizationEpoch) throw new Error('REMOTE_TRACK_ATTRIBUTION_EPOCH_STALE')
   const receipt = readPersistedAttributionReceipt(db, scope)
   if (receipt) return receipt
-  const candidates = readCandidates(db, scope)
+  const candidates = readCandidates(db, scope, options.sessionQueries)
   let explicitReference: Parameters<typeof attributeRemoteMessage>[0]['explicitReference']
   if (scope.replyToPlatformMessageId) {
     const reference = resolveRemoteTrackMessageReference(db, {
@@ -317,8 +324,9 @@ export async function attributeAndPersistRemoteMessage(
 }
 
 /** Exported for focused tests and operational inspection without exposing mutable DB rows. */
-export function listRemoteTrackAttributionCandidates(db: AppDatabase, scope: Omit<AttributionScope, 'platformMessageId' | 'text' | 'replyToPlatformMessageId' | 'now'>): TrackCandidateSummary[] {
-  return readCandidates(db, { ...scope, platformMessageId: '', text: '' })
+export function listRemoteTrackAttributionCandidates(db: AppDatabase, scope: Omit<AttributionScope, 'platformMessageId' | 'text' | 'replyToPlatformMessageId' | 'now'>,
+  sessionQueries: Pick<SessionQueries, 'readMessage' | 'readSession'>): TrackCandidateSummary[] {
+  return readCandidates(db, { ...scope, platformMessageId: '', text: '' }, sessionQueries)
 }
 
 /** Rehydrates the exact inbox attribution and verifies it against the durable authority snapshot. */

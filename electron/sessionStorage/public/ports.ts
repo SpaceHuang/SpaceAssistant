@@ -15,7 +15,7 @@ import type { TurnExecutionConfig } from '../../../src/shared/assistantFactAggre
 
 export type ProjectionPreparationRequest = Readonly<{ sessionId: string; scopeKey: string; specVersion: number }>
 export type SessionTurnSnapshot = Readonly<{
-  turnId: string; requestId: string; sessionId: string; state: string; outcome?: string
+  turnId: string; requestId: string; sessionId: string; assistantMessageId: string; trackId?: string; state: string; outcome?: string
   userMessageId?: string; executionConfig?: TurnExecutionConfig; error?: Readonly<{ code: string; message: string }>
 }>
 
@@ -163,6 +163,7 @@ export interface SessionQueries {
   readLatestRetryTarget(sessionId: string): RetryContextTarget | null
   readMessageSequence(ref: MessageRef): number | null
   readTurnByRequest(input: { sessionId: string; requestId: string }): SessionTurnSnapshot | undefined
+  readTurnById(input: { turnId: string }): SessionTurnSnapshot | undefined
   listTurnErrorsByAssistantMessageIds(assistantMessageIds: readonly string[]): Array<{ assistantMessageId: string; message: string }>
 }
 

@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { appendMessage, createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
+import type { AppDatabase } from '../database'
 import { createRemoteTrack } from '../database/remoteTrackStore'
 import { getDbConnection } from '../database/sqliteStore'
-import { buildTrackModelInputViewRef, recordTrackModelMessage } from './trackModelInputViewStore'
+import { buildTrackModelInputViewRef as buildTrackModelInputView, recordTrackModelMessage as persistTrackModelMessage } from './trackModelInputViewStore'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+
+function recordTrackModelMessage(db: AppDatabase, input: Parameters<typeof persistTrackModelMessage>[1]) {
+  return persistTrackModelMessage(db, input, createSqliteSessionStorage(db).queries)
+}
+function buildTrackModelInputViewRef(db: AppDatabase, input: Parameters<typeof buildTrackModelInputView>[1]) {
+  return buildTrackModelInputView(db, input, createSqliteSessionStorage(db).queries)
+}
 
 describe('persisted Track model input view', () => {
   it('builds a complete view from only the selected Track event ledger in a shared session', () => {
