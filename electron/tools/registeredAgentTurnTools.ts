@@ -17,9 +17,14 @@ export type ExecutorUnhandledSettlement = { rethrow: true; error: unknown }
 
 /** A deferred call was rejected before the executor dispatch claim, so no tool side effect started. */
 export class DeferredToolPreDispatchError extends Error {
+  readonly failureCode: string
+
   constructor(cause: unknown) {
     super('DEFERRED_TOOL_PRE_DISPATCH_REJECTED', { cause })
     this.name = 'DeferredToolPreDispatchError'
+    const message = cause instanceof Error ? cause.message : ''
+    const code = message.match(/(?:^|:)([A-Z][A-Z0-9_:-]{0,95})$/)?.[1]
+    this.failureCode = code ?? 'UNKNOWN_PRE_DISPATCH_FAILURE'
   }
 }
 

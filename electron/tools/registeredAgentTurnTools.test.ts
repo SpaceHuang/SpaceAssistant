@@ -231,8 +231,13 @@ describe('createRegisteredAgentTurnTools', () => {
     await expect(tools.executeDeferred({ invocationId: 'deferred-predispatch-invocation', toolCallId: 'deferred-predispatch-call',
       toolName: 'write_file', input: { path: 'report.txt', content: 'approved' } }, {
       confirmationReceipt: 'approval:reply-predispatch', authorize: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' })
-    })).rejects.toBeInstanceOf(DeferredToolPreDispatchError)
+    })).rejects.toMatchObject({ name: 'DeferredToolPreDispatchError', failureCode: 'DEFERRED_SAFETY_RECHECK_DENIED:POLICY_DENY' })
     expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('keeps pre-dispatch diagnostics to stable error codes and never includes arbitrary cause text', () => {
+    expect(new DeferredToolPreDispatchError(new Error('MISSING_MATERIAL')).failureCode).toBe('MISSING_MATERIAL')
+    expect(new DeferredToolPreDispatchError(new Error('/Users/private/document.txt')).failureCode).toBe('UNKNOWN_PRE_DISPATCH_FAILURE')
   })
 
   it('IM 异步审批持久化待办并 park invocation，不继续模型循环或执行原工具', async () => {
