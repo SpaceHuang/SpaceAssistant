@@ -22,7 +22,7 @@ export interface WikiDomainCoordinator {
   movePage(input: WikiSavePageInput & { pageId: string; expectedRevision: number; parentPageId: string | null }): Promise<WikiSavePageResult>
 }
 
-export interface PendingWikiOperationTarget { targetPath: string; newHash: string; oldHash: string | null; pageId: string; revision: number; status: 'prepared' | 'domain_committed' }
+export interface PendingWikiOperationTarget { targetPath: string; stagingPath: string; newHash: string; oldHash: string | null; pageId: string; revision: number; status: 'prepared' | 'domain_committed' }
 
 export interface WikiMoveRequestIdentity { requestId: string; toolUseId: string; callerId: string; lane: string; pageId: string; expectedRevision: number; parentPageId: string | null }
 
@@ -56,9 +56,10 @@ export async function listPendingWikiOperationTargets(store: WikiFileStore): Pro
     const journal = await readJournal(store, `.wiki-service/operations/${name}`)
     if (journal?.formatVersion !== 1 || journal.operationId !== operationId || !['prepared', 'domain_committed'].includes(journal.status) ||
       !/^wiki\/.+\.md$/i.test(journal.targetPath) || !/^[0-9a-f]{64}$/i.test(journal.newHash) ||
+      journal.stagingPath !== `.wiki-service/staging/${operationId}.payload` ||
       !(journal.oldHash === null || /^[0-9a-f]{64}$/i.test(journal.oldHash)) || journal.result?.operationId !== operationId ||
       typeof journal.result.pageId !== 'string' || !Number.isSafeInteger(journal.result.revision) || journal.result.revision < 1) continue
-    targets.push({ targetPath: journal.targetPath, newHash: journal.newHash, oldHash: journal.oldHash, pageId: journal.result.pageId, revision: journal.result.revision, status: journal.status as 'prepared' | 'domain_committed' })
+    targets.push({ targetPath: journal.targetPath, stagingPath: journal.stagingPath, newHash: journal.newHash, oldHash: journal.oldHash, pageId: journal.result.pageId, revision: journal.result.revision, status: journal.status as 'prepared' | 'domain_committed' })
   }
   return targets
 }

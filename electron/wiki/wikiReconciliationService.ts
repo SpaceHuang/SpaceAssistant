@@ -70,17 +70,54 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
   const observedFiles = files.map(file => ({ ...file }))
   const pendingByPath = new Map((await listPendingWikiOperationTargets(store)).map(operation => [operation.targetPath, operation]))
   const ignoredPendingCreates = new Set<string>()
+  const committedSnapshots = new Map<string, { revision: number; content: Buffer }>()
+  const committedBaselinePages = new Map<string, { pageId: string; path: string; revision: number; contentHash: string; title: string; categoryId: string; summary: string; parentPageId: string | null; sourceRefs: Array<{ sourceId: string; sourceRevision: number }> }>()
+  const stageCommittedBaseline = async (operation: NonNullable<ReturnType<typeof pendingByPath.get>>): Promise<boolean> => {
+    const existing = catalog.pages.find(page => page.pageId === operation.pageId)
+    if (existing && (existing.revision ?? 1) > operation.revision) return false
+    try {
+      const staged = await store.read(operation.stagingPath)
+      if (hashBuffer(staged) !== operation.newHash) throw new Error('staging-hash-mismatch')
+      const stagedPage = parseWikiPageMarker(staged.toString('utf8'))
+      const title = /^#\s+(.+?)\s*#*\s*$/m.exec(stagedPage.body)?.[1]?.trim()
+      if (!stagedPage.marker || stagedPage.marker.pageId !== operation.pageId || stagedPage.marker.revision !== operation.revision || !title) throw new Error('staging-page-invalid')
+      const catalogHasCommitted = existing?.path === operation.targetPath && existing.revision === operation.revision && existing.contentHash === operation.newHash
+      const catalogHasBaseline = operation.oldHash === null
+        ? existing === undefined
+        : existing?.path === operation.targetPath && existing.revision === operation.revision - 1 && existing.contentHash === operation.oldHash
+      if (!catalogHasCommitted && !catalogHasBaseline) throw new Error('catalog-baseline-mismatch')
+      committedSnapshots.set(operation.pageId, { revision: operation.revision, content: staged })
+      committedBaselinePages.set(operation.pageId, {
+        pageId: operation.pageId, path: operation.targetPath, revision: operation.revision, contentHash: operation.newHash,
+        title, categoryId: stagedPage.marker.categoryId, summary: stagedPage.marker.summary,
+        parentPageId: stagedPage.marker.parentPageId, sourceRefs: stagedPage.marker.sourceRefs
+      })
+      return true
+    } catch {
+      diagnostics.push({ code: 'wiki-domain-committed-baseline-invalid', path: operation.targetPath, pageId: operation.pageId, message: 'Committed staging content or catalog baseline cannot be verified; external bytes are preserved for recovery.' })
+      return false
+    }
+  }
   // Keep journal-owned bytes at their prior catalog baseline while still coordinating SCHEMA and unrelated external edits.
   for (const file of files) {
     const operation = pendingByPath.get(file.path)
-    if (!operation || hashText(file.content) !== operation.newHash) continue
+    if (!operation) continue
+    const fileHash = hashText(file.content)
     const existing = catalog.pages.find(page => page.pageId === operation.pageId)
-    if (existing && existing.path === operation.targetPath && existing.revision === operation.revision && existing.contentHash === operation.newHash) {
+    if (fileHash === operation.newHash && existing && existing.path === operation.targetPath && existing.revision === operation.revision && existing.contentHash === operation.newHash) {
       continue
     }
-    // A domain-committed operation is semantically saved. Keep its landed bytes
-    // in reconciliation so schema validation and catalog repair see the page.
-    if (operation.status === 'domain_committed') continue
+    if (operation.status === 'domain_committed') {
+      if (fileHash === operation.newHash) continue
+      const currentPage = parseWikiPageMarker(file.content)
+      if (currentPage.marker?.pageId !== operation.pageId) {
+        diagnostics.push({ code: 'wiki-domain-committed-target-changed', path: file.path, pageId: operation.pageId, message: 'Committed target identity changed; external bytes are preserved for recovery.' })
+      } else {
+        await stageCommittedBaseline(operation)
+      }
+      continue
+    }
+    if (fileHash !== operation.newHash) continue
     if (operation.oldHash === null) {
       if (existing) {
         diagnostics.push({ code: 'wiki-pending-operation-baseline-conflict', path: file.path, pageId: operation.pageId, message: 'Pending page creation conflicts with an existing catalog entry.' })
@@ -103,10 +140,27 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
       diagnostics.push({ code: 'wiki-pending-operation-history-missing', path: file.path, pageId: operation.pageId, message: 'Pending page operation has no verified prior snapshot.' })
     }
   }
+  for (const operation of pendingByPath.values()) {
+    if (operation.status !== 'domain_committed' || files.some(file => file.path === operation.targetPath)) continue
+    const existing = catalog.pages.find(page => page.pageId === operation.pageId)
+    if (existing && (existing.revision ?? 1) > operation.revision) continue
+    const renamedFile = files.find(file => parseWikiPageMarker(file.content).marker?.pageId === operation.pageId)
+    if (renamedFile) {
+      await stageCommittedBaseline(operation)
+      continue
+    }
+    await stageCommittedBaseline(operation)
+  }
   if (diagnostics.length) return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics }
   files = files.filter(file => !ignoredPendingCreates.has(file.path))
+  const reconciliationCatalogPages = [...catalog.pages]
+  for (const [pageId, page] of committedBaselinePages) {
+    const index = reconciliationCatalogPages.findIndex(item => item.pageId === pageId)
+    if (index >= 0) reconciliationCatalogPages[index] = page
+    else reconciliationCatalogPages.push(page)
+  }
   const catalogIdentity = await store.identity('.wiki-service/catalog.json')
-  const reconciled = reconcileWikiFiles(files, catalog.pages.map(page => ({ pageId: page.pageId, path: page.path, revision: page.revision ?? 1, contentHash: page.contentHash ?? '' })), schema)
+  const reconciled = reconcileWikiFiles(files, reconciliationCatalogPages.map(page => ({ pageId: page.pageId, path: page.path, revision: page.revision ?? 1, contentHash: page.contentHash ?? '' })), schema)
   diagnostics.push(...reconciled.diagnostics)
   if (diagnostics.length) return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics }
 
@@ -120,13 +174,15 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
     ? schemaState.contentHash === schemaHash ? schemaState : { formatVersion: 1 as const, schemaVersion: schemaState.schemaVersion + 1, contentHash: schemaHash }
     : { formatVersion: 1 as const, schemaVersion: 1, contentHash: schemaHash }
   const changedPages = reconciled.pages.filter(page => page.externalEdit)
-  const newlyRegisteredPages = reconciled.pages.filter(page => !catalog.pages.some(item => item.pageId === page.pageId || item.path === page.path))
+  const newlyRegisteredPages = reconciled.pages.filter(page => !reconciliationCatalogPages.some(item => item.pageId === page.pageId || item.path === page.path))
   const updatedBodies = new Map<string, string>()
   for (const page of changedPages) {
-    const old = catalog.pages.find(item => item.pageId === page.pageId)
+    const old = reconciliationCatalogPages.find(item => item.pageId === page.pageId)
     if (!old) continue
     try { await store.read(`.wiki-service/page-history/${page.pageId}/${old.revision ?? 1}.md`) }
-    catch { diagnostics.push({ code: 'wiki-history-missing', path: page.path, pageId: page.pageId, message: 'Previous page snapshot is missing; external change is preserved for manual recovery.' }) }
+    catch {
+      if (committedSnapshots.get(page.pageId)?.revision !== old.revision) diagnostics.push({ code: 'wiki-history-missing', path: page.path, pageId: page.pageId, message: 'Previous page snapshot is missing; external change is preserved for manual recovery.' })
+    }
   }
   for (const page of newlyRegisteredPages) {
     const source = files.find(file => file.path === page.path)
@@ -170,6 +226,13 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
     return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-target-changed', path: 'SCHEMA.md', message: 'Schema changed after reconciliation scanned its snapshot.' }] }
   }
 
+  for (const [pageId, snapshot] of committedSnapshots) {
+    const historyPath = `.wiki-service/page-history/${pageId}/${snapshot.revision}.md`
+    if (!(await store.identity(historyPath))) await store.writeImmutable(historyPath, snapshot.content)
+    else if (hashBuffer(await store.read(historyPath)) !== hashBuffer(snapshot.content)) {
+      return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-history-conflict', path: historyPath, pageId, message: 'Committed revision history conflicts with the verified operation staging content.' }] }
+    }
+  }
   if (!schemaState && !(await store.identity('.wiki-service/schema-history/1.md'))) await store.writeImmutable('.wiki-service/schema-history/1.md', schemaText)
   if (schemaState && schemaState.contentHash !== schemaHash && !(await store.identity(`.wiki-service/schema-history/${nextSchemaState.schemaVersion}.md`))) {
     await store.writeImmutable(`.wiki-service/schema-history/${nextSchemaState.schemaVersion}.md`, schemaText)
@@ -265,6 +328,7 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
 }
 
 function hashText(value: string): string { return createHash('sha256').update(value, 'utf8').digest('hex') }
+function hashBuffer(value: Buffer): string { return createHash('sha256').update(value).digest('hex') }
 
 function sameIdentity(left: FileIdentity | null, right: FileIdentity | null): boolean {
   if (left === null || right === null) return left === right

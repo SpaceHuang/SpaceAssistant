@@ -153,3 +153,25 @@ it('does not complete a domain-committed page under an incompatible external sch
   const result = await saveWikiPageForContext(material, context)
   expect(result.success).toBe(false)
 })
+
+for (const existingPage of [false, true]) {
+  it(`preserves the committed snapshot before reconciling a later external edit (existing=${existingPage})`, async () => {
+    const { store, coordinator, context } = await fixture()
+    const first = existingPage
+      ? await coordinator.savePage({ ...material, requestId: 'initial', toolUseId: 'initial', callerId: 'review:local', lane: 'desktop' })
+      : undefined
+    const input = { ...material, markdown: 'committed-before-external', ...(first ? { pageId: first.pageId, expectedRevision: 1 } : {}) }
+    await expect(coordinator.savePage({ ...input, requestId: 'r', toolUseId: 't', callerId: 'review:local', lane: 'desktop', crashAt: 'after-domain-commit' })).rejects.toThrow('injected crash')
+    const operationId = createHash('sha256').update('r\0t').digest('hex')
+    const operation = JSON.parse(await store.readText(`.wiki-service/operations/${operationId}.json`)) as { targetPath: string; result: { pageId: string; revision: number } }
+    await store.write(operation.targetPath, (await store.readText(operation.targetPath)).replace('committed-before-external', 'external-after-commit'))
+
+    const search = await searchWikiForContext({ query: 'external-after-commit' }, context)
+
+    expect(search).toMatchObject({ success: true, data: { matches: [{ pageId: operation.result.pageId }] } })
+    const catalogPage = (await store.readCatalog())!.pages.find(page => page.pageId === operation.result.pageId)!
+    expect(catalogPage.revision).toBeGreaterThan(operation.result.revision)
+    await expect(store.readText(`.wiki-service/page-history/${operation.result.pageId}/${operation.result.revision}.md`)).resolves.toContain('committed-before-external')
+    await expect(store.readText(`.wiki-service/page-history/${operation.result.pageId}/${catalogPage.revision}.md`)).resolves.toContain('external-after-commit')
+  })
+}
