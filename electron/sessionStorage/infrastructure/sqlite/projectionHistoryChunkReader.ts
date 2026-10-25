@@ -12,10 +12,11 @@ type ProjectionHistoryEventRow = {
   invocation_id: string; sequence: number; event_id: string; idempotency_key: string; turn_id: string
   schema_version: number; kind: string; payload_json: string; session_seq: number; commit_order: number; created_at: number
 }
-type ProjectionMessageFactRow = {
+type ProjectionMessageFactHeaderRow = {
   id: string; role: string; timestamp: number; sequence: number; queue_scope: string
-  content_storage_state: ProjectionMessageFact['contentStorageState']; write_mode: string | null; content: string
+  content_storage_state: ProjectionMessageFact['contentStorageState']; write_mode: string | null; stored_content_byte_length: number
 }
+type ProjectionMessageFactContentRow = { id: string; content: string }
 
 const MAX_CHUNK_ROWS = 200
 const MAX_CHUNK_BYTES = 256 * 1024
@@ -64,9 +65,41 @@ export function readProjectionHistoryChunk(
           permit.sessionId, permit.sessionId, input.afterSessionSequence, input.maxRows + 1
         ) as Iterable<ProjectionHistoryEventRow>
       for (const row of rows) {
+        if (events.length >= input.maxRows) { hasMore = true; break }
+        const storedPayloadBytes = Buffer.byteLength(row.payload_json, 'utf8')
+        if (events.length > 0 && byteLength + storedPayloadBytes > input.maxBytes) { hasMore = true; break }
+        if (row.session_seq !== nextSessionSequence + 1 || row.commit_order < 1) {
+          return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'history-order-invalid' }
+        }
+        if (storedPayloadBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) {
+          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+            eventSequence: row.session_seq, observedByteLength: storedPayloadBytes, observedEventRows: 1,
+            reason: 'oversized-event-exceeds-staging-budget' }
+        }
+        if (storedPayloadBytes > input.maxBytes && !input.allowOversizedChunk) {
+          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+            eventSequence: row.session_seq, observedByteLength: storedPayloadBytes, observedEventRows: 1 }
+        }
+        let parsedPayload: unknown
+        try { parsedPayload = JSON.parse(row.payload_json) }
+        catch {
+          return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'projection-history-payload-invalid' }
+        }
+        const spillDescriptors = collectSpillDescriptorsStrict(parsedPayload)
+        const expandedPayloadBytes = storedPayloadBytes + spillDescriptors.reduce((total, descriptor) => total + descriptor.byteLength * 6, 0)
+        if (events.length > 0 && byteLength + expandedPayloadBytes > input.maxBytes) { hasMore = true; break }
+        if (expandedPayloadBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) {
+          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+            eventSequence: row.session_seq, observedByteLength: expandedPayloadBytes, observedEventRows: 1,
+            reason: 'oversized-event-exceeds-staging-budget' }
+        }
+        if (expandedPayloadBytes > input.maxBytes && !input.allowOversizedChunk) {
+          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+            eventSequence: row.session_seq, observedByteLength: expandedPayloadBytes, observedEventRows: 1 }
+        }
         let payloadJson: string
         try {
-          payloadJson = JSON.stringify(hydrateSourceTruthSpills(JSON.parse(row.payload_json), path.join(path.dirname(permit.dbPath), 'spill')))
+          payloadJson = JSON.stringify(hydrateSourceTruthSpills(parsedPayload, path.join(path.dirname(permit.dbPath), 'spill')))
         } catch (error) {
           return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence,
             reason: error instanceof Error ? error.message : 'projection-spill-unavailable' }
@@ -88,9 +121,6 @@ export function readProjectionHistoryChunk(
             reason: 'oversized-event-exceeds-staging-budget' }
         }
         if (events.length >= input.maxRows || (events.length > 0 && byteLength + eventBytes > input.maxBytes)) { hasMore = true; break }
-        if (row.session_seq !== nextSessionSequence + 1 || row.commit_order < 1) {
-          return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'history-order-invalid' }
-        }
         events.push(event)
         byteLength += eventBytes
         nextSessionSequence = row.session_seq
@@ -104,13 +134,30 @@ export function readProjectionHistoryChunk(
       for (let start = 0; start < messageIds.length; start += 400) {
         const ids = messageIds.slice(start, start + 400)
         const rows = conn.prepare(`SELECT messages.id,messages.role,messages.timestamp,messages.sequence,messages.queue_scope,
-          messages.content_storage_state,messages.content,cutover.write_mode
+          messages.content_storage_state,length(CAST(messages.content AS BLOB)) AS stored_content_byte_length,cutover.write_mode
           FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
           WHERE messages.session_id=? AND messages.id IN (${ids.map(() => '?').join(',')}) ORDER BY messages.sequence ASC`)
-          .all(permit.sessionId, ...ids) as ProjectionMessageFactRow[]
-        messageFacts.push(...rows.map((row) => Object.freeze({ id: row.id, role: row.role, timestamp: row.timestamp,
+          .all(permit.sessionId, ...ids) as ProjectionMessageFactHeaderRow[]
+        const headers = rows.map((row) => Object.freeze({ id: row.id, role: row.role, timestamp: row.timestamp,
           sequence: row.sequence, queueScope: row.queue_scope, contentStorageState: row.content_storage_state,
-          writeMode: row.write_mode, storedContent: row.content })))
+          writeMode: row.write_mode, storedContent: '' }))
+        const metadataBytes = Buffer.byteLength(JSON.stringify(headers), 'utf8')
+        const storedContentBytes = rows.reduce((total, row) => total + Number(row.stored_content_byte_length), 0)
+        // Six bytes per source byte is a conservative upper bound for JSON string escaping.
+        const expandedFactsBytes = metadataBytes + storedContentBytes * 6
+        const estimatedChunkBytes = byteLength + expandedFactsBytes
+        if (estimatedChunkBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) return { kind: 'deferred-large', permit,
+          afterSessionSequence: input.afterSessionSequence, eventSequence: events[0]!.sessionSequence,
+          observedByteLength: estimatedChunkBytes, observedEventRows: events.length,
+          reason: 'oversized-source-chunk-exceeds-staging-budget' }
+        if (estimatedChunkBytes > input.maxBytes && !input.allowOversizedChunk) return { kind: 'deferred-large', permit,
+          afterSessionSequence: input.afterSessionSequence, eventSequence: events[0]!.sessionSequence,
+          observedByteLength: estimatedChunkBytes, observedEventRows: events.length }
+        const contentRows = conn.prepare(`SELECT id,content FROM messages WHERE session_id=? AND id IN (${ids.map(() => '?').join(',')})`)
+          .all(permit.sessionId, ...ids) as ProjectionMessageFactContentRow[]
+        const storedContentById = new Map(contentRows.map(({ id, content }) => [id, content]))
+        messageFacts.push(...rows.map((row, index) => Object.freeze({ ...headers[index]!,
+          storedContent: storedContentById.get(row.id) ?? '' })))
       }
       const totalBytes = byteLength + Buffer.byteLength(JSON.stringify(messageFacts), 'utf8')
       if (totalBytes > input.maxBytes && !input.allowOversizedChunk) return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,

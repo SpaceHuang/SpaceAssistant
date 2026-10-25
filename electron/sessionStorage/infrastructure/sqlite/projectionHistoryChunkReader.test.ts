@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { appendMessage, createSession } from '../../../database/operations'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { getDbConnection } from '../../../database/sqliteStore'
@@ -86,5 +86,121 @@ describe('projection read-only History chunk source', () => {
     expect(stagedCandidate).toMatchObject({ kind: 'chunk', afterSessionSequence: 0, nextSessionSequence: 1, byteLength: expect.any(Number) })
     if (stagedCandidate.kind !== 'chunk') throw new Error('expected staged oversized candidate')
     expect(stagedCandidate.byteLength).toBeGreaterThan(512)
+  })
+
+  it('defers an event over the staging cap before parsing its full payload', async () => {
+    temp = createTempDatabase('projection-history-staging-cap-')
+    const session = createSession(temp.db, { name: 'projection history staging cap' })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 10, session.id)
+    await history.appendBatch([{
+      invocationId: 'staging-cap-invocation', turnId: 'staging-cap-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'staging-cap-event', idempotencyKey: 'staging-cap-key', kind: 'invocation-context-committed',
+      payload: { messages: [] },
+    }], 0)
+    const oversizedPayload = JSON.stringify({ messages: [], extra: 'x'.repeat(32 * 1024 * 1024 + 1) })
+    getDbConnection(temp.db).prepare('UPDATE agent_history_events SET payload_json=? WHERE invocation_id=?')
+      .run(oversizedPayload, 'staging-cap-invocation')
+    const sourceIdentityJson = readProjectionSourceIdentity(getDbConnection(temp.db), session.id, session.generation)!
+    const permit = { dbPath: temp.dbPath, sessionId: session.id, sessionGeneration: session.generation,
+      scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson, connectionEpoch: 1, processGeneration: 2, rebuildToken: 'token-large' }
+    const parseSpy = vi.spyOn(JSON, 'parse')
+    try {
+      const result = readProjectionHistoryChunk(permit, { afterSessionSequence: 0, maxRows: 1, maxBytes: 256 * 1024,
+        allowOversizedChunk: true })
+      expect(result).toMatchObject({ kind: 'deferred-large', eventSequence: 1, reason: 'oversized-event-exceeds-staging-budget' })
+      expect(parseSpy.mock.calls.some(([value]) => typeof value === 'string' && value.length > 1024 * 1024)).toBe(false)
+    } finally {
+      parseSpy.mockRestore()
+    }
+  })
+
+  it('defers a source spill whose escaped payload exceeds the staging cap without opening the spill file', async () => {
+    temp = createTempDatabase('projection-history-spill-staging-cap-')
+    const session = createSession(temp.db, { name: 'projection history spill staging cap' })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 10, session.id)
+    await history.appendBatch([{
+      invocationId: 'spill-staging-cap-invocation', turnId: 'spill-staging-cap-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-staging-cap-event', idempotencyKey: 'spill-staging-cap-key', kind: 'invocation-context-committed',
+      payload: { messages: [] },
+    }], 0)
+    const oversizedDescriptor = { __spaceassistant_spill_v1: {
+      version: 1, kind: 'source-of-truth', locator: '11111111-1111-4111-8111-111111111111.spill',
+      byteLength: 5.5 * 1024 * 1024, sha256: 'a'.repeat(64), createdAt: 1, head: '', tail: ''
+    } }
+    getDbConnection(temp.db).prepare('UPDATE agent_history_events SET payload_json=? WHERE invocation_id=?')
+      .run(JSON.stringify({ messages: [], body: oversizedDescriptor }), 'spill-staging-cap-invocation')
+    const sourceIdentityJson = readProjectionSourceIdentity(getDbConnection(temp.db), session.id, session.generation)!
+    const permit = { dbPath: temp.dbPath, sessionId: session.id, sessionGeneration: session.generation,
+      scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson, connectionEpoch: 1, processGeneration: 2, rebuildToken: 'token-spill-large' }
+
+    expect(readProjectionHistoryChunk(permit, { afterSessionSequence: 0, maxRows: 1, maxBytes: 256 * 1024,
+      allowOversizedChunk: true })).toMatchObject({ kind: 'deferred-large', eventSequence: 1,
+      reason: 'oversized-event-exceeds-staging-budget' })
+  })
+
+  it('returns a full page before deferring an oversized next-page event', async () => {
+    temp = createTempDatabase('projection-history-staging-page-boundary-')
+    const session = createSession(temp.db, { name: 'projection history staging page boundary' })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 10, session.id)
+    await history.appendBatch([
+      { invocationId: 'staging-page-invocation', turnId: 'staging-page-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'staging-page-event-1', idempotencyKey: 'staging-page-key-1', kind: 'invocation-context-committed', payload: { messages: [] } },
+      { invocationId: 'staging-page-invocation', turnId: 'staging-page-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'staging-page-event-2', idempotencyKey: 'staging-page-key-2', kind: 'invocation-completed', payload: { status: 'completed' } },
+    ], 0)
+    const oversizedPayload = JSON.stringify({ extra: 'x'.repeat(32 * 1024 * 1024 + 1) })
+    getDbConnection(temp.db).prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?')
+      .run(oversizedPayload, 'staging-page-event-2')
+    const sourceIdentityJson = readProjectionSourceIdentity(getDbConnection(temp.db), session.id, session.generation)!
+    const permit = { dbPath: temp.dbPath, sessionId: session.id, sessionGeneration: session.generation,
+      scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson, connectionEpoch: 1, processGeneration: 2, rebuildToken: 'token-page' }
+    const parseSpy = vi.spyOn(JSON, 'parse')
+    let firstPage: ReturnType<typeof readProjectionHistoryChunk>
+    try {
+      firstPage = readProjectionHistoryChunk(permit, { afterSessionSequence: 0, maxRows: 1, maxBytes: 256 * 1024,
+        allowOversizedChunk: true })
+      expect(firstPage).toMatchObject({ kind: 'chunk', afterSessionSequence: 0, nextSessionSequence: 1, hasMore: true })
+      expect(parseSpy.mock.calls.some(([value]) => typeof value === 'string' && value.length > 1024 * 1024)).toBe(false)
+    } finally {
+      parseSpy.mockRestore()
+    }
+    if (firstPage.kind !== 'chunk') throw new Error('expected first full page before oversized event')
+    expect(readProjectionHistoryChunk(permit, { afterSessionSequence: firstPage.nextSessionSequence, maxRows: 1,
+      maxBytes: 256 * 1024, allowOversizedChunk: true }))
+      .toMatchObject({ kind: 'deferred-large', eventSequence: 2, reason: 'oversized-event-exceeds-staging-budget' })
+  })
+
+  it('defers a large message fact before materializing its body into the worker chunk', async () => {
+    temp = createTempDatabase('projection-history-fact-staging-cap-')
+    const session = createSession(temp.db, { name: 'projection message fact staging cap' })
+    const oversizedBody = '\u0001'.repeat(5.5 * 1024 * 1024)
+    appendMessage(temp.db, { id: 'staging-cap-message', sessionId: session.id, role: 'user', content: oversizedBody,
+      timestamp: 10, status: 'sent' })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 10, session.id)
+    await history.appendBatch([{
+      invocationId: 'staging-cap-facts-invocation', turnId: 'staging-cap-facts-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'staging-cap-facts-event', idempotencyKey: 'staging-cap-facts-key', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'staging-cap-message', role: 'user', content: 'canonical' }] },
+    }], 0)
+    getDbConnection(temp.db).prepare('UPDATE messages SET content=? WHERE id=?').run(oversizedBody, 'staging-cap-message')
+    expect((getDbConnection(temp.db).prepare('SELECT length(content) AS length FROM messages WHERE id=?')
+      .get('staging-cap-message') as { length: number }).length).toBe(oversizedBody.length)
+    const sourceIdentityJson = readProjectionSourceIdentity(getDbConnection(temp.db), session.id, session.generation)!
+    const permit = { dbPath: temp.dbPath, sessionId: session.id, sessionGeneration: session.generation,
+      scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson, connectionEpoch: 1, processGeneration: 2, rebuildToken: 'token-large-fact' }
+    const stringifySpy = vi.spyOn(JSON, 'stringify')
+    try {
+      const result = readProjectionHistoryChunk(permit, { afterSessionSequence: 0, maxRows: 1, maxBytes: 256 * 1024,
+        allowOversizedChunk: true })
+      const resultSummary = result.kind === 'chunk' ? { kind: result.kind, byteLength: result.byteLength,
+        facts: result.messageFacts.map(({ id, storedContent }) => [id, storedContent.length]) } : result
+      expect(result.kind, JSON.stringify(resultSummary)).toBe('deferred-large')
+      expect(result).toMatchObject({ kind: 'deferred-large', eventSequence: 1,
+        reason: 'oversized-source-chunk-exceeds-staging-budget' })
+      expect(stringifySpy.mock.calls.some(([value]) => Array.isArray(value) && value.some((item) =>
+        item && typeof item === 'object' && 'storedContent' in item && (item as { storedContent?: unknown }).storedContent === oversizedBody))).toBe(false)
+    } finally {
+      stringifySpy.mockRestore()
+    }
   })
 })
