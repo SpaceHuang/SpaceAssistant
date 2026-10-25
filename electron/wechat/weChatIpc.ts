@@ -535,7 +535,9 @@ export function registerWeChatIpcHandlers(
     const status = await b.botService.startPoll()
     const boundUserId = b.botService.getBoundUserId() ?? status.boundUserId
     const allowlistBackfilled = backfillWeChatOwnerAllowlistIfMissing(deps.db, { ...status, boundUserId })
-    persistWeChatConfig(deps.db, { remoteEnabled: true })
+    // A successful listener start is the explicit user action that activates this channel;
+    // repair a stale disabled flag left by older global renderer snapshots before inbound guard.
+    persistWeChatConfig(deps.db, { enabled: status.loggedIn, remoteEnabled: true })
     logWeChatCliEvent(status.pollState === 'polling' ? 'info' : 'error', 'wechat.poll.start', {
       pollState: status.pollState,
       lastError: status.lastError,
