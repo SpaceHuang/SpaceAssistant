@@ -234,6 +234,17 @@ export function getProjectedTurnContext(
   return resolveSelectedMessageBodies(db, selected, (id) => readSessionTranscriptProjection(db, id))
 }
 
+/** Select the accepted turn's ordered rows without resolving canonical-backed bodies on the caller thread. */
+export function selectTurnContextForPreparedRead(
+  db: AppDatabase,
+  sessionId: string,
+  boundarySequence: number | undefined,
+  requiredUserMessageId: string | undefined,
+  excludeMessageIds: string[]
+): Message[] {
+  return selectTurnContext(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds)
+}
+
 /** Preserve the legacy ascending sequence/limit/offset contract for whole-session consumers. */
 export function getProjectedMessages(db: AppDatabase, sessionId: string, limit = 500, offset = 0): Message[] {
   return resolveSelectedMessageBodies(db, readLegacyMessages(db, sessionId, limit, offset), (id) => readSessionTranscriptProjection(db, id))

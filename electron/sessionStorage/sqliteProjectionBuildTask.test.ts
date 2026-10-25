@@ -13,6 +13,7 @@ import { readProjectionChatBodyCache } from './application/projectionChatBodyCac
 import { CHAT_BODY_PROJECTION_SPEC_VERSION, encodeProjectionScopeKey } from './domain/scopeKey'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { advanceProcessGeneration } from '../database/processGeneration'
+import { queueInputFingerprint } from '../queueInputFingerprint'
 import { getDbConnection } from '../database/sqliteStore'
 import { openDatabase } from '../database'
 import { createSessionProjectionBlobStore } from './infrastructure/sqlite/sessionProjectionBlobStore'
@@ -156,6 +157,55 @@ describe('SQLite projection build task composition', () => {
         await expect(host.storage.queries.readPreparedApiBaseline?.({ sessionId: session.id, prepared: ensured })).resolves.toBeUndefined()
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
     } finally { db.close(); temp.cleanup() }
+  })
+
+  it('loads accepted turn context from the prepared worker cache without replaying History on the main thread', async () => {
+    const temp = createTempDatabase('sqlite-projection-accepted-context-')
+    const db = temp.db
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-accepted-context-blobs-'))
+    try {
+      const session = createSession(db, { name: 'prepared accepted context', model: 'test' })
+      const user = appendMessage(db, { id: 'prepared-accepted-user', sessionId: session.id, role: 'user',
+        content: 'accepted canonical body', timestamp: 11, status: 'sent' })
+      appendMessage(db, { id: 'prepared-accepted-assistant', sessionId: session.id, role: 'assistant',
+        content: '', timestamp: 12, status: 'streaming' })
+      createPersistedTurn(db, { turnId: 'prepared-accepted-turn', requestId: 'prepared-accepted-request', sessionId: session.id,
+        userMessageId: user.message.id, assistantMessageId: 'prepared-accepted-assistant',
+        contextBoundarySequence: user.sequence - 1, state: 'executing', excludeMessageIds: [] })
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id)
+      await history.appendBatch([
+        { invocationId: 'prepared-accepted-turn', turnId: 'prepared-accepted-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'prepared-accepted-input', idempotencyKey: 'prepared-accepted-input', kind: 'session-input-committed',
+          payload: { sessionId: session.id, messageId: user.message.id, role: 'user', inputFingerprint: queueInputFingerprint({ text: 'accepted canonical body', attachments: [] }) } },
+        { invocationId: 'prepared-accepted-turn', turnId: 'prepared-accepted-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'prepared-accepted-context', idempotencyKey: 'prepared-accepted-context', kind: 'invocation-context-committed',
+          payload: { messages: [{ id: user.message.id, role: 'user', content: 'accepted canonical body', timestamp: 11 }] } },
+        { invocationId: 'prepared-accepted-turn', turnId: 'prepared-accepted-turn', sequence: 3, schemaVersion: 1,
+          eventId: 'prepared-accepted-terminal', idempotencyKey: 'prepared-accepted-terminal', kind: 'invocation-completed',
+          payload: { status: 'completed' } },
+      ], 0)
+      getDbConnection(db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      getDbConnection(db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?")
+        .run(user.message.id)
+      const processGeneration = advanceProcessGeneration(getDbConnection(db))
+      const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      const host = createSqliteSessionStorageHost(db, {
+        storage: { projectionBlobRoot: root },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
+        maintenanceTasks: [task],
+      })
+      const replaySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+      const shadowReplaySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
+
+      const actual = await host.storage.execution.loadAcceptedMessagesAsync({ sessionId: session.id, turnId: 'prepared-accepted-turn' })
+      expect(actual).toMatchObject([{ id: user.message.id, content: 'accepted canonical body' }])
+      expect(replaySpy).not.toHaveBeenCalled()
+      expect(shadowReplaySpy).not.toHaveBeenCalled()
+      replaySpy.mockRestore()
+      shadowReplaySpy.mockRestore()
+    } finally { temp.cleanup() }
   })
 
   it('rebuilds an oversized History event when its persisted pending chunk is corrupted', async () => {

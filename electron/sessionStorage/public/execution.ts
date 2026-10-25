@@ -96,5 +96,8 @@ export interface SessionExecutionStore {
   bindStartedContinuationTurn(input: { requestId: string; sessionId: string; text: string; attachments?: Message['attachments']; payloadSha256: string; intentKind: 'exact-continue' | 'follow-up'; route: string; turnId: string; source?: { invocationId: string; turnId: string; sequence?: number }; retrySource?: { assistantMessageId: string; invocationId?: string } }): ContinuationIntentReceipt
   bindExactContinueTurn(input: { requestId: string; sessionId: string; text: string; attachments?: Message['attachments']; payloadSha256: string; turnId: string }): ContinuationIntentReceipt
   repairPreparedContinuationAcceptance(input: { requestId: string; sessionId: string; text: string; attachments?: Message['attachments']; payloadSha256: string; intentKind: 'exact-continue' | 'follow-up'; route: string; turnId: string; source?: { invocationId: string; turnId: string; sequence?: number }; retrySource?: { assistantMessageId: string; invocationId?: string } }): ContinuationIntentReceipt
+  /** Synchronous compatibility reader; production provider handoffs must use loadAcceptedMessagesAsync. */
   loadAcceptedMessages(ref: Readonly<{ sessionId: string; turnId: string }>): Message[]
+  /** Prepare and resolve canonical-backed accepted context through the bounded worker cache before handoff. */
+  loadAcceptedMessagesAsync(ref: Readonly<{ sessionId: string; turnId: string }>): Promise<Message[]>
 }

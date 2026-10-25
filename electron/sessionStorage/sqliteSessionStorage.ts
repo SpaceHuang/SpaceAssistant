@@ -122,7 +122,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       },
       prepare: () => options.prepareProjection!({ sessionId, scopeKey: bodyScopeKey, specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION }) })
   }
-  const execution = createSessionExecutionStore(db, queries, options)
+  const execution = createSessionExecutionStore(db, queries, { getTurnRuntime: options.getTurnRuntime, ensureChatBodyV1 })
   const contexts = createSessionStorageContextRouter(async ({ sessionId, isBusy }) => {
     const session = queries.readSession(sessionId)
     const workDir = options.getWorkDirForSession?.(sessionId)

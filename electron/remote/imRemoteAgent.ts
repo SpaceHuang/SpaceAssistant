@@ -226,7 +226,7 @@ export async function runImRemoteAgent(args: {
         throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
       }
       if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
-      rawMessages = storage.execution.loadAcceptedMessages({ sessionId: args.sessionId, turnId: args.turnId })
+      rawMessages = await storage.execution.loadAcceptedMessagesAsync({ sessionId: args.sessionId, turnId: args.turnId })
       acceptedUserMessageId = persisted.userMessageId
     } else {
       rawMessages = await readChatMessagesAfterPreparation(storage, { sessionId: args.sessionId })

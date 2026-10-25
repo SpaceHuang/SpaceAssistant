@@ -22,6 +22,7 @@ import {
   getProjectedMessages,
   getProjectedSearchCorpusPage,
   getProjectedTurnContext,
+  selectTurnContextForPreparedRead,
   resolveProjectedRetryContext,
   searchProjectedMessages
 } from './infrastructure/sqlite/sessionTranscriptProjection'
@@ -334,6 +335,35 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         return isUsable(preparedTarget) ? preparedTarget : null
       })
     } } : {}),
+    ...(preparedChatBody ? {
+      isPreparedViewCurrent: ({ sessionId, prepared }) => prepared.sessionId === sessionId &&
+        preparedChatBody.currentSourceIdentity(sessionId, prepared.sessionGeneration) === prepared.sourceIdentityJson,
+      readPreparedTurnContext: async ({ sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds = [], prepared }) => {
+        const view = prepared
+        if (!view || view.sessionId !== sessionId) return undefined
+        const select = () => selectTurnContextForPreparedRead(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds)
+        const selected = runInTransaction(getDbConnection(db), () => {
+          if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+          const messages = select()
+          return { messages, canonicalIds: canonicalBodyMessageIds(db, sessionId, messages) }
+        })
+        if (!selected) return undefined
+        if (selected.canonicalIds.length === 0) return selected.messages
+        let bodies: PreparedChatBodySelection
+        try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
+        catch {
+          preparedChatBody.invalidate(view)
+          return undefined
+        }
+        return runInTransaction(getDbConnection(db), () => {
+          if (preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) return undefined
+          const latest = select()
+          if (latest.length !== selected.messages.length || latest.some((message, index) =>
+            JSON.stringify(message) !== JSON.stringify(selected.messages[index]))) return undefined
+          return overlayPreparedBodies(latest, selected.canonicalIds, bodies)
+        })
+      }
+    } : {}),
     readChatPage: ({ sessionId, beforeSequence, limit }) => {
       const page = getProjectedChatMessagePage(db, sessionId, beforeSequence, limit)
       return { ...page, entries: projectMessageEntriesV1('chatMessageV1', page.entries) }

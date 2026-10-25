@@ -136,6 +136,11 @@ export interface SessionQueries {
   readPreparedExportPage?(input: { sessionId: string; fromSequence: number; pageSize: number; prepared?: PreparedChatBodyView }): Promise<ExportPage | undefined>
   /** Async retry-context lookup; undefined means selection must use the existing authority reader. */
   readPreparedRetryTarget?(input: { sessionId: string; failedAssistantMessageId?: string; prepared?: PreparedChatBodyView }): Promise<RetryContextTarget | null | undefined>
+  /** Async accepted-turn context lookup; undefined means the execution adapter must use its authority reader. */
+  readPreparedTurnContext?(input: { sessionId: string; boundarySequence?: number; requiredUserMessageId?: string;
+    excludeMessageIds?: string[]; prepared?: PreparedChatBodyView }): Promise<Message[] | undefined>
+  /** Recheck the prepared source fence inside the accepted-turn validation transaction. */
+  isPreparedViewCurrent?(input: { sessionId: string; prepared: PreparedChatBodyView }): boolean
   readChatPage(input: { sessionId: string; beforeSequence?: number | null; limit?: number }): ChatMessagePage
   readTurnContext(input: { sessionId: string; boundarySequence?: number; requiredUserMessageId?: string; excludeMessageIds?: string[] }): Message[]
   readApiBaseline(input: { sessionId: string; limit?: number }): ApiContextBaseline

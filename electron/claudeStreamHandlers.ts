@@ -81,14 +81,14 @@ type ClaudeChatMessageWithContentBlocks = {
   timestamp?: number
 }
 
-export function loadAuthoritativeTurnContext(_db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string, sessionStorage: SessionStorage): { messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] } {
+export async function loadAuthoritativeTurnContext(_db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string, sessionStorage: SessionStorage): Promise<{ messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] }> {
   const persisted = sessionStorage.execution.readTurn({ sessionId, turnId })
   if (!persisted || persisted.sessionId !== sessionId || persisted.requestId !== requestId || persisted.startToken !== startToken) {
     throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
   }
   if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
   if (!persisted.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
-  const messages = sessionStorage.execution.loadAcceptedMessages({ sessionId, turnId })
+  const messages = await sessionStorage.execution.loadAcceptedMessagesAsync({ sessionId, turnId })
   let continuationTranscript: ClaudeChatMessageWithContentBlocks[] | undefined
   if (persisted.executionConfig?.continuationSource) {
     continuationTranscript = sessionStorage.execution.loadAcceptedContinuationTranscript({ sessionId, turnId })
@@ -355,7 +355,7 @@ export function registerClaudeStreamHandlers(_ipcMain: IpcMain, deps: ClaudeStre
         if (!sessionId) throw new Error('Invalid sessionId')
         const db = deps.getAppDatabase()
         if (!deps.turnRuntime || !turnId || !turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
-        const authoritative = loadAuthoritativeTurnContext(db, turnId, sessionId, requestId, turnStartToken, sessionStorage)
+        const authoritative = await loadAuthoritativeTurnContext(db, turnId, sessionId, requestId, turnStartToken, sessionStorage)
         eventTurnId = turnId
         const session = sessionStorage.queries.readSession(sessionId)
         if (session) {

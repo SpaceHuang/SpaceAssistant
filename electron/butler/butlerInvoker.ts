@@ -476,7 +476,7 @@ async function runButlerModelTurn(
       throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
     }
     if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
-    rawMessages = sessionStorage.execution.loadAcceptedMessages({ sessionId: args.sessionId, turnId: args.turnId })
+    rawMessages = await sessionStorage.execution.loadAcceptedMessagesAsync({ sessionId: args.sessionId, turnId: args.turnId })
   } else {
     rawMessages = await readChatMessagesAfterPreparation(sessionStorage, { sessionId: args.sessionId })
   }

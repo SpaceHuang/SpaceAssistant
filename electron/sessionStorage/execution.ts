@@ -20,6 +20,7 @@ import type { ContinuationIntentAcceptance, EnqueueResult } from './public/model
 import type { PreparedIdentity, ContinuationRecordSnapshot, SessionExecutionStore } from './application/ports'
 import type { SessionHistoryPort } from './public/ports'
 import type { SessionQueries } from './public/ports'
+import type { PreparedChatBodyView } from './public/model'
 import type { HistoryPort } from '../../packages/agent-sdk/src/history'
 import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from '../runtime/canonicalHistory'
@@ -39,7 +40,10 @@ export function createTurnRuntimeForSessionExecution(execution: SessionExecution
 }
 
 /** Narrow SQLite execution adapter for prepared acceptance and validated context loading. */
-export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQueries, options: { getTurnRuntime?: () => import('../turnRuntime').TurnRuntime } = {}): SessionExecutionStore {
+export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQueries, options: {
+  getTurnRuntime?: () => import('../turnRuntime').TurnRuntime
+  ensureChatBodyV1?: (input: { sessionId: string }) => Promise<PreparedChatBodyView>
+} = {}): SessionExecutionStore {
   // 压缩换入（reopenDatabaseConnection）会整体替换底层 DatabaseSync，门面身份不变；
   // 工厂期捕获连接会在换入后永久失效（database is not open），必须每方法入口现取。
   const liveConn = () => getDbConnection(db)
@@ -369,6 +373,10 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
     loadAcceptedMessages: ({ sessionId, turnId }) => {
       const turn = getPersistedTurnInSession(db, sessionId, turnId)
       return loadAcceptedMessagesForTurn(db, turn, queries)
+    },
+    loadAcceptedMessagesAsync: async ({ sessionId, turnId }) => {
+      const turn = getPersistedTurnInSession(db, sessionId, turnId)
+      return loadAcceptedMessagesForTurnPrepared(db, turn, queries, options.ensureChatBodyV1)
     }
   }
   const frozenExecution = Object.freeze(execution)
@@ -421,31 +429,27 @@ function getPersistedTurnInSession(db: AppDatabase, sessionId: string, turnId: s
   return turn
 }
 
-export function loadAcceptedMessagesForTurn(db: AppDatabase, turn: PersistedTurn, queries?: SessionQueries): Message[] {
-  if (!turn.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
+function validateAcceptedMessagesInTransaction(db: AppDatabase, turn: PersistedTurn, queries: SessionQueries | undefined,
+  messages: Message[], usePrepared: boolean): Message[] {
   const conn = getDbConnection(db)
-  return runInTransaction(conn, () => {
-    const selection = { sessionId: turn.sessionId, boundarySequence: turn.contextBoundarySequence, requiredUserMessageId: turn.userMessageId!, excludeMessageIds: turn.excludeMessageIds ?? [] }
-    const messages = queries
-      ? queries.readTurnContext(selection)
-      : getProjectedTurnContext(db, selection.sessionId, selection.boundarySequence, selection.requiredUserMessageId, selection.excludeMessageIds)
-    const history = new SqliteAgentHistory(conn, 1, Date.now, turn.sessionId)
-    let events = history.readSync(turn.turnId).events
-    if (events.length === 0 && turn.requestId !== turn.turnId) events = history.readSync(turn.requestId).events
-    const acceptedInputs = events.filter((event) => event.kind === 'session-input-committed')
-    if (acceptedInputs.length > 0 && (acceptedInputs.length !== 1 || events[0] !== acceptedInputs[0])) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
-    if (acceptedInputs.length === 0 && (turn.acceptedInputHistoryVersion ?? 0) > 0) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
-    const acceptedInput = acceptedInputs[0]
-    let acceptedInputForShadow: { messageId: string; fingerprint: string } | undefined
-    if (acceptedInput) {
-      const payload = acceptedInput.payload as { sessionId?: unknown; messageId?: unknown; role?: unknown; inputFingerprint?: unknown }
-      const userMessage = messages.find((message) => message.id === turn.userMessageId)
-      if (acceptedInput.turnId !== turn.turnId || !userMessage || payload.sessionId !== turn.sessionId || payload.messageId !== userMessage.id || payload.role !== 'user' ||
-        typeof payload.inputFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(payload.inputFingerprint) ||
-        queueInputFingerprint({ text: userMessage.content, attachments: userMessage.attachments }) !== payload.inputFingerprint) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
-      acceptedInputForShadow = { messageId: userMessage.id, fingerprint: payload.inputFingerprint }
-    }
-    let acceptedMessages = messages
+  const history = new SqliteAgentHistory(conn, 1, Date.now, turn.sessionId)
+  let events = history.readSync(turn.turnId).events
+  if (events.length === 0 && turn.requestId !== turn.turnId) events = history.readSync(turn.requestId).events
+  const acceptedInputs = events.filter((event) => event.kind === 'session-input-committed')
+  if (acceptedInputs.length > 0 && (acceptedInputs.length !== 1 || events[0] !== acceptedInputs[0])) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+  if (acceptedInputs.length === 0 && (turn.acceptedInputHistoryVersion ?? 0) > 0) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+  const acceptedInput = acceptedInputs[0]
+  let acceptedInputForShadow: { messageId: string; fingerprint: string } | undefined
+  if (acceptedInput) {
+    const payload = acceptedInput.payload as { sessionId?: unknown; messageId?: unknown; role?: unknown; inputFingerprint?: unknown }
+    const userMessage = messages.find((message) => message.id === turn.userMessageId)
+    if (acceptedInput.turnId !== turn.turnId || !userMessage || payload.sessionId !== turn.sessionId || payload.messageId !== userMessage.id || payload.role !== 'user' ||
+      typeof payload.inputFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(payload.inputFingerprint) ||
+      queueInputFingerprint({ text: userMessage.content, attachments: userMessage.attachments }) !== payload.inputFingerprint) throw new Error('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    acceptedInputForShadow = { messageId: userMessage.id, fingerprint: payload.inputFingerprint }
+  }
+  let acceptedMessages = messages
+  if (!usePrepared) {
     let usedCanonicalContext = false
     try {
       const canonical = readCanonicalApiContextIfEligible(db, turn.sessionId, turn.contextBoundarySequence, turn.userMessageId, turn.excludeMessageIds ?? [], acceptedInputForShadow)
@@ -456,6 +460,48 @@ export function loadAcceptedMessagesForTurn(db: AppDatabase, turn: PersistedTurn
     if (!usedCanonicalContext) {
       try { shadowAcceptedTurnContext(db, turn.sessionId, messages, acceptedInputForShadow) } catch { /* legacy reads remain observational */ }
     }
-    return acceptedMessages
+  }
+  return acceptedMessages
+}
+
+function selectAcceptedTurnMessages(db: AppDatabase, turn: PersistedTurn, queries?: SessionQueries): Message[] {
+  if (!turn.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
+  const selection = { sessionId: turn.sessionId, boundarySequence: turn.contextBoundarySequence,
+    requiredUserMessageId: turn.userMessageId, excludeMessageIds: turn.excludeMessageIds ?? [] }
+  return queries
+    ? queries.readTurnContext(selection)
+    : getProjectedTurnContext(db, selection.sessionId, selection.boundarySequence, selection.requiredUserMessageId, selection.excludeMessageIds)
+}
+
+export function loadAcceptedMessagesForTurn(db: AppDatabase, turn: PersistedTurn, queries?: SessionQueries): Message[] {
+  if (!turn.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => validateAcceptedMessagesInTransaction(db, turn, queries,
+    selectAcceptedTurnMessages(db, turn, queries), false))
+}
+
+export async function loadAcceptedMessagesForTurnPrepared(db: AppDatabase, turn: PersistedTurn, queries?: SessionQueries,
+  ensureChatBodyV1?: (input: { sessionId: string }) => Promise<PreparedChatBodyView>): Promise<Message[]> {
+  if (!turn.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
+  if (!ensureChatBodyV1 || !queries?.readPreparedTurnContext || !queries.isPreparedViewCurrent) {
+    return loadAcceptedMessagesForTurn(db, turn, queries)
+  }
+  const selection = { sessionId: turn.sessionId, boundarySequence: turn.contextBoundarySequence,
+    requiredUserMessageId: turn.userMessageId, excludeMessageIds: turn.excludeMessageIds ?? [] }
+  let preparedView: PreparedChatBodyView | undefined
+  let preparedMessages: Message[] | undefined
+  try {
+    preparedView = await ensureChatBodyV1({ sessionId: turn.sessionId })
+    preparedMessages = await queries.readPreparedTurnContext({ ...selection, prepared: preparedView })
+  } catch {
+    preparedView = undefined
+    preparedMessages = undefined
+  }
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const usePrepared = preparedMessages !== undefined && preparedView !== undefined &&
+      queries.isPreparedViewCurrent!({ sessionId: turn.sessionId, prepared: preparedView })
+    const messages = usePrepared ? preparedMessages! : selectAcceptedTurnMessages(db, turn, queries)
+    return validateAcceptedMessagesInTransaction(db, turn, queries, messages, usePrepared)
   })
 }

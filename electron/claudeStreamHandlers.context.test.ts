@@ -49,7 +49,7 @@ describe('loadAuthoritativeTurnContext', () => {
     const storage = createSqliteSessionStorage(db)
     const loadContinuationTranscript = vi.fn(storage.execution.loadAcceptedContinuationTranscript)
     const injectedStorage = { ...storage, execution: { ...storage.execution, loadAcceptedContinuationTranscript: loadContinuationTranscript } }
-    const context = loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token', injectedStorage)
+    const context = await loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token', injectedStorage)
     expect(loadContinuationTranscript).toHaveBeenCalledWith({ sessionId: session.id, turnId: 'target-turn' })
     expect(context.continuationTranscript).toEqual([
       { role: 'user', content: 'checkpoint user history', id: 'continuation-user' },
@@ -57,12 +57,12 @@ describe('loadAuthoritativeTurnContext', () => {
     ])
     conn.prepare("UPDATE agent_history_events SET payload_json = json_set(payload_json, '$.continuationSource.checkpointSha256', ?) WHERE invocation_id = ?")
       .run('b'.repeat(64), 'target-invocation')
-    expect(() => loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token'))
-      .toThrow('TURN_CONTINUATION_HISTORY_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token'))
+      .rejects.toThrow('TURN_CONTINUATION_HISTORY_MISMATCH')
     conn.prepare("UPDATE agent_history_events SET payload_json = json_set(json_set(payload_json, '$.continuationSource.checkpointSha256', ?), '$.continuationSource.turnId', ?) WHERE invocation_id = ?")
       .run('a'.repeat(64), 'another-source-turn', 'target-invocation')
-    expect(() => loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token'))
-      .toThrow('TURN_CONTINUATION_HISTORY_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token'))
+      .rejects.toThrow('TURN_CONTINUATION_HISTORY_MISMATCH')
     db.close()
   })
 
@@ -77,7 +77,7 @@ describe('loadAuthoritativeTurnContext', () => {
     expect(recovered[0]).toMatchObject({ id: 'current-user', role: 'user', content: 'current question' })
   })
 
-  it('忽略 renderer 可能提交的伪造历史，只按持久化 turn boundary 返回上下文', () => {
+  it('忽略 renderer 可能提交的伪造历史，只按持久化 turn boundary 返回上下文', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'authoritative-context' })
     appendMessage(db, { id: 'old', sessionId: session.id, role: 'user', content: 'old', timestamp: 1, status: 'sent' })
@@ -89,16 +89,16 @@ describe('loadAuthoritativeTurnContext', () => {
     const readTurn = vi.fn(storage.execution.readTurn)
     const injectedStorage = { ...storage, execution: { ...storage.execution, readTurn } }
 
-    const context = loadAuthoritativeTurnContext(db, 'turn-a', session.id, 'request-a', 'token-a', injectedStorage)
+    const context = await loadAuthoritativeTurnContext(db, 'turn-a', session.id, 'request-a', 'token-a', injectedStorage)
     expect(readTurn).toHaveBeenCalledWith({ sessionId: session.id, turnId: 'turn-a' })
     expect(context.currentUserMessageId).toBe('user-a')
     expect(context.messages.map((message) => message.id)).toEqual(['old', 'user-a'])
     expect(context.messages.some((message) => message.content === 'must not enter')).toBe(false)
-    expect(() => loadAuthoritativeTurnContext(db, 'turn-a', session.id, 'request-a', 'wrong-token')).toThrow('TURN_EXECUTION_CREDENTIALS_INVALID')
+    await expect(loadAuthoritativeTurnContext(db, 'turn-a', session.id, 'request-a', 'wrong-token')).rejects.toThrow('TURN_EXECUTION_CREDENTIALS_INVALID')
     db.close()
   })
 
-  it('canonical accepted-input fingerprint binds Desktop turn context to the committed user message', () => {
+  it('canonical accepted-input fingerprint binds Desktop turn context to the committed user message', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'accepted-input-binding' })
     const acceptedAttachment = { id: 'accepted-image', stagingKey: `chat-attachments/${session.id}/accepted-image.png`, fileName: 'accepted-image.png', mimeType: 'image/png', byteLength: 4 }
@@ -108,20 +108,20 @@ describe('loadAuthoritativeTurnContext', () => {
       turn: { turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: session.id, assistantMessageId: 'accepted-assistant', state: 'prepared', startToken: 'accepted-token' }
     })
 
-    expect(loadAuthoritativeTurnContext(db, 'accepted-turn', session.id, 'accepted-request', 'accepted-token').messages)
+    expect((await loadAuthoritativeTurnContext(db, 'accepted-turn', session.id, 'accepted-request', 'accepted-token')).messages)
       .toContainEqual(expect.objectContaining({ id: 'accepted-user', content: 'accepted question' }))
     getDbConnection(db).prepare('UPDATE messages SET content = ? WHERE id = ?').run('changed after acceptance', 'accepted-user')
 
-    expect(() => loadAuthoritativeTurnContext(db, 'accepted-turn', session.id, 'accepted-request', 'accepted-token'))
-      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'accepted-turn', session.id, 'accepted-request', 'accepted-token'))
+      .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
     getDbConnection(db).prepare('UPDATE messages SET content = ?, attachments = ? WHERE id = ?')
       .run('accepted question', JSON.stringify([{ ...acceptedAttachment, stagingKey: `chat-attachments/${session.id}/replaced.png` }]), 'accepted-user')
-    expect(() => loadAuthoritativeTurnContext(db, 'accepted-turn', session.id, 'accepted-request', 'accepted-token'))
-      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'accepted-turn', session.id, 'accepted-request', 'accepted-token'))
+      .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
     db.close()
   })
 
-  it('accepted-input History fingerprint keeps an edited current user message from changing a prepared turn', () => {
+  it('accepted-input History fingerprint keeps an edited current user message from changing a prepared turn', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'accepted-input-edit-fence' })
     prepareTurnAtomically(db, {
@@ -132,12 +132,12 @@ describe('loadAuthoritativeTurnContext', () => {
 
     updateMessageContent(db, 'accepted-edit-user', { content: 'edited after acceptance' })
 
-    expect(() => loadAuthoritativeTurnContext(db, 'accepted-edit-turn', session.id, 'accepted-edit-request', 'accepted-edit-token'))
-      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'accepted-edit-turn', session.id, 'accepted-edit-request', 'accepted-edit-token'))
+      .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
     db.close()
   })
 
-  it('legacy accepted turns without an input receipt read the edited user value at handoff time', () => {
+  it('legacy accepted turns without an input receipt read the edited user value at handoff time', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'legacy-edit-handoff' })
     const user = appendMessage(db, { id: 'legacy-edit-user', sessionId: session.id, role: 'user', content: 'before edit', timestamp: 1, status: 'sent' })
@@ -147,12 +147,12 @@ describe('loadAuthoritativeTurnContext', () => {
 
     updateMessageContent(db, 'legacy-edit-user', { content: 'after edit' })
 
-    const context = loadAuthoritativeTurnContext(db, 'legacy-edit-turn', session.id, 'legacy-edit-request', 'legacy-edit-token')
+    const context = await loadAuthoritativeTurnContext(db, 'legacy-edit-turn', session.id, 'legacy-edit-request', 'legacy-edit-token')
     expect(context.messages).toContainEqual(expect.objectContaining({ id: 'legacy-edit-user', content: 'after edit' }))
     db.close()
   })
 
-  it('accepted-turn canonical shadow failure leaves the legacy context and fingerprint path unchanged', () => {
+  it('accepted-turn canonical shadow failure leaves the legacy context and fingerprint path unchanged', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'accepted-shadow-failure' })
     prepareTurnAtomically(db, {
@@ -164,7 +164,7 @@ describe('loadAuthoritativeTurnContext', () => {
       throw new Error('injected shadow-only API failure')
     })
 
-    const context = loadAuthoritativeTurnContext(db, 'shadow-turn', session.id, 'shadow-request', 'shadow-token')
+    const context = await loadAuthoritativeTurnContext(db, 'shadow-turn', session.id, 'shadow-request', 'shadow-token')
 
     expect(context.messages).toContainEqual(expect.objectContaining({ id: 'shadow-user', content: 'legacy accepted text' }))
     expect(shadow).toHaveBeenCalledTimes(1)
@@ -172,7 +172,7 @@ describe('loadAuthoritativeTurnContext', () => {
     db.close()
   })
 
-  it('accepted-input History marker must belong to the persisted Desktop turn', () => {
+  it('accepted-input History marker must belong to the persisted Desktop turn', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'accepted-input-turn-owner' })
     prepareTurnAtomically(db, {
@@ -183,8 +183,8 @@ describe('loadAuthoritativeTurnContext', () => {
     getDbConnection(db).prepare("UPDATE agent_history_events SET turn_id = ? WHERE invocation_id = ? AND kind = 'session-input-committed'")
       .run('foreign-turn', 'accepted-owner-turn')
 
-    expect(() => loadAuthoritativeTurnContext(db, 'accepted-owner-turn', session.id, 'accepted-owner-request', 'accepted-owner-token'))
-      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'accepted-owner-turn', session.id, 'accepted-owner-request', 'accepted-owner-token'))
+      .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
     db.close()
   })
 
@@ -205,8 +205,8 @@ describe('loadAuthoritativeTurnContext', () => {
       ...marker, sequence: 2, eventId: 'late-input-marker', idempotencyKey: 'late-input-marker'
     }], 1)
 
-    expect(() => loadAuthoritativeTurnContext(db, 'marker-order-turn', session.id, 'marker-order-request', 'marker-order-token'))
-      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'marker-order-turn', session.id, 'marker-order-request', 'marker-order-token'))
+      .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
     db.close()
   })
 
@@ -224,12 +224,12 @@ describe('loadAuthoritativeTurnContext', () => {
       ...marker, sequence: 2, eventId: 'duplicate-input-marker', idempotencyKey: 'duplicate-input-marker'
     }], 1)
 
-    expect(() => loadAuthoritativeTurnContext(db, 'duplicate-marker-turn', session.id, 'duplicate-marker-request', 'duplicate-marker-token'))
-      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'duplicate-marker-turn', session.id, 'duplicate-marker-request', 'duplicate-marker-token'))
+      .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
     db.close()
   })
 
-  it('requires History for turns created with the accepted-input commit protocol', () => {
+  it('requires History for turns created with the accepted-input commit protocol', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'accepted-input-stream-missing' })
     prepareTurnAtomically(db, {
@@ -240,12 +240,12 @@ describe('loadAuthoritativeTurnContext', () => {
     getDbConnection(db).prepare('DELETE FROM agent_history_events WHERE invocation_id = ?').run('missing-stream-turn')
     getDbConnection(db).prepare('DELETE FROM agent_history_streams WHERE invocation_id = ?').run('missing-stream-turn')
 
-    expect(() => loadAuthoritativeTurnContext(db, 'missing-stream-turn', session.id, 'missing-stream-request', 'missing-stream-token'))
-      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'missing-stream-turn', session.id, 'missing-stream-request', 'missing-stream-token'))
+      .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
     db.close()
   })
 
-  it('verifies accepted attachments when a queued user message is claimed', () => {
+  it('verifies accepted attachments when a queued user message is claimed', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'queued-accepted-attachment' })
     const attachment = { id: 'queued-image', stagingKey: `chat-attachments/${session.id}/queued-image.png`, fileName: 'queued.png', mimeType: 'image/png', byteLength: 8 }
@@ -255,16 +255,16 @@ describe('loadAuthoritativeTurnContext', () => {
       assistantMessageId: 'queued-accepted-assistant', requestId: 'queued-accepted-request', startToken: 'queued-accepted-token'
     })
 
-    expect(loadAuthoritativeTurnContext(db, 'queued-accepted-turn', session.id, 'queued-accepted-request', 'queued-accepted-token').messages)
+    expect((await loadAuthoritativeTurnContext(db, 'queued-accepted-turn', session.id, 'queued-accepted-request', 'queued-accepted-token')).messages)
       .toContainEqual(expect.objectContaining({ id: queued.persisted.message.id, attachments: [attachment] }))
     getDbConnection(db).prepare('UPDATE messages SET attachments = ? WHERE id = ?')
       .run(JSON.stringify([{ ...attachment, stagingKey: `chat-attachments/${session.id}/substituted.png` }]), queued.persisted.message.id)
-    expect(() => loadAuthoritativeTurnContext(db, 'queued-accepted-turn', session.id, 'queued-accepted-request', 'queued-accepted-token'))
-      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'queued-accepted-turn', session.id, 'queued-accepted-request', 'queued-accepted-token'))
+      .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
     db.close()
   })
 
-  it('拒绝 configuring turn，避免将未完成配置误判为旧版 executionConfig 缺失', () => {
+  it('拒绝 configuring turn，避免将未完成配置误判为旧版 executionConfig 缺失', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'configuring-context' })
     const user = appendMessage(db, { id: 'configuring-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
@@ -275,8 +275,8 @@ describe('loadAuthoritativeTurnContext', () => {
       contextBoundarySequence: user.sequence - 1, state: 'configuring', startToken: 'configuring-token'
     })
 
-    expect(() => loadAuthoritativeTurnContext(db, 'configuring-turn', session.id, 'configuring-request', 'configuring-token'))
-      .toThrow('TURN_EXECUTION_CONFIGURING')
+    await expect(loadAuthoritativeTurnContext(db, 'configuring-turn', session.id, 'configuring-request', 'configuring-token'))
+      .rejects.toThrow('TURN_EXECUTION_CONFIGURING')
     db.close()
   })
 
@@ -299,7 +299,7 @@ describe('loadAuthoritativeTurnContext', () => {
     const currentAssistant = appendMessage(db, { id: 'long-current-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 602, status: 'streaming' })
     createPersistedTurn(db, { turnId: 'long-turn', requestId: 'long-request', sessionId: session.id, userMessageId: required.message.id, assistantMessageId: currentAssistant.message.id, contextBoundarySequence: boundary.sequence, state: 'prepared', startToken: 'long-token' })
 
-    const authoritative = loadAuthoritativeTurnContext(db, 'long-turn', session.id, 'long-request', 'long-token')
+    const authoritative = await loadAuthoritativeTurnContext(db, 'long-turn', session.id, 'long-request', 'long-token')
     const built = await buildToolChatMessagesFromSource({ userDataDir: '/tmp', sourceMessages: authoritative.messages, currentUserMessageId: authoritative.currentUserMessageId, sessionId: session.id })
     const payload = normalizeAndValidateClaudeMessagesWithContentBlocks(built, { sessionId: session.id, requiredUserMessageId: authoritative.currentUserMessageId })
 
