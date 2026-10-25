@@ -19,7 +19,9 @@ describe('Wiki command to sourceId integration', () => {
     fs.writeFileSync(path.join(workDir, 'note.md'), 'integration source')
     const wikiRoot = path.join(userDataPath, 'llm-wiki')
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const imported = await parseWikiCommand('/wiki ingest note.md', { manualActivated: [], manualDisabled: [] }, {
       wikiInit: vi.fn(),
       wikiStatus: vi.fn().mockResolvedValue({ rootPath: 'llm-wiki', initialized: true, pageCount: 0, rawCount: 0 }),
@@ -42,7 +44,9 @@ describe('Wiki command to sourceId integration', () => {
     const userDataPath = temp('wiki-route-bulk-data-')
     const wikiRoot = path.join(userDataPath, 'llm-wiki')
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     fs.mkdirSync(path.join(workDir, 'docs', 'nested'), { recursive: true })
     fs.mkdirSync(path.join(workDir, '.private'), { recursive: true })
     fs.mkdirSync(path.join(workDir, 'node_modules', 'pkg'), { recursive: true })
@@ -64,5 +68,23 @@ describe('Wiki command to sourceId integration', () => {
     expect(result.text).not.toContain('secret')
     expect(result.text).not.toContain('readme')
     expect(fs.readdirSync(path.join(userDataPath, 'llm-wiki', '.wiki-service', 'sources'))).toHaveLength(1)
+  })
+
+  it('caps bulk ingest by maxBatchIngest before binding sources', async () => {
+    const workDir = temp('wiki-route-bulk-cap-work-')
+    const userDataPath = temp('wiki-route-bulk-cap-data-')
+    const config = { ...DEFAULT_WIKI_CONFIG, maxBatchIngest: 1 }
+    const wikiRoot = path.join(userDataPath, config.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
+    for (const name of ['a.md', 'b.md', 'c.md']) fs.writeFileSync(path.join(workDir, name), name)
+    const result = await importAllRawFromWorkDir(workDir, config, { userDataPath })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.sources).toHaveLength(1)
+    expect(result.remainingCount).toBe(2)
+    expect(fs.readdirSync(path.join(wikiRoot, '.wiki-service', 'sources'))).toHaveLength(1)
   })
 })

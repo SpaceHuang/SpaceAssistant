@@ -360,6 +360,13 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
 })
 
 describe('Wiki schema change confirmation policy', () => {
+  it('hard-denies automation page writes instead of sending them to the approval agent', async () => {
+    for (const toolName of ['memory.wiki_save_page', 'memory.wiki_move_page']) {
+      const result = await evaluateToolCallGate(base({ lane: 'automation', toolName, toolInput: {} }))
+      expect(result.decision).toMatchObject({ type: 'deny', ruleId: 'wiki-page-write-automation-deny' })
+    }
+  })
+
   it('requires a user confirmation for apply and rejects unattended automation', async () => {
     const desktop = await evaluateToolCallGate(base({ toolName: 'memory.wiki_update_schema', toolInput: { proposalId: 'proposal-1', expectedSchemaVersion: 1 } }))
     expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'wiki-schema-update-human-confirm', answerer: 'user' })

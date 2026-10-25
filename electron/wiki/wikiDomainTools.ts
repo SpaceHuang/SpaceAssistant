@@ -129,7 +129,7 @@ export async function saveWikiPageForContext(input: WikiInput, context: WikiDoma
   if (input.expectedRevision !== undefined && input.pageId === undefined) return { success: false, error: 'wiki_page_id_required_for_update' }
   if (!context.requestId || !context.toolUseId || !context.sessionId) return { success: false, error: 'wiki_invocation_invalid' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { requireEnabled: true })
     if (!(await validateSourceRefs(store, input.sourceRefs as Array<{ sourceId: string; sourceRevision: number }> | undefined))) return { success: false, error: 'source_missing' }
     const runtime = await getHistoryRuntime(store)
     const result = await runtime.coordinator.savePage({
@@ -148,7 +148,7 @@ export async function moveWikiPageForContext(input: WikiInput, context: WikiDoma
     (input.parentPageId !== undefined && input.parentPageId !== null && typeof input.parentPageId !== 'string')) return { success: false, error: 'wiki_page_input_invalid' }
   if (!context.requestId || !context.toolUseId || !context.sessionId) return { success: false, error: 'wiki_invocation_invalid' }
   try {
-    const store = await getReadyWikiStore(context, { reconcileExternalChanges: false })
+    const store = await getReadyWikiStore(context, { reconcileExternalChanges: false, requireEnabled: true })
     const moveIdentity = {
       requestId: context.requestId, toolUseId: context.toolUseId, callerId: wikiCaller(context).callerId, lane: context.lane ?? 'desktop',
       pageId: input.pageId, expectedRevision: input.expectedRevision as number, parentPageId: typeof input.parentPageId === 'string' ? input.parentPageId : null
@@ -156,7 +156,7 @@ export async function moveWikiPageForContext(input: WikiInput, context: WikiDoma
     const replayed = await replayCompletedWikiMove(store, moveIdentity)
     if (replayed) return { success: true, data: replayed }
     const reconciliation = await reconcileExternalWikiChanges(store)
-    if (reconciliation.diagnostics.length) throw new WikiDomainToolError('wiki_external_change_conflict')
+    if (reconciliation.diagnostics.some(item => item.code !== 'wiki-schema-invalid')) throw new WikiDomainToolError('wiki_external_change_conflict')
     const catalog = await store.readCatalog()
     const page = catalog?.pages.find(item => item.pageId === input.pageId)
     if (!page) return { success: false, error: 'page_not_found' }
@@ -249,7 +249,7 @@ export async function importWikiSourceForContext(
 ): Promise<ToolExecutorResult> {
   if (typeof input.sourceRef !== 'string' || !input.sourceRef || input.sourceRef.length > 1024) return { success: false, error: 'source_missing' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { requireEnabled: true })
     if (!/^[0-9a-f-]{36}$/i.test(input.sourceRef)) return { success: false, error: 'source_missing' }
     const sourceId = input.sourceRef
     const bindingText = await store.readText(`.wiki-service/sources/${sourceId}.json`).catch(() => undefined)
@@ -265,7 +265,7 @@ export async function importWikiSourceForContext(
 
 export async function searchWikiForContext(input: WikiInput, context: Pick<ToolExecutionContext, 'wikiConfig' | 'userDataDir' | 'appDatabase'>): Promise<ToolExecutorResult> {
   try {
-    return { success: true, data: await searchWikiCatalog(await getReadyWikiStore(context), input) }
+    return { success: true, data: await searchWikiCatalog(await getReadyWikiStore(context, { allowInvalidSchemaSnapshot: true }), input) }
   } catch (error) {
     return { success: false, error: error instanceof WikiDomainToolError ? error.code : 'wiki_search_unavailable' }
   }
@@ -275,7 +275,7 @@ export async function openWikiPageForContext(input: WikiInput, context: WikiDoma
   if (typeof input.pageId !== 'string' || !input.pageId) return { success: false, error: 'wiki-page-unavailable' }
   if (input.revision !== undefined && (!Number.isSafeInteger(input.revision) || (input.revision as number) < 1)) return { success: false, error: 'wiki-page-unavailable' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { allowInvalidSchemaSnapshot: true })
     const service = await getPageReadService(store)
     const page = await service.openPage(input.pageId, wikiCaller(context), input.revision as number | undefined)
     const sourceRefs = 'sourceRefs' in page && Array.isArray(page.sourceRefs) ? page.sourceRefs : []
@@ -288,7 +288,7 @@ export async function openWikiPageForContext(input: WikiInput, context: WikiDoma
 export async function readWikiPageForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
   if (typeof input.readHandle !== 'string' || !input.readHandle) return { success: false, error: 'page_read_handle_expired' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { reconcileExternalChanges: false, allowInvalidSchemaSnapshot: true })
     const service = await getPageReadService(store)
     return { success: true, data: await service.readPage(input.readHandle, wikiCaller(context), {
       ...(typeof input.cursor === 'string' ? { cursor: input.cursor } : {}),
@@ -303,7 +303,7 @@ export async function readWikiPageForContext(input: WikiInput, context: WikiDoma
 export async function readWikiSourceForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
   if (typeof input.sourceId !== 'string' || !input.sourceId) return { success: false, error: 'source_missing' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { allowInvalidSchemaSnapshot: true })
     let service = sourceReadServices.get(store.root)
     if (!service) {
       service = createWikiSourceService({ store, resolveSourceRef: () => undefined, validateSource: async () => false, authorize: async () => true })
@@ -323,7 +323,7 @@ export async function readWikiSourceForContext(input: WikiInput, context: WikiDo
 export async function listWikiPageRevisionsForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
   if (typeof input.pageId !== 'string' || !input.pageId) return { success: false, error: 'wiki-page-unavailable' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { allowInvalidSchemaSnapshot: true })
     const revisions = await listWikiPageRevisions(store, input.pageId)
     const enriched = await Promise.all(revisions.map(async revision => {
       const snapshot = await store.readText(`.wiki-service/page-history/${input.pageId}/${revision.revision}.md`).catch(() => '')
@@ -355,7 +355,7 @@ export async function prepareWikiRestoreForContext(input: WikiInput, context: Wi
 export async function applyWikiRestoreForContext(input: WikiInput, context: WikiDomainContext): Promise<ToolExecutorResult> {
   if (typeof input.proposalId !== 'string' || !input.proposalId || !isRestoreFinalPage(input.finalPage)) return { success: false, error: 'restore_conflict' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { requireEnabled: true })
     const runtime = await getHistoryRuntime(store)
     const receipt = { proposalId: input.proposalId, requestId: context.requestId, toolUseId: context.toolUseId, sessionId: context.sessionId,
       lane: context.lane ?? 'desktop', confirmed: context.toolUserConfirmed === true, answerer: context.userConfirmationAnswerer }
@@ -380,7 +380,7 @@ export async function updateWikiSchemaForContext(input: WikiInput, context: Wiki
   if (typeof input.proposalId !== 'string' || !input.proposalId || !Number.isSafeInteger(input.expectedSchemaVersion) || (input.expectedSchemaVersion as number) < 1 ||
     !isSchemaProposalDiff(input.proposalDiff)) return { success: false, error: 'schema_material_mismatch' }
   try {
-    const store = await getReadyWikiStore(context)
+    const store = await getReadyWikiStore(context, { requireEnabled: true })
     const receipt = {
       proposalId: input.proposalId,
       requestId: context.requestId,
@@ -541,17 +541,17 @@ async function resolveSourceAttribution(store: WikiFileStore, value: unknown): P
 
 async function getReadyWikiStore(
   context: Pick<WikiDomainContext, 'wikiConfig' | 'userDataDir' | 'appDatabase'>,
-  options: { reconcileExternalChanges?: boolean } = {}
+  options: { reconcileExternalChanges?: boolean; requireEnabled?: boolean; allowInvalidSchemaSnapshot?: boolean } = {}
 ): Promise<WikiFileStore> {
   const wikiConfig = context.wikiConfig ?? (context.appDatabase ? readWikiConfig(context.appDatabase) : undefined)
   if (!wikiConfig) throw new WikiDomainToolError('wiki_lifecycle_unavailable')
   const root = resolveSharedWikiRoot(context.userDataDir, wikiConfig)
   const lifecycle = await createWikiLifecycleController(root).read()
-  if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') throw new WikiDomainToolError('wiki_lifecycle_not_ready')
+  if (options.requireEnabled ? lifecycle.lifecycle !== 'domain_enabled' : lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') throw new WikiDomainToolError('wiki_lifecycle_not_ready')
   const store = createWikiFileStore(root)
   if (options.reconcileExternalChanges !== false && await store.identity('SCHEMA.md')) {
     const reconciliation = await reconcileExternalWikiChanges(store)
-    if (reconciliation.diagnostics.length) throw new WikiDomainToolError('wiki_external_change_conflict')
+    if (reconciliation.diagnostics.length && !(options.allowInvalidSchemaSnapshot && reconciliation.diagnostics.every(item => item.code === 'wiki-schema-invalid'))) throw new WikiDomainToolError('wiki_external_change_conflict')
   }
   return store
 }

@@ -85,6 +85,7 @@ import os from 'os'
 import path from 'path'
 import { createHash } from 'node:crypto'
 import { initWikiStructure } from './wiki/wikiInit'
+import { createWikiLifecycleController } from './wiki/wikiLifecycle'
 import { DEFAULT_WIKI_CONFIG } from '../src/shared/domainTypes'
 import { getDbConnection } from './database'
 import { commitImPolicySnapshot } from './confirmation/imPolicyStore'
@@ -258,6 +259,7 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-tool-loop-wd-'))
     try {
       await initWikiStructure(workDir, DEFAULT_WIKI_CONFIG, { userDataPath: userDataDir, installSkill: false })
+      await createWikiLifecycleController(path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)).enable()
       const { result } = await runWith(baseMaterials({
         providerRouteId: routeId,
         userDataDir,
@@ -289,6 +291,7 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-im-discovery-wd-'))
     try {
       await initWikiStructure(workDir, DEFAULT_WIKI_CONFIG, { userDataPath: userDataDir, installSkill: false })
+      await createWikiLifecycleController(path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)).enable()
       const appDb = createMemoryAppDb('zh-CN')
       commitImPolicySnapshot(getDbConnection(appDb), {
         policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'wiki-im-discovery-policy'
@@ -323,6 +326,7 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-search-loop-wd-'))
     try {
       await initWikiStructure(workDir, DEFAULT_WIKI_CONFIG, { userDataPath: userDataDir, installSkill: false })
+      await createWikiLifecycleController(path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)).enable()
       const store = createWikiFileStore(path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath))
       const pageText = `<!-- wiki-page:start -->\n${JSON.stringify({ formatVersion: 1, pageId: 'p-1', categoryId: 'topic', summary: 'Assistant architecture', parentPageId: null, sourceRefs: [], revision: 3 })}\n<!-- wiki-page:end -->\n# Space Assistant\n\nAssistant architecture`
       await store.write('wiki/private-location.md', pageText)
@@ -352,6 +356,7 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiki-read-source-loop-wd-'))
     try {
       await initWikiStructure(workDir, DEFAULT_WIKI_CONFIG, { userDataPath: userDataDir, installSkill: false })
+      await createWikiLifecycleController(path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)).enable()
       fs.writeFileSync(path.join(workDir, 'AGENTS.md'), 'Bound source content for the Wiki agent.', 'utf8')
       const imported = await importRawFromWorkDir(workDir, DEFAULT_WIKI_CONFIG, 'AGENTS.md', { userDataPath: userDataDir })
       expect(imported.ok).toBe(true)

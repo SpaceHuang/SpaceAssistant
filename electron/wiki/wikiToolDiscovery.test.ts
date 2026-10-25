@@ -71,6 +71,8 @@ describe('Wiki domain tool discovery', () => {
     const controller = createWikiLifecycleController(root)
     await controller.initialize({ fresh: true })
     const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG }
+    expect(await executeWikiDiscovery({}, context)).toMatchObject({ success: false, error: 'wiki_lifecycle_not_ready' })
+    await controller.enable()
     expect((await executeWikiDiscovery({}, context)).success).toBe(true)
     await controller.markRecoveryRequired()
     expect(await executeWikiDiscovery({}, context)).toMatchObject({ success: false, error: 'wiki_lifecycle_not_ready' })
@@ -83,6 +85,7 @@ describe('Wiki domain tool discovery', () => {
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
     await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    await createWikiLifecycleController(wikiRoot).enable()
     const db = openDatabase(':memory:')
     setConfigValue(db, 'config.wiki', JSON.stringify(DEFAULT_WIKI_CONFIG))
     try {

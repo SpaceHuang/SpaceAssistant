@@ -17,7 +17,7 @@ export type WikiCommandDeps = {
   wikiImportRaw: (payload: {
     srcRelPath: string
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean; sourceId?: string; sourceRevision?: number } | { ok: false; error: string }>
-  wikiImportAllRaw?: () => Promise<{ ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> } | { ok: false; error: string }>
+  wikiImportAllRaw?: () => Promise<{ ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }>; remainingCount?: number } | { ok: false; error: string }>
 }
 
 const WIKI_SKILL = WIKI_VOCABULARY_PREFIX
@@ -100,7 +100,7 @@ export async function parseWikiCommand(
       return {
         type: 'run',
         text: `请通过 memory.wiki_read_source 读取并整理以下已绑定来源，再通过 memory.wiki_save_page 保存知识页面。\n${imported.sources.map(source => `- sourceId=${source.sourceId} sourceRevision=${source.sourceRevision} displayName=${source.displayName}`).join('\n')}`,
-        hint: `[Wiki] 已绑定 ${imported.sources.length} 个知识来源，Ingest 已开始`,
+        hint: `[Wiki] 已绑定 ${imported.sources.length} 个知识来源${imported.remainingCount ? `，还有 ${imported.remainingCount} 个待后续批次导入` : ''}，Ingest 已开始`,
         skillsState,
         wikiModeActive: true
       }

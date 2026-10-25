@@ -50,7 +50,7 @@ export async function executeWikiDiscovery(input: Record<string, unknown>, conte
   if (!wikiConfig) return { success: false, error: 'wiki_config_missing' }
   const root = resolveSharedWikiRoot(context.userDataDir, wikiConfig)
   const lifecycle = await createWikiLifecycleController(root).read()
-  if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') {
+  if (lifecycle.lifecycle !== 'domain_enabled') {
     return { success: false, error: 'wiki_lifecycle_not_ready' }
   }
   return {

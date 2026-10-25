@@ -39,6 +39,11 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     denyClass: 'forbidden', action: 'deny', locked: true, reason: 'automation lane cannot restore Wiki pages'
   },
   {
+    id: 'wiki-page-write-automation-deny', when: 'invocation',
+    match: { lane: ['automation'], toolName: ['memory.wiki_save_page', 'memory.wiki_move_page'] },
+    denyClass: 'forbidden', action: 'deny', locked: true, reason: 'automation lane cannot write Wiki pages'
+  },
+  {
     id: 'wiki-page-restore-human-confirm', when: 'invocation',
     match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'memory.wiki_apply_restore' },
     denyClass: 'insufficient-info', action: 'ask', answerer: 'user', humanRequired: true, locked: true, reason: 'Wiki page restores require user confirmation'

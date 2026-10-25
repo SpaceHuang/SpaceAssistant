@@ -19,6 +19,27 @@ async function fixture() {
 const base = { requestId: 'req-1', toolUseId: 'tool-1', callerId: 'assistant', lane: 'chat', title: 'Alpha', categoryId: 'topic', summary: 'A', markdown: 'Body', schemaVersion: 1 }
 
 describe('WikiDomainCoordinator', () => {
+  it('projects categories in Schema order and includes complete page navigation and provenance metadata', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wiki-domain-index-'))
+    roots.push(root)
+    const store = createWikiFileStore(root)
+    const sourceId = '01234567-89ab-cdef-0123-456789abcdef'
+    await store.writeImmutable(`.wiki-service/source-history/${sourceId}/1.md`, Buffer.from('source snapshot'))
+    const coordinator = createWikiDomainCoordinator({ store, schema: () => ({ schemaVersion: 1, categories: [
+      { id: 'z-first', name: 'First', status: 'active' }, { id: 'a-second', name: 'Second', status: 'active' }
+    ] }) })
+    const first = await coordinator.savePage({ ...base, requestId: 'index-z', toolUseId: 'index-z', title: 'First item', categoryId: 'z-first', sourceRefs: [{ sourceId, sourceRevision: 1 }] })
+    const second = await coordinator.savePage({ ...base, requestId: 'index-a', toolUseId: 'index-a', title: 'Second item', categoryId: 'a-second' })
+    const index = await store.readText('wiki/index.md')
+
+    expect(index.indexOf('## z-first')).toBeLessThan(index.indexOf('## a-second'))
+    expect(index).toContain(`pageId: ${first.pageId}`)
+    expect(index).toContain('parentPageId: null')
+    expect(index).toContain('updatedAt: ')
+    expect(index).toContain(`sourceRefs: ${sourceId}@1`)
+    expect(index).toContain(`pageId: ${second.pageId}`)
+  })
+
   it('replays completed invocations before checking their stale expected revision', async () => {
     const { root, coordinator } = await fixture()
     const created = await coordinator.savePage(base)

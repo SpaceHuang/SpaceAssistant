@@ -35,7 +35,9 @@ async function initializeReadyWiki(userDataPath: string, config = wikiConfig()):
   const { createWikiLifecycleController } = await import('./wikiLifecycle')
   const root = path.join(userDataPath, config.rootPath)
   fs.mkdirSync(root, { recursive: true })
-  await createWikiLifecycleController(root).initialize({ fresh: true })
+  const lifecycle = createWikiLifecycleController(root)
+  await lifecycle.initialize({ fresh: true })
+  await lifecycle.enable()
 }
 
 describe('importRawFromWorkDir 共享根（T1.12c）', () => {

@@ -331,10 +331,13 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
     if (!(await store.identity(historyPath))) await store.writeImmutable(historyPath, Buffer.from(snapshot))
     if (snapshot !== source.content) await store.write(page.path, snapshot, source.identity)
   }
-  const pages = reconciled.pages.map(page => ({
-    pageId: page.pageId, path: page.path, revision: page.revision, contentHash: hashText(updatedBodies.get(page.path) ?? files.find(file => file.path === page.path)!.content), title: page.title,
-    categoryId: page.categoryId, summary: page.summary, parentPageId: page.parentPageId, sourceRefs: page.sourceRefs
-  }))
+  const pages = reconciled.pages.map(page => {
+    const observed = files.find(file => file.path === page.path)
+    return {
+      pageId: page.pageId, path: page.path, revision: page.revision, contentHash: hashText(updatedBodies.get(page.path) ?? observed!.content), title: page.title,
+      categoryId: page.categoryId, summary: page.summary, parentPageId: page.parentPageId, updatedAt: observed ? new Date(observed.identity.mtimeMs).toISOString() : undefined, sourceRefs: page.sourceRefs
+    }
+  })
   const aliasMap = new Map((catalog.pathAliases ?? []).map(alias => [alias.path, alias.pageId]))
   for (const page of pages) {
     const previous = catalog.pages.find(item => item.pageId === page.pageId)
@@ -352,7 +355,7 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
   await store.write('.wiki-service/catalog.json', `${JSON.stringify(nextCatalog, null, 2)}\n`, catalogIdentity)
   try {
     const operations = await readOperationEvents(store)
-    await rebuildProjection(store, 'index', buildWikiIndex(pages.filter(page => page.title && page.categoryId).map(page => ({ pageId: page.pageId, path: page.path, revision: page.revision ?? 1, title: page.title!, categoryId: page.categoryId!, summary: page.summary, parentPageId: page.parentPageId }))))
+    await rebuildProjection(store, 'index', buildWikiIndex(pages.filter(page => page.title && page.categoryId).map(page => ({ pageId: page.pageId, path: page.path, revision: page.revision ?? 1, title: page.title!, categoryId: page.categoryId!, summary: page.summary, parentPageId: page.parentPageId, updatedAt: page.updatedAt, sourceRefs: page.sourceRefs })), schema.categories.map(category => category.id)))
     await rebuildProjection(store, 'log', buildWikiLog(operations))
   } catch (error) {
     return { pages: pages.length, changed: changedPages.length, tombstones: reconciled.tombstones, diagnostics: [{ code: 'wiki-projection-rebuild-failed', path: 'wiki/index.md', message: error instanceof Error ? error.message : String(error) }] }

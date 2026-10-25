@@ -33,7 +33,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n')
     const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-write', lane: 'desktop', requestId: 'request-save', toolUseId: 'tool-save' }
@@ -57,7 +59,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n')
     const sourceId = '01234567-89ab-cdef-0123-456789abcdef'
@@ -112,7 +116,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(path.join(wikiRoot, 'wiki', 'topics'), { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const schema = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
     await store.write('SCHEMA.md', schema)
@@ -137,7 +143,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{\"formatVersion\":1,\"categories\":[{\"id\":\"topic\",\"name\":\"Topic\",\"description\":\"Topics\",\"status\":\"active\"}]}\n<!-- wiki-categories:end -->\n')
     await store.write('wiki/external.md', `${serializeWikiPageMarker({ pageId: 'external-page', categoryId: 'topic', summary: 'External summary', parentPageId: null, sourceRefs: [], revision: 1 })}\n# External\n\nDiscovered body\n`)
@@ -155,7 +163,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{\"formatVersion\":1,\"categories\":[{\"id\":\"topic\",\"name\":\"Topic\",\"description\":\"Topics\",\"status\":\"active\"}]}\n<!-- wiki-categories:end -->\n')
     const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-search-delete', lane: 'desktop', requestId: 'request-search-delete', toolUseId: 'tool-search-delete' }
@@ -174,7 +184,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{\"formatVersion\":1,\"categories\":[{\"id\":\"topic\",\"name\":\"Topic\",\"description\":\"Topics\",\"status\":\"active\"}]}\n<!-- wiki-categories:end -->\n')
     const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-parent-cycle', lane: 'desktop', requestId: 'request-parent-cycle', toolUseId: 'tool-parent-cycle' }
@@ -195,7 +207,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{\"formatVersion\":1,\"categories\":[{\"id\":\"topic\",\"name\":\"Topic\",\"description\":\"Topics\",\"status\":\"active\"}]}\n<!-- wiki-categories:end -->\n')
     const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-open-deleted', lane: 'desktop', requestId: 'request-open-deleted', toolUseId: 'tool-open-deleted' }
@@ -217,7 +231,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const initial = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
     await store.write('SCHEMA.md', initial)
@@ -237,7 +253,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const schema = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
     await store.write('SCHEMA.md', schema)
@@ -260,7 +278,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const lastValid = '# Valid\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
     await store.write('SCHEMA.md', lastValid)
@@ -269,6 +289,38 @@ describe('Wiki domain search tool', () => {
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\nnot-json\n<!-- wiki-categories:end -->\n')
     const result = await getWikiSchemaForContext({ userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG })
     expect(result).toMatchObject({ success: true, data: { valid: false, diagnostics: expect.arrayContaining([expect.objectContaining({ code: expect.any(String) })]), lastValid: { schemaVersion: 1, content: lastValid } } })
+  })
+
+  it('allows a fixed page snapshot to be read while the current SCHEMA is invalid', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
+    const store = createWikiFileStore(wikiRoot)
+    const schema = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
+    await store.write('SCHEMA.md', schema)
+    await store.write('.wiki-service/schema-state.json', JSON.stringify({ formatVersion: 1, schemaVersion: 1, contentHash: createHash('sha256').update(schema).digest('hex') }))
+    await store.write('SCHEMA.md', schema)
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'invalid-schema-read', lane: 'desktop', requestId: 'invalid-schema-read', toolUseId: 'invalid-schema-read' }
+    const saved = await saveWikiPageForContext({ title: 'Snapshot', categoryId: 'topic', summary: '', markdown: 'Fixed body', schemaVersion: 1 }, context)
+    const pageId = (saved as { data: { pageId: string } }).data.pageId
+    const opened = await openWikiPageForContext({ pageId }, context)
+    const readHandle = (opened as { data: { readHandle: string } }).data.readHandle
+    await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\nnot-json\n<!-- wiki-categories:end -->\n')
+
+    expect(await readWikiPageForContext({ readHandle }, context)).toMatchObject({ success: true, data: { text: 'Fixed body\n' } })
+    expect(await saveWikiPageForContext({ title: 'Blocked', categoryId: 'topic', summary: '', markdown: 'body', schemaVersion: 1 }, { ...context, requestId: 'blocked', toolUseId: 'blocked' })).toMatchObject({ success: false, error: 'wiki_external_change_conflict' })
+  })
+
+  it('keeps writes closed until the lifecycle is explicitly enabled', async () => {
+    const userDataDir = tempRoot()
+    const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'ready-write', lane: 'desktop', requestId: 'ready-write', toolUseId: 'ready-write' }
+    expect(await saveWikiPageForContext({ title: 'Blocked', categoryId: 'topic', summary: '', markdown: 'body', schemaVersion: 1 }, context)).toMatchObject({ success: false, error: 'wiki_lifecycle_not_ready' })
   })
 
   it('exposes the stable structured error envelope through the registered Wiki tool', async () => {
@@ -313,7 +365,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: 'p-1', path: 'wiki/a.md', revision: 2, title: 'Alpha', categoryId: 'topic', summary: 'Summary' }] })
     await store.writeImmutable('.wiki-service/page-history/p-1/2.md', Buffer.from('# Alpha\nfirst line\nsecond line\n', 'utf8'))
@@ -333,7 +387,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const body = '# Guide\n\n## Details\n\nAuthored content.\n'
     const snapshot = `${serializeWikiPageMarker({ pageId: 'p-envelope', categoryId: 'topic', summary: 'summary', parentPageId: null, sourceRefs: [], revision: 3 })}\n# Guide\n\n${body}`
@@ -355,7 +411,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n')
     const context = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-save-read', lane: 'desktop', requestId: 'request-save-read', toolUseId: 'tool-save-read' }
@@ -376,7 +434,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(path.join(wikiRoot, 'wiki', 'topics'), { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n')
     const oldText = `${serializeWikiPageMarker({ pageId: 'p-external', categoryId: 'topic', summary: '', parentPageId: null, sourceRefs: [], revision: 1 })}\n# External\n\nold body\n`
@@ -394,7 +454,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(path.join(wikiRoot, 'wiki', 'topics'), { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const previousSchema = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Topics","status":"active"}]}\n<!-- wiki-categories:end -->\n'
     const schema = previousSchema.replace('# Rules', '# Rules\n\nExternally clarified rule.')
@@ -425,7 +487,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const sourceId = '01234567-89ab-cdef-0123-456789abcdef'
     await store.write('.wiki-service/sources/' + sourceId + '.json', JSON.stringify({ formatVersion: 1, sourceId, sourceRevision: 1, displayName: 'notes.md', projectId: 'project-a' }))
@@ -444,7 +508,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const sourceId = '12345678-1234-4234-8234-123456789abc'
     const sourcePath = `.wiki-service/source-history/${sourceId}/1.md`
     await storeWrite(wikiRoot, sourcePath, 'trusted content')
@@ -460,7 +526,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.writeImmutable('.wiki-service/page-history/p-1/1.md', Buffer.from('first snapshot'))
     const result = await listWikiPageRevisionsForContext({ pageId: 'p-1' }, {
@@ -478,7 +546,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const initial = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n'
     const proposed = initial.replace('"name":"Topic"', '"name":"Knowledge"')
@@ -501,7 +571,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const initial = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n'
     const proposed = initial.replace('"name":"Topic"', '"name":"Knowledge"')
@@ -519,7 +591,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const activeSchema = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n'
     const deprecatedSchema = activeSchema.replace('"status":"active"', '"status":"deprecated"')
@@ -554,7 +628,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     const initial = '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n'
     const proposed = initial.replace('"name":"Topic"', '"name":"Updated"')
@@ -588,7 +664,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n')
     const base = { userDataDir, wikiConfig: DEFAULT_WIKI_CONFIG, sessionId: 'session-restore-conflict', lane: 'desktop', requestId: 'request-restore-conflict', toolUseId: 'save-a' }
@@ -608,7 +686,9 @@ describe('Wiki domain search tool', () => {
     const userDataDir = tempRoot()
     const wikiRoot = path.join(userDataDir, DEFAULT_WIKI_CONFIG.rootPath)
     fs.mkdirSync(wikiRoot, { recursive: true })
-    await createWikiLifecycleController(wikiRoot).initialize({ fresh: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
     const store = createWikiFileStore(wikiRoot)
     await store.write('SCHEMA.md', '# Rules\n\n<!-- wiki-categories:start -->\n{"formatVersion":1,"categories":[{"id":"topic","name":"Topic","description":"Knowledge","status":"active"}]}\n<!-- wiki-categories:end -->\n')
     const pageId = 'restore-page-1'

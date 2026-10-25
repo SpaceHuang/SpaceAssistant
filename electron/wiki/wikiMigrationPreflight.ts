@@ -97,7 +97,7 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
     const parsed = parseWikiPageMarker(candidate.content)
     const title = /^#\s+(.+?)\s*#*\s*$/m.exec(parsed.body)?.[1]?.trim()
     if (!parsed.marker || !title) { allPagesAreDomainFormatted = false; continue }
-    currentProjectionPages.push({ pageId: parsed.marker.pageId, title, categoryId: parsed.marker.categoryId, summary: parsed.marker.summary, path: candidatePath, revision: parsed.marker.revision, parentPageId: parsed.marker.parentPageId })
+    currentProjectionPages.push({ pageId: parsed.marker.pageId, title, categoryId: parsed.marker.categoryId, summary: parsed.marker.summary, path: candidatePath, revision: parsed.marker.revision, parentPageId: parsed.marker.parentPageId, sourceRefs: parsed.marker.sourceRefs })
   }
   for (const file of [...input.files].sort((a, b) => a.path.localeCompare(b.path))) {
     const normalized = normalizeWikiRelativePath(file.path)
@@ -113,7 +113,7 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
     }
     files.push({ path: normalized, sha256, kind })
     if (kind === 'legacy-index') {
-      if (allPagesAreDomainFormatted && file.content === buildWikiIndex(currentProjectionPages)) continue
+      if (allPagesAreDomainFormatted && file.content === buildWikiIndex(currentProjectionPages, schema.categories.map(category => category.id))) continue
       const indexReview = reviewLegacyIndex(normalized, file.content)
       review.indexNotes.push(...indexReview.notes)
       review.unclassifiedIndexContent.push(...indexReview.unclassified)
@@ -203,15 +203,15 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
     const { marker, body } = parseWikiPageMarker(content)
     const title = /^#\s+(.+?)\s*#*\s*$/m.exec(body)?.[1]?.trim()
     if (!marker || !title) continue
-    projectionPages.push({ pageId: marker.pageId, title, categoryId: marker.categoryId, summary: marker.summary, path: normalized, revision: marker.revision, parentPageId: marker.parentPageId })
+    projectionPages.push({ pageId: marker.pageId, title, categoryId: marker.categoryId, summary: marker.summary, path: normalized, revision: marker.revision, parentPageId: marker.parentPageId, sourceRefs: marker.sourceRefs })
   }
   for (const change of changes.filter(item => item.objectKind === 'index-note')) {
     const { marker, body } = parseWikiPageMarker(change.newBytes)
     const title = /^#\s+(.+?)\s*#*\s*$/m.exec(body)?.[1]?.trim()
-    if (marker && title) projectionPages.push({ pageId: marker.pageId, title, categoryId: marker.categoryId, summary: marker.summary, path: change.relativePath, revision: marker.revision, parentPageId: marker.parentPageId })
+    if (marker && title) projectionPages.push({ pageId: marker.pageId, title, categoryId: marker.categoryId, summary: marker.summary, path: change.relativePath, revision: marker.revision, parentPageId: marker.parentPageId, sourceRefs: marker.sourceRefs })
   }
   for (const [relativePath, objectKind, newBytes] of [
-    ['wiki/index.md', 'index-projection', buildWikiIndex(projectionPages)],
+    ['wiki/index.md', 'index-projection', buildWikiIndex(projectionPages, schema.categories.map(category => category.id))],
     ['wiki/log.md', 'log-projection', buildWikiLog([])],
   ] as const) {
     const existing = input.files.find(file => normalizeWikiRelativePath(file.path) === relativePath)

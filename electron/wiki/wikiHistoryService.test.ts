@@ -116,6 +116,19 @@ describe('WikiHistoryService', () => {
     expect(retry).toEqual(first)
     expect((await service.listPageRevisions(page.pageId)).map(item => item.revision)).toEqual([3, 2, 1])
   })
+
+  it('replays a completed restore after rebuilding the history service', async () => {
+    const { store, coordinator } = await fixture()
+    const page = await coordinator.savePage(input)
+    await coordinator.savePage({ ...input, requestId: 'update-rebuild', toolUseId: 'update-rebuild', pageId: page.pageId, expectedRevision: 1, markdown: 'Changed body' })
+    const service = createWikiHistoryService({ store, coordinator, schema: () => ({ schemaVersion: 1, categories: [{ id: 'topic', status: 'active' }] }), verifyConfirmation: receipt => receipt === 'approved' })
+    const proposal = await service.prepareRestore({ pageId: page.pageId, targetRevision: 1, expectedCurrentRevision: 2, callerId: 'assistant', lane: 'chat' })
+    const invocation = { requestId: 'restore-rebuild', toolUseId: 'restore-rebuild', callerId: 'assistant', lane: 'chat', receipt: 'approved' }
+    const first = await service.applyRestore(proposal.proposalId, invocation)
+    const rebuilt = createWikiHistoryService({ store, coordinator, schema: () => ({ schemaVersion: 1, categories: [{ id: 'topic', status: 'active' }] }), verifyConfirmation: receipt => receipt === 'approved' })
+
+    await expect(rebuilt.applyRestore(proposal.proposalId, invocation)).resolves.toEqual(first)
+  })
 })
 
 async function fixtureWithCategories(categories: Array<{ id: string; name: string; status: 'active'; allowedParentCategoryIds?: string[] }>) {

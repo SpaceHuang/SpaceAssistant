@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { WikiFileStore } from './wikiFileStore'
-import type { WikiDomainCoordinator, WikiSavePageResult } from './wikiDomainCoordinator'
+import { replayCompletedWikiRestore, type WikiDomainCoordinator, type WikiSavePageResult } from './wikiDomainCoordinator'
 import type { WikiDomainSchema } from './wikiDomainCoordinator'
 import { parseWikiPageMarker } from './wikiReconciler'
 
@@ -69,10 +69,14 @@ export function createWikiHistoryService(options: {
       return { proposalId: proposal.proposalId, conflicts: proposal.conflicts, finalPage: proposal.finalPage }
     },
     async applyRestore(proposalId: string, invocation: { requestId: string; toolUseId: string; callerId: string; lane: string; receipt: unknown; expectedFinalPage?: PreparedRestore['finalPage'] }): Promise<WikiSavePageResult> {
-      const proposal = proposals.get(proposalId)
-      if (!proposal || !/^[0-9a-f-]{36}$/i.test(proposalId)) throw codedError('restore_proposal_expired')
-      if (proposal.input.callerId !== invocation.callerId || proposal.input.lane !== invocation.lane) throw codedError('restore_conflict')
+      if (!/^[0-9a-f-]{36}$/i.test(proposalId)) throw codedError('restore_proposal_expired')
       const invocationKey = `${invocation.requestId}\0${invocation.toolUseId}`
+      const finalPageHash = invocation.expectedFinalPage ? stableHash(invocation.expectedFinalPage) : undefined
+      const persisted = await replayCompletedWikiRestore(options.store, { ...invocation, proposalId, ...(finalPageHash ? { finalPageHash } : {}) })
+      if (persisted) return persisted
+      const proposal = proposals.get(proposalId)
+      if (!proposal) throw codedError('restore_proposal_expired')
+      if (proposal.input.callerId !== invocation.callerId || proposal.input.lane !== invocation.lane) throw codedError('restore_conflict')
       const completed = completedRestores.get(invocationKey)
       if (completed) {
         if (completed.proposalId !== proposalId || completed.callerId !== invocation.callerId || completed.lane !== invocation.lane) throw codedError('idempotency_conflict')
@@ -89,7 +93,7 @@ export function createWikiHistoryService(options: {
           pageId: proposal.input.pageId, expectedRevision: proposal.input.expectedCurrentRevision, schemaVersion: proposal.baseSchemaVersion,
           title: proposal.finalPage.title, categoryId: proposal.finalPage.categoryId, summary: proposal.finalPage.summary,
           markdown: proposal.finalPage.markdown, parentPageId: proposal.finalPage.parentPageId, sourceRefs: proposal.finalPage.sourceRefs,
-          operationKind: 'restored',
+          operationKind: 'restored', restoreProposalId: proposalId, restoreFinalPageHash: stableHash(proposal.finalPage),
         })
         completedRestores.set(invocationKey, { proposalId, callerId: invocation.callerId, lane: invocation.lane, result })
         return result
@@ -179,4 +183,5 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
   return `{${Object.keys(value as Record<string, unknown>).sort().map(key => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(',')}}`
 }
+function stableHash(value: unknown): string { return createHash('sha256').update(stableJson(value)).digest('hex') }
 function codedError(code: string): Error { return Object.assign(new Error(code), { code }) }

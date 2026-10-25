@@ -24,7 +24,7 @@ export type WikiImportRawResult =
   | { ok: false; error: string }
 
 export type WikiImportAllRawResult =
-  | { ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> }
+  | { ok: true; sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }>; remainingCount: number }
   | { ok: false; error: string }
 
 export function wikiImportFileTreeChange(result: WikiImportRawResult): FileTreeChangeEvent | null {
@@ -135,6 +135,9 @@ export async function importAllRawFromWorkDir(
       if (candidates.length > 250) return { ok: false, error: '可导入文本超过 250 个，请改用单文件 ingest' }
     }
     candidates.sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    const maxBatch = Number.isSafeInteger(wikiConfig.maxBatchIngest) ? Math.max(1, Math.min(250, wikiConfig.maxBatchIngest)) : 10
+    const remainingCount = Math.max(0, candidates.length - maxBatch)
+    candidates.splice(maxBatch)
     const sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> = []
     let totalBytes = 0
     for (const srcRelPath of candidates) {
@@ -151,7 +154,7 @@ export async function importAllRawFromWorkDir(
       if (!result.sourceId || !result.sourceRevision) return { ok: false, error: `${srcRelPath}: 来源绑定未完成` }
       sources.push({ sourceId: result.sourceId, sourceRevision: result.sourceRevision, displayName: path.basename(srcRelPath) })
     }
-    return { ok: true, sources }
+    return { ok: true, sources, remainingCount }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -168,7 +171,7 @@ async function importRawToSharedRoot(
   const realBase = resolveSharedWikiRoot(shared.userDataPath!, wikiConfig)
   return withWikiWriteMutex(path.join(realBase, '.wiki-domain-lock'), async () => {
     const lifecycle = await createWikiLifecycleController(realBase).read()
-    if (lifecycle.lifecycle !== 'domain_ready' && lifecycle.lifecycle !== 'domain_enabled') {
+    if (lifecycle.lifecycle !== 'domain_enabled') {
       return { ok: false, error: `Wiki lifecycle blocks import: ${lifecycle.lifecycle}` }
     }
     return importRawToSharedRootUnderLock(workDir, wikiConfig, srcRelPath, shared, realBase)
