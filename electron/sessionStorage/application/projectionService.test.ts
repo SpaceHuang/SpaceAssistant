@@ -82,6 +82,24 @@ describe('Session ProjectionService', () => {
     expect(service.get(session.id, scopeKey)?.sourceIdentityJson).toBeNull()
   })
 
+  it('keeps an immediate stale retry due when wall time advances between scheduling calls', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection stale retry clock', model: 'test' })
+    let now = 10
+    const service = createProjectionService(createSqliteProjectionStateStore(db), {
+      processGeneration: () => 2, connectionEpoch: () => 1, createToken: () => 'stale-retry-token', now: () => now,
+    })
+    const scopeKey = 'session-projection:chatBodyV1:v1'
+    service.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })!
+    service.reject(lease, { failureCaseJson: '{"staleMetadata":false}', attempts: 1, retryAfter: 100 })
+
+    now = 102
+    expect(service.scheduleRejectedRetry({ sessionId: session.id, scopeKey, sessionGeneration: session.generation,
+      failureCaseJson: '{"staleMetadata":true}', retryAfter: 101 })).toMatchObject({ status: 'rejected', retryAfter: 102,
+      failureCaseJson: '{"staleMetadata":true}' })
+  })
+
   it('reopens due rejected work and fences a rebuild owner from the previous process generation', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-projection-service-reopen-'))
     const dbPath = path.join(tempDir, 'test.db')

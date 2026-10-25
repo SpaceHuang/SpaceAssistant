@@ -127,9 +127,10 @@ export function createProjectionService(store: ProjectionStateStore, options: Re
   const scheduleRejectedRetry: SessionProjectionService['scheduleRejectedRetry'] = (input) => {
     const current = store.get(input.sessionId, input.scopeKey)
     if (!current || current.status !== 'rejected' || !current.failureCaseJson) return null
+    const now = options.now()
     return store.transition({ sessionId: input.sessionId, scopeKey: input.scopeKey, sessionGeneration: input.sessionGeneration,
       command: { type: 'scheduleRetry', expectedFailureCaseJson: current.failureCaseJson,
-        failureCaseJson: input.failureCaseJson, retryAfter: input.retryAfter, now: options.now() } })
+        failureCaseJson: input.failureCaseJson, retryAfter: Math.max(input.retryAfter, now), now } })
   }
 
   const invalidateLease: SessionProjectionService['invalidateLease'] = (lease) => {
