@@ -18,13 +18,35 @@ export type ExecutorUnhandledSettlement = { rethrow: true; error: unknown }
 /** A deferred call was rejected before the executor dispatch claim, so no tool side effect started. */
 export class DeferredToolPreDispatchError extends Error {
   readonly failureCode: string
+  readonly failureType: string
+  readonly failureSite: string
 
   constructor(cause: unknown) {
     super('DEFERRED_TOOL_PRE_DISPATCH_REJECTED', { cause })
     this.name = 'DeferredToolPreDispatchError'
-    const message = cause instanceof Error ? cause.message : ''
-    const code = message.match(/(?:^|:)([A-Z][A-Z0-9_:-]{0,95})$/)?.[1]
-    this.failureCode = code ?? 'UNKNOWN_PRE_DISPATCH_FAILURE'
+    const chain: unknown[] = []
+    let current: unknown = cause
+    for (let depth = 0; depth < 5 && current && !chain.includes(current); depth += 1) {
+      chain.push(current)
+      current = typeof current === 'object' && current !== null && 'cause' in current
+        ? (current as { cause?: unknown }).cause
+        : undefined
+    }
+    const stableToken = (value: unknown): string | undefined => typeof value === 'string' && /^[A-Z][A-Z0-9_:-]{0,95}$/.test(value) ? value : undefined
+    const diagnostic = chain.flatMap((item) => {
+      if (!item || typeof item !== 'object') return []
+      const record = item as Record<string, unknown>
+      const message = item instanceof Error ? item.message : ''
+      const suffix = message.match(/(?:^|:)([A-Z][A-Z0-9_:-]{0,95})$/)?.[1]
+      return [stableToken(record.reasonCode), stableToken(record.reason), stableToken(record.code), stableToken(suffix)].filter((value): value is string => Boolean(value))
+    })[0]
+    const root = chain[0]
+    const rootName = root instanceof Error ? root.name : root && typeof root === 'object' && typeof (root as { name?: unknown }).name === 'string' ? (root as { name: string }).name : ''
+    this.failureType = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(rootName) ? rootName : typeof root
+    this.failureCode = diagnostic ?? 'UNKNOWN_PRE_DISPATCH_FAILURE'
+    const stack = root instanceof Error ? root.stack ?? '' : ''
+    const site = stack.match(/((?:electron|packages)\/[A-Za-z0-9_.\/-]+:\d+:\d+)/)?.[1]
+    this.failureSite = site ?? 'UNKNOWN_FAILURE_SITE'
   }
 }
 

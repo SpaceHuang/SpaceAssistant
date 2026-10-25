@@ -231,12 +231,16 @@ describe('createRegisteredAgentTurnTools', () => {
     await expect(tools.executeDeferred({ invocationId: 'deferred-predispatch-invocation', toolCallId: 'deferred-predispatch-call',
       toolName: 'write_file', input: { path: 'report.txt', content: 'approved' } }, {
       confirmationReceipt: 'approval:reply-predispatch', authorize: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' })
-    })).rejects.toMatchObject({ name: 'DeferredToolPreDispatchError', failureCode: 'DEFERRED_SAFETY_RECHECK_DENIED:POLICY_DENY' })
+    })).rejects.toMatchObject({ name: 'DeferredToolPreDispatchError', failureCode: 'DEFERRED_SAFETY_RECHECK_DENIED:POLICY_DENY', failureType: 'Error' })
     expect(execute).not.toHaveBeenCalled()
   })
 
   it('keeps pre-dispatch diagnostics to stable error codes and never includes arbitrary cause text', () => {
     expect(new DeferredToolPreDispatchError(new Error('MISSING_MATERIAL')).failureCode).toBe('MISSING_MATERIAL')
+    const privateCause = new Error('/Users/private/document.txt')
+    Object.assign(privateCause, { reason: 'BINDING_MISMATCH' })
+    privateCause.stack = 'Error: /Users/private/document.txt\n    at execute (electron/runtime/registered.ts:21:4)'
+    expect(new DeferredToolPreDispatchError(privateCause)).toMatchObject({ failureCode: 'BINDING_MISMATCH', failureType: 'Error', failureSite: 'electron/runtime/registered.ts:21:4' })
     expect(new DeferredToolPreDispatchError(new Error('/Users/private/document.txt')).failureCode).toBe('UNKNOWN_PRE_DISPATCH_FAILURE')
   })
 

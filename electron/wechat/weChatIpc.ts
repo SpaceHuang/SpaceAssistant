@@ -232,7 +232,7 @@ export function createWeChatBundle(deps: {
         if (error instanceof DeferredToolPreDispatchError) {
           logWeChatCliEvent('warn', 'wechat.deferred_execution_pre_dispatch_rejected', {
             todoId: todo.todoId, invocationId: envelope.invocationId, toolCallId: envelope.toolCallId,
-            failureCode: error.failureCode
+            failureCode: error.failureCode, failureType: error.failureType, failureSite: error.failureSite
           })
           return { dispatched: false, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
         }
