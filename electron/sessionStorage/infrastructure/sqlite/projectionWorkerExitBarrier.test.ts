@@ -4,6 +4,7 @@ vi.mock('node:worker_threads', async () => {
   const { EventEmitter } = await import('node:events')
   return { Worker: class extends EventEmitter {
     constructor(..._args: unknown[]) { super(); state.workers.push(this) }
+    unref() { return this }
     postMessage(message: any) {
       queueMicrotask(() => this.emit('message', { requestId: message.requestId, result: message.stateJson !== undefined
         ? { stateJson: '{}', outputOperations: [], resetOutput: false, workerThreadId: 1,
@@ -28,7 +29,7 @@ for (const kind of ['reducer', 'final', 'chat-body-cache'] as const) it(`waits f
       : readPreparedChatBodiesInWorker({ root: '/tmp', messageIds: ['m'], view: { sessionId: 's', sessionGeneration: 'g', scopeKey: 'scope',
         specVersion: 1, sourceIdentityJson: '{}', payloadGeneration: 'projection-x', payloadDigest: 'a'.repeat(64), validatedRangeJson: '{}',
         cachePresent: true, stateSourceIdentityJson: '{}', statePayloadGeneration: 'projection-x', statePayloadDigest: 'a'.repeat(64),
-        stateValidatedRangeJson: '{}', blobLocator: 'projection-123e4567-e89b-12d3-a456-426614174000.blob', blobByteLength: 1 } })
+        stateValidatedRangeJson: '{}', inlinePayload: 'x'.repeat(257 * 1024) } })
   const observed = promise.then(() => { settled = true })
   try {
     await new Promise<void>((resolve) => setImmediate(resolve))

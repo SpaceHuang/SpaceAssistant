@@ -62,7 +62,7 @@ parentPort.once('message', (message: {
       catch { throw new Error('PROJECTION_PENDING_CHUNK_INVALID_JSON') }
       if (payload && typeof payload === 'object' && (payload as { kind?: unknown }).kind === 'segmented-history-event') {
         const segmented = payload as { formatVersion?: unknown; event?: unknown; messageCount?: unknown;
-          messageSegments?: unknown; factCount?: unknown; factSegments?: unknown; requiredUserMessage?: unknown;
+          messageSegments?: unknown; factCount?: unknown; factSegments?: unknown; extraPayload?: unknown; requiredUserMessage?: unknown;
           requiredUserSegments?: unknown }
         if (segmented.formatVersion !== 2 || !segmented.event || typeof segmented.event !== 'object' || Array.isArray(segmented.event) ||
           !Number.isSafeInteger(segmented.messageCount) || (segmented.messageCount as number) < 1 ||
@@ -164,10 +164,16 @@ parentPort.once('message', (message: {
         if (messages.length !== segmented.messageCount || segmentByteLength > 128 * 1024 * 1024) {
           throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
         }
+        if (segmented.extraPayload !== undefined && (!segmented.extraPayload || typeof segmented.extraPayload !== 'object' ||
+          Array.isArray(segmented.extraPayload))) {
+          throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+        }
         if (factsFromSegments.length !== segmented.factCount || factsFromSegments.some((fact) => !isProjectionMessageFact(fact))) {
           throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
         }
-        const eventPayload = { messages, ...(requiredUserMessage === undefined ? {} : { requiredUserMessage }) }
+        const extraPayload = segmented.extraPayload as Record<string, unknown> | undefined
+        const eventPayload = { ...(extraPayload ?? {}), messages,
+          ...(requiredUserMessage === undefined ? {} : { requiredUserMessage }) }
         events = [{ ...event, payloadJson: '', payload: eventPayload } as ProjectionHistoryChunkEvent]
         messageFacts = factsFromSegments
       } else {

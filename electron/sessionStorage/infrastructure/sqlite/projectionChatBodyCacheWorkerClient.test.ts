@@ -36,9 +36,12 @@ describe('projection chat body cache worker client', () => {
 
     expect(result.workerThreadId).toBe(0)
     expect(result.messages).toEqual([{ id: 'inline-requested', role: 'assistant', content: 'selected body', timestamp: 3 }])
-    const search = await searchPreparedChatBodiesInWorker({ root: '', view, query: 'body', limit: 1 })
+    const search = await searchPreparedChatBodiesInWorker({ root: '', view, query: 'body', limit: 1, candidateFacts: [] })
     expect(search.workerThreadId).toBe(0)
     expect(search.messages).toEqual([{ id: 'inline-requested', role: 'assistant', content: 'selected body', timestamp: 3 }])
+    await expect(searchPreparedChatBodiesInWorker({ root: '', view, query: 'body', limit: 1,
+      candidateFacts: [{ id: 'canonical-missing-candidate', role: 'user', timestamp: 99 }] }))
+      .rejects.toThrow('PROJECTION_CHAT_BODY_CACHE_CANDIDATE_SOURCE_MISMATCH')
     await expect(readPreparedChatBodiesInWorker({ root: '', view: { ...view,
       inlinePayload: inlinePayload.replace('selected body', 'tampered body') }, messageIds: ['inline-requested'] }))
       .rejects.toThrow('PROJECTION_CHAT_BODY_CACHE_DIGEST_MISMATCH')
@@ -81,13 +84,16 @@ describe('projection chat body cache worker client', () => {
     const repeatedSelection = await readPreparedChatBodiesInWorker({ root, view, messageIds: ['requested'] })
     expect(repeatedSelection.workerThreadId).toBe(result.workerThreadId)
     expect(repeatedSelection.messages).toEqual(result.messages)
-    const search = await searchPreparedChatBodiesInWorker({ root, view, query: 'selected', limit: 1 })
+    const search = await searchPreparedChatBodiesInWorker({ root, view, query: 'selected', limit: 1, candidateFacts: [] })
     expect(search.workerThreadId).toBeGreaterThan(0)
     expect(search.workerThreadId).not.toBe(threadId)
     expect(search.messages).toEqual([{ id: 'requested', role: 'assistant', content: 'selected body', timestamp: 3 }])
-    const repeatedSearch = await searchPreparedChatBodiesInWorker({ root, view, query: 'selected', limit: 2 })
+    const repeatedSearch = await searchPreparedChatBodiesInWorker({ root, view, query: 'selected', limit: 2, candidateFacts: [] })
     expect(repeatedSearch.workerThreadId).toBe(search.workerThreadId)
     expect(repeatedSearch.messages.map(({ id }) => id)).toEqual(['requested', 'large-unselected'])
+    await expect(searchPreparedChatBodiesInWorker({ root, view, query: 'selected', limit: 1,
+      candidateFacts: [{ id: 'missing-canonical-candidate', role: 'user', timestamp: 7 }] }))
+      .rejects.toThrow('PROJECTION_CHAT_BODY_CACHE_CANDIDATE_SOURCE_MISMATCH')
   })
 
   it('streams a cache larger than the search worker LRU and returns bounded results', async () => {
@@ -118,7 +124,11 @@ describe('projection chat body cache worker client', () => {
 
     const selected = await readPreparedChatBodiesInWorker({ root, view, messageIds: ['stream-0'] })
     expect(selected.messages).toEqual([{ id: 'stream-0', role: 'assistant', content: `needle ${'x'.repeat(256 * 1024)}`, timestamp: 0 }])
-    const search = await searchPreparedChatBodiesInWorker({ root, view, query: 'needle', limit: 1 })
+    const search = await searchPreparedChatBodiesInWorker({ root, view, query: 'needle', limit: 1,
+      candidateFacts: [{ id: 'stream-0', role: 'assistant', timestamp: 0 }] })
     expect(search.messages.map(({ id }) => id)).toEqual(['stream-0'])
+    await expect(searchPreparedChatBodiesInWorker({ root, view, query: 'needle', limit: 1,
+      candidateFacts: [{ id: 'missing-stream-candidate', role: 'user', timestamp: 10 }] }))
+      .rejects.toThrow('PROJECTION_CHAT_BODY_CACHE_CANDIDATE_SOURCE_MISMATCH')
   })
 })

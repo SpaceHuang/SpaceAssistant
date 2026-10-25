@@ -27,6 +27,7 @@ type LargeContextEventCapture = Readonly<{
   requiredUserByteLength: number | null
   messages: readonly Readonly<{ message_index: number; message_json: string }>[]
   requiredUserJson?: string
+  extraPayloadJson: string
 }>
 type LargeContextStageRequest = Readonly<{ kind: 'stage-large-context-event'; row: ProjectionHistoryEventRow; watermark: number }>
 type RawHistoryRead = Readonly<{ kind: 'raw-history-read'; rows: readonly Readonly<{ row: ProjectionHistoryEventRow; payloadJson: string }>[];
@@ -136,6 +137,12 @@ export function readProjectionHistoryChunk(
             const spillDescriptors = collectSpillDescriptorsStrict(parsed)
             const expanded = Buffer.byteLength(item.payloadJson, 'utf8') + spillDescriptors.reduce((sum, d) => sum + d.byteLength * 6, 0)
             if (expanded > MAX_STAGED_SOURCE_CHUNK_BYTES) {
+              if (input.staging && events.length === 0 &&
+                (item.row.kind === 'invocation-context-committed' || item.row.kind === 'transcript-compacted') &&
+                expanded <= MAX_SEGMENTED_HISTORY_EVENT_BYTES) {
+                result = { kind: 'stage-large-context-event', row: item.row, watermark: captured.watermark }
+                break
+              }
               result = { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
                 eventSequence: item.row.session_seq, observedByteLength: expanded, observedEventRows: 1,
                 reason: 'oversized-event-exceeds-staging-budget' }; break
@@ -251,12 +258,11 @@ function readLargeContextEventCapture(
   const shape = conn.prepare(`SELECT json_type(payload_json,'$.messages') AS messages_type,
     json_array_length(payload_json,'$.messages') AS message_count,
     length(CAST(json_extract(payload_json,'$.requiredUserMessage') AS BLOB)) AS required_user_byte_length,
-    EXISTS(SELECT 1 FROM json_each(agent_history_events.payload_json) field
-      WHERE field.key NOT IN ('messages','requiredUserMessage')) AS has_unsupported_fields
+    json_remove(payload_json,'$.messages','$.requiredUserMessage') AS extra_payload_json
     FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
-    { messages_type: string | null; message_count: number | null; required_user_byte_length: number | null; has_unsupported_fields: number } | undefined
+    { messages_type: string | null; message_count: number | null; required_user_byte_length: number | null; extra_payload_json: string } | undefined
   if (shape?.messages_type !== 'array' || !Number.isSafeInteger(shape.message_count) || (shape.message_count ?? 0) < 1 ||
-    shape.has_unsupported_fields || (shape.required_user_byte_length !== null &&
+    Buffer.byteLength(shape.extra_payload_json, 'utf8') > MAX_STAGED_SOURCE_CHUNK_BYTES || (shape.required_user_byte_length !== null &&
       shape.required_user_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES)) return undefined
   const messages = conn.prepare(`SELECT CAST(item.key AS INTEGER) AS message_index,item.value AS message_json
     FROM agent_history_events event,json_each(event.payload_json,'$.messages') item
@@ -274,7 +280,8 @@ function readLargeContextEventCapture(
     requiredUserJson = required.required_user_json
   }
   return Object.freeze({ messageCount: shape.message_count!, requiredUserByteLength: shape.required_user_byte_length,
-    messages: Object.freeze(messages.map((item) => Object.freeze(item))), ...(requiredUserJson !== undefined ? { requiredUserJson } : {}) })
+    messages: Object.freeze(messages.map((item) => Object.freeze(item))), extraPayloadJson: shape.extra_payload_json,
+    ...(requiredUserJson !== undefined ? { requiredUserJson } : {}) })
 }
 
 /** Stage a large canonical context event as bounded message/fact arrays without materializing its JSON array. */
@@ -447,10 +454,14 @@ function stageOversizedContextEvent(
         } else requiredUserMessage = hydratedRequiredUser
       } catch { return undefined }
     }
+    let extraPayload: unknown
+    try { extraPayload = JSON.parse(capture.extraPayloadJson) } catch { return undefined }
+    if (!extraPayload || typeof extraPayload !== 'object' || Array.isArray(extraPayload)) return undefined
     const rootPayload = JSON.stringify({ formatVersion: 2, kind: 'segmented-history-event',
       event: { invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id,
         idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind,
         sessionSequence: row.session_seq, commitOrder: row.commit_order, createdAt: row.created_at },
+      extraPayload,
       messageCount,
       messageSegments: writtenSegments.filter(({ kind }) => kind === 'messages').map((segment) => ({ locator: segment.locator,
         byteLength: segment.byteLength, payloadDigest: segment.payloadDigest,
@@ -469,7 +480,7 @@ function stageOversizedContextEvent(
         firstItemIndex: segment.firstItemIndex, fragmentIndex: segment.fragmentIndex, fragmentCount: segment.fragmentCount })) } : {}),
       ...(requiredUserMessage === undefined ? {} : { requiredUserMessage }) })
     const rootBytes = Buffer.from(rootPayload, 'utf8')
-    const sourceByteLength = messageByteLength + factBytes + requiredUserByteLength
+    const sourceByteLength = messageByteLength + factBytes + requiredUserByteLength + Buffer.byteLength(capture.extraPayloadJson, 'utf8')
     if (rootBytes.byteLength > MAX_STAGED_SOURCE_CHUNK_BYTES || sourceByteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
     const payloadDigest = createHash('sha256').update(rootBytes).digest('hex')
     stagedFiles.push({ tempLocator: staging.tempLocator, bytes: rootBytes })

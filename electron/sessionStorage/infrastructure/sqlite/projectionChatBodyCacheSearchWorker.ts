@@ -2,7 +2,8 @@ import path from 'node:path'
 import { parentPort, threadId } from 'node:worker_threads'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { readVerifiedChatBodyPayloadStream } from './projectionChatBodyCacheStream'
-import { readVerifiedChatBodyPayload, searchVerifiedChatBodies, selectVerifiedChatBodies, type VerifiedChatBody } from './projectionChatBodyCachePayload'
+import { readVerifiedChatBodyPayload, searchVerifiedChatBodies, selectVerifiedChatBodies, verifyChatBodyCandidateFacts,
+  type ChatBodyCandidateFact, type VerifiedChatBody } from './projectionChatBodyCachePayload'
 import { readSourceTruthSpillSync, type SpillDescriptor } from '../../../storage/spillProtocol'
 
 if (!parentPort) throw new Error('projection chat body cache search worker requires a parent port')
@@ -11,6 +12,7 @@ type Input = Readonly<{
   requestId: string; root: string; sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number
   sourceIdentityJson: string; payloadDigest: string; validatedRangeJson: string; inlinePayload?: string
   blobLocator?: string; blobByteLength?: number; operation: 'select' | 'search'; query?: string; limit?: number; messageIds?: readonly string[]
+  candidateFacts?: readonly ChatBodyCandidateFact[]
   sourceSpillRoot?: string; sourceTruthSpills?: readonly SpillDescriptor[]
 }>
 type Cached = Readonly<{ key: string; byteLength: number; messages: readonly VerifiedChatBody[] }>
@@ -45,7 +47,7 @@ async function readLargePayload(input: Input): Promise<readonly VerifiedChatBody
       sessionGeneration: input.sessionGeneration, scopeKey: input.scopeKey, specVersion: input.specVersion,
       sourceIdentityJson: input.sourceIdentityJson, payloadDigest: input.payloadDigest,
       validatedRangeJson: input.validatedRangeJson, operation: input.operation === 'search'
-        ? { kind: 'search', query: input.query!, limit: input.limit! }
+        ? { kind: 'search', query: input.query!, limit: input.limit!, candidateFacts: input.candidateFacts! }
         : { kind: 'select', messageIds: input.messageIds! } }))
 }
 
@@ -61,7 +63,9 @@ async function handle(input: Input): Promise<void> {
       throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
     }
     if (input.operation === 'search' && (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit) ||
-      input.limit! < 0 || input.limit! > MAX_SEARCH_RESULTS)) throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
+      input.limit! < 0 || input.limit! > MAX_SEARCH_RESULTS || !Array.isArray(input.candidateFacts))) {
+      throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
+    }
     if (input.operation === 'select' && (!Array.isArray(input.messageIds) || input.messageIds.some((id) => typeof id !== 'string' || !id) ||
       new Set(input.messageIds).size !== input.messageIds.length)) throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
     if (input.inlinePayload === undefined && Number.isSafeInteger(input.blobByteLength) && input.blobByteLength! > MAX_CACHED_PAYLOAD_BYTES) {
@@ -94,6 +98,7 @@ async function handle(input: Input): Promise<void> {
       cache.delete(key)
       cache.set(key, entry)
     }
+    if (input.operation === 'search') verifyChatBodyCandidateFacts(entry.messages, input.candidateFacts!)
     const messages = input.operation === 'search'
       ? searchVerifiedChatBodies(entry.messages, input.query!, input.limit!)
       : selectVerifiedChatBodies(entry.messages, input.messageIds!)

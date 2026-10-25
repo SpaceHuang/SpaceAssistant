@@ -51,7 +51,7 @@ describe('stream-verified chatBodyV1 payload reader', () => {
     }
 
     const result = await readVerifiedChatBodyPayloadStream(source(), { ...payload, byteLength: payload.bytes.byteLength,
-      operation: { kind: 'search', query: 'needle 100%_x', limit: 1 } })
+      operation: { kind: 'search', query: 'needle 100%_x', limit: 1, candidateFacts: [] } })
 
     expect(result.map(({ id }) => id)).toEqual(['wrong-case'])
   })

@@ -8,6 +8,7 @@ import { Worker } from 'node:worker_threads'
 import type { PreparedChatBodyView } from '../../public/model'
 import { searchVerifiedChatBodyPayload, selectVerifiedChatBodyPayload } from './projectionChatBodyCachePayload'
 import type { SpillDescriptor } from '../../../storage/spillProtocol'
+import type { ChatBodyCandidateFact } from './projectionChatBodyCachePayload'
 
 export type PreparedChatBodySelection = Readonly<{
   messages: readonly Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>[]
@@ -72,6 +73,7 @@ export function searchPreparedChatBodiesInWorker(input: Readonly<{
   view: PreparedChatBodyView
   query: string
   limit: number
+  candidateFacts: readonly ChatBodyCandidateFact[]
   signal?: AbortSignal
 }>): Promise<PreparedChatBodySearch> {
   return !input.sourceTruthSpills?.length && input.view.inlinePayload !== undefined
@@ -81,7 +83,8 @@ export function searchPreparedChatBodiesInWorker(input: Readonly<{
 
 function readWithPreparedCacheWorker(input: Readonly<{
   root: string; sourceSpillRoot?: string; sourceTruthSpills?: readonly SpillDescriptor[]
-  view: PreparedChatBodyView; operation: 'select' | 'search'; query?: string; limit?: number; messageIds?: readonly string[]; signal?: AbortSignal
+  view: PreparedChatBodyView; operation: 'select' | 'search'; query?: string; limit?: number; messageIds?: readonly string[];
+  candidateFacts?: readonly ChatBodyCandidateFact[]; signal?: AbortSignal
 }>): Promise<PreparedChatBodySearch> {
   if (input.signal?.aborted) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_ABORTED'))
   const workerPath = path.join(__dirname, 'projectionChatBodyCacheSearchWorker.js')
@@ -162,7 +165,7 @@ function readWithPreparedCacheWorker(input: Readonly<{
       sourceIdentityJson: input.view.sourceIdentityJson, payloadDigest: input.view.payloadDigest,
       validatedRangeJson: input.view.validatedRangeJson, inlinePayload: input.view.inlinePayload,
       blobLocator: input.view.blobLocator, blobByteLength: input.view.blobByteLength, operation: input.operation,
-      query: input.query, limit: input.limit, messageIds: input.messageIds,
+      query: input.query, limit: input.limit, messageIds: input.messageIds, candidateFacts: input.candidateFacts,
       sourceSpillRoot: input.sourceSpillRoot, sourceTruthSpills: input.sourceTruthSpills }) }
     catch (error) {
       pendingSearchRequests.delete(requestId)
@@ -181,6 +184,7 @@ function readPreparedChatBodyCache(input: Readonly<{
   messageIds?: readonly string[]
   query?: string
   limit?: number
+  candidateFacts?: readonly ChatBodyCandidateFact[]
   signal?: AbortSignal
 }>): Promise<PreparedChatBodySelection> {
   if (input.operation === 'select' && !input.messageIds) return Promise.reject(new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID'))
@@ -197,7 +201,7 @@ function readPreparedChatBodyCache(input: Readonly<{
         payloadDigest: input.view.payloadDigest, validatedRangeJson: input.view.validatedRangeJson }
       const messages = input.operation === 'select'
         ? selectVerifiedChatBodyPayload({ ...payload, messageIds: input.messageIds! })
-        : searchVerifiedChatBodyPayload({ ...payload, query: input.query!, limit: input.limit! })
+        : searchVerifiedChatBodyPayload({ ...payload, query: input.query!, limit: input.limit!, candidateFacts: input.candidateFacts! })
       return Promise.resolve({ messages,
       workerThreadId: 0 })
     } catch (error) { return Promise.reject(error instanceof Error ? error : new Error('PROJECTION_CHAT_BODY_CACHE_INLINE_READ_FAILED')) }
@@ -263,6 +267,7 @@ function readPreparedChatBodyCache(input: Readonly<{
       sourceIdentityJson: input.view.sourceIdentityJson, payloadDigest: input.view.payloadDigest,
       validatedRangeJson: input.view.validatedRangeJson, inlinePayload: input.view.inlinePayload,
       blobLocator: input.view.blobLocator, blobByteLength: input.view.blobByteLength, messageIds: input.messageIds,
+      candidateFacts: input.candidateFacts,
       sourceSpillRoot: input.sourceSpillRoot, sourceTruthSpills: input.sourceTruthSpills }) }
     catch (error) { terminateWithError(error instanceof Error ? error : new Error('PROJECTION_CHAT_BODY_CACHE_WORKER_POST_FAILED')) }
   })

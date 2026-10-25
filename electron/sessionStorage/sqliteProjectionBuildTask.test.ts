@@ -455,7 +455,7 @@ describe('SQLite projection build task composition', () => {
         memorySampleIntervalMs: number | null; workerSamples: number }> = []
       const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
         processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3,
-        onSlice: (sample) => sliceSamples.push(sample) })
+        onSlice: (sample) => { sliceSamples.push(sample) } })
       const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }), recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
         maintenanceTasks: [task] })

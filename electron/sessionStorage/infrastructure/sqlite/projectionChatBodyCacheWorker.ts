@@ -12,6 +12,7 @@ type Input = Readonly<{
   root: string; sessionId: string; sessionGeneration: string; scopeKey: string; specVersion: number
   sourceIdentityJson: string; payloadDigest: string; validatedRangeJson: string; inlinePayload?: string
   blobLocator?: string; blobByteLength?: number; messageIds: readonly string[]
+  candidateFacts?: readonly import('./projectionChatBodyCachePayload').ChatBodyCandidateFact[]
   sourceSpillRoot?: string; sourceTruthSpills?: readonly SpillDescriptor[]
 }>
 
@@ -31,13 +32,13 @@ async function readMessages(input: Input): Promise<readonly import('./projection
     const payload = { ...metadata, payload: readInlinePayload(input) }
     return input.operation === 'select'
       ? selectVerifiedChatBodyPayload({ ...payload, messageIds: input.messageIds })
-      : searchVerifiedChatBodyPayload({ ...payload, query: input.query!, limit: input.limit! })
+      : searchVerifiedChatBodyPayload({ ...payload, query: input.query!, limit: input.limit!, candidateFacts: input.candidateFacts! })
   }
   if (!input.blobLocator || !/^projection-[0-9a-f-]{36}\.blob$/.test(input.blobLocator) || path.basename(input.blobLocator) !== input.blobLocator ||
     !Number.isSafeInteger(input.blobByteLength) || input.blobByteLength! < 1) throw new Error('PROJECTION_CHAT_BODY_CACHE_LOCATOR_INVALID')
   const operation = input.operation === 'select'
     ? { kind: 'select' as const, messageIds: input.messageIds }
-    : { kind: 'search' as const, query: input.query!, limit: input.limit! }
+    : { kind: 'search' as const, query: input.query!, limit: input.limit!, candidateFacts: input.candidateFacts! }
   return createSessionProjectionBlobStore(input.root).withVerifiedReadStream({ locator: input.blobLocator,
     byteLength: input.blobByteLength!, payloadDigest: input.payloadDigest }, (stream) =>
     readVerifiedChatBodyPayloadStream(stream, { ...metadata, byteLength: input.blobByteLength!, operation }))
@@ -53,7 +54,8 @@ parentPort.once('message', async (input: Input) => {
     }
     if (input.operation === 'select' && (!Array.isArray(input.messageIds) || input.messageIds.some((id) => typeof id !== 'string' || !id) ||
       new Set(input.messageIds).size !== input.messageIds.length)) throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
-    if (input.operation === 'search' && (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit))) {
+    if (input.operation === 'search' && (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit) ||
+      !Array.isArray(input.candidateFacts))) {
       throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
     }
     if (input.operation !== 'select' && input.operation !== 'search') throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')

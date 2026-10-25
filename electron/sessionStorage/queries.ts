@@ -37,6 +37,7 @@ import { runInTransaction } from '../database/transaction'
 import type { PreparedChatBodyView } from './public/model'
 import type { PreparedChatBodySelection } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
 import type { PreparedChatBodySearch } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
+import type { ChatBodyCandidateFact } from './infrastructure/sqlite/projectionChatBodyCachePayload'
 import type { Message } from '../../src/shared/domainTypes'
 
 function canonicalBodyMessageIds(db: AppDatabase, sessionId: string, messages: readonly Message[]): string[] {
@@ -109,7 +110,7 @@ function selectUniqueFailedAssistantMessageId(db: AppDatabase, sessionId: string
 export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonly<{
   currentSourceIdentity(sessionId: string, sessionGeneration: string): string | undefined
   readBodies(view: PreparedChatBodyView, messageIds: readonly string[], signal?: AbortSignal): Promise<PreparedChatBodySelection>
-  searchBodies(view: PreparedChatBodyView, query: string, limit: number): Promise<PreparedChatBodySearch>
+  searchBodies(view: PreparedChatBodyView, query: string, limit: number, candidateFacts: readonly ChatBodyCandidateFact[]): Promise<PreparedChatBodySearch>
   invalidate(view: PreparedChatBodyView): void
 }>): SessionQueries {
   const queries: SessionQueries = {
@@ -458,10 +459,22 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
                 sourceIdentityJson: view.sourceIdentityJson
               })
               let search: PreparedChatBodySearch
-              try { search = await preparedChatBody.searchBodies(view, q, limit > 0 ? limit - results.length : Number.MAX_SAFE_INTEGER) }
+              const candidateRows = candidates.filter((item) => item.session_id === candidate.session_id &&
+                ['canonical-backed-dual-write', 'canonical-backed-only'].includes(item.content_storage_state))
+              if (candidateRows.some(({ role }) => role !== 'user' && role !== 'assistant')) {
+                throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+              }
+              const candidateFacts = candidateRows.map(({ id, role, timestamp }) => ({
+                id, role: role as 'user' | 'assistant', timestamp
+              }))
+              try { search = await preparedChatBody.searchBodies(view, q,
+                limit > 0 ? limit - results.length : Number.MAX_SAFE_INTEGER, candidateFacts) }
               catch (error) {
                 if (error instanceof Error && error.message === 'PROJECTION_SOURCE_SPILL_INDEX_UNAVAILABLE') {
                   throw new Error('PREPARED_SEARCH_UNAVAILABLE')
+                }
+                if (error instanceof Error && error.message === 'PROJECTION_CHAT_BODY_CACHE_CANDIDATE_SOURCE_MISMATCH') {
+                  throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
                 }
                 preparedChatBody.invalidate(view)
                 throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')

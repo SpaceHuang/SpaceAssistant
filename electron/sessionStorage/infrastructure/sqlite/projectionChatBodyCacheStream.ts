@@ -10,7 +10,7 @@ const MESSAGE_FIELD_NAMES = [...PROJECTION_SPECS.chatBodyV1.outputFields].sort()
 const MESSAGE_FIELDS = new Set<string>(MESSAGE_FIELD_NAMES)
 
 type StreamOperation = Readonly<{ kind: 'select'; messageIds: readonly string[] }> |
-  Readonly<{ kind: 'search'; query: string; limit: number }>
+  Readonly<{ kind: 'search'; query: string; limit: number; candidateFacts: readonly Readonly<{ id: string; role: 'user' | 'assistant'; timestamp: number }>[] }>
 type StreamInput = Readonly<{
   byteLength: number
   sessionId: string
@@ -38,6 +38,8 @@ export async function readVerifiedChatBodyPayloadStream(
   const selected = new Map<string, VerifiedChatBody>()
   const matches: Array<{ message: VerifiedChatBody; ordinal: number }> = []
   const needle = input.operation.kind === 'search' ? foldAscii(input.operation.query) : ''
+  const candidateFacts = input.operation.kind === 'search'
+    ? new Map(input.operation.candidateFacts.map((fact) => [fact.id, fact])) : undefined
 
   await reader.skipWhitespace()
   await reader.expect('{')
@@ -58,11 +60,20 @@ export async function readVerifiedChatBodyPayloadStream(
             const message = validateMessage(await reader.readMessage(), messageCount, ids)
             if (input.operation.kind === 'select') {
               if (wanted!.has(message.id)) selected.set(message.id, message)
-            } else if (needle && foldAscii(message.content).includes(needle)) {
-              matches.push({ message, ordinal: messageCount })
-              if (input.operation.limit >= 0 && matches.length > input.operation.limit) {
-                matches.sort(compareSearchMatches)
-                matches.length = input.operation.limit
+            } else {
+              const fact = candidateFacts!.get(message.id)
+              if (fact) {
+                if (fact.role !== message.role || fact.timestamp !== message.timestamp) {
+                  throw new Error('PROJECTION_CHAT_BODY_CACHE_CANDIDATE_SOURCE_MISMATCH')
+                }
+                candidateFacts!.delete(message.id)
+              }
+              if (needle && foldAscii(message.content).includes(needle)) {
+                matches.push({ message, ordinal: messageCount })
+                if (input.operation.limit >= 0 && matches.length > input.operation.limit) {
+                  matches.sort(compareSearchMatches)
+                  matches.length = input.operation.limit
+                }
               }
             }
             input.onMessageScanned?.(messageCount)
@@ -97,6 +108,7 @@ export async function readVerifiedChatBodyPayloadStream(
     if (selected.size !== wanted!.size) throw new Error('PROJECTION_CHAT_BODY_CACHE_MESSAGE_MISSING')
     return Object.freeze(input.operation.messageIds.map((id) => selected.get(id)!))
   }
+  if (candidateFacts!.size > 0) throw new Error('PROJECTION_CHAT_BODY_CACHE_CANDIDATE_SOURCE_MISMATCH')
   matches.sort(compareSearchMatches)
   return Object.freeze(matches.map(({ message }) => message))
 }
@@ -117,7 +129,10 @@ function validateRequest(input: StreamInput): void {
     throw new Error('PROJECTION_CHAT_BODY_CACHE_REQUEST_INVALID')
   }
   if (input.operation.kind === 'search' && (typeof input.operation.query !== 'string' || !Number.isSafeInteger(input.operation.limit) ||
-    input.operation.limit < 0 || input.operation.limit > MAX_SEARCH_RESULTS)) {
+    input.operation.limit < 0 || input.operation.limit > MAX_SEARCH_RESULTS || !Array.isArray(input.operation.candidateFacts) ||
+    input.operation.candidateFacts.some((fact) => !fact || typeof fact.id !== 'string' || !fact.id ||
+      (fact.role !== 'user' && fact.role !== 'assistant') || !Number.isSafeInteger(fact.timestamp)) ||
+    new Set(input.operation.candidateFacts.map(({ id }) => id)).size !== input.operation.candidateFacts.length)) {
     throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
   }
 }

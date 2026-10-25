@@ -155,10 +155,10 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
       return readPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', sourceSpillRoot: source.root,
         sourceTruthSpills: source.descriptors, view, messageIds, signal })
     },
-    searchBodies: (view, query, limit) => {
+    searchBodies: (view, query, limit, candidateFacts) => {
       const source = readSourceTruthSpillsForPreparedView(view.sessionId, view.sessionGeneration, view.sourceIdentityJson)
       return searchPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', sourceSpillRoot: source.root,
-        sourceTruthSpills: source.descriptors, view, query, limit })
+        sourceTruthSpills: source.descriptors, view, query, limit, candidateFacts })
     },
     invalidate: (view) => invalidatePreparedChatBodyView(view, cacheStore)
   })

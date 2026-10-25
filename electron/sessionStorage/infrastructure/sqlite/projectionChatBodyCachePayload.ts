@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { PROJECTION_SPECS } from '../../domain/projectionSpec'
 
 export type VerifiedChatBody = Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>
+export type ChatBodyCandidateFact = Readonly<{ id: string; role: 'user' | 'assistant'; timestamp: number }>
 
 type VerifiedPayloadInput = Readonly<{
   payload: Buffer
@@ -67,8 +68,26 @@ export function selectVerifiedChatBodies(messages: readonly VerifiedChatBody[], 
 }
 
 /** Search verified canonical bodies using SQLite LIKE's literal, ASCII-case-insensitive semantics. */
-export function searchVerifiedChatBodyPayload(input: VerifiedPayloadInput & Readonly<{ query: string; limit: number }>): readonly VerifiedChatBody[] {
+export function verifyChatBodyCandidateFacts(messages: readonly VerifiedChatBody[], candidateFacts: readonly ChatBodyCandidateFact[]): void {
+  if (!Array.isArray(candidateFacts) || candidateFacts.some((fact) => !fact || typeof fact.id !== 'string' || !fact.id ||
+    (fact.role !== 'user' && fact.role !== 'assistant') || !Number.isSafeInteger(fact.timestamp)) ||
+    new Set(candidateFacts.map(({ id }) => id)).size !== candidateFacts.length) {
+    throw new Error('PROJECTION_CHAT_BODY_CACHE_CANDIDATE_FACTS_INVALID')
+  }
+  const byId = new Map(messages.map((message) => [message.id, message]))
+  for (const fact of candidateFacts) {
+    const message = byId.get(fact.id)
+    if (!message || message.role !== fact.role || message.timestamp !== fact.timestamp) {
+      throw new Error('PROJECTION_CHAT_BODY_CACHE_CANDIDATE_SOURCE_MISMATCH')
+    }
+  }
+}
+
+export function searchVerifiedChatBodyPayload(input: VerifiedPayloadInput & Readonly<{
+  query: string; limit: number; candidateFacts: readonly ChatBodyCandidateFact[]
+}>): readonly VerifiedChatBody[] {
   if (typeof input.query !== 'string' || !Number.isSafeInteger(input.limit)) throw new Error('PROJECTION_CHAT_BODY_CACHE_SEARCH_REQUEST_INVALID')
+  verifyChatBodyCandidateFacts(readVerifiedChatBodyPayload(input), input.candidateFacts)
   if (!input.query || input.limit === 0) return Object.freeze([])
   return searchVerifiedChatBodies(readVerifiedChatBodyPayload(input), input.query, input.limit)
 }

@@ -26,7 +26,7 @@ describe('prepared chat body global search', () => {
       { id: 'non-ascii', role: 'user', content: 'Äneedle 100%_x', timestamp: 6 }
     ])
 
-    const result = searchVerifiedChatBodyPayload({ ...payload, query: 'needle 100%_x', limit: 10 })
+    const result = searchVerifiedChatBodyPayload({ ...payload, query: 'needle 100%_x', limit: 10, candidateFacts: [] })
 
     expect(result.map(({ id }) => id)).toEqual(['non-ascii', 'wrong-case', 'newer', 'older'])
     expect(result.map(({ content }) => content)).toEqual([
@@ -35,7 +35,7 @@ describe('prepared chat body global search', () => {
     const nonAsciiCase = payloadFor([
       { id: 'lower', role: 'user', content: 'äneedle', timestamp: 1 }
     ])
-    expect(searchVerifiedChatBodyPayload({ ...nonAsciiCase, query: 'Äneedle', limit: 10 })).toEqual([])
+    expect(searchVerifiedChatBodyPayload({ ...nonAsciiCase, query: 'Äneedle', limit: 10, candidateFacts: [] })).toEqual([])
   })
 
   it('applies a bounded result limit after ordering matches', () => {
@@ -44,6 +44,6 @@ describe('prepared chat body global search', () => {
       { id: 'new', role: 'assistant', content: 'match', timestamp: 2 }
     ])
 
-    expect(searchVerifiedChatBodyPayload({ ...payload, query: 'match', limit: 1 }).map(({ id }) => id)).toEqual(['new'])
+    expect(searchVerifiedChatBodyPayload({ ...payload, query: 'match', limit: 1, candidateFacts: [] }).map(({ id }) => id)).toEqual(['new'])
   })
 })
