@@ -1187,14 +1187,16 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     })
   } else if (args.phase !== 'recheck' && readPathFact && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
-    const registered = registry.register({
+    const registration = {
       requestId: args.requestId ?? args.sessionId,
       toolUseId: args.toolUseId ?? args.toolName,
       inputDigest: readInputDigest(args.toolInput),
       factIds: [`fact-${readPathFact.normalizedPath}`],
       ruleId: decision.ruleId,
       expiresAt: Date.now() + (decision.timeoutMs ?? DEFAULT_USER_CONFIRMATION_TIMEOUT_MS)
-    })
+    }
+    // policy: deferred re-evaluation may reuse the original live registration only when every bound fact is unchanged.
+    const registered = registry.register(registration) || registry.matchesPending(registration)
     if (!registered) decision = { type: 'deny', ruleId: 'read-confirmation-registration-failed', reason: '无法建立本次读取确认登记，已阻止执行' }
   }
 
@@ -1205,14 +1207,16 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (decision.type === 'auto-allow') result.approvedFactIds = [readTarget]
     else if (decision.type === 'require-confirm') {
       const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
-      const registered = registry.register({
+      const registration = {
         requestId: args.requestId ?? args.sessionId,
         toolUseId: args.toolUseId ?? args.toolName,
         inputDigest: readInputDigest(args.toolInput),
         factIds: [factId],
         ruleId: decision.ruleId,
         expiresAt: Date.now() + (decision.timeoutMs ?? DEFAULT_USER_CONFIRMATION_TIMEOUT_MS)
-      })
+      }
+      // policy: attachment confirmation follows the same exact-registration rule as file reads.
+      const registered = registry.register(registration) || registry.matchesPending(registration)
       if (!registered) decision = { type: 'deny', ruleId: 'read-confirmation-registration-failed', reason: '无法建立本次附件读取确认登记，已阻止执行' }
     }
   }

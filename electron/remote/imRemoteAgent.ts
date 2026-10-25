@@ -314,7 +314,8 @@ export async function runImRemoteAgent(args: {
     const paired = ensureToolResultPairing(trimmed, { requiredUserMessageId: currentUserMessageId })
     const deferredContinuation = args.remoteContext.deferredContinuation
     const messages = deferredContinuation ? [...paired.messages,
-      { role: 'assistant' as const, content: '', toolCalls: [{ id: deferredContinuation.toolCallId, name: deferredContinuation.toolName, input: deferredContinuation.canonicalArgs }] },
+      { role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: deferredContinuation.toolCallId,
+        name: deferredContinuation.toolName, input: deferredContinuation.canonicalArgs }] },
       { role: 'tool' as const, toolCallId: deferredContinuation.toolCallId,
         content: JSON.stringify(deferredContinuation.result.value ?? deferredContinuation.result), isError: deferredContinuation.result.kind === 'failed' }
     ] : paired.messages
