@@ -21,6 +21,7 @@
 
 - [启动时历史会话恢复耗时优化方案](./in-flight/启动历史会话恢复耗时优化方案.md) —— [执行计划](./in-flight/启动历史会话恢复耗时优化执行计划.md) P0–P8 记载源码阶段已完成；header 的“执行中”仅剩外验未收口。用户库迁移状态、真机启动/旧 ledger 首访性能的剩余证据只在该执行计划记录。后续结构重构吸收其已实现机制，不重复派发旧源码任务，归属见[新方案 §5.2.1](./in-flight/持久化与历史管理边界重构方案.md#521-与旧启动优化方案执行计划的归属)。
 - [持久化与历史管理边界重构方案](./in-flight/持久化与历史管理边界重构方案.md) —— D-1–D-4 均已批准 A，未实施；D-2 继续绑定方案 §7.2.1 的兼容回退包 R。核对多种会话表示、重复判据、可用性与白名单闸门，规定职责收敛、迁移回退与分阶段验收。附[基线核验记录与隔离复现](./in-flight/持久化与历史管理边界核验记录-2026-10-21.md)。
+- [方案独立复核-2026-10-22](./in-flight/持久化与历史管理-方案独立复核-2026-10-22.md) —— 第三方视角静态复核（未跑测试、未复现夹具）；不定义新编号，只给出 5 条撤回（方案已回答之判断）、2 处未点名判据缺口（`F-X1` canonical 指纹 × 宽容口径、`F-X2` 编辑路径 fence 自校）与 2 条 AC 用例建议。
 
 > **2026-10-14 核验更正（原判 C 有误）**：`message-fact-persistence-core-refactor-plan.md`、`message-fact-pipeline-prompt-cache-optimization-plan.md` —— 证据：2026-09-09 `refactor(message-fact): persist turn lifecycle in core`；`da010dcb feat(context): add prompt cache breakpoints`。
 
