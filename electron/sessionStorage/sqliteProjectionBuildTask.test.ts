@@ -299,7 +299,7 @@ describe('SQLite projection build task composition', () => {
       const messages = Array.from({ length: 850 }, (_, index) => ({ id: `segment-source-${index}`, role: 'user', content: body, timestamp: index + 1 }))
       for (const message of messages) appendMessage(db, { ...message, sessionId: session.id, status: 'sent' })
       const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id,
-        createSpillStore(path.join(path.dirname(temp.dbPath), 'source-spill')))
+        createSpillStore(path.join(path.dirname(temp.dbPath), 'spill')))
       await history.appendBatch([
         { invocationId: 'single-history-segment-inv', turnId: 'single-history-segment-turn', sequence: 1, schemaVersion: 1,
           eventId: 'single-history-segment-context', idempotencyKey: 'single-history-segment-context', kind: 'invocation-context-committed',
@@ -378,6 +378,49 @@ describe('SQLite projection build task composition', () => {
       } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
     } finally { temp.cleanup() }
   }, 60_000)
+
+  it('segments one oversized spilled message item across bounded History blobs', async () => {
+    const temp = createTempDatabase('sqlite-projection-single-oversized-history-item-')
+    const db = temp.db
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-single-oversized-history-item-blobs-'))
+    try {
+      const session = createSession(db, { name: 'single oversized History item', model: 'test' })
+      const body = 'x'.repeat(17 * 1024 * 1024)
+      appendMessage(db, { id: 'single-oversized-history-item', sessionId: session.id, role: 'user', content: body,
+        timestamp: 1, status: 'sent' })
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id,
+        createSpillStore(path.join(path.dirname(temp.dbPath), 'spill')))
+      await history.appendBatch([
+        { invocationId: 'single-oversized-history-item-inv', turnId: 'single-oversized-history-item-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'single-oversized-history-item-context', idempotencyKey: 'single-oversized-history-item-context',
+          kind: 'invocation-context-committed', payload: { messages: [{ id: 'single-oversized-history-item', role: 'user', content: body, timestamp: 1 }],
+            requiredUserMessage: { id: 'single-oversized-history-item', message: { id: 'single-oversized-history-item', role: 'user', content: body, timestamp: 1 } } } },
+        { invocationId: 'single-oversized-history-item-inv', turnId: 'single-oversized-history-item-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'single-oversized-history-item-terminal', idempotencyKey: 'single-oversized-history-item-terminal',
+          kind: 'invocation-completed', payload: { status: 'completed' } },
+      ], 0)
+      const conn = getDbConnection(db)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
+      const stagedHistoryRow = conn.prepare('SELECT length(CAST(payload_json AS BLOB)) AS byte_length, instr(payload_json,\'__spaceassistant_spill_v1\') AS has_spill FROM agent_history_events WHERE event_id=?')
+        .get('single-oversized-history-item-context') as { byte_length: number; has_spill: number }
+      expect(stagedHistoryRow.byte_length).toBeGreaterThan(16 * 1024 * 1024)
+      expect(stagedHistoryRow.has_spill).toBeGreaterThan(0)
+      const processGeneration = advanceProcessGeneration(conn)
+      const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+      try {
+        const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
+        expect(prepared).toMatchObject({ sessionId: session.id, payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+        const page = await host.storage.queries.readPreparedChatPage?.({ sessionId: session.id, prepared, limit: 1 })
+        expect(page?.entries).toHaveLength(1)
+        expect(page?.entries[0]?.message.content).toBe(body)
+      } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
+    } finally { temp.cleanup() }
+  }, 120_000)
 
   it('publishes a segmented output manifest chain for a multi-message oversized History chunk', async () => {
     const temp = createTempDatabase('sqlite-projection-output-segments-')

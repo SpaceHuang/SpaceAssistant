@@ -62,13 +62,19 @@ parentPort.once('message', (message: {
       catch { throw new Error('PROJECTION_PENDING_CHUNK_INVALID_JSON') }
       if (payload && typeof payload === 'object' && (payload as { kind?: unknown }).kind === 'segmented-history-event') {
         const segmented = payload as { formatVersion?: unknown; event?: unknown; messageCount?: unknown;
-          messageSegments?: unknown; factCount?: unknown; factSegments?: unknown; requiredUserMessage?: unknown }
+          messageSegments?: unknown; factCount?: unknown; factSegments?: unknown; requiredUserMessage?: unknown;
+          requiredUserSegments?: unknown }
         if (segmented.formatVersion !== 2 || !segmented.event || typeof segmented.event !== 'object' || Array.isArray(segmented.event) ||
           !Number.isSafeInteger(segmented.messageCount) || (segmented.messageCount as number) < 1 ||
           !Array.isArray(segmented.messageSegments) || segmented.messageSegments.length < 1 || segmented.messageSegments.length > 15 ||
           !Number.isSafeInteger(segmented.factCount) || (segmented.factCount as number) < 0 ||
           !Array.isArray(segmented.factSegments) || segmented.factSegments.length > 15 ||
-          segmented.messageSegments.length + segmented.factSegments.length > 15) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+          (segmented.requiredUserSegments !== undefined && (!Array.isArray(segmented.requiredUserSegments) ||
+            (segmented.requiredUserSegments as unknown[]).length < 2)) ||
+          segmented.messageSegments.length + segmented.factSegments.length +
+            (Array.isArray(segmented.requiredUserSegments) ? segmented.requiredUserSegments.length : 0) > 15) {
+          throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+        }
         const event = segmented.event as Partial<ProjectionHistoryChunkEvent>
         if (typeof event.invocationId !== 'string' || !event.invocationId || typeof event.turnId !== 'string' || !event.turnId ||
           !Number.isSafeInteger(event.sequence) || (event.sequence ?? 0) < 1 || typeof event.eventId !== 'string' || !event.eventId ||
@@ -80,40 +86,88 @@ parentPort.once('message', (message: {
         const factsFromSegments: ProjectionMessageFact[] = []
         const segmentLocators = new Set<string>()
         let segmentByteLength = 0
-        const readSegments = async (rawSegments: unknown[], items: unknown[]) => {
-          for (const rawSegment of rawSegments) {
+        const readSegmentBytes = async (rawSegment: unknown): Promise<Readonly<{ bytes: Buffer; descriptor: {
+          locator: string; byteLength: number; payloadDigest: string; itemCount: number; encoding?: unknown;
+          firstItemIndex?: unknown; fragmentIndex?: unknown; fragmentCount?: unknown
+        } }>> => {
           if (!rawSegment || typeof rawSegment !== 'object' || Array.isArray(rawSegment)) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
-          const segment = rawSegment as { locator?: unknown; byteLength?: unknown; payloadDigest?: unknown; itemCount?: unknown }
-          if (typeof segment.locator !== 'string' || !/^projection-[0-9a-f-]{36}\.blob$/.test(segment.locator) ||
-            path.basename(segment.locator) !== segment.locator || !Number.isSafeInteger(segment.byteLength) ||
-            (segment.byteLength as number) < 1 || (segment.byteLength as number) > 16 * 1024 * 1024 ||
-            typeof segment.payloadDigest !== 'string' || !/^[a-f0-9]{64}$/.test(segment.payloadDigest) ||
-            !Number.isSafeInteger(segment.itemCount) || (segment.itemCount as number) < 1 || segmentLocators.has(segment.locator)) {
+          const descriptor = rawSegment as { locator?: unknown; byteLength?: unknown; payloadDigest?: unknown; itemCount?: unknown;
+            encoding?: unknown; firstItemIndex?: unknown; fragmentIndex?: unknown; fragmentCount?: unknown }
+          if (typeof descriptor.locator !== 'string' || !/^projection-[0-9a-f-]{36}\.blob$/.test(descriptor.locator) ||
+            path.basename(descriptor.locator) !== descriptor.locator || !Number.isSafeInteger(descriptor.byteLength) ||
+            (descriptor.byteLength as number) < 1 || (descriptor.byteLength as number) > 16 * 1024 * 1024 ||
+            typeof descriptor.payloadDigest !== 'string' || !/^[a-f0-9]{64}$/.test(descriptor.payloadDigest) ||
+            !Number.isSafeInteger(descriptor.itemCount) || (descriptor.itemCount as number) < 0 ||
+            (descriptor.encoding !== undefined && descriptor.encoding !== 'json-item-fragment') || segmentLocators.has(descriptor.locator)) {
             throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
           }
-          segmentLocators.add(segment.locator)
-          let segmentBytes: Buffer
-          try { segmentBytes = await fs.readFile(path.join(path.resolve(root), segment.locator)) }
+          segmentLocators.add(descriptor.locator)
+          let bytes: Buffer
+          try { bytes = await fs.readFile(path.join(path.resolve(root), descriptor.locator)) }
           catch { throw new Error('PROJECTION_PENDING_CHUNK_UNAVAILABLE') }
-          if (segmentBytes.byteLength !== segment.byteLength || createHash('sha256').update(segmentBytes).digest('hex') !== segment.payloadDigest) {
+          if (bytes.byteLength !== descriptor.byteLength || createHash('sha256').update(bytes).digest('hex') !== descriptor.payloadDigest) {
             throw new Error('PROJECTION_PENDING_CHUNK_DIGEST_MISMATCH')
           }
-          let segmentMessages: unknown
-          try { segmentMessages = JSON.parse(segmentBytes.toString('utf8')) } catch { throw new Error('PROJECTION_PENDING_CHUNK_INVALID_JSON') }
-          if (!Array.isArray(segmentMessages) || segmentMessages.length !== segment.itemCount) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
-          for (const item of segmentMessages) items.push(item)
-          segmentByteLength += segmentBytes.byteLength
+          segmentByteLength += bytes.byteLength
+          if (segmentByteLength > 128 * 1024 * 1024) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+          return { bytes, descriptor: descriptor as typeof descriptor & { locator: string; byteLength: number;
+            payloadDigest: string; itemCount: number } }
+        }
+        const readSegments = async (rawSegments: unknown[], items: unknown[]) => {
+          let index = 0
+          while (index < rawSegments.length) {
+            const { bytes, descriptor } = await readSegmentBytes(rawSegments[index])
+            if (descriptor.encoding !== 'json-item-fragment') {
+              if (descriptor.itemCount < 1 || (descriptor.firstItemIndex !== undefined && descriptor.firstItemIndex !== items.length)) {
+                throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+              }
+              let payload: unknown
+              try { payload = JSON.parse(bytes.toString('utf8')) } catch { throw new Error('PROJECTION_PENDING_CHUNK_INVALID_JSON') }
+              if (!Array.isArray(payload) || payload.length !== descriptor.itemCount) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+              for (const item of payload) items.push(item)
+              index += 1
+              continue
+            }
+            const itemIndex = descriptor.firstItemIndex
+            const fragmentCount = descriptor.fragmentCount
+            if (itemIndex !== items.length || descriptor.fragmentIndex !== 0 || descriptor.itemCount !== 1 ||
+              !Number.isSafeInteger(fragmentCount) || (fragmentCount as number) < 2 || (fragmentCount as number) > 15 ||
+              index + (fragmentCount as number) > rawSegments.length) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+            const fragments = [bytes]
+            for (let fragmentIndex = 1; fragmentIndex < (fragmentCount as number); fragmentIndex += 1) {
+              const next = await readSegmentBytes(rawSegments[index + fragmentIndex])
+              if (next.descriptor.encoding !== 'json-item-fragment' || next.descriptor.firstItemIndex !== itemIndex ||
+                next.descriptor.fragmentIndex !== fragmentIndex || next.descriptor.fragmentCount !== fragmentCount ||
+                next.descriptor.itemCount !== 0) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+              fragments.push(next.bytes)
+            }
+            let item: unknown
+            try { item = JSON.parse(Buffer.concat(fragments).toString('utf8')) }
+            catch { throw new Error('PROJECTION_PENDING_CHUNK_INVALID_JSON') }
+            items.push(item)
+            index += fragmentCount as number
           }
         }
         await readSegments(segmented.messageSegments as unknown[], messages)
         await readSegments(segmented.factSegments as unknown[], factsFromSegments as unknown[])
+        let requiredUserMessage = segmented.requiredUserMessage
+        if (segmented.requiredUserSegments !== undefined) {
+          if (requiredUserMessage !== undefined || (segmented.requiredUserSegments as unknown[])
+            .some((segment) => !segment || typeof segment !== 'object' || (segment as { encoding?: unknown }).encoding !== 'json-item-fragment')) {
+            throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+          }
+          const requiredUserItems: unknown[] = []
+          await readSegments(segmented.requiredUserSegments as unknown[], requiredUserItems)
+          if (requiredUserItems.length !== 1) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+          requiredUserMessage = requiredUserItems[0]
+        }
         if (messages.length !== segmented.messageCount || segmentByteLength > 128 * 1024 * 1024) {
           throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
         }
         if (factsFromSegments.length !== segmented.factCount || factsFromSegments.some((fact) => !isProjectionMessageFact(fact))) {
           throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
         }
-        const eventPayload = { messages, ...(segmented.requiredUserMessage === undefined ? {} : { requiredUserMessage: segmented.requiredUserMessage }) }
+        const eventPayload = { messages, ...(requiredUserMessage === undefined ? {} : { requiredUserMessage }) }
         events = [{ ...event, payloadJson: '', payload: eventPayload } as ProjectionHistoryChunkEvent]
         messageFacts = factsFromSegments
       } else {

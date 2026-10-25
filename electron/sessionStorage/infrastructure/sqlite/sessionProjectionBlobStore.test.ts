@@ -228,42 +228,60 @@ describe('session projection derived blob store', () => {
     expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 1 })
   })
 
-  it('keeps segmented History child blobs while a pending root is checkpointed, then collects the entire chain', async () => {
+  it('keeps fragmented History item blobs while a pending root is checkpointed, then collects the entire chain', async () => {
     temp = createTempDatabase('projection-blob-segmented-checkpoint-')
     const session = createSession(temp.db, { name: 'segmented checkpoint root', model: 'test' })
     const conn = getDbConnection(temp.db)
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')
     const blobs = createSessionProjectionBlobStore(root)
-    const segmentPayload = JSON.stringify([{ id: 'message-a', content: 'body' }, { id: 'message-b', content: 'body' }])
-    const segment = await blobs.write(segmentPayload)
-    await segment.release()
+    const messagePayload = JSON.stringify({ id: 'message-a', content: 'body' })
+    const messagePartA = await blobs.write(messagePayload.slice(0, 12))
+    await messagePartA.release()
+    const messagePartB = await blobs.write(messagePayload.slice(12))
+    await messagePartB.release()
+    const requiredUserPayload = JSON.stringify({ id: 'message-a', message: { role: 'user', content: 'body' } })
+    const requiredUserPartA = await blobs.write(requiredUserPayload.slice(0, 16))
+    await requiredUserPartA.release()
+    const requiredUserPartB = await blobs.write(requiredUserPayload.slice(16))
+    await requiredUserPartB.release()
     const factPayload = JSON.stringify([{ id: 'message-a', role: 'user', timestamp: 1, sequence: 1, queueScope: 'desktop',
       contentStorageState: 'legacy', writeMode: null, storedContent: 'body' }])
     const factSegment = await blobs.write(factPayload)
     await factSegment.release()
     const event = { invocationId: 'inv', sequence: 1, eventId: 'event', idempotencyKey: 'event', turnId: 'turn',
       schemaVersion: 1, kind: 'invocation-context-committed', payloadJson: '', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
-    const rootPayload = JSON.stringify({ formatVersion: 2, kind: 'segmented-history-event', event, messageCount: 2,
-      messageSegments: [{ locator: segment.locator, byteLength: segment.byteLength, payloadDigest: segment.payloadDigest, itemCount: 2 }],
+    const rootPayload = JSON.stringify({ formatVersion: 2, kind: 'segmented-history-event', event, messageCount: 1,
+      messageSegments: [
+        { locator: messagePartA.locator, byteLength: messagePartA.byteLength, payloadDigest: messagePartA.payloadDigest,
+          itemCount: 1, encoding: 'json-item-fragment', firstItemIndex: 0, fragmentIndex: 0, fragmentCount: 2 },
+        { locator: messagePartB.locator, byteLength: messagePartB.byteLength, payloadDigest: messagePartB.payloadDigest,
+          itemCount: 0, encoding: 'json-item-fragment', firstItemIndex: 0, fragmentIndex: 1, fragmentCount: 2 },
+      ],
       factCount: 1, factSegments: [{ locator: factSegment.locator, byteLength: factSegment.byteLength,
-        payloadDigest: factSegment.payloadDigest, itemCount: 1 }] })
+        payloadDigest: factSegment.payloadDigest, itemCount: 1, firstItemIndex: 0 }],
+      requiredUserSegments: [
+        { locator: requiredUserPartA.locator, byteLength: requiredUserPartA.byteLength, payloadDigest: requiredUserPartA.payloadDigest,
+          itemCount: 1, encoding: 'json-item-fragment', firstItemIndex: 0, fragmentIndex: 0, fragmentCount: 2 },
+        { locator: requiredUserPartB.locator, byteLength: requiredUserPartB.byteLength, payloadDigest: requiredUserPartB.payloadDigest,
+          itemCount: 0, encoding: 'json-item-fragment', firstItemIndex: 0, fragmentIndex: 1, fragmentCount: 2 },
+      ] })
     const finalPending = await blobs.write(rootPayload)
     const seed = createProjectionBuildCheckpoint({ sessionId: session.id, sessionGeneration: session.generation,
       scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson: '{"source":1}', processGeneration: 1,
       rebuildToken: 'segmented-build-token', startSequence: 0, historyReducerStateJson: '{}' })
     const checkpoint = attachProjectionPendingHistoryChunk(seed, { locator: finalPending.locator, byteLength: finalPending.byteLength,
       payloadDigest: finalPending.payloadDigest, sessionId: session.id, scopeKey: 'scope-a', sourceIdentityJson: '{"source":1}',
-      fromSequence: 0, nextSequence: 1, rowCount: 1, sourceBytes: Buffer.byteLength(segmentPayload), hasMore: false })!
+      fromSequence: 0, nextSequence: 1, rowCount: 1, sourceBytes: Buffer.byteLength(messagePayload), hasMore: false })!
     conn.prepare("INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,process_generation,rebuild_token,updated_at,build_checkpoint_json) VALUES(?,?,?,'rebuilding',1,'segmented-build-token',1,?)")
       .run(session.id, 'scope-a', session.generation, JSON.stringify(checkpoint))
     await finalPending.release()
 
     expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 0 })
-    await fs.writeFile(path.join(root, segment.locator), 'tampered child segment')
+    await fs.writeFile(path.join(root, messagePartB.locator), 'tampered child segment')
     await expect(blobs.collectGarbage(conn)).rejects.toMatchObject({ code: 'PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE' })
     await expect(fs.stat(path.join(root, finalPending.locator))).resolves.toBeDefined()
     conn.prepare('UPDATE session_projection_state SET build_checkpoint_json=NULL WHERE session_id=? AND scope_key=?').run(session.id, 'scope-a')
-    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 3 })
+    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 6 })
   })
 
   it('retains a stable-ID index blob referenced only by a durable checkpoint', async () => {

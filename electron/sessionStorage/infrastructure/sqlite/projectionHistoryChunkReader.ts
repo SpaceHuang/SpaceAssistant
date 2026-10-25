@@ -90,6 +90,11 @@ export function readProjectionHistoryChunk(
             eventSequence: row.session_seq, observedByteLength: storedPayloadBytes, observedEventRows: 1,
             reason: 'oversized-event-exceeds-staging-budget' }
         }
+        if (storedPayloadBytes > input.maxBytes && input.staging && events.length === 0 &&
+          (row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')) {
+          const staged = stageOversizedContextEvent(conn, permit, input, row, watermark)
+          if (staged) return staged
+        }
         if (storedPayloadBytes > input.maxBytes && !input.allowOversizedChunk) {
           return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
             eventSequence: row.session_seq, observedByteLength: storedPayloadBytes, observedEventRows: 1 }
@@ -201,7 +206,9 @@ export function readProjectionHistoryChunk(
   }
 }
 
-type SegmentedEventPart = Readonly<{ kind: 'messages' | 'facts'; tempLocator: string; locator: string; byteLength: number; payloadDigest: string; itemCount: number }>
+type SegmentedEventPart = Readonly<{ kind: 'messages' | 'facts' | 'required-user'; tempLocator: string; locator: string; byteLength: number;
+  payloadDigest: string; itemCount: number; encoding?: 'json-item-fragment'; firstItemIndex?: number;
+  fragmentIndex?: number; fragmentCount?: number }>
 
 /** Stage a large canonical context event as bounded message/fact arrays without materializing its JSON array. */
 function stageOversizedContextEvent(
@@ -213,11 +220,14 @@ function stageOversizedContextEvent(
   if (!staging || row.payload_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES || !Number.isSafeInteger(row.payload_byte_length)) return undefined
   const eventShape = conn.prepare(`SELECT json_type(payload_json,'$.messages') AS messages_type,
     json_array_length(payload_json,'$.messages') AS message_count,
-    json_extract(payload_json,'$.requiredUserMessage') AS required_user_json
+    length(CAST(json_extract(payload_json,'$.requiredUserMessage') AS BLOB)) AS required_user_byte_length,
+    EXISTS(SELECT 1 FROM json_each(agent_history_events.payload_json) field
+      WHERE field.key NOT IN ('messages','requiredUserMessage')) AS has_unsupported_fields
     FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
-    { messages_type: string | null; message_count: number | null; required_user_json: string | null } | undefined
+    { messages_type: string | null; message_count: number | null; required_user_byte_length: number | null; has_unsupported_fields: number } | undefined
   if (eventShape?.messages_type !== 'array' || !Number.isSafeInteger(eventShape.message_count) || (eventShape.message_count ?? 0) < 1) return undefined
-  if (eventShape.required_user_json !== null && Buffer.byteLength(eventShape.required_user_json, 'utf8') > MAX_STAGED_SOURCE_CHUNK_BYTES) return undefined
+  if (eventShape.has_unsupported_fields) return undefined
+  if (eventShape.required_user_byte_length !== null && eventShape.required_user_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
 
   const tempLocators = [staging.tempLocator, ...(staging.tempLocators ?? [])]
   if (tempLocators.length < 2 || tempLocators.length > MAX_HISTORY_EVENT_SEGMENTS + 1 ||
@@ -225,7 +235,9 @@ function stageOversizedContextEvent(
       !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(locator) || path.basename(locator) !== locator)) return undefined
   const availableLocators = tempLocators.slice(1)
   const writtenSegments: SegmentedEventPart[] = []
-  let current: { kind: 'messages' | 'facts'; locator: string; tempLocator: string; fd: number; hash: ReturnType<typeof createHash>; byteLength: number; itemCount: number } | undefined
+  let current: { kind: 'messages' | 'facts'; locator: string; tempLocator: string; fd: number; hash: ReturnType<typeof createHash>;
+    byteLength: number; itemCount: number; firstItemIndex: number } | undefined
+  const itemCounts: Record<'messages' | 'facts', number> = { messages: 0, facts: 0 }
   const closeCurrent = () => {
     if (!current) return
     const closing = Buffer.from(']')
@@ -235,7 +247,7 @@ function stageOversizedContextEvent(
     fs.fsyncSync(current.fd)
     fs.closeSync(current.fd)
     writtenSegments.push({ kind: current.kind, tempLocator: current.tempLocator, locator: current.locator, byteLength: current.byteLength,
-      payloadDigest: current.hash.digest('hex'), itemCount: current.itemCount })
+      payloadDigest: current.hash.digest('hex'), itemCount: current.itemCount, firstItemIndex: current.firstItemIndex })
     current = undefined
   }
   const beginCurrent = (kind: 'messages' | 'facts') => {
@@ -247,11 +259,35 @@ function stageOversizedContextEvent(
     const opening = Buffer.from('[')
     fs.writeSync(fd, opening)
     hash.update(opening)
-    current = { kind, locator, tempLocator, fd, hash, byteLength: opening.byteLength, itemCount: 0 }
+    current = { kind, locator, tempLocator, fd, hash, byteLength: opening.byteLength, itemCount: 0, firstItemIndex: itemCounts[kind] }
+  }
+  const appendFragmentedItem = (bytes: Buffer, kind: SegmentedEventPart['kind'], itemIndex: number): boolean => {
+    if (bytes.byteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return false
+    const fragmentCount = Math.ceil(bytes.byteLength / MAX_HISTORY_EVENT_SEGMENT_BYTES)
+    if (fragmentCount > availableLocators.length) return false
+    for (let fragmentIndex = 0; fragmentIndex < fragmentCount; fragmentIndex += 1) {
+      const tempLocator = availableLocators.shift()
+      if (!tempLocator) return false
+      const locator = tempLocator.slice(1, -4) + '.blob'
+      const start = fragmentIndex * MAX_HISTORY_EVENT_SEGMENT_BYTES
+      const fragment = bytes.subarray(start, Math.min(bytes.byteLength, start + MAX_HISTORY_EVENT_SEGMENT_BYTES))
+      const fd = fs.openSync(path.join(staging.root, tempLocator), 'wx', 0o600)
+      try { fs.writeSync(fd, fragment); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+      writtenSegments.push({ kind, encoding: 'json-item-fragment', tempLocator, locator,
+        byteLength: fragment.byteLength, payloadDigest: createHash('sha256').update(fragment).digest('hex'),
+        itemCount: 1, firstItemIndex: itemIndex, fragmentIndex, fragmentCount })
+    }
+    return true
   }
   const appendJsonItem = (serialized: string, kind: 'messages' | 'facts'): boolean => {
     const bytes = Buffer.from(serialized, 'utf8')
-    if (bytes.byteLength + 2 > MAX_HISTORY_EVENT_SEGMENT_BYTES) return false
+    if (bytes.byteLength + 2 > MAX_HISTORY_EVENT_SEGMENT_BYTES) {
+      closeCurrent()
+      const itemIndex = itemCounts[kind]
+      if (!appendFragmentedItem(bytes, kind, itemIndex)) return false
+      itemCounts[kind] += 1
+      return true
+    }
     const separatorBytes = current && current.itemCount > 0 ? 1 : 0
     if (current && current.kind !== kind) closeCurrent()
     if (!current || current.byteLength + separatorBytes + bytes.byteLength + 1 > MAX_HISTORY_EVENT_SEGMENT_BYTES) {
@@ -264,6 +300,7 @@ function stageOversizedContextEvent(
     current!.hash.update(bytes)
     current!.byteLength += bytes.byteLength
     current!.itemCount += 1
+    itemCounts[kind] += 1
     return true
   }
 
@@ -331,13 +368,25 @@ function stageOversizedContextEvent(
     }
     closeCurrent()
     let requiredUserMessage: unknown
-    if (eventShape.required_user_json !== null) {
+    let requiredUserByteLength = 0
+    if (eventShape.required_user_byte_length !== null) {
       try {
-        const requiredValue = JSON.parse(eventShape.required_user_json)
+        const requiredRow = conn.prepare(`SELECT json_extract(payload_json,'$.requiredUserMessage') AS required_user_json
+          FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
+          { required_user_json: string | null } | undefined
+        if (typeof requiredRow?.required_user_json !== 'string') return undefined
+        const requiredValue = JSON.parse(requiredRow.required_user_json)
         const descriptorBytes = collectSpillDescriptorsStrict(requiredValue)
           .reduce((total, descriptor) => total + descriptor.byteLength, 0)
         if (descriptorBytes > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
-        requiredUserMessage = hydrateSourceTruthSpills(requiredValue, path.join(path.dirname(permit.dbPath), 'spill'))
+        const hydratedRequiredUser = hydrateSourceTruthSpills(requiredValue, path.join(path.dirname(permit.dbPath), 'spill'))
+        const serializedRequiredUser = JSON.stringify(hydratedRequiredUser)
+        if (typeof serializedRequiredUser !== 'string') return undefined
+        const requiredUserBytes = Buffer.from(serializedRequiredUser, 'utf8')
+        if (requiredUserBytes.byteLength + 2 > MAX_HISTORY_EVENT_SEGMENT_BYTES) {
+          if (!appendFragmentedItem(requiredUserBytes, 'required-user', 0)) return undefined
+          requiredUserByteLength = requiredUserBytes.byteLength
+        } else requiredUserMessage = hydratedRequiredUser
       } catch { return undefined }
     }
     const rootPayload = JSON.stringify({ formatVersion: 2, kind: 'segmented-history-event',
@@ -345,14 +394,24 @@ function stageOversizedContextEvent(
         idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind,
         sessionSequence: row.session_seq, commitOrder: row.commit_order, createdAt: row.created_at },
       messageCount,
-      messageSegments: writtenSegments.filter(({ kind }) => kind === 'messages').map(({ locator, byteLength, payloadDigest, itemCount }) =>
-        ({ locator, byteLength, payloadDigest, itemCount })),
+      messageSegments: writtenSegments.filter(({ kind }) => kind === 'messages').map((segment) => ({ locator: segment.locator,
+        byteLength: segment.byteLength, payloadDigest: segment.payloadDigest,
+        itemCount: segment.encoding === 'json-item-fragment' && segment.fragmentIndex !== 0 ? 0 : segment.itemCount,
+        ...(segment.encoding ? { encoding: segment.encoding, firstItemIndex: segment.firstItemIndex,
+          fragmentIndex: segment.fragmentIndex, fragmentCount: segment.fragmentCount } : { firstItemIndex: segment.firstItemIndex }) })),
       factCount,
-      factSegments: writtenSegments.filter(({ kind }) => kind === 'facts').map(({ locator, byteLength, payloadDigest, itemCount }) =>
-        ({ locator, byteLength, payloadDigest, itemCount })),
+      factSegments: writtenSegments.filter(({ kind }) => kind === 'facts').map((segment) => ({ locator: segment.locator,
+        byteLength: segment.byteLength, payloadDigest: segment.payloadDigest,
+        itemCount: segment.encoding === 'json-item-fragment' && segment.fragmentIndex !== 0 ? 0 : segment.itemCount,
+        ...(segment.encoding ? { encoding: segment.encoding, firstItemIndex: segment.firstItemIndex,
+          fragmentIndex: segment.fragmentIndex, fragmentCount: segment.fragmentCount } : { firstItemIndex: segment.firstItemIndex }) })),
+      ...(requiredUserByteLength > 0 ? { requiredUserSegments: writtenSegments.filter(({ kind }) => kind === 'required-user').map((segment) => ({
+        locator: segment.locator, byteLength: segment.byteLength, payloadDigest: segment.payloadDigest,
+        itemCount: segment.fragmentIndex === 0 ? 1 : 0, encoding: segment.encoding,
+        firstItemIndex: segment.firstItemIndex, fragmentIndex: segment.fragmentIndex, fragmentCount: segment.fragmentCount })) } : {}),
       ...(requiredUserMessage === undefined ? {} : { requiredUserMessage }) })
     const rootBytes = Buffer.from(rootPayload, 'utf8')
-    const sourceByteLength = messageByteLength + factBytes
+    const sourceByteLength = messageByteLength + factBytes + requiredUserByteLength
     if (rootBytes.byteLength > MAX_STAGED_SOURCE_CHUNK_BYTES || sourceByteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
     const rootFd = fs.openSync(path.join(staging.root, staging.tempLocator), 'wx', 0o600)
     try { fs.writeSync(rootFd, rootBytes); fs.fsyncSync(rootFd) } finally { fs.closeSync(rootFd) }
