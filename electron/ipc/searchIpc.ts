@@ -18,28 +18,23 @@ export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const activeProfileId = ctx.workDirManager.getActiveProfileId()
     const storage = ctx.sessionStorage!
     let hits: MessageSearchHit[] = []
-    if (storage.queries.listCanonicalSearchSessions && storage.ensureChatBodyV1 && storage.queries.searchPreparedMessages) {
+    if (storage.ensureChatBodyV1 && storage.queries.searchPreparedMessages) {
       let usedPreparedSearch = false
       for (let attempt = 0; attempt < 2 && !usedPreparedSearch; attempt++) {
-        const canonicalSessions = storage.queries.listCanonicalSearchSessions(activeProfileId)
-        if (!canonicalSessions.length) {
-          hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })
-          usedPreparedSearch = true
-          break
-        }
-        const preparedBySession = new Map<string, import('../sessionStorage/public/model').PreparedChatBodyView>()
-        let complete = true
-        for (const sessionId of canonicalSessions) {
-          const prepared = await prepareChatBodyForRead(storage.ensureChatBodyV1, sessionId)
-          if (!prepared) { complete = false; break }
-          preparedBySession.set(sessionId, prepared as import('../sessionStorage/public/model').PreparedChatBodyView)
-        }
-        if (!complete) break
         try {
-          hits = await storage.queries.searchPreparedMessages({ query: q, activeProfileId, limit: 50, preparedBySession })
+          hits = await storage.queries.searchPreparedMessages({ query: q, activeProfileId, limit: 50,
+            prepareSession: async (sessionId) => {
+              const prepared = await prepareChatBodyForRead(storage.ensureChatBodyV1!, sessionId)
+              return prepared as import('../sessionStorage/public/model').PreparedChatBodyView | undefined
+            } })
           usedPreparedSearch = true
         } catch (error) {
           if (error instanceof Error && error.message === 'GLOBAL_SEARCH_SOURCE_CHANGED' && attempt === 0) continue
+          if (error instanceof Error && error.message === 'PREPARED_SEARCH_UNAVAILABLE') {
+            hits = storage.queries.searchMessages({ query: q, activeProfileId, limit: 50 })
+            usedPreparedSearch = true
+            break
+          }
           throw error
         }
       }

@@ -423,18 +423,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       return { ...page, entries: projectMessageEntriesV1('searchCorpusV1', page.entries) }
     },
     ...(preparedChatBody ? {
-      listCanonicalSearchSessions: (activeProfileId: string) => {
-        const rows = getDbConnection(db).prepare(`SELECT DISTINCT m.session_id AS sessionId
-          FROM messages m JOIN sessions s ON s.id=m.session_id
-          JOIN session_message_content_cutover cutover ON cutover.session_id=m.session_id
-          WHERE m.content_storage_state IN ('canonical-backed-dual-write','canonical-backed-only')
-            AND cutover.write_mode='canonical'
-            AND (s.work_dir_profile_id IS NULL OR s.work_dir_profile_id=?)
-            AND (s.ownership IS NULL OR s.ownership!='internal')
-          ORDER BY m.session_id`).all(activeProfileId) as Array<{ sessionId: string }>
-        return rows.map(({ sessionId }) => sessionId)
-      },
-      searchPreparedMessages: async ({ query, activeProfileId, limit = 50, preparedBySession }) => {
+      searchPreparedMessages: async ({ query, activeProfileId, limit = 50, prepareSession }) => {
         const q = query.trim()
         if (!q || limit === 0) return []
         const escaped = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
@@ -449,32 +438,34 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
             id: string; session_id: string; role: Message['role']; content: string; content_storage_state: string;
             write_mode: string | null; session_name: string; timestamp: number
           }>
-        const canonicalById = new Map<string, { content: string; timestamp: number; role: Message['role'] }>()
-        const canonicalSessionIds = [...new Set(candidates.filter(({ content_storage_state }) =>
-          ['canonical-backed-dual-write', 'canonical-backed-only'].includes(content_storage_state)).map(({ session_id }) => session_id))]
-        for (const sessionId of canonicalSessionIds) {
-          if (candidates.some((row) => row.session_id === sessionId &&
-            ['canonical-backed-dual-write', 'canonical-backed-only'].includes(row.content_storage_state) && row.write_mode !== 'canonical')) {
-            throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          }
-          const view = preparedBySession.get(sessionId)
-          if (!view || preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration) !== view.sourceIdentityJson) {
-            throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          }
-          let search: PreparedChatBodySearch
-          try { search = await preparedChatBody.searchBodies(view, q, limit > 0 ? limit : Number.MAX_SAFE_INTEGER) }
-          catch {
-            preparedChatBody.invalidate(view)
-            throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          }
-          const currentIdentity = preparedChatBody.currentSourceIdentity(sessionId, view.sessionGeneration)
-          if (currentIdentity !== view.sourceIdentityJson) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-          for (const message of search.messages) canonicalById.set(message.id, message)
-        }
         const results: MessageSearchHit[] = []
+        const searchedBySession = new Map<string, Map<string, PreparedChatBodySearch['messages'][number]>>()
         for (const candidate of candidates) {
           const canonicalBacked = ['canonical-backed-dual-write', 'canonical-backed-only'].includes(candidate.content_storage_state)
-          const canonical = canonicalBacked ? canonicalById.get(candidate.id) : undefined
+          let canonical: PreparedChatBodySearch['messages'][number] | undefined
+          if (canonicalBacked) {
+            if (candidate.write_mode !== 'canonical') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+            let sessionMessages = searchedBySession.get(candidate.session_id)
+            if (!sessionMessages) {
+              const view = await prepareSession(candidate.session_id)
+              if (!view) throw new Error('PREPARED_SEARCH_UNAVAILABLE')
+              if (preparedChatBody.currentSourceIdentity(candidate.session_id, view.sessionGeneration) !== view.sourceIdentityJson) {
+                throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+              }
+              let search: PreparedChatBodySearch
+              try { search = await preparedChatBody.searchBodies(view, q, limit > 0 ? limit - results.length : Number.MAX_SAFE_INTEGER) }
+              catch {
+                preparedChatBody.invalidate(view)
+                throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+              }
+              if (preparedChatBody.currentSourceIdentity(candidate.session_id, view.sessionGeneration) !== view.sourceIdentityJson) {
+                throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+              }
+              sessionMessages = new Map(search.messages.map((message) => [message.id, message]))
+              searchedBySession.set(candidate.session_id, sessionMessages)
+            }
+            canonical = sessionMessages.get(candidate.id)
+          }
           if (canonicalBacked && (!canonical || canonical.role !== candidate.role || canonical.timestamp !== candidate.timestamp)) continue
           results.push({ messageId: candidate.id, sessionId: candidate.session_id,
             content: canonical?.content ?? candidate.content, sessionName: candidate.session_name,

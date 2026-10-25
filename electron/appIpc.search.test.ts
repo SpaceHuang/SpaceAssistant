@@ -4,7 +4,8 @@ import { registerAppIpcHandlers as registerAppIpcHandlersRaw } from './appIpc'
 import { withSessionRuntime } from './testSupport/sessionStorageComposition'
 import type { AppIpcContext } from './appIpc'
 
-import { listSearchHistory } from './database/operations'
+import { appendMessage, createSession, listSearchHistory } from './database/operations'
+import { getDbConnection } from './database/sqliteStore'
 import * as sessionTranscriptProjection from './sessionStorage/infrastructure/sqlite/sessionTranscriptProjection'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { createMemoryAppDb } from './database/testHelpers'
@@ -168,7 +169,7 @@ describe('search:execute IPC handler', () => {
     })
   })
 
-  it('prepares each provisional result session then reruns the complete cross-session search', async () => {
+  it('prepares canonical sessions lazily as the global result window reaches them', async () => {
     const ctx = makeCtx()
     const db = createMemoryAppDb()
     ctx.db = db
@@ -184,10 +185,11 @@ describe('search:execute IPC handler', () => {
       ...base,
       ensureChatBodyV1: vi.fn(async ({ sessionId }: { sessionId: string }) => { events.push(`ensure:${sessionId}`); return { sessionId } }),
       queries: { ...base.queries,
-        listCanonicalSearchSessions: vi.fn(() => ['s1', 's2']),
         searchMessages: vi.fn(() => { events.push('sync-search'); return hits }),
-        searchPreparedMessages: vi.fn(async ({ preparedBySession }: { preparedBySession: ReadonlyMap<string, unknown> }) => {
-          events.push(`prepared-search:${[...preparedBySession.keys()].join(',')}`)
+        searchPreparedMessages: vi.fn(async ({ prepareSession }: { prepareSession: (sessionId: string) => Promise<unknown> }) => {
+          await prepareSession('s1')
+          await prepareSession('s2')
+          events.push('prepared-search:s1,s2')
           return hits
         })
       }
@@ -202,24 +204,55 @@ describe('search:execute IPC handler', () => {
     } finally { db.close() }
   })
 
+  it('does not prepare a broken canonical session outside the IPC result limit', async () => {
+    const ctx = makeCtx()
+    const db = createMemoryAppDb()
+    ctx.db = db
+    const base = createSqliteSessionStorage(db)
+    const legacy = createSession(db, { name: 'legacy result page' })
+    for (let index = 0; index < 50; index += 1) {
+      appendMessage(db, { id: `legacy-hit-${index}`, sessionId: legacy.id, role: 'user', content: 'needle',
+        timestamp: 1000 - index, status: 'sent' })
+    }
+    const broken = createSession(db, { name: 'outside result page' })
+    appendMessage(db, { id: 'broken-after-limit', sessionId: broken.id, role: 'user', content: '', timestamp: 1, status: 'sent' })
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(broken.id)
+    conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-only' WHERE id='broken-after-limit'").run()
+    const ensureChatBodyV1 = vi.fn(async () => undefined)
+    ctx.sessionStorage = { ...base, ensureChatBodyV1 }
+    try {
+      registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+      const results = await ipc.getHandler('search:execute')!({}, 'needle')
+
+      expect(results.filter((result: { id: string }) => result.id.startsWith('msg:'))).toHaveLength(50)
+      expect(ensureChatBodyV1).not.toHaveBeenCalled()
+    } finally { db.close() }
+  })
+
   it('falls back to the History reader when prepared search is unavailable', async () => {
     const ctx = makeCtx()
     const base = ctx.sessionStorage!
     const hit = { messageId: 'history-hit', sessionId: 'canonical', content: 'needle from History', sessionName: 'canonical' }
+    const ensureChatBodyV1 = vi.fn(async () => undefined)
     ctx.sessionStorage = {
       ...base,
-      ensureChatBodyV1: vi.fn(async () => undefined),
+      ensureChatBodyV1,
       queries: { ...base.queries,
-        listCanonicalSearchSessions: vi.fn(() => ['canonical']),
         searchMessages: vi.fn(() => [hit]),
-        searchPreparedMessages: vi.fn()
+        searchPreparedMessages: vi.fn(async ({ prepareSession }: { prepareSession: (sessionId: string) => Promise<unknown> }) => {
+          if (!await prepareSession('canonical')) throw new Error('PREPARED_SEARCH_UNAVAILABLE')
+          return []
+        })
       }
     }
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
 
     const results = await ipc.getHandler('search:execute')!({}, 'needle')
 
-    expect(ctx.sessionStorage.queries.searchPreparedMessages).not.toHaveBeenCalled()
+    expect(ctx.sessionStorage.queries.searchPreparedMessages).toHaveBeenCalledTimes(1)
+    expect(ensureChatBodyV1).toHaveBeenCalledExactlyOnceWith({ sessionId: 'canonical' })
     expect(ctx.sessionStorage.queries.searchMessages).toHaveBeenCalledWith({ query: 'needle', activeProfileId: 'default', limit: 50 })
     expect(results).toMatchObject([{ messageId: 'history-hit', preview: 'needle from History' }])
   })

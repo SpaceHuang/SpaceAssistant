@@ -188,14 +188,14 @@ describe('session transcript projection P2 read path', () => {
           recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
       const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
       if (!prepared) throw new Error('PERF_FIXTURE_PROJECTION_PREPARATION_UNAVAILABLE')
-      const preparedBySession = new Map([[session.id, prepared as import('../sessionStorage/public/model').PreparedChatBodyView]])
+      const prepareSession = async (sessionId: string) => await host!.storage.ensureChatBodyV1?.({ sessionId }) as import('../sessionStorage/public/model').PreparedChatBodyView | undefined
       expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
       const legacySearchSamples: number[] = []
       const canonicalSearchSamples: number[] = []
       for (let warmup = 0; warmup < 10; warmup += 1) {
         expect(searchMessages(db, 'query-with-no-matches', '', 50)).toEqual([])
         expect(await host.storage.queries.searchPreparedMessages!({ query: 'query-with-no-matches', activeProfileId: '',
-          limit: 50, preparedBySession })).toEqual([])
+          limit: 50, prepareSession })).toEqual([])
       }
       for (let iteration = 0; iteration < 30; iteration += 1) {
         const legacyStarted = performance.now()
@@ -204,7 +204,7 @@ describe('session transcript projection P2 read path', () => {
 
         const canonicalStarted = performance.now()
         expect(await host.storage.queries.searchPreparedMessages!({ query: 'query-with-no-matches', activeProfileId: '',
-          limit: 50, preparedBySession })).toEqual([])
+          limit: 50, prepareSession })).toEqual([])
         canonicalSearchSamples.push(performance.now() - canonicalStarted)
       }
       const legacySearchP95 = p95(legacySearchSamples)
@@ -1334,7 +1334,7 @@ describe('session transcript projection P2 read path', () => {
       await expect(readChatMessagesAfterPreparation(host.storage, { sessionId: session.id, limit: 50 })).resolves.toHaveLength(40)
       const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
       if (!prepared) throw new Error('PERF_FIXTURE_PROJECTION_PREPARATION_UNAVAILABLE')
-      const preparedBySession = new Map([[session.id, prepared as import('../sessionStorage/public/model').PreparedChatBodyView]])
+      const prepareSession = async (sessionId: string) => await host!.storage.ensureChatBodyV1?.({ sessionId }) as import('../sessionStorage/public/model').PreparedChatBodyView | undefined
 
       const measureP95 = (samples: number[]) => {
         samples.sort((left, right) => left - right)
@@ -1353,7 +1353,7 @@ describe('session transcript projection P2 read path', () => {
 
         started = performance.now()
         const hits = await host!.storage.queries.searchPreparedMessages!({ query: 'multi-spill-needle', activeProfileId: '',
-          limit: 20, preparedBySession })
+          limit: 20, prepareSession })
         searchSamples.push(performance.now() - started)
         expect(hits).toHaveLength(20)
       }
@@ -1405,12 +1405,7 @@ describe('session transcript projection P2 read path', () => {
       host = createSqliteSessionStorageHost(temp.db, { storage: { projectionBlobRoot: blobRoot },
         startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
           recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
-      const preparedBySession = new Map<string, import('../sessionStorage/public/model').PreparedChatBodyView>()
-      for (const session of sessions) {
-        const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
-        if (!prepared) throw new Error('PERF_FIXTURE_PROJECTION_PREPARATION_UNAVAILABLE')
-        preparedBySession.set(session.id, prepared as import('../sessionStorage/public/model').PreparedChatBodyView)
-      }
+      const prepareSession = async (sessionId: string) => await host!.storage.ensureChatBodyV1?.({ sessionId }) as import('../sessionStorage/public/model').PreparedChatBodyView | undefined
 
       const measureP95 = (samples: number[]) => {
         samples.sort((left, right) => left - right)
@@ -1420,7 +1415,7 @@ describe('session transcript projection P2 read path', () => {
       const sampleSearch = async () => {
         const started = performance.now()
         const hits = await host!.storage.queries.searchPreparedMessages!({ query: 'global-search-needle', activeProfileId: '',
-          limit: 60, preparedBySession })
+          limit: 60, prepareSession })
         samples.push(performance.now() - started)
         expect(hits).toHaveLength(60)
         expect(new Set(hits.map(({ sessionId }) => sessionId)).size).toBe(3)
@@ -1498,11 +1493,8 @@ describe('session transcript projection P2 read path', () => {
         recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
     try {
       const queries = host.storage.queries
-      expect(queries.listCanonicalSearchSessions!('')).toEqual([canonicalSession.id])
-      const view = await host.storage.ensureChatBodyV1?.({ sessionId: canonicalSession.id })
-      expect(view).toBeTruthy()
       const hits = await queries.searchPreparedMessages!({ query: 'needle', activeProfileId: '', limit: 2,
-        preparedBySession: new Map([[canonicalSession.id, view as import('../sessionStorage/public/model').PreparedChatBodyView]]) })
+        prepareSession: async (sessionId) => await host!.storage.ensureChatBodyV1?.({ sessionId }) as import('../sessionStorage/public/model').PreparedChatBodyView | undefined })
 
       expect(hits.map(({ messageId, content }) => [messageId, content])).toEqual([
         ['prepared-legacy-user', 'needle legacy'], ['prepared-canonical-user', canonicalBody]
