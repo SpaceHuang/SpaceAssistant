@@ -1,22 +1,23 @@
 # Wiki 专属能力接口发布验收记录
 
-> 状态：E-14 本机源码已关闭；桌面正文边界回归以 TDD 修复并提交。2026-10-21 修复版隔离 macOS arm64 候选的真实 DeepSeek 保存、固定 revision 打开和全文读取通过，读回正文逐字一致且无存储标记泄漏。桌面 Wiki 硬门槛通过。按用户优先级，本版本允许 IM Wiki 不可用；未完成渠道作为未支持缺口保留，不计为通过。E-16 隔离迁移验收通过；E-17 已在隔离候选启用，目标生命周期为 `domain_enabled`。最终 `npm test` 为 1109 文件通过、1 跳过，10527 项通过、111 项跳过；`npm run build` 通过（Vite 有既有 dynamic import 与 chunk-size 警告）。Windows/其他平台归入各自发布验收，不阻塞本次 macOS 目标。
+> 状态：E-14 本机源码已关闭；E-15 桌面链路验收于 2026-10-24 完成：真实 DeepSeek Schema 应用将 v1 升至 v2；最新隔离复测真实展示完整 Schema before/after 确认卡并验证拒绝不应用；Wiki 恢复批准与拒绝终态均通过；普通 Wiki 写入确认也验证了人工审批和保存结果。E-16 macOS arm64 隔离验收通过。用户决定本版本 IM Wiki 可作为未支持项，因此飞书/微信未验收场景不计为通过，也不阻塞桌面范围关闭。E-17 在当前验收根尚未启用；既有 `domain_enabled` 证据仅对应 `/private/tmp/wiki-domain-tools-desktop-fix/userdata/llm-wiki`。最新完整门禁：`npm test` 1125 文件通过、1 跳过，10891 项通过、112 项跳过；`npm run build`、renderer/shared typecheck、i18n 与 invariant registry 检查通过。Windows/其他平台不作为本次 macOS 开发门禁。
 > 执行计划：[wiki-domain-tools-execution-plan.md](./wiki-domain-tools-execution-plan.md)
 
 ## 验收信息
 
 | 项目 | 记录 |
 | --- | --- |
-| 验收日期 | 2026-10-21（E-15 修复版桌面真实模型保存/读取复验；E-16 迁移报告补验于 2026-10-20） |
+| 验收日期 | 2026-10-24（桌面 E-15 真实模型确认展示、批准与拒绝验收完成） |
 | 源码关闭提交 | `f5b27dbd`（实现）、`61e320a7`（策略分类）、`e66bbf17`（E-14 证据）、`2737d84f`（首次启动 lifecycle 显示修复）、`e7262730`（保留 Wiki executor 的宿主确认来源） |
 | 候选版本 | SpaceAssistant 0.2.7 |
-| 当前结论 | `wikiDomainRead` 正文边界回归先 RED 后 GREEN；27 项定向测试、Electron 类型检查通过。2026-10-21 修复版候选 `/private/tmp/wiki-domain-tools-desktop-fix/SpaceAssistant-fixed2.app` 由真实 `deepseek-flash` 完成 `memory_wiki_get_schema`、`memory_wiki_search`、`memory_wiki_save_page`、`memory_wiki_open_page`、`memory_wiki_read_page`：pageId `68d8df29-d84e-49db-8d1a-716c869fe6a0`，revision 1，projection `complete`，读取 `hasMore=false`，charCount 17 / lineCount 2，正文“桌面 Wiki 保存读取回归正文”逐字匹配且无存储封套；SCHEMA 未修改。桌面真实模型保存后复读与硬门槛通过。E-15 IM 渠道缺口按用户决定作为本版本未支持项保留，不冒充通过。E-16 macOS arm64 候选验收完成；E-17 已在隔离根完成启用，生命周期 `domain_enabled`。最终 `npm test`：1109 文件通过、1 跳过；10527 项通过、111 项跳过。`npm run build` 通过，Vite 有既有 dynamic import/chunk-size 警告。Windows/其他平台留待各自发布验收 |
+| 当前结论 | 桌面真实模型完成 Wiki 保存/读取、Schema v1→v2 获批应用、Schema 确认卡完整 diff 展示及拒绝、恢复批准（页面 revision 7）与拒绝（`CONFIRMATION_DENIED`、executor 未进入）。详细会话、proposal 与数据库终态见下方 E-15 记录；历史阶段的待验收描述保留为当时状态。源码回归、完整构建、类型检查、i18n 与 invariant registry 门禁记录见 E-14；E-16 macOS arm64 隔离验收通过。IM Wiki 依用户决定作为本版本未支持项，不计为通过；E-17 当前验收根尚未启用。Windows/其他平台不作为本次 macOS 开发门禁 |
 
 ## E-14 本机源码验收
 
 | 检查 | 结果 | 证据 |
 | --- | --- | --- |
-| 全量测试（最终复验） | 通过 | `npm test`：1108 个文件通过、1 个跳过；10477 项通过、111 项跳过 |
+| 全量测试（最终复验） | 通过 | `npm test`：1125 个文件通过、1 个跳过；10891 项通过、112 项跳过 |
+| E-01 至 E-13 计划定向回归 | 通过 | 按执行计划逐项命令合并去重运行 32 个真实存在的 Vitest 文件，638 项通过；测试文件清单见执行计划 E-01 至 E-13 |
 | 完整构建（修复后复验） | 通过 | `npm run build`；Vite 有既有动态导入与 chunk size 警告 |
 | 类型、i18n 与 invariant 门禁（修复后复验） | 通过 | `npm run typecheck:renderer`、`npm run typecheck:shared`、`npx tsc -p tsconfig.electron.json --noEmit`、`npm run i18n:check`、`npm run check:system-invariant-registry` |
 
@@ -42,6 +43,10 @@
 | 修复版候选中的桌面真实模型 Wiki 保存与复读 | macOS 26.5.2 arm64；SpaceAssistant 0.2.7 arm64 候选 `/private/tmp/wiki-e15-final-release/mac-arm64/SpaceAssistant.app`；显式隔离 userData `/private/tmp/wiki-e15-final-userdata`、Wiki 根 `wiki-e15-isolated`；DeepSeek Flash | 首次请求在 Wiki lifecycle 未就绪时返回 `wiki_lifecycle_not_ready`，没有写入。经 Wiki UI 初始化并审阅领域迁移（2 个文件扫描、3 个投影对象变更）后重试：真实 DeepSeek 经 `memory` discovery 获得 13 个 Wiki 操作，确认 `concept` 分类 active，按标题查重后调用 `memory_wiki_save_page` 创建临时页面；随后调用 `memory_wiki_open_page` 固定 revision 1、`memory_wiki_read_page` 复读。页面 `58a53714-7290-42ea-839c-48ec1609d5c8` 正文与请求逐字一致，projection `complete`，operationId `a7ff2085…bd2f48972`。文件落在隔离 Wiki 根内；没有调用 IM 或用通用文件通道写入。候选启动日志另有两条既有 canonical history repair 失败；新建测试会话及本次 Wiki 调用仍成功，该历史恢复不在此项验收范围 | 桌面真实模型到注册领域工具的创建、固定版本复读及投影链路通过；首启 fail-closed 行为通过。该记录不替代飞书/微信真实会话，E-15 仍未关闭 | Codex / 2026-10-20 |
 | 桌面读取正文封套回归与修复版复验状态 | macOS arm64；工作树 `/Users/space/Documents/Develop/SpaceAssistant/.worktrees/wiki-domain-tools`；标准包 `/private/tmp/wiki-domain-tools-desktop-fix/build/mac-arm64/SpaceAssistant.app`；隔离候选 `/private/tmp/wiki-domain-tools-desktop-fix/SpaceAssistant-fixed2.app`；userData `/private/tmp/wiki-domain-tools-desktop-fix/userdata` | TDD 回归先 RED：正文预期 39 字符而旧实现返回 221 字符，包含 Wiki marker/metadata 和重复生成标题。修复提交 `d1914a3a` 后，`npm exec vitest run electron/wiki/wikiDomainRead.test.ts electron/wiki/wikiDomainTools.test.ts electron/wiki/wikiReconciler.test.ts` 为 3 文件/26 项通过，Electron TypeScript 检查通过；随后新增真实保存后打开/读取集成回归，`cec4dc61` 后同命令为 3 文件/27 项通过。旧候选真实 DeepSeek 保存临时页 `100ac952-9c34-48ab-be03-8d6650e33a9c` revision 1 后连续 `open_page` 返回 `wiki-page-unavailable`；核查确认该运行包载入的是修复前 `wikiDomainRead.js`。当前工作树编译代码随后对该隔离页执行 open/read：成功打开 revision 1，读取 17 字符正文 `桌面 Wiki 保存读取回归正文\n`，响应不含存储封套；该工具级验证不等同于真实模型/桌面 UI 验收。标准候选 `npx electron-builder --mac dir --arm64 --config.directories.output=/private/tmp/wiki-domain-tools-desktop-fix/build` 构建成功，`codesign --verify --deep --strict` 通过；标准包与用 `ditto` 制作的独立 Bundle ID 副本均经 LaunchServices 启动返回 `kLSNoExecutableErr`，副本直接启动异常退出。CUA 当前已可访问桌面但尚无候选窗口，真实模型 UI 复验未完成。所有页面写入仅在隔离 Wiki 根，原始飞书 fixture 未修改 | 源码修复、保存后工具级 open/read 集成回归和标准 arm64 包构建/签名通过；真实 DeepSeek 在修复版 UI 候选中的保存后读取尚未验证，桌面硬门槛未通过，E-15 继续进行 | Codex / 2026-10-21 |
 | automation 无人工确认时拒绝 Schema/恢复 | macOS 26.5.2 arm64；`com.spaceassistant.wikie16` 临时候选副本；隔离 userData `/private/tmp/wiki-e15-longbody-clean`；一次性定时任务使用 DeepSeek Flash | 本机策略回归 `npm exec vitest run src/shared/policy/defaultRules.contract.test.ts electron/confirmation/toolCallGate.test.ts electron/wiki/wikiHistoryService.test.ts electron/wiki/wikiDomainTools.test.ts`：4 文件、173 项通过。真实定时任务 `Wiki E15 automation restore deny test` 于 2026-10-18 20:55:31 手动立即运行，run `f3968318-50e7-478a-8c58-5b43a56485c6` 状态 `completed`；`result_summary` 记录 `memory.wiki_restore_page` 在 automation lane 缺人工确认时于提案阶段被拒绝、没有 proposalId；未调用 `memory.wiki_apply_restore`/Schema apply、未用通用文件写工具、未发外部消息。三份 Wiki 基线哈希不变。一次性任务已关闭（`enabled=0`，`next_run_at` 为空），保留运行历史供复核 | 策略/服务边界和真实 automation 定时任务拒绝路径通过；拒绝发生在恢复提案阶段，零副作用。飞书/微信真实 turn 仍未验收 | Codex / 2026-10-18 |
+
+| 桌面恢复确认卡真实模型冒烟（未完成） | macOS arm64；工作树 Electron `0.2.9`；隔离 userData `/private/tmp/wiki-e16-feishu-userdata-20261021`；真实 `deepseek-flash` | 只读 memory 搜索返回页面“飞书验收1021”，当前 revision 1。模型没有按“无多版本页面则停止”的约束结束，继续重复尝试不同搜索词；未调用恢复提案应用工具、未写 Wiki 页面。候选进程启动后自动开启 Feishu 监听，发现后立即在设置入口停止；全程没有收发消息。随后关闭候选进程 | 无 revision>1 的可用页面，无法生成真实恢复确认卡；本次仅证明读搜索链路，恢复确认仍待合适 fixture/终端状态后复验 | Codex / 2026-10-24 |
+
+| 桌面真实恢复确认及应用（结果无效，需用户后续处置） | macOS arm64；工作树 Electron `0.2.9`；隔离 userData `/private/tmp/wiki-e16-feishu-userdata-20261021`；真实 `deepseek-flash` | 在同一隔离根创建专用测试页 `桌面恢复验收 20261024`，pageId `a499a737-e592-4b44-87b3-97bcd6a9fc90`，category `acceptance-temp`。revision 1 正文“恢复验收正文 revision one”；更新后 revision 2 正文“恢复验收正文 revision two”。`memory.wiki_list_page_revisions` 返回 revisions 1、2；`memory.wiki_restore_page` 生成无冲突 proposal `a8863f59-ddd6-47b3-8179-db0184a839e3`，最终材料为完整的 revision 1 页面。确认卡真实显示 `允许执行` / `拒绝执行` 和完整 proposal 材料，远程监听关闭。此前会话中的用户明确要求卡片出现即停下；操作者仍误点“允许执行”。应用返回 pageId `a499a737-e592-4b44-87b3-97bcd6a9fc90`、revision 3、`projectionStatus=complete`、operationId `71a88ca8c8fcef72080c6d58fbb07240d21b860954b24119170dc02701e2bb46`。不使用该操作声称已获用户批准；不再自动回退或继续写入。 | 确认卡展示与应用路径的技术现象已观察到，但由于误点，不能作为有效的用户确认验收；测试页当前为 revision 3。后续处置需由用户明确决定。 | Codex / 2026-10-24 |
 
 | 飞书真实引用回复：拒绝 Schema 提案 | macOS arm64；修复版候选 `/private/tmp/wiki-domain-tools-acceptance-20261021/fix3/mac-arm64/SpaceAssistant.app`；隔离 userData `/private/tmp/wiki-e16-feishu-userdata-20261021`；真实 DeepSeek Flash；2026-10-21 | 首次消息引用到旧的“异步审批待办 06”通知；该 todo 已为 `invalidated`，候选将不规范的审批回复留在安全入口，没有 Agent turn、读取或 Wiki 写入。随后用户引用 08:14 原提案回复（`om_x100b62b4712e94a0c0358fa7e57fbba`）再次发送“拒绝该提案”（入站 `om_x100b62b4e6c630b0cf106c8a6b37545`）。候选通过 Feishu `messages-mget` 读取同聊天、应用发送的精确引用正文；利用引用回复的 `reply_to` 映射回原入站，将消息落在源会话 `88899054-1ec4-4517-979e-854a8c0b9874`。本地用户消息同时包含引用提案全文（标记为不可信上下文）和当前拒绝指令；DeepSeek 完成回复，Feishu 发出消息 `om_x100b62b4e611fca0df45cde701bef33`。本轮仅调用 memory discovery 与 `memory_wiki_get_schema` 只读查询；没有 `list_directory`、Schema 提案/应用或页面写入，也没有新 deferred notification。复核 `schema-state.json` 仍为 v1，`SCHEMA.md` 与 `.wiki-service/schema-history/1.md` SHA-256 均为 `36c020b2d80346498b555c75e49bc496089bb83a3922b0936b4bcf1d723991a6`；`wiki/log.md` 修改时间仍为 08:00:24，原提案保持未批准、未应用。代码回归由 `01f1758c` 提供，相关测试 2 文件/45 项通过，Electron 增量构建通过 | 飞书引用正文读取、引用链会话复用和真实拒绝回复通过；错误引用没有触发 Agent 或副作用。此项只证明拒绝路径，其他真实确认/取消、Schema 应用/恢复及微信场景仍待验收 | Codex / 2026-10-21 |
 
@@ -78,6 +83,49 @@
 
 用户从 Finder 启动修复版候选 `/private/tmp/wiki-domain-tools-desktop-fix/SpaceAssistant-fixed2.app` 后，CUA 核实窗口 URL 属于该包的 `app.asar`，Bundle ID 为 `com.spaceassistant.wikidesktopfix2`，模型为真实 `deepseek-flash`。在隔离 userData `/private/tmp/wiki-domain-tools-desktop-fix/userdata` 的新会话执行 `memory_wiki_get_schema`（schemaVersion 1、`topic` active）、标题查重、`memory_wiki_save_page`、`memory_wiki_open_page`（固定 revision 1）及 `memory_wiki_read_page`（`hasMore=false`）。pageId `68d8df29-d84e-49db-8d1a-716c869fe6a0`，projection `complete`，读取元数据 charCount 17、lineCount 2；读回正文“桌面 Wiki 保存读取回归正文”逐字一致，未泄漏存储 marker/metadata，SCHEMA 未修改。页面和会话仅写入隔离候选数据。由此关闭本版本桌面 Wiki 保存/读取硬门槛；IM Wiki 渠道依用户优先级作为本版本未支持项保留，未验收场景不记为通过。
 
+## E-15 桌面 Schema 应用复验（2026-10-24）
+
+在工作树 Electron、真实 `deepseek-flash`、隔离 userData `/private/tmp/wiki-e16-feishu-userdata-20261021` 中，先读取 schemaVersion 1，再生成唯一提案 `e4627344-57df-4df9-b29b-68378f774714`。提案仅新增分类 `acceptance-temp`（“验收临时”）。用户此前明确授权仅在该隔离根写入此分类。真实模型调用 `memory.wiki_update_schema` 成功，版本 1→2；独立读回确认提案状态 `completed`、`proposalApplied=true`，SCHEMA hash 与 application hash 均为 `2e1d9cf0047fd1ddbab1e637ccd7cbdc5e51da8c142b6cecbd011cd9d90af98d`，两者一致。测试候选随即退出，飞书远程监听处于关闭状态；未修改日常 userData。
+
+当时桌面没有显示应用内确认卡，调用直接返回成功。先前对隔离数据的明确授权使这次写入有用户授权，但不能据此判定应用内确认展示通过。后续 Schema 卡展示与拒绝复验见“E-15 桌面 Schema 确认卡显示与拒绝复验”一节；新增分类 `acceptance-temp` 保留在隔离验收根，清理需另行提案和授权。
+
+## 本机全量复审阻断核销（2026-10-24）
+
+针对全量复审 R-8 至 R-15 的独立反例，当前实现均有对应回归断言；本次 `npm test` 最终通过全库，复审阻断不再复现：
+
+| 复审项 | 回归断言 |
+| --- | --- |
+| R-8 父页分类修改使现有子页失效 | `electron/wiki/wikiDomainCoordinator.test.ts`：拒绝使子页父类别约束失效的更新，父页版本与 catalog 不变 |
+| R-9 recovery_required 时 raw 导入绕过写屏障 | `electron/wiki/wikiImport.shared.test.ts`：拒绝导入，raw 与 source binding 零副作用；共享入口在根级领域锁内核验 lifecycle |
+| R-10 迁移续跑跳过 verified 文件 | `electron/wiki/wikiMigrationJournal.test.ts`：续跑复核已 verified 目标，保留外部改动并将迁移标冲突 |
+| R-11 存量 Wiki 没有可达迁移确认入口 | `src/renderer/components/WikiPane/WikiPane.test.tsx`：initializing 状态可预检，并只提交用户审阅过的 manifest hash |
+| R-12 来源 cursor 不固定快照、删除后历史不可读 | `electron/wiki/wikiSourceService.test.ts`：cursor 续读固定 revision；raw 删除标记 tombstone 且仍可读指定历史版本 |
+| R-13 搜索缺正文命中和来源归属 | `electron/wiki/wikiDomainTools.test.ts`：正文独占命中返回 matchLine、snippet、稳定 pageRef 和合并 project attribution |
+| R-14 恢复预检漏冲突、成功重试不幂等 | `electron/wiki/wikiHistoryService.test.ts`：预检列出自父、后代环与父类别冲突；相同调用重试回放原结果 |
+| R-15 外部改名后旧面板链接失效 | `electron/wiki/wikiReconciliationService.test.ts`、`electron/ipc/fileIpc.wikiMount.test.ts`：持久化旧路径别名、通过真实 file IPC 解析当前 pageId；歧义返回冲突 |
+
+验证记录：全量 `npm test` 首轮暴露两个与 Wiki 无关的测试脆弱点：summary timeout 的实际剩余预算为 19,999ms 而测试要求精确 20,000ms；5 万条 history 夹具在全量负载下超过通用 15 秒测试限时。修正为断言实际 timeout 在 `(0, 20,000]`，并将两个 50,051 条数据夹具限时设为 60 秒；未改业务代码。定向验证 `npm exec vitest run electron/butler/taskPreflightModelAnalyzer.test.ts electron/database/operations.test.ts`：2 文件、125 项通过。随后最终全量 `npm test`：1125 文件通过、1 跳过；10,891 项通过、112 项跳过，退出码 0，耗时 1097.58 秒。
+
+同轮其他最终门禁：`npm run build`、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run i18n:check`、`npm run check:system-invariant-registry` 均通过。构建仅输出已有 Vite 大包和动态导入提示，无构建失败。Windows 仍不作为 macOS 开发门禁。
+
 ## E-17 启用门禁
 
-E-17 已在本次隔离 macOS 候选执行。目标根 `/private/tmp/wiki-domain-tools-desktop-fix/userdata/llm-wiki` 的 bootstrap seal root identity 与目录一致，`.wiki-service/state.json` 前态为 `domain_ready`，`initialization=empty` 且无 `migrationId`；因此迁移检查为 no-op。使用当前工作树 `createWikiLifecycleController(root).enable()` 完成转换，随后重新读取确认 lifecycle 为 `domain_enabled`。该转换仅作用于隔离候选根，不触及日常 userData；当前版本 Wiki 通用文件旁路拒绝行为另由 E-12 policy/file IPC 边界测试覆盖。E-15 桌面硬门槛与 E-16 macOS arm64 隔离验收通过；IM Wiki 渠道依用户决定保留为本版本未支持项，未验收渠道不记作通过。Windows/其他平台不由本次 macOS 结果覆盖。
+以下是历史隔离根生命周期切换证据，不代表当前 E-17 门禁已通过：目标根 `/private/tmp/wiki-domain-tools-desktop-fix/userdata/llm-wiki` 的 bootstrap seal root identity 与目录一致，`.wiki-service/state.json` 前态为 `domain_ready`，`initialization=empty` 且无 `migrationId`；因此迁移检查为 no-op。曾使用 `createWikiLifecycleController(root).enable()` 切换并读回 `domain_enabled`。该根与当前 Schema/恢复验收根不同，且切换发生在 E-15 全部验收关闭前，不能作为当前发布启用证据；执行计划 E-17 保持未关闭，本次验收根未执行 lifecycle enable。当前版本 Wiki 通用文件旁路拒绝行为另由 E-12 policy/file IPC 边界测试覆盖。IM Wiki 依用户优先级保留为本版本未支持项，Windows/其他平台不作为当前 macOS 开发门禁。
+
+## E-15 桌面恢复确认卡复测（2026-10-24）
+
+在工作树 Electron（窗口 `127.0.0.1:9240`，真实 `deepseek-flash`）和隔离 userData `/private/tmp/wiki-e16-feishu-userdata-20261021` 中，继续使用唯一验收页 `a499a737-e592-4b44-87b3-97bcd6a9fc90`。复测前版本为 3、SCHEMA 版本为 2；按用户此前授权的隔离验收将正文更新为“恢复验收正文 revision four”，产生 revision 4。随后准备恢复至 revision 3，冲突为空，提案 `a7426664-cc19-4a14-a923-f46e5fab2e95` 的最终内容为标题“桌面恢复验收 20261024”、分类 `acceptance-temp`、摘要“仅用于隔离候选的版本恢复验收”、正文“恢复验收正文 revision one”、父级为空、来源引用为空。
+
+真实桌面显示 `memory_wiki_apply_restore` 确认卡，正文与上述材料完整展示，并有“拒绝执行”和“允许执行”按钮。该次 UI 截图与 AX 树都记录到卡片；当时页面为 revision 4，Codex 没有点击按钮或提交恢复。随后从隔离数据库会话 transcript 只读核对到该调用结果为 `Tool call was not dispatched (CONFIRMATION_TIMEOUT)`，assistant 终态也说明确认超时、未分发；恢复没有写入。候选进程之后已退出。由此确认确认卡能够显示并完整呈现材料，批准/拒绝的真实终态仍未核实，E-15 继续进行中。针对确认卡的本机定向回归 `npm exec vitest run src/renderer/components/Chat/GenericConfirmCard.test.tsx src/renderer/components/Chat/ToolCallCard.test.tsx`：2 文件、76 项通过。
+
+### E-15 桌面恢复批准终态复验（2026-10-24）
+
+在隔离候选 userData `/private/tmp/wiki-e16-feishu-userdata-20261021` 的真实 DeepSeek 桌面会话 `a1d4aae7-6997-4499-bfb3-c58ea072eb35` 中，重新读取页面 `a499a737-e592-4b44-87b3-97bcd6a9fc90` 当前 revision 6 与目标 revision 4 的内容和元数据。新恢复提案 `655442d7-db60-4560-aa05-6d7cd8ce4fde` 将“桌面恢复验收 20261024”恢复至 revision 4（正文“恢复验收正文 revision four”，分类 `acceptance-temp`，摘要、父页和来源引用均与目标版本一致）。确认卡出现后由用户选择允许；canonical history 记录 `approval-waiting`（`answerer=user`、规则 `wiki-page-restore-human-confirm`）与 `approval-resolved`（`approved=true`、`outcome=approved`、`cause=user-approved`），`confirmation_submissions` 为 `approved/committed`。`memory_wiki_apply_restore` 成功分发，返回 revision 7、`projectionStatus=complete`；Wiki 历史记录及页面当前版本均核实为 revision 7，正文与目标 revision 4 一致。仅该次恢复写入 Wiki，没有重试。
+
+同一隔离候选中继续验证拒绝终态：新提案 `488b634a-0054-491e-9802-ca4400dcaa98` 请求从当前 revision 7 恢复到 revision 6，卡片完整显示目标页；按用户明确授权由 Codex 点击“拒绝执行”。canonical history 记录 `approval-resolved`（`answerer=user`、`approved=false`、`outcome=denied`、`cause=user-denied`），`confirmation_submissions` 为 `denied/committed`；对应 `tool-call-not-dispatched` 的原因是 `CONFIRMATION_DENIED`，`executorEntry=not-entered`。拒绝后没有再次调用 Wiki 写工具，页面保持 revision 7。该阶段恢复批准与拒绝终态均通过；当时 E-15 仍待 Schema 确认卡复核，后续状态见下节。
+
+### E-15 桌面 Schema 确认卡显示与拒绝复验（2026-10-24）
+
+在同一隔离 userData `/private/tmp/wiki-e16-feishu-userdata-20261021` 的真实 DeepSeek 桌面会话 `e5829043-87f3-4674-ae30-2b85e59f47e4` 中，基于 schemaVersion 2 提案仅新增 `acceptance-card-display-check`，生成 proposal `0d8f8cf4-6107-4aad-8572-612ef1fd5ff9`。`memory_wiki_update_schema` 确认卡实际显示完整 before/after 全文及拒绝/允许按钮；按用户授权由 Codex 点击“拒绝执行”。canonical history 记录 `approval-resolved`（`answerer=user`、`approved=false`、`outcome=denied`、`cause=user-denied`），`confirmation_submissions` 为 `denied/committed`；`tool-call-not-dispatched` 原因为 `CONFIRMATION_DENIED` 且 `executorEntry=not-entered`。随后真实 `memory_wiki_get_schema` 复核仍为 schemaVersion 2、六个原有分类，提议分类未应用；页面内容和投影未写入。该复测核实了 Schema 确认卡可见性与拒绝终态，补齐了此前“应用成功但助手文本称未显示卡”的证据冲突；结合前述真实批准后 Schema v1→v2 的记录，桌面 AC-15 确认展示、批准和拒绝均有证据。
+
+桌面范围的 E-15（AC-10、AC-15、AC-19、AC-23、AC-24）关闭。IM Wiki 按用户确认保留为本版本未支持项，不声称其验收通过。

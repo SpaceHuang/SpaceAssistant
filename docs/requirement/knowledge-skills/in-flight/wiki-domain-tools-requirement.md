@@ -1,7 +1,7 @@
 # LLM Wiki 专属能力接口需求
 
-> 状态：已批准需求基线（D-01 至 D-06 决策已定；实现进度与阶段验收见执行计划 §7.1）
-> 接口与验收口径以本文件为真源；外部渠道和平台验收状态见执行计划与 release acceptance。
+> 状态：已确认需求基线｜实现进度与本机验收以[执行计划](../../../develop/knowledge-skills/in-flight/wiki-domain-tools-execution-plan.md)为准；外部验收结论与未完成项见[发布验收记录](../../../develop/knowledge-skills/in-flight/wiki-domain-tools-release-acceptance.md)。
+> 版本范围决定（2026-10-24）：桌面 Wiki 是本版本硬门槛；负责人允许本版本 IM Wiki 不可用。该范围例外不代表飞书/微信功能通过验收，也不撤销本文定义的产品行为要求。
 > 日期：2026-10-17
 > 核对基线：main 7c0edc41（2026-10-17）
 > 主题入口：[knowledge-skills 需求基线](../需求基线.md)｜现行 Wiki 需求原件：[LLM Wiki v1.7](../../archive/knowledge-skills/llm-wiki-requirement.md)

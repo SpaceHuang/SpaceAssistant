@@ -1,6 +1,6 @@
 # Wiki 专属能力接口技术方案
 
-> 状态：技术方案基线（D-TP-01 至 D-TP-05 已决定；D-06 界面归属已批准）
+> 状态：技术方案基线（D-TP-01 至 D-TP-05 已决定；D-06 界面归属已批准）；实现进度与外部验收缺口以[执行计划](./wiki-domain-tools-execution-plan.md)及[发布验收记录](./wiki-domain-tools-release-acceptance.md)为准。
 > 需求真源：[Wiki 专属能力接口需求](../../../requirement/knowledge-skills/in-flight/wiki-domain-tools-requirement.md)
 > 核对基线：当前工作区 HEAD 28dd3223（2026-10-17）；需求稿事实基线为 main 7c0edc41（2026-10-17）
 > 适用范围：主进程 Wiki 服务、Agent 工具注册与授权、通用文件工具旁路封锁、兼容迁移及页面历史恢复
@@ -157,7 +157,7 @@ Wiki 文件仍能被用户从文件管理器或外部编辑器修改。相关工
 | memory.wiki_import_source | 应用绑定的 sourceRef / sourceId；不接收 Agent 自由路径 | sourceId、sourceRevision、显示名、来源 projectId 标注；拒绝未绑定引用、越界、目录、二进制与 Wiki 挂载源 | import/write |
 | memory.wiki_read_source | sourceId、可选 sourceRevision/cursor/maxChars | 指定版本的有界正文片段、project attribution、nextCursor、hasMore；无权和未知对象返回相同外部错误类 | read |
 | memory.wiki_save_page | pageId?、title、categoryId、summary、markdown、sourceRefs、schemaVersion、expectedRevision?、parentPageId? | pageId、revision、projectionStatus、页面引用；更新不允许在该操作改 parentPageId | write/confirm by current policy |
-| memory.wiki_move_page | pageId、可选 parentPageId（省略或 null 表示根页面）、expectedRevision | 新 revision、原 categoryId/pageId、逻辑面包屑；拒绝环、自父级、不可读父级 | write/confirm by current policy |
+| memory.wiki_move_page | pageId、parentPageId 或 null、expectedRevision | 新 revision、原 categoryId/pageId、逻辑面包屑；拒绝环、自父级、不可读父级 | write/confirm by current policy |
 | memory.wiki_list_page_revisions | pageId | 按时间倒序返回 revision、时间、变更摘要、externalEdit、deleted 状态 | read |
 | memory.wiki_restore_page | pageId、targetRevision、expectedCurrentRevision、可选 title/categoryId/parentPageId overrides | 返回完整冲突集合或 proposal-to-confirm；执行前展示最终标题、类别、摘要、父级、正文、来源版本和差异 | write + mandatory user confirm |
 | memory.wiki_propose_schema_change | complete proposed SCHEMA content、expectedSchemaVersion | proposalId、规范化全文 diff、影响页数、有效期、基线 hash；不写 SCHEMA | write/proposal |
@@ -261,7 +261,7 @@ Wiki 面板保留现有操作和布局。file:list-directory 对 Wiki 用户视�
 | domain_enabled | 按需披露；执行经过当前策略与 permit | 当前版本 `/wiki`/Skill 走领域服务；Agent 通用文件旁路拒绝 | 旧版二进制仍能照常写；本服务不声称拦截 |
 | recovery_required | 当前版本隐藏写工具，提供安全只读诊断 | 当前版本全部 Wiki 写入口拒绝 | 不受当前版本控制；保留现场，等待新版恢复处理 |
 
-首次引导使用 Wiki 根内的 `.wiki-service-bootstrap.json` 作为持久 seal，先由现有 Wiki 根初始化流程确保挂载根目录存在，再以目标必须不存在的原子安全创建写入 `initializing` 意图；root identity 绑定规范化的 `resolveWikiMount.realBase` 与现有目录 identity，不采用 Agent 提供的路径。随后创建 `.wiki-service/` 与 state，最后把 seal 原子更新为 `initialized` 并记录根身份、bootstrapId、类型和格式版本。若并发启动导致 seal 已被创建，失败方必须重读并按现有 seal 分支处理，不得覆盖。该文件只由当前版本 WikiLifecycleController 创建/推进；启动入口是 Wiki mount 已解析到可信集中根之后、任何 Wiki 工具披露或读写之前。初始化扫描只读：若根已有 SCHEMA/页面/index/log，则写入 `preflight`，记录 `bootstrapKind=existing`；若根为空，则进入 `domain_ready`，记录 `bootstrapKind=empty`，不创建内容迁移。本次目标安装只有在适用的 E-15/E-16 验收通过后才能 `domain_enabled`；其他操作系统的验证按其后续平台发布执行，不阻塞当前目标，且不得跨平台外推验收结论。
+首次引导使用 Wiki 根内的 `.wiki-service-bootstrap.json` 作为持久 seal，先由现有 Wiki 根初始化流程确保挂载根目录存在，再以目标必须不存在的原子安全创建写入 `initializing` 意图；root identity 绑定规范化的 `resolveWikiMount.realBase` 与现有目录 identity，不采用 Agent 提供的路径。随后创建 `.wiki-service/` 与 state，最后把 seal 原子更新为 `initialized` 并记录根身份、bootstrapId、类型和格式版本。若并发启动导致 seal 已被创建，失败方必须重读并按现有 seal 分支处理，不得覆盖。该文件只由当前版本 WikiLifecycleController 创建/推进；启动入口是 Wiki mount 已解析到可信集中根之后、任何 Wiki 工具披露或读写之前。初始化扫描只读：若根已有 SCHEMA/页面/index/log，则写入 `preflight`，记录 `bootstrapKind=existing`；若根为空，则进入 `domain_ready`，记录 `bootstrapKind=empty`，不创建内容迁移。两个分支都仍须通过 E-15/E-16 才能 `domain_enabled`。
 
 判定规则：seal 与 state 均不存在时，且 Wiki mount 根身份可信，才允许走一次首次初始化；seal 已存在为 `initializing` 时按 bootstrapId/hash 校验并继续幂等初始化；seal 与 state 一致且格式有效时按 state 运行。seal 存在但 state 缺失/损坏、seal 与 state 的 root identity/bootstrapId 不符、或只有 service 目录却没有有效 seal 时，lifecycle provider 将有效运行状态判为 `recovery_required`，绝不重置为 `legacy` 或重新初始化，也不覆盖损坏文件。seal 不存在但已发现 `.wiki-service/` 保留数据时同样视为控制面损坏。恢复只接受用户从可信备份恢复出的 seal/state 文件；当前版本随后核对 root identity、bootstrapId、格式版本和 migration manifest 后才恢复原生命周期。无可信备份时保持只读诊断，需人工修复控制面文件，不自动清空重建。若用户同时删除 seal 与整个 service 目录，单靠该 Wiki 根无法区分从未初始化和双重删除；因此 seal 作为迁移后的长期控制文件保留，并纳入用户现有 Wiki 备份；检测范围以至少一个控制文件仍存在为前提。
 
@@ -296,7 +296,7 @@ Wiki 面板保留现有操作和布局。file:list-directory 对 Wiki 用户视�
 | P4 SCHEMA 与恢复交互 | 依赖确认绑定和当前规则解析 | propose/update SCHEMA、版本列表、聊天恢复 | E-08/E-09 confirmation receipt 与冲突零写入证据 | schema proposal / revision modules |
 | P5 真实入口、工具与安全接通 | 源码关闭需走真实 `/wiki` 命令、Skill 和 sourceId 链路 | 旧命令/Skill 改为领域 API；deferred discovery；统一 lifecycle 和当前版本 file bypass；WikiPane alias 兼容 | E-10/E-11/E-12 的集成、策略 trace 和路径矩阵 | 工具注册、策略规则、命令路由、Skill |
 | P6 必要原位迁移与源码关闭 | 只在旧格式确需改写时迁移；源码关闭不依赖外部渠道 | 可选 migration manifest、逐文件恢复、本机 AC 与回退演练 | E-13/E-14；若无待迁移项，E-13 以 dry-run 证明 no-op | 旧 Wiki 根快照、manifest、lifecycle |
-| P7 外部验收与发布启用 | 本次目标平台适用的外部渠道和打包环境证据须先于该目标安装启用；其他平台在各自发布前验收 | 真机/IM 验收、本次 macOS 候选包文件系统验收、启用 lifecycle | E-15/E-16/E-17 签署记录 | 候选包、隔离 Wiki fixture、目标平台 release gate |
+| P7 外部验收与发布启用 | 外部渠道和打包环境证据须先于启用 | 真机/IM 验收、候选包文件系统验收、启用 lifecycle | E-15/E-16/E-17 签署记录 | 候选包、隔离 Wiki fixture、release gate |
 
 E 编号 DAG 只由执行计划维护；本表为阶段归属说明：P0=E-00/E-01，P1=E-02/E-03，P2=E-05/E-06，P3=E-07，P4=E-08/E-09，P5=E-10/E-11/E-12，P6=E-13/E-14，P7=E-15/E-16/E-17。E-13 有待迁移项时执行，且迁移前需用户确认 E-05 报告；无待迁移内容时以只读 dry-run 通过，不产生写入。
 
@@ -367,7 +367,7 @@ E 编号 DAG 只由执行计划维护；本表为阶段归属说明：P0=E-00/E-
 
 **当前开发机可本地验收：** parser、migration fixtures、文件存储夹具、并发与 journal 故障注入、Wiki mount/path facts、工具按需加载、确认 receipt fake、project attribution 与 lane policy unit/integration、现有 WikiPane 文件引用映射、构建与类型/i18n 检查。
 
-**需要外部环境复核、但不阻塞源码关闭：** 真实飞书/微信账号中的 Wiki 确认与拒绝、automation 实际无确认拒绝、桌面长恢复正文可读性、外部编辑器及旧版应用真实改名/移动/并发写后的新版本协调结果、正式安装包升级及本次候选目标（macOS arm64）的数据目录与现有 `safeAtomicWrite` 能力。这些证据按目标发布范围逐项记录，并阻塞对应目标安装启用；Windows/其他平台验证不作为当前 macOS 发布门禁，须在各自平台发布前完成，且不能由 macOS 证据替代。当前目标适用证据未逐项签署前保持 `domain_ready`，不得对该目标标记 `domain_enabled`。
+**需要外部环境复核、但不阻塞源码关闭；全部阻塞发布启用：** 真实飞书/微信账号中的 Wiki 确认与拒绝、automation 实际无确认拒绝、桌面长恢复正文可读性、外部编辑器及旧版应用真实改名/移动/并发写后的新版本协调结果、正式安装包升级、各目标平台数据目录与现有 `safeAtomicWrite` 所需目录写入能力。证据写入执行计划指定的 release acceptance 记录；没有逐项签署证据时必须停在 `domain_ready`，不得标记 `domain_enabled`。
 
 ### 3.5 未验证项与实现前技术核查
 
@@ -392,7 +392,7 @@ E 编号 DAG 只由执行计划维护；本表为阶段归属说明：P0=E-00/E-
 ## 附录 A：证据和来源
 
 - 需求真源：[wiki-domain-tools-requirement.md](../../../requirement/knowledge-skills/in-flight/wiki-domain-tools-requirement.md)，尤其 D-01 至 D-06、§4–§13、AC-01–AC-26。
-- 实施基线记录（E-00）：HEAD `28dd3223`，复核命令见 §1.3；本机关闭证据见执行计划 §7.1 的 E-14。工作区在本次文档任务开始前已有其他用户改动，本方案未覆盖或清理这些文件。
+- 当前代码事实：HEAD 28dd3223，复核命令见 §1.3；工作区在本次文档任务开始前已有其他用户改动，本方案未覆盖或清理这些文件。
 - 历史规则：LLM Wiki 当前 Skill、Wiki mount/import、安全策略及 MCP 延迟加载的实际源码路径见 F-01 至 F-07。
 - D-TP-01 至 D-TP-05 已按负责人选择记录；实施前须按 E-00/E-01 复核代码事实和安全写入签名，若事实变化则先修订方案与 DAG。旧版应用仍可按原代码写原 Wiki 文件，是已明确的兼容事实。
 
@@ -400,31 +400,16 @@ E 编号 DAG 只由执行计划维护；本表为阶段归属说明：P0=E-00/E-
 
 | 评审项 | 修订位置与计划证据 | 当前状态 |
 | --- | --- | --- |
-| B-01 幂等查询顺序与调用映射 | §2.5、§2.6；E-07 成功重试、pending 恢复、同键异参测试 | 已实现验证；证据见执行计划 §7.1 E-07、E-14 |
+| B-01 幂等查询顺序与调用映射 | §2.5、§2.6；E-07 成功重试、pending 恢复、同键异参测试 | 方案已闭合，待实现证据 |
 | B-02 外部编辑器竞态 | D-TP-05；复用 `safeAtomicWrite`、Wiki mutex 与既有文件工具竞态用例；E-04 接入验证 | **已按既有文件写入契约收敛**；Wiki service 不得复制或绕过既有安全写入链路 |
-| B-03（首轮）多文件迁移恢复 | §2.9 durable manifest、逐文件 step 与重启算法；E-13 逐文件故障注入 | 已实现验证；证据见执行计划 §7.1 E-13、E-14 |
-| B-04 源码入口与启用状态 | §2.9 lifecycle 状态机；E-10 真实本地命令/Skill/sourceId 路由，E-11 状态统一门控，E-14 本地源码关闭 | 源码阶段已验证；真实渠道与启用仍由 E-15/E-16/E-17 验收 |
+| B-03（首轮）多文件迁移恢复 | §2.9 durable manifest、逐文件 step 与重启算法；E-13 逐文件故障注入 | 方案已闭合，待实现证据 |
+| B-04 源码入口与启用状态 | §2.9 lifecycle 状态机；E-10 真实本地命令/Skill/sourceId 路由，E-11 状态统一门控，E-14 本地源码关闭 | 方案已闭合，待实现证据 |
 | B-05 SQLite 备份开工证据（已不适用） | 负责人裁决复用现有文件存储后，SQLite 备份探针不再适用；文件权限与安全写入能力由 E-00/E-01/E-13 核验 | 已从门禁移除；不新增数据库备份前置 |
-| B-03（本轮）迁移 pending + new_hash 恢复 | §2.9 完整 step/存在性/hash 分支；E-13 在写入后、manifest 更新前强制崩溃 | 已实现验证；证据见执行计划 §7.1 E-13、E-14 |
-| B-07 跨页/SCHEMA 并发约束 | INV-07/09、§2.6 域锁与固定锁顺序；E-07/E-08 交错与随机序列测试 | 已实现验证；证据见执行计划 §7.1 E-07 至 E-09、E-14 |
-| B-08 日志投影循环 | §2.5/2.6/2.8 以 `domain_committed` 为事件提交点，log 消费 domain_committed/completed，completed 仅表示投影完成 | 已实现验证；证据见执行计划 §7.1 E-07、E-14 |
-| B-09 首次初始化路径 | §2.9 bootstrap seal、existing/empty 分流和损坏恢复；E-11/E-13 覆盖初始化入口与中断 | 已实现验证；证据见执行计划 §7.1 E-11、E-13、E-14 |
-| B-06 发布前外部验收 | §3.4 本次目标平台外部证据阻塞该目标 `domain_enabled`；E-15/E-16 为对应目标 E-17 的必需前置；不同平台分别验收 | 当前 macOS 目标仍须满足全部适用项；其他平台证据不阻塞当前目标，也不能由当前目标证据代替 |
+| B-03（本轮）迁移 pending + new_hash 恢复 | §2.9 完整 step/存在性/hash 分支；E-13 在写入后、manifest 更新前强制崩溃 | 方案已闭合，待实现证据 |
+| B-07 跨页/SCHEMA 并发约束 | INV-07/09、§2.6 域锁与固定锁顺序；E-07/E-08 交错与随机序列测试 | 方案已闭合，待实现证据 |
+| B-08 日志投影循环 | §2.5/2.6/2.8 以 `domain_committed` 为事件提交点，log 消费 domain_committed/completed，completed 仅表示投影完成 | 方案已闭合，待实现证据 |
+| B-09 首次初始化路径 | §2.9 bootstrap seal、existing/empty 分流和损坏恢复；E-11/E-13 覆盖初始化入口与中断 | 方案已闭合，待实现证据 |
+| B-06 发布前外部验收 | §3.4 外部证据阻塞 domain_enabled；E-15/E-16 为 E-17 的必需前置 | 门禁已闭合；未有签署证据不得启用 |
 
 可执行性补充已纳入执行计划：E-03 负责文件模型与可独立验证的数据访问，不实现生产 operation recovery/projection；后者由 E-07 完成。E-05 只做只读预检和外部文件协调，不代替 E-13 迁移级恢复。每项任务都有独立定向命令；P/E/G 映射唯一；安全事实、策略、permit、executor 分别指向具体模块和测试。
-
-### 附录 C：E-14 本机关闭证据（2026-10-18）
-
-- 修复与门禁对账提交：代码 `f5b27dbd`，锁定策略分类文档 `61e320a7`。全量测试首次暴露的 7 个失败已修复并由最终重跑覆盖。
-- `npm test`：1108 个测试文件通过、1 个跳过；10474 项通过、111 项跳过。
-- `npm run build`：通过。Vite 输出既有 `INEFFECTIVE_DYNAMIC_IMPORT` 与 chunk size 警告，无构建错误。
-- `npm run typecheck:renderer`、`npm run typecheck:shared`、`npx tsc -p tsconfig.electron.json --noEmit`、`npm run i18n:check`、`npm run check:system-invariant-registry`：通过。
-- E-15/E-16 需要真实 IM/automation 会话与隔离候选安装包验收证据；未据本机源码结果推定通过。E-17 按目标安装范围验收；当前 macOS 目标未通过前仍保持关闭，Windows/其他平台证据属于各自后续发布范围。
-
-### 附录 D：E-14 接口注册与首启预检补充验证（2026-10-20）
-
-- `memory` discovery 原先公布 `memory.wiki_save_page` 与 `memory.wiki_move_page`，运行时 registry 未注册；registry parity 回归先 RED，新增保存/移动调用测试因 handler 缺失 RED。提交 `2703d5e5` 接通 planned write tools 与 domain coordinator，验证绑定来源的不可变历史快照、更新页面不改父级、移动到指定父级以及省略/null 移至根页面；所有写入仍经过现有 planned tool policy/confirmation dispatch。
-- 同轮全量验收发现：服务生成的 Wiki index/log 会被迁移预检误判为 legacy 修改；仅在投影字节不一致时才登记 projection 变更，并跳过与当前 marker 页面完全匹配的 index、符合服务格式的 log。合规 Wiki no-op bootstrap 回归通过。
-- 最终 `npm test`：1108 个文件通过、1 个跳过；10495 项通过、111 项跳过。`npm run build`、renderer/shared 类型检查、i18n 和 system invariant registry 检查通过。构建保留既有动态导入与大 chunk 警告。
-- E-14 本机源码关闭不代替 E-15 真实飞书/微信验收，也不授权 E-17 启用。Windows 与其他平台不作为本次开发门禁。
 
