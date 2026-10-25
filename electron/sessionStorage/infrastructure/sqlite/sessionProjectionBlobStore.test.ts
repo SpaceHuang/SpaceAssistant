@@ -228,6 +228,39 @@ describe('session projection derived blob store', () => {
     expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 1 })
   })
 
+  it('keeps segmented History child blobs while a pending root is checkpointed, then collects the entire chain', async () => {
+    temp = createTempDatabase('projection-blob-segmented-checkpoint-')
+    const session = createSession(temp.db, { name: 'segmented checkpoint root', model: 'test' })
+    const conn = getDbConnection(temp.db)
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const segmentPayload = JSON.stringify([{ id: 'message-a', content: 'body' }, { id: 'message-b', content: 'body' }])
+    const segment = await blobs.write(segmentPayload)
+    await segment.release()
+    const event = { invocationId: 'inv', sequence: 1, eventId: 'event', idempotencyKey: 'event', turnId: 'turn',
+      schemaVersion: 1, kind: 'invocation-context-committed', payloadJson: '', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+    const rootPayload = JSON.stringify({ formatVersion: 1, kind: 'segmented-history-event', event, messageCount: 2,
+      messageSegments: [{ locator: segment.locator, byteLength: segment.byteLength, payloadDigest: segment.payloadDigest, itemCount: 2 }],
+      messageFacts: [] })
+    const finalPending = await blobs.write(rootPayload)
+    const seed = createProjectionBuildCheckpoint({ sessionId: session.id, sessionGeneration: session.generation,
+      scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson: '{"source":1}', processGeneration: 1,
+      rebuildToken: 'segmented-build-token', startSequence: 0, historyReducerStateJson: '{}' })
+    const checkpoint = attachProjectionPendingHistoryChunk(seed, { locator: finalPending.locator, byteLength: finalPending.byteLength,
+      payloadDigest: finalPending.payloadDigest, sessionId: session.id, scopeKey: 'scope-a', sourceIdentityJson: '{"source":1}',
+      fromSequence: 0, nextSequence: 1, rowCount: 1, sourceBytes: Buffer.byteLength(segmentPayload), hasMore: false })!
+    conn.prepare("INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,process_generation,rebuild_token,updated_at,build_checkpoint_json) VALUES(?,?,?,'rebuilding',1,'segmented-build-token',1,?)")
+      .run(session.id, 'scope-a', session.generation, JSON.stringify(checkpoint))
+    await finalPending.release()
+
+    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 0 })
+    await fs.writeFile(path.join(root, segment.locator), 'tampered child segment')
+    await expect(blobs.collectGarbage(conn)).rejects.toMatchObject({ code: 'PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE' })
+    await expect(fs.stat(path.join(root, finalPending.locator))).resolves.toBeDefined()
+    conn.prepare('UPDATE session_projection_state SET build_checkpoint_json=NULL WHERE session_id=? AND scope_key=?').run(session.id, 'scope-a')
+    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 2 })
+  })
+
   it('retains a stable-ID index blob referenced only by a durable checkpoint', async () => {
     temp = createTempDatabase('projection-blob-stable-index-')
     const session = createSession(temp.db, { name: 'stable ID index checkpoint', model: 'test' })

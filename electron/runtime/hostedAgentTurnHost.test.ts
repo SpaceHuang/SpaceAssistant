@@ -83,7 +83,7 @@ function baseDependencies() {
 }
 
 describe('Desktop Hosted AgentTurnHost composition', () => {
-  it('sends the edited legacy handoff message to the actual provider loop', () => {
+  it('sends the edited legacy handoff message to the actual provider loop', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'provider-edit-handoff' })
     const user = appendMessage(db, { id: 'provider-edit-user', sessionId: session.id, role: 'user', content: 'before edit', timestamp: 1, status: 'sent' })
@@ -93,22 +93,21 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
       state: 'prepared', startToken: 'provider-edit-token' })
     updateMessageContent(db, user.message.id, { content: 'after edit provider sentinel' })
 
-    const context = loadAuthoritativeTurnContext(db, 'provider-edit-turn', session.id, 'provider-edit-request', 'provider-edit-token', createSqliteSessionStorage(db))
+    const context = await loadAuthoritativeTurnContext(db, 'provider-edit-turn', session.id, 'provider-edit-request', 'provider-edit-token', createSqliteSessionStorage(db))
     const deps = baseDependencies()
     const provider = new RecordingModelProvider([{ type: 'text-delta', text: 'recorded' }, { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' }])
     deps.providerRegistry.register(route, provider)
 
     const requestMessages = context.messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp }))
     const requiredUserMessage = requestMessages.find((message) => message.id === context.currentUserMessageId)!
-    return runHostedAgentTurn({
+    await runHostedAgentTurn({
       host: createHostedAgentTurnHost(deps), invocationId: deps.invocationId, turnId: deps.turnId, routeId: deps.routeId,
       request: { messages: requestMessages, maxTokens: 64 },
       requiredUserMessage: { id: context.currentUserMessageId, message: requiredUserMessage }
-    }).then(() => {
-      expect(provider.calls).toHaveLength(1)
-      expect(provider.calls[0]?.request.messages).toContainEqual(expect.objectContaining({ role: 'user', content: 'after edit provider sentinel' }))
-      db.close()
     })
+    expect(provider.calls).toHaveLength(1)
+    expect(provider.calls[0]?.request.messages).toContainEqual(expect.objectContaining({ role: 'user', content: 'after edit provider sentinel' }))
+    db.close()
   })
 
   it('sends an edited legacy assistant history message with the next user turn to the actual provider', async () => {
@@ -123,7 +122,7 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
       state: 'prepared', startToken: 'provider-next-token' })
     updateMessageContent(db, oldAssistant.message.id, { content: 'edited prior assistant provider sentinel' })
 
-    const context = loadAuthoritativeTurnContext(db, 'provider-next-turn', session.id, 'provider-next-request', 'provider-next-token', createSqliteSessionStorage(db))
+    const context = await loadAuthoritativeTurnContext(db, 'provider-next-turn', session.id, 'provider-next-request', 'provider-next-token', createSqliteSessionStorage(db))
     const deps = baseDependencies()
     const provider = new RecordingModelProvider([{ type: 'text-delta', text: 'recorded' }, { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' }])
     deps.providerRegistry.register(route, provider)
@@ -166,7 +165,7 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
       userMessageId: target!.currentUser.message.id, assistantMessageId: retryAssistant.message.id,
       contextBoundarySequence: target!.currentUser.sequence, excludeMessageIds: target!.excludeMessageIds,
       retryOfMessageId: failedAssistant.message.id, state: 'prepared', startToken: 'provider-retry-next-token' })
-    const context = loadAuthoritativeTurnContext(db, 'provider-retry-next-turn', session.id, 'provider-retry-next-request', 'provider-retry-next-token', storage)
+    const context = await loadAuthoritativeTurnContext(db, 'provider-retry-next-turn', session.id, 'provider-retry-next-request', 'provider-retry-next-token', storage)
     expect(getPersistedTurn(db, 'provider-retry-next-turn')).toMatchObject({
       contextBoundarySequence: target!.currentUser.sequence,
       excludeMessageIds: [failedAssistant.message.id]
@@ -192,7 +191,7 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     db.close()
   })
 
-  it('rejects an edited accepted input before the actual provider loop is called', () => {
+  it('rejects an edited accepted input before the actual provider loop is called', async () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'provider-accepted-input-fence' })
     prepareTurnAtomically(db, {
@@ -218,8 +217,8 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     const provider = new RecordingModelProvider([{ type: 'text-delta', text: 'unexpected' }, { type: 'finish', reason: 'stop' }])
     deps.providerRegistry.register(route, provider)
 
-    expect(() => loadAuthoritativeTurnContext(db, 'provider-accepted-turn', session.id, 'provider-accepted-request', 'provider-accepted-token', createSqliteSessionStorage(db)))
-      .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    await expect(loadAuthoritativeTurnContext(db, 'provider-accepted-turn', session.id, 'provider-accepted-request', 'provider-accepted-token', createSqliteSessionStorage(db)))
+      .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
     expect(provider.calls).toHaveLength(0)
     expect(deps.onProviderStart).not.toHaveBeenCalled()
     db.close()
@@ -245,7 +244,7 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     expect(acceptedInputFingerprint).toBe(queueInputFingerprint({ text: 'accepted user stays fixed' }))
     expect(getDbConnection(db).prepare('SELECT content FROM messages WHERE id=?').get('provider-entry-user'))
       .toEqual({ content: 'accepted user stays fixed' })
-    const context = loadAuthoritativeTurnContext(db, 'provider-entry-turn', session.id, 'provider-entry-request', 'provider-entry-token', createSqliteSessionStorage(db))
+    const context = await loadAuthoritativeTurnContext(db, 'provider-entry-turn', session.id, 'provider-entry-request', 'provider-entry-token', createSqliteSessionStorage(db))
     const deps = baseDependencies()
     const provider = new RecordingModelProvider([{ type: 'text-delta', text: 'recorded' }, { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' }])
     deps.providerRegistry.register(route, provider)
@@ -314,7 +313,7 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
       userMessageId: target!.currentUser.message.id, assistantMessageId: retryAssistant.message.id,
       contextBoundarySequence: target!.currentUser.sequence, excludeMessageIds: target!.excludeMessageIds, retryOfMessageId: failedAssistant.message.id,
       state: 'prepared', startToken: 'retry-new-token' })
-    const context = loadAuthoritativeTurnContext(db, 'retry-new-turn', session.id, 'retry-new-request', 'retry-new-token', createSqliteSessionStorage(db))
+    const context = await loadAuthoritativeTurnContext(db, 'retry-new-turn', session.id, 'retry-new-request', 'retry-new-token', createSqliteSessionStorage(db))
     expect(context.messages.find((message) => message.id === targetUser.message.id)?.content).toBe('retry target sentinel')
     const deps = baseDependencies()
     const provider = new RecordingModelProvider([{ type: 'text-delta', text: 'retried answer' }, { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' }])

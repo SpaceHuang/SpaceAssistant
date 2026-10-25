@@ -11,12 +11,16 @@ const memorySampler = createProjectionWorkerMemorySampler()
 parentPort.once('message', (message: {
   requestId: string
   permit: ProjectionHistoryChunkPermit
-  input: { afterSessionSequence: number; maxRows: number; maxBytes: number; staging?: { root: string; tempLocator: string } }
+  input: { afterSessionSequence: number; maxRows: number; maxBytes: number;
+    staging?: { root: string; tempLocator: string; tempLocators?: readonly string[] } }
 }) => {
   void (async () => {
     const startedAt = performance.now()
     let result = readProjectionHistoryChunk(message.permit, { ...message.input, allowOversizedChunk: !!message.input.staging })
-    if (result.kind === 'chunk' && result.byteLength > message.input.maxBytes && message.input.staging) {
+    if (result.kind === 'staged-chunk') {
+      // The reader has already written and hashed the root manifest and message segments.
+      // Preserve those descriptors; serializing the hydrated event here would rematerialize it.
+    } else if (result.kind === 'chunk' && result.byteLength > message.input.maxBytes && message.input.staging) {
       const root = path.resolve(message.input.staging.root)
       const tempLocator = message.input.staging.tempLocator
       if (!/^\.projection-[0-9a-f-]{36}\.tmp$/.test(tempLocator) || path.basename(tempLocator) !== tempLocator) {

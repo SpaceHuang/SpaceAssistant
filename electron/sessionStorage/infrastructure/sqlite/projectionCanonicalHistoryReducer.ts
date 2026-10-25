@@ -13,7 +13,8 @@ export function createProjectionCanonicalHistoryReducer(): ProjectionHistoryRedu
       if (!state) throw new Error('projection history reducer checkpoint is invalid')
       const events: HistoryEvent[] = rows.map((row) => ({ invocationId: row.invocationId, turnId: row.turnId,
         sequence: row.sequence, schemaVersion: row.schemaVersion, eventId: row.eventId,
-        idempotencyKey: row.idempotencyKey, kind: row.kind as HistoryEvent['kind'], payload: parsePayload(row.payloadJson) }))
+        idempotencyKey: row.idempotencyKey, kind: row.kind as HistoryEvent['kind'],
+        payload: row.payload === undefined ? parsePayload(row.payloadJson) : row.payload }))
       const seenInvocationIds = new Set<string>()
       const outputOperations: unknown[] = []
       for (let start = 0; start < events.length;) {

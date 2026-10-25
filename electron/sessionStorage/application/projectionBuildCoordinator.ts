@@ -32,7 +32,7 @@ const DEFAULT_PROJECTION_RETRY_DELAY_MS = 60_000
 export type ProjectionHistoryChunkReaderPort = (
   permit: ProjectionHistoryChunkPermit,
   input: Readonly<{ afterSessionSequence: number; maxRows: number; maxBytes: number; signal?: AbortSignal;
-    staging?: Readonly<{ root: string; tempLocator: string }> }>
+    staging?: Readonly<{ root: string; tempLocator: string; tempLocators?: readonly string[] }> }>
 ) => Promise<ProjectionHistoryChunkResult>
 
 export type ProjectionHistoryReducerPort = Readonly<{
@@ -178,9 +178,19 @@ export async function runProjectionBuildSlice(input: Readonly<{
         let earlyResult: ProjectionBuildSliceResult | undefined
         if (input.blobs.withWorkerStaging) {
           stagedResult = await input.blobs.withWorkerStaging(async (promote, stage) => {
-            const source = await input.readChunk(permit, { ...readInput, staging: { root: stage.root, tempLocator: stage.tempLocator } })
+            const source = await input.readChunk(permit, { ...readInput, staging: { root: stage.root, tempLocator: stage.tempLocator,
+              tempLocators: stage.allocate(15) } })
             if (source.kind !== 'staged-chunk') return source
             if (!samePermit(source.permit, permit)) return source
+            for (const segment of source.stagedSegments ?? []) {
+              const promotedSegment = await promote({ tempLocator: segment.tempLocator, locator: segment.locator,
+                byteLength: segment.byteLength, payloadDigest: segment.payloadDigest })
+              if (promotedSegment.locator !== segment.locator || promotedSegment.byteLength !== segment.byteLength ||
+                promotedSegment.payloadDigest !== segment.payloadDigest) {
+                await promotedSegment.release()
+                throw new Error('PROJECTION_HISTORY_SEGMENT_PROMOTION_MISMATCH')
+              }
+            }
             const blob = await promote(source.stagedBlob)
             const pending = attachProjectionPendingHistoryChunk(checkpoint, {
               locator: blob.locator, byteLength: blob.byteLength, payloadDigest: blob.payloadDigest,

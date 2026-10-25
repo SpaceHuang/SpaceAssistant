@@ -29,6 +29,8 @@ export type ProjectionHistoryChunkEvent = Readonly<{
   schemaVersion: number
   kind: string
   payloadJson: string
+  /** Worker-internal hydrated payload used when a single source event was staged in segments. */
+  payload?: unknown
   sessionSequence: number
   commitOrder: number
   createdAt: number
@@ -49,7 +51,8 @@ export type ProjectionMessageFact = Readonly<{
 export type ProjectionHistoryChunkResult = (
   | Readonly<{ kind: 'chunk'; permit: ProjectionHistoryChunkPermit; afterSessionSequence: number; nextSessionSequence: number; events: readonly ProjectionHistoryChunkEvent[]; messageFacts: readonly ProjectionMessageFact[]; byteLength: number; hasMore: boolean }>
   | Readonly<{ kind: 'staged-chunk'; permit: ProjectionHistoryChunkPermit; afterSessionSequence: number; nextSessionSequence: number;
-      rowCount: number; sourceByteLength: number; hasMore: boolean; stagedBlob: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }> }>
+      rowCount: number; sourceByteLength: number; hasMore: boolean; stagedBlob: Readonly<{ tempLocator: string; byteLength: number; payloadDigest: string }>;
+      stagedSegments?: readonly Readonly<{ tempLocator: string; locator: string; byteLength: number; payloadDigest: string; itemCount: number }>[] }>
   | Readonly<{ kind: 'complete'; permit: ProjectionHistoryChunkPermit; afterSessionSequence: number }>
   | Readonly<{ kind: 'source-drift' | 'cursor-invalid' | 'deferred-large' | 'unavailable'; permit: ProjectionHistoryChunkPermit; afterSessionSequence: number; eventSequence?: number; observedByteLength?: number; observedEventRows?: number; reason?: string }>
 ) & Readonly<{ snapshotDurationMs?: number; workerSample?: ProjectionWorkerSample }>

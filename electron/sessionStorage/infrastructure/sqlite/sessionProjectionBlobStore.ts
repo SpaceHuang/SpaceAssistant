@@ -314,6 +314,54 @@ export function createSessionProjectionBlobStore(root: string) {
             throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending History chunk blob failed reference verification')
           }
           referenced.add(manifest.locator)
+          let pendingPayload: unknown
+          try { pendingPayload = JSON.parse(content.toString('utf8')) }
+          catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `pending History chunk JSON is invalid: ${String(cause)}`) }
+          if (pendingPayload && typeof pendingPayload === 'object' &&
+            (pendingPayload as { kind?: unknown }).kind === 'segmented-history-event') {
+            const segmented = pendingPayload as { formatVersion?: unknown; messageSegments?: unknown; messageCount?: unknown; messageFacts?: unknown }
+            if (segmented.formatVersion !== 1 || !Array.isArray(segmented.messageSegments) || segmented.messageSegments.length < 1 ||
+              segmented.messageSegments.length > 15 || !Number.isSafeInteger(segmented.messageCount) ||
+              (segmented.messageCount as number) < 1 || !Array.isArray(segmented.messageFacts)) {
+              throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending segmented History chunk shape is invalid')
+            }
+            const segmentLocators = new Set<string>()
+            let segmentBytes = 0
+            let segmentItems = 0
+            for (const rawSegment of segmented.messageSegments) {
+              if (!rawSegment || typeof rawSegment !== 'object' || Array.isArray(rawSegment)) {
+                throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending History segment reference is invalid')
+              }
+              const segment = rawSegment as { locator?: unknown; byteLength?: unknown; payloadDigest?: unknown; itemCount?: unknown }
+              let locator: string
+              try { locator = assertLocator(typeof segment.locator === 'string' ? segment.locator : '') }
+              catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid pending History segment locator: ${String(cause)}`) }
+              if (segmentLocators.has(locator) || !Number.isSafeInteger(segment.byteLength) || (segment.byteLength as number) < 1 ||
+                (segment.byteLength as number) > 16 * 1024 * 1024 || typeof segment.payloadDigest !== 'string' ||
+                !/^[a-f0-9]{64}$/.test(segment.payloadDigest) || !Number.isSafeInteger(segment.itemCount) || (segment.itemCount as number) < 1) {
+                throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending History segment manifest is malformed')
+              }
+              let segmentContent: Buffer
+              try { segmentContent = await fs.readFile(path.join(root, locator)) }
+              catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `pending History segment is unavailable: ${String(cause)}`) }
+              if (segmentContent.byteLength !== segment.byteLength || digest(segmentContent) !== segment.payloadDigest) {
+                throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending History segment failed digest verification')
+              }
+              let segmentPayload: unknown
+              try { segmentPayload = JSON.parse(segmentContent.toString('utf8')) }
+              catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `pending History segment JSON is invalid: ${String(cause)}`) }
+              if (!Array.isArray(segmentPayload) || segmentPayload.length !== segment.itemCount) {
+                throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending History segment shape is invalid')
+              }
+              segmentLocators.add(locator)
+              segmentBytes += segmentContent.byteLength
+              segmentItems += segmentPayload.length
+              referenced.add(locator)
+            }
+            if (segmentItems !== segmented.messageCount || segmentBytes > 128 * 1024 * 1024) {
+              throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending History segmented payload totals are invalid')
+            }
+          }
         }
         const names = await fs.readdir(root)
         let removedCount = 0

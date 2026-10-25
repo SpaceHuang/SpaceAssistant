@@ -49,7 +49,7 @@ anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(
 export function readProjectionHistoryChunkInWorker(
   permit: ProjectionHistoryChunkPermit,
   input: Readonly<{ afterSessionSequence: number; maxRows: number; maxBytes: number; signal?: AbortSignal;
-    staging?: Readonly<{ root: string; tempLocator: string }> }>,
+    staging?: Readonly<{ root: string; tempLocator: string; tempLocators?: readonly string[] }> }>,
   options: ProjectionHistoryWorkerOptions = {}
 ): Promise<ProjectionHistoryChunkResult> {
   const signal = options.signal ?? input.signal
@@ -84,6 +84,8 @@ export function readProjectionHistoryChunkInWorker(
       if (message.requestId !== requestId || !message.result) { stop(new Error('PROJECTION_WORKER_PROTOCOL_MISMATCH')); return }
       if (message.result.kind === 'staged-chunk') {
         const staged = message.result.stagedBlob
+        const segments = message.result.stagedSegments ?? []
+        const allowedLocators = new Set([input.staging?.tempLocator, ...(input.staging?.tempLocators ?? [])])
         if (!input.staging || staged.tempLocator !== input.staging.tempLocator ||
           !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(staged.tempLocator) ||
           !Number.isSafeInteger(staged.byteLength) || staged.byteLength < 1 || staged.byteLength > 32 * 1024 * 1024 ||
@@ -93,7 +95,15 @@ export function readProjectionHistoryChunkInWorker(
           message.result.nextSessionSequence <= message.result.afterSessionSequence ||
           message.result.nextSessionSequence - message.result.afterSessionSequence !== message.result.rowCount ||
           !Number.isSafeInteger(message.result.sourceByteLength) || message.result.sourceByteLength <= input.maxBytes ||
-          message.result.sourceByteLength > 32 * 1024 * 1024 || typeof message.result.hasMore !== 'boolean') {
+          message.result.sourceByteLength > 128 * 1024 * 1024 || typeof message.result.hasMore !== 'boolean' ||
+          segments.length > 15 || new Set(segments.map(({ tempLocator }) => tempLocator)).size !== segments.length ||
+          segments.some((segment) => !allowedLocators.has(segment.tempLocator) ||
+            !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(segment.tempLocator) ||
+            path.basename(segment.tempLocator) !== segment.tempLocator ||
+            segment.locator !== `${segment.tempLocator.slice(1, -4)}.blob` ||
+            !Number.isSafeInteger(segment.byteLength) || segment.byteLength < 1 || segment.byteLength > 32 * 1024 * 1024 ||
+            !/^[a-f0-9]{64}$/.test(segment.payloadDigest) || !Number.isSafeInteger(segment.itemCount) || segment.itemCount < 1) ||
+          segments.some(({ tempLocator }) => tempLocator === staged.tempLocator)) {
           stop(new Error('PROJECTION_WORKER_STAGED_RESULT_INVALID'))
           return
         }
