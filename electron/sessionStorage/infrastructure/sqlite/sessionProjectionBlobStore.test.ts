@@ -237,11 +237,16 @@ describe('session projection derived blob store', () => {
     const segmentPayload = JSON.stringify([{ id: 'message-a', content: 'body' }, { id: 'message-b', content: 'body' }])
     const segment = await blobs.write(segmentPayload)
     await segment.release()
+    const factPayload = JSON.stringify([{ id: 'message-a', role: 'user', timestamp: 1, sequence: 1, queueScope: 'desktop',
+      contentStorageState: 'legacy', writeMode: null, storedContent: 'body' }])
+    const factSegment = await blobs.write(factPayload)
+    await factSegment.release()
     const event = { invocationId: 'inv', sequence: 1, eventId: 'event', idempotencyKey: 'event', turnId: 'turn',
       schemaVersion: 1, kind: 'invocation-context-committed', payloadJson: '', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
-    const rootPayload = JSON.stringify({ formatVersion: 1, kind: 'segmented-history-event', event, messageCount: 2,
+    const rootPayload = JSON.stringify({ formatVersion: 2, kind: 'segmented-history-event', event, messageCount: 2,
       messageSegments: [{ locator: segment.locator, byteLength: segment.byteLength, payloadDigest: segment.payloadDigest, itemCount: 2 }],
-      messageFacts: [] })
+      factCount: 1, factSegments: [{ locator: factSegment.locator, byteLength: factSegment.byteLength,
+        payloadDigest: factSegment.payloadDigest, itemCount: 1 }] })
     const finalPending = await blobs.write(rootPayload)
     const seed = createProjectionBuildCheckpoint({ sessionId: session.id, sessionGeneration: session.generation,
       scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson: '{"source":1}', processGeneration: 1,
@@ -258,7 +263,7 @@ describe('session projection derived blob store', () => {
     await expect(blobs.collectGarbage(conn)).rejects.toMatchObject({ code: 'PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE' })
     await expect(fs.stat(path.join(root, finalPending.locator))).resolves.toBeDefined()
     conn.prepare('UPDATE session_projection_state SET build_checkpoint_json=NULL WHERE session_id=? AND scope_key=?').run(session.id, 'scope-a')
-    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 2 })
+    expect(await blobs.collectGarbage(conn)).toMatchObject({ removedCount: 3 })
   })
 
   it('retains a stable-ID index blob referenced only by a durable checkpoint', async () => {

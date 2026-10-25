@@ -201,7 +201,7 @@ export function readProjectionHistoryChunk(
   }
 }
 
-type SegmentedEventPart = Readonly<{ tempLocator: string; locator: string; byteLength: number; payloadDigest: string; itemCount: number }>
+type SegmentedEventPart = Readonly<{ kind: 'messages' | 'facts'; tempLocator: string; locator: string; byteLength: number; payloadDigest: string; itemCount: number }>
 
 /** Stage a large canonical context event as bounded message/fact arrays without materializing its JSON array. */
 function stageOversizedContextEvent(
@@ -225,7 +225,7 @@ function stageOversizedContextEvent(
       !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(locator) || path.basename(locator) !== locator)) return undefined
   const availableLocators = tempLocators.slice(1)
   const writtenSegments: SegmentedEventPart[] = []
-  let current: { locator: string; tempLocator: string; fd: number; hash: ReturnType<typeof createHash>; byteLength: number; itemCount: number } | undefined
+  let current: { kind: 'messages' | 'facts'; locator: string; tempLocator: string; fd: number; hash: ReturnType<typeof createHash>; byteLength: number; itemCount: number } | undefined
   const closeCurrent = () => {
     if (!current) return
     const closing = Buffer.from(']')
@@ -234,11 +234,11 @@ function stageOversizedContextEvent(
     current.byteLength += 1
     fs.fsyncSync(current.fd)
     fs.closeSync(current.fd)
-    writtenSegments.push({ tempLocator: current.tempLocator, locator: current.locator, byteLength: current.byteLength,
+    writtenSegments.push({ kind: current.kind, tempLocator: current.tempLocator, locator: current.locator, byteLength: current.byteLength,
       payloadDigest: current.hash.digest('hex'), itemCount: current.itemCount })
     current = undefined
   }
-  const beginCurrent = () => {
+  const beginCurrent = (kind: 'messages' | 'facts') => {
     const tempLocator = availableLocators.shift()
     if (!tempLocator) throw new Error('PROJECTION_HISTORY_SEGMENT_LIMIT_EXCEEDED')
     const locator = tempLocator.slice(1, -4) + '.blob'
@@ -247,15 +247,16 @@ function stageOversizedContextEvent(
     const opening = Buffer.from('[')
     fs.writeSync(fd, opening)
     hash.update(opening)
-    current = { locator, tempLocator, fd, hash, byteLength: opening.byteLength, itemCount: 0 }
+    current = { kind, locator, tempLocator, fd, hash, byteLength: opening.byteLength, itemCount: 0 }
   }
-  const appendJsonItem = (serialized: string): boolean => {
+  const appendJsonItem = (serialized: string, kind: 'messages' | 'facts'): boolean => {
     const bytes = Buffer.from(serialized, 'utf8')
     if (bytes.byteLength + 2 > MAX_HISTORY_EVENT_SEGMENT_BYTES) return false
     const separatorBytes = current && current.itemCount > 0 ? 1 : 0
+    if (current && current.kind !== kind) closeCurrent()
     if (!current || current.byteLength + separatorBytes + bytes.byteLength + 1 > MAX_HISTORY_EVENT_SEGMENT_BYTES) {
       closeCurrent()
-      try { beginCurrent() } catch { return false }
+      try { beginCurrent(kind) } catch { return false }
     }
     const separator = current!.itemCount > 0 ? Buffer.from(',') : Buffer.alloc(0)
     if (separator.byteLength) { fs.writeSync(current!.fd, separator); current!.hash.update(separator); current!.byteLength += 1 }
@@ -285,7 +286,7 @@ function stageOversizedContextEvent(
       try { hydrated = hydrateSourceTruthSpills(message, path.join(path.dirname(permit.dbPath), 'spill')) }
       catch { return undefined }
       const serialized = JSON.stringify(hydrated)
-      if (typeof serialized !== 'string' || !appendJsonItem(serialized)) return undefined
+      if (typeof serialized !== 'string' || !appendJsonItem(serialized, 'messages')) return undefined
       messageByteLength += Buffer.byteLength(serialized, 'utf8') + 1
       if (messageByteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
       if (hydrated && typeof hydrated === 'object' && !Array.isArray(hydrated)) {
@@ -298,8 +299,9 @@ function stageOversizedContextEvent(
     if (messageCount !== eventShape.message_count || messageCount < 1) return undefined
 
     const uniqueIds = [...new Set(ids)]
-    const facts: ProjectionMessageFact[] = []
     let estimatedFactBytes = 0
+    let factBytes = 0
+    let factCount = 0
     for (let start = 0; start < uniqueIds.length; start += 64) {
       const batch = uniqueIds.slice(start, start + 64)
       const headers = conn.prepare(`SELECT messages.id,messages.role,messages.timestamp,messages.sequence,messages.queue_scope,
@@ -316,13 +318,18 @@ function stageOversizedContextEvent(
       const contentRows = conn.prepare(`SELECT id,content FROM messages WHERE session_id=? AND id IN (${batch.map(() => '?').join(',')})`)
         .all(permit.sessionId, ...batch) as ProjectionMessageFactContentRow[]
       const contentById = new Map(contentRows.map(({ id, content }) => [id, content]))
-      facts.push(...headers.map((fact) => Object.freeze({ id: fact.id, role: fact.role, timestamp: fact.timestamp,
+      const facts = headers.map((fact) => Object.freeze({ id: fact.id, role: fact.role, timestamp: fact.timestamp,
         sequence: fact.sequence, queueScope: fact.queue_scope, contentStorageState: fact.content_storage_state,
-        writeMode: fact.write_mode, storedContent: contentById.get(fact.id) ?? '' })))
+        writeMode: fact.write_mode, storedContent: contentById.get(fact.id) ?? '' }))
+      for (const fact of facts) {
+        const serialized = JSON.stringify(fact)
+        if (!appendJsonItem(serialized, 'facts')) return undefined
+        factBytes += Buffer.byteLength(serialized, 'utf8') + (factCount > 0 ? 1 : 0)
+        if (factBytes > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
+        factCount += 1
+      }
     }
-    const factsJson = JSON.stringify(facts)
-    const factsBytes = Buffer.byteLength(factsJson, 'utf8')
-    if (factsBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) return undefined
+    closeCurrent()
     let requiredUserMessage: unknown
     if (eventShape.required_user_json !== null) {
       try {
@@ -333,15 +340,19 @@ function stageOversizedContextEvent(
         requiredUserMessage = hydrateSourceTruthSpills(requiredValue, path.join(path.dirname(permit.dbPath), 'spill'))
       } catch { return undefined }
     }
-    const rootPayload = JSON.stringify({ formatVersion: 1, kind: 'segmented-history-event',
+    const rootPayload = JSON.stringify({ formatVersion: 2, kind: 'segmented-history-event',
       event: { invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id,
         idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind,
         sessionSequence: row.session_seq, commitOrder: row.commit_order, createdAt: row.created_at },
-      messageCount, messageSegments: writtenSegments.map(({ locator, byteLength, payloadDigest, itemCount }) =>
-        ({ locator, byteLength, payloadDigest, itemCount })), messageFacts: facts,
+      messageCount,
+      messageSegments: writtenSegments.filter(({ kind }) => kind === 'messages').map(({ locator, byteLength, payloadDigest, itemCount }) =>
+        ({ locator, byteLength, payloadDigest, itemCount })),
+      factCount,
+      factSegments: writtenSegments.filter(({ kind }) => kind === 'facts').map(({ locator, byteLength, payloadDigest, itemCount }) =>
+        ({ locator, byteLength, payloadDigest, itemCount })),
       ...(requiredUserMessage === undefined ? {} : { requiredUserMessage }) })
     const rootBytes = Buffer.from(rootPayload, 'utf8')
-    const sourceByteLength = messageByteLength + factsBytes
+    const sourceByteLength = messageByteLength + factBytes
     if (rootBytes.byteLength > MAX_STAGED_SOURCE_CHUNK_BYTES || sourceByteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
     const rootFd = fs.openSync(path.join(staging.root, staging.tempLocator), 'wx', 0o600)
     try { fs.writeSync(rootFd, rootBytes); fs.fsyncSync(rootFd) } finally { fs.closeSync(rootFd) }

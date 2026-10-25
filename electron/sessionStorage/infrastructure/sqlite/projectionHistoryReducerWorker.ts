@@ -62,11 +62,13 @@ parentPort.once('message', (message: {
       catch { throw new Error('PROJECTION_PENDING_CHUNK_INVALID_JSON') }
       if (payload && typeof payload === 'object' && (payload as { kind?: unknown }).kind === 'segmented-history-event') {
         const segmented = payload as { formatVersion?: unknown; event?: unknown; messageCount?: unknown;
-          messageSegments?: unknown; messageFacts?: unknown; requiredUserMessage?: unknown }
-        if (segmented.formatVersion !== 1 || !segmented.event || typeof segmented.event !== 'object' || Array.isArray(segmented.event) ||
+          messageSegments?: unknown; factCount?: unknown; factSegments?: unknown; requiredUserMessage?: unknown }
+        if (segmented.formatVersion !== 2 || !segmented.event || typeof segmented.event !== 'object' || Array.isArray(segmented.event) ||
           !Number.isSafeInteger(segmented.messageCount) || (segmented.messageCount as number) < 1 ||
           !Array.isArray(segmented.messageSegments) || segmented.messageSegments.length < 1 || segmented.messageSegments.length > 15 ||
-          !Array.isArray(segmented.messageFacts)) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+          !Number.isSafeInteger(segmented.factCount) || (segmented.factCount as number) < 0 ||
+          !Array.isArray(segmented.factSegments) || segmented.factSegments.length > 15 ||
+          segmented.messageSegments.length + segmented.factSegments.length > 15) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
         const event = segmented.event as Partial<ProjectionHistoryChunkEvent>
         if (typeof event.invocationId !== 'string' || !event.invocationId || typeof event.turnId !== 'string' || !event.turnId ||
           !Number.isSafeInteger(event.sequence) || (event.sequence ?? 0) < 1 || typeof event.eventId !== 'string' || !event.eventId ||
@@ -75,9 +77,11 @@ parentPort.once('message', (message: {
           event.sessionSequence !== manifest.nextSequence || !Number.isSafeInteger(event.commitOrder) || (event.commitOrder ?? 0) < 1 ||
           !Number.isSafeInteger(event.createdAt)) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
         const messages: unknown[] = []
+        const factsFromSegments: ProjectionMessageFact[] = []
         const segmentLocators = new Set<string>()
         let segmentByteLength = 0
-        for (const rawSegment of segmented.messageSegments) {
+        const readSegments = async (rawSegments: unknown[], items: unknown[]) => {
+          for (const rawSegment of rawSegments) {
           if (!rawSegment || typeof rawSegment !== 'object' || Array.isArray(rawSegment)) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
           const segment = rawSegment as { locator?: unknown; byteLength?: unknown; payloadDigest?: unknown; itemCount?: unknown }
           if (typeof segment.locator !== 'string' || !/^projection-[0-9a-f-]{36}\.blob$/.test(segment.locator) ||
@@ -97,15 +101,21 @@ parentPort.once('message', (message: {
           let segmentMessages: unknown
           try { segmentMessages = JSON.parse(segmentBytes.toString('utf8')) } catch { throw new Error('PROJECTION_PENDING_CHUNK_INVALID_JSON') }
           if (!Array.isArray(segmentMessages) || segmentMessages.length !== segment.itemCount) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
-          for (const item of segmentMessages) messages.push(item)
+          for (const item of segmentMessages) items.push(item)
           segmentByteLength += segmentBytes.byteLength
+          }
         }
+        await readSegments(segmented.messageSegments as unknown[], messages)
+        await readSegments(segmented.factSegments as unknown[], factsFromSegments as unknown[])
         if (messages.length !== segmented.messageCount || segmentByteLength > 128 * 1024 * 1024) {
+          throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+        }
+        if (factsFromSegments.length !== segmented.factCount || factsFromSegments.some((fact) => !isProjectionMessageFact(fact))) {
           throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
         }
         const eventPayload = { messages, ...(segmented.requiredUserMessage === undefined ? {} : { requiredUserMessage: segmented.requiredUserMessage }) }
         events = [{ ...event, payloadJson: '', payload: eventPayload } as ProjectionHistoryChunkEvent]
-        messageFacts = segmented.messageFacts as ProjectionMessageFact[]
+        messageFacts = factsFromSegments
       } else {
       if (!Array.isArray(payload.events) || !Array.isArray(payload.messageFacts) || payload.events.length !== manifest.rowCount ||
         payload.events.some((event, index) => !event || typeof event !== 'object' ||
@@ -282,4 +292,14 @@ async function buildStableIdIndex(input: Readonly<{
   const payload = JSON.stringify({ formatVersion: 1, messageCount: entries.length, ...input.identity,
     ids: entries.map((entry) => entry.id), entries: entries.map((entry, ordinal) => ({ ...entry, ordinal })) })
   return { payload, itemCount: entries.length }
+}
+
+function isProjectionMessageFact(value: unknown): value is ProjectionMessageFact {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const fact = value as Partial<ProjectionMessageFact>
+  return typeof fact.id === 'string' && Boolean(fact.id) && typeof fact.role === 'string' &&
+    Number.isSafeInteger(fact.timestamp) && Number.isSafeInteger(fact.sequence) && typeof fact.queueScope === 'string' &&
+    (fact.contentStorageState === 'legacy' || fact.contentStorageState === 'canonical-backed-dual-write' ||
+      fact.contentStorageState === 'canonical-backed-only') &&
+    (fact.writeMode === null || typeof fact.writeMode === 'string') && typeof fact.storedContent === 'string'
 }

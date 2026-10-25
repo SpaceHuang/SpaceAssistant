@@ -340,6 +340,45 @@ describe('SQLite projection build task composition', () => {
     } finally { temp.cleanup() }
   }, 60_000)
 
+  it('segments large same-snapshot message facts instead of embedding them in the root manifest', async () => {
+    const temp = createTempDatabase('sqlite-projection-large-message-facts-segments-')
+    const db = temp.db
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-projection-large-message-facts-blobs-'))
+    try {
+      const session = createSession(db, { name: 'large History message facts', model: 'test' })
+      const body = 'dual-write-fact-body-'.repeat(2_048)
+      const messages = Array.from({ length: 850 }, (_, index) => ({ id: `large-fact-${index}`, role: 'user', content: body, timestamp: index + 1 }))
+      for (const message of messages) appendMessage(db, { ...message, sessionId: session.id, status: 'sent' })
+      const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id,
+        createSpillStore(path.join(path.dirname(temp.dbPath), 'source-spill')))
+      await history.appendBatch([
+        { invocationId: 'large-facts-inv', turnId: 'large-facts-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'large-facts-context', idempotencyKey: 'large-facts-context', kind: 'invocation-context-committed', payload: { messages } },
+        { invocationId: 'large-facts-inv', turnId: 'large-facts-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'large-facts-terminal', idempotencyKey: 'large-facts-terminal', kind: 'invocation-completed', payload: { status: 'completed' } },
+      ], 0)
+      const conn = getDbConnection(db)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
+      const storedEvent = conn.prepare('SELECT length(CAST(payload_json AS BLOB)) AS byte_length FROM agent_history_events WHERE event_id=?')
+        .get('large-facts-context') as { byte_length: number }
+      expect(storedEvent.byte_length).toBeGreaterThan(32 * 1024 * 1024)
+      const processGeneration = advanceProcessGeneration(conn)
+      const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot: root,
+        processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: () => 3 })
+      const host = createSqliteSessionStorageHost(db, { storage: { projectionBlobRoot: root },
+        startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+      try {
+        const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
+        expect(prepared).toMatchObject({ sessionId: session.id, payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+        const page = await host.storage.queries.readPreparedChatPage?.({ sessionId: session.id, prepared, limit: 10 })
+        expect(page?.entries).toHaveLength(20)
+        expect(page?.entries.every(({ message }) => message.content === body)).toBe(true)
+      } finally { await host.lifecycle.stop({ deadlineMs: 5_000 }) }
+    } finally { temp.cleanup() }
+  }, 60_000)
+
   it('publishes a segmented output manifest chain for a multi-message oversized History chunk', async () => {
     const temp = createTempDatabase('sqlite-projection-output-segments-')
     const db = temp.db

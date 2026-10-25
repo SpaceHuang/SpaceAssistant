@@ -319,16 +319,24 @@ export function createSessionProjectionBlobStore(root: string) {
           catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `pending History chunk JSON is invalid: ${String(cause)}`) }
           if (pendingPayload && typeof pendingPayload === 'object' &&
             (pendingPayload as { kind?: unknown }).kind === 'segmented-history-event') {
-            const segmented = pendingPayload as { formatVersion?: unknown; messageSegments?: unknown; messageCount?: unknown; messageFacts?: unknown }
-            if (segmented.formatVersion !== 1 || !Array.isArray(segmented.messageSegments) || segmented.messageSegments.length < 1 ||
+            const segmented = pendingPayload as { formatVersion?: unknown; messageSegments?: unknown; messageCount?: unknown;
+              factSegments?: unknown; factCount?: unknown }
+            if (segmented.formatVersion !== 2 || !Array.isArray(segmented.messageSegments) || segmented.messageSegments.length < 1 ||
               segmented.messageSegments.length > 15 || !Number.isSafeInteger(segmented.messageCount) ||
-              (segmented.messageCount as number) < 1 || !Array.isArray(segmented.messageFacts)) {
+              (segmented.messageCount as number) < 1 || !Array.isArray(segmented.factSegments) ||
+              segmented.factSegments.length > 15 || segmented.messageSegments.length + segmented.factSegments.length > 15 ||
+              !Number.isSafeInteger(segmented.factCount) || (segmented.factCount as number) < 0) {
               throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending segmented History chunk shape is invalid')
             }
             const segmentLocators = new Set<string>()
             let segmentBytes = 0
-            let segmentItems = 0
-            for (const rawSegment of segmented.messageSegments) {
+            let messageItems = 0
+            let factItems = 0
+            const allSegments = [
+              ...(segmented.messageSegments as unknown[]).map((raw) => ({ raw, kind: 'message' as const })),
+              ...(segmented.factSegments as unknown[]).map((raw) => ({ raw, kind: 'fact' as const })),
+            ]
+            for (const { raw: rawSegment, kind } of allSegments) {
               if (!rawSegment || typeof rawSegment !== 'object' || Array.isArray(rawSegment)) {
                 throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending History segment reference is invalid')
               }
@@ -355,10 +363,11 @@ export function createSessionProjectionBlobStore(root: string) {
               }
               segmentLocators.add(locator)
               segmentBytes += segmentContent.byteLength
-              segmentItems += segmentPayload.length
+              if (kind === 'message') messageItems += segmentPayload.length
+              else factItems += segmentPayload.length
               referenced.add(locator)
             }
-            if (segmentItems !== segmented.messageCount || segmentBytes > 128 * 1024 * 1024) {
+            if (messageItems !== segmented.messageCount || factItems !== segmented.factCount || segmentBytes > 128 * 1024 * 1024) {
               throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending History segmented payload totals are invalid')
             }
           }
