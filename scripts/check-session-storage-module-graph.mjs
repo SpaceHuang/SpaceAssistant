@@ -96,6 +96,12 @@ function nonStaticModuleLoads(sourceFile) {
     if (ts.isCallExpression(node) && node.arguments.length === 1 &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
       const argument = node.arguments[0]
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword && ts.isStringLiteral(argument) &&
+        /(?:^|\/)database\/sqliteStore(?:\.[cm]?ts)?$/u.test(argument.text.replaceAll('\\', '/'))) {
+        loads.push({ line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1, kind: 'import()' })
+        ts.forEachChild(node, visit)
+        return
+      }
       // Require quoted static specifiers. Template literals are rejected even without substitutions
       // so import paths have one unambiguous form for the edge scanner to audit.
       if (!ts.isStringLiteral(argument)) {
@@ -442,6 +448,8 @@ function runIllegalEdgeProbes() {
       ['test composition unregistered SQLite symbol', 'electron/testSupport/sessionStorageComposition.ts', `import { createSqliteSessionStorageHost } from '../sessionStorage/sqliteSessionStorage'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['template-literal static implementation import', 'electron/ipc/__gate_probe__.ts', 'import(`../sessionStorage/application/readMessages`)',
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['dynamic raw SQLite connection import', 'electron/ipc/__gate_probe__.ts', `const load = () => import('../database/sqliteStore')`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['non-static dynamic module load', 'electron/ipc/__gate_probe__.ts', `const modulePath = '../sessionStorage/infrastructure/sqlite/sessionProjectionStateStore'; import(modulePath)`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0]

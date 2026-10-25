@@ -348,7 +348,7 @@ describe('session storage module graph rules', () => {
 
   it('keeps IPC transport on database owner APIs and rejects raw SQLite capabilities', () => {
     for (const source of [
-      "import { getDbConnection } from '../database/sqliteStore'",
+      "import { getDbConnection } from '../database/sqliteStore'; export const read = (db) => getDbConnection(db).prepare('SELECT id FROM messages').all()",
       "import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'",
       "import * as database from '../database'",
       "export { appendMessage } from '../database/operations'",
