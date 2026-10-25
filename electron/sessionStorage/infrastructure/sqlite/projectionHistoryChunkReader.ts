@@ -25,6 +25,7 @@ type ProjectionMessageFactContentRow = { id: string; content: string }
 type LargeContextEventCapture = Readonly<{
   messageCount: number
   requiredUserByteLength: number | null
+  requiredUserMessageRef?: Readonly<{ id: string; messageIndex: number }>
   messages: readonly Readonly<{ message_index: number; message_json: string }>[]
   requiredUserJson?: string
   extraPayloadJson: string
@@ -258,9 +259,11 @@ function readLargeContextEventCapture(
   const shape = conn.prepare(`SELECT json_type(payload_json,'$.messages') AS messages_type,
     json_array_length(payload_json,'$.messages') AS message_count,
     length(CAST(json_extract(payload_json,'$.requiredUserMessage') AS BLOB)) AS required_user_byte_length,
+    json_extract(payload_json,'$.requiredUserMessage.id') AS required_user_id,
     json_remove(payload_json,'$.messages','$.requiredUserMessage') AS extra_payload_json
     FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
-    { messages_type: string | null; message_count: number | null; required_user_byte_length: number | null; extra_payload_json: string } | undefined
+    { messages_type: string | null; message_count: number | null; required_user_byte_length: number | null;
+      required_user_id: string | null; extra_payload_json: string } | undefined
   if (shape?.messages_type !== 'array' || !Number.isSafeInteger(shape.message_count) || (shape.message_count ?? 0) < 1 ||
     Buffer.byteLength(shape.extra_payload_json, 'utf8') > MAX_STAGED_SOURCE_CHUNK_BYTES || (shape.required_user_byte_length !== null &&
       shape.required_user_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES)) return undefined
@@ -272,15 +275,32 @@ function readLargeContextEventCapture(
     return undefined
   }
   let requiredUserJson: string | undefined
+  let requiredUserMessageRef: Readonly<{ id: string; messageIndex: number }> | undefined
   if (shape.required_user_byte_length !== null) {
-    const required = conn.prepare(`SELECT json_extract(payload_json,'$.requiredUserMessage') AS required_user_json
-      FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
-      { required_user_json: string | null } | undefined
-    if (typeof required?.required_user_json !== 'string') return undefined
-    requiredUserJson = required.required_user_json
+    if (typeof shape.required_user_id === 'string' && shape.required_user_id.trim()) {
+      const matchingMessage = conn.prepare(`SELECT CAST(item.key AS INTEGER) AS message_index
+        FROM agent_history_events event,json_each(event.payload_json,'$.messages') item
+        WHERE event.event_id=? AND event.session_id=? AND json_extract(item.value,'$.id')=?
+        ORDER BY CAST(item.key AS INTEGER) LIMIT 1`).get(row.event_id, permit.sessionId, shape.required_user_id) as
+        { message_index: number } | undefined
+      if (matchingMessage && Number.isSafeInteger(matchingMessage.message_index) &&
+        matchingMessage.message_index >= 0 && matchingMessage.message_index < shape.message_count!) {
+        // Canonical History validates requiredUserMessage against this context message at write time.
+        // Reference the already staged item by ID so a large body is not hydrated and serialized twice.
+        requiredUserMessageRef = Object.freeze({ id: shape.required_user_id, messageIndex: matchingMessage.message_index })
+      }
+    }
+    if (!requiredUserMessageRef) {
+      const required = conn.prepare(`SELECT json_extract(payload_json,'$.requiredUserMessage') AS required_user_json
+        FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
+        { required_user_json: string | null } | undefined
+      if (typeof required?.required_user_json !== 'string') return undefined
+      requiredUserJson = required.required_user_json
+    }
   }
   return Object.freeze({ messageCount: shape.message_count!, requiredUserByteLength: shape.required_user_byte_length,
     messages: Object.freeze(messages.map((item) => Object.freeze(item))), extraPayloadJson: shape.extra_payload_json,
+    ...(requiredUserMessageRef ? { requiredUserMessageRef } : {}),
     ...(requiredUserJson !== undefined ? { requiredUserJson } : {}) })
 }
 
@@ -437,7 +457,7 @@ function stageOversizedContextEvent(
     closeCurrent()
     let requiredUserMessage: unknown
     let requiredUserByteLength = 0
-    if (capture.requiredUserByteLength !== null) {
+    if (capture.requiredUserByteLength !== null && !capture.requiredUserMessageRef) {
       try {
         if (typeof capture.requiredUserJson !== 'string') return undefined
         const requiredValue = JSON.parse(capture.requiredUserJson)
@@ -457,7 +477,7 @@ function stageOversizedContextEvent(
     let extraPayload: unknown
     try { extraPayload = JSON.parse(capture.extraPayloadJson) } catch { return undefined }
     if (!extraPayload || typeof extraPayload !== 'object' || Array.isArray(extraPayload)) return undefined
-    const rootPayload = JSON.stringify({ formatVersion: 2, kind: 'segmented-history-event',
+    const rootPayload = JSON.stringify({ formatVersion: 3, kind: 'segmented-history-event',
       event: { invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id,
         idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind,
         sessionSequence: row.session_seq, commitOrder: row.commit_order, createdAt: row.created_at },
@@ -478,9 +498,12 @@ function stageOversizedContextEvent(
         locator: segment.locator, byteLength: segment.byteLength, payloadDigest: segment.payloadDigest,
         itemCount: segment.fragmentIndex === 0 ? 1 : 0, encoding: segment.encoding,
         firstItemIndex: segment.firstItemIndex, fragmentIndex: segment.fragmentIndex, fragmentCount: segment.fragmentCount })) } : {}),
+      ...(capture.requiredUserMessageRef ? { requiredUserMessageRef: capture.requiredUserMessageRef } : {}),
       ...(requiredUserMessage === undefined ? {} : { requiredUserMessage }) })
     const rootBytes = Buffer.from(rootPayload, 'utf8')
-    const sourceByteLength = messageByteLength + factBytes + requiredUserByteLength + Buffer.byteLength(capture.extraPayloadJson, 'utf8')
+    const sourceByteLength = messageByteLength + factBytes + (capture.requiredUserMessageRef
+      ? Buffer.byteLength(JSON.stringify(capture.requiredUserMessageRef), 'utf8') : requiredUserByteLength) +
+      Buffer.byteLength(capture.extraPayloadJson, 'utf8')
     if (rootBytes.byteLength > MAX_STAGED_SOURCE_CHUNK_BYTES || sourceByteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
     const payloadDigest = createHash('sha256').update(rootBytes).digest('hex')
     stagedFiles.push({ tempLocator: staging.tempLocator, bytes: rootBytes })

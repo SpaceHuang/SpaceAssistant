@@ -63,14 +63,18 @@ parentPort.once('message', (message: {
       if (payload && typeof payload === 'object' && (payload as { kind?: unknown }).kind === 'segmented-history-event') {
         const segmented = payload as { formatVersion?: unknown; event?: unknown; messageCount?: unknown;
           messageSegments?: unknown; factCount?: unknown; factSegments?: unknown; extraPayload?: unknown; requiredUserMessage?: unknown;
-          requiredUserSegments?: unknown }
-        if (segmented.formatVersion !== 2 || !segmented.event || typeof segmented.event !== 'object' || Array.isArray(segmented.event) ||
+          requiredUserSegments?: unknown; requiredUserMessageRef?: unknown }
+        if ((segmented.formatVersion !== 2 && segmented.formatVersion !== 3) || !segmented.event || typeof segmented.event !== 'object' || Array.isArray(segmented.event) ||
           !Number.isSafeInteger(segmented.messageCount) || (segmented.messageCount as number) < 1 ||
           !Array.isArray(segmented.messageSegments) || segmented.messageSegments.length < 1 || segmented.messageSegments.length > 15 ||
           !Number.isSafeInteger(segmented.factCount) || (segmented.factCount as number) < 0 ||
           !Array.isArray(segmented.factSegments) || segmented.factSegments.length > 15 ||
           (segmented.requiredUserSegments !== undefined && (!Array.isArray(segmented.requiredUserSegments) ||
             (segmented.requiredUserSegments as unknown[]).length < 2)) ||
+          (segmented.requiredUserMessageRef !== undefined && (segmented.formatVersion !== 3 || !segmented.requiredUserMessageRef ||
+            typeof segmented.requiredUserMessageRef !== 'object' || Array.isArray(segmented.requiredUserMessageRef))) ||
+          (segmented.requiredUserMessageRef !== undefined && (segmented.requiredUserMessage !== undefined ||
+            segmented.requiredUserSegments !== undefined)) ||
           segmented.messageSegments.length + segmented.factSegments.length +
             (Array.isArray(segmented.requiredUserSegments) ? segmented.requiredUserSegments.length : 0) > 15) {
           throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
@@ -151,6 +155,17 @@ parentPort.once('message', (message: {
         await readSegments(segmented.messageSegments as unknown[], messages)
         await readSegments(segmented.factSegments as unknown[], factsFromSegments as unknown[])
         let requiredUserMessage = segmented.requiredUserMessage
+        if (segmented.requiredUserMessageRef !== undefined) {
+          const reference = segmented.requiredUserMessageRef as { id?: unknown; messageIndex?: unknown }
+          if (typeof reference.id !== 'string' || !reference.id.trim() || !Number.isSafeInteger(reference.messageIndex) ||
+            (reference.messageIndex as number) < 0 || (reference.messageIndex as number) >= messages.length) {
+            throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+          }
+          const referencedMessage = messages[reference.messageIndex as number] as { id?: unknown } | undefined
+          if (!referencedMessage || typeof referencedMessage !== 'object' || Array.isArray(referencedMessage) ||
+            referencedMessage.id !== reference.id) throw new Error('PROJECTION_PENDING_CHUNK_SHAPE_INVALID')
+          requiredUserMessage = { id: reference.id, message: referencedMessage }
+        }
         if (segmented.requiredUserSegments !== undefined) {
           if (requiredUserMessage !== undefined || (segmented.requiredUserSegments as unknown[])
             .some((segment) => !segment || typeof segment !== 'object' || (segment as { encoding?: unknown }).encoding !== 'json-item-fragment')) {

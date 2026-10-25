@@ -7,7 +7,7 @@ import type { Message } from '../../src/shared/domainTypes'
 import { appendMessage, createPersistedTurn, createSession, enqueueQueuedUserMessageInScope, getApiContextBaseline, getChatMessagePage, getMessage, getMessageSkeletons, getMessages, getMessagesPageWithSequence, getRecentTurnRoutingMessages, getSearchCorpusPage, getTurnContext, resolveRetryContext, searchMessages, updateMessageContent, updateSession } from '../database/operations'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
-import { getDbConnection } from '../database/sqliteStore'
+import { getDbConnection, reopenDatabaseConnection } from '../database/sqliteStore'
 import { advanceProcessGeneration } from '../database/processGeneration'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
@@ -356,10 +356,104 @@ describe('session transcript projection P2 read path', () => {
       expect(candidateStartupSamples).toHaveLength(30)
       expect(sliceSamples.reduce((sum, sample) => sum + sample.sourceRows, 0)).toBeGreaterThan(0)
       expect(percentile(coldVisitSamples, 0.95)).toBeLessThanOrEqual(percentile(authoritySamples, 0.95) * 2 + 5)
-      expect(percentile(candidateStartupSamples, 0.95)).toBeLessThanOrEqual(50)
+      expect(percentile(candidateStartupSamples, 0.95)).toBeLessThanOrEqual(percentile(baselineStartupSamples, 0.95) * 2 + 5)
+      expect(percentile(candidateQuiesceSamples, 0.95)).toBeLessThanOrEqual(percentile(baselineQuiesceSamples, 0.95) * 2 + 5)
     } finally {
       vi.restoreAllMocks()
       for (const lifecycle of lifecycleControls) await lifecycle.stop({ deadlineMs: 5_000 })
+      await host?.lifecycle.stop({ deadlineMs: 5_000 })
+      temp.cleanup()
+    }
+  }, 120_000)
+
+  it.skipIf(!runStoragePerf)('measures file-backed prepared reads across same-object database reopen', async () => {
+    const temp = createTempDatabase('session-projection-reopen-perf-')
+    const blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    let host: ReturnType<typeof createSqliteSessionStorageHost> | undefined
+    let processGeneration = advanceProcessGeneration(getDbConnection(temp.db))
+    const makeTask = () => createSqliteProjectionBuildTask({ db: temp.db, dbPath: temp.dbPath, blobRoot,
+      processGeneration: () => processGeneration, connectionEpoch: () => processGeneration, now: Date.now })
+    const makeHost = () => createSqliteSessionStorageHost(temp.db, { storage: { projectionBlobRoot: blobRoot },
+      startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+        recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [makeTask()] })
+    try {
+      const messages = Array.from({ length: 80 }, (_, index) => ({
+        id: `reopen-perf-${index}`, sessionId: '',
+        role: (index % 2 ? 'assistant' : 'user') as 'user' | 'assistant',
+        content: `same object reopen body ${index} ${'durable source '.repeat(6)}`, timestamp: index + 1,
+        status: (index % 2 ? 'completed' : 'sent') as 'completed' | 'sent'
+      }))
+      const session = createSession(temp.db, { name: 'same object reopen performance', model: 'test' })
+      const sessionMessages = messages.map((message) => ({ ...message, sessionId: session.id }))
+      const { appendMessagesAtomically } = await import('../database/operations')
+      appendMessagesAtomically(temp.db, sessionMessages)
+      const conn = getDbConnection(temp.db)
+      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+      await history.appendBatch([{
+        invocationId: 'reopen-perf-invocation', turnId: 'reopen-perf-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'reopen-perf-context', idempotencyKey: 'reopen-perf-context', kind: 'invocation-context-committed',
+        payload: { messages: sessionMessages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) }
+      }], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+      conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+      expect(readSessionTranscriptProjection(temp.db, session.id).source).toBe('canonical:L2')
+      host = makeHost()
+      const initial = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
+      expect(initial).toMatchObject({ sessionId: session.id, cachePresent: true })
+
+      const authoritySamples: number[] = []
+      const reopenedReadSamples: number[] = []
+      const quiesceSamples: number[] = []
+      const reopenSamples: number[] = []
+      const readHistory = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+      const readHistoryShadow = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
+      readHistory.mockClear()
+      readHistoryShadow.mockClear()
+      const memoryBefore = process.memoryUsage()
+      const walBytesBefore = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
+      for (let sample = 0; sample < 30; sample += 1) {
+        let started = performance.now()
+        const authority = readSessionTranscriptProjection(temp.db, session.id)
+        authoritySamples.push(performance.now() - started)
+        expect(authority.source).toBe('canonical:L2')
+        const authorityHistoryReads = readHistory.mock.calls.length + readHistoryShadow.mock.calls.length
+
+        started = performance.now()
+        expect(await host.lifecycle.stop({ deadlineMs: 5_000 })).toEqual({ status: 'quiescent' })
+        quiesceSamples.push(performance.now() - started)
+        started = performance.now()
+        reopenDatabaseConnection(temp.db)
+        processGeneration = advanceProcessGeneration(getDbConnection(temp.db))
+        reopenSamples.push(performance.now() - started)
+        host = makeHost()
+
+        started = performance.now()
+        const read = await readChatMessagesAfterPreparation(host.storage, { sessionId: session.id, limit: 80 })
+        reopenedReadSamples.push(performance.now() - started)
+        expect(read.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
+          .toEqual(authority.messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
+        expect(readHistory.mock.calls.length + readHistoryShadow.mock.calls.length).toBe(authorityHistoryReads)
+        const ready = host.storage.readPreparedChatBodyV1?.({ sessionId: session.id })
+        expect(ready).toMatchObject({ sessionId: session.id, cachePresent: true })
+      }
+      const percentile = (values: number[], fraction: number) => {
+        const sorted = [...values].sort((left, right) => left - right)
+        return sorted[Math.ceil(sorted.length * fraction) - 1]!
+      }
+      const memoryAfter = process.memoryUsage()
+      const walBytes = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
+      process.stdout.write(`file-backed-reopen authorityP50=${percentile(authoritySamples, 0.5).toFixed(2)}ms ` +
+        `authorityP95=${percentile(authoritySamples, 0.95).toFixed(2)}ms preparedP50=${percentile(reopenedReadSamples, 0.5).toFixed(2)}ms ` +
+        `preparedP95=${percentile(reopenedReadSamples, 0.95).toFixed(2)}ms samples=30 messages=80 sameObjectSwap=true ` +
+        `mainHistoryReadsB=${readHistory.mock.calls.length + readHistoryShadow.mock.calls.length} mainHistoryReadsC=0 heapDelta=${memoryAfter.heapUsed - memoryBefore.heapUsed} ` +
+        `rssDelta=${memoryAfter.rss - memoryBefore.rss} walBytes=${walBytes} walDeltaBytes=${walBytes - walBytesBefore} ` +
+        `reopenP95=${percentile(reopenSamples, 0.95).toFixed(2)}ms quiesceP95=${percentile(quiesceSamples, 0.95).toFixed(2)}ms\n`)
+      expect(reopenedReadSamples).toHaveLength(30)
+      expect(percentile(reopenedReadSamples, 0.95)).toBeLessThanOrEqual(percentile(authoritySamples, 0.95) * 2 + 5)
+      expect(readHistory.mock.calls.length + readHistoryShadow.mock.calls.length).toBeGreaterThan(0)
+    } finally {
+      vi.restoreAllMocks()
       await host?.lifecycle.stop({ deadlineMs: 5_000 })
       temp.cleanup()
     }

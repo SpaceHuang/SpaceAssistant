@@ -329,17 +329,29 @@ export function createSessionProjectionBlobStore(root: string) {
           if (pendingPayload && typeof pendingPayload === 'object' &&
             (pendingPayload as { kind?: unknown }).kind === 'segmented-history-event') {
             const segmented = pendingPayload as { formatVersion?: unknown; messageSegments?: unknown; messageCount?: unknown;
-              factSegments?: unknown; factCount?: unknown; requiredUserSegments?: unknown }
-            if (segmented.formatVersion !== 2 || !Array.isArray(segmented.messageSegments) || segmented.messageSegments.length < 1 ||
+              factSegments?: unknown; factCount?: unknown; requiredUserSegments?: unknown; requiredUserMessage?: unknown;
+              requiredUserMessageRef?: unknown }
+            if ((segmented.formatVersion !== 2 && segmented.formatVersion !== 3) || !Array.isArray(segmented.messageSegments) || segmented.messageSegments.length < 1 ||
               segmented.messageSegments.length > 15 || !Number.isSafeInteger(segmented.messageCount) ||
               (segmented.messageCount as number) < 1 || !Array.isArray(segmented.factSegments) ||
               segmented.factSegments.length > 15 ||
               (segmented.requiredUserSegments !== undefined && (!Array.isArray(segmented.requiredUserSegments) ||
                 segmented.requiredUserSegments.length < 2)) ||
+              (segmented.requiredUserMessageRef !== undefined && (segmented.formatVersion !== 3 || !segmented.requiredUserMessageRef ||
+                typeof segmented.requiredUserMessageRef !== 'object' || Array.isArray(segmented.requiredUserMessageRef))) ||
+              (segmented.requiredUserMessageRef !== undefined && (segmented.requiredUserMessage !== undefined ||
+                segmented.requiredUserSegments !== undefined)) ||
               segmented.messageSegments.length + segmented.factSegments.length +
                 (Array.isArray(segmented.requiredUserSegments) ? segmented.requiredUserSegments.length : 0) > 15 ||
               !Number.isSafeInteger(segmented.factCount) || (segmented.factCount as number) < 0) {
               throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending segmented History chunk shape is invalid')
+            }
+            if (segmented.requiredUserMessageRef !== undefined) {
+              const reference = segmented.requiredUserMessageRef as { id?: unknown; messageIndex?: unknown }
+              if (typeof reference.id !== 'string' || !reference.id.trim() || !Number.isSafeInteger(reference.messageIndex) ||
+                (reference.messageIndex as number) < 0 || (reference.messageIndex as number) >= (segmented.messageCount as number)) {
+                throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'pending required-user message reference is invalid')
+              }
             }
             const segmentLocators = new Set<string>()
             let segmentBytes = 0
