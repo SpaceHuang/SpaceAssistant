@@ -385,6 +385,81 @@ describe('deferred IM bundle runtime', () => {
     db.close()
   })
 
+  it.each(['feishu', 'wechat'] as const)(
+    'replaces the owner approval after policy changes at claim time on %s', async (channel) => {
+      const db = createMemoryAppDb()
+      const conn = getDbConnection(db)
+      commitImPolicySnapshot(conn, { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'custom' },
+        updatedAt: 1, eventId: `claim-policy-${channel}-seed` })
+      const sessionId = createSession(db, { name: `claim-policy-${channel}` }).id
+      const todoStore = createDeferredTodoStore(db)
+      const rule = { ruleId: 'old-ask', factsHash: 'a'.repeat(64) }
+      const todo = todoStore.create({ todoId: `claim-policy-${channel}-todo`, invocationId: `claim-policy-${channel}-invocation`,
+        channel, identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 3, rule, workflowId: 'workflow', taskId: 'task',
+        stepId: 'step', planRevision: 1, originSessionId: sessionId, createdAt: 1, expiresAt: Date.now() + 60_000 }).todo
+      const intents = createSecurityActionIntentStore(db)
+      intents.prepare({ invocationId: todo.invocationId, envelopeInvocationId: todo.invocationId, sessionId,
+        workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: todo.planRevision })
+      intents.linkTodo(todo.invocationId, todo.todoId)
+      intents.commitCheckpoint(todo.invocationId, { checkpointId: `claim-policy-${channel}-checkpoint`, workflowRevision: 1 })
+      putTaskControlRecord(db, { sessionId, ownerId: todo.ownerId, workflowId: todo.workflowId, taskId: todo.taskId,
+        planRevision: todo.planRevision, expectedRevision: null, data: { steps: [{ stepId: todo.stepId }],
+          outstandingInvocations: [{ invocationId: todo.invocationId, todoId: todo.todoId, stepId: todo.stepId }] } })
+      const envelopeStore = createDeferredEnvelopeStore(db)
+      const args = { path: 'approved.txt', content: 'original operation' }
+      envelopeStore.put({ invocationId: todo.invocationId, requestId: `claim-policy-${channel}-source`, turnId: 'turn', toolCallId: 'tool',
+        toolName: 'write_file', canonicalArgs: args, contentVersions: {}, executionContext: { sessionId, workflowId: todo.workflowId,
+          taskId: todo.taskId, stepId: todo.stepId, planRevision: 1, channel, identityKey: todo.identityKey, ownerId: todo.ownerId,
+          authorizationEpoch: 3, invocationId: todo.invocationId, toolName: 'write_file', toolInput: structuredClone(args),
+          requestId: `claim-policy-${channel}-source`, turnId: 'turn', toolCallId: 'tool', providerRouteId: 'provider',
+          messageId: 'inbound', model: 'test', workDirProfileId: 'profile', policyBehaviorVersion: todo.policyBehaviorVersion,
+          policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch, ruleId: rule.ruleId, factsHash: rule.factsHash,
+          confirmationReceipt: 'old-receipt' } })
+      const notificationDelivery = createDeferredApprovalNotificationDelivery({ db, todoStore, intentStore: intents,
+        adapter: { send: vi.fn(async () => ({ messageId: 'replacement-notice' })) },
+        allocateShortCode: vi.fn().mockReturnValueOnce('81').mockReturnValueOnce('82'), audit: vi.fn() })
+      await notificationDelivery.createAndSend({ todoId: todo.todoId, invocationId: todo.invocationId, channel,
+        identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch, rule,
+        safeActionSummary: '创建文件', userDelegation: '原始待审批操作', untrustedMaterial: '' })
+      const handlers = new Map<string, (...args: unknown[]) => unknown>()
+      registerPolicyIpc({ handle: (name: string, handler: (...args: unknown[]) => unknown) => handlers.set(name, handler) } as never, db)
+      const dispatch = vi.fn(async () => {
+        await handlers.get('policy:write')!({}, { lane: channel, expectedRevision: 1,
+          change: { kind: 'rule-override', ruleId: 'mcp-tool-ask', action: 'allow' } })
+        return { dispatched: false, failureCode: 'FRESH_APPROVAL_REQUIRED', failureReason: 'fresh owner approval required' }
+      })
+      const runtime = createDeferredImBundleRuntime({ db, channel, todoStore, notificationDelivery,
+        isEnabled: () => true, getAuthorizationEpoch: () => 3, maxParallel: 1, isOwnerAuthorized: () => true,
+        recheckTask: () => true, reauthorizePolicy: async () => ({ decision: 'ask',
+          rule: { ruleId: 'fresh-policy-ask', factsHash: 'b'.repeat(64) }, reasonSummary: '策略已变化，需要重新批准' }),
+        dispatch, audit: vi.fn() })
+      const requeue = vi.spyOn(todoStore, 'requeueConsumedAfterPolicyChange')
+
+      await runtime.resume.requestResume({ requestId: `claim-policy-${channel}-owner-resume`, todoId: todo.todoId, sessionId,
+        channel, identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch,
+        rule, notificationVersion: 1, messageId: 'owner-approved', reasonKey: 'owner-approval' })
+      const results = await runtime.resume.dispatchPending(sessionId)
+      expect(requeue).toHaveBeenCalledOnce()
+      expect(requeue.mock.results[0]?.value).toBe(true)
+      expect(results).toEqual([
+        { requestId: `claim-policy-${channel}-owner-resume`, status: 'invalidated' }
+      ])
+
+      expect(dispatch).toHaveBeenCalledOnce()
+      expect(notificationDelivery.list(todo.todoId)).toMatchObject([
+        { state: 'superseded', notificationVersion: 1 },
+        { state: 'delivered', notificationVersion: 2, rule: { ruleId: 'fresh-policy-ask' } }
+      ])
+      expect(todoStore.get(todo.todoId, { channel, identityKey: todo.identityKey, ownerId: todo.ownerId,
+        authorizationEpoch: todo.authorizationEpoch, originSessionId: sessionId,
+        rule: { ruleId: 'fresh-policy-ask', factsHash: 'b'.repeat(64) } })).toMatchObject({ status: 'pending', policyRevision: 2 })
+      expect(runtime.resume.getResumeRequest(`claim-policy-${channel}-owner-resume`)?.state).toBe('invalidated')
+      expect(createDeferredExecutionResultStore(db).getByTodo(todo.todoId)).toBeNull()
+      runtime.disposePolicyChangeSubscription()
+      db.close()
+    }
+  )
+
   it('retries a claimed completion wake automatically when its lease expires after restart', async () => {
     vi.useFakeTimers()
     try {

@@ -260,7 +260,11 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
       return transition(todoId, 'dispatching', 'consumed', now)
     },
 
-    /** Reopen only a known pre-dispatch policy rejection so the same parked call can receive a fresh ask. */
+    /**
+     * final-check outcome: reopen only the stable FRESH_APPROVAL_REQUIRED known-not-dispatched case.
+     * The resume coordinator then re-enters current IM policy and replaces the stale owner notice.
+     * Boundary coverage: deferredResumeCoordinator.test.ts and deferredImBundleRuntime.test.ts.
+     */
     requeueConsumedAfterPolicyChange(todoId: string, now = Date.now()): boolean {
       const conn = liveConn()
       return runInTransaction(conn, () => {
@@ -269,8 +273,11 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
         const updated = conn.prepare("UPDATE deferred_todos SET state='invalidated',updated_at=? WHERE todo_id=? AND state='consumed'")
           .run(now, todoId)
         if (Number(updated.changes) !== 1) return false
-        const policy = conn.prepare("UPDATE policy_deferred_todos SET status='invalidated' WHERE todo_id=? AND domain='im' AND status IN ('active','invalidated')")
-          .run(todoId)
+        // A policy commit can race with a todo that has already moved to consumed,
+        // so it may not have created the compact policy index row for this todo.
+        // This method is reached only after the executor proves the call did not start.
+        const policy = conn.prepare(`INSERT INTO policy_deferred_todos(todo_id,domain,status) VALUES(?,'im','invalidated')
+          ON CONFLICT(todo_id) DO UPDATE SET status='invalidated' WHERE policy_deferred_todos.domain='im'`).run(todoId)
         if (Number(policy.changes) !== 1) throw new Error('DEFERRED_POLICY_REQUEUE_FENCE_MISSING')
         if (todo.trackId) {
           conn.prepare(`UPDATE remote_track_children SET state='invalidated',updated_at=?

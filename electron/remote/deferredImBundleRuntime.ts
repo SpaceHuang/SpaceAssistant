@@ -103,6 +103,17 @@ export function createDeferredImBundleRuntime(input: {
       }
     }
   })
+  const policyReevaluation = input.reauthorizePolicy ? createDeferredPolicyReevaluation({
+    db: input.db, channel: input.channel, todoStore: input.todoStore, envelopeStore,
+    notificationDelivery: input.notificationDelivery, enabled: input.isEnabled,
+    authorizationEpoch: input.getAuthorizationEpoch, ownerAuthorized: input.isOwnerAuthorized,
+    recheckTask: input.recheckTask,
+    ...(input.recheckAttachment ? { recheckAttachment: input.recheckAttachment } : {}),
+    reauthorize: input.reauthorizePolicy, recheck: ports.recheck,
+    dispatch: ports.dispatchClaimed,
+    maxParallel: input.maxParallel, ...(input.scheduleRetry ? { scheduleRetry: input.scheduleRetry } : {}),
+    wake: input.onCompletionWake ?? (() => undefined), audit: input.audit
+  }) : undefined
   const runtime = createDeferredApprovalRuntime({
     db: input.db,
     channel: input.channel,
@@ -117,19 +128,9 @@ export function createDeferredImBundleRuntime(input: {
     audit: input.audit,
     recoverDispatchingExecutions,
     recoverCompletionWake: input.recoverCompletionWake ?? input.onCompletionWake,
-    scheduleRetry: input.scheduleRetry
+    scheduleRetry: input.scheduleRetry,
+    ...(policyReevaluation ? { onFreshApprovalRequired: async () => { await policyReevaluation.processInvalidated() } } : {})
   })
-  const policyReevaluation = input.reauthorizePolicy ? createDeferredPolicyReevaluation({
-    db: input.db, channel: input.channel, todoStore: input.todoStore, envelopeStore,
-    notificationDelivery: input.notificationDelivery, enabled: input.isEnabled,
-    authorizationEpoch: input.getAuthorizationEpoch, ownerAuthorized: input.isOwnerAuthorized,
-    recheckTask: input.recheckTask,
-    ...(input.recheckAttachment ? { recheckAttachment: input.recheckAttachment } : {}),
-    reauthorize: input.reauthorizePolicy, recheck: ports.recheck,
-    dispatch: ports.dispatchClaimed,
-    maxParallel: input.maxParallel, ...(input.scheduleRetry ? { scheduleRetry: input.scheduleRetry } : {}),
-    wake: input.onCompletionWake ?? (() => undefined), audit: input.audit
-  }) : undefined
   const unsubscribePolicyChange = policyReevaluation
     ? deferredPolicyChangeRegistry.subscribe(input.channel, () => { void policyReevaluation.processInvalidated() }) : undefined
   const closeCoordinator = createDeferredApprovalCloseCoordinator({
