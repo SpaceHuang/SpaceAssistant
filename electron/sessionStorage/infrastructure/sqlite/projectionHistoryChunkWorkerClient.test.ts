@@ -108,7 +108,7 @@ describe('projection history chunk worker client', () => {
           sessionGeneration: session.generation, scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson: currentSourceIdentityJson,
           connectionEpoch: 1, processGeneration: 1, rebuildToken: 'worker-token' },
         { afterSessionSequence: 1, maxRows: 1, maxBytes: 512,
-          staging: { root: stageRoot, tempLocator } }, {
+          staging: { root: stageRoot, tempLocator, tempLocators: Array.from({ length: 15 }, () => `.projection-${randomUUID()}.tmp`) } }, {
           workerPath: path.join(process.cwd(), 'electron/sessionStorage/infrastructure/sqlite/projectionHistoryChunkWorker.ts'), timeoutMs: 5000,
         })
         expect(staged).toMatchObject({ kind: 'staged-chunk', afterSessionSequence: 1, nextSessionSequence: 2,
@@ -118,7 +118,15 @@ describe('projection history chunk worker client', () => {
         const bytes = await fs.readFile(path.join(stageRoot, tempLocator))
         expect(bytes.byteLength).toBe(staged.stagedBlob.byteLength)
         expect(createHash('sha256').update(bytes).digest('hex')).toBe(staged.stagedBlob.payloadDigest)
-        expect(JSON.parse(bytes.toString('utf8'))).toMatchObject({ events: [{ eventId: 'worker-large-event' }], messageFacts: [] })
+        const manifest = JSON.parse(bytes.toString('utf8'))
+        expect(manifest).toMatchObject({ kind: 'segmented-history-event', event: { eventId: 'worker-large-event' }, messageCount: 1 })
+        expect(staged.stagedSegments).toHaveLength(manifest.messageSegments.length)
+        for (const segment of staged.stagedSegments) {
+          const segmentBytes = await fs.readFile(path.join(stageRoot, segment.tempLocator))
+          expect(segmentBytes.byteLength).toBe(segment.byteLength)
+          expect(createHash('sha256').update(segmentBytes).digest('hex')).toBe(segment.payloadDigest)
+          expect(JSON.parse(`[${segmentBytes.toString('utf8').slice(1, -1)}]`)).toHaveLength(1)
+        }
       } finally { await fs.rm(stageRoot, { recursive: true, force: true }) }
     } finally { temp.cleanup() }
   }, 15_000)

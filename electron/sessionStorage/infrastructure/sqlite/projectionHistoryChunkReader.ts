@@ -22,6 +22,15 @@ type ProjectionMessageFactHeaderRow = {
   content_storage_state: ProjectionMessageFact['contentStorageState']; write_mode: string | null; stored_content_byte_length: number
 }
 type ProjectionMessageFactContentRow = { id: string; content: string }
+type LargeContextEventCapture = Readonly<{
+  messageCount: number
+  requiredUserByteLength: number | null
+  messages: readonly Readonly<{ message_index: number; message_json: string }>[]
+  requiredUserJson?: string
+}>
+type LargeContextStageRequest = Readonly<{ kind: 'stage-large-context-event'; row: ProjectionHistoryEventRow; watermark: number }>
+type RawHistoryRead = Readonly<{ kind: 'raw-history-read'; rows: readonly Readonly<{ row: ProjectionHistoryEventRow; payloadJson: string }>[];
+  watermark: number; nextSessionSequence: number; hasMore: boolean }>
 
 const MAX_CHUNK_ROWS = 200
 const MAX_CHUNK_BYTES = 256 * 1024
@@ -50,7 +59,10 @@ export function readProjectionHistoryChunk(
     db = openSqliteDatabaseReadOnly(permit.dbPath)
     const conn = getDbConnection(db)
     const snapshotStartedAt = performance.now()
-    const result: ProjectionHistoryChunkResult = runInTransaction(conn, () => {
+    const finalizeStaging: Array<() => void> = []
+    let result!: ProjectionHistoryChunkResult | LargeContextStageRequest | RawHistoryRead
+    try {
+      result = runInTransaction(conn, () => {
       const sourceIdentityJson = readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration)
       if (sourceIdentityJson !== permit.sourceIdentityJson) return { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
       let source: { historyWatermark?: unknown }
@@ -61,7 +73,7 @@ export function readProjectionHistoryChunk(
         ? source.historyWatermark[0] as number : 0
       if (input.afterSessionSequence > watermark) return { kind: 'cursor-invalid', permit, afterSessionSequence: input.afterSessionSequence }
 
-      const events: ProjectionHistoryChunkEvent[] = []
+      const rawEvents: Array<{ row: ProjectionHistoryEventRow; payloadJson: string }> = []
       let byteLength = 0
       let nextSessionSequence = input.afterSessionSequence
       let hasMore = false
@@ -74,129 +86,149 @@ export function readProjectionHistoryChunk(
           permit.sessionId, permit.sessionId, input.afterSessionSequence, input.maxRows + 1
         ) as Iterable<ProjectionHistoryEventRow>
       for (const row of rows) {
-        if (events.length >= input.maxRows) { hasMore = true; break }
+        if (rawEvents.length >= input.maxRows) { hasMore = true; break }
         const storedPayloadBytes = Number(row.payload_byte_length)
-        if (events.length > 0 && byteLength + storedPayloadBytes > input.maxBytes) { hasMore = true; break }
+        if (rawEvents.length > 0 && byteLength + storedPayloadBytes > input.maxBytes) { hasMore = true; break }
         if (row.session_seq !== nextSessionSequence + 1 || row.commit_order < 1) {
           return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'history-order-invalid' }
         }
         if (storedPayloadBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) {
-          if (input.staging && (row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted') &&
-            events.length === 0) {
-            const staged = stageOversizedContextEvent(conn, permit, input, row, watermark)
-            if (staged) return staged
+          if (input.staging && (row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted') && rawEvents.length === 0) {
+            return { kind: 'stage-large-context-event', row, watermark }
           }
           return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
             eventSequence: row.session_seq, observedByteLength: storedPayloadBytes, observedEventRows: 1,
             reason: 'oversized-event-exceeds-staging-budget' }
         }
-        if (storedPayloadBytes > input.maxBytes && input.staging && events.length === 0 &&
+        if (storedPayloadBytes > input.maxBytes && input.staging && rawEvents.length === 0 &&
           (row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')) {
-          const staged = stageOversizedContextEvent(conn, permit, input, row, watermark)
-          if (staged) return staged
+          return { kind: 'stage-large-context-event', row, watermark }
         }
-        if (storedPayloadBytes > input.maxBytes && !input.allowOversizedChunk) {
-          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
-            eventSequence: row.session_seq, observedByteLength: storedPayloadBytes, observedEventRows: 1 }
-        }
+        if (storedPayloadBytes > input.maxBytes && !input.allowOversizedChunk) return { kind: 'deferred-large', permit,
+          afterSessionSequence: input.afterSessionSequence, eventSequence: row.session_seq,
+          observedByteLength: storedPayloadBytes, observedEventRows: 1 }
         const storedPayload = conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=? AND session_id=?')
           .get(row.event_id, permit.sessionId) as { payload_json: string } | undefined
-        if (!storedPayload || Buffer.byteLength(storedPayload.payload_json, 'utf8') !== storedPayloadBytes) {
-          return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'projection-history-payload-changed' }
-        }
-        let parsedPayload: unknown
-        try { parsedPayload = JSON.parse(storedPayload.payload_json) }
-        catch {
-          return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'projection-history-payload-invalid' }
-        }
-        const spillDescriptors = collectSpillDescriptorsStrict(parsedPayload)
-        const expandedPayloadBytes = storedPayloadBytes + spillDescriptors.reduce((total, descriptor) => total + descriptor.byteLength * 6, 0)
-        if (events.length > 0 && byteLength + expandedPayloadBytes > input.maxBytes) { hasMore = true; break }
-        if (expandedPayloadBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) {
-          if (input.staging && events.length === 0 &&
-            (row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')) {
-            const staged = stageOversizedContextEvent(conn, permit, input, row, watermark)
-            if (staged) return staged
-          }
-          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
-            eventSequence: row.session_seq, observedByteLength: expandedPayloadBytes, observedEventRows: 1,
-            reason: 'oversized-event-exceeds-staging-budget' }
-        }
-        if (expandedPayloadBytes > input.maxBytes && !input.allowOversizedChunk) {
-          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
-            eventSequence: row.session_seq, observedByteLength: expandedPayloadBytes, observedEventRows: 1 }
-        }
-        let payloadJson: string
-        try {
-          payloadJson = JSON.stringify(hydrateSourceTruthSpills(parsedPayload, path.join(path.dirname(permit.dbPath), 'spill')))
-        } catch (error) {
-          return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence,
-            reason: error instanceof Error ? error.message : 'projection-spill-unavailable' }
-        }
-        const event: ProjectionHistoryChunkEvent = {
-          invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id,
-          idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version,
-          kind: row.kind, payloadJson, sessionSequence: row.session_seq,
-          commitOrder: row.commit_order, createdAt: row.created_at,
-        }
-        const eventBytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
-        if (eventBytes > input.maxBytes && events.length === 0 && !input.allowOversizedChunk) {
-          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
-            eventSequence: row.session_seq, observedByteLength: eventBytes, observedEventRows: 1 }
-        }
-        if (eventBytes > MAX_STAGED_SOURCE_CHUNK_BYTES && events.length === 0) {
-          return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
-            eventSequence: row.session_seq, observedByteLength: eventBytes, observedEventRows: 1,
-            reason: 'oversized-event-exceeds-staging-budget' }
-        }
-        if (events.length >= input.maxRows || (events.length > 0 && byteLength + eventBytes > input.maxBytes)) { hasMore = true; break }
-        events.push(event)
-        byteLength += eventBytes
+        if (!storedPayload || Buffer.byteLength(storedPayload.payload_json, 'utf8') !== storedPayloadBytes) return {
+          kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'projection-history-payload-changed' }
+        rawEvents.push({ row, payloadJson: storedPayload.payload_json })
+        byteLength += storedPayloadBytes
         nextSessionSequence = row.session_seq
       }
-      if (!events.length) return input.afterSessionSequence < watermark
+      if (!rawEvents.length) return input.afterSessionSequence < watermark
         ? { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence, reason: 'history-order-invalid' }
         : { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
       if (nextSessionSequence < watermark) hasMore = true
-      const messageIds = [...new Set(events.flatMap(referencedMessageIds))]
-      const messageFacts: ProjectionMessageFact[] = []
-      for (let start = 0; start < messageIds.length; start += 400) {
-        const ids = messageIds.slice(start, start + 400)
-        const rows = conn.prepare(`SELECT messages.id,messages.role,messages.timestamp,messages.sequence,messages.queue_scope,
-          messages.content_storage_state,length(CAST(messages.content AS BLOB)) AS stored_content_byte_length,cutover.write_mode
-          FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
-          WHERE messages.session_id=? AND messages.id IN (${ids.map(() => '?').join(',')}) ORDER BY messages.sequence ASC`)
-          .all(permit.sessionId, ...ids) as ProjectionMessageFactHeaderRow[]
-        const headers = rows.map((row) => Object.freeze({ id: row.id, role: row.role, timestamp: row.timestamp,
-          sequence: row.sequence, queueScope: row.queue_scope, contentStorageState: row.content_storage_state,
-          writeMode: row.write_mode, storedContent: '' }))
-        const metadataBytes = Buffer.byteLength(JSON.stringify(headers), 'utf8')
-        const storedContentBytes = rows.reduce((total, row) => total + Number(row.stored_content_byte_length), 0)
-        // Six bytes per source byte is a conservative upper bound for JSON string escaping.
-        const expandedFactsBytes = metadataBytes + storedContentBytes * 6
-        const estimatedChunkBytes = byteLength + expandedFactsBytes
-        if (estimatedChunkBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) return { kind: 'deferred-large', permit,
-          afterSessionSequence: input.afterSessionSequence, eventSequence: events[0]!.sessionSequence,
-          observedByteLength: estimatedChunkBytes, observedEventRows: events.length,
-          reason: 'oversized-source-chunk-exceeds-staging-budget' }
-        if (estimatedChunkBytes > input.maxBytes && !input.allowOversizedChunk) return { kind: 'deferred-large', permit,
-          afterSessionSequence: input.afterSessionSequence, eventSequence: events[0]!.sessionSequence,
-          observedByteLength: estimatedChunkBytes, observedEventRows: events.length }
-        const contentRows = conn.prepare(`SELECT id,content FROM messages WHERE session_id=? AND id IN (${ids.map(() => '?').join(',')})`)
-          .all(permit.sessionId, ...ids) as ProjectionMessageFactContentRow[]
-        const storedContentById = new Map(contentRows.map(({ id, content }) => [id, content]))
-        messageFacts.push(...rows.map((row, index) => Object.freeze({ ...headers[index]!,
-          storedContent: storedContentById.get(row.id) ?? '' })))
+      return { kind: 'raw-history-read', rows: Object.freeze(rawEvents.map((item) => Object.freeze(item))), watermark,
+        nextSessionSequence, hasMore }
+      })
+      if (result.kind === 'raw-history-read') {
+        const captured = result
+        const events: ProjectionHistoryChunkEvent[] = []
+        let eventBytes = 0
+        for (const item of captured.rows) {
+          let parsed: unknown
+          try { parsed = JSON.parse(item.payloadJson) } catch {
+            result = { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence,
+              reason: 'projection-history-payload-invalid' }; break
+          }
+          try {
+            const spillDescriptors = collectSpillDescriptorsStrict(parsed)
+            const expanded = Buffer.byteLength(item.payloadJson, 'utf8') + spillDescriptors.reduce((sum, d) => sum + d.byteLength * 6, 0)
+            if (expanded > MAX_STAGED_SOURCE_CHUNK_BYTES) {
+              result = { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+                eventSequence: item.row.session_seq, observedByteLength: expanded, observedEventRows: 1,
+                reason: 'oversized-event-exceeds-staging-budget' }; break
+            }
+            const payloadJson = JSON.stringify(hydrateSourceTruthSpills(parsed, path.join(path.dirname(permit.dbPath), 'spill')))
+            const event: ProjectionHistoryChunkEvent = { invocationId: item.row.invocation_id, sequence: item.row.sequence,
+              eventId: item.row.event_id, idempotencyKey: item.row.idempotency_key, turnId: item.row.turn_id,
+              schemaVersion: item.row.schema_version, kind: item.row.kind, payloadJson, sessionSequence: item.row.session_seq,
+              commitOrder: item.row.commit_order, createdAt: item.row.created_at }
+            const size = Buffer.byteLength(JSON.stringify(event), 'utf8')
+            if (size > input.maxBytes && !input.allowOversizedChunk) {
+              result = { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+                eventSequence: item.row.session_seq, observedByteLength: size, observedEventRows: 1 }; break
+            }
+            if (size > MAX_STAGED_SOURCE_CHUNK_BYTES) {
+              result = { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+                eventSequence: item.row.session_seq, observedByteLength: size, observedEventRows: 1,
+                reason: 'oversized-event-exceeds-staging-budget' }; break
+            }
+            events.push(event); eventBytes += size
+          } catch (error) {
+            result = { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence,
+              reason: error instanceof Error ? error.message : 'projection-spill-unavailable' }; break
+          }
+        }
+        if (result.kind === 'raw-history-read') {
+          const ids = [...new Set(events.flatMap(referencedMessageIds))]
+          const factsSnapshot = runInTransaction(conn, () => {
+            if (readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration) !== permit.sourceIdentityJson) return 'source-drift' as const
+            const headers: ProjectionMessageFactHeaderRow[] = []
+            for (let start = 0; start < ids.length; start += 400) {
+              const batch = ids.slice(start, start + 400), marks = batch.map(() => '?').join(',')
+              headers.push(...conn.prepare(`SELECT messages.id,messages.role,messages.timestamp,messages.sequence,messages.queue_scope,
+                messages.content_storage_state,length(CAST(messages.content AS BLOB)) AS stored_content_byte_length,cutover.write_mode
+                FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
+                WHERE messages.session_id=? AND messages.id IN (${marks}) ORDER BY messages.sequence ASC`)
+                .all(permit.sessionId, ...batch) as ProjectionMessageFactHeaderRow[])
+            }
+            const metadata = headers.map((row) => ({ id: row.id, role: row.role, timestamp: row.timestamp,
+              sequence: row.sequence, queueScope: row.queue_scope, contentStorageState: row.content_storage_state,
+              writeMode: row.write_mode, storedContent: '' }))
+            const estimatedBytes = eventBytes + Buffer.byteLength(JSON.stringify(metadata), 'utf8') +
+              headers.reduce((sum, row) => sum + Number(row.stored_content_byte_length) * 6, 0)
+            if (estimatedBytes > MAX_STAGED_SOURCE_CHUNK_BYTES || (estimatedBytes > input.maxBytes && !input.allowOversizedChunk)) {
+              return { kind: 'too-large' as const, headers, estimatedBytes }
+            }
+            const contents: ProjectionMessageFactContentRow[] = []
+            for (let start = 0; start < ids.length; start += 400) {
+              const batch = ids.slice(start, start + 400), marks = batch.map(() => '?').join(',')
+              contents.push(...conn.prepare(`SELECT id,content FROM messages WHERE session_id=? AND id IN (${marks})`)
+                .all(permit.sessionId, ...batch) as ProjectionMessageFactContentRow[])
+            }
+            return { kind: 'facts' as const, headers, contents, estimatedBytes }
+          })
+          if (factsSnapshot === 'source-drift') result = { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
+          else if (factsSnapshot.kind === 'too-large') result = { kind: 'deferred-large', permit,
+            afterSessionSequence: input.afterSessionSequence, eventSequence: events[0]!.sessionSequence,
+            observedByteLength: factsSnapshot.estimatedBytes, observedEventRows: events.length,
+            ...(factsSnapshot.estimatedBytes > MAX_STAGED_SOURCE_CHUNK_BYTES ? { reason: 'oversized-source-chunk-exceeds-staging-budget' } : {}) }
+          else {
+            const contentById = new Map(factsSnapshot.contents.map(({ id, content }) => [id, content]))
+            const messageFacts = factsSnapshot.headers.map((row) => Object.freeze({ id: row.id, role: row.role,
+              timestamp: row.timestamp, sequence: row.sequence, queueScope: row.queue_scope,
+              contentStorageState: row.content_storage_state, writeMode: row.write_mode, storedContent: contentById.get(row.id) ?? '' }))
+            const totalBytes = eventBytes + Buffer.byteLength(JSON.stringify(messageFacts), 'utf8')
+            if (totalBytes > MAX_STAGED_SOURCE_CHUNK_BYTES || (totalBytes > input.maxBytes && !input.allowOversizedChunk)) {
+              result = { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+                eventSequence: events[0]!.sessionSequence, observedByteLength: totalBytes, observedEventRows: events.length,
+                ...(totalBytes > MAX_STAGED_SOURCE_CHUNK_BYTES ? { reason: 'oversized-source-chunk-exceeds-staging-budget' } : {}) }
+            } else result = { kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence,
+              nextSessionSequence: captured.nextSessionSequence, events: Object.freeze(events), messageFacts: Object.freeze(messageFacts),
+              byteLength: totalBytes, hasMore: captured.hasMore }
+          }
+        }
       }
-      const totalBytes = byteLength + Buffer.byteLength(JSON.stringify(messageFacts), 'utf8')
-      if (totalBytes > input.maxBytes && !input.allowOversizedChunk) return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
-        eventSequence: events[0]!.sessionSequence, observedByteLength: totalBytes, observedEventRows: events.length }
-      if (totalBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) return { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
-        eventSequence: events[0]!.sessionSequence, observedByteLength: totalBytes, observedEventRows: events.length,
-        reason: 'oversized-source-chunk-exceeds-staging-budget' }
-      return { kind: 'chunk', permit, afterSessionSequence: input.afterSessionSequence,
-        nextSessionSequence, events: Object.freeze(events), messageFacts: Object.freeze(messageFacts), byteLength: totalBytes, hasMore }
-    })
+      if (result.kind === 'stage-large-context-event') {
+        const stagedRequest = result
+        const capture = runInTransaction(conn, () => readLargeContextEventCapture(conn, permit, stagedRequest.row))
+        if (capture === 'source-drift') result = { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
+        else if (capture) {
+          result = stageOversizedContextEvent(conn, permit, input, (finalize) => finalizeStaging.push(finalize),
+            stagedRequest.row, stagedRequest.watermark, capture) ?? {
+              kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+              eventSequence: stagedRequest.row.session_seq, observedByteLength: stagedRequest.row.payload_byte_length,
+              observedEventRows: 1, reason: 'oversized-event-exceeds-staging-budget'
+            }
+        } else result = { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
+          eventSequence: stagedRequest.row.session_seq, observedByteLength: stagedRequest.row.payload_byte_length,
+          observedEventRows: 1, reason: 'oversized-event-exceeds-staging-budget' }
+      }
+    } finally {
+      for (const finalize of finalizeStaging) finalize()
+    }
     return { ...result, snapshotDurationMs: Math.max(0, performance.now() - snapshotStartedAt) }
   } catch (error) {
     return { kind: 'unavailable', permit, afterSessionSequence: input.afterSessionSequence,
@@ -210,24 +242,49 @@ type SegmentedEventPart = Readonly<{ kind: 'messages' | 'facts' | 'required-user
   payloadDigest: string; itemCount: number; encoding?: 'json-item-fragment'; firstItemIndex?: number;
   fragmentIndex?: number; fragmentCount?: number }>
 
-/** Stage a large canonical context event as bounded message/fact arrays without materializing its JSON array. */
-function stageOversizedContextEvent(
-  conn: ReturnType<typeof getDbConnection>, permit: ProjectionHistoryChunkPermit,
-  input: ProjectionHistoryChunkReadInput,
-  row: ProjectionHistoryEventRow, watermark: number
-): ProjectionHistoryChunkResult | undefined {
-  const staging = input.staging
-  if (!staging || row.payload_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES || !Number.isSafeInteger(row.payload_byte_length)) return undefined
-  const eventShape = conn.prepare(`SELECT json_type(payload_json,'$.messages') AS messages_type,
+/** Copy raw JSON item strings and event metadata inside a short, read-only source snapshot. */
+function readLargeContextEventCapture(
+  conn: ReturnType<typeof getDbConnection>, permit: ProjectionHistoryChunkPermit, row: ProjectionHistoryEventRow
+): LargeContextEventCapture | 'source-drift' | undefined {
+  if (readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration) !== permit.sourceIdentityJson) return 'source-drift'
+  if (!Number.isSafeInteger(row.payload_byte_length) || row.payload_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
+  const shape = conn.prepare(`SELECT json_type(payload_json,'$.messages') AS messages_type,
     json_array_length(payload_json,'$.messages') AS message_count,
     length(CAST(json_extract(payload_json,'$.requiredUserMessage') AS BLOB)) AS required_user_byte_length,
     EXISTS(SELECT 1 FROM json_each(agent_history_events.payload_json) field
       WHERE field.key NOT IN ('messages','requiredUserMessage')) AS has_unsupported_fields
     FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
     { messages_type: string | null; message_count: number | null; required_user_byte_length: number | null; has_unsupported_fields: number } | undefined
-  if (eventShape?.messages_type !== 'array' || !Number.isSafeInteger(eventShape.message_count) || (eventShape.message_count ?? 0) < 1) return undefined
-  if (eventShape.has_unsupported_fields) return undefined
-  if (eventShape.required_user_byte_length !== null && eventShape.required_user_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
+  if (shape?.messages_type !== 'array' || !Number.isSafeInteger(shape.message_count) || (shape.message_count ?? 0) < 1 ||
+    shape.has_unsupported_fields || (shape.required_user_byte_length !== null &&
+      shape.required_user_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES)) return undefined
+  const messages = conn.prepare(`SELECT CAST(item.key AS INTEGER) AS message_index,item.value AS message_json
+    FROM agent_history_events event,json_each(event.payload_json,'$.messages') item
+    WHERE event.event_id=? AND event.session_id=? ORDER BY CAST(item.key AS INTEGER)`).all(row.event_id, permit.sessionId) as
+    Array<{ message_index: number; message_json: string }>
+  if (messages.length !== shape.message_count || messages.reduce((total, item) => total + Buffer.byteLength(item.message_json, 'utf8'), 0) > MAX_SEGMENTED_HISTORY_EVENT_BYTES) {
+    return undefined
+  }
+  let requiredUserJson: string | undefined
+  if (shape.required_user_byte_length !== null) {
+    const required = conn.prepare(`SELECT json_extract(payload_json,'$.requiredUserMessage') AS required_user_json
+      FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
+      { required_user_json: string | null } | undefined
+    if (typeof required?.required_user_json !== 'string') return undefined
+    requiredUserJson = required.required_user_json
+  }
+  return Object.freeze({ messageCount: shape.message_count!, requiredUserByteLength: shape.required_user_byte_length,
+    messages: Object.freeze(messages.map((item) => Object.freeze(item))), ...(requiredUserJson !== undefined ? { requiredUserJson } : {}) })
+}
+
+/** Stage a large canonical context event as bounded message/fact arrays without materializing its JSON array. */
+function stageOversizedContextEvent(
+  conn: ReturnType<typeof getDbConnection>, permit: ProjectionHistoryChunkPermit,
+  input: ProjectionHistoryChunkReadInput, registerFinalizer: (finalize: () => void) => void,
+  row: ProjectionHistoryEventRow, watermark: number, capture: LargeContextEventCapture
+): ProjectionHistoryChunkResult | undefined {
+  const staging = input.staging
+  if (!staging || row.payload_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES || !Number.isSafeInteger(row.payload_byte_length)) return undefined
 
   const tempLocators = [staging.tempLocator, ...(staging.tempLocators ?? [])]
   if (tempLocators.length < 2 || tempLocators.length > MAX_HISTORY_EVENT_SEGMENTS + 1 ||
@@ -235,31 +292,30 @@ function stageOversizedContextEvent(
       !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(locator) || path.basename(locator) !== locator)) return undefined
   const availableLocators = tempLocators.slice(1)
   const writtenSegments: SegmentedEventPart[] = []
-  let current: { kind: 'messages' | 'facts'; locator: string; tempLocator: string; fd: number; hash: ReturnType<typeof createHash>;
+  const stagedFiles: Array<{ tempLocator: string; bytes: Buffer }> = []
+  let current: { kind: 'messages' | 'facts'; locator: string; tempLocator: string; parts: Buffer[]; hash: ReturnType<typeof createHash>;
     byteLength: number; itemCount: number; firstItemIndex: number } | undefined
   const itemCounts: Record<'messages' | 'facts', number> = { messages: 0, facts: 0 }
   const closeCurrent = () => {
     if (!current) return
     const closing = Buffer.from(']')
-    fs.writeSync(current.fd, closing)
+    current.parts.push(closing)
     current.hash.update(closing)
     current.byteLength += 1
-    fs.fsyncSync(current.fd)
-    fs.closeSync(current.fd)
+    const bytes = Buffer.concat(current.parts)
     writtenSegments.push({ kind: current.kind, tempLocator: current.tempLocator, locator: current.locator, byteLength: current.byteLength,
       payloadDigest: current.hash.digest('hex'), itemCount: current.itemCount, firstItemIndex: current.firstItemIndex })
+    stagedFiles.push({ tempLocator: current.tempLocator, bytes })
     current = undefined
   }
   const beginCurrent = (kind: 'messages' | 'facts') => {
     const tempLocator = availableLocators.shift()
     if (!tempLocator) throw new Error('PROJECTION_HISTORY_SEGMENT_LIMIT_EXCEEDED')
     const locator = tempLocator.slice(1, -4) + '.blob'
-    const fd = fs.openSync(path.join(staging.root, tempLocator), 'wx', 0o600)
     const hash = createHash('sha256')
     const opening = Buffer.from('[')
-    fs.writeSync(fd, opening)
     hash.update(opening)
-    current = { kind, locator, tempLocator, fd, hash, byteLength: opening.byteLength, itemCount: 0, firstItemIndex: itemCounts[kind] }
+    current = { kind, locator, tempLocator, parts: [opening], hash, byteLength: opening.byteLength, itemCount: 0, firstItemIndex: itemCounts[kind] }
   }
   const appendFragmentedItem = (bytes: Buffer, kind: SegmentedEventPart['kind'], itemIndex: number): boolean => {
     if (bytes.byteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return false
@@ -270,9 +326,8 @@ function stageOversizedContextEvent(
       if (!tempLocator) return false
       const locator = tempLocator.slice(1, -4) + '.blob'
       const start = fragmentIndex * MAX_HISTORY_EVENT_SEGMENT_BYTES
-      const fragment = bytes.subarray(start, Math.min(bytes.byteLength, start + MAX_HISTORY_EVENT_SEGMENT_BYTES))
-      const fd = fs.openSync(path.join(staging.root, tempLocator), 'wx', 0o600)
-      try { fs.writeSync(fd, fragment); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+      const fragment = Buffer.from(bytes.subarray(start, Math.min(bytes.byteLength, start + MAX_HISTORY_EVENT_SEGMENT_BYTES)))
+      stagedFiles.push({ tempLocator, bytes: fragment })
       writtenSegments.push({ kind, encoding: 'json-item-fragment', tempLocator, locator,
         byteLength: fragment.byteLength, payloadDigest: createHash('sha256').update(fragment).digest('hex'),
         itemCount: 1, firstItemIndex: itemIndex, fragmentIndex, fragmentCount })
@@ -295,8 +350,8 @@ function stageOversizedContextEvent(
       try { beginCurrent(kind) } catch { return false }
     }
     const separator = current!.itemCount > 0 ? Buffer.from(',') : Buffer.alloc(0)
-    if (separator.byteLength) { fs.writeSync(current!.fd, separator); current!.hash.update(separator); current!.byteLength += 1 }
-    fs.writeSync(current!.fd, bytes)
+    if (separator.byteLength) { current!.parts.push(separator); current!.hash.update(separator); current!.byteLength += 1 }
+    current!.parts.push(bytes)
     current!.hash.update(bytes)
     current!.byteLength += bytes.byteLength
     current!.itemCount += 1
@@ -308,11 +363,7 @@ function stageOversizedContextEvent(
     let messageCount = 0
     let messageByteLength = 0
     const ids: string[] = []
-    const messages = conn.prepare(`SELECT CAST(item.key AS INTEGER) AS message_index,item.value AS message_json
-      FROM agent_history_events event,json_each(event.payload_json,'$.messages') item
-      WHERE event.event_id=? AND event.session_id=? ORDER BY CAST(item.key AS INTEGER)`).iterate(row.event_id, permit.sessionId) as
-      Iterable<{ message_index: number; message_json: string }>
-    for (const item of messages) {
+    for (const item of capture.messages) {
       if (item.message_index !== messageCount) return undefined
       let message: unknown
       try { message = JSON.parse(item.message_json) } catch { return undefined }
@@ -333,31 +384,41 @@ function stageOversizedContextEvent(
       messageCount += 1
     }
     closeCurrent()
-    if (messageCount !== eventShape.message_count || messageCount < 1) return undefined
+    if (messageCount !== capture.messageCount || messageCount < 1) return undefined
 
     const uniqueIds = [...new Set(ids)]
     let estimatedFactBytes = 0
     let factBytes = 0
     let factCount = 0
-    for (let start = 0; start < uniqueIds.length; start += 64) {
-      const batch = uniqueIds.slice(start, start + 64)
-      const headers = conn.prepare(`SELECT messages.id,messages.role,messages.timestamp,messages.sequence,messages.queue_scope,
-        messages.content_storage_state,length(CAST(messages.content AS BLOB)) AS stored_content_byte_length,cutover.write_mode
-        FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
-        WHERE messages.session_id=? AND messages.id IN (${batch.map(() => '?').join(',')}) ORDER BY messages.sequence ASC`)
-        .all(permit.sessionId, ...batch) as ProjectionMessageFactHeaderRow[]
+    const factCapture = runInTransaction(conn, () => {
+      if (readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration) !== permit.sourceIdentityJson) return 'source-drift' as const
+      const headers: ProjectionMessageFactHeaderRow[] = []
+      const contentRows: ProjectionMessageFactContentRow[] = []
+      for (let start = 0; start < uniqueIds.length; start += 64) {
+        const batch = uniqueIds.slice(start, start + 64)
+        headers.push(...conn.prepare(`SELECT messages.id,messages.role,messages.timestamp,messages.sequence,messages.queue_scope,
+          messages.content_storage_state,length(CAST(messages.content AS BLOB)) AS stored_content_byte_length,cutover.write_mode
+          FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
+          WHERE messages.session_id=? AND messages.id IN (${batch.map(() => '?').join(',')}) ORDER BY messages.sequence ASC`)
+          .all(permit.sessionId, ...batch) as ProjectionMessageFactHeaderRow[])
+        contentRows.push(...conn.prepare(`SELECT id,content FROM messages WHERE session_id=? AND id IN (${batch.map(() => '?').join(',')})`)
+          .all(permit.sessionId, ...batch) as ProjectionMessageFactContentRow[])
+      }
+      return { headers, contentRows }
+    })
+    if (factCapture === 'source-drift') return { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
+    const storedContentById = new Map(factCapture.contentRows.map(({ id, content }) => [id, content]))
+    for (let start = 0; start < factCapture.headers.length; start += 64) {
+      const headers = factCapture.headers.slice(start, start + 64)
       const metadata = headers.map((fact) => ({ id: fact.id, role: fact.role, timestamp: fact.timestamp,
         sequence: fact.sequence, queueScope: fact.queue_scope, contentStorageState: fact.content_storage_state,
         writeMode: fact.write_mode, storedContent: '' }))
       estimatedFactBytes += Buffer.byteLength(JSON.stringify(metadata), 'utf8') +
         headers.reduce((total, fact) => total + Number(fact.stored_content_byte_length), 0)
       if (estimatedFactBytes > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
-      const contentRows = conn.prepare(`SELECT id,content FROM messages WHERE session_id=? AND id IN (${batch.map(() => '?').join(',')})`)
-        .all(permit.sessionId, ...batch) as ProjectionMessageFactContentRow[]
-      const contentById = new Map(contentRows.map(({ id, content }) => [id, content]))
       const facts = headers.map((fact) => Object.freeze({ id: fact.id, role: fact.role, timestamp: fact.timestamp,
         sequence: fact.sequence, queueScope: fact.queue_scope, contentStorageState: fact.content_storage_state,
-        writeMode: fact.write_mode, storedContent: contentById.get(fact.id) ?? '' }))
+        writeMode: fact.write_mode, storedContent: storedContentById.get(fact.id) ?? '' }))
       for (const fact of facts) {
         const serialized = JSON.stringify(fact)
         if (!appendJsonItem(serialized, 'facts')) return undefined
@@ -369,13 +430,10 @@ function stageOversizedContextEvent(
     closeCurrent()
     let requiredUserMessage: unknown
     let requiredUserByteLength = 0
-    if (eventShape.required_user_byte_length !== null) {
+    if (capture.requiredUserByteLength !== null) {
       try {
-        const requiredRow = conn.prepare(`SELECT json_extract(payload_json,'$.requiredUserMessage') AS required_user_json
-          FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
-          { required_user_json: string | null } | undefined
-        if (typeof requiredRow?.required_user_json !== 'string') return undefined
-        const requiredValue = JSON.parse(requiredRow.required_user_json)
+        if (typeof capture.requiredUserJson !== 'string') return undefined
+        const requiredValue = JSON.parse(capture.requiredUserJson)
         const descriptorBytes = collectSpillDescriptorsStrict(requiredValue)
           .reduce((total, descriptor) => total + descriptor.byteLength, 0)
         if (descriptorBytes > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
@@ -413,9 +471,14 @@ function stageOversizedContextEvent(
     const rootBytes = Buffer.from(rootPayload, 'utf8')
     const sourceByteLength = messageByteLength + factBytes + requiredUserByteLength
     if (rootBytes.byteLength > MAX_STAGED_SOURCE_CHUNK_BYTES || sourceByteLength > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
-    const rootFd = fs.openSync(path.join(staging.root, staging.tempLocator), 'wx', 0o600)
-    try { fs.writeSync(rootFd, rootBytes); fs.fsyncSync(rootFd) } finally { fs.closeSync(rootFd) }
     const payloadDigest = createHash('sha256').update(rootBytes).digest('hex')
+    stagedFiles.push({ tempLocator: staging.tempLocator, bytes: rootBytes })
+    registerFinalizer(() => {
+      for (const file of stagedFiles) {
+        const fd = fs.openSync(path.join(staging.root, file.tempLocator), 'wx', 0o600)
+        try { fs.writeSync(fd, file.bytes); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+      }
+    })
     return { kind: 'staged-chunk', permit, afterSessionSequence: input.afterSessionSequence,
       nextSessionSequence: row.session_seq, rowCount: 1, sourceByteLength,
       hasMore: row.session_seq < watermark,
@@ -423,7 +486,7 @@ function stageOversizedContextEvent(
       stagedSegments: Object.freeze(writtenSegments.map((segment) => Object.freeze(segment))) }
   } finally {
     if (current) {
-      try { closeCurrent() } catch { try { fs.closeSync(current.fd) } catch { /* worker cleanup handles the partial stage */ } }
+      try { closeCurrent() } catch { /* partial in-memory stage is discarded by the worker owner */ }
     }
   }
 }
