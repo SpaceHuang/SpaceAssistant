@@ -260,6 +260,28 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
       return transition(todoId, 'dispatching', 'consumed', now)
     },
 
+    /** Reopen only a known pre-dispatch policy rejection so the same parked call can receive a fresh ask. */
+    requeueConsumedAfterPolicyChange(todoId: string, now = Date.now()): boolean {
+      const conn = liveConn()
+      return runInTransaction(conn, () => {
+        const todo = find(todoId)
+        if (!todo || todo.status !== 'consumed') return false
+        const updated = conn.prepare("UPDATE deferred_todos SET state='invalidated',updated_at=? WHERE todo_id=? AND state='consumed'")
+          .run(now, todoId)
+        if (Number(updated.changes) !== 1) return false
+        const policy = conn.prepare("UPDATE policy_deferred_todos SET status='invalidated' WHERE todo_id=? AND domain='im' AND status IN ('active','invalidated')")
+          .run(todoId)
+        if (Number(policy.changes) !== 1) throw new Error('DEFERRED_POLICY_REQUEUE_FENCE_MISSING')
+        if (todo.trackId) {
+          conn.prepare(`UPDATE remote_track_children SET state='invalidated',updated_at=?
+            WHERE track_id=? AND child_kind='async-todo' AND child_id=?`).run(now, todo.trackId, todoId)
+          conn.prepare('UPDATE remote_tracks SET version=version+1,updated_at=? WHERE track_id=?').run(now, todo.trackId)
+        }
+        db.save()
+        return true
+      })
+    },
+
     invalidate(todoId: string, now = Date.now()): boolean {
       return transition(todoId, 'pending', 'invalidated', now)
     },

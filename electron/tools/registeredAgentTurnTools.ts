@@ -114,6 +114,7 @@ export function createRegisteredAgentTurnTools(input: {
   toolExecution: ReturnType<typeof createPermitBoundToolExecutionPort<TurnToolCall, TurnToolResult>>
   executeDeferred(call: TurnToolCall, input: {
     confirmationReceipt: string
+    confirmationPolicyRevision?: string
     authorizeInitial?(initial: PermitBinding): Promise<{ kind: 'allow' } | { kind: 'deny'; reasonCode?: string }>
     authorize(initial: PermitBinding, recheck: PermitBinding): Promise<{ kind: 'allow'; permitId: string } | { kind: 'deny'; reasonCode?: string }>
   }): Promise<TurnToolResult>
@@ -337,6 +338,7 @@ export function createRegisteredAgentTurnTools(input: {
 
   const executeDeferred = async (call: TurnToolCall, request: {
     confirmationReceipt: string
+    confirmationPolicyRevision?: string
     authorizeInitial?(initial: PermitBinding): Promise<{ kind: 'allow' } | { kind: 'deny'; reasonCode?: string }>
     authorize(initial: PermitBinding, recheck: PermitBinding): Promise<{ kind: 'allow'; permitId: string } | { kind: 'deny'; reasonCode?: string }>
   }): Promise<TurnToolResult> => {
@@ -347,7 +349,10 @@ export function createRegisteredAgentTurnTools(input: {
         const initial = await prepareTool(call, { kind: 'initial' })
       if (request.authorizeInitial) {
         const initialAuthorization = await request.authorizeInitial(initial)
-        if (initialAuthorization.kind !== 'allow') throw new Error(`DEFERRED_INITIAL_POLICY_DENIED:${initialAuthorization.reasonCode ?? 'POLICY_DENY'}`)
+        if (initialAuthorization.kind !== 'allow') {
+          if (initialAuthorization.reasonCode === 'FRESH_APPROVAL_REQUIRED') throw new Error('FRESH_APPROVAL_REQUIRED')
+          throw new Error(`DEFERRED_INITIAL_POLICY_DENIED:${initialAuthorization.reasonCode ?? 'POLICY_DENY'}`)
+        }
       }
         const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt, answerer: 'user' } })
         if (!sameRecheckSubject(initial, recheck)) throw new Error('DEFERRED_RECHECK_BINDING_CHANGED')

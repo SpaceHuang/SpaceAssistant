@@ -33,7 +33,7 @@ export function createDeferredImDispatchPorts(input: {
   isOwnerAuthorized(todo: DeferredTodoRecord): boolean
   recheckTask(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean
   recheckAttachment?(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean | Promise<boolean>
-  dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string }>
+  dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string; failureCode?: string }>
 }) {
   const recheck = async (_request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope) => {
     const context = envelope.executionContext

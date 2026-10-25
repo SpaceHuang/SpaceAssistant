@@ -132,8 +132,10 @@ export async function filterBuiltinToolsForApiWithApproval(args: {
   rules?: PolicyRule[]
   resolveRules?: () => PolicyRule[]
   resolveAuthorizationVersion?: () => string
+  subscribePolicyChanges?: (listener: () => void) => () => void
+  locale?: import('../src/shared/locale').AppLocale
   terminalSnapshot?: TerminalProfileSnapshot
-  requestApproval: (request: { lane: ExecutionLane; toolName: string; ruleId: string }) => Promise<boolean>
+  requestApproval: (request: { lane: ExecutionLane; toolName: string; ruleId: string }, signal?: AbortSignal) => Promise<boolean>
 }): Promise<typeof BUILTIN_TOOL_DEFINITIONS> {
   const lane: ExecutionLane = args.remoteContext ? args.remoteContext.source === 'feishu' ? 'feishu' : 'wechat' : 'desktop'
   const candidates = filterBuiltinToolsForApi(args.cfg, args.feishu, args.browserConfig, args.remoteContext,
@@ -155,19 +157,40 @@ export async function filterBuiltinToolsForApiWithApproval(args: {
     if (decision.action !== 'ask' || !decision.ruleId) continue
     let pending = decision
     for (let attempt = 0; attempt < 4 && pending.action === 'ask' && pending.ruleId; attempt += 1) {
-      let approved = false
       const approvedRules = JSON.stringify(currentRules ?? [])
       const approvedVersion = args.resolveAuthorizationVersion?.()
-      try { approved = await args.requestApproval({ lane, toolName: tool.name, ruleId: pending.ruleId }) } catch { approved = false }
-      // Policy phase: an exposure prompt answer is valid only against the snapshot/version it opened on.
-      currentRules = args.resolveRules?.() ?? args.rules
-      const currentVersion = args.resolveAuthorizationVersion?.()
-      if (JSON.stringify(currentRules ?? []) !== approvedRules || approvedVersion !== currentVersion) {
+      let unsubscribe: () => void = () => undefined
+      let changed = false
+      const controller = new AbortController()
+      const change = new Promise<'changed'>((resolve) => {
+        if (!args.subscribePolicyChanges) return
+        unsubscribe = args.subscribePolicyChanges(() => { changed = true; controller.abort(); resolve('changed') })
+      })
+      const rulesAfterSubscribe = args.resolveRules?.() ?? args.rules
+      const versionAfterSubscribe = args.resolveAuthorizationVersion?.()
+      if (JSON.stringify(rulesAfterSubscribe ?? []) !== approvedRules || versionAfterSubscribe !== approvedVersion) {
+        unsubscribe()
+        currentRules = rulesAfterSubscribe
         pending = evaluateExposure({ toolName: tool.name, lane, rules: currentRules })
         if (pending.allowed) { allowed.add(tool.name); break }
         if (pending.action === 'deny' || pending.action !== 'ask' || !pending.ruleId) break
         continue
       }
+      let outcome: boolean | 'changed'
+      try { outcome = args.subscribePolicyChanges
+        ? await Promise.race([args.requestApproval({ lane, toolName: tool.name, ruleId: pending.ruleId }, controller.signal).catch(() => false), change])
+        : await args.requestApproval({ lane, toolName: tool.name, ruleId: pending.ruleId }, controller.signal).catch(() => false)
+      } finally { unsubscribe() }
+      // Policy phase: an exposure prompt answer is valid only against the snapshot/version it opened on.
+      currentRules = args.resolveRules?.() ?? args.rules
+      const currentVersion = args.resolveAuthorizationVersion?.()
+      if (outcome === 'changed' || changed || JSON.stringify(currentRules ?? []) !== approvedRules || approvedVersion !== currentVersion) {
+        pending = evaluateExposure({ toolName: tool.name, lane, rules: currentRules })
+        if (pending.allowed) { allowed.add(tool.name); break }
+        if (pending.action === 'deny' || pending.action !== 'ask' || !pending.ruleId) break
+        continue
+      }
+      const approved = outcome
       if (!approved) break
       const permit = issueExposureApprovalPermit({ ruleId: pending.ruleId, toolName: tool.name, lane })
       if (evaluateExposure({ toolName: tool.name, lane, rules: currentRules, approvedExposure: permit }).allowed) allowed.add(tool.name)

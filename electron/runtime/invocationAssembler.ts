@@ -345,7 +345,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       policy: ReturnType<typeof createAgentSdkSafetyPolicy>
       confirmation: ReturnType<typeof createAgentSdkConfirmationPort>
       host: ReturnType<typeof createHostedAgentTurnHost>
-      executeDeferred(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string): Promise<unknown>
+      executeDeferred(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string, confirmationPolicyRevision?: string): Promise<unknown>
       dispose(): Promise<void>
     }
   }
@@ -1574,7 +1574,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         }) } : {}),
         resolveRegisteredToolName: resolveToolName
       })
-      const executeDeferred = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string) => {
+      const executeDeferred = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string, confirmationPolicyRevision?: string) => {
         const capability = resolveToolName(call.toolName)
         if (!registry.get(capability) || !input.authorizedToolNames.has(capability)) throw new Error('DEFERRED_TOOL_NOT_AUTHORIZED')
         const capabilities = new CapabilityRegistry()
@@ -1585,9 +1585,17 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         try {
           return await registeredTools.executeDeferred(call, {
             confirmationReceipt,
+            confirmationPolicyRevision,
             authorizeInitial: async (initial) => {
               const initialDecision = await safetyGate.evaluate(initial)
               if (initialDecision.kind === 'ask') {
+                const binding = currentPolicyBinding()
+                const currentRevision = binding && !('invalid' in binding) && binding.domain === 'im'
+                  ? `${binding.policyBehaviorVersion}:${binding.revision}:${binding.epoch}`
+                  : undefined
+                if (!currentRevision || confirmationPolicyRevision !== currentRevision || confirmationReceipt.startsWith('policy-recheck:')) {
+                  return { kind: 'deny', reasonCode: 'FRESH_APPROVAL_REQUIRED' }
+                }
                 policy.markConfirmed(call, 'user')
                 return { kind: 'allow' }
               }

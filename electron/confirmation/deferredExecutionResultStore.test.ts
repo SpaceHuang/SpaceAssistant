@@ -60,6 +60,28 @@ describe('deferred execution result recovery', () => {
     db.close()
   })
 
+  it('abandons only an empty dispatch reservation after a proven pre-dispatch rejection', () => {
+    const db = createMemoryAppDb()
+    const store = createDeferredExecutionResultStore(db)
+    store.beginDispatch({ todoId: 'todo-stale-policy', invocationId: 'invocation-stale-policy', dispatchKey: 'dispatch-stale-policy' })
+    expect(store.abandonKnownNotDispatched('todo-stale-policy', 'wrong-key')).toBe(false)
+    expect(store.abandonKnownNotDispatched('todo-stale-policy', 'dispatch-stale-policy')).toBe(true)
+    expect(store.getByTodo('todo-stale-policy')).toBeNull()
+    expect(store.beginDispatch({ todoId: 'todo-stale-policy', invocationId: 'invocation-stale-policy', dispatchKey: 'fresh-policy-dispatch' }))
+      .toMatchObject({ ok: true, state: 'dispatching' })
+    db.close()
+  })
+
+  it('does not abandon a dispatch reservation after a result or completion outbox exists', () => {
+    const db = createMemoryAppDb()
+    const store = createDeferredExecutionResultStore(db)
+    store.beginDispatch({ todoId: 'todo-committed-result', invocationId: 'invocation-committed-result', dispatchKey: 'dispatch-committed-result' })
+    store.commitResult('todo-committed-result', { kind: 'completed', outputRef: 'committed-result-ref' })
+    expect(store.abandonKnownNotDispatched('todo-committed-result', 'dispatch-committed-result')).toBe(false)
+    expect(store.getByTodo('todo-committed-result')).toMatchObject({ state: 'completion_outboxed' })
+    db.close()
+  })
+
   it('keeps a unique pending completion event after result commit until delivery', async () => {
     const db = createMemoryAppDb()
     const store = createDeferredExecutionResultStore(db)

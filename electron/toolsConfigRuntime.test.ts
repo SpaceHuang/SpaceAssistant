@@ -89,7 +89,7 @@ describe('按对象批准 exposure ask', () => {
         action: 'ask', userOverride: true, reason: 'require approval' } as never],
       requestApproval
     })
-    expect(requestApproval).toHaveBeenCalledWith({ lane: 'wechat', toolName: 'wechat_send', ruleId: 'im-no-wechat-send' })
+    expect(requestApproval).toHaveBeenCalledWith({ lane: 'wechat', toolName: 'wechat_send', ruleId: 'im-no-wechat-send' }, expect.any(AbortSignal))
     expect(tools.map((tool) => tool.name)).toContain('wechat_send')
     expect(tools.map((tool) => tool.name)).not.toContain('wechat_reply')
   })
@@ -144,5 +144,66 @@ describe('按对象批准 exposure ask', () => {
       }
     })
     expect(tools.map((tool) => tool.name)).toContain('wechat_send')
+  })
+
+  it('策略变更通知会唤醒仍未返回的 exposure 审批并按新 allow 暴露工具', async () => {
+    let rules = [{ id: 'im-no-wechat-send', when: 'exposure' as const, match: { lane: ['wechat'], toolName: 'wechat_send' },
+      action: 'ask' as const, userOverride: true, reason: 'require approval' } as never]
+    let wake = () => undefined
+    const tools = filterBuiltinToolsForApiWithApproval({
+      cfg: { enabled: true, deniedTools: [], allowedTools: [] } as never,
+      wechat: { enabled: true } as never,
+      remoteContext: { source: 'wechat', messageId: 'wake-pending-exposure', confirmPolicy: 'im_confirm' },
+      rules, resolveRules: () => rules,
+      subscribePolicyChanges: (listener) => { wake = listener; return () => undefined },
+      requestApproval: () => new Promise<boolean>(() => undefined)
+    })
+    await Promise.resolve()
+    rules = [{ ...rules[0]!, action: 'allow' }]
+    wake()
+    await expect(tools).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'wechat_send' })]))
+  })
+
+  it('订阅策略通知前后的版本间隙不会打开已过期的 exposure 审批窗', async () => {
+    let rules = [{ id: 'im-no-wechat-send', when: 'exposure' as const, match: { lane: ['wechat'], toolName: 'wechat_send' },
+      action: 'ask' as const, userOverride: true, reason: 'old ask' } as never]
+    let version = 1
+    const requestApproval = vi.fn(async () => true)
+    const tools = await filterBuiltinToolsForApiWithApproval({
+      cfg: { enabled: true, deniedTools: [], allowedTools: [] } as never,
+      wechat: { enabled: true } as never,
+      remoteContext: { source: 'wechat', messageId: 'subscribe-race-exposure', confirmPolicy: 'im_confirm' },
+      rules, resolveRules: () => rules, resolveAuthorizationVersion: () => `version-${version}`,
+      subscribePolicyChanges: () => {
+        rules = [{ ...rules[0]!, action: 'allow' }]
+        version += 1
+        return () => undefined
+      }, requestApproval
+    })
+    expect(tools.map((tool) => tool.name)).toContain('wechat_send')
+    expect(requestApproval).not.toHaveBeenCalled()
+  })
+
+  it('旧 exposure 审批未返回时策略仍为 ask 会立即请求新审批', async () => {
+    let rules = [{ id: 'im-no-wechat-send', when: 'exposure' as const, match: { lane: ['wechat'], toolName: 'wechat_send' },
+      action: 'ask' as const, userOverride: true, reason: 'old ask' } as never]
+    let wake = () => undefined
+    let approvals = 0
+    const tools = filterBuiltinToolsForApiWithApproval({
+      cfg: { enabled: true, deniedTools: [], allowedTools: [] } as never,
+      wechat: { enabled: true } as never,
+      remoteContext: { source: 'wechat', messageId: 'replace-pending-exposure', confirmPolicy: 'im_confirm' },
+      rules, resolveRules: () => rules,
+      subscribePolicyChanges: (listener) => { wake = listener; return () => undefined },
+      requestApproval: () => {
+        approvals += 1
+        return approvals === 1 ? new Promise<boolean>(() => undefined) : Promise.resolve(true)
+      }
+    })
+    await Promise.resolve()
+    rules = [{ ...rules[0]!, reason: 'new ask' }]
+    wake()
+    await expect(tools).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'wechat_send' })]))
+    expect(approvals).toBe(2)
   })
 })

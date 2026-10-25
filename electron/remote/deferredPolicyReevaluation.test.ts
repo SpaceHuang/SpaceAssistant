@@ -108,6 +108,36 @@ describe('deferred policy re-evaluation', () => {
     stores.db.close(); stores.temp.cleanup()
   })
 
+  it('reopens a consumed allow when the real pre-dispatch gate demands a fresh ask', async () => {
+    const stores = setup()
+    await invalidate(stores)
+    const dispatch = vi.fn().mockResolvedValueOnce({ dispatched: false, failureCode: 'FRESH_APPROVAL_REQUIRED' })
+    const { reevaluation } = createReevaluation(stores, 'allow')
+    // Replace only the dispatch adapter, preserving the real policy and todo stores.
+    const freshAskReevaluation = createDeferredPolicyReevaluation({
+      db: stores.db, channel: 'feishu', todoStore: stores.todoStore, envelopeStore: stores.envelopeStore,
+      notificationDelivery: stores.notificationDelivery, enabled: () => true, authorizationEpoch: () => 4,
+      ownerAuthorized: () => true, recheckTask: () => true,
+      reauthorize: async (_todo, envelope) => envelope.executionContext.policyRevision === 2
+        ? { decision: 'allow', rule: { ruleId: 'new-allow', factsHash: 'b'.repeat(64) } }
+        : { decision: 'ask', rule: { ruleId: 'late-ask', factsHash: 'c'.repeat(64) } },
+      recheck: async () => ({ allowed: true }), dispatch: async () => ({ dispatched: false, failureCode: 'FRESH_APPROVAL_REQUIRED' }),
+      maxParallel: 1, scheduleRetry: (_delay, callback) => callback(),
+      wake: vi.fn(), audit: vi.fn()
+    })
+    void reevaluation
+    await freshAskReevaluation.processInvalidated()
+    await vi.waitFor(() => expect(stores.notificationDelivery.list(stores.todo.todoId)).toHaveLength(2))
+    expect(stores.notificationDelivery.list(stores.todo.todoId)).toMatchObject([
+      { state: 'superseded', notificationVersion: 1 },
+      { state: 'delivered', notificationVersion: 2, rule: { ruleId: 'late-ask' } }
+    ])
+    expect(stores.todoStore.get(stores.todo.todoId, { channel: 'feishu', identityKey: stores.todo.identityKey,
+      ownerId: stores.todo.ownerId, authorizationEpoch: 4, originSessionId: stores.todo.originSessionId,
+      rule: { ruleId: 'late-ask', factsHash: 'c'.repeat(64) } })).toMatchObject({ status: 'pending', policyRevision: 2 })
+    stores.db.close(); stores.temp.cleanup()
+  })
+
   it('does not dispatch an allow decision when another policy revision commits during reauthorization', async () => {
     const stores = setup()
     await invalidate(stores)

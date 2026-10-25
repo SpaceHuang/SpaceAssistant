@@ -220,8 +220,9 @@ export async function computeEffectiveToolsWithExposureApproval(
   args: Parameters<typeof computeEffectiveTools>[0] & {
     resolveExposureRules?: () => PolicyRule[]
     resolveExposureAuthorizationVersion?: () => string
+    subscribeExposurePolicyChanges?: (listener: () => void) => () => void
   },
-  requestApproval: (request: { lane: import('../src/shared/confirmation/types').ExecutionLane; toolName: string; ruleId: string }) => Promise<boolean>
+  requestApproval: (request: { lane: import('../src/shared/confirmation/types').ExecutionLane; toolName: string; ruleId: string }, signal?: AbortSignal) => Promise<boolean>
 ): Promise<EffectiveTools> {
   const resolvedBuiltinTools = await filterBuiltinToolsForApiWithApproval({
     cfg: args.builtinConfig,
@@ -233,6 +234,7 @@ export async function computeEffectiveToolsWithExposureApproval(
     rules: args.exposureRules,
     resolveRules: args.resolveExposureRules,
     resolveAuthorizationVersion: args.resolveExposureAuthorizationVersion,
+    subscribePolicyChanges: args.subscribeExposurePolicyChanges,
     requestApproval
   })
   return computeEffectiveTools({ ...args, resolvedBuiltinTools })

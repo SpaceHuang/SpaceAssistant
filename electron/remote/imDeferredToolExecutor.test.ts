@@ -4,6 +4,7 @@ import { createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { readImPolicyAuthorizationRevision } from './imInboundGuard'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegistry'
 import { createDesktopAgentRuntime } from '../runtime/desktopAgentRuntime'
@@ -33,6 +34,7 @@ describe('IM deferred tool executor', () => {
       db, sessionStorage: storage, sessionId: session.id, requestId: 'persisted-request', turnId: 'persisted-turn',
       invocationId: 'persisted-invocation', toolCallId: 'persisted-tool-call', toolName: 'write_file',
       input: { path: 'approved.txt', content: 'original' }, confirmationReceipt: 'approval:reply-1',
+      confirmationPolicyRevision: readImPolicyAuthorizationRevision(db),
       lane: 'feishu', remoteContext: { source: 'feishu', messageId: 'original-platform-message', confirmPolicy: 'always',
         authOwner: 'owner-1', chatId: 'chat-1', originSessionId: session.id },
       model: 'model', providerRouteId: 'deferred-executor-model', toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',

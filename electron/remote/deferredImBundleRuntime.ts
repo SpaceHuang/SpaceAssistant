@@ -33,7 +33,7 @@ export function createDeferredImBundleRuntime(input: {
   isOwnerAuthorized(todo: DeferredTodoRecord): boolean
   recheckTask(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean
   recheckAttachment?(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean | Promise<boolean>
-  dispatch(input: DispatchInput): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string }>
+  dispatch(input: DispatchInput): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string; failureCode?: string }>
   onCompletionWake?(sessionId: string): void | Promise<void>
   scheduleRetry?: (delayMs: number, callback: () => void) => void
   recoverCompletionWake?: (sessionId: string) => void | Promise<void>
@@ -71,6 +71,9 @@ export function createDeferredImBundleRuntime(input: {
       try {
         const outcome = await input.dispatch({ request, todo, envelope })
         if (!outcome.dispatched) {
+          if (outcome.failureCode === 'FRESH_APPROVAL_REQUIRED' && executionResults.abandonKnownNotDispatched(todo.todoId, dispatchKey)) {
+            return { dispatched: false, failureCode: outcome.failureCode, failureReason: outcome.failureReason }
+          }
           // The dispatch port explicitly reports that it did not enter the executor. This is
           // a known non-execution, not an uncertain side effect: persist a failure receipt and
           // wake the conversation so the owner is told the approved action did not run.
@@ -122,7 +125,8 @@ export function createDeferredImBundleRuntime(input: {
     authorizationEpoch: input.getAuthorizationEpoch, ownerAuthorized: input.isOwnerAuthorized,
     recheckTask: input.recheckTask,
     ...(input.recheckAttachment ? { recheckAttachment: input.recheckAttachment } : {}),
-    reauthorize: input.reauthorizePolicy, recheck: ports.recheck, dispatch: ports.dispatchClaimed,
+    reauthorize: input.reauthorizePolicy, recheck: ports.recheck,
+    dispatch: ports.dispatchClaimed,
     maxParallel: input.maxParallel, ...(input.scheduleRetry ? { scheduleRetry: input.scheduleRetry } : {}),
     wake: input.onCompletionWake ?? (() => undefined), audit: input.audit
   }) : undefined

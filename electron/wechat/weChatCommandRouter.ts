@@ -19,6 +19,7 @@ import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSessi
 import { authorizeImInboundMessage, evaluateImInboundGuard, readImPolicyAuthorizationRevision, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import { requestImIngressApproval } from '../remote/imIngressApprovalPrompt'
 import { loadEffectivePolicyRules } from '../confirmation/policyRulesRuntime'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import { inboundSummaryForLog, previewText, quoteWireSummaryForLog, WECHAT_CLI_LINE_PREVIEW_MAX } from './weChatCliLogFields'
 import { logWeChatCliEvent } from './weChatCliLogger'
@@ -579,7 +580,8 @@ export class WeChatCommandRouter {
       isLoggedIn: () => Boolean(mergeWeChatConfig(this.deps.getWeChatConfig()).loggedIn),
       getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'wechat'),
       getPolicyRevision: () => readImPolicyAuthorizationRevision(this.deps.db),
-      requestApproval: (request) => requestImIngressApproval({ ...request, messageText: msg.text })
+      subscribePolicyChanges: (listener) => getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(msg.messageId, 'wechat', listener),
+      requestApproval: (request, signal) => requestImIngressApproval({ ...request, db: this.deps.db, messageText: msg.text, signal })
     })
     if (!guard.ok) {
       logWeChatCliEvent('warn', 'wechat.inbound.guard_reject', { reason: guard.reason, userId: msg.userId })

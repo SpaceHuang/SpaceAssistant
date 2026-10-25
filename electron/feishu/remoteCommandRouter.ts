@@ -23,6 +23,7 @@ import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSessi
 import { authorizeImInboundMessage, evaluateImInboundGuard, readImPolicyAuthorizationRevision, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import { requestImIngressApproval } from '../remote/imIngressApprovalPrompt'
 import { loadEffectivePolicyRules } from '../confirmation/policyRulesRuntime'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
   buildDisambiguationReply,
@@ -569,7 +570,8 @@ export class RemoteCommandRouter {
       isGroup: msg.chatType === 'group', getConfig: getGuardConfig,
       getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'feishu'),
       getPolicyRevision: () => readImPolicyAuthorizationRevision(this.deps.db),
-      requestApproval: (request) => requestImIngressApproval({ ...request, messageText: msg.content })
+      subscribePolicyChanges: (listener) => getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(msg.messageId, 'feishu', listener),
+      requestApproval: (request, signal) => requestImIngressApproval({ ...request, db: this.deps.db, messageText: msg.content, signal })
     })
     let earlyGuard: Awaited<ReturnType<typeof authorizeIngress>> | undefined
     if (!accept.accept && (accept.reason === 'group_disabled' || accept.reason === 'non_owner')) {

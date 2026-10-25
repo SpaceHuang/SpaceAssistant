@@ -156,7 +156,8 @@ export function revalidateImInboundGuard(
  * the caller's in-memory auth snapshot and is bound to channel, sender, platform message and rule.
  */
 export async function authorizeImInboundMessage(args: Parameters<typeof evaluateImInboundGuard>[0] & {
-  requestApproval: (request: { channel: RemoteAuthChannel; senderId: string; messageId: string; ruleId: string }) => Promise<boolean>
+  requestApproval: (request: { channel: RemoteAuthChannel; senderId: string; messageId: string; ruleId: string }, signal?: AbortSignal) => Promise<boolean>
+  subscribePolicyChanges?: (listener: () => void) => () => void
 }): Promise<GuardResult> {
   const initial = evaluateImInboundGuard(args)
   if (initial.ok || initial.reason !== 'approval_required' || !args.messageId || !initial.ruleId) return initial
@@ -165,8 +166,30 @@ export async function authorizeImInboundMessage(args: Parameters<typeof evaluate
   for (let attempt = 0; attempt < 4 && !pending.ok && pending.reason === 'approval_required' && pending.ruleId; attempt += 1) {
     const policyRevision = args.getPolicyRevision?.() ?? createHash('sha256').update(JSON.stringify(args.getPolicyRules?.() ?? [])).digest('hex')
     const approval = { channel: args.channel, senderId: args.senderId, messageId: args.messageId, ruleId: pending.ruleId, policyRevision }
+    let unsubscribe: () => void = () => undefined
+    let changed = false
+    const controller = new AbortController()
+    const change = new Promise<'changed'>((resolve) => {
+      if (!args.subscribePolicyChanges) return
+      unsubscribe = args.subscribePolicyChanges(() => { changed = true; controller.abort(); resolve('changed') })
+    })
+    const revisionAfterSubscribe = args.getPolicyRevision?.() ?? createHash('sha256').update(JSON.stringify(args.getPolicyRules?.() ?? [])).digest('hex')
+    if (revisionAfterSubscribe !== policyRevision) {
+      unsubscribe()
+      pending = evaluateImInboundGuard(args)
+      continue
+    }
     let approved = false
-    try { approved = await args.requestApproval(approval) } catch { approved = false }
+    let outcome: boolean | 'changed'
+    try { outcome = args.subscribePolicyChanges
+      ? await Promise.race([args.requestApproval(approval, controller.signal).catch(() => false), change])
+      : await args.requestApproval(approval, controller.signal).catch(() => false)
+    } finally { unsubscribe() }
+    if (outcome === 'changed' || changed) {
+      pending = evaluateImInboundGuard(args)
+      continue
+    }
+    approved = outcome
     if (remoteAuthorizationRegistry.getGeneration(args.channel) !== generation) return { ok: false, reason: 'revoked' }
     // Policy phase: a prompt answer belongs only to the exact policy revision that opened it.
     // On drift, discard either answer and evaluate the latest ingress rule before accepting or rejecting.

@@ -12,7 +12,7 @@ import { tryClaimRemoteSession, releaseRemoteSession } from './remoteAgentRegist
 import { runInTransaction } from '../database/transaction'
 
 type Recheck = (request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope) => Promise<{ allowed: boolean }>
-type Dispatch = (request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope) => Promise<{ dispatched: boolean; failureReason?: string }>
+type Dispatch = (request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope) => Promise<{ dispatched: boolean; failureReason?: string; failureCode?: string }>
 
 /** Re-enter a fresh IM gate for parked calls after a policy revision; old receipts never authorize this transition. */
 export function createDeferredPolicyReevaluation(input: {
@@ -187,6 +187,12 @@ export function createDeferredPolicyReevaluation(input: {
             policyBehaviorVersion: current.policyBehaviorVersion, policyRevision: current.policyRevision, dispatchKey: requestId }))
           executionStarted = true
           const dispatched = await input.dispatch(request, rebound, updatedEnvelope)
+          if (!dispatched.dispatched && dispatched.failureCode === 'FRESH_APPROVAL_REQUIRED') {
+            if (!input.todoStore.requeueConsumedAfterPolicyChange(todo.todoId, now)) throw new Error('DEFERRED_POLICY_FRESH_ASK_REQUEUE_FAILED')
+            dirty.add(todo.todoId)
+            results.push({ todoId: todo.todoId, outcome: 'unavailable' })
+            continue
+          }
           if (!dispatched.dispatched) await recordFailure(todo, current.policyRevision,
             dispatched.failureReason ?? '策略变更后的派发检查未通过，本次操作未执行。')
           results.push({ todoId: todo.todoId, outcome: dispatched.dispatched ? 'allow' : 'deny' })

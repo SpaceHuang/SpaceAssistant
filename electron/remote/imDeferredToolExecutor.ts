@@ -18,6 +18,7 @@ export async function executeDeferredImTool(input: {
   toolName: string
   input: Record<string, unknown>
   confirmationReceipt?: string
+  confirmationPolicyRevision?: string
   policyOnly?: boolean
   lane: 'feishu' | 'wechat'
   remoteContext: RemoteContext
@@ -88,7 +89,7 @@ export async function executeDeferredImTool(input: {
       toolCallId: input.toolCallId,
       toolName: input.toolName,
       input: structuredClone(input.input)
-    }, input.confirmationReceipt)
+    }, input.confirmationReceipt, input.confirmationPolicyRevision)
   } finally {
     await runtime.dispose()
   }

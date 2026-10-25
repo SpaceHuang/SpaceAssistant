@@ -27,10 +27,12 @@ describe('deferred IM bundle runtime', () => {
   it.each([
     { channel: 'feishu' as const, policyAction: 'allow' as const, lateAction: undefined, expectedDecision: 'allow', expectedExecutions: 1 },
     { channel: 'feishu' as const, policyAction: 'allow' as const, lateAction: 'deny' as const, expectedDecision: 'allow', expectedExecutions: 0 },
+    { channel: 'feishu' as const, policyAction: 'allow' as const, lateAction: 'ask' as const, expectedDecision: 'allow', expectedExecutions: 0 },
     { channel: 'feishu' as const, policyAction: 'ask' as const, lateAction: undefined, expectedDecision: 'ask', expectedExecutions: 0 },
     { channel: 'feishu' as const, policyAction: 'deny' as const, lateAction: undefined, expectedDecision: 'deny', expectedExecutions: 0 },
     { channel: 'wechat' as const, policyAction: 'allow' as const, lateAction: undefined, expectedDecision: 'allow', expectedExecutions: 1 },
     { channel: 'wechat' as const, policyAction: 'allow' as const, lateAction: 'deny' as const, expectedDecision: 'allow', expectedExecutions: 0 },
+    { channel: 'wechat' as const, policyAction: 'allow' as const, lateAction: 'ask' as const, expectedDecision: 'allow', expectedExecutions: 0 },
     { channel: 'wechat' as const, policyAction: 'ask' as const, lateAction: undefined, expectedDecision: 'ask', expectedExecutions: 0 },
     { channel: 'wechat' as const, policyAction: 'deny' as const, lateAction: undefined, expectedDecision: 'deny', expectedExecutions: 0 }
   ])('re-evaluates persisted $channel envelope through the real gate ($policyAction; late=$lateAction)', async ({ channel, policyAction, lateAction, expectedDecision, expectedExecutions }) => {
@@ -48,6 +50,7 @@ describe('deferred IM bundle runtime', () => {
     const calls: unknown[] = []
     const gateDecisions: unknown[] = []
     const executorErrors: unknown[] = []
+    const dispatchFailureCodes: unknown[] = []
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write',
       parseInput: (raw) => raw as { path: string; content: string }, plan: async (input) => input,
@@ -90,7 +93,10 @@ describe('deferred IM bundle runtime', () => {
         const context = envelope.executionContext
         return executeDeferredImTool({ db, sessionStorage, sessionId, requestId: envelope.requestId, turnId: envelope.turnId,
           invocationId: envelope.invocationId, toolCallId: envelope.toolCallId, toolName: envelope.toolName,
-          input: envelope.canonicalArgs, ...(policyOnly ? { policyOnly: true } : { confirmationReceipt: context.confirmationReceipt as string }),
+          input: envelope.canonicalArgs, ...(policyOnly ? { policyOnly: true } : {
+            confirmationReceipt: context.confirmationReceipt as string,
+            confirmationPolicyRevision: `${String(context.policyBehaviorVersion)}:${String(context.policyRevision)}:${String(context.policyEpoch)}`
+          }),
           lane: channel, remoteContext: { source: channel, messageId: context.messageId as string,
             chatId: todo.identityKey, userId: todo.ownerId, authOwner: todo.ownerId, originSessionId: sessionId,
             workDirProfileId: 'caller-profile' }, model: 'model', providerRouteId: 'deferred-policy-caller-model',
@@ -107,7 +113,9 @@ describe('deferred IM bundle runtime', () => {
           return { dispatched: true, result }
         } catch (error) {
           executorErrors.push(error instanceof Error && 'cause' in error ? error.cause : error)
-          return { dispatched: false, failureReason: '真实 executor 未进入' }
+          dispatchFailureCodes.push(error && typeof error === 'object' && 'failureCode' in error ? (error as { failureCode: unknown }).failureCode : undefined)
+          return { dispatched: false, failureCode: error && typeof error === 'object' && 'failureCode' in error
+            ? String((error as { failureCode: unknown }).failureCode) : undefined, failureReason: '真实 executor 未进入' }
         }
       })
       const bundle = createDeferredImBundleRuntime({ db, channel, todoStore, notificationDelivery,
@@ -123,12 +131,16 @@ describe('deferred IM bundle runtime', () => {
       registerPolicyIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, db)
       await handlers.get('policy:write')!({}, { lane: channel, expectedRevision: 1,
         change: { kind: 'rule-override', ruleId: 'im-low-risk-create', action: policyAction } })
-      await vi.waitFor(() => expect(gateDecisions).toHaveLength(1))
-      expect(gateDecisions).toMatchObject([{ decision: { kind: expectedDecision } }])
+      await vi.waitFor(() => expect(gateDecisions.length).toBeGreaterThanOrEqual(lateAction === 'ask' ? 2 : 1))
+      expect(gateDecisions[0]).toMatchObject({ decision: { kind: expectedDecision } })
       if (expectedDecision === 'allow') await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
       if (expectedExecutions === 1) await vi.waitFor(() => expect(calls).toHaveLength(1))
       if (expectedDecision === 'allow' && lateAction) await vi.waitFor(() => expect(executorErrors).toHaveLength(1))
+      if (lateAction === 'ask') expect(executorErrors[0]).toMatchObject({ message: expect.stringContaining('FRESH_APPROVAL_REQUIRED') })
+      if (lateAction === 'ask') expect(dispatchFailureCodes).toEqual(['FRESH_APPROVAL_REQUIRED'])
       if (expectedDecision === 'ask') await vi.waitFor(() => expect(notificationDelivery.list(todo.todoId)).toHaveLength(2))
+      if (lateAction === 'ask') await vi.waitFor(() => expect(notificationDelivery.list(todo.todoId)).toHaveLength(2))
+      if (lateAction === 'ask') expect(createDeferredExecutionResultStore(db).getByTodo(todo.todoId)).toBeNull()
       if (expectedDecision === 'deny') await vi.waitFor(() => expect(createDeferredExecutionResultStore(db).getByTodo(todo.todoId)?.state).toBe('completion_outboxed'))
 
       expect(executorErrors).toHaveLength(expectedDecision === 'allow' && lateAction ? 1 : 0)
@@ -138,9 +150,10 @@ describe('deferred IM bundle runtime', () => {
       expect(providerStream).not.toHaveBeenCalled()
       if (expectedDecision === 'allow') {
         expect(dispatch.mock.calls[0]?.[0].envelope).toMatchObject({ invocationId: todo.invocationId, canonicalArgs })
-        expect(todoStore.get(todo.todoId, { channel, identityKey: todo.identityKey, ownerId: todo.ownerId,
-          authorizationEpoch: 7, originSessionId: sessionId, rule: dispatch.mock.calls[0]?.[0].todo.rule }))
-          .toMatchObject({ status: 'consumed', policyRevision: 2 })
+        const stored = todoStore.get(todo.todoId, { channel, identityKey: todo.identityKey, ownerId: todo.ownerId,
+          authorizationEpoch: 7, originSessionId: sessionId,
+          rule: lateAction === 'ask' ? gateDecisions[1]?.policy as { ruleId: string; factsHash: string } : dispatch.mock.calls[0]?.[0].todo.rule })
+        expect(stored).toMatchObject(lateAction === 'ask' ? { status: 'pending', policyRevision: 3 } : { status: 'consumed', policyRevision: 2 })
       }
       if (expectedDecision === 'ask') expect(notificationDelivery.list(todo.todoId)).toMatchObject([
         { state: 'superseded', notificationVersion: 1 }, { state: 'delivered', notificationVersion: 2,

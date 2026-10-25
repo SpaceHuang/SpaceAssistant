@@ -94,6 +94,7 @@ import {
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
 import { computeDeferredPlan, computeEffectiveToolsWithExposureApproval } from './effectiveTools'
+import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { requestImExposureApproval } from './remote/imIngressApprovalPrompt'
 import { requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
 import { clearToolRevocationRequest, registerToolRevocationRequest } from './toolRevocationRegistry'
@@ -923,10 +924,13 @@ async function runToolChatSessionInner(
     exposureRules,
     resolveExposureRules: hostResolveExposureRules,
     resolveExposureAuthorizationVersion: hostResolveExposureAuthorizationVersion,
+    subscribeExposurePolicyChanges: remoteContext?.source === 'wechat' || remoteContext?.source === 'feishu'
+      ? (listener) => getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(args.requestId, remoteContext.source, listener)
+      : undefined,
     mcpSnapshot,
     trim: toolsTrim,
     deferredPlan
-  }, requestImExposureApproval)
+  }, (request, signal) => requestImExposureApproval({ ...request, locale: payloadLocale, signal }))
   const tools = effectiveLane === 'automation'
     ? requireAutomationShellWorkingDirectory(effectiveTools.tools)
     : effectiveTools.tools

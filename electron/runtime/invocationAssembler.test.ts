@@ -1247,7 +1247,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']) })
     try {
       await expect(composed.executeDeferred({ invocationId: turnId, toolCallId: 'persisted-tool-call', toolName: 'write_file',
-        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-1')).resolves.toMatchObject({
+        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-1', 'im-v1.6:1:1')).resolves.toMatchObject({
         output: { success: true, data: 'executed without a model' }, isError: false
       })
       expect(execute).toHaveBeenCalledOnce()
@@ -1274,7 +1274,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']) })
     try {
       await expect(composed.executeDeferred({ invocationId: 'request-origin', toolCallId: 'persisted-tool-call', toolName: 'write_file',
-        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-2')).resolves.toMatchObject({ isError: false })
+        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-2', 'im-v1.6:1:1')).resolves.toMatchObject({ isError: false })
     } finally { await composed.dispose(); appDb.close() }
     expect(execute).toHaveBeenCalledOnce()
   })

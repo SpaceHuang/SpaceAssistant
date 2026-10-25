@@ -205,7 +205,10 @@ export function createFeishuBundle(deps: {
         db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
         requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
         toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs,
-        confirmationReceipt: context.confirmationReceipt, lane: 'feishu', providerRouteId: context.providerRouteId,
+        confirmationReceipt: context.confirmationReceipt,
+        confirmationPolicyRevision: typeof context.policyBehaviorVersion === 'string' && Number.isSafeInteger(context.policyRevision) && Number.isSafeInteger(context.policyEpoch)
+          ? `${context.policyBehaviorVersion}:${context.policyRevision}:${context.policyEpoch}` : undefined,
+        lane: 'feishu', providerRouteId: context.providerRouteId,
         remoteContext: {
           source: 'feishu', messageId: context.messageId,
           chatId: todo.identityKey, userId: todo.ownerId, authOwner: todo.ownerId, originSessionId: todo.originSessionId,
@@ -219,7 +222,7 @@ export function createFeishuBundle(deps: {
       })
       } catch (error) {
         if (error instanceof DeferredToolPreDispatchError) {
-          return { dispatched: false, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
+          return { dispatched: false, failureCode: error.failureCode, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
         }
         throw error
       }
