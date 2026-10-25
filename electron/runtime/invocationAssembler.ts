@@ -1585,10 +1585,17 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         try {
           return await registeredTools.executeDeferred(call, {
             confirmationReceipt,
-            authorize: async (initial, recheck) => {
+            authorizeInitial: async (initial) => {
               const initialDecision = await safetyGate.evaluate(initial)
-              if (initialDecision.kind === 'ask') policy.markConfirmed(call, 'user')
-              else if (initialDecision.kind !== 'allow') return { kind: 'deny', reasonCode: initialDecision.reasonCode }
+              if (initialDecision.kind === 'ask') {
+                policy.markConfirmed(call, 'user')
+                return { kind: 'allow' }
+              }
+              return initialDecision.kind === 'allow'
+                ? { kind: 'allow' }
+                : { kind: 'deny', reasonCode: initialDecision.kind === 'deny' ? initialDecision.reasonCode : 'POLICY_DENY' }
+            },
+            authorize: async (initial, recheck) => {
               const authorization = await safetyGate.authorize(recheck)
               return authorization.kind === 'allow'
                 ? authorization

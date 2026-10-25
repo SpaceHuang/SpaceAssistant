@@ -235,6 +235,40 @@ describe('createRegisteredAgentTurnTools', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
+  it('deferred read restores its gate-issued permit before validating the confirmed plan', async () => {
+    const input = { path: '/workspace/approved.txt' }
+    const executor = { name: 'read_file', execute: vi.fn(async () => ({ success: true, data: 'approved read' })) }
+    const readTool = createReadRegisteredTools({ readFile: executor as never, listDirectory: executor as never,
+      grep: executor as never, readFeishuAttachment: executor as never })[0]!
+    const registry = new TypedToolRegistry()
+    registry.register(readTool)
+    const permits = new InMemorySafetyPermitStore()
+    let tools!: ReturnType<typeof createRegisteredAgentTurnTools>
+    const call = { invocationId: 'deferred-read-invocation', toolCallId: 'deferred-read-tool', toolName: 'read_file', input }
+    tools = createRegisteredAgentTurnTools({
+      requestId: 'deferred-read-request', turnId: 'deferred-read-turn', registry, permits,
+      admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ requestId: 'deferred-read-request', toolUseId: call.toolCallId, sessionId: 'deferred-read-session', workDir: '/workspace' }),
+      resolveAuthorizationVersion: () => 'policy-v1'
+    })
+
+    const result = await tools.executeDeferred(call, {
+      confirmationReceipt: 'approval:deferred-read',
+      authorizeInitial: async () => {
+        const readExecutionPermit = buildReadExecutionPermit({ requestId: 'deferred-read-request', toolUseId: call.toolCallId,
+          toolName: 'read_file', input, decisionRuleId: 'path-sensitive-read-confirm',
+          facts: [{ factId: 'read-fact', decisionRuleId: 'path-sensitive-read-confirm', normalizedPath: input.path,
+            zone: 'workdir-normal', targetKind: 'file' }] })
+        tools.updateExecutionContext(call, (context) => { context.readExecutionPermit = readExecutionPermit })
+        return { kind: 'allow' as const }
+      },
+      authorize: async (_initial, recheck) => ({ kind: 'allow' as const, permitId: permits.issue(recheck, Date.now() + 30_000) })
+    })
+
+    expect(result).toMatchObject({ output: { success: true, data: 'approved read' }, isError: false })
+    expect(executor.execute).toHaveBeenCalledOnce()
+  })
+
   it('keeps pre-dispatch diagnostics to stable error codes and never includes arbitrary cause text', () => {
     expect(new DeferredToolPreDispatchError(new Error('MISSING_MATERIAL')).failureCode).toBe('MISSING_MATERIAL')
     const privateCause = new Error('/Users/private/document.txt')
