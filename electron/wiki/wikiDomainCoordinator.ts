@@ -14,6 +14,7 @@ export interface WikiSavePageInput {
   pageId?: string; title: string; categoryId: string; summary: string; markdown: string
   schemaVersion: number; expectedRevision?: number; parentPageId?: string | null
   sourceRefs?: Array<{ sourceId: string; sourceRevision: number }>; operationKind?: 'saved' | 'moved' | 'restored'; crashAt?: 'after-target-write' | 'after-domain-commit' | 'after-log-write'
+  moveRequestFingerprint?: string
 }
 export interface WikiSavePageResult { pageId: string; revision: number; projectionStatus: 'complete'; operationId: string }
 export interface WikiDomainCoordinator {
@@ -21,16 +22,50 @@ export interface WikiDomainCoordinator {
   movePage(input: WikiSavePageInput & { pageId: string; expectedRevision: number; parentPageId: string | null }): Promise<WikiSavePageResult>
 }
 
-/** Used by the real tool entry to avoid reconciling bytes owned by an interrupted operation before its journal can recover them. */
-export async function hasRecoverableWikiOperation(store: WikiFileStore, requestId: string, toolUseId: string): Promise<boolean> {
-  const operationId = sha(`${requestId}\0${toolUseId}`)
+export interface PendingWikiOperationTarget { targetPath: string; newHash: string; oldHash: string | null; pageId: string; revision: number }
+
+export interface WikiMoveRequestIdentity { requestId: string; toolUseId: string; callerId: string; lane: string; pageId: string; expectedRevision: number; parentPageId: string | null }
+
+export async function replayCompletedWikiMove(store: WikiFileStore, identity: WikiMoveRequestIdentity): Promise<WikiSavePageResult | undefined> {
+  const operationId = sha(`${identity.requestId}\0${identity.toolUseId}`)
   const journal = await readJournal(store, `.wiki-service/operations/${operationId}.json`)
-  return journal?.formatVersion === 1 && journal.operationId === operationId && /^wiki\/.+\.md$/i.test(journal.targetPath) &&
-    /^[0-9a-f]{64}$/i.test(journal.newHash) && (journal.status === 'prepared' || journal.status === 'domain_committed')
+  if (!journal?.moveRequestFingerprint) return undefined
+  if (journal.formatVersion !== 1 || journal.operationId !== operationId || journal.eventMaterial?.type !== 'moved' ||
+    journal.result?.operationId !== operationId || journal.moveRequestFingerprint !== wikiMoveRequestFingerprint(identity) ||
+    journal.callerId !== identity.callerId || journal.lane !== identity.lane) {
+    throw codedError('idempotency_conflict')
+  }
+  if (journal.status === 'completed') return journal.result
+  if (journal.status === 'conflict') throw codedError(journal.errorCode ?? 'external_change_conflict')
+  return undefined
+}
+
+export function wikiMoveRequestFingerprint(identity: Pick<WikiMoveRequestIdentity, 'pageId' | 'expectedRevision' | 'parentPageId'>): string {
+  return sha(stableJson({ pageId: identity.pageId, expectedRevision: identity.expectedRevision, parentPageId: identity.parentPageId }))
+}
+
+export async function listPendingWikiOperationTargets(store: WikiFileStore): Promise<PendingWikiOperationTarget[]> {
+  const directory = store.absolutePath('.wiki-service/operations')
+  let names: string[]
+  try { names = await readdir(directory) }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
+  const targets: PendingWikiOperationTarget[] = []
+  for (const name of names.sort()) {
+    if (!/^[0-9a-f]{64}\.json$/i.test(name)) continue
+    const operationId = name.slice(0, -5)
+    const journal = await readJournal(store, `.wiki-service/operations/${name}`)
+    if (journal?.formatVersion !== 1 || journal.operationId !== operationId || !['prepared', 'domain_committed'].includes(journal.status) ||
+      !/^wiki\/.+\.md$/i.test(journal.targetPath) || !/^[0-9a-f]{64}$/i.test(journal.newHash) ||
+      !(journal.oldHash === null || /^[0-9a-f]{64}$/i.test(journal.oldHash)) || journal.result?.operationId !== operationId ||
+      typeof journal.result.pageId !== 'string' || !Number.isSafeInteger(journal.result.revision) || journal.result.revision < 1) continue
+    targets.push({ targetPath: journal.targetPath, newHash: journal.newHash, oldHash: journal.oldHash, pageId: journal.result.pageId, revision: journal.result.revision })
+  }
+  return targets
 }
 
 interface OperationJournal {
   formatVersion: 1; operationId: string; inputFingerprint: string; callerId: string; lane: string; schemaVersion?: number; status: 'prepared' | 'domain_committed' | 'completed' | 'conflict'
+  moveRequestFingerprint?: string
   targetPath: string; oldHash: string | null; newHash: string; stagingPath: string; result: WikiSavePageResult; eventMaterial: WikiSuccessEvent; successEvent?: WikiSuccessEvent; errorCode?: string
 }
 
@@ -47,9 +82,14 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     const invocationKey = sha(`${input.requestId}\0${input.toolUseId}`)
     const operationPath = `.wiki-service/operations/${invocationKey}.json`
     const fingerprint = sha(stableJson({ ...input, crashAt: undefined }))
+    const legacyInput = { ...input }
+    delete legacyInput.moveRequestFingerprint
+    const legacyFingerprint = sha(stableJson({ ...legacyInput, crashAt: undefined }))
     const existing = await readJournal(options.store, operationPath)
     if (existing) {
-      if (existing.inputFingerprint !== fingerprint || existing.callerId !== input.callerId || existing.lane !== input.lane) throw codedError('idempotency_conflict')
+      const sameMoveRequest = input.moveRequestFingerprint !== undefined && existing.moveRequestFingerprint === input.moveRequestFingerprint
+      const sameLegacyInput = existing.moveRequestFingerprint === undefined && existing.inputFingerprint === legacyFingerprint
+      if ((!sameMoveRequest && !sameLegacyInput && existing.inputFingerprint !== fingerprint) || existing.callerId !== input.callerId || existing.lane !== input.lane) throw codedError('idempotency_conflict')
       if (existing.status === 'completed') return existing.result
       if (existing.status === 'conflict') throw codedError(existing.errorCode ?? 'external_change_conflict')
       return recover(existing, operationPath, input.crashAt)
@@ -91,7 +131,7 @@ export function createWikiDomainCoordinator(options: { store: WikiFileStore; sch
     const oldSnapshot = existingPage ? await writeService.read(existingPage.path) : undefined
     const result: WikiSavePageResult = { pageId, revision, projectionStatus: 'complete', operationId: invocationKey }
     const event: WikiSuccessEvent = { operationId: invocationKey, type: input.operationKind ?? (existingPage ? 'saved' : 'created'), title: input.title.trim(), revision, committedAt: now().toISOString(), pageId, sourceIds: (input.sourceRefs ?? []).map(source => source.sourceId), changeSummary: input.summary }
-    const journal: OperationJournal = { formatVersion: 1, operationId: invocationKey, inputFingerprint: fingerprint, callerId: input.callerId, lane: input.lane, schemaVersion: schema.schemaVersion, status: 'prepared', targetPath: relPath, oldHash: oldSnapshot?.sha256 ?? null, newHash: sha(bytes), stagingPath: `.wiki-service/staging/${invocationKey}.payload`, result, eventMaterial: event }
+    const journal: OperationJournal = { formatVersion: 1, operationId: invocationKey, inputFingerprint: fingerprint, callerId: input.callerId, lane: input.lane, schemaVersion: schema.schemaVersion, status: 'prepared', targetPath: relPath, oldHash: oldSnapshot?.sha256 ?? null, newHash: sha(bytes), stagingPath: `.wiki-service/staging/${invocationKey}.payload`, result, eventMaterial: event, ...(input.moveRequestFingerprint ? { moveRequestFingerprint: input.moveRequestFingerprint } : {}) }
     await options.store.write(journal.stagingPath, bytes)
     await options.store.write(operationPath, json(journal))
     if (oldSnapshot) await writeSnapshotIfMissing(options.store, `.wiki-service/page-history/${pageId}/${existingPage!.revision}.md`, oldSnapshot.bytes)

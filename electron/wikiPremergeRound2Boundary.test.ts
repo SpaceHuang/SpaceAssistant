@@ -2,10 +2,11 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { createWikiFileStore } from './wiki/wikiFileStore'
 import { createWikiDomainCoordinator } from './wiki/wikiDomainCoordinator'
 import { createWikiLifecycleController } from './wiki/wikiLifecycle'
-import { saveWikiPageForContext, moveWikiPageForContext } from './wiki/wikiDomainTools'
+import { saveWikiPageForContext, moveWikiPageForContext, searchWikiForContext, getWikiSchemaForContext } from './wiki/wikiDomainTools'
 import { DEFAULT_WIKI_CONFIG } from '../src/shared/domainTypes'
 
 const roots: string[] = []
@@ -40,6 +41,7 @@ it('recovers an interrupted update through the real save tool', async () => {
   const first = await coordinator.savePage({ ...material, requestId: 'initial', toolUseId: 'initial', callerId: 'review:local', lane: 'desktop' })
   const update = { ...material, pageId: first.pageId, expectedRevision: 1, markdown: 'new body' }
   await expect(coordinator.savePage({ ...update, requestId: 'r', toolUseId: 't', callerId: 'review:local', lane: 'desktop', crashAt: 'after-target-write' })).rejects.toThrow('injected crash')
+  expect((await searchWikiForContext({ query: 'A' }, context)).success).toBe(true)
   expect(await saveWikiPageForContext(update, context)).toMatchObject({ success: true, data: { revision: 2 } })
   const page = (await store.readCatalog())!.pages[0]!
   await expect(store.readText(page.path)).resolves.toContain('new body')
@@ -65,4 +67,48 @@ it('replays a successful move at the real tool entry', async () => {
   const result = await moveWikiPageForContext(input, context)
   expect(result.success).toBe(true)
   expect(await moveWikiPageForContext(input, context)).toEqual(result)
+})
+
+it('recovers a pending create after another real read has scanned the wiki', async () => {
+  const { store, coordinator, context } = await fixture()
+  await expect(coordinator.savePage({ ...material, requestId: 'r', toolUseId: 't', callerId: 'review:local', lane: 'desktop', crashAt: 'after-target-write' })).rejects.toThrow('injected crash')
+  expect((await searchWikiForContext({ query: 'A' }, context)).success).toBe(true)
+  const result = await saveWikiPageForContext(material, context)
+  expect(result).toMatchObject({ success: true, data: { revision: 1 } })
+})
+
+it('preserves a domain-committed page when a read lands after catalog write but before completion', async () => {
+  const { store, coordinator, context } = await fixture()
+  await expect(coordinator.savePage({ ...material, requestId: 'r', toolUseId: 't', callerId: 'review:local', lane: 'desktop', crashAt: 'after-target-write' })).rejects.toThrow('injected crash')
+  const operationId = createHash('sha256').update('r\0t').digest('hex')
+  const operationPath = `.wiki-service/operations/${operationId}.json`
+  const journal = JSON.parse(await store.readText(operationPath)) as { status: string; successEvent?: unknown; eventMaterial: unknown; targetPath: string; newHash: string; result: { pageId: string; revision: number } }
+  journal.status = 'domain_committed'
+  journal.successEvent = journal.eventMaterial
+  await store.write(operationPath, `${JSON.stringify(journal)}\n`)
+  await store.writeCatalog({ formatVersion: 1, pages: [{ pageId: journal.result.pageId, path: journal.targetPath, revision: journal.result.revision, contentHash: journal.newHash, title: material.title, categoryId: material.categoryId, summary: material.summary, parentPageId: null }], tombstones: [], pathAliases: [] })
+  expect((await searchWikiForContext({ query: 'A' }, context)).success).toBe(true)
+  expect(await saveWikiPageForContext(material, context)).toMatchObject({ success: true, data: { revision: 1 } })
+  await expect(store.readText(journal.targetPath)).resolves.toContain('body')
+})
+
+it('rejects a pending save after a valid external schema change that preserves its category', async () => {
+  const { store, coordinator, context } = await fixture()
+  expect((await getWikiSchemaForContext(context)).success).toBe(true)
+  await expect(coordinator.savePage({ ...material, requestId: 'r', toolUseId: 't', callerId: 'review:local', lane: 'desktop', crashAt: 'after-target-write' })).rejects.toThrow('injected crash')
+  await store.write('SCHEMA.md', (await store.readText('SCHEMA.md')).replace('Topic', 'Renamed Topic'))
+  expect(await saveWikiPageForContext(material, context)).toMatchObject({ success: false, error: 'schema_conflict' })
+  expect((await store.readCatalog())?.pages).toEqual([])
+  expect(JSON.parse(await store.readText('.wiki-service/schema-state.json'))).toMatchObject({ schemaVersion: 2 })
+})
+
+it('replays a completed move after a later ordinary content edit', async () => {
+  const { coordinator, context } = await fixture()
+  const first = await coordinator.savePage({ ...material, requestId: 'initial', toolUseId: 'initial', callerId: 'review:local', lane: 'desktop' })
+  const parent = await coordinator.savePage({ ...material, title: 'Parent', requestId: 'parent', toolUseId: 'parent', callerId: 'review:local', lane: 'desktop' })
+  const input = { pageId: first.pageId, expectedRevision: 1, parentPageId: parent.pageId }
+  const moved = await moveWikiPageForContext(input, context)
+  expect(moved.success).toBe(true)
+  expect((await saveWikiPageForContext({ ...material, pageId: first.pageId, expectedRevision: 2, title: 'Edited', markdown: 'new content' }, { ...context, requestId: 'edit', toolUseId: 'edit' })).success).toBe(true)
+  expect(await moveWikiPageForContext(input, context)).toEqual(moved)
 })

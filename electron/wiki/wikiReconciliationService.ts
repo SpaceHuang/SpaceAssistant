@@ -7,6 +7,7 @@ import { parseWikiSchema } from './wikiSchema'
 import { parseWikiPageMarker, reconcileWikiFiles, serializeWikiPageMarker } from './wikiReconciler'
 import { buildWikiIndex, buildWikiLog, type WikiSuccessEvent } from './wikiProjection'
 import { withWikiWriteMutex } from './wikiWriteMutex'
+import { listPendingWikiOperationTargets } from './wikiDomainCoordinator'
 
 export interface WikiReconciliationResult { pages: number; changed: number; tombstones: Array<{ pageId: string; path: string; revision: number; deleted: true }>; diagnostics: Array<{ code: string; path: string; pageId?: string; message: string }> }
 
@@ -29,7 +30,7 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
       schemaState = value as { formatVersion: 1; schemaVersion: number; contentHash: string }
     } catch { return { pages: 0, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-schema-state-invalid', path: '.wiki-service/schema-state.json', message: 'Schema state is invalid.' }] } }
   }
-  const files: Array<{ path: string; content: string; identity: FileIdentity }> = []
+  let files: Array<{ path: string; content: string; identity: FileIdentity }> = []
   const diagnostics: WikiReconciliationResult['diagnostics'] = []
   const directorySnapshots = new Map<string, string[]>()
   const visit = async (relative: string): Promise<void> => {
@@ -66,6 +67,41 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
   }
   await visit('wiki')
   const catalog = await store.readCatalog() ?? { formatVersion: 1 as const, pages: [] }
+  const observedFiles = files.map(file => ({ ...file }))
+  const pendingByPath = new Map((await listPendingWikiOperationTargets(store)).map(operation => [operation.targetPath, operation]))
+  const ignoredPendingCreates = new Set<string>()
+  // Keep journal-owned bytes at their prior catalog baseline while still coordinating SCHEMA and unrelated external edits.
+  for (const file of files) {
+    const operation = pendingByPath.get(file.path)
+    if (!operation || hashText(file.content) !== operation.newHash) continue
+    const existing = catalog.pages.find(page => page.pageId === operation.pageId)
+    if (existing && existing.path === operation.targetPath && existing.revision === operation.revision && existing.contentHash === operation.newHash) {
+      continue
+    }
+    if (operation.oldHash === null) {
+      if (existing) {
+        diagnostics.push({ code: 'wiki-pending-operation-baseline-conflict', path: file.path, pageId: operation.pageId, message: 'Pending page creation conflicts with an existing catalog entry.' })
+        continue
+      }
+      ignoredPendingCreates.add(file.path)
+      continue
+    }
+    const previous = existing
+    const previousRevision = operation.revision - 1
+    if (!previous || previous.path !== operation.targetPath || previous.revision !== previousRevision || previous.contentHash !== operation.oldHash) {
+      diagnostics.push({ code: 'wiki-pending-operation-baseline-conflict', path: file.path, pageId: operation.pageId, message: 'Pending page operation no longer matches its catalog baseline.' })
+      continue
+    }
+    try {
+      const previousText = await store.readText(`.wiki-service/page-history/${operation.pageId}/${previousRevision}.md`)
+      if (hashText(previousText) !== operation.oldHash) throw new Error('history-hash-mismatch')
+      file.content = previousText
+    } catch {
+      diagnostics.push({ code: 'wiki-pending-operation-history-missing', path: file.path, pageId: operation.pageId, message: 'Pending page operation has no verified prior snapshot.' })
+    }
+  }
+  if (diagnostics.length) return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics }
+  files = files.filter(file => !ignoredPendingCreates.has(file.path))
   const catalogIdentity = await store.identity('.wiki-service/catalog.json')
   const reconciled = reconcileWikiFiles(files, catalog.pages.map(page => ({ pageId: page.pageId, path: page.path, revision: page.revision ?? 1, contentHash: page.contentHash ?? '' })), schema)
   diagnostics.push(...reconciled.diagnostics)
@@ -113,7 +149,7 @@ async function reconcileExternalWikiChangesLocked(store: WikiFileStore): Promise
   if (!sameIdentity(catalogIdentity, await store.identity('.wiki-service/catalog.json')) || JSON.stringify(latestCatalog) !== JSON.stringify(catalog)) {
     return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-target-changed', path: '.wiki-service/catalog.json', message: 'Catalog changed after reconciliation scanned its snapshot.' }] }
   }
-  for (const file of files) {
+  for (const file of observedFiles) {
     const identity = await store.identity(file.path)
     if (!sameIdentity(file.identity, identity) || hashText(await store.readText(file.path)) !== hashText(file.content)) {
       return { pages: catalog.pages.length, changed: 0, tombstones: [], diagnostics: [{ code: 'wiki-target-changed', path: file.path, message: 'Page changed after reconciliation scanned its snapshot.' }] }
