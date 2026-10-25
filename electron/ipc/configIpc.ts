@@ -15,7 +15,7 @@ import { WikiConfig, FeishuConfig, WeChatConfig, BrowserConfig, ShellConfig } fr
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { createAnthropicClient } from '../anthropicClientFactory'
 import { fetchServiceModels } from '../llmModelListFetcher'
-import { getConfigValue, getDbConnection, runInTransaction, setConfigValue } from '../database'
+import { getConfigValue, runDatabaseTransaction, setConfigValue } from '../database'
 import { getModelIds, pruneMissingModelsFromServices } from '../../src/shared/llmModelConfig'
 import { isAppLocale } from '../../src/shared/locale'
 import { isToolEnabledByConfig } from '../toolsConfigRuntime'
@@ -453,7 +453,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       stripPlanConfigFromDbIfNeeded(ctx.db)
       }
       try {
-        if (atomicKeySave) runInTransaction(getDbConnection(ctx.db), saveConfig)
+        if (atomicKeySave) runDatabaseTransaction(ctx.db, saveConfig)
         else saveConfig()
       } catch (e) {
         if (atomicKeySave && ctx.getWorkDir() !== previousWorkDir) ctx.setWorkDir(previousWorkDir)

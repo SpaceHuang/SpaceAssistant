@@ -37,6 +37,11 @@ export function getDbConnection(db: AppDatabase): DatabaseSync {
   return conn
 }
 
+/** Domain code that only needs the legacy-SQLite compatibility branch must not unwrap the connection. */
+export function isSqliteDatabaseOpen(db: AppDatabase): boolean {
+  return connMap.has(db)
+}
+
 /** Monotonic in-process fence for asynchronous work tied to a specific SQLite handle. */
 export function getDbConnectionEpoch(db: AppDatabase): number {
   return connectionEpochMap.get(db) ?? 0

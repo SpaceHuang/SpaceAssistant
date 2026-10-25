@@ -346,6 +346,24 @@ describe('session storage module graph rules', () => {
     `)).toHaveLength(1)
   })
 
+  it('keeps IPC transport on database owner APIs and rejects raw SQLite capabilities', () => {
+    for (const source of [
+      "import { getDbConnection } from '../database/sqliteStore'",
+      "import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'",
+      "import * as database from '../database'",
+      "export { appendMessage } from '../database/operations'",
+      "const load = () => import('../database/sqliteStore')"
+    ]) {
+      expect(findSessionStorageModuleViolations('electron/ipc/example.ts', source), source).not.toEqual([])
+    }
+    expect(findSessionStorageModuleViolations('electron/ipc/example.ts', `
+      import { getConfigValue, runDatabaseTransaction } from '../database'
+      import { createImPolicyDatabaseAdapter } from '../confirmation/imPolicyStore'
+      import { createSearchHistoryStore } from '../database/searchHistory'
+      import { isSqliteDatabaseOpen } from '../database'
+    `)).toEqual([])
+  })
+
   it('publishes the execution capability from the public contract module', () => {
     const publicExecution = readFileSync(path.resolve('electron/sessionStorage/public/execution.ts'), 'utf8')
     const applicationPorts = readFileSync(path.resolve('electron/sessionStorage/application/ports.ts'), 'utf8')

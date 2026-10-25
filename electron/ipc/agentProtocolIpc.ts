@@ -18,7 +18,7 @@ import type { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
 import { readApiBaselineAfterPreparation, readChatMessageAfterPreparation, readChatMessagesAfterPreparation, readChatPageAfterPreparation, readSearchCorpusPageAfterPreparation, readRetryTargetAfterPreparation } from '../sessionStorage/public/readMessages'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
-import { getDbConnection } from '../database'
+import { isSqliteDatabaseOpen } from '../database'
 import { WikiConfig, WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
 import { getConfigValue, setConfigValue } from '../database'
@@ -657,10 +657,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           } catch { /* 数据库仍不可用时由启动恢复器继续处理 */ }
         }
         if (rolledBackBeforeCommit) restoreReservedToolConfirm(payload.requestId, payload.toolUseId, ownerSessionId)
-        const connection = typeof getDbConnection === 'function' ? getDbConnection(ctx.db) as unknown as { exec?: unknown } : undefined
         // 真实 SQLite 已由 commitConfirmationSubmissionWithWork 回滚；不得再用补偿删除可能早已存在的授权。
         // 只有无数据库的兼容适配器才使用旧的尽力补偿路径。
-        if (typeof connection?.exec !== 'function') {
+        if (!isSqliteDatabaseOpen(ctx.db)) {
           for (const key of writtenTrustKeys) {
             try { revokeLegacyTrustForCacheKey(ctx.db, key) } catch { /* fail closed */ }
           }

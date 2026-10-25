@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { runInTransaction } from '../database/transaction'
+import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
 
 export interface CommitImPolicySnapshotInput {
   expectedRevision?: number
@@ -182,6 +183,18 @@ export function switchToCurrentImStandard(db: DatabaseSync, input: SwitchToCurre
     eventKind: 'policy-behavior-version-switched',
     actor: 'user',
     auditMetadata: { userChoiceConfirmed: true, displayedDiffs: [...input.displayedDiffs] }
+  })
+}
+
+/** Database-owned adapter for IPC composition. Keeps raw connection access inside confirmation storage. */
+export function createImPolicyDatabaseAdapter(appDb: AppDatabase) {
+  return Object.freeze({
+    readBehavior: (domain: unknown, options: ReadImPolicySnapshotOptions) =>
+      readPolicyBehaviorSnapshot(getDbConnection(appDb), domain, options),
+    readIm: (options: ReadImPolicySnapshotOptions) => readImPolicySnapshot(getDbConnection(appDb), options),
+    commit: (input: CommitImPolicySnapshotInput) => commitImPolicySnapshot(getDbConnection(appDb), input),
+    switchToCurrentStandard: (input: SwitchToCurrentImStandardInput) =>
+      switchToCurrentImStandard(getDbConnection(appDb), input)
   })
 }
 

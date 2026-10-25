@@ -1,14 +1,20 @@
 import path from 'path'
 import { resolveDbPath, resolveJsonPathForDb } from './jsonSnapshot'
 import { migrateFromJsonIfNeeded } from './migrateFromJson'
-import { openSqliteDatabase, type AppDatabase } from './sqliteStore'
+import { getDbConnection, openSqliteDatabase, type AppDatabase } from './sqliteStore'
 import { migrateThinkingEffortConfig } from './thinkingEffortMigration'
+import { runInTransaction } from './transaction'
 
 export type { AppDatabase } from './sqliteStore'
 export type { StoredMessage } from './types'
 // 事务入口与 changes 转换 helper 的对外桶导出；实现位于 ./transaction（canonical 路径）。
-export { openSqliteDatabase, openSqliteDatabaseReadOnly, getDbConnection } from './sqliteStore'
+export { openSqliteDatabase, openSqliteDatabaseReadOnly, getDbConnection, isSqliteDatabaseOpen } from './sqliteStore'
 export { changesToNumber, runInTransaction } from './transaction'
+
+/** Transaction capability for composition code whose callback uses only database domain ports. */
+export function runDatabaseTransaction<T>(db: AppDatabase, fn: () => T): T {
+  return runInTransaction(getDbConnection(db), fn)
+}
 export { listImInboxMessages } from './imInbox'
 export type { ImInboxMessage } from './imInbox'
 

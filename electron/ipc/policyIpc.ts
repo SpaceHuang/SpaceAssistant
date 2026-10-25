@@ -1,9 +1,7 @@
 import type { IpcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database'
-import { readPolicyBehaviorSnapshot } from '../confirmation/imPolicyStore'
-import { commitImPolicySnapshot, readImPolicySnapshot, switchToCurrentImStandard } from '../confirmation/imPolicyStore'
+import { createImPolicyDatabaseAdapter } from '../confirmation/imPolicyStore'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { isPolicyPackage, validateRuleOverride } from '../../src/shared/policy/policyPackages'
 import { IM_STANDARD_BEHAVIOR_DIFF_IDS } from '../../src/shared/policy/imPolicyBehavior'
@@ -31,12 +29,13 @@ export function policyDomainForLane(lane: unknown): 'desktop' | 'im' {
 }
 
 export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
+  const policyStore = createImPolicyDatabaseAdapter(db)
   ipcMain.handle('policy:read-for-lane', async (_event, payload: unknown) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('POLICY_READ_PAYLOAD_INVALID')
     const request = payload as Record<string, unknown>
     if (Object.hasOwn(request, 'domain')) throw new Error('POLICY_DOMAIN_MUST_NOT_BE_SPECIFIED')
     const domain = policyDomainForLane(request.lane)
-    const policy = readPolicyBehaviorSnapshot(getDbConnection(db), domain, {
+    const policy = policyStore.readBehavior(domain, {
       supportedBehaviorVersions: SUPPORTED_BEHAVIOR_VERSIONS[domain]
     })
     return policy
@@ -50,7 +49,7 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
     if (!Number.isSafeInteger(request.expectedRevision) || (request.expectedRevision as number) < 0) throw new Error('POLICY_REVISION_INVALID')
     if (!request.change || typeof request.change !== 'object' || Array.isArray(request.change)) throw new Error('POLICY_CHANGE_INVALID')
     const change = request.change as Record<string, unknown>
-    const current = readImPolicySnapshot(getDbConnection(db), { supportedBehaviorVersions: SUPPORTED_BEHAVIOR_VERSIONS.im })
+    const current = policyStore.readIm({ supportedBehaviorVersions: SUPPORTED_BEHAVIOR_VERSIONS.im })
     if (change.kind === 'switch-to-standard') {
       if (change.userChoiceConfirmed !== true || !Array.isArray(change.displayedDiffs) ||
           JSON.stringify(change.displayedDiffs) !== JSON.stringify(IM_STANDARD_BEHAVIOR_DIFF_IDS)) {
@@ -58,7 +57,7 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
       }
       if (current.policyBehaviorVersion === 'im-standard-v2') throw new Error('POLICY_BEHAVIOR_ALREADY_CURRENT')
       if (request.expectedRevision !== current.revision) return { status: 'conflict', currentRevision: current.revision }
-      return switchToCurrentImStandard(getDbConnection(db), {
+      return policyStore.switchToCurrentStandard({
         userChoiceConfirmed: true,
         displayedDiffs: IM_STANDARD_BEHAVIOR_DIFF_IDS,
         updatedAt: Date.now(),
@@ -115,7 +114,7 @@ export function registerPolicyIpc(ipcMain: IpcMain, db: AppDatabase): void {
       permissions[change.capabilityId] = change.permission
       snapshot.capabilityPermissions = permissions
     } else throw new Error('POLICY_CHANGE_KIND_INVALID')
-    const result = commitImPolicySnapshot(getDbConnection(db), {
+    const result = policyStore.commit({
       expectedRevision: request.expectedRevision as number,
       policyBehaviorVersion: current.policyBehaviorVersion,
       snapshot,

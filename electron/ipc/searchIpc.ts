@@ -2,18 +2,18 @@
 import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { SearchResult } from '../../src/shared/domainTypes'
-import { appendSearchHistory, listSearchHistory } from '../database/operations'
+import { createSearchHistoryStore } from '../database/searchHistory'
 import { searchFilesUnder } from './ipcShared'
 import { prepareChatBodyForRead } from '../sessionStorage/public/readPreparation'
 import type { MessageSearchHit } from '../sessionStorage/public/model'
 
 export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
-
+  const searchHistory = createSearchHistoryStore(ctx.db)
 
   ipcMain.handle('search:execute', async (_e, query: string): Promise<SearchResult[]> => {
     const q = query.trim()
     if (!q) return []
-    appendSearchHistory(ctx.db, q)
+    searchHistory.append(q)
     const results: SearchResult[] = []
     const activeProfileId = ctx.workDirManager.getActiveProfileId()
     const storage = ctx.sessionStorage!
@@ -57,5 +57,5 @@ export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     return results
   })
 
-  ipcMain.handle('search:get-history', (): string[] => listSearchHistory(ctx.db))
+  ipcMain.handle('search:get-history', (): string[] => searchHistory.list())
 }

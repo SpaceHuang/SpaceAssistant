@@ -115,6 +115,11 @@ export function findSessionStorageModuleViolations(filePath, source) {
   const rawSessionMessageReads = new Set(['getMessage', 'getMessages', 'getMessageSkeletons', 'getChatMessagePage',
     'getMessagesPageWithSequence', 'getSearchCorpusPage', 'searchMessages', 'getApiContextBaseline', 'getTurnContext', 'resolveRetryContext'])
   const allowed = (edge) => {
+    if (category === 'external-electron' && normalizedFile.startsWith('electron/ipc/')) {
+      if (edge.resolved === 'electron/database/sqliteStore' || edge.resolved === 'electron/runtime/sqliteAgentHistory' ||
+        edge.resolved === 'electron/database/operations') return false
+      if (edge.resolved === 'electron/database' && (edge.symbols.includes('*') || edge.symbols.includes('getDbConnection'))) return false
+    }
     if (category === 'external-electron' && edge.resolved === 'electron/database/operations' &&
       edge.symbols.some((symbol) => rawSessionMessageReads.has(symbol))) return false
     if (category === 'external-electron' && edge.resolved === 'electron/sessionStorage/sqliteRuntimeBindings') {
@@ -351,6 +356,14 @@ function runIllegalEdgeProbes() {
       ['external implementation binding import', 'electron/ipc/__gate_probe__.ts', `import { createProjectionService, createSqliteProjectionStateStore } from '../sessionStorage/sqliteRuntimeBindings'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['external implementation re-export import', 'electron/ipc/__gate_probe__.ts', `import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['IPC raw database connection', 'electron/ipc/__gate_probe__.ts', `import { getDbConnection } from '../database/sqliteStore'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['IPC History implementation', 'electron/ipc/__gate_probe__.ts', `import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['IPC database namespace barrel', 'electron/ipc/__gate_probe__.ts', `import * as database from '../database'`,
+        (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
+      ['IPC low-level session write', 'electron/ipc/__gate_probe__.ts', `import { appendMessage } from '../database/operations'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
       ['external SQLite composition re-export import', 'electron/ipc/__gate_probe__.ts', `import { createSessionTurnRuntime } from '../sessionStorage/sqliteSessionStorage'`,
         (file, source) => findSessionStorageModuleViolations(file, source).length > 0],
