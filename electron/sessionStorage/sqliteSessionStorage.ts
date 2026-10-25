@@ -47,6 +47,7 @@ import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
 import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
 import { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
+import { createProjectionBlobGcTask } from './infrastructure/sqlite/projectionBlobGcTask'
 export { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
 export { createSqliteStartupHistoryRecoveryBindings }
 export { startSessionProjectionRevalidationDrain }
@@ -365,11 +366,18 @@ export function createSqliteSessionStorageHost(db: AppDatabase, input: {
   maintenanceTasks?: Parameters<typeof createStorageLifecycleControl>[0]['tasks']
   quiesceMaintenance?: Parameters<typeof createStorageLifecycleControl>[0]['quiesce']
 }): SessionStorageHost {
-  const lifecycle = createStorageLifecycleControl({ tasks: input.maintenanceTasks ?? [], quiesce: input.quiesceMaintenance })
+  const blobGcTask = input.storage.projectionBlobRoot ? createProjectionBlobGcTask(db, input.storage.projectionBlobRoot) : undefined
+  const lifecycle = createStorageLifecycleControl({
+    tasks: [...(input.maintenanceTasks ?? []), ...(blobGcTask ? [blobGcTask] : [])],
+    quiesce: input.quiesceMaintenance
+  })
   const storage = createSqliteSessionStorage(db, {
     ...input.storage,
     inspectMaintenance: () => lifecycle.inspectMaintenance(),
-    prepareProjection: (request) => lifecycle.prepareProjection(request),
+    prepareProjection: async (request) => {
+      await lifecycle.prepareProjection(request)
+      lifecycle.requestMaintenance({ reason: 'scope-changed', category: 'pending-reclamation' })
+    },
     recoveryStages: {
       ...input.storage.recoveryStages,
       history: input.startup.recoverHistory,
@@ -377,7 +385,21 @@ export function createSqliteSessionStorageHost(db: AppDatabase, input: {
     }
   })
   const hostStorage: SessionStorage = Object.freeze({ ...storage,
-    prepareProjection: (request: Parameters<NonNullable<SessionStorage['prepareProjection']>>[0]) => lifecycle.prepareProjection(request) })
+    prepareProjection: async (request: Parameters<NonNullable<SessionStorage['prepareProjection']>>[0]) => {
+      await lifecycle.prepareProjection(request)
+      lifecycle.requestMaintenance({ reason: 'scope-changed', category: 'pending-reclamation' })
+    },
+    ...(storage.clearProjectionCaches ? { clearProjectionCaches: async () => {
+      const result = await storage.clearProjectionCaches!()
+      lifecycle.requestMaintenance({ reason: 'policy-changed', category: 'pending-reclamation' })
+      return result
+    } } : {}),
+    commands: Object.freeze({ ...storage.commands, deleteSession: (sessionId: string) => {
+      const result = storage.commands.deleteSession(sessionId)
+      lifecycle.requestMaintenance({ reason: 'scope-changed', category: 'pending-reclamation' })
+      return result
+    } })
+  })
   return Object.freeze({ storage: hostStorage, startup: input.startup, ledgerRecovery: input.ledgerRecovery ?? createSessionLedgerRecoveryBindings(), lifecycle })
 }
 

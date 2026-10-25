@@ -253,7 +253,16 @@ export function createSessionProjectionBlobStore(root: string) {
         catch (error) { if (!operationFailed) throw error }
       }
     },
-    async collectGarbage(conn: DatabaseSync): Promise<Readonly<{ removedCount: number; removedBytes: number }>> {
+    async collectGarbage(conn: DatabaseSync, input: Readonly<{ afterLocator?: string; maxEntries?: number }> = {}): Promise<Readonly<{
+      removedCount: number; removedBytes: number; nextLocator?: string
+    }>> {
+      const maxEntries = input.maxEntries ?? 4096
+      if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 4096) {
+        throw blobError('PROJECTION_BLOB_GC_BUDGET_INVALID', 'projection blob GC entry budget is invalid')
+      }
+      if (input.afterLocator !== undefined && input.afterLocator !== '' && !/^\.?projection-[0-9a-f-]{36}\.(?:blob|tmp)$/.test(input.afterLocator)) {
+        throw blobError('PROJECTION_BLOB_GC_CURSOR_INVALID', 'projection blob GC cursor is invalid')
+      }
       const releaseFence = await acquireFence()
       let operationFailed = false
       try {
@@ -424,10 +433,12 @@ export function createSessionProjectionBlobStore(root: string) {
             }
           }
         }
-        const names = await fs.readdir(root)
+        const names = (await fs.readdir(root)).filter((name) => /^projection-[0-9a-f-]{36}\.blob$/.test(name) || /^\.projection-[0-9a-f-]{36}\.tmp$/.test(name))
+          .filter((name) => !input.afterLocator || name > input.afterLocator).sort()
+        const page = names.slice(0, maxEntries)
         let removedCount = 0
         let removedBytes = 0
-        for (const name of names) {
+        for (const name of page) {
           const isBlob = /^projection-[0-9a-f-]{36}\.blob$/.test(name)
           const isTemp = /^\.projection-[0-9a-f-]{36}\.tmp$/.test(name)
           if ((!isBlob && !isTemp) || referenced.has(name)) continue
@@ -438,7 +449,7 @@ export function createSessionProjectionBlobStore(root: string) {
           if (isBlob) { removedCount += 1; removedBytes += stat.size }
         }
         if (removedCount > 0) await syncDirectory(root)
-        return Object.freeze({ removedCount, removedBytes })
+        return Object.freeze({ removedCount, removedBytes, ...(names.length > maxEntries ? { nextLocator: page.at(-1) } : {}) })
       } catch (error) {
         operationFailed = true
         throw error

@@ -15,6 +15,7 @@ export type AgentLogEventName =
   | 'session.transcript.reconciliation'
   | 'eventloop.delay'
   | 'session.transcript.revalidation'
+  | 'session.projection.blob_gc_failed'
   | 'session.storage.pending_view'
   | 'storage.spill.source_truth_gc'
   | 'storage.spill.source_truth_gc_failed'

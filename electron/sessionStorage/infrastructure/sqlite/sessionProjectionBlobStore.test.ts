@@ -49,6 +49,27 @@ describe('session projection derived blob store', () => {
     expect(await blobs.readVerified(promoted)).toBe(payload)
   })
 
+  it('reclaims unreferenced blobs in bounded lexicographic pages', async () => {
+    temp = createTempDatabase('projection-bounded-gc-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    for (const payload of ['orphan-a', 'orphan-b', 'orphan-c']) {
+      const staged = await blobs.write(payload)
+      await staged.release()
+    }
+    const conn = getDbConnection(temp.db)
+    const first = await blobs.collectGarbage(conn, { maxEntries: 1 })
+    expect(first.removedCount).toBe(1)
+    expect(first.nextLocator).toBeDefined()
+    const second = await blobs.collectGarbage(conn, { afterLocator: first.nextLocator, maxEntries: 1 })
+    expect(second.removedCount).toBe(1)
+    expect(second.nextLocator).toBeDefined()
+    const third = await blobs.collectGarbage(conn, { afterLocator: second.nextLocator, maxEntries: 1 })
+    expect(third.removedCount).toBe(1)
+    expect(third.nextLocator).toBeUndefined()
+    expect((await fs.readdir(root)).filter((name) => name.endsWith('.blob'))).toHaveLength(0)
+  })
+
   it('streams a verified blob while holding the GC fence until the consumer reaches EOF', async () => {
     temp = createTempDatabase('projection-verified-stream-')
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')
