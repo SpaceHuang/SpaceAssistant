@@ -1,4 +1,4 @@
-import type { ProjectionStateCommand, ProjectionStateRecord } from '../domain/projectionState'
+import { MAX_INLINE_PROJECTION_PAYLOAD_BYTES, type ProjectionStateCommand, type ProjectionStateRecord } from '../domain/projectionState'
 import { parseProjectionBuildCheckpoint } from '../domain/projectionBuild'
 import type { ProjectionCacheCandidate, ProjectionStateStore } from './ports'
 
@@ -95,6 +95,7 @@ export function createProjectionService(store: ProjectionStateStore, options: Re
 
   const publish: SessionProjectionService['publish'] = (lease, output) => {
     if (!ownsLease(lease) || output.sourceIdentityJson !== lease.sourceIdentityJson || !output.payloadGeneration.trim() || !output.payloadDigest.trim()) return null
+    if (typeof output.inlinePayload === 'string' && Buffer.byteLength(output.inlinePayload, 'utf8') > MAX_INLINE_PROJECTION_PAYLOAD_BYTES) return null
     let source: { formatVersion?: unknown; sessionGeneration?: unknown; messageRevision?: unknown; historyWatermark?: unknown }
     try { source = JSON.parse(lease.sourceIdentityJson) as typeof source } catch { return null }
     if (source.formatVersion !== 1 || source.sessionGeneration !== lease.sessionGeneration || !Number.isSafeInteger(source.messageRevision)) return null

@@ -7,6 +7,7 @@ import { createMemoryAppDb } from '../../database/testHelpers'
 import { getDbConnection } from '../../database/sqliteStore'
 import { openDatabase } from '../../database'
 import { createProjectionBuildCheckpoint } from '../domain/projectionBuild'
+import { MAX_INLINE_PROJECTION_PAYLOAD_BYTES } from '../domain/projectionState'
 import { createSqliteProjectionStateStore } from '../infrastructure/sqlite/sessionProjectionStateStore'
 import { createProjectionService } from './projectionService'
 
@@ -45,6 +46,21 @@ describe('Session ProjectionService', () => {
     expect(nextLease).toMatchObject({ status: 'invalid' })
     expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM session_projection_cache WHERE session_id=? AND scope_key=?').get(session.id, 'scope-a'))
       .toEqual({ count: 0 })
+  })
+
+  it('refuses oversized inline cache publications before they reach the state store', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection inline budget', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), {
+      processGeneration: () => 2, connectionEpoch: () => 1, createToken: () => 'inline-budget-token', now: () => 1,
+    })
+    service.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation })!
+    expect(service.publish(lease, { sourceIdentityJson: lease.sourceIdentityJson, payloadGeneration: 'oversized',
+      payloadDigest: 'digest', validatedRangeJson: '{}', inlinePayload: 'x'.repeat(MAX_INLINE_PROJECTION_PAYLOAD_BYTES + 1) })).toBeNull()
+    expect(service.get(session.id, 'scope-a')).toMatchObject({ status: 'rebuilding', rebuildToken: lease.rebuildToken })
+    expect(getDbConnection(db).prepare('SELECT 1 FROM session_projection_cache WHERE session_id=? AND scope_key=?').get(session.id, 'scope-a'))
+      .toBeUndefined()
   })
 
   it('stores retryable projection rejection as a scope state with a due retry time', () => {

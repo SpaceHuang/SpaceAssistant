@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { createSession } from '../../../database/operations'
 import { createMemoryAppDb, createTempDatabase } from '../../../database/testHelpers'
 import { getDbConnection, reopenDatabaseConnection } from '../../../database/sqliteStore'
@@ -40,19 +41,29 @@ describe('SQLite API and route projection fence', () => {
     const scopes = [encodeProjectionScopeKey({ scope: 'apiBaselineV1', specVersion: 1 }),
       encodeProjectionScopeKey({ scope: 'routeV1', specVersion: 1 })]
     for (const scopeKey of scopes) {
+      const proof = JSON.stringify({ formatVersion: 1, kind: 'canonical-shadow-match', scopeKey })
+      const proofDigest = createHash('sha256').update(proof).digest('hex')
       conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
         message_revision,payload_generation,payload_digest,validated_range_json,source_identity_json,updated_at)
-        VALUES(?,?,?,'valid',?,0,'payload-1','digest-1','{}',?,1)`).run(session.id, scopeKey, session.generation, historyWatermarkJson, sourceIdentityJson)
+        VALUES(?,?,?,'valid',?,0,'payload-1',?,'{}',?,1)`).run(session.id, scopeKey, session.generation, historyWatermarkJson, proofDigest, sourceIdentityJson)
       conn.prepare(`INSERT INTO session_projection_cache(session_id,scope_key,payload_generation,source_identity_json,payload_digest,
-        validated_range_json,inline_payload,updated_at) VALUES(?,?,? ,?,'digest-1','{}','[]',1)`)
-        .run(session.id, scopeKey, 'payload-1', sourceIdentityJson)
+        validated_range_json,inline_payload,updated_at) VALUES(?,?,?,?,?,'{}',?,1)`)
+        .run(session.id, scopeKey, 'payload-1', sourceIdentityJson, proofDigest, proof)
     }
 
     expect(fence.isCurrent({ sessionId: session.id, sessionGeneration: session.generation, messageRevision: 0, historyWatermarkJson })).toBe(true)
+    conn.prepare('UPDATE session_projection_cache SET inline_payload=? WHERE session_id=? AND scope_key=?')
+      .run('x'.repeat(256 * 1024 + 1), session.id, scopes[0])
+    expect(fence.isCurrent({ sessionId: session.id, sessionGeneration: session.generation, messageRevision: 0, historyWatermarkJson })).toBe(false)
+    const apiProof = JSON.stringify({ formatVersion: 1, kind: 'canonical-shadow-match', scopeKey: scopes[0] })
+    conn.prepare('UPDATE session_projection_cache SET inline_payload=? WHERE session_id=? AND scope_key=?')
+      .run(apiProof, session.id, scopes[0])
     conn.prepare("DELETE FROM session_projection_cache WHERE session_id=? AND scope_key=?").run(session.id, scopes[1])
     expect(fence.isCurrent({ sessionId: session.id, sessionGeneration: session.generation, messageRevision: 0, historyWatermarkJson })).toBe(false)
-    conn.prepare("INSERT INTO session_projection_cache(session_id,scope_key,payload_generation,source_identity_json,payload_digest,validated_range_json,inline_payload,updated_at) VALUES(?,?,'payload-1',?,'digest-1','{}','[]',1)")
-      .run(session.id, scopes[1], sourceIdentityJson)
+    const routeProof = JSON.stringify({ formatVersion: 1, kind: 'canonical-shadow-match', scopeKey: scopes[1] })
+    const routeDigest = createHash('sha256').update(routeProof).digest('hex')
+    conn.prepare("INSERT INTO session_projection_cache(session_id,scope_key,payload_generation,source_identity_json,payload_digest,validated_range_json,inline_payload,updated_at) VALUES(?,?,'payload-1',?,?,'{}',?,1)")
+      .run(session.id, scopes[1], sourceIdentityJson, routeDigest, routeProof)
     conn.prepare("UPDATE session_projection_state SET history_watermark_json='stale' WHERE session_id=? AND scope_key=?").run(session.id, scopes[1])
     expect(fence.isCurrent({ sessionId: session.id, sessionGeneration: session.generation, messageRevision: 0, historyWatermarkJson })).toBe(false)
   })
@@ -79,15 +90,17 @@ describe('SQLite API and route projection fence', () => {
 
     expect(publishSqliteSessionApiRouteScopes(db, {
       sessionId: session.id, sessionGeneration: session.generation, messageRevision: 0, historyWatermarkJson,
-      apiBaseline: [{ id: 'api-message', content: 'body' }], route: { recentMessages: [{ role: 'user', content: 'body' }] },
     })).toBe(true)
+    const proofRows = getDbConnection(db).prepare('SELECT inline_payload FROM session_projection_cache WHERE session_id=?').all(session.id) as Array<{ inline_payload: string }>
+    expect(proofRows).toHaveLength(2)
+    expect(proofRows.every(({ inline_payload }) => Buffer.byteLength(inline_payload, 'utf8') <= 256 * 1024 &&
+      inline_payload.includes('canonical-shadow-match'))).toBe(true)
     const fence = createSqliteSessionApiRouteProjectionFence(db)
     expect(fence.isCurrent({ sessionId: session.id, sessionGeneration: session.generation, messageRevision: 0, historyWatermarkJson })).toBe(true)
 
     getDbConnection(db).prepare('UPDATE session_message_content_cutover SET message_revision=message_revision+1 WHERE session_id=?').run(session.id)
     expect(publishSqliteSessionApiRouteScopes(db, {
       sessionId: session.id, sessionGeneration: session.generation, messageRevision: 0, historyWatermarkJson,
-      apiBaseline: [], route: {},
     })).toBe(false)
     expect(fence.isCurrent({ sessionId: session.id, sessionGeneration: session.generation, messageRevision: 0, historyWatermarkJson })).toBe(false)
   })

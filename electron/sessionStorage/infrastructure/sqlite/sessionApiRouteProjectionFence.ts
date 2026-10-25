@@ -7,6 +7,7 @@ import { encodeProjectionScopeKey } from '../../domain/scopeKey'
 import { createProjectionService } from '../../application/projectionService'
 import { createSqliteProjectionStateStore } from './sessionProjectionStateStore'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
+import { MAX_INLINE_PROJECTION_PAYLOAD_BYTES } from '../../domain/projectionState'
 
 const API_ROUTE_SCOPE_KEYS = Object.freeze([
   encodeProjectionScopeKey({ scope: 'apiBaselineV1', specVersion: 1 }),
@@ -45,29 +46,40 @@ export function createSqliteSessionApiRouteProjectionFence(db: AppDatabase) {
 
     return API_ROUTE_SCOPE_KEYS.every((scopeKey) => {
       const row = readScope.get(input.sessionId, scopeKey) as Record<string, unknown> | undefined
+      let proofValid = false
+      if (typeof row?.inline_payload === 'string' && Buffer.byteLength(row.inline_payload, 'utf8') <= MAX_INLINE_PROJECTION_PAYLOAD_BYTES &&
+        row.blob_locator === null && row.blob_byte_length === null) {
+        try {
+          const proof = JSON.parse(row.inline_payload) as { formatVersion?: unknown; kind?: unknown; scopeKey?: unknown }
+          proofValid = proof.formatVersion === 1 && proof.kind === 'canonical-shadow-match' && proof.scopeKey === scopeKey &&
+            createHash('sha256').update(row.inline_payload).digest('hex') === row.cache_payload_digest
+        } catch { /* malformed proof is not current */ }
+      }
       return !!row && row.session_generation === input.sessionGeneration && row.status === 'valid' &&
         row.message_revision === input.messageRevision && row.history_watermark_json === input.historyWatermarkJson &&
         row.source_identity_json === sourceIdentityJson && typeof row.payload_generation === 'string' &&
         typeof row.payload_digest === 'string' && typeof row.validated_range_json === 'string' &&
-        row.cache_payload_generation === row.payload_generation && row.cache_source_identity_json === sourceIdentityJson &&
+        proofValid && row.cache_payload_generation === row.payload_generation && row.cache_source_identity_json === sourceIdentityJson &&
         row.cache_payload_digest === row.payload_digest && row.cache_validated_range_json === row.validated_range_json &&
-        ((typeof row.inline_payload === 'string' && row.blob_locator === null && row.blob_byte_length === null) ||
-          (row.inline_payload === null && typeof row.blob_locator === 'string' && Number.isSafeInteger(row.blob_byte_length) && Number(row.blob_byte_length) > 0))
+        row.inline_payload !== null
     })
   }
   return Object.freeze({ isCurrent })
 }
 
 /** Publish the API and route candidates as a paired, source-fenced set of scope manifests. */
-export function publishSqliteSessionApiRouteScopes(db: AppDatabase, input: FenceInput & Readonly<{
-  apiBaseline: unknown
-  route: unknown
-}>): boolean {
+export function publishSqliteSessionApiRouteScopes(db: AppDatabase, input: FenceInput): boolean {
   const conn = getDbConnection(db)
   const store = createSqliteProjectionStateStore(db)
   const processGeneration = currentProcessGeneration(conn)
   const service = createProjectionService(store, { processGeneration: () => processGeneration, connectionEpoch: () => 0,
     createToken: randomUUID, now: Date.now })
+  const proofs = API_ROUTE_SCOPE_KEYS.map((scopeKey) => {
+    const inlinePayload = JSON.stringify({ formatVersion: 1, kind: 'canonical-shadow-match', scopeKey })
+    if (Buffer.byteLength(inlinePayload, 'utf8') > MAX_INLINE_PROJECTION_PAYLOAD_BYTES) throw new Error('API_ROUTE_PROOF_INLINE_LIMIT_EXCEEDED')
+    return { inlinePayload, payloadDigest: createHash('sha256').update(inlinePayload).digest('hex') }
+  })
+  const validatedRangeJson = JSON.stringify({ messageRevision: input.messageRevision, historyWatermarkJson: input.historyWatermarkJson })
   try {
     return runInTransaction(conn, () => {
       const sourceIdentityJson = readProjectionSourceIdentity(conn, input.sessionId, input.sessionGeneration)
@@ -83,12 +95,9 @@ export function publishSqliteSessionApiRouteScopes(db: AppDatabase, input: Fence
         else service.ensureInvalid({ sessionId: input.sessionId, scopeKey, sessionGeneration: input.sessionGeneration })
         const lease = service.beginRebuild({ sessionId: input.sessionId, scopeKey, sessionGeneration: input.sessionGeneration })
         if (!lease || lease.sourceIdentityJson !== sourceIdentityJson) throw new Error('API_ROUTE_SCOPE_REBUILD_CLAIM_FAILED')
-        const payload = JSON.stringify(index === 0 ? input.apiBaseline : input.route)
-        const payloadDigest = createHash('sha256').update(payload).digest('hex')
         const published = service.publish(lease, {
-          sourceIdentityJson, payloadGeneration: randomUUID(), payloadDigest,
-          validatedRangeJson: JSON.stringify({ messageRevision: input.messageRevision, historyWatermarkJson: input.historyWatermarkJson }),
-          inlinePayload: payload,
+          sourceIdentityJson, payloadGeneration: randomUUID(), payloadDigest: proofs[index]!.payloadDigest,
+          validatedRangeJson, inlinePayload: proofs[index]!.inlinePayload,
         })
         if (published?.status !== 'valid') throw new Error('API_ROUTE_SCOPE_PUBLISH_FAILED')
       }

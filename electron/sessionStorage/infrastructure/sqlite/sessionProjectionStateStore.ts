@@ -1,7 +1,7 @@
 import type { AppDatabase } from '../../../database/sqliteStore'
 import { changesToNumber, runInTransaction } from '../../../database/transaction'
 import { getDbConnection } from '../../../database/sqliteStore'
-import { transitionProjectionState, type ProjectionStateCommand, type ProjectionStateRecord } from '../../domain/projectionState'
+import { MAX_INLINE_PROJECTION_PAYLOAD_BYTES, transitionProjectionState, type ProjectionStateCommand, type ProjectionStateRecord } from '../../domain/projectionState'
 import type { ProjectionCacheCandidate, ProjectionStateStore } from '../../application/ports'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
 import { projectionScopeSpecVersion } from '../../domain/scopeKey'
@@ -178,6 +178,9 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
         (cache.inlinePayload === undefined) === (cache.blobLocator === undefined) ||
         (cache.blobLocator !== undefined && (!Number.isSafeInteger(cache.blobByteLength) || cache.blobByteLength! <= 0))) {
         throw new Error('PROJECTION_CACHE_MANIFEST_MISMATCH')
+      }
+      if (cache.inlinePayload !== undefined && Buffer.byteLength(cache.inlinePayload, 'utf8') > MAX_INLINE_PROJECTION_PAYLOAD_BYTES) {
+        throw new Error('PROJECTION_CACHE_INLINE_LIMIT_EXCEEDED')
       }
       conn().prepare(`INSERT INTO session_projection_cache(
         session_id,scope_key,payload_generation,source_identity_json,payload_digest,validated_range_json,inline_payload,blob_locator,blob_byte_length,updated_at

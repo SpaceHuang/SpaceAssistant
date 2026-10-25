@@ -5,6 +5,7 @@ import { getDbConnection, reopenDatabaseConnection } from '../../../database/sql
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
 import { createSqliteProjectionChatBodyCacheStore, createSqliteProjectionStateStore } from './sessionProjectionStateStore'
 import { encodeProjectionScopeKey } from '../../domain/scopeKey'
+import { MAX_INLINE_PROJECTION_PAYLOAD_BYTES } from '../../domain/projectionState'
 
 describe('SQLite session projection state store', () => {
   let db: ReturnType<typeof createMemoryAppDb> | undefined
@@ -135,6 +136,29 @@ describe('SQLite session projection state store', () => {
     const invalidated = store.invalidateInTransaction({ sessionId: session.id, scopeKey: 'scope-a', sessionGeneration: session.generation, now: 4 })
     expect(invalidated).toMatchObject({ status: 'invalid', payloadDigest: null, rebuildToken: null })
     expect(getDbConnection(db).prepare('SELECT 1 FROM session_projection_cache WHERE session_id=? AND scope_key=?').get(session.id, 'scope-a')).toBeUndefined()
+  })
+
+  it('rejects oversized inline payloads at the SQLite owner and rolls back the state transition', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'projection state store inline budget', model: 'test' })
+    const store = createSqliteProjectionStateStore(db)
+    store.ensureInvalid({ sessionId: session.id, scopeKey: 'scope-large', sessionGeneration: session.generation, now: 1 })
+    const sourceIdentityJson = store.readSourceIdentity(session.id, session.generation)!
+    const source = JSON.parse(sourceIdentityJson) as { messageRevision: number; historyWatermark: unknown }
+    store.transition({ sessionId: session.id, scopeKey: 'scope-large', sessionGeneration: session.generation,
+      command: { type: 'claim', processGeneration: 2, rebuildToken: 'large-inline-token', now: 2 } })
+    expect(() => store.transition({
+      sessionId: session.id, scopeKey: 'scope-large', sessionGeneration: session.generation,
+      command: { type: 'publish', processGeneration: 2, rebuildToken: 'large-inline-token',
+        expectedSourceIdentityJson: sourceIdentityJson, historyWatermarkJson: JSON.stringify(source.historyWatermark ?? null),
+        messageRevision: source.messageRevision, payloadGeneration: 'large-inline', payloadDigest: 'digest',
+        validatedRangeJson: '{}', now: 3 },
+      cache: { sourceIdentityJson, payloadGeneration: 'large-inline', payloadDigest: 'digest', validatedRangeJson: '{}',
+        inlinePayload: 'x'.repeat(MAX_INLINE_PROJECTION_PAYLOAD_BYTES + 1) }
+    })).toThrow('PROJECTION_CACHE_INLINE_LIMIT_EXCEEDED')
+    expect(store.get(session.id, 'scope-large')).toMatchObject({ status: 'rebuilding', rebuildToken: 'large-inline-token' })
+    expect(getDbConnection(db).prepare('SELECT 1 FROM session_projection_cache WHERE session_id=? AND scope_key=?').get(session.id, 'scope-large'))
+      .toBeUndefined()
   })
 
   it('publishes a complete blob cache manifest with byte length and digest in the same transaction', () => {

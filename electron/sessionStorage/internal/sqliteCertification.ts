@@ -199,8 +199,7 @@ export function certifyCanonicalSessionApiRead(db: AppDatabase, sessionId: strin
     if (!sourceIdentity || sourceIdentity.messageRevision !== initial.messageRevision ||
       !publishSqliteSessionApiRouteScopes(db, {
         sessionId, sessionGeneration: initial.generation, messageRevision: initial.messageRevision,
-        historyWatermarkJson: JSON.stringify(sourceIdentity.historyWatermark ?? null),
-        apiBaseline: apiShadow.candidate, route: routeShadow.candidate
+        historyWatermarkJson: JSON.stringify(sourceIdentity.historyWatermark ?? null)
       })) {
       revokeEligibility(db, sessionId)
       return { status: 'ineligible', reason: 'projection-scope-publish-failed', apiReadMode: 'legacy',

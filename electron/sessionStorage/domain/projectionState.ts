@@ -1,5 +1,7 @@
 export type ProjectionStateStatus = 'invalid' | 'rebuilding' | 'valid' | 'rejected'
 
+export const MAX_INLINE_PROJECTION_PAYLOAD_BYTES = 256 * 1024
+
 export interface ProjectionStateRecord {
   sessionId: string
   scopeKey: string
