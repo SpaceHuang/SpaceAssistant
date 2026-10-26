@@ -93,6 +93,10 @@ function propagatePreparedReadCancellation(error: unknown, signal?: AbortSignal)
   if (error instanceof Error && (error.name === 'AbortError' || /(?:^|_)WORKER_(?:ABORTED|CANCELLED)$/.test(error.message))) throw error
 }
 
+function isPreparedSourceLocatorPending(error: unknown): boolean {
+  return error instanceof Error && error.message === 'PROJECTION_SOURCE_LOCATOR_NOT_READY'
+}
+
 function getTurnByAssistant(db: AppDatabase, sessionId: string, assistantMessageId: string): { requestId: string; turnId: string } | undefined {
   return getDbConnection(db).prepare('SELECT request_id AS requestId, turn_id AS turnId FROM turns WHERE session_id=? AND assistant_message_id=?').get(sessionId, assistantMessageId) as { requestId: string; turnId: string } | undefined
 }
@@ -158,7 +162,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
       catch (error) {
         propagatePreparedReadCancellation(error)
-        preparedChatBody.invalidate(view)
+        if (!isPreparedSourceLocatorPending(error)) preparedChatBody.invalidate(view)
         return undefined
       }
       return runInTransaction(getDbConnection(db), () => {
@@ -184,7 +188,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
       catch (error) {
         propagatePreparedReadCancellation(error)
-        preparedChatBody.invalidate(view)
+        if (!isPreparedSourceLocatorPending(error)) preparedChatBody.invalidate(view)
         return undefined
       }
       return runInTransaction(getDbConnection(db), () => {
@@ -213,7 +217,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         undefined, recordStage ? (stage, durationMs) => recordStage(stage, durationMs) : undefined)) }
       catch (error) {
         propagatePreparedReadCancellation(error)
-        preparedChatBody.invalidate(view)
+        if (!isPreparedSourceLocatorPending(error)) preparedChatBody.invalidate(view)
         return undefined
       }
       return measureStage('final-source-check', () => runInTransaction(getDbConnection(db), () => {
@@ -247,7 +251,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
       catch (error) {
         propagatePreparedReadCancellation(error)
-        preparedChatBody.invalidate(view)
+        if (!isPreparedSourceLocatorPending(error)) preparedChatBody.invalidate(view)
         return undefined
       }
       return runInTransaction(getDbConnection(db), () => {
@@ -280,7 +284,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
       catch (error) {
         propagatePreparedReadCancellation(error)
-        preparedChatBody.invalidate(view)
+        if (!isPreparedSourceLocatorPending(error)) preparedChatBody.invalidate(view)
         return undefined
       }
       return runInTransaction(getDbConnection(db), () => {
@@ -314,7 +318,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds, signal) }
       catch (error) {
         propagatePreparedReadCancellation(error, signal)
-        preparedChatBody.invalidate(view)
+        if (!isPreparedSourceLocatorPending(error)) preparedChatBody.invalidate(view)
         return undefined
       }
       return runInTransaction(getDbConnection(db), () => {
@@ -360,7 +364,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
       try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
       catch (error) {
         propagatePreparedReadCancellation(error)
-        preparedChatBody.invalidate(view)
+        if (!isPreparedSourceLocatorPending(error)) preparedChatBody.invalidate(view)
         return undefined
       }
       return runInTransaction(getDbConnection(db), () => {
@@ -400,7 +404,7 @@ export function createSessionQueries(db: AppDatabase, preparedChatBody?: Readonl
         try { bodies = await preparedChatBody.readBodies(view, selected.canonicalIds) }
         catch (error) {
           propagatePreparedReadCancellation(error)
-          preparedChatBody.invalidate(view)
+          if (!isPreparedSourceLocatorPending(error)) preparedChatBody.invalidate(view)
           return undefined
         }
         return runInTransaction(getDbConnection(db), () => {

@@ -145,6 +145,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
         if (!sourceSpillStore) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
         return { root: sourceSpillStore.root, descriptors }
       }
+      throw new Error('PROJECTION_SOURCE_LOCATOR_NOT_READY')
     }
     const evidence = runInTransaction(conn, () => {
       if (readProjectionSourceIdentity(conn, sessionId, sessionGeneration) !== expectedIdentity) return undefined
