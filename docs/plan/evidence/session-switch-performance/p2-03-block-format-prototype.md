@@ -18,7 +18,7 @@
 ## 候选定位目录
 
 - 使用有序范围树，以消息 `sequence` 为页读取入口；内部节点记录子节点 sequence 范围、blob locator、byteLength 与摘要。候选 fanout 为 8。根摘要由 manifest 固定，读页只遍历与页范围相交的节点。
-- 另需 message ID → 完整 History event dependency 的定位索引，供未发布/失效正文缓存后的冷页读取；这是 D-3 的数据库定位记录决策，不能与顺序块目录混为一份全量 JSON 清单。
+- 另需 message ID → 可单独读取的正文片段 + 精确 History 来源坐标/摘要记录，供未发布/失效正文缓存后的冷页读取；仅保存整 event ID 不够，因为大 context event 可包含整段会话，读一条仍可能解析所有消息。这是 D-3 的持久定位记录决策，不能与顺序块目录混为一份全量 JSON 清单。
 - 构建时扫描完整输出并验证稳定 ID 唯一、sequence 唯一/递增、消息正文与源事实一致；运行时页读取不重做全量覆盖扫描，只依赖完整发布的 manifest 和本页块。
 - 每个目录节点与正文块独立校验。根 manifest 绑定 session generation、chatBody 规格版本、source identity/fence、消息范围、message count、目录根引用与摘要。未知版本、缺块、错摘要、越界序列或重复 ID 使整个该代产物不可用，不返回部分页。
 
@@ -34,10 +34,10 @@
 
 ## 发布与恢复候选协议
 
-1. worker 根据一份稳定 source revision 构建正文块、顺序目录和来源依赖记录；逐项把产物写到 staging，完整 fsync/摘要校验后 promote 成不可变最终 blob。
+1. worker 根据一份稳定 source revision 构建正文块、顺序目录和逐消息来源记录；逐项把产物写到 staging，完整 fsync/摘要校验后 promote 成不可变最终 blob。大 History 事件必须能为目标消息定位到独立片段，不能每次把整个大事件当作单条消息依赖。
 2. 在一个 SQLite 事务中核对 source revision、session generation、message revision 与 History watermark，再发布 manifest 与索引完成标记。任何 fence 不匹配都丢弃本轮产物并重排维护。
 3. 崩溃发生在 manifest 发布前：blob 是孤块，不可读；重启孤块清理由现有 blob reference reconciliation 纳入新 manifest 引用类型后执行。发布后块缺失/损坏：该代无效、清除 ready 资格、保留 History/spill，进入现有 rebuild supervisor。
-4. 目录/来源映射维护与 canonical event append 必须同事务。编辑、History event UPDATE/DELETE、owner/schema 变更与 session 删除由触发器递增 source revision 或撤销索引完成状态。
+4. 目录/来源映射引用与 canonical event append 必须同事务。编辑、History event UPDATE/DELETE、owner/schema 变更与 session 删除由触发器递增 source revision 或撤销索引完成状态。正文片段是可校验派生数据，需保留 History 来源 event ID/sequence/schema version 与 source digest，不得成为独立权威。
 5. 老会话来源映射回填分段提交 progress，但全量尾部校验前不发布 complete；期间按 D-3 批准的行为处理页面。source revision 变化要使本次回填 checkpoint 失效或从安全游标续跑，并且不能把部分映射当完整覆盖。
 
 ## 原型验证

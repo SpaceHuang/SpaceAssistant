@@ -12,7 +12,7 @@
 - continuation checkpoint resume/retry（`electron/runtime/agentContinuation.ts`）→ 共享底层入口，然后镜像恢复上下文。
 - hosted / remote / session commit adapters 调用 `HistoryPort.appendBatch`，最后进入 `SqliteAgentHistory.appendBatch`。
 
-因此，候选来源映射可在底层追加事务中统一维护；只在上层 `SqliteAgentHistory` 接入会漏掉 accepted input 与 continuation 写入。
+因此，locator 元数据需在底层追加事务中统一维护；只在上层 `SqliteAgentHistory` 接入会漏掉 accepted input 与 continuation 写入。若消息正文片段放独立文件，则文件 staging 还需覆盖每个同步/异步调用者；此事务入口本身不能 await 文件操作。
 
 ## 直接修改与删除
 
@@ -23,11 +23,12 @@
 
 ## 候选实现边界
 
-1. 将 locator 写入放在 `appendSqliteAgentHistoryBatchInTransaction` 的 event append 内，需在事件 schema/转移校验成功后、外层事务提交前完成；幂等重复事件路径不能重复累加依赖。
+1. 将逐消息来源记录/引用放在 `appendSqliteAgentHistoryBatchInTransaction` 的 event append 内，需在事件 schema/转移校验成功后、外层事务提交前完成；幂等重复事件路径不能重复累加依赖。一个事件若含许多消息，索引必须能单独读取目标消息正文片段，不能让 reader 为一条消息解析整份 context JSON。
 2. `invocation-context-committed` / `transcript-compacted` 的消息数组会为已出现 ID 建立或替换正文基点；后续 `model-response-committed` 对 assistant 同 ID 增加 response dependency。匿名 tool result 不产生 UI message locator，但 tool lifecycle event 是否必须作为对应 invocation 的 reducer dependency，仍需通过差分原型定案。
-3. 大型 payload 的 locator 只能保存 History 坐标与依赖类型，正文仍由 source event/spill 提供；写入端要先用现有 spill descriptor 校验/解析，不能将 source spill locator 当作独立正文副本。
+3. 大型 payload 的定位引用要保存 History 坐标、依赖类型和摘要；如果整条 event 里有许多消息，必须额外提供按消息可读的派生片段或等价的随机访问格式。正文权威仍是 source event/spill，派生片段不得变成独立事实来源，且需用 source event digest/序号绑定；写入端要先用现有 spill descriptor 校验/解析。
 4. 对任意 event UPDATE/DELETE、stream owner/schema 变化及 session 删除，数据库约束/触发器必须使旧目录不可读；只有中心追加函数不能保护直接 SQL 修复与删除路径。
 5. 当前 `session_message_content_cutover.message_revision` 覆盖 message identity/body 变更；History event cursor 覆盖追加但不覆盖 UPDATE/DELETE 或 stream 元数据变化。因此候选常量级 fence 还需新的、由 SQLite triggers 单调推进的 session source revision，或等价的已证明方案。
+6. `appendSqliteAgentHistoryBatchInTransaction` 是同步 helper，continuation 代码直接在同步事务里调用；若逐消息 body fragment 存独立文件，必须先在所有调用点事务外完成 staging，再在本事务写引用并为失败/重复做孤块回收。否则应评估 SQLite 内可寻址片段的写入/事务成本。该存储落点尚未由 P2-03 原型确定，不能假设只给 helper 增一条 INSERT 就覆盖了格式和生命周期。
 
 ## 可复现检索
 
