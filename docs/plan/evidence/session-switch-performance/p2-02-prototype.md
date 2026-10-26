@@ -6,7 +6,7 @@
 
 ## 结论
 
-测试原型证明：完整权威归约后生成按消息顺序排列的不可变正文块，配合多层范围目录，可以只读固定页及相邻块；正文块与目录摘要不匹配会拒绝读取。普通块最多 8 条、JSON 字节不超过 256 KiB；单条超过字节预算时独立成块，不拆分消息。10 倍合成历史下，末页触及 24 条正文记录与 23 个目录节点，访问到的目录描述字节低于 10 KiB。
+测试原型证明：完整权威归约后生成按消息顺序排列的不可变正文块，配合多层范围目录，可以只读固定页及相邻块；另有按 message ID 查找来源片段的二级范围目录。正文块与目录摘要不匹配会拒绝读取。普通块最多 8 条、JSON 字节不超过 256 KiB；单条超过字节预算时独立成块，不拆分消息。10 倍合成历史下，末页触及 24 条正文记录与 23 个序列目录节点；按 ID 查找最多读取 5 个目录节点与 8 条候选记录。
 
 这**没有通过 AC-3/AC-4 的冷读来源定位门禁**。现有 turn/request 索引不能定位完整正文依赖：后续 invocation 的 `transcript-compacted` 可以用同一 message ID 更新此前的正文，完整归约结果取决于该后续事件。现在只有全历史 reducer 会发现这个更新。`readProjectionSourceIdentity` 还会枚举并序列化该 session 的全部 stream IDs。因此本原型不能证明无索引冷页不需要全会话工作，不能进入 P3。
 
@@ -15,6 +15,8 @@
 新增 [pageBodyReadPrototype.test.ts](../../../electron/sessionStorage/pageBodyReadPrototype.test.ts)，复用 `createProjectionChatBodyReducer`，验证：
 
 - 完整 reducer 与正文块分页结果一致，样本包含 dual-write/ canonical-only、assistant response、`tool_use` 文本提取，以及后来压缩快照改写既有 user/assistant message ID。
+- 按 turn 分组归约的来源片段样本，将旧消息映射到后来 compaction 所属 invocation、保留完整 invocation 依赖 event IDs，并与全 session reducer 页结果相同；该片段生成仍由内存全量原型完成。
+- 10,000 条 message ID 二级目录查询只走根到叶路径；1,000→10,000 条规模增长时，返回页正文数据项保持不超过 8 条。
 - 正文块摘要损坏时返回明确失败，不产出页面。
 - 1,000 与 10,000 条正文数据读取末 20 条：大样本触及 24 条正文记录、23 个目录节点，目录没有全量加载。
 - 单独反例确认 `turns` 中只列当前 turn 的消息 ID，而后续压缩事件可再次包含旧消息 ID；只按 turn ID 查找会漏掉更新。
@@ -23,7 +25,7 @@
 
 ```text
 npm exec -- vitest run electron/sessionStorage/pageBodyReadPrototype.test.ts --reporter=dot
-1 file passed; 6 passed; 0 failed; 0.58s
+1 file passed; 7 passed; 0 failed; 0.59s
 ```
 
 ## 尚未证明的要求
