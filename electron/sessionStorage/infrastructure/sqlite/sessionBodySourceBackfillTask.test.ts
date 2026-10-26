@@ -5,6 +5,7 @@ import { appendMessage, createSession } from '../../../database/operations'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
+import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { projectionSourceEventDigest } from './projectionSourceDependencyReader'
 import { createSessionBodySourceBackfillTask } from './sessionBodySourceBackfillTask'
 
@@ -82,5 +83,34 @@ describe('session body source backfill task', () => {
     ])), { timeout: 10_000 })
     expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(healthy.id))
       .toEqual({ status: 'complete' })
+  })
+
+  it('reduces and publishes a segmented large context body through the production maintenance task', async () => {
+    const temp = createTempDatabase('session-body-source-backfill-task-segmented-')
+    cleanup = temp.cleanup
+    blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    const conn = getDbConnection(temp.db)
+    const session = createSession(temp.db, { name: 'segmented source backfill' })
+    const content = 'large-context-body-'.repeat(400_000)
+    appendMessage(temp.db, { id: 'segmented-task-user', sessionId: session.id, role: 'user', content, timestamp: 1, status: 'sent' })
+    const history = new SqliteAgentHistory(conn, 1, () => 10, session.id)
+    await history.appendBatch([{ invocationId: 'segmented-task-invocation', turnId: 'segmented-task-turn', sequence: 1,
+      schemaVersion: 1, eventId: 'segmented-task-context', idempotencyKey: 'segmented-task-context',
+      kind: 'invocation-context-committed', payload: { messages: [
+        { id: 'segmented-task-user', role: 'user', content, timestamp: 1 },
+      ] } }], 0)
+    const result = new Promise<{ sessionId: string; status: string; messageCount?: number; error?: string }>((resolve) => {
+      const task = createSessionBodySourceBackfillTask({ db: temp.db, blobRoot: blobRoot!,
+        idleDelayMs: 60_000, retryDelayMs: 60_000, onResult: resolve })
+      taskStop = task.start()!.stop
+    })
+
+    await expect(result).resolves.toMatchObject({ sessionId: session.id, status: 'complete', messageCount: 1 })
+    const locator = conn.prepare(`SELECT fragment_locator,byte_length,sha256 FROM session_message_body_locator
+      WHERE session_id=? AND message_id='segmented-task-user'`).get(session.id) as
+      { fragment_locator: string; byte_length: number; sha256: string }
+    const body = JSON.parse(await createSessionProjectionBlobStore(blobRoot).readVerified({ locator: locator.fragment_locator,
+      byteLength: locator.byte_length, payloadDigest: locator.sha256 })) as { message?: { content?: string } }
+    expect(body.message?.content).toBe(content)
   })
 })
