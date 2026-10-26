@@ -40,6 +40,24 @@
 4. 目录/来源映射引用与 canonical event append 必须同事务。编辑、History event UPDATE/DELETE、owner/schema 变更与 session 删除由触发器递增 source revision 或撤销索引完成状态。正文片段是可校验派生数据，需保留 History 来源 event ID/sequence/schema version 与 source digest，不得成为独立权威。
 5. 老会话来源映射回填分段提交 progress，但全量尾部校验前不发布 complete；期间按 D-3 批准的行为处理页面。source revision 变化要使本次回填 checkpoint 失效或从安全游标续跑，并且不能把部分映射当完整覆盖。
 
+## 读取错误与回退候选
+
+| 情况 | 页结果 | 派生索引处置 | 来源读取处置 |
+| --- | --- | --- | --- |
+| 尚无完整 locator、旧 schema 不支持、索引正在回填 | 不读部分 locator 页 | 保持未就绪并排队维护 | 调用原 History reader；若原 reader 不支持该源格式，保持现有失败结果 |
+| page 前后 source revision / generation 不同 | 丢弃本次页，最多从新快照重试 1 次 | 过期 locator 不得返回 | 再变化时走既有 source mutation 错误通路 |
+| manifest、目录、目标正文片段或 locator 摘要损坏/缺失 | 不返回部分页或旧缓存正文 | 撤销 ready，排队重建；不删除 History/spill | 回退原 History reader，要求它独立校验 canonical source |
+| History source spill 缺失、长度/摘要不符或依赖清单不完整 | 不返回派生正文 | 保持不可用并记录稳定内部失败类 | 原 History reader 同样必须校验；若 source 已损坏则维持当前错误，不能拿旧镜像补正文 |
+| 文件/数据库暂时不可读 | 不返回部分页 | 按现有维护重试策略重试，不把瞬时失败标永久损坏 | 通过现有 storage 错误通路返回 |
+
+以上是 P2 候选契约，不新增 IPC 错误或用户文案；最终是否可以对所有缺索引会话走旧 reader，仍需按 D-3 选择确认。任何回退都不能绕过 canonical spill 的长度/摘要检查。
+
+## Schema 与包回退边界
+
+当前代码的 `DB_SCHEMA_VERSION` 为 115（`electron/database/schema.ts`）；`runMigrations` 会在磁盘版本高于当前二进制支持版本时抛 `DatabaseUpgradeRequiredError`（`electron/database/migrations.ts`）。因此 locator 状态若落 SQLite，候选迁移至少是 v115→v116，属于前向迁移：旧包不能继续打开升级后的同一数据库。P4 回退必须启动未升级数据库副本或恢复迁移前备份；“旧二进制忽略新表即可降级”与当前实现冲突。
+
+候选迁移只允许新增派生 locator / source-revision 状态及必要索引/触发器，不改写或删除 `messages`、canonical History、spill 与旧读表；DDL 在现有 `runInTransaction` 里原子执行，历史回填不在启动迁移事务内运行。回退只需清理新派生状态并丢弃新缓存文件，权威源保持可由旧路径读取。具体表布局、外键/触发器列表、v116 迁移测试和旧包副本演练仍须在 D-3=A 后冻结；此处没有执行 schema 变更。
+
 ## 原型验证
 
 `pageBodyReadPrototype.test.ts` 目前 10 项通过：完整 History reducer 对拍、compaction 覆盖旧 ID、`requiredUserMessage` 稳定 ID、assistant chunk/replay 图片输入/assistant 图片与 tool_use/tool-call-started/tool result/mixed authority、页范围和 message ID 二级目录各放大 10 倍、正文块/目录/来源片段/来源事件/依赖摘要损坏或变化拒绝、普通块 byte/message 上限及 300 KiB 单条隔离。逐消息来源记录绑定 event ID、invocation 内序号、session 序号、schema version、event kind 与 source digest；完整 reducer 依赖放在共享的 invocation manifest 中，消息记录只引用其摘要。测试先用不完整定位记录断言出 RED，再补来源坐标、摘要和 source revision fence；按页读取经 sequence directory 选中范围后，只校验目标片段和常量级版本/摘要引用，不重扫 invocation 事件列表。
