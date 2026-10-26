@@ -144,4 +144,36 @@ describe('projection invocation source reader', () => {
       await fs.rm(blobRoot, { recursive: true, force: true })
     }
   })
+
+  it('reads a segmented large context into one bounded source page without deferring the session forever', async () => {
+    const temp = createTempDatabase('projection-invocation-source-reader-segmented-')
+    const blobRoot = `${temp.dbPath}.blobs`
+    try {
+      const conn = getDbConnection(temp.db)
+      const session = createSession(temp.db, { name: 'segmented source reader' })
+      const content = 'segmented-body-'.repeat(400_000)
+      appendMessage(temp.db, { id: 'segmented-user', sessionId: session.id, role: 'user', content, timestamp: 1, status: 'sent' })
+      const history = new SqliteAgentHistory(conn, 1, () => 10, session.id)
+      await history.appendBatch([{ invocationId: 'reader-segmented', turnId: 'turn-segmented', sequence: 1, schemaVersion: 1,
+        eventId: 'reader-segmented-1', idempotencyKey: 'reader-segmented-1', kind: 'invocation-context-committed',
+        payload: { messages: [{ id: 'segmented-user', role: 'user', content, timestamp: 1 }] } }], 0)
+      const sourceIdentityJson = readProjectionSourceIdentity(conn, session.id, session.generation)!
+      const invocations = readProjectionHistoryInvocationsInWorker({ blobs: createSessionProjectionBlobStore(blobRoot), permit: {
+        dbPath: temp.dbPath, sessionId: session.id, sessionGeneration: session.generation,
+        scopeKey: 'source-backfill', specVersion: 1, sourceIdentityJson, connectionEpoch: 0,
+        processGeneration: 0, rebuildToken: 'reader-segmented-token',
+      } })
+      let readInvocation: ProjectionInvocationSourceInput | undefined
+      for await (const item of invocations) { readInvocation = item; break }
+      const stored = conn.prepare('SELECT invocation_id,turn_id,sequence,event_id,idempotency_key,schema_version,kind,session_seq,commit_order,created_at,payload_json FROM agent_history_events WHERE event_id=?')
+        .get('reader-segmented-1') as Parameters<typeof projectionSourceEventDigest>[0]
+
+      expect(readInvocation?.events[0]?.payloadJson).toContain(content.slice(0, 1_024))
+      expect(readInvocation?.messageFacts[0]?.storedContent).toBe(content)
+      expect(readInvocation?.events[0]?.sourceDigest).toBe(projectionSourceEventDigest(stored))
+    } finally {
+      temp.cleanup()
+      await fs.rm(blobRoot, { recursive: true, force: true })
+    }
+  })
 })

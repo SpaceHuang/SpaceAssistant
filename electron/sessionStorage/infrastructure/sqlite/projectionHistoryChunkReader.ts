@@ -25,6 +25,7 @@ type ProjectionMessageFactHeaderRow = {
 type ProjectionMessageFactContentRow = { id: string; content: string }
 type LargeContextEventCapture = Readonly<{
   messageCount: number
+  sourceDigest: string
   requiredUserByteLength: number | null
   requiredUserMessageRef?: Readonly<{ id: string; messageIndex: number }>
   requiredUserJson?: string
@@ -267,16 +268,17 @@ function readLargeContextEventCapture(
 ): LargeContextEventCapture | 'source-drift' | undefined {
   if (readProjectionSourceIdentity(conn, permit.sessionId, permit.sessionGeneration) !== permit.sourceIdentityJson) return 'source-drift'
   if (!Number.isSafeInteger(row.payload_byte_length) || row.payload_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
-  const shape = conn.prepare(`SELECT json_type(payload_json,'$.messages') AS messages_type,
+  const shape = conn.prepare(`SELECT json_type(payload_json,'$.messages') AS messages_type,payload_json AS raw_payload_json,
     json_array_length(payload_json,'$.messages') AS message_count,
     (SELECT COALESCE(SUM(length(CAST(item.value AS BLOB))),0) FROM json_each(agent_history_events.payload_json,'$.messages') item) AS message_json_byte_length,
     length(CAST(json_extract(payload_json,'$.requiredUserMessage') AS BLOB)) AS required_user_byte_length,
     json_extract(payload_json,'$.requiredUserMessage.id') AS required_user_id,
     json_remove(payload_json,'$.messages','$.requiredUserMessage') AS extra_payload_json
     FROM agent_history_events WHERE event_id=? AND session_id=?`).get(row.event_id, permit.sessionId) as
-    { messages_type: string | null; message_count: number | null; required_user_byte_length: number | null;
+    { messages_type: string | null; raw_payload_json: string; message_count: number | null; required_user_byte_length: number | null;
       required_user_id: string | null; message_json_byte_length: number; extra_payload_json: string } | undefined
-  if (shape?.messages_type !== 'array' || !Number.isSafeInteger(shape.message_count) || (shape.message_count ?? 0) < 1 ||
+  if (shape?.messages_type !== 'array' || Buffer.byteLength(shape.raw_payload_json, 'utf8') > MAX_STAGED_SOURCE_CHUNK_BYTES ||
+    !Number.isSafeInteger(shape.message_count) || (shape.message_count ?? 0) < 1 ||
     Buffer.byteLength(shape.extra_payload_json, 'utf8') > MAX_STAGED_SOURCE_CHUNK_BYTES || (shape.required_user_byte_length !== null &&
       shape.required_user_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES)) return undefined
   if (!Number.isSafeInteger(shape.message_json_byte_length) || shape.message_json_byte_length > MAX_SEGMENTED_HISTORY_EVENT_BYTES) return undefined
@@ -304,7 +306,9 @@ function readLargeContextEventCapture(
       requiredUserJson = required.required_user_json
     }
   }
-  return Object.freeze({ messageCount: shape.message_count!, requiredUserByteLength: shape.required_user_byte_length,
+  return Object.freeze({ messageCount: shape.message_count!,
+    sourceDigest: projectionSourceEventDigest({ ...row, payload_json: shape.raw_payload_json }),
+    requiredUserByteLength: shape.required_user_byte_length,
     extraPayloadJson: shape.extra_payload_json,
     ...(requiredUserMessageRef ? { requiredUserMessageRef } : {}),
     ...(requiredUserJson !== undefined ? { requiredUserJson } : {}) })
@@ -539,7 +543,7 @@ function stageOversizedContextEvent(
     const rootPayload = JSON.stringify({ formatVersion: 3, kind: 'segmented-history-event',
       event: { invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id,
         idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind,
-        sessionSequence: row.session_seq, commitOrder: row.commit_order, createdAt: row.created_at },
+        sessionSequence: row.session_seq, commitOrder: row.commit_order, createdAt: row.created_at, sourceDigest: capture.sourceDigest },
       extraPayload,
       messageCount,
       messageSegments: writtenSegments.filter(({ kind }) => kind === 'messages').map((segment) => ({ locator: segment.locator,
