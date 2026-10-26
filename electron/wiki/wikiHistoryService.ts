@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { WikiFileStore } from './wikiFileStore'
-import { replayCompletedWikiRestore, type WikiDomainCoordinator, type WikiSavePageResult } from './wikiDomainCoordinator'
+import { replayCompletedWikiRestore, resumePendingWikiRestore, type WikiDomainCoordinator, type WikiSavePageResult } from './wikiDomainCoordinator'
 import type { WikiDomainSchema } from './wikiDomainCoordinator'
 import { parseWikiPageMarker } from './wikiReconciler'
 
@@ -74,6 +74,15 @@ export function createWikiHistoryService(options: {
       const finalPageHash = invocation.expectedFinalPage ? stableHash(invocation.expectedFinalPage) : undefined
       const persisted = await replayCompletedWikiRestore(options.store, { ...invocation, proposalId, ...(finalPageHash ? { finalPageHash } : {}) })
       if (persisted) return persisted
+      if (finalPageHash) {
+        const pending = await resumePendingWikiRestore(options.store, { ...invocation, proposalId, finalPageHash })
+        if (pending) {
+          if (invocation.lane === 'automation' || !await options.verifyConfirmation(invocation.receipt, proposalId)) throw codedError('confirmation_required')
+          const resumed = await options.coordinator.savePage(pending)
+          completedRestores.set(invocationKey, { proposalId, callerId: invocation.callerId, lane: invocation.lane, result: resumed })
+          return resumed
+        }
+      }
       const proposal = proposals.get(proposalId)
       if (!proposal) throw codedError('restore_proposal_expired')
       if (proposal.input.callerId !== invocation.callerId || proposal.input.lane !== invocation.lane) throw codedError('restore_conflict')

@@ -87,4 +87,30 @@ describe('Wiki command to sourceId integration', () => {
     expect(result.remainingCount).toBe(2)
     expect(fs.readdirSync(path.join(wikiRoot, '.wiki-service', 'sources'))).toHaveLength(1)
   })
+
+  it('advances repeated capped bulk ingests through remaining files without duplicating sources', async () => {
+    const workDir = temp('wiki-route-bulk-advance-work-')
+    const userDataPath = temp('wiki-route-bulk-advance-data-')
+    const config = { ...DEFAULT_WIKI_CONFIG, maxBatchIngest: 1 }
+    const wikiRoot = path.join(userDataPath, config.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
+    for (const name of ['a.md', 'b.md', 'c.md']) fs.writeFileSync(path.join(workDir, name), name)
+
+    const first = await importAllRawFromWorkDir(workDir, config, { userDataPath })
+    const second = await importAllRawFromWorkDir(workDir, config, { userDataPath })
+    const third = await importAllRawFromWorkDir(workDir, config, { userDataPath })
+
+    expect([first, second, third].map(result => result.ok ? { name: result.sources[0]?.displayName, remainingCount: result.remainingCount } : result)).toEqual([
+      { name: 'a.md', remainingCount: 2 },
+      { name: 'b.md', remainingCount: 1 },
+      { name: 'c.md', remainingCount: 0 },
+    ])
+    const sourceFiles = fs.readdirSync(path.join(wikiRoot, '.wiki-service', 'sources'))
+    expect(sourceFiles).toHaveLength(3)
+    expect(new Set([first, second, third].flatMap(result => result.ok ? result.sources.map(source => source.sourceId) : [])).size).toBe(3)
+    expect(fs.readdirSync(path.join(wikiRoot, 'raw', (await import('./wikiProjects')).computeProjectId(workDir)))).toHaveLength(3)
+  })
 })

@@ -53,6 +53,28 @@ export async function replayCompletedWikiRestore(store: WikiFileStore, identity:
   return journal.result
 }
 
+export async function resumePendingWikiRestore(store: WikiFileStore, identity: { requestId: string; toolUseId: string; callerId: string; lane: string; proposalId: string; finalPageHash: string }): Promise<WikiSavePageInput | undefined> {
+  const operationId = sha(`${identity.requestId}\0${identity.toolUseId}`)
+  const journal = await readJournal(store, `.wiki-service/operations/${operationId}.json`)
+  if (!journal?.restoreBinding || !['prepared', 'domain_committed'].includes(journal.status)) return undefined
+  if (journal.formatVersion !== 1 || journal.operationId !== operationId || journal.result?.operationId !== operationId ||
+    journal.restoreBinding.proposalId !== identity.proposalId || journal.restoreBinding.finalPageHash !== identity.finalPageHash ||
+    journal.callerId !== identity.callerId || journal.lane !== identity.lane || !Number.isSafeInteger(journal.schemaVersion)) throw codedError('idempotency_conflict')
+  const staged = await store.read(journal.stagingPath)
+  if (sha(staged) !== journal.newHash) throw codedError('operation_pending')
+  const parsed = parseWikiPageMarker(staged.toString('utf8'))
+  const title = /^#\s+(.+?)\s*#*\s*$/m.exec(parsed.body)?.[1]?.trim()
+  if (!parsed.marker || !title || parsed.marker.pageId !== journal.result.pageId || parsed.marker.revision !== journal.result.revision ||
+    typeof parsed.marker.categoryId !== 'string' || typeof parsed.marker.summary !== 'string') throw codedError('operation_pending')
+  const finalPage = { title, categoryId: parsed.marker.categoryId, summary: parsed.marker.summary, markdown: parsed.body.replace(/^#\s+.+?\s*#*\s*\r?\n(?:\r?\n)?/m, '').trimEnd(), parentPageId: parsed.marker.parentPageId ?? null, sourceRefs: parsed.marker.sourceRefs ?? [] }
+  if (sha(stableJson(finalPage)) !== identity.finalPageHash || !journal.eventMaterial || journal.eventMaterial.pageId !== journal.result.pageId) throw codedError('restore_material_mismatch')
+  return {
+    requestId: identity.requestId, toolUseId: identity.toolUseId, callerId: identity.callerId, lane: identity.lane,
+    pageId: journal.result.pageId, expectedRevision: journal.result.revision - 1, schemaVersion: journal.schemaVersion!,
+    ...finalPage, operationKind: 'restored', restoreProposalId: identity.proposalId, restoreFinalPageHash: identity.finalPageHash,
+  }
+}
+
 export async function listPendingWikiOperationTargets(store: WikiFileStore): Promise<PendingWikiOperationTarget[]> {
   const directory = store.absolutePath('.wiki-service/operations')
   let names: string[]

@@ -129,6 +129,26 @@ describe('WikiHistoryService', () => {
 
     await expect(rebuilt.applyRestore(proposal.proposalId, invocation)).resolves.toEqual(first)
   })
+
+  it('resumes a committed restore after projection failure and rebuilding both services', async () => {
+    const { store } = await fixture()
+    let failProjection = false
+    const schema = () => ({ schemaVersion: 1, categories: [{ id: 'topic', name: 'Topic', status: 'active' as const }] })
+    let coordinator = createWikiDomainCoordinator({ store, schema, beforeProjection: projection => { if (projection === 'log' && failProjection) { failProjection = false; throw new Error('projection unavailable') } } })
+    let service = createWikiHistoryService({ store, coordinator, schema, verifyConfirmation: receipt => receipt === 'approved' })
+    const page = await coordinator.savePage(input)
+    await coordinator.savePage({ ...input, requestId: 'update-resume', toolUseId: 'update-resume', pageId: page.pageId, expectedRevision: 1, markdown: 'Changed body' })
+    const proposal = await service.prepareRestore({ pageId: page.pageId, targetRevision: 1, expectedCurrentRevision: 2, callerId: 'assistant', lane: 'chat' })
+    const invocation = { requestId: 'restore-resume', toolUseId: 'restore-resume', callerId: 'assistant', lane: 'chat', receipt: 'approved', expectedFinalPage: proposal.finalPage }
+
+    failProjection = true
+    await expect(service.applyRestore(proposal.proposalId, invocation)).rejects.toMatchObject({ code: 'projection_pending' })
+    coordinator = createWikiDomainCoordinator({ store, schema, beforeProjection: projection => { if (projection === 'log' && failProjection) throw new Error('projection unavailable') } })
+    service = createWikiHistoryService({ store, coordinator, schema, verifyConfirmation: receipt => receipt === 'approved' })
+
+    await expect(service.applyRestore(proposal.proposalId, invocation)).resolves.toMatchObject({ pageId: page.pageId, revision: 3 })
+    expect((await store.readCatalog())?.pages).toMatchObject([{ pageId: page.pageId, revision: 3 }])
+  })
 })
 
 async function fixtureWithCategories(categories: Array<{ id: string; name: string; status: 'active'; allowedParentCategoryIds?: string[] }>) {
