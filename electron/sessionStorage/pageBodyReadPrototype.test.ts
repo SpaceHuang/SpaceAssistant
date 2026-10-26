@@ -208,7 +208,13 @@ function buildSourceFragmentPrototype(events: ProjectionHistoryChunkEvent[], fac
         digest: createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex') })
     }
   }
-  const pageIndex = buildPrototype([...fragments.values()].map(({ body }) => body).sort((left, right) => left.sequence - right.sequence))
+  const pageBodies = [...fragments.values()].map(({ body }) => body)
+  const seenSequences = new Set<number>()
+  for (const body of pageBodies) {
+    if (!Number.isSafeInteger(body.sequence) || seenSequences.has(body.sequence)) throw new Error('PROTOTYPE_SOURCE_SEQUENCE_DUPLICATE')
+    seenSequences.add(body.sequence)
+  }
+  const pageIndex = buildPrototype(pageBodies.sort((left, right) => left.sequence - right.sequence))
   const readFragment = (messageId: string) => {
     const fragment = fragments.get(messageId)
     if (!fragment) return undefined
@@ -369,6 +375,20 @@ describe('paged chat body read prototype (test only)', () => {
     expect(reduceAll(events, facts)).toMatchObject([{ id: 'required-user', content: 'required task' }])
     const index = buildSourceFragmentPrototype(events, facts)
     expect(index.get('required-user')).toMatchObject({ sourceEvent: { eventId: 'turn-required-1' } })
+  })
+
+  it('rejects duplicate message sequence values across separately reduced invocations', () => {
+    const events = [
+      fixtureEvent('turn-1', 1, 'invocation-context-committed', { messages: [{ id: 'u1', role: 'user', content: 'one', timestamp: 1 }] }),
+      fixtureEvent('turn-1', 2, 'invocation-completed', { status: 'completed' }),
+      fixtureEvent('turn-2', 1, 'invocation-context-committed', { messages: [{ id: 'u2', role: 'user', content: 'two', timestamp: 2 }] }),
+      fixtureEvent('turn-2', 2, 'invocation-completed', { status: 'completed' }),
+    ]
+    const facts: ProjectionMessageFact[] = [
+      { id: 'u1', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'one' },
+      { id: 'u2', role: 'user', timestamp: 2, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'two' },
+    ]
+    expect(() => buildSourceFragmentPrototype(events, facts)).toThrow('PROTOTYPE_SOURCE_SEQUENCE_DUPLICATE')
   })
 
   it('keeps page directory and body reads bounded when unrelated history grows tenfold', () => {
