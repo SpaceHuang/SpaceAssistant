@@ -14,7 +14,7 @@
 
 新增 [pageBodyReadPrototype.test.ts](../../../electron/sessionStorage/pageBodyReadPrototype.test.ts)，复用 `createProjectionChatBodyReducer`，验证：
 
-- 完整 reducer 与正文块分页结果一致，样本包含 dual-write/ canonical-only、assistant response、`tool_use` 文本提取，以及后来压缩快照改写既有 user/assistant message ID。
+- 完整 reducer 与正文块分页结果一致，样本包含 dual-write/canonical-only、assistant response、`tool_use` 文本提取，以及后来压缩快照改写既有 user/assistant message ID；跨 invocation 重复 message sequence 会 fail closed。
 - 按 turn 分组归约的来源片段样本，将旧消息映射到后来 compaction 所属 invocation；也覆盖 `requiredUserMessage` 补充稳定 ID、replay user 图片输入、assistant 图片/tool_use、tool-call-started/tool result。共享 invocation 依赖清单记录 event/session sequence、schema version、kind 与事件摘要，逐消息记录引用其摘要；页面读取通过 source revision 与摘要引用拒绝陈旧/损坏记录，并与全 session reducer 页结果相同。该片段生成仍由内存全量原型完成。
 - 10,000 条 message ID 二级目录查询只走根到叶路径；1,000→10,000 条规模增长时，返回页正文数据项保持不超过 8 条。
 - 正文块摘要损坏时返回明确失败，不产出页面。
@@ -25,7 +25,7 @@
 
 ```text
 npm exec -- vitest run electron/sessionStorage/pageBodyReadPrototype.test.ts --reporter=dot
-1 file passed; 10 passed; 0 failed; 0.60s
+1 file passed; 11 passed; 0 failed; 0.60s
 ```
 
 ## 尚未证明的要求
