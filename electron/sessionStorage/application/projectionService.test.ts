@@ -63,6 +63,53 @@ describe('Session ProjectionService', () => {
       .toBeUndefined()
   })
 
+  it('publishes paged block references atomically with a valid cache row and removes them on invalidation', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'paged body blob references', model: 'test' })
+    const service = createProjectionService(createSqliteProjectionStateStore(db), {
+      processGeneration: () => 2, connectionEpoch: () => 1, createToken: () => 'paged-reference-token', now: () => 1,
+    })
+    const scopeKey = 'session-projection:chatBodyV1:v4'
+    service.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })!
+    const reference = { locator: 'projection-00000000-0000-4000-8000-000000000001.blob', byteLength: 13,
+      payloadDigest: 'a'.repeat(64), kind: 'body-block' }
+
+    expect(service.publish(lease, { sourceIdentityJson: lease.sourceIdentityJson, payloadGeneration: 'paged-generation-a',
+      payloadDigest: 'b'.repeat(64), validatedRangeJson: '{}', inlinePayload: '{"formatVersion":1}', blobReferences: [reference] }))
+      .toMatchObject({ status: 'valid', payloadGeneration: 'paged-generation-a' })
+    const conn = getDbConnection(db)
+    expect(conn.prepare('SELECT locator,byte_length,payload_digest,kind FROM session_projection_blob_references WHERE session_id=?')
+      .all(session.id)).toEqual([{ locator: reference.locator, byte_length: 13, payload_digest: 'a'.repeat(64), kind: 'body-block' }])
+
+    service.invalidateInTransaction({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })
+    expect(conn.prepare('SELECT 1 FROM session_projection_blob_references WHERE session_id=?').get(session.id)).toBeUndefined()
+  })
+
+  it('does not publish blob references from a lease replaced by a newer generation', () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'stale paged body lease', model: 'test' })
+    let token = 'old-paged-lease'
+    const service = createProjectionService(createSqliteProjectionStateStore(db), {
+      processGeneration: () => 2, connectionEpoch: () => 1, createToken: () => token, now: () => 1,
+    })
+    const scopeKey = 'session-projection:chatBodyV1:v4'
+    service.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })
+    const oldLease = service.beginRebuild({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })!
+    service.invalidateLease(oldLease)
+    token = 'new-paged-lease'
+    const newLease = service.beginRebuild({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })!
+    const ref = { locator: 'projection-00000000-0000-4000-8000-000000000002.blob', byteLength: 4,
+      payloadDigest: 'c'.repeat(64), kind: 'body-block' as const }
+    const output = { sourceIdentityJson: oldLease.sourceIdentityJson, payloadGeneration: 'stale-generation',
+      payloadDigest: 'd'.repeat(64), validatedRangeJson: '{}', inlinePayload: '{}', blobReferences: [ref] }
+
+    expect(service.publish(oldLease, output)).toBeNull()
+    expect(getDbConnection(db).prepare('SELECT 1 FROM session_projection_blob_references WHERE session_id=?').get(session.id))
+      .toBeUndefined()
+    expect(service.get(session.id, scopeKey)).toMatchObject({ status: 'rebuilding', rebuildToken: newLease.rebuildToken })
+  })
+
   it('stores retryable projection rejection as a scope state with a due retry time', () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection rejection state', model: 'test' })

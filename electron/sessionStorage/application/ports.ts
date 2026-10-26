@@ -11,6 +11,13 @@ type ProjectionCacheCandidateBase = Readonly<{
   payloadGeneration: string
   payloadDigest: string
   validatedRangeJson: string
+  blobReferences?: readonly ProjectionCacheBlobReference[]
+}>
+export type ProjectionCacheBlobReference = Readonly<{
+  locator: string
+  byteLength: number
+  payloadDigest: string
+  kind: 'body-block' | 'sequence-directory' | 'id-directory'
 }>
 export type ProjectionCacheCandidate = ProjectionCacheCandidateBase &
   (Readonly<{ inlinePayload: string; blobLocator?: never; blobByteLength?: never }> |

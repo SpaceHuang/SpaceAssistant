@@ -190,6 +190,14 @@ export function createSqliteProjectionStateStore(db: AppDatabase) {
         inline_payload=excluded.inline_payload,blob_locator=excluded.blob_locator,blob_byte_length=excluded.blob_byte_length,updated_at=excluded.updated_at`)
         .run(next.sessionId,next.scopeKey,cache.payloadGeneration,cache.sourceIdentityJson,cache.payloadDigest,cache.validatedRangeJson,
           cache.inlinePayload ?? null,cache.blobLocator ?? null,cache.blobByteLength ?? null,next.updatedAt)
+      conn().prepare('DELETE FROM session_projection_blob_references WHERE session_id=? AND scope_key=?').run(next.sessionId, next.scopeKey)
+      if (cache.blobReferences?.length) {
+        const insertReference = conn().prepare(`INSERT INTO session_projection_blob_references(
+          session_id,scope_key,payload_generation,locator,byte_length,payload_digest,kind
+        ) VALUES(?,?,?,?,?,?,?)`)
+        for (const reference of cache.blobReferences) insertReference.run(next.sessionId, next.scopeKey, cache.payloadGeneration, reference.locator,
+          reference.byteLength, reference.payloadDigest, reference.kind)
+      }
     } else {
       conn().prepare('DELETE FROM session_projection_cache WHERE session_id=? AND scope_key=?').run(next.sessionId, next.scopeKey)
     }

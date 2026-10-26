@@ -39,6 +39,7 @@ import {
   MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
   MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
   MIGRATION_V114_INVOCATION_PENDING_VIEWS_RETIREMENT_SQL,
+  MIGRATION_V116_SESSION_BODY_LOCATOR_SQL,
   SCHEMA_META_KEYS, WIKI_PROJECTS_TABLE_SQL
 } from './schema'
 import { runInTransaction } from './transaction'
@@ -2335,6 +2336,12 @@ export function runMigrations(conn: DatabaseSync): void {
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   if (version >= 115) runInTransaction(conn, () => retireApiReadModeColumn(conn))
+  // v115 → v116: persistent rebuildable message-body locators and paged-cache blob roots.
+  if (version === 115) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V116_SESSION_BODY_LOCATOR_SQL)
+    version = 116
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {

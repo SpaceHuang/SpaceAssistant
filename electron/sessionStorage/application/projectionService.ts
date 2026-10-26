@@ -1,6 +1,6 @@
 import { MAX_INLINE_PROJECTION_PAYLOAD_BYTES, type ProjectionStateCommand, type ProjectionStateRecord } from '../domain/projectionState'
 import { parseProjectionBuildCheckpoint } from '../domain/projectionBuild'
-import type { ProjectionCacheCandidate, ProjectionStateStore } from './ports'
+import type { ProjectionCacheBlobReference, ProjectionCacheCandidate, ProjectionStateStore } from './ports'
 
 export type ProjectionRebuildLease = Readonly<{
   sessionId: string
@@ -20,7 +20,8 @@ type ProjectionBuildOutputBase = Readonly<{
 }>
 type ProjectionBuildOutput = ProjectionBuildOutputBase &
   (Readonly<{ inlinePayload: string; blobLocator?: never; blobByteLength?: never }> |
-   Readonly<{ inlinePayload?: never; blobLocator: string; blobByteLength: number }>)
+   Readonly<{ inlinePayload?: never; blobLocator: string; blobByteLength: number }>) &
+  Readonly<{ blobReferences?: readonly ProjectionCacheBlobReference[] }>
 
 export interface SessionProjectionService {
   get(sessionId: string, scopeKey: string): ProjectionStateRecord | null
@@ -96,6 +97,11 @@ export function createProjectionService(store: ProjectionStateStore, options: Re
   const publish: SessionProjectionService['publish'] = (lease, output) => {
     if (!ownsLease(lease) || output.sourceIdentityJson !== lease.sourceIdentityJson || !output.payloadGeneration.trim() || !output.payloadDigest.trim()) return null
     if (typeof output.inlinePayload === 'string' && Buffer.byteLength(output.inlinePayload, 'utf8') > MAX_INLINE_PROJECTION_PAYLOAD_BYTES) return null
+    if (output.blobReferences !== undefined && (!Array.isArray(output.blobReferences) || output.blobReferences.length < 1 ||
+      output.blobReferences.length > 100_000 || output.blobReferences.some((reference) => !reference ||
+        !/^projection-[0-9a-f-]{36}\.blob$/.test(reference.locator) || !Number.isSafeInteger(reference.byteLength) || reference.byteLength < 1 ||
+        !/^[a-f0-9]{64}$/.test(reference.payloadDigest) || !['body-block','sequence-directory','id-directory'].includes(reference.kind)) ||
+      new Set(output.blobReferences.map(({ locator }) => locator)).size !== output.blobReferences.length || output.inlinePayload === undefined)) return null
     let source: { formatVersion?: unknown; sessionGeneration?: unknown; messageRevision?: unknown; historyWatermark?: unknown }
     try { source = JSON.parse(lease.sourceIdentityJson) as typeof source } catch { return null }
     if (source.formatVersion !== 1 || source.sessionGeneration !== lease.sessionGeneration || !Number.isSafeInteger(source.messageRevision)) return null
@@ -111,6 +117,7 @@ export function createProjectionService(store: ProjectionStateStore, options: Re
       ...(output.inlinePayload === undefined
         ? { blobLocator: output.blobLocator, blobByteLength: output.blobByteLength }
         : { inlinePayload: output.inlinePayload }),
+      ...(output.blobReferences ? { blobReferences: output.blobReferences } : {}),
     }
     return store.transition({ sessionId: lease.sessionId, scopeKey: lease.scopeKey, sessionGeneration: lease.sessionGeneration, command, cache })
   }

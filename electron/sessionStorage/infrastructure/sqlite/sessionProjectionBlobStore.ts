@@ -271,6 +271,17 @@ export function createSessionProjectionBlobStore(root: string) {
           const manifests: Array<{ locator: string; byteLength?: number; payloadDigest: string; sessionId: string; scopeKey: string; sourceIdentityJson: string; kind?: 'output' | 'stable-id-index' | 'final-view'; itemCount?: number }> = []
           const reducerStateManifests: ProjectionBuildReducerStateManifestRef[] = []
           const pendingChunkManifests: ProjectionPendingHistoryChunkManifestRef[] = []
+          const bodyBlockReferences: Array<{ locator: string; byteLength: number; payloadDigest: string }> = []
+          for (const row of conn.prepare(`SELECT locator,byte_length,payload_digest FROM session_projection_blob_references
+            ORDER BY locator`).all() as Array<{ locator: string; byte_length: number; payload_digest: string }>) {
+            try {
+              const locator = assertLocator(row.locator)
+              if (!Number.isSafeInteger(row.byte_length) || row.byte_length < 1 || !/^[a-f0-9]{64}$/.test(row.payload_digest)) {
+                throw new Error('invalid body block metadata')
+              }
+              bodyBlockReferences.push({ locator, byteLength: row.byte_length, payloadDigest: row.payload_digest })
+            } catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid paged body blob reference: ${String(cause)}`) }
+          }
           for (const row of conn.prepare('SELECT session_id,scope_key,source_identity_json,blob_locator,blob_byte_length,payload_digest FROM session_projection_cache WHERE blob_locator IS NOT NULL').all() as Array<{ session_id: string; scope_key: string; source_identity_json: string; blob_locator: string; blob_byte_length: number; payload_digest: string }>) {
             try {
               manifests.push({ locator: assertLocator(row.blob_locator), byteLength: row.blob_byte_length, payloadDigest: row.payload_digest,
@@ -302,10 +313,19 @@ export function createSessionProjectionBlobStore(root: string) {
               catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid stable-ID index manifest reference: ${String(cause)}`) }
             }
           }
-          return { locators, manifests, reducerStateManifests, pendingChunkManifests }
+          return { locators, manifests, reducerStateManifests, pendingChunkManifests, bodyBlockReferences }
         })
         const referenced = roots.locators
         await retainOutputManifestChains(root, roots.manifests, referenced)
+        for (const reference of roots.bodyBlockReferences) {
+          let content: Buffer
+          try { content = await fs.readFile(path.join(root, reference.locator)) }
+          catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `paged body blob is unavailable: ${String(cause)}`) }
+          if (content.byteLength !== reference.byteLength || digest(content) !== reference.payloadDigest) {
+            throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', 'paged body blob failed reference verification')
+          }
+          referenced.add(reference.locator)
+        }
         for (const manifest of roots.reducerStateManifests) {
           let content: Buffer
           try { content = await fs.readFile(path.join(root, manifest.locator)) }

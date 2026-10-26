@@ -70,6 +70,32 @@ describe('session projection derived blob store', () => {
     expect((await fs.readdir(root)).filter((name) => name.endsWith('.blob'))).toHaveLength(0)
   })
 
+  it('retains published paged body blobs and fails closed when a referenced blob is missing', async () => {
+    temp = createTempDatabase('projection-paged-body-gc-')
+    root = path.join(path.dirname(temp.dbPath), 'derived-projections')
+    const blobs = createSessionProjectionBlobStore(root)
+    const session = createSession(temp.db, { name: 'paged body gc root', model: 'test' })
+    const staged = await blobs.write('paged body block')
+    await staged.release()
+    const conn = getDbConnection(temp.db)
+    conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
+      message_revision,payload_generation,payload_digest,validated_range_json,updated_at)
+      VALUES(?,?,?,'valid','null',0,'generation-a','${'a'.repeat(64)}','{}',1)`)
+      .run(session.id, 'session-projection:chatBodyV1:v4', session.generation)
+    conn.prepare(`INSERT INTO session_projection_cache(session_id,scope_key,payload_generation,source_identity_json,payload_digest,
+      validated_range_json,inline_payload,updated_at) VALUES(?,?,?,?,?,?,?,1)`)
+      .run(session.id, 'session-projection:chatBodyV1:v4', 'generation-a', '{}', 'a'.repeat(64), '{}', '{}')
+    conn.prepare(`INSERT INTO session_projection_blob_references(session_id,scope_key,payload_generation,locator,byte_length,payload_digest,kind)
+      VALUES(?,?,?,?,?,?,?)`).run(session.id, 'session-projection:chatBodyV1:v4', 'generation-a', staged.locator,
+        staged.byteLength, staged.payloadDigest, 'body-block')
+
+    await expect(blobs.collectGarbage(conn)).resolves.toMatchObject({ removedCount: 0 })
+    await expect(fs.stat(path.join(root, staged.locator))).resolves.toBeDefined()
+
+    await fs.unlink(path.join(root, staged.locator))
+    await expect(blobs.collectGarbage(conn)).rejects.toMatchObject({ code: 'PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE' })
+  })
+
   it('streams a verified blob while holding the GC fence until the consumer reaches EOF', async () => {
     temp = createTempDatabase('projection-verified-stream-')
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')

@@ -207,7 +207,9 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
   }
 
   return {
-    async write(input: PagedChatBodyWriteInput): Promise<Readonly<{ manifest: PagedChatBodyManifest; release(): Promise<void> }>> {
+    async write(input: PagedChatBodyWriteInput): Promise<Readonly<{ manifest: PagedChatBodyManifest;
+      blobReferences: readonly Readonly<BlobRef & { kind: 'body-block' | 'sequence-directory' | 'id-directory' }>[];
+      release(): Promise<void> }>> {
       if (!input || typeof input.sessionId !== 'string' || !input.sessionId || typeof input.sessionGeneration !== 'string' || !input.sessionGeneration ||
         !Number.isSafeInteger(input.specVersion) || input.specVersion < 1 || !Number.isSafeInteger(input.sourceRevision) || input.sourceRevision < 0 ||
         (input.messageRevision !== null && (!Number.isSafeInteger(input.messageRevision) || input.messageRevision < 0)) ||
@@ -231,9 +233,9 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
         return Object.freeze({ sequence, message: Object.freeze({ id: message.id, role: message.role, content: message.content, timestamp: message.timestamp }) })
       }).sort((left, right) => left.sequence - right.sequence)
 
-      const promoted: StagedProjectionBlob[] = []
+      const promoted: Array<StagedProjectionBlob & { kind: 'body-block' | 'sequence-directory' | 'id-directory' }> = []
       const staged = await blobs.withWorkerStaging(async (promote, stage) => {
-        const writeBlob = async (payload: string): Promise<BlobRef> => {
+        const writeBlob = async (payload: string, kind: 'body-block' | 'sequence-directory' | 'id-directory'): Promise<BlobRef> => {
           const [tempLocator] = stage.allocate(1)
           if (!tempLocator) fail('PAGED_CHAT_BODY_STAGE_FAILED')
           const filePath = path.join(stage.root, tempLocator)
@@ -241,7 +243,7 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
           const file = await fs.open(filePath, 'wx', 0o600)
           try { await file.writeFile(bytes); await file.sync() } finally { await file.close() }
           const blob = await promote({ tempLocator, byteLength: bytes.byteLength, payloadDigest: digest(bytes) })
-          promoted.push(blob)
+          promoted.push({ ...blob, kind })
           return Object.freeze({ locator: blob.locator, byteLength: blob.byteLength, payloadDigest: blob.payloadDigest })
         }
         const bodyBlocks = makeBodyBlocks(ordered)
@@ -249,7 +251,7 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
         let bodyOffset = 0
         for (const block of bodyBlocks) {
           const payload = json({ formatVersion: FORMAT_VERSION, kind: 'body-block', entries: block })
-          const blob = await writeBlob(payload)
+          const blob = await writeBlob(payload, 'body-block')
           bodyRefs.push(Object.freeze({ first: block[0]!.sequence, last: block.at(-1)!.sequence, count: block.length, blob }))
           bodyOffset += block.length
         }
@@ -267,7 +269,7 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
                 entries: entries.flatMap((entry) =>
                   (entry.idEntries ?? []).map((locator) => ({ first: locator.id, last: locator.id, ...locator }))) }
               : { formatVersion: FORMAT_VERSION, kind: `${kind}-directory`, first, last, entries })
-            level.push({ first, last, blob: await writeBlob(payload) })
+            level.push({ first, last, blob: await writeBlob(payload, kind === 'sequence' ? 'sequence-directory' : 'id-directory') })
           }
           if (level.length === 0) fail('PAGED_CHAT_DIRECTORY_EMPTY')
           while (level.length > 1) {
@@ -278,7 +280,7 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
               const last = children.at(-1)!.last
               const payload = json({ formatVersion: FORMAT_VERSION, kind: `${kind}-directory`, first, last,
                 children: children.map(({ first: childFirst, last: childLast, blob }) => ({ first: childFirst, last: childLast, blob })) })
-              next.push({ first, last, blob: await writeBlob(payload) })
+              next.push({ first, last, blob: await writeBlob(payload, kind === 'sequence' ? 'sequence-directory' : 'id-directory') })
             }
             level = next
           }
@@ -304,7 +306,9 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
           sourceIdentityJson: input.sourceIdentityJson, historyWatermarkJson: input.historyWatermarkJson, messageCount: ordered.length,
           firstSequence: ordered[0]!.sequence, lastSequence: ordered.at(-1)!.sequence, sequenceRoot, idRoot }
         const manifest: PagedChatBodyManifest = Object.freeze({ ...manifestPayload, manifestDigest: digest(json(manifestPayload)) })
-        return { manifest }
+        const blobReferences = promoted.map((blob) => Object.freeze({ locator: blob.locator, byteLength: blob.byteLength,
+          payloadDigest: blob.payloadDigest, kind: blob.kind }))
+        return { manifest, blobReferences }
       })
       let released = false
       return Object.freeze({ manifest: staged.manifest, async release() {

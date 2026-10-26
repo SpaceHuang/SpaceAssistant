@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 115
+export const DB_SCHEMA_VERSION = 116
 
 /** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -2129,6 +2129,141 @@ CREATE TABLE IF NOT EXISTS session_projection_cache (
         (inline_payload IS NULL AND blob_locator IS NOT NULL AND blob_byte_length IS NOT NULL))
 );
 
+`
+
+/** v115 → v116: persistent, rebuildable message-body locators and page-cache blob roots. */
+export const MIGRATION_V116_SESSION_BODY_LOCATOR_SQL = `
+CREATE TABLE IF NOT EXISTS session_body_source_state (
+  session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  source_revision INTEGER NOT NULL DEFAULT 0 CHECK(source_revision >= 0),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','backfilling','complete')),
+  checkpoint_json TEXT,
+  updated_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO session_body_source_state(session_id,source_revision,status,checkpoint_json,updated_at)
+SELECT id,0,'pending',NULL,unixepoch()*1000 FROM sessions;
+
+CREATE TABLE IF NOT EXISTS session_body_source_manifest (
+  session_id TEXT NOT NULL REFERENCES session_body_source_state(session_id) ON DELETE CASCADE,
+  invocation_id TEXT NOT NULL,
+  source_revision INTEGER NOT NULL CHECK(source_revision >= 0),
+  manifest_locator TEXT NOT NULL,
+  byte_length INTEGER NOT NULL CHECK(byte_length > 0),
+  sha256 TEXT NOT NULL CHECK(length(sha256)=64),
+  history_watermark_json TEXT NOT NULL,
+  schema_version INTEGER NOT NULL CHECK(schema_version > 0),
+  PRIMARY KEY(session_id,invocation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_body_source_manifest_revision
+  ON session_body_source_manifest(session_id,source_revision,invocation_id);
+
+CREATE TABLE IF NOT EXISTS session_message_body_locator (
+  session_id TEXT NOT NULL REFERENCES session_body_source_state(session_id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK(sequence >= 0),
+  fragment_locator TEXT NOT NULL,
+  byte_length INTEGER NOT NULL CHECK(byte_length > 0),
+  sha256 TEXT NOT NULL CHECK(length(sha256)=64),
+  PRIMARY KEY(session_id,message_id),
+  UNIQUE(session_id,sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_session_message_body_locator_sequence
+  ON session_message_body_locator(session_id,sequence);
+CREATE INDEX IF NOT EXISTS idx_session_message_body_locator_id
+  ON session_message_body_locator(session_id,message_id);
+
+CREATE TABLE IF NOT EXISTS session_message_body_source_event (
+  session_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  invocation_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  event_sequence INTEGER NOT NULL CHECK(event_sequence > 0),
+  session_sequence INTEGER,
+  schema_version INTEGER NOT NULL CHECK(schema_version > 0),
+  kind TEXT NOT NULL,
+  source_digest TEXT NOT NULL CHECK(length(source_digest)=64),
+  PRIMARY KEY(session_id,message_id,invocation_id,event_id),
+  FOREIGN KEY(session_id,message_id) REFERENCES session_message_body_locator(session_id,message_id) ON DELETE CASCADE,
+  FOREIGN KEY(session_id,invocation_id) REFERENCES session_body_source_manifest(session_id,invocation_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_session_message_body_source_event_order
+  ON session_message_body_source_event(session_id,message_id,session_sequence,event_sequence);
+
+CREATE TABLE IF NOT EXISTS session_projection_blob_references (
+  session_id TEXT NOT NULL,
+  scope_key TEXT NOT NULL,
+  payload_generation TEXT NOT NULL,
+  locator TEXT NOT NULL,
+  byte_length INTEGER NOT NULL CHECK(byte_length > 0),
+  payload_digest TEXT NOT NULL CHECK(length(payload_digest)=64),
+  kind TEXT NOT NULL CHECK(kind IN ('body-block','sequence-directory','id-directory')),
+  PRIMARY KEY(session_id,scope_key,payload_generation,locator),
+  FOREIGN KEY(session_id,scope_key) REFERENCES session_projection_cache(session_id,scope_key) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_session_projection_blob_references_locator
+  ON session_projection_blob_references(locator);
+
+CREATE TRIGGER IF NOT EXISTS seed_session_body_source_state
+AFTER INSERT ON sessions BEGIN
+  INSERT OR IGNORE INTO session_body_source_state(session_id,source_revision,status,checkpoint_json,updated_at)
+  VALUES(NEW.id,0,'pending',NULL,unixepoch()*1000);
+END;
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_session_generation
+AFTER UPDATE OF generation ON sessions WHEN OLD.generation IS NOT NEW.generation BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id=NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_history_insert
+AFTER INSERT ON agent_history_events BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id=COALESCE(NEW.session_id,(SELECT session_id FROM agent_history_streams WHERE invocation_id=NEW.invocation_id));
+END;
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_history_update
+AFTER UPDATE ON agent_history_events BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id IN (COALESCE(OLD.session_id,(SELECT session_id FROM agent_history_streams WHERE invocation_id=OLD.invocation_id)),
+                       COALESCE(NEW.session_id,(SELECT session_id FROM agent_history_streams WHERE invocation_id=NEW.invocation_id)));
+END;
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_history_delete
+AFTER DELETE ON agent_history_events BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id=COALESCE(OLD.session_id,(SELECT session_id FROM agent_history_streams WHERE invocation_id=OLD.invocation_id));
+END;
+
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_stream_insert
+AFTER INSERT ON agent_history_streams WHEN NEW.session_id IS NOT NULL BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_stream_update
+AFTER UPDATE ON agent_history_streams BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id IN (OLD.session_id,NEW.session_id) AND session_id IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_stream_delete
+AFTER DELETE ON agent_history_streams WHEN OLD.session_id IS NOT NULL BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id=OLD.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_cutover_insert
+AFTER INSERT ON session_message_content_cutover BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_cutover_update
+AFTER UPDATE OF session_generation,message_revision,write_mode,cleanup_state ON session_message_content_cutover
+WHEN OLD.session_generation IS NOT NEW.session_generation OR OLD.message_revision IS NOT NEW.message_revision OR
+     OLD.write_mode IS NOT NEW.write_mode OR OLD.cleanup_state IS NOT NEW.cleanup_state BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS bump_session_body_source_after_cutover_delete
+AFTER DELETE ON session_message_content_cutover BEGIN
+  UPDATE session_body_source_state SET source_revision=source_revision+1,status='pending',checkpoint_json=NULL,updated_at=unixepoch()*1000
+  WHERE session_id=OLD.session_id;
+END;
 `
 
 /** Source mutations synchronously revoke all dependent projection proofs in their transaction. */
