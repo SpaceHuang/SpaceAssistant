@@ -42,7 +42,7 @@
 
 ## 原型验证
 
-`pageBodyReadPrototype.test.ts` 目前 9 项通过：完整 History reducer 对拍、compaction 覆盖旧 ID、assistant chunk/mixed authority、页范围和 message ID 二级目录各放大 10 倍、正文块/目录/来源片段/来源事件/依赖摘要损坏或变化拒绝、普通块 byte/message 上限及 300 KiB 单条隔离。逐消息来源记录绑定 event ID、invocation 内序号、session 序号、schema version、event kind、source digest 和完整 reducer dependency digests。测试先用不完整定位记录断言出 RED，再补来源坐标、摘要和 source revision fence；按页读取经 sequence directory 选中范围后，只验证目标片段，不遍历全体来源事件。
+`pageBodyReadPrototype.test.ts` 目前 9 项通过：完整 History reducer 对拍、compaction 覆盖旧 ID、assistant chunk/replay 图片输入/assistant 图片与 tool_use 和 tool result/mixed authority、页范围和 message ID 二级目录各放大 10 倍、正文块/目录/来源片段/来源事件/依赖摘要损坏或变化拒绝、普通块 byte/message 上限及 300 KiB 单条隔离。逐消息来源记录绑定 event ID、invocation 内序号、session 序号、schema version、event kind、source digest 和完整 reducer dependency digests。测试先用不完整定位记录断言出 RED，再补来源坐标、摘要和 source revision fence；按页读取经 sequence directory 选中范围后，只验证目标片段，不遍历全体来源事件。
 
 ```text
 npm exec -- vitest run electron/sessionStorage/pageBodyReadPrototype.test.ts --reporter=dot
