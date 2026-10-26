@@ -15,7 +15,7 @@ import { runInTransaction } from '../database/transaction'
 import { readProjectionSourceIdentity } from './infrastructure/sqlite/projectionSourceIdentity'
 import { encodeProjectionScopeKey } from './domain/scopeKey'
 import { readPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
-import { createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
+import { createSessionBodySourceBackfillTask, createSqliteProjectionBuildTask, createSqliteSessionStorageHost } from './sqliteSessionStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { runSpillReferenceReconciliationBatch } from '../storage/spillReferenceReconciliation'
 import type { PreparedChatBodyView } from './public/model'
@@ -775,7 +775,7 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
     }
   }, 180_000)
 
-  it('measures first production reads for canonical-only large bodies (30 cold sessions)', async () => {
+  it('measures cold production reads after source locators are ready (30 canonical-only sessions)', async () => {
     const temp = createTempDatabase('session-switch-production-cold-')
     const blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-switch-production-cold-blobs-'))
     const db = temp.db
@@ -830,6 +830,13 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
           reconciliation = await runSpillReferenceReconciliationBatch(conn)
         }
         expect(reconciliation.status).toBe('complete')
+        let backfillResult: { sessionId: string; status: string; error?: string } | undefined
+        const backfillTask = createSessionBodySourceBackfillTask({ db, blobRoot, idleDelayMs: 60_000,
+          retryDelayMs: 60_000, onResult: (result) => { if (result.sessionId === session.id) backfillResult = result } })
+        const backfillHandle = backfillTask.start()!
+        try {
+          await vi.waitFor(() => expect(backfillResult).toMatchObject({ sessionId: session.id, status: 'complete' }), { timeout: 30_000 })
+        } finally { backfillHandle.stop() }
         const trace = createSessionSwitchTrace({ instance: 'main', traceId: `cold-${sample}`, emit: (event) => {
           for (const stage of event.stages) {
             stages.set(stage.name, [...(stages.get(stage.name) ?? []), stage.durationMs])
