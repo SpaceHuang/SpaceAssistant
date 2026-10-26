@@ -14,6 +14,7 @@ export type ProjectionSourceEventDependency = Readonly<{
 
 export type ProjectionInvocationBodySources = Readonly<{
   invocationId: string
+  replacesPriorMessages: boolean
   messages: readonly (VerifiedChatBody & Readonly<{ sequence: number }>)[]
   dependencies: readonly ProjectionSourceEventDependency[]
   dependencyManifestJson: string
@@ -110,7 +111,9 @@ export function reduceProjectionInvocationChatBodySources(events: readonly Proje
     dependenciesByMessage.set(message.id, dependencies)
     manifestDigestByMessage.set(message.id, dependencyManifestDigest)
   }
-  return Object.freeze({ invocationId, messages: Object.freeze(outputMessages), dependencies, dependencyManifestJson,
+  const replacesPriorMessages = folded.resetOutput || folded.outputOperations.some((operation) =>
+    Boolean(operation && typeof operation === 'object' && 'type' in operation && operation.type === 'replace'))
+  return Object.freeze({ invocationId, replacesPriorMessages, messages: Object.freeze(outputMessages), dependencies, dependencyManifestJson,
     dependencyManifestDigest, dependenciesByMessage, manifestDigestByMessage })
 }
 
