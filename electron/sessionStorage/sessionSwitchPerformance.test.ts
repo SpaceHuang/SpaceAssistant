@@ -659,28 +659,34 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
     const generation = advanceProcessGeneration(conn)
     const task = createSqliteProjectionBuildTask({ db, dbPath: temp.dbPath, blobRoot,
       processGeneration: () => generation, connectionEpoch: () => generation, now: () => 10 })
+    const sourceBackfillTask = createSessionBodySourceBackfillTask({ db, blobRoot, idleDelayMs: 60_000, retryDelayMs: 60_000 })
     const host = createSqliteSessionStorageHost(db, {
       storage: { projectionBlobRoot: blobRoot },
       startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
         recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) },
-      maintenanceTasks: [task]
+      maintenanceTasks: [task, sourceBackfillTask]
     })
     try {
+      host.lifecycle.allowBackgroundWork()
+      await vi.waitFor(() => expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(session.id))
+        .toEqual({ status: 'complete' }), { timeout: 30_000 })
       const requestMs: number[] = []
       let finalCheckMutations = 0
       let fallbacks = 0
       for (let sample = 0; sample < 30; sample += 1) {
         const prepared = await host.storage.ensureChatBodyV1?.({ sessionId: session.id })
         expect(prepared).toBeDefined()
-        const id = `inflight-drift-${sample}`
         const baseRead = host.storage.queries.readPreparedChatPage!
         const storage = { ...host.storage, readPreparedChatBodyV1: () => prepared,
           queries: { ...host.storage.queries, readPreparedChatPage: async (input: Parameters<typeof baseRead>[0]) => {
             const measure = input.measure
             return baseRead({ ...input, measure: measure ? async (name, operation) => {
               if (name === 'final-source-check') {
-                appendMessage(db, { id, sessionId: session.id, role: 'user', content: `during-${sample}`,
-                  timestamp: sample + 2, status: 'sent' })
+                // Advance only the source fence so the already-read page remains authoritative after fallback.
+                conn.prepare(`UPDATE session_body_source_state SET source_revision=source_revision+1,status='complete',
+                  checkpoint_json=NULL,updated_at=updated_at+1 WHERE session_id=?`).run(session.id)
+                conn.prepare(`UPDATE session_body_source_manifest SET source_revision=(SELECT source_revision FROM session_body_source_state
+                  WHERE session_id=?) WHERE session_id=?`).run(session.id, session.id)
                 finalCheckMutations += 1
               }
               return measure(name, operation)
@@ -692,7 +698,7 @@ describe.skipIf(!runScaleBenchmarks)('session switch source identity scale bench
           onCachePath: (cachePath) => cachePaths.push(cachePath)
         })
         requestMs.push(performance.now() - startedAt)
-        expect(page.entries.some(({ message }) => message.id === id), JSON.stringify({ id, ids: page.entries.map(({ message }) => message.id),
+        expect(page.entries.some(({ message }) => message.id === 'inflight-initial'), JSON.stringify({ ids: page.entries.map(({ message }) => message.id),
           cachePaths, finalCheckMutations })).toBe(true)
         if (cachePaths.includes('invalidated')) fallbacks += 1
       }
