@@ -31,6 +31,8 @@ export type ProjectionHistoryChunkEvent = Readonly<{
   payloadJson: string
   /** Worker-internal hydrated payload used when a single source event was staged in segments. */
   payload?: unknown
+  /** Digest of the canonical stored History event, before source-truth spill hydration. */
+  sourceDigest?: string
   sessionSequence: number
   commitOrder: number
   createdAt: number

@@ -126,6 +126,7 @@ export function reduceProjectionInvocationChatBodySources(events: readonly Proje
 }
 
 function digestSourceEvent(event: ProjectionHistoryChunkEvent): string {
+  if (typeof event.sourceDigest === 'string' && /^[a-f0-9]{64}$/.test(event.sourceDigest)) return event.sourceDigest
   return sha256(JSON.stringify({ invocationId: event.invocationId, turnId: event.turnId, sequence: event.sequence,
     eventId: event.eventId, idempotencyKey: event.idempotencyKey, schemaVersion: event.schemaVersion, kind: event.kind,
     sessionSequence: event.sessionSequence, commitOrder: event.commitOrder, createdAt: event.createdAt, payloadJson: event.payloadJson }))

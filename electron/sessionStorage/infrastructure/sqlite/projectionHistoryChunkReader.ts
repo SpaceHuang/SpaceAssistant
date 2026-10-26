@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import { getDbConnection, openSqliteDatabaseReadOnly, type AppDatabase } from '../../../database/sqliteStore'
 import { runInTransaction } from '../../../database/transaction'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
+import { projectionSourceEventDigest } from './projectionSourceDependencyReader'
 import { collectSpillDescriptorsStrict, readSourceTruthSpillSync, type SpillDescriptor } from '../../../storage/spillProtocol'
 import path from 'node:path'
 import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact } from '../../domain/projectionSource'
@@ -161,7 +162,8 @@ export function readProjectionHistoryChunk(
             const event: ProjectionHistoryChunkEvent = { invocationId: item.row.invocation_id, sequence: item.row.sequence,
               eventId: item.row.event_id, idempotencyKey: item.row.idempotency_key, turnId: item.row.turn_id,
               schemaVersion: item.row.schema_version, kind: item.row.kind, payloadJson, sessionSequence: item.row.session_seq,
-              commitOrder: item.row.commit_order, createdAt: item.row.created_at }
+              commitOrder: item.row.commit_order, createdAt: item.row.created_at,
+              sourceDigest: projectionSourceEventDigest({ ...item.row, payload_json: item.payloadJson }) }
             const size = Buffer.byteLength(JSON.stringify(event), 'utf8')
             if (size > input.maxBytes && !input.allowOversizedChunk) {
               result = { kind: 'deferred-large', permit, afterSessionSequence: input.afterSessionSequence,
