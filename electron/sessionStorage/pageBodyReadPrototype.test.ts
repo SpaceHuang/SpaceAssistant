@@ -97,6 +97,18 @@ function digestBodyBlock(entries: readonly Body[]): string {
   return createHash('sha256').update(JSON.stringify(entries), 'utf8').digest('hex')
 }
 
+function digestSourceEvent(event: ProjectionHistoryChunkEvent): string {
+  return createHash('sha256').update(JSON.stringify({ invocationId: event.invocationId, turnId: event.turnId,
+    sequence: event.sequence, eventId: event.eventId, idempotencyKey: event.idempotencyKey, schemaVersion: event.schemaVersion,
+    kind: event.kind, sessionSequence: event.sessionSequence, commitOrder: event.commitOrder, createdAt: event.createdAt,
+    payloadJson: event.payloadJson }), 'utf8').digest('hex')
+}
+
+function digestSourceDependencies(dependencies: readonly Readonly<{ eventId: string; sequence: number; sessionSequence: number;
+  schemaVersion: number; kind: string; digest: string }>[]): string {
+  return createHash('sha256').update(JSON.stringify(dependencies), 'utf8').digest('hex')
+}
+
 function buildIdLookup(messages: readonly Body[]) {
   const sorted = [...messages].sort((left, right) => left.id.localeCompare(right.id))
   const leaves: IdDirectoryNode[] = []
@@ -168,10 +180,12 @@ function buildSourceFragmentPrototype(events: ProjectionHistoryChunkEvent[], fac
   const factById = new Map(facts.map((fact) => [fact.id, fact]))
   const byInvocation = new Map<string, ProjectionHistoryChunkEvent[]>()
   for (const event of events) byInvocation.set(event.invocationId, [...(byInvocation.get(event.invocationId) ?? []), event])
-  const fragments = new Map<string, Readonly<{ body: Body; invocationId: string; sourceEventId: string; dependencyEventIds: readonly string[]; digest: string }>>()
+  let currentSourceRevision = 1
+  const fragments = new Map<string, { body: Body; invocationId: string; sourceEvent: ProjectionHistoryChunkEvent; sourceDigest: string;
+    dependencies: readonly Readonly<{ eventId: string; sequence: number; sessionSequence: number; schemaVersion: number;
+      kind: string; digest: string }>[]; dependenciesDigest: string; sourceRevision: number; digest: string }>()
   for (const [invocationId, invocationEvents] of byInvocation) {
     const invocationOutput = reduceAll(invocationEvents, facts)
-    const dependencyEventIds = invocationEvents.map(({ eventId }) => eventId)
     for (const candidate of invocationOutput) {
       if (!candidate.id) continue
       const fact = factById.get(candidate.id)
@@ -184,16 +198,58 @@ function buildSourceFragmentPrototype(events: ProjectionHistoryChunkEvent[], fac
         return message?.id === candidate.id || messages?.some(({ id }) => id === candidate.id)
       })
       if (!sourceEvent) throw new Error(`prototype source event missing: ${candidate.id}`)
-      fragments.set(candidate.id, Object.freeze({ body, invocationId, sourceEventId: sourceEvent.eventId,
-        dependencyEventIds: Object.freeze(dependencyEventIds),
-        digest: createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex') }))
+      const dependencies = Object.freeze(invocationEvents.map((event) => Object.freeze({ eventId: event.eventId, sequence: event.sequence,
+        sessionSequence: event.sessionSequence, schemaVersion: event.schemaVersion, kind: event.kind, digest: digestSourceEvent(event) })))
+      fragments.set(candidate.id, { body, invocationId, sourceEvent, sourceDigest: digestSourceEvent(sourceEvent), dependencies,
+        dependenciesDigest: digestSourceDependencies(dependencies), sourceRevision: currentSourceRevision,
+        digest: createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex') })
     }
   }
+  const pageIndex = buildPrototype([...fragments.values()].map(({ body }) => body).sort((left, right) => left.sequence - right.sequence))
+  const readFragment = (messageId: string) => {
+    const fragment = fragments.get(messageId)
+    if (!fragment) return undefined
+    if (fragment.sourceRevision !== currentSourceRevision) throw new Error('PROTOTYPE_SOURCE_REVISION_MISMATCH')
+    if (createHash('sha256').update(JSON.stringify(fragment.body), 'utf8').digest('hex') !== fragment.digest) {
+      throw new Error('PROTOTYPE_SOURCE_FRAGMENT_DIGEST_MISMATCH')
+    }
+    if (digestSourceEvent(fragment.sourceEvent) !== fragment.sourceDigest) {
+      throw new Error('PROTOTYPE_SOURCE_EVENT_DIGEST_MISMATCH')
+    }
+    if (digestSourceDependencies(fragment.dependencies) !== fragment.dependenciesDigest) {
+      throw new Error('PROTOTYPE_DEPENDENCY_MANIFEST_DIGEST_MISMATCH')
+    }
+    return fragment
+  }
   return {
-    get: (messageId: string) => fragments.get(messageId),
+    get: readFragment,
+    corruptFragmentForTest(messageId: string) {
+      const fragment = fragments.get(messageId)
+      if (!fragment) throw new Error(`prototype message fragment missing: ${messageId}`)
+      fragment.body = { ...fragment.body, content: `${fragment.body.content}!` }
+    },
+    corruptSourceEventForTest(messageId: string) {
+      const fragment = fragments.get(messageId)
+      if (!fragment) throw new Error(`prototype message fragment missing: ${messageId}`)
+      fragment.sourceEvent = { ...fragment.sourceEvent, payloadJson: `${fragment.sourceEvent.payloadJson}!` }
+    },
+    corruptDependencyEventForTest(messageId: string, eventId: string) {
+      const fragment = fragments.get(messageId)
+      if (!fragment) throw new Error(`prototype message fragment missing: ${messageId}`)
+      const events = byInvocation.get(fragment.invocationId) ?? []
+      const index = events.findIndex((event) => event.eventId === eventId)
+      if (index < 0) throw new Error(`prototype dependency event missing: ${eventId}`)
+      events[index] = { ...events[index]!, payloadJson: `${events[index]!.payloadJson}!` }
+      currentSourceRevision += 1
+    },
+    corruptDependencyManifestForTest(messageId: string) {
+      const fragment = fragments.get(messageId)
+      if (!fragment) throw new Error(`prototype message fragment missing: ${messageId}`)
+      fragment.dependencies = Object.freeze(fragment.dependencies.map((dependency, index) => index === 0
+        ? Object.freeze({ ...dependency, digest: `${dependency.digest.slice(1)}0` }) : dependency))
+    },
     readPage(beforeSequence: number, limit: number): Body[] {
-      return [...fragments.values()].map(({ body }) => body).sort((a, b) => a.sequence - b.sequence)
-        .filter(({ sequence }) => sequence < beforeSequence).slice(-limit)
+      return pageIndex.readPage(beforeSequence, limit).page.map(({ id }) => readFragment(id)!.body)
     }
   }
 }
@@ -241,8 +297,44 @@ describe('paged chat body read prototype (test only)', () => {
     expect(indexed.readPage(4, 2).page).toEqual(authoritative.slice(2, 4))
     const sourceIndex = buildSourceFragmentPrototype(events, facts)
     expect(sourceIndex.readPage(4, 4)).toEqual(authoritative)
-    expect(sourceIndex.get('u1')).toMatchObject({ invocationId: 'turn-2', sourceEventId: 'turn-2-2', body: { content: 'summary of prompt' } })
-    expect(sourceIndex.get('a1')?.dependencyEventIds).toEqual(['turn-2-1', 'turn-2-2', 'turn-2-3', 'turn-2-4'])
+    expect(sourceIndex.get('u1')).toMatchObject({ invocationId: 'turn-2',
+      sourceEvent: { eventId: 'turn-2-2', sequence: 2, sessionSequence: 2, schemaVersion: 1, kind: 'transcript-compacted' },
+      body: { content: 'summary of prompt' } })
+    expect(sourceIndex.get('u1')?.sourceDigest).toMatch(/^[a-f0-9]{64}$/)
+    expect(sourceIndex.get('a1')?.dependencies.map(({ eventId }) => eventId)).toEqual(['turn-2-1', 'turn-2-2', 'turn-2-3', 'turn-2-4'])
+    expect(sourceIndex.get('a1')?.dependencies.every(({ digest }) => /^[a-f0-9]{64}$/.test(digest))).toBe(true)
+  })
+
+  it('rejects a source body fragment whose digest no longer matches', () => {
+    const events = [
+      fixtureEvent('turn-1', 1, 'invocation-context-committed', { messages: [{ id: 'u1', role: 'user', content: 'prompt', timestamp: 1 }] }),
+      fixtureEvent('turn-1', 2, 'invocation-completed', { status: 'completed' }),
+    ]
+    const facts: ProjectionMessageFact[] = [
+      { id: 'u1', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'prompt' },
+    ]
+    const index = buildSourceFragmentPrototype(events, facts)
+    index.corruptFragmentForTest('u1')
+    expect(() => index.get('u1')).toThrow('PROTOTYPE_SOURCE_FRAGMENT_DIGEST_MISMATCH')
+  })
+
+  it('rejects a changed source event or reducer dependency for an indexed message', () => {
+    const createIndex = () => buildSourceFragmentPrototype([
+      fixtureEvent('turn-1', 1, 'invocation-context-committed', { messages: [{ id: 'u1', role: 'user', content: 'prompt', timestamp: 1 }] }),
+      fixtureEvent('turn-1', 2, 'invocation-completed', { status: 'completed' }),
+    ], [{ id: 'u1', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'prompt' }])
+
+    const sourceIndex = createIndex()
+    sourceIndex.corruptSourceEventForTest('u1')
+    expect(() => sourceIndex.get('u1')).toThrow('PROTOTYPE_SOURCE_EVENT_DIGEST_MISMATCH')
+
+    const dependencyIndex = createIndex()
+    dependencyIndex.corruptDependencyEventForTest('u1', 'turn-1-2')
+    expect(() => dependencyIndex.get('u1')).toThrow('PROTOTYPE_SOURCE_REVISION_MISMATCH')
+
+    const manifestIndex = createIndex()
+    manifestIndex.corruptDependencyManifestForTest('u1')
+    expect(() => manifestIndex.get('u1')).toThrow('PROTOTYPE_DEPENDENCY_MANIFEST_DIGEST_MISMATCH')
   })
 
   it('keeps page directory and body reads bounded when unrelated history grows tenfold', () => {
