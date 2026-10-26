@@ -103,7 +103,7 @@ export function readProjectionHistoryChunk(
             { messages_type: string | null; message_count: number | null; spill_bytes: number | null } | undefined
           const expandedBound = storedPayloadBytes + Number(largeContext?.spill_bytes ?? 0) * 6
           if (largeContext?.messages_type === 'array' && Number.isSafeInteger(largeContext.message_count) &&
-            (largeContext.message_count ?? 0) > 0 && expandedBound > MAX_STAGED_SOURCE_CHUNK_BYTES &&
+            (largeContext.message_count ?? 0) > 0 && expandedBound > input.maxBytes &&
             expandedBound <= MAX_SEGMENTED_HISTORY_EVENT_BYTES) return { kind: 'stage-large-context-event', row, watermark }
         }
         if (storedPayloadBytes > MAX_STAGED_SOURCE_CHUNK_BYTES) {

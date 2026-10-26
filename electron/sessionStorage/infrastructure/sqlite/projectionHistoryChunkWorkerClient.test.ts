@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Worker } from 'node:worker_threads'
-import { createSession } from '../../../database/operations'
+import { appendMessage, createSession } from '../../../database/operations'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
@@ -75,6 +75,8 @@ describe('projection history chunk worker client', () => {
     const temp = createTempDatabase('projection-real-worker-')
     try {
       const session = createSession(temp.db, { name: 'projection real worker' })
+      appendMessage(temp.db, { id: 'large-worker-message', sessionId: session.id, role: 'user', content: 'x'.repeat(4096),
+        timestamp: 1, status: 'sent' })
       const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 10, session.id)
       await history.appendBatch([{ invocationId: 'worker-sample-inv', turnId: 'worker-sample-turn', sequence: 1, schemaVersion: 1,
         eventId: 'worker-sample-event', idempotencyKey: 'worker-sample-event', kind: 'invocation-context-committed',
@@ -120,7 +122,7 @@ describe('projection history chunk worker client', () => {
         expect(createHash('sha256').update(bytes).digest('hex')).toBe(staged.stagedBlob.payloadDigest)
         const manifest = JSON.parse(bytes.toString('utf8'))
         expect(manifest).toMatchObject({ kind: 'segmented-history-event', event: { eventId: 'worker-large-event' }, messageCount: 1 })
-        expect(staged.stagedSegments).toHaveLength(manifest.messageSegments.length)
+        expect(staged.stagedSegments).toHaveLength(manifest.messageSegments.length + manifest.factSegments.length)
         for (const segment of staged.stagedSegments) {
           const segmentBytes = await fs.readFile(path.join(stageRoot, segment.tempLocator))
           expect(segmentBytes.byteLength).toBe(segment.byteLength)
