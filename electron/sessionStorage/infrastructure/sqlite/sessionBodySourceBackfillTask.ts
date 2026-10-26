@@ -19,6 +19,9 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
   onResult?: (result: Readonly<{ sessionId: string; status: 'complete' | 'failed'; messageCount?: number; error?: string }>) => void
 }>): LifecycleTaskRegistration {
   const reducerSpecVersion = input.reducerSpecVersion ?? CHAT_BODY_PROJECTION_SPEC_VERSION
+  const reportResult = (result: Readonly<{ sessionId: string; status: 'complete' | 'failed'; messageCount?: number; error?: string }>) => {
+    try { input.onResult?.(result) } catch { /* Observers must not alter maintenance state. */ }
+  }
   if (!input.blobRoot || !Number.isSafeInteger(reducerSpecVersion) || reducerSpecVersion < 1) {
     throw new Error('PROJECTION_SOURCE_BACKFILL_TASK_INPUT_INVALID')
   }
@@ -93,7 +96,7 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
               reducerSpecVersion, signal: controller.signal,
               invocations: readProjectionHistoryInvocationsInWorker({ permit, blobs, signal: controller.signal }) })
             delayedSessions.delete(session.session_id)
-            input.onResult?.({ sessionId: session.session_id, status: 'complete', messageCount: result.messageCount })
+            reportResult({ sessionId: session.session_id, status: 'complete', messageCount: result.messageCount })
             schedule(0)
         } catch (error) {
           if (!stopped) {
@@ -102,14 +105,14 @@ export function createSessionBodySourceBackfillTask(input: Readonly<{
               .get(session.session_id) as { updated_at: number } | undefined
             delayedSessions.set(session.session_id, { retryAt: Date.now() + (input.retryDelayMs ?? 5 * 60_000),
               updatedAt: current?.updated_at ?? session.updated_at })
-            input.onResult?.({ sessionId: session.session_id, status: 'failed', error: message })
+              reportResult({ sessionId: session.session_id, status: 'failed', error: message })
             schedule(0)
           }
         }
         } catch (error) {
           if (!stopped) {
             const message = error instanceof Error ? error.message : 'unknown-error'
-            try { input.onResult?.({ sessionId: '', status: 'failed', error: message }) } catch { /* Observers must not stop maintenance. */ }
+              reportResult({ sessionId: '', status: 'failed', error: message })
             schedule(input.retryDelayMs ?? 5 * 60_000)
           }
         }

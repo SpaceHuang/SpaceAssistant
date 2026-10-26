@@ -128,4 +128,24 @@ describe('session body source backfill task', () => {
 
     await expect(result).resolves.toMatchObject({ status: 'failed', error: 'Database connection is closed' })
   })
+
+  it('does not turn a completed backfill into a failure when its observer throws', async () => {
+    const temp = createTempDatabase('session-body-source-backfill-task-observer-')
+    cleanup = temp.cleanup
+    blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    const conn = getDbConnection(temp.db)
+    const session = createSession(temp.db, { name: 'observer isolation' })
+    appendMessage(temp.db, { id: 'observer-message', sessionId: session.id, role: 'user', content: 'body', timestamp: 1, status: 'sent' })
+    await new SqliteAgentHistory(conn, 1, () => 10, session.id).appendBatch([{ invocationId: 'observer-invocation',
+      turnId: 'observer-turn', sequence: 1, schemaVersion: 1, eventId: 'observer-context', idempotencyKey: 'observer-context',
+      kind: 'invocation-context-committed', payload: { messages: [{ id: 'observer-message', role: 'user', content: 'body', timestamp: 1 }] } }], 0)
+    const results: Array<{ sessionId: string; status: string }> = []
+    const task = createSessionBodySourceBackfillTask({ db: temp.db, blobRoot, idleDelayMs: 60_000,
+      onResult: (result) => { results.push(result); throw new Error('observer failed') } })
+    taskStop = task.start()!.stop
+
+    await vi.waitFor(() => expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(session.id))
+      .toEqual({ status: 'complete' }), { timeout: 10_000 })
+    expect(results).toEqual([{ sessionId: session.id, status: 'complete', messageCount: 1 }])
+  })
 })
