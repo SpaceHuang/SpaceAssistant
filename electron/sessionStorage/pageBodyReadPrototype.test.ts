@@ -181,10 +181,14 @@ function buildSourceFragmentPrototype(events: ProjectionHistoryChunkEvent[], fac
   const byInvocation = new Map<string, ProjectionHistoryChunkEvent[]>()
   for (const event of events) byInvocation.set(event.invocationId, [...(byInvocation.get(event.invocationId) ?? []), event])
   let currentSourceRevision = 1
+  const dependencyManifests = new Map<string, { entries: readonly Readonly<{ eventId: string; sequence: number; sessionSequence: number;
+    schemaVersion: number; kind: string; digest: string }>[]; digest: string }>()
   const fragments = new Map<string, { body: Body; invocationId: string; sourceEvent: ProjectionHistoryChunkEvent; sourceDigest: string;
-    dependencies: readonly Readonly<{ eventId: string; sequence: number; sessionSequence: number; schemaVersion: number;
-      kind: string; digest: string }>[]; dependenciesDigest: string; sourceRevision: number; digest: string }>()
+    dependencyManifestDigest: string; sourceRevision: number; digest: string }>()
   for (const [invocationId, invocationEvents] of byInvocation) {
+    const dependencies = Object.freeze(invocationEvents.map((event) => Object.freeze({ eventId: event.eventId, sequence: event.sequence,
+      sessionSequence: event.sessionSequence, schemaVersion: event.schemaVersion, kind: event.kind, digest: digestSourceEvent(event) })))
+    dependencyManifests.set(invocationId, { entries: dependencies, digest: digestSourceDependencies(dependencies) })
     const invocationOutput = reduceAll(invocationEvents, facts)
     for (const candidate of invocationOutput) {
       if (!candidate.id) continue
@@ -195,13 +199,12 @@ function buildSourceFragmentPrototype(events: ProjectionHistoryChunkEvent[], fac
         const payload = JSON.parse(event.payloadJson) as Record<string, unknown>
         const message = payload.message as { id?: unknown } | undefined
         const messages = payload.messages as Array<{ id?: unknown }> | undefined
-        return message?.id === candidate.id || messages?.some(({ id }) => id === candidate.id)
+        const requiredUserMessage = payload.requiredUserMessage as { id?: unknown } | undefined
+        return message?.id === candidate.id || messages?.some(({ id }) => id === candidate.id) || requiredUserMessage?.id === candidate.id
       })
       if (!sourceEvent) throw new Error(`prototype source event missing: ${candidate.id}`)
-      const dependencies = Object.freeze(invocationEvents.map((event) => Object.freeze({ eventId: event.eventId, sequence: event.sequence,
-        sessionSequence: event.sessionSequence, schemaVersion: event.schemaVersion, kind: event.kind, digest: digestSourceEvent(event) })))
-      fragments.set(candidate.id, { body, invocationId, sourceEvent, sourceDigest: digestSourceEvent(sourceEvent), dependencies,
-        dependenciesDigest: digestSourceDependencies(dependencies), sourceRevision: currentSourceRevision,
+      fragments.set(candidate.id, { body, invocationId, sourceEvent, sourceDigest: digestSourceEvent(sourceEvent),
+        dependencyManifestDigest: dependencyManifests.get(invocationId)!.digest, sourceRevision: currentSourceRevision,
         digest: createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex') })
     }
   }
@@ -216,8 +219,8 @@ function buildSourceFragmentPrototype(events: ProjectionHistoryChunkEvent[], fac
     if (digestSourceEvent(fragment.sourceEvent) !== fragment.sourceDigest) {
       throw new Error('PROTOTYPE_SOURCE_EVENT_DIGEST_MISMATCH')
     }
-    if (digestSourceDependencies(fragment.dependencies) !== fragment.dependenciesDigest) {
-      throw new Error('PROTOTYPE_DEPENDENCY_MANIFEST_DIGEST_MISMATCH')
+    if (dependencyManifests.get(fragment.invocationId)?.digest !== fragment.dependencyManifestDigest) {
+      throw new Error('PROTOTYPE_DEPENDENCY_MANIFEST_MISMATCH')
     }
     return fragment
   }
@@ -242,11 +245,17 @@ function buildSourceFragmentPrototype(events: ProjectionHistoryChunkEvent[], fac
       events[index] = { ...events[index]!, payloadJson: `${events[index]!.payloadJson}!` }
       currentSourceRevision += 1
     },
+    getDependencyRecordsForTest(messageId: string) {
+      const fragment = fragments.get(messageId)
+      if (!fragment) return undefined
+      return dependencyManifests.get(fragment.invocationId)?.entries
+    },
     corruptDependencyManifestForTest(messageId: string) {
       const fragment = fragments.get(messageId)
       if (!fragment) throw new Error(`prototype message fragment missing: ${messageId}`)
-      fragment.dependencies = Object.freeze(fragment.dependencies.map((dependency, index) => index === 0
-        ? Object.freeze({ ...dependency, digest: `${dependency.digest.slice(1)}0` }) : dependency))
+      const manifest = dependencyManifests.get(fragment.invocationId)
+      if (!manifest) throw new Error(`prototype dependency manifest missing: ${fragment.invocationId}`)
+      manifest.digest = '0'.repeat(64)
     },
     readPage(beforeSequence: number, limit: number): Body[] {
       return pageIndex.readPage(beforeSequence, limit).page.map(({ id }) => readFragment(id)!.body)
@@ -289,7 +298,7 @@ describe('paged chat body read prototype (test only)', () => {
     ]
     const facts: ProjectionMessageFact[] = [
       { id: 'u1', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'summary of prompt' },
-      { id: 'a1', role: 'assistant', timestamp: 2, sequence: 1, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'summary answer' },
+      { id: 'a1', role: 'assistant', timestamp: 2, sequence: 1, queueScope: 'desktop', contentStorageState: 'canonical-backed-only', writeMode: 'canonical', storedContent: '' },
       { id: 'u2', role: 'user', timestamp: 3, sequence: 2, queueScope: 'desktop', contentStorageState: 'canonical-backed-dual-write', writeMode: 'canonical', storedContent: 'next prompt' },
       { id: 'u3', role: 'user', timestamp: 4, sequence: 3, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'image prompt' },
       { id: 'a2', role: 'assistant', timestamp: 5, sequence: 4, queueScope: 'desktop', contentStorageState: 'canonical-backed-only', writeMode: 'canonical', storedContent: '' },
@@ -300,6 +309,8 @@ describe('paged chat body read prototype (test only)', () => {
     ])
     const indexed = buildPrototype(authoritative)
     expect(indexed.readPage(5, 2).page).toEqual(authoritative.slice(3, 5))
+    const firstInvocationIndex = buildSourceFragmentPrototype(events.filter(({ invocationId }) => invocationId === 'turn-1'), facts.slice(0, 2))
+    expect(firstInvocationIndex.get('a1')?.body.content).toBe('new answer')
     const sourceIndex = buildSourceFragmentPrototype(events, facts)
     expect(sourceIndex.readPage(5, 5)).toEqual(authoritative)
     expect(sourceIndex.get('u1')).toMatchObject({ invocationId: 'turn-2',
@@ -307,10 +318,10 @@ describe('paged chat body read prototype (test only)', () => {
       body: { content: 'summary of prompt' } })
     expect(sourceIndex.get('u3')).toMatchObject({ sourceEvent: { eventId: 'turn-2-3', kind: 'replay-message-committed' },
       body: { content: 'image prompt' } })
-    expect(sourceIndex.get('a2')?.dependencies.map(({ eventId }) => eventId)).toContain('turn-2-5')
+    expect(sourceIndex.getDependencyRecordsForTest('a2')?.map(({ eventId }) => eventId)).toContain('turn-2-5')
     expect(sourceIndex.get('u1')?.sourceDigest).toMatch(/^[a-f0-9]{64}$/)
-    expect(sourceIndex.get('a1')?.dependencies.map(({ eventId }) => eventId)).toEqual(['turn-2-1', 'turn-2-2', 'turn-2-3', 'turn-2-4', 'turn-2-5', 'turn-2-6'])
-    expect(sourceIndex.get('a1')?.dependencies.every(({ digest }) => /^[a-f0-9]{64}$/.test(digest))).toBe(true)
+    expect(sourceIndex.getDependencyRecordsForTest('a1')?.map(({ eventId }) => eventId)).toEqual(['turn-2-1', 'turn-2-2', 'turn-2-3', 'turn-2-4', 'turn-2-5', 'turn-2-6'])
+    expect(sourceIndex.getDependencyRecordsForTest('a1')?.every(({ digest }) => /^[a-f0-9]{64}$/.test(digest))).toBe(true)
   })
 
   it('rejects a source body fragment whose digest no longer matches', () => {
@@ -342,7 +353,21 @@ describe('paged chat body read prototype (test only)', () => {
 
     const manifestIndex = createIndex()
     manifestIndex.corruptDependencyManifestForTest('u1')
-    expect(() => manifestIndex.get('u1')).toThrow('PROTOTYPE_DEPENDENCY_MANIFEST_DIGEST_MISMATCH')
+    expect(() => manifestIndex.get('u1')).toThrow('PROTOTYPE_DEPENDENCY_MANIFEST_MISMATCH')
+  })
+
+  it('locates a required user message whose stable ID is carried outside the snapshot message', () => {
+    const events = [
+      fixtureEvent('turn-required', 1, 'invocation-context-committed', { messages: [{ role: 'user', content: 'required task', timestamp: 1 }],
+        requiredUserMessage: { id: 'required-user', message: { role: 'user', content: 'required task', timestamp: 1 } } }),
+      fixtureEvent('turn-required', 2, 'invocation-completed', { status: 'completed' }),
+    ]
+    const facts: ProjectionMessageFact[] = [
+      { id: 'required-user', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'required task' },
+    ]
+    expect(reduceAll(events, facts)).toMatchObject([{ id: 'required-user', content: 'required task' }])
+    const index = buildSourceFragmentPrototype(events, facts)
+    expect(index.get('required-user')).toMatchObject({ sourceEvent: { eventId: 'turn-required-1' } })
   })
 
   it('keeps page directory and body reads bounded when unrelated history grows tenfold', () => {
