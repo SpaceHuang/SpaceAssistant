@@ -188,6 +188,19 @@ export function createDeferredExecutionResultStore(db: AppDatabase, options: { a
       return Number(changed.changes) === 1
     },
 
+    /** Remove only the empty reservation for a caller-proven pre-dispatch policy rejection. */
+    abandonKnownNotDispatched(todoId: string, dispatchKey: string, now = Date.now()): boolean {
+      return runInTransaction(liveConn(), () => {
+        const outbox = liveConn().prepare('SELECT 1 FROM deferred_completion_outbox WHERE todo_id=? LIMIT 1').get(todoId)
+        if (outbox) return false
+        const changed = liveConn().prepare(`DELETE FROM deferred_execution_results
+          WHERE todo_id=? AND dispatch_key=? AND state='dispatching' AND result_json IS NULL`).run(todoId, dispatchKey)
+        if (Number(changed.changes) !== 1) return false
+        db.save()
+        return true
+      })
+    },
+
     getByTodo,
 
     listCompletionOutbox(todoId: string): Array<{ state: 'pending' | 'delivered'; result: Record<string, unknown>; dispatchKey: string }> {

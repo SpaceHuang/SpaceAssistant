@@ -315,9 +315,9 @@ export async function runImRemoteAgent(args: {
     const paired = ensureToolResultPairing(trimmed, { requiredUserMessageId: currentUserMessageId })
     const deferredContinuation = args.remoteContext.deferredContinuation
     const messages = deferredContinuation ? [...paired.messages,
-      { role: 'assistant' as const, content: [{ type: 'tool_use', id: deferredContinuation.toolCallId,
+      { role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: deferredContinuation.toolCallId,
         name: deferredContinuation.toolName, input: deferredContinuation.canonicalArgs }] },
-      { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: deferredContinuation.toolCallId,
+      { role: 'user' as const, content: [{ type: 'tool_result' as const, tool_use_id: deferredContinuation.toolCallId,
         content: JSON.stringify(deferredContinuation.result.value ?? deferredContinuation.result), is_error: deferredContinuation.result.kind === 'failed' }] }
     ] : paired.messages
     // `history.read` is a bounded lookup over persisted conversation facts. Remote

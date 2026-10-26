@@ -268,7 +268,7 @@ export function effectiveActionFor(
 
 /**
  * 自定义套餐覆盖校验（主进程强制，UI 仅作前置提示；B2 动作域按 lane）：
- * 规则必须存在、非 locked；动作 ∈ 本链路 availableActions
+ * 规则必须存在；动作 ∈ 本链路 availableActions
  * （desktop 4 态含 auto-evaluator；wechat/feishu 3 态拒绝 auto-evaluator）。
  * 调用方未带 lane 时按最严格 3 态域（fail-closed：auto-evaluator 仅在显式 desktop 下接受）。
  * 不可增删规则、顺序不可改由"仅按 id 覆盖动作"天然保证。
@@ -281,7 +281,6 @@ export function validateRuleOverride(
 ): { ok: true; rule: PolicyRule } | { ok: false; error: string } {
   const rule = baseRules.find((r) => r.id === ruleId)
   if (!rule) return { ok: false, error: `unknown rule: ${ruleId}` }
-  if (rule.locked) return { ok: false, error: `rule is locked: ${ruleId}` }
   const domain: readonly PolicyAction[] = lane
     ? LANE_PROFILES[lane].availableActions
     : (['deny', 'allow', 'ask'] as const)
@@ -303,11 +302,10 @@ function applyCustom(lane: ExecutionLane, rules: PolicyRule[], overrides: Policy
   const byId = new Map(overrides.filter((o) => allowed.has(o.action)).map((o) => [o.ruleId, o]))
   if (byId.size === 0) return rules
   return rules.map((r) => {
-    if (r.locked) return r
     const o = byId.get(r.id)
     if (!o) return r
-    const { configRequires: _c, askUnless: _a, requiresContext: _r, ...rest } = r
-    return { ...rest, action: o.action }
+    const { configRequires: _c, askUnless: _a, requiresContext: _r, humanRequired: _h, ...rest } = r
+    return { ...rest, action: o.action, userOverride: true }
   })
 }
 

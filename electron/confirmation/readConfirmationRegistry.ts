@@ -76,6 +76,18 @@ export class ReadConfirmationRegistry {
     return true
   }
 
+  /** Reuse only the same live pending gate registration during deferred policy re-evaluation. */
+  matchesPending(entry: Omit<ReadConfirmationEntry, 'state'>): boolean {
+    const now = this.clock.now()
+    this.prune(now)
+    const current = this.entries.get(this.key(entry.requestId, entry.toolUseId))
+    if (!current || current.state !== 'pending' || current.expiresAt <= now) return false
+    const expectedFacts = [...entry.factIds].sort()
+    const currentFacts = [...current.factIds].sort()
+    return current.inputDigest === entry.inputDigest && current.ruleId === entry.ruleId &&
+      expectedFacts.length === currentFacts.length && expectedFacts.every((factId, index) => factId === currentFacts[index])
+  }
+
   settle(requestId: string, toolUseId: string, _state: 'rejected' | 'expired'): boolean {
     const now = this.clock.now()
     this.prune(now)

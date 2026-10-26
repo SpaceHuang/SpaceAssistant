@@ -247,7 +247,7 @@ export type CanonicalToolExecutionResult = {
 }
 export type ToolPreparationStage =
   | Readonly<{ kind: 'initial'; requestMetadata?: Readonly<Record<string, unknown>> }>
-  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }>; replanAfterFreshApproval?: true; requestMetadata?: Readonly<Record<string, unknown>> }>
+  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }>; replanAfterFreshApproval?: true; policyChanged?: true; requestMetadata?: Readonly<Record<string, unknown>> }>
 export type ToolConfirmationResult = Readonly<{
   answerer?: 'user' | 'agent'
   cause?: string
@@ -261,6 +261,7 @@ export type ToolConfirmationResult = Readonly<{
     | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'binding-unavailable'; sendCall: 'fulfilled'; delivery: 'unavailable'; errorCategory: 'message-binding-unavailable' }>
 }> & (
   | Readonly<{ kind: 'approved'; receipt: string }>
+  | Readonly<{ kind: 'authorization-changed' }>
   | Readonly<{ kind: 'deferred'; todoId: string; invocationId: string; checkpointRef: Readonly<{ checkpointId: string; workflowRevision: number }>; cause?: string; executionState?: 'not-executed'; retryable?: boolean; nextStep?: 'await-user' }>
   | Readonly<{ kind: 'denied' | 'timeout' | 'unavailable' | 'cancelled' }>
 )
@@ -1698,16 +1699,18 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         await markNotDispatched(tool, 'PREPARED_CALL_MISMATCH')
         throw new ToolDeniedError('PREPARED_CALL_MISMATCH')
       }
-        const initialDecision = await input.safetyGate.evaluate(initialBinding, input.request.signal)
+      let initialDecision = await input.safetyGate.evaluate(initialBinding, input.request.signal)
       throwIfAborted(input.request.signal)
 
       let confirmation: Readonly<{ receipt: string; answerer?: 'user' | 'agent' }> | undefined
+      let activeApprovalId: string | undefined
       if (initialDecision.kind === 'deny') {
         await markNotDispatched(tool, initialDecision.reasonCode)
         // FR12②：deny 决策可携带模型可见的区分文案（预算未注入 vs 服务不可用）
         throw new ToolDeniedError(initialDecision.reasonCode, initialDecision.userMessage)
       }
       if (initialDecision.kind === 'ask') {
+        activeApprovalId = initialDecision.confirmationId
         if (!input.confirmation) {
           await markNotDispatched(tool, 'CONFIRMATION_REQUIRED')
           throw new ToolDeniedError('CONFIRMATION_REQUIRED')
@@ -1766,7 +1769,71 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         } finally {
           if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
         }
-        if (result.kind === 'deferred') {
+        let activeDecision = initialDecision
+        let policyChangedToAllow = false
+        while (result.kind === 'authorization-changed') {
+          await appendHistory([{ kind: 'approval-resolved', payload: {
+            toolCallId: tool.toolCallId, approvalId: activeDecision.confirmationId, approved: false,
+            outcome: 'invalidated', cause: 'authorization-changed', settledAt: Date.now()
+          } }])
+          activeApprovalId = undefined
+          let refreshedBinding: PermitBinding
+          try {
+            refreshedBinding = await input.prepareTool(executionCall, {
+              kind: 'recheck', replanAfterFreshApproval: true, policyChanged: true,
+              ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {})
+            })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : ''
+            const reasonCode = error instanceof ToolDeniedError ? error.reasonCode
+              : /^[A-Z0-9_]{1,64}$/.test(message) ? message : 'PREPARED_RECHECK_FAILED'
+            await markNotDispatched(tool, reasonCode)
+            throw new ToolDeniedError(reasonCode)
+          }
+          const refreshedDecision = await input.safetyGate.evaluate(refreshedBinding, input.request.signal)
+          throwIfAborted(input.request.signal)
+          if (refreshedDecision.kind === 'deny') {
+            await markNotDispatched(tool, refreshedDecision.reasonCode, refreshedDecision.userMessage)
+            throw new ToolDeniedError(refreshedDecision.reasonCode, refreshedDecision.userMessage)
+          }
+          if (refreshedDecision.kind === 'allow') {
+            policyChangedToAllow = true
+            break
+          }
+          if (!input.confirmation) {
+            await markNotDispatched(tool, 'CONFIRMATION_REQUIRED')
+            throw new ToolDeniedError('CONFIRMATION_REQUIRED')
+          }
+          activeDecision = refreshedDecision
+          activeApprovalId = activeDecision.confirmationId
+          try {
+            await approvalSlots.acquire(input.request.signal ? { signal: input.request.signal } : {})
+            approvalPermitHeld = true
+          } catch (error) {
+            await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'CONFIRMATION_CAPACITY_UNAVAILABLE')
+            throw error
+          }
+          await appendHistory([{ kind: 'approval-waiting', payload: {
+            toolCallId: tool.toolCallId, sourceRequestId: `${invocationId}:round:${modelTurns}`, modelTurn: modelTurns,
+            approvalId: activeDecision.confirmationId, answerer: activeDecision.answerer,
+            reasonCode: activeDecision.reasonCode, requestId: input.invocationId, requestedAt: Date.now()
+          } }])
+          try {
+            result = await input.confirmation({
+              call: executionCall, modelTurn: modelTurns, confirmationId: activeDecision.confirmationId,
+              answerer: activeDecision.answerer, reasonCode: activeDecision.reasonCode,
+              ...(activeDecision.context !== undefined ? { context: structuredClone(activeDecision.context) } : {}),
+              ...(input.request.signal ? { signal: input.request.signal } : {})
+            })
+          } catch (error) {
+            await appendHistory([{ kind: 'approval-resolved', payload: { toolCallId: tool.toolCallId,
+              approvalId: activeDecision.confirmationId, approved: false, outcome: 'unavailable', settledAt: Date.now() } }])
+            throw error
+          } finally {
+            if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
+          }
+        }
+        if (!policyChangedToAllow && result.kind === 'deferred') {
           if (!result.todoId.trim() || result.invocationId !== input.invocationId || !result.checkpointRef.checkpointId.trim() ||
             !Number.isInteger(result.checkpointRef.workflowRevision) || result.checkpointRef.workflowRevision <= 0) {
             await markNotDispatched(tool, 'DEFERRED_CHECKPOINT_INVALID')
@@ -1785,11 +1852,14 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           parkedTodoId = result.todoId
           throw new DeferredTurnParkedError()
         }
+        if (policyChangedToAllow) {
+          confirmation = undefined
+        } else {
         const approved = result.kind === 'approved' && Boolean(result.receipt.trim())
         const approvalOutcome = approved ? 'approved' : result.kind === 'approved' ? 'denied' : result.kind
         const resolvedApproval = {
           toolCallId: tool.toolCallId,
-          approvalId: initialDecision.confirmationId,
+          approvalId: activeDecision.confirmationId,
           approved,
           outcome: approvalOutcome,
           ...(result.answerer ? { answerer: result.answerer } : {}),
@@ -1811,20 +1881,35 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
           throwIfAborted(input.request.signal)
         }
-        confirmation = { receipt: result.receipt, answerer: result.answerer ?? initialDecision.answerer }
+        confirmation = { receipt: result.receipt, answerer: result.answerer ?? activeDecision.answerer }
         if (confirmation.answerer === 'user') userApprovedToolCalls.add(tool.toolCallId)
+        activeApprovalId = activeDecision.confirmationId
+        }
       }
 
       let resourceLease: { release(): void } | undefined
       let resourceReleaseDeferred = false
       let executionResult: CanonicalToolExecutionResult
+      let policyChangedDuringDispatch = false
       try {
         const resourceKeys = input.toolResourceKeys?.(executionCall) ?? [`unknown:${invocationId}`]
         resourceLease = await resourceLocks.acquire(resourceKeys, input.request.signal ? { signal: input.request.signal } : undefined)
+        let dispatchAuthorizationAttempts = 0
+        dispatchAuthorization: while (true) {
+        dispatchAuthorizationAttempts += 1
+        if (dispatchAuthorizationAttempts > 8) {
+          await markNotDispatched(tool, 'AUTHORIZATION_STALE')
+          throw new ToolDeniedError('AUTHORIZATION_STALE')
+        }
         // Match the host lifecycle: resource ownership is acquired before the final policy/facts recheck.
         let recheckBinding: PermitBinding
         try {
-          recheckBinding = await input.prepareTool(executionCall, { kind: 'recheck', ...(confirmation ? { confirmation } : {}), ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {}) })
+          recheckBinding = await input.prepareTool(executionCall, {
+            kind: 'recheck',
+            ...(confirmation ? { confirmation } : {}),
+            ...(policyChangedDuringDispatch ? { replanAfterFreshApproval: true, policyChanged: true } : {}),
+            ...(preparedRequestProjection?.requestMetadata ? { requestMetadata: preparedRequestProjection.requestMetadata } : {})
+          })
         } catch (error) {
           throwIfAborted(input.request.signal)
           const message = error instanceof Error ? error.message : ''
@@ -1835,7 +1920,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           throw new ToolDeniedError(reasonCode)
         }
         throwIfAborted(input.request.signal)
-        if (!matchesRecheckBinding(initialBinding, recheckBinding)) {
+        if (!matchesRecheckBinding(initialBinding, recheckBinding, policyChangedDuringDispatch)) {
           await markNotDispatched(tool, 'STALE_AUTHORIZATION')
           throw new ToolDeniedError('STALE_AUTHORIZATION')
         }
@@ -1848,9 +1933,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           const askContext = authorization.context && typeof authorization.context === 'object'
             ? authorization.context as { decision?: { disposition?: unknown } }
             : undefined
-          if (authorization.answerer !== 'user' || askContext?.decision?.disposition !== 'human-required' || !input.confirmation) {
-            const reason = authorization.answerer !== 'user' || askContext?.decision?.disposition !== 'human-required'
-              ? 'RECHECK_REQUIRES_CONFIRMATION' : 'CONFIRMATION_REQUIRED'
+          if (!input.confirmation) {
+            const reason = askContext?.decision?.disposition === 'human-required' ? 'CONFIRMATION_REQUIRED' : 'RECHECK_REQUIRES_CONFIRMATION'
             await markNotDispatched(tool, reason)
             throw new ToolDeniedError(reason)
           }
@@ -1876,6 +1960,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
               requestedAt: Date.now()
             }
           }])
+          activeApprovalId = authorization.confirmationId
           let freshConfirmation: ToolConfirmationResult
           try {
             freshConfirmation = await input.confirmation({
@@ -1915,6 +2000,14 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             parkedTodoId = freshConfirmation.todoId
             throw new DeferredTurnParkedError()
           }
+          if (freshConfirmation.kind === 'authorization-changed') {
+            await appendHistory([{ kind: 'approval-resolved', payload: { toolCallId: tool.toolCallId,
+              approvalId: authorization.confirmationId, approved: false, outcome: 'invalidated',
+              cause: 'authorization-changed', settledAt: Date.now() } }])
+            activeApprovalId = undefined
+            confirmation = undefined
+            continue dispatchAuthorization
+          }
           const freshApproved = freshConfirmation.kind === 'approved' && Boolean(freshConfirmation.receipt.trim())
           await appendHistory([{ kind: 'approval-resolved', payload: {
             toolCallId: tool.toolCallId,
@@ -1938,6 +2031,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           }
           confirmation = { receipt: freshConfirmation.receipt, answerer: freshConfirmation.answerer ?? 'user' }
           if (confirmation.answerer === 'user') userApprovedToolCalls.add(tool.toolCallId)
+          activeApprovalId = authorization.confirmationId
           try {
             // The first recheck asked again because the previous approval no longer covered current facts.
             // Let the host rebuild its prepared plan against this fresh user decision before authorizing it.
@@ -1999,11 +2093,32 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             // tool-call-started is committed before the dispatch lease's final abort check.
             // A rejection here proves the executor was never entered, so settle the
             // proposal as not-dispatched even if that start projection already exists.
-            toolDispatchStates.set(tool.toolCallId, 'pending')
             if (error.reason === 'CANCELLED' || input.request.signal?.aborted) {
+              toolDispatchStates.set(tool.toolCallId, 'pending')
               await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
               throw abortErrorForSignal(input.request.signal)
             }
+            if (error.reason === 'AUTHORIZATION_STALE') {
+              const hadStartedProjection = toolDispatchStates.get(tool.toolCallId) === 'started'
+              if (hadStartedProjection) {
+                await appendHistory([{ kind: 'tool-call-not-dispatched', payload: {
+                  toolCallId: tool.toolCallId,
+                  sourceRequestId: `${invocationId}:round:${modelTurns}`,
+                  modelTurn: modelTurns,
+                  reason: 'AUTHORIZATION_STALE',
+                  replayContent: 'Tool call was not dispatched (AUTHORIZATION_STALE).',
+                  isError: true,
+                  executorEntry: 'not-entered',
+                  executionOutcome: 'not-dispatched'
+                } }])
+              }
+              toolDispatchStates.set(tool.toolCallId, 'pending')
+              confirmation = undefined
+              activeApprovalId = undefined
+              policyChangedDuringDispatch = true
+              continue dispatchAuthorization
+            }
+            toolDispatchStates.set(tool.toolCallId, 'pending')
             await markNotDispatched(tool, error.reason)
             if (error.reason.startsWith('VERIFY_ONLY_') || error.reason.startsWith('RECOVERY_')) {
               return { role: 'tool', toolCallId: tool.toolCallId, content: `Tool call was not dispatched (${error.reason}).`, isError: true } satisfies CanonicalTurnMessage
@@ -2011,6 +2126,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             throw new ToolDeniedError(error.reason)
           }
           throw error
+        }
+        break dispatchAuthorization
         }
       } catch (error) {
         if (error instanceof ToolExecutionAfterDispatchError && error.executorSettled) {

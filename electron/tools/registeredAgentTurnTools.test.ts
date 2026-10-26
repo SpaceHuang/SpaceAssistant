@@ -51,6 +51,63 @@ const invocationId = 'inv-sdk-host'
 async function* stream(...chunks: StreamChunk[]) { yield* chunks }
 
 describe('createRegisteredAgentTurnTools', () => {
+  it('真实 SDK、注册工具与 Electron policy 在 ask 改为 allow 后完成一次派发', async () => {
+    const execute = vi.fn(async () => ({ success: true, data: 'executed once' }))
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'lookup', actionClass: 'read', parseInput: (value) => value, execute }))
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    let authorizationVersion = 'policy-v1'
+    const tools = createRegisteredAgentTurnTools({ requestId: 'policy-change-e2e', turnId: 'turn', registry,
+      permits, admission, createExecutionContext: () => ({ sessionId: 's', lane: 'desktop' }),
+      resolveAuthorizationVersion: () => authorizationVersion })
+    const facts = { toolName: 'lookup', actionClass: 'read' as const, baseRiskLevel: 'low' as const, signals: [], summary: { text: 'lookup' } }
+    const ask = { type: 'require-confirm' as const, ruleId: 'lookup-ask', answerer: 'user' as const,
+      riskLevel: 'low' as const, facts, memoryTiers: [], timeoutMs: null, disposition: 'human-required' as const }
+    const policy = createAgentSdkSafetyPolicy({ resolveToolCall: tools.getPreparedCall,
+      resolveGateArgs: async (_binding, call) => ({ toolName: call!.toolName, toolInput: call!.input,
+        sessionId: 'policy-change-e2e', workDir: '/tmp', userDataDir: '/tmp', toolsConfig: {}, effectiveRules: [],
+        decisionCache: { lookup: () => null } } as never),
+      evaluateGate: async () => authorizationVersion === 'policy-v1'
+        ? { decision: ask, facts, approvedFactIds: [] }
+        : { decision: { type: 'auto-allow', ruleId: 'fresh-allow', reason: 'fresh policy' }, facts, approvedFactIds: [] } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('policy-change-e2e', ['lookup'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy })
+    const providers = new ModelProviderRegistry()
+    const responses = [
+      stream({ type: 'tool-call', toolCallId: 'policy-change-call', toolName: 'lookup', input: {} },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }),
+      stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    ]
+    providers.register(route, { providerId: 'policy-change-e2e', stream: () => responses.shift()! })
+    const history = new MemoryHistory()
+    try {
+      await runAgentTurn({ registry: providers, routeId: route.routeId, invocationId: 'policy-change-e2e', turnId: 'turn',
+        request: { messages: [{ role: 'user', content: 'lookup' }], maxTokens: 30 }, safetyGate,
+        prepareTool: tools.prepareTool, discardPreparedTool: tools.discardPreparedTool, toolExecution: tools.toolExecution,
+        confirmation: async () => { authorizationVersion = 'policy-v2'; return { kind: 'authorization-changed' } },
+        history, maxModelTurns: 2, maxConcurrentTools: 1 })
+      expect(execute).toHaveBeenCalledOnce()
+      expect(execute).toHaveBeenCalledWith({}, expect.anything())
+    } finally { tools.discardPreparedTool({ invocationId: 'policy-change-e2e', toolCallId: 'policy-change-call', toolName: 'lookup', input: {} }) }
+  })
+
+  it('策略变化后无旧 receipt 的 recheck 仍能刷新真实注册工具计划', async () => {
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'lookup', actionClass: 'read', parseInput: (x: unknown) => x,
+      plan: async (x: unknown) => x, execute: async () => ({ success: true }) }))
+    const tools = createRegisteredAgentTurnTools({ requestId: 'policy-change', turnId: 'turn', registry,
+      permits: new InMemorySafetyPermitStore(), admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ sessionId: 's', lane: 'desktop' }), resolveAuthorizationVersion: () => 'v2' })
+    const call = { invocationId: 'policy-change', toolCallId: 'call', toolName: 'lookup', input: {} }
+    try {
+      await tools.prepareTool(call, { kind: 'initial' })
+      await expect(tools.prepareTool(call, { kind: 'recheck', replanAfterFreshApproval: true, policyChanged: true } as any))
+        .resolves.toMatchObject({ phase: 'recheck', policyChanged: true })
+    } finally { tools.discardPreparedTool(call) }
+  })
+
   it('rechecks policy after a policy snapshot changes and accepts a fresh authorization version', async () => {
     const execute = vi.fn(async () => ({ success: true, data: 'fresh policy approved' }))
     const registry = new TypedToolRegistry()
@@ -80,6 +137,49 @@ describe('createRegisteredAgentTurnTools', () => {
       .resolves.toMatchObject({ output: { success: true, data: 'fresh policy approved' } })
     expect(resolveCount).toBe(3)
     expect(execute).toHaveBeenCalledOnce()
+  })
+
+  it('deferred claim 失效后重新授权，并在新 allow 下只派发一次', async () => {
+    const execute = vi.fn(async () => ({ success: true, data: 'retried after fresh authorization' }))
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw, execute }))
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('deferred-stale-invocation', ['write_file'])
+    let authorizationListener: (() => void) | undefined
+    let currentVersion = 'policy-v1'
+    let recheckVersionReads = 0
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: {
+      evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion })
+    } })
+    const tools = createRegisteredAgentTurnTools({ requestId: 'deferred-stale-request', turnId: 'deferred-stale-turn', registry,
+      permits, admission, createExecutionContext: () => ({ sessionId: 's', lane: 'wechat' }),
+      resolveAuthorizationVersion: (_call, stage) => {
+        if (stage.kind === 'recheck' && ++recheckVersionReads === 2 && authorizationListener) {
+          currentVersion = 'policy-v2'
+          authorizationListener()
+        }
+        return currentVersion
+      }, currentAuthorizationVersion: () => currentVersion,
+      subscribeAuthorizationChanges: (_call, listener) => { authorizationListener = listener; return () => { authorizationListener = undefined } } })
+    const call = { invocationId: 'deferred-stale-invocation', toolCallId: 'deferred-stale-call', toolName: 'write_file', input: { path: 'report.txt', content: 'approved' } }
+    let authorizations = 0
+    const authorize = async (initial: import('../../packages/agent-sdk/src/safetyPermit').PermitBinding,
+      recheck: import('../../packages/agent-sdk/src/safetyPermit').PermitBinding) => {
+      const initialDecision = await safetyGate.evaluate(initial)
+      if (initialDecision.kind !== 'allow') return { kind: 'deny' as const, reasonCode: 'POLICY_DENY' }
+      const fresh = await safetyGate.authorize(recheck)
+      if (fresh.kind !== 'allow') return { kind: 'deny' as const, reasonCode: 'POLICY_DENY' }
+      authorizations += 1
+      return fresh
+    }
+
+    await expect(tools.executeDeferred(call, { confirmationReceipt: 'approval:stale-claim', authorize }))
+      .resolves.toMatchObject({ output: { success: true, data: 'retried after fresh authorization' }, isError: false })
+    expect(authorizations).toBe(2)
+    expect(execute).toHaveBeenCalledOnce()
+    expect(admission.executorEntries).toBe(1)
   })
 
   it('executes a deferred original tool without a model turn, after fresh recheck and one-shot permit admission', async () => {
@@ -131,8 +231,51 @@ describe('createRegisteredAgentTurnTools', () => {
     await expect(tools.executeDeferred({ invocationId: 'deferred-predispatch-invocation', toolCallId: 'deferred-predispatch-call',
       toolName: 'write_file', input: { path: 'report.txt', content: 'approved' } }, {
       confirmationReceipt: 'approval:reply-predispatch', authorize: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' })
-    })).rejects.toBeInstanceOf(DeferredToolPreDispatchError)
+    })).rejects.toMatchObject({ name: 'DeferredToolPreDispatchError', failureCode: 'DEFERRED_SAFETY_RECHECK_DENIED:POLICY_DENY', failureType: 'Error' })
     expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('deferred read restores its gate-issued permit before validating the confirmed plan', async () => {
+    const input = { path: '/workspace/approved.txt' }
+    const executor = { name: 'read_file', execute: vi.fn(async () => ({ success: true, data: 'approved read' })) }
+    const readTool = createReadRegisteredTools({ readFile: executor as never, listDirectory: executor as never,
+      grep: executor as never, readFeishuAttachment: executor as never })[0]!
+    const registry = new TypedToolRegistry()
+    registry.register(readTool)
+    const permits = new InMemorySafetyPermitStore()
+    let tools!: ReturnType<typeof createRegisteredAgentTurnTools>
+    const call = { invocationId: 'deferred-read-invocation', toolCallId: 'deferred-read-tool', toolName: 'read_file', input }
+    tools = createRegisteredAgentTurnTools({
+      requestId: 'deferred-read-request', turnId: 'deferred-read-turn', registry, permits,
+      admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ requestId: 'deferred-read-request', toolUseId: call.toolCallId, sessionId: 'deferred-read-session', workDir: '/workspace' }),
+      resolveAuthorizationVersion: () => 'policy-v1'
+    })
+
+    const result = await tools.executeDeferred(call, {
+      confirmationReceipt: 'approval:deferred-read',
+      authorizeInitial: async () => {
+        const readExecutionPermit = buildReadExecutionPermit({ requestId: 'deferred-read-request', toolUseId: call.toolCallId,
+          toolName: 'read_file', input, decisionRuleId: 'path-sensitive-read-confirm',
+          facts: [{ factId: 'read-fact', decisionRuleId: 'path-sensitive-read-confirm', normalizedPath: input.path,
+            zone: 'workdir-normal', targetKind: 'file' }] })
+        tools.updateExecutionContext(call, (context) => { context.readExecutionPermit = readExecutionPermit })
+        return { kind: 'allow' as const }
+      },
+      authorize: async (_initial, recheck) => ({ kind: 'allow' as const, permitId: permits.issue(recheck, Date.now() + 30_000) })
+    })
+
+    expect(result).toMatchObject({ output: { success: true, data: 'approved read' }, isError: false })
+    expect(executor.execute).toHaveBeenCalledOnce()
+  })
+
+  it('keeps pre-dispatch diagnostics to stable error codes and never includes arbitrary cause text', () => {
+    expect(new DeferredToolPreDispatchError(new Error('MISSING_MATERIAL')).failureCode).toBe('MISSING_MATERIAL')
+    const privateCause = new Error('/Users/private/document.txt')
+    Object.assign(privateCause, { reason: 'BINDING_MISMATCH' })
+    privateCause.stack = 'Error: /Users/private/document.txt\n    at execute (electron/runtime/registered.ts:21:4)'
+    expect(new DeferredToolPreDispatchError(privateCause)).toMatchObject({ failureCode: 'BINDING_MISMATCH', failureType: 'Error', failureSite: 'electron/runtime/registered.ts:21:4' })
+    expect(new DeferredToolPreDispatchError(new Error('/Users/private/document.txt')).failureCode).toBe('UNKNOWN_PRE_DISPATCH_FAILURE')
   })
 
   it('IM 异步审批持久化待办并 park invocation，不继续模型循环或执行原工具', async () => {

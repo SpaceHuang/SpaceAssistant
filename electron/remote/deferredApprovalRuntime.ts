@@ -29,13 +29,15 @@ export function createDeferredApprovalRuntime(input: {
   scheduleRetry?: (delayMs: number, callback: () => void) => void
   recoverDispatchingExecutions?: Parameters<ReturnType<typeof createDeferredResumeCoordinator>['recoverDispatchingExecutions']>[0]
   recoverCompletionWake?: (sessionId: string) => void | Promise<void>
+  onFreshApprovalRequired?: Parameters<typeof createDeferredResumeCoordinator>[0]['onFreshApprovalRequired']
 }) {
   const scheduledSessions = new Set<string>()
   const scheduledCompletionSessions = new Set<string>()
   const executionResults = createDeferredExecutionResultStore(input.db)
   const resume = createDeferredResumeCoordinator({
     db: input.db, channel: input.channel, todoStore: input.todoStore, envelopeStore: input.envelopeStore,
-    maxParallel: input.maxParallel, requirePolicyFence: true, recheck: input.recheck, dispatch: input.dispatch, audit: input.audit
+    maxParallel: input.maxParallel, requirePolicyFence: true, recheck: input.recheck, dispatch: input.dispatch, audit: input.audit,
+    ...(input.onFreshApprovalRequired ? { onFreshApprovalRequired: input.onFreshApprovalRequired } : {})
   })
   const ingress = createDeferredApprovalIngress({
     db: input.db,

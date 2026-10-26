@@ -2,11 +2,12 @@ import fs from 'fs/promises'
 import path from 'path'
 import { createHash, randomUUID } from 'crypto'
 import { isDeepStrictEqual } from 'node:util'
+import { toolResultProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
 import type { SessionUsage } from '../src/shared/sessionUsage'
 import { foldCompactionEvents, projectCompactionMarkers, type CompactionReplay, type CompactionMarker } from '../src/shared/compactionEvents'
 import { withTransientLockRetry } from './safeAtomicWrite'
 import { sessionLedgerLocationIdentity } from './sessionLedgerIdentity'
-import { sessionEventProjectionMatches } from './sessionLedgerProjectionCompatibility'
+import { sessionEventProjectionMatches, sessionEventProjectionSchemasCompatible } from './sessionLedgerProjectionCompatibility'
 import { currentSessionEventSchemaVersion, SESSION_EVENT_TYPES, type SessionEventType } from './sessionEventSchema'
 import { isSessionLedgerLifecycleLockHeld, withSessionLedgerLifecycleLock } from './sessionLedgerLifecycle'
 
@@ -141,7 +142,8 @@ export async function ensureToolResultEvent(
     const existingPayload = { ...existing.payload }
     // Pre-turn-owner projections are compatible with canonical sidecars that have no turnId.
     if (input.turnId === undefined) delete existingPayload.turnId
-    if (!sessionEventProjectionMatches({ ...existing, payload: existingPayload }, { type: 'tool_result', schemaVersion: 2, payload })) {
+    if (!sessionEventProjectionSchemasCompatible(existing, { type: 'tool_result', schemaVersion: 2, payload }) ||
+      !toolResultProjectionPayloadMatches(existingPayload, payload)) {
       throw new Error(`conflicting tool result ledger event: ${input.toolUseId}`)
     }
     return existing

@@ -93,7 +93,9 @@ import {
 import {
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
-import { computeDeferredPlan, computeEffectiveTools } from './effectiveTools'
+import { computeDeferredPlan, computeEffectiveToolsWithExposureApproval } from './effectiveTools'
+import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { requestImExposureApproval } from './remote/imIngressApprovalPrompt'
 import { requireAutomationShellWorkingDirectory } from './toolsConfigRuntime'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
 import { WIKI_DOMAIN_TOOL_DEFINITIONS } from './wiki/wikiToolDiscovery'
@@ -280,6 +282,8 @@ export type RunToolChatSessionArgs = {
   hostSessionMetadata?: Readonly<Record<string, unknown>>
   hostTitleSuggestions?: { schedule(input: Record<string, unknown>): void }
   hostExposureRules?: readonly import('../src/shared/confirmation/types').PolicyRule[]
+  hostResolveExposureRules?: () => import('../src/shared/confirmation/types').PolicyRule[]
+  hostResolveExposureAuthorizationVersion?: () => string
   hostMcp?: {
     snapshot: McpToolSnapshot
     resolveExecutor?(toolName: string, manager: McpConnectionManager): import('./tools/types').ToolExecutor | undefined
@@ -486,6 +490,8 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     hostSessionMetadata: ports.sessionMetadata,
     hostTitleSuggestions: ports.titleSuggestions,
     hostExposureRules: ports.exposure?.rules,
+    hostResolveExposureRules: ports.resolveExposureRules,
+    hostResolveExposureAuthorizationVersion: ports.resolveExposureAuthorizationVersion,
     hostMcp: ports.mcp as RunToolChatSessionArgs['hostMcp'],
     hostAnswerer: ports.answerer as RunToolChatSessionArgs['hostAnswerer'],
     toolsTrim: invocation.profile.tools.trim
@@ -662,6 +668,8 @@ async function runToolChatSessionInner(
     hostSessionMetadata,
     hostTitleSuggestions,
     hostExposureRules,
+    hostResolveExposureRules,
+    hostResolveExposureAuthorizationVersion,
     hostMcp,
     toolsTrim,
     reasoningEffort,
@@ -927,7 +935,7 @@ async function runToolChatSessionInner(
     mode: deferredMode,
     thresholdBytes: deferredThresholdBytes
   })
-  const effectiveTools = computeEffectiveTools({
+  const effectiveTools = await computeEffectiveToolsWithExposureApproval({
     builtinConfig: toolsConfig,
     feishuConfig,
     browserConfig,
@@ -935,10 +943,15 @@ async function runToolChatSessionInner(
     wechatConfig,
     remoteContext,
     exposureRules,
+    resolveExposureRules: hostResolveExposureRules,
+    resolveExposureAuthorizationVersion: hostResolveExposureAuthorizationVersion,
+    subscribeExposurePolicyChanges: remoteContext?.source === 'wechat' || remoteContext?.source === 'feishu'
+      ? (listener) => getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(args.requestId, remoteContext.source, listener)
+      : undefined,
     mcpSnapshot,
     trim: toolsTrim,
     deferredPlan
-  })
+  }, (request, signal) => requestImExposureApproval({ ...request, locale: payloadLocale, signal }))
   const tools = effectiveLane === 'automation'
     ? requireAutomationShellWorkingDirectory(effectiveTools.tools)
     : effectiveTools.tools

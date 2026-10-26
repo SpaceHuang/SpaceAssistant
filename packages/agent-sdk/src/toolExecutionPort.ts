@@ -93,6 +93,11 @@ export function createPermitBoundToolExecutionPort<TCall extends PermitBoundTool
         removeAuthorizationListener = deps.subscribeAuthorizationChange?.(call, invalidateAuthorizationIfChanged) ?? (() => undefined)
         if (deps.isRevoked?.(call)) throw new ToolExecutionRejectedError('REVOKED')
         invalidateAuthorizationIfChanged()
+        if (authorizationStale) throw new ToolExecutionRejectedError('AUTHORIZATION_STALE')
+        // A fresh gate produced this permit and its bound version matches the host's current
+        // version. Remove only the policy-stale fence; cancellation and revocation stay terminal.
+        deps.permits.clearAuthorizationInvalidation(expected.requestId, expected.invocationId)
+        deps.admission.clearAuthorizationInvalidation?.(expected)
         if (call.signal?.aborted) onAbort()
         else call.signal?.addEventListener('abort', onAbort, { once: true })
         const consumed = await deps.permits.consume(permitId, expected)

@@ -150,6 +150,36 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('repairs parked invocation projections without appending a second terminal event', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const location = { workDir: '/tmp/parked-projection-recovery', sessionId: 'parked-projection-session', createdAt: 1000 }
+    await history.appendBatch([
+      { ...event('parked-projection-response', 1), kind: 'model-response-committed', payload: {
+        message: { role: 'assistant', toolCalls: [{ id: 'parked-projection-tool', name: 'read_file', input: { path: 'a.txt' } }] },
+        sessionLedger: { location, stepId: 'parked-projection-step', toolCalls: [
+          { toolUseId: 'parked-projection-tool', name: 'read_file', args: { path: 'a.txt' } }
+        ] }
+      } },
+      { ...event('parked-projection-terminal', 2), kind: 'invocation-parked', payload: { status: 'parked' } }
+    ], 0)
+    conn.prepare(`UPDATE canonical_projection_repairs SET status='pending',attempts=0,terminal_failed=0,last_error=NULL,updated_at=1
+      WHERE invocation_id=? AND repair_kind='invocation-projections' AND target_key=?`)
+      .run('inv-1', 'parked-projection-response')
+    const repairToolCallLedger = vi.fn(async () => undefined)
+
+    await expect(history.recoverInterruptedInvocations({ repairToolCallLedger })).resolves.toEqual([])
+
+    expect(repairToolCallLedger).toHaveBeenCalledOnce()
+    await expect(history.read('inv-1')).resolves.toMatchObject({
+      version: 2, events: [expect.objectContaining({ kind: 'model-response-committed' }), expect.objectContaining({ kind: 'invocation-parked' })]
+    })
+    expect(conn.prepare(`SELECT status FROM canonical_projection_repairs
+      WHERE invocation_id=? AND target_key=?`).get('inv-1', 'parked-projection-response'))
+      .toEqual({ status: 'completed' })
+    conn.close()
+  })
+
   it('recovers only a prior process generation from the durable active workset after reopen', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'history-process-generation-'))
     const dbPath = path.join(root, 'history.db')
@@ -1180,7 +1210,7 @@ describe('SqliteAgentHistory', () => {
       ] }], requiredUserMessage: { id: 'atomic-required-user-unsupported', message: { role: 'user', content: [
         { type: 'text', text: 'same visible text' }, { type: 'audio', data: 'different unsupported payload' }
       ] } } } }], 0))
-      .rejects.toThrow('canonical invocation context payload is invalid')
+      .rejects.toThrow('canonical invocation context payload is invalid (content-block-unsupported)')
     expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-unsupported-event'))
       .toEqual({ count: 0 })
     db.close()

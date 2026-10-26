@@ -15,6 +15,8 @@ import { createDeferredExecutionResultStore } from '../confirmation/deferredExec
 import { getDbConnection } from '../database/sqliteStore'
 import { confirmationAuthorizationRegistry } from '../confirmation/confirmationAuthorizationRegistry'
 import { remoteWriteGrantRegistry } from './remoteWriteGrantRegistry'
+import { deferredPolicyChangeRegistry } from './deferredPolicyChangeRegistry'
+import { createDeferredPolicyReevaluation } from './deferredPolicyReevaluation'
 
 type DispatchInput = { request: DeferredResumeRequest; todo: DeferredTodoRecord; envelope: DeferredCallEnvelope }
 
@@ -31,10 +33,15 @@ export function createDeferredImBundleRuntime(input: {
   isOwnerAuthorized(todo: DeferredTodoRecord): boolean
   recheckTask(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean
   recheckAttachment?(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean | Promise<boolean>
-  dispatch(input: DispatchInput): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string }>
+  dispatch(input: DispatchInput): Promise<{ dispatched: boolean; result?: unknown; failureReason?: string; failureCode?: string }>
   onCompletionWake?(sessionId: string): void | Promise<void>
   scheduleRetry?: (delayMs: number, callback: () => void) => void
   recoverCompletionWake?: (sessionId: string) => void | Promise<void>
+  reauthorizePolicy?(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{
+    decision: 'allow' | 'ask' | 'deny'
+    rule: { ruleId: string; factsHash: string }
+    reasonSummary?: string
+  }>
   audit(event: SecurityAuditEvent): void
 }) {
   const authorizationRegistry = input.authorizationRegistry ?? remoteAuthorizationRegistry
@@ -64,6 +71,9 @@ export function createDeferredImBundleRuntime(input: {
       try {
         const outcome = await input.dispatch({ request, todo, envelope })
         if (!outcome.dispatched) {
+          if (outcome.failureCode === 'FRESH_APPROVAL_REQUIRED' && executionResults.abandonKnownNotDispatched(todo.todoId, dispatchKey)) {
+            return { dispatched: false, failureCode: outcome.failureCode, failureReason: outcome.failureReason }
+          }
           // The dispatch port explicitly reports that it did not enter the executor. This is
           // a known non-execution, not an uncertain side effect: persist a failure receipt and
           // wake the conversation so the owner is told the approved action did not run.
@@ -93,6 +103,17 @@ export function createDeferredImBundleRuntime(input: {
       }
     }
   })
+  const policyReevaluation = input.reauthorizePolicy ? createDeferredPolicyReevaluation({
+    db: input.db, channel: input.channel, todoStore: input.todoStore, envelopeStore,
+    notificationDelivery: input.notificationDelivery, enabled: input.isEnabled,
+    authorizationEpoch: input.getAuthorizationEpoch, ownerAuthorized: input.isOwnerAuthorized,
+    recheckTask: input.recheckTask,
+    ...(input.recheckAttachment ? { recheckAttachment: input.recheckAttachment } : {}),
+    reauthorize: input.reauthorizePolicy, recheck: ports.recheck,
+    dispatch: ports.dispatchClaimed,
+    maxParallel: input.maxParallel, ...(input.scheduleRetry ? { scheduleRetry: input.scheduleRetry } : {}),
+    wake: input.onCompletionWake ?? (() => undefined), audit: input.audit
+  }) : undefined
   const runtime = createDeferredApprovalRuntime({
     db: input.db,
     channel: input.channel,
@@ -107,8 +128,11 @@ export function createDeferredImBundleRuntime(input: {
     audit: input.audit,
     recoverDispatchingExecutions,
     recoverCompletionWake: input.recoverCompletionWake ?? input.onCompletionWake,
-    scheduleRetry: input.scheduleRetry
+    scheduleRetry: input.scheduleRetry,
+    ...(policyReevaluation ? { onFreshApprovalRequired: async () => { await policyReevaluation.processInvalidated() } } : {})
   })
+  const unsubscribePolicyChange = policyReevaluation
+    ? deferredPolicyChangeRegistry.subscribe(input.channel, () => { void policyReevaluation.processInvalidated() }) : undefined
   const closeCoordinator = createDeferredApprovalCloseCoordinator({
     db: input.db,
     advanceAuthorizationEpoch: (channel, reason) => authorizationRegistry.advanceAuthorizationEpoch(channel, reason),
@@ -173,9 +197,12 @@ export function createDeferredImBundleRuntime(input: {
     ...runtime,
     closeCoordinator,
     recoverDispatchingExecutions,
+    reauthorizeInvalidated: () => policyReevaluation?.processInvalidated() ?? Promise.resolve([]),
+    disposePolicyChangeSubscription: () => unsubscribePolicyChange?.(),
     async recoverPending() {
       const closeResults = await closeCoordinator.reconcilePending()
       if (closeResults.some(({ result }) => result.status !== 'closed')) return []
+      await policyReevaluation?.processInvalidated()
       return runtime.recoverPending()
     }
   }

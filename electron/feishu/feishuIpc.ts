@@ -164,6 +164,33 @@ export function createFeishuBundle(deps: {
         readOwnerOpenIdFromAllowlist(allowlist) === todo.ownerId
     },
     recheckTask: (todo, envelope) => recheckDeferredTaskControl(deps.db, todo, envelope),
+    reauthorizePolicy: async (todo, envelope) => {
+      const context = envelope.executionContext
+      const storage = deps.sessionStorage
+      if (!storage || typeof context.messageId !== 'string' || typeof context.providerRouteId !== 'string' || typeof context.model !== 'string') {
+        throw new Error('DEFERRED_POLICY_RECHECK_MATERIAL_MISSING')
+      }
+      const resolved = resolveWorkDirForSession(storage.queries, todo.originSessionId,
+        () => deps.workDirManager.listProfiles(), () => deps.workDirManager.getActiveProfileId(), () => deps.workDirManager.getActiveWorkDir())
+      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) throw new Error('DEFERRED_POLICY_RECHECK_WORKDIR_CHANGED')
+      const config = readCfg()
+      const result = await executeDeferredImTool({ db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
+        requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
+        toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs, policyOnly: true,
+        lane: 'feishu', providerRouteId: context.providerRouteId,
+        remoteContext: { source: 'feishu', messageId: context.messageId, chatId: todo.identityKey, userId: todo.ownerId,
+          authOwner: todo.ownerId, originSessionId: todo.originSessionId, workDirProfileId: resolved.profileId,
+          requestId: envelope.requestId, authorizationGeneration: remoteAuthorizationRegistry.getGeneration('feishu'),
+          feishuConfig: config, larkCliRunner: runner },
+        model: context.model, toolsConfig: deps.getToolsConfig(), workDir: resolved.workDir,
+        userDataDir: deps.getUserDataPath(), getApiKey: deps.getApiKey, getBaseUrl: deps.getBaseUrl,
+        workDirManager: deps.workDirManager, getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
+        getShellConfig: () => readShellConfigFromDb(deps.db), toolChatExtras: { feishuConfig: config, larkCliRunner: runner }
+      }) as { decision?: { kind?: string; reasonCode?: string }; policy?: { ruleId: string; factsHash: string } }
+      if (!result.decision || !result.policy || !['allow', 'ask', 'deny'].includes(result.decision.kind ?? '')) throw new Error('DEFERRED_POLICY_RECHECK_RESULT_INVALID')
+      return { decision: result.decision.kind as 'allow' | 'ask' | 'deny', rule: result.policy,
+        ...(result.decision.reasonCode ? { reasonSummary: result.decision.reasonCode } : {}) }
+    },
     dispatch: async ({ todo, envelope }) => {
       const context = envelope.executionContext
       const storage = deps.sessionStorage
@@ -181,7 +208,10 @@ export function createFeishuBundle(deps: {
         db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
         requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
         toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs,
-        confirmationReceipt: context.confirmationReceipt, lane: 'feishu', providerRouteId: context.providerRouteId,
+        confirmationReceipt: context.confirmationReceipt,
+        confirmationPolicyRevision: typeof context.policyBehaviorVersion === 'string' && Number.isSafeInteger(context.policyRevision) && Number.isSafeInteger(context.policyEpoch)
+          ? `${context.policyBehaviorVersion}:${context.policyRevision}:${context.policyEpoch}` : undefined,
+        lane: 'feishu', providerRouteId: context.providerRouteId,
         remoteContext: {
           source: 'feishu', messageId: context.messageId,
           chatId: todo.identityKey, userId: todo.ownerId, authOwner: todo.ownerId, originSessionId: todo.originSessionId,
@@ -195,7 +225,7 @@ export function createFeishuBundle(deps: {
       })
       } catch (error) {
         if (error instanceof DeferredToolPreDispatchError) {
-          return { dispatched: false, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
+          return { dispatched: false, failureCode: error.failureCode, failureReason: '审批后的执行检查未通过，本次操作未执行。' }
         }
         throw error
       }

@@ -20,7 +20,10 @@ import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { resolveClarificationControlMessage, type ClarificationResolverInput, type ClarificationResolverResult } from '../remote/clarificationInbound'
 import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSession, getRemoteAgentLease } from '../remote/remoteAgentRegistry'
-import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
+import { authorizeImInboundMessage, evaluateImInboundGuard, readImPolicyAuthorizationRevision, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
+import { requestImIngressApproval } from '../remote/imIngressApprovalPrompt'
+import { loadEffectivePolicyRules } from '../confirmation/policyRulesRuntime'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
   buildDisambiguationReply,
@@ -199,10 +202,12 @@ export class RemoteCommandRouter {
       throw new Error('FEISHU_WAKE_SESSION_IDENTITY_INVALID')
     }
     const config = mergeFeishuConfig(this.deps.getFeishuConfig())
-    const guard = evaluateImInboundGuard({ channel: 'feishu', senderId: metadata.feishuSenderOpenId, getConfig: () => config })
+    const guard = evaluateImInboundGuard({ channel: 'feishu', senderId: metadata.feishuSenderOpenId, getConfig: () => config,
+      getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'feishu'), skipIngressPolicy: true })
     if (!guard.ok) throw new Error(`FEISHU_WAKE_AUTH_REJECTED:${guard.reason}`)
     const assertAuthorized = () => {
-      const revalidated = revalidateImInboundGuard(guard.snapshot, { getConfig: () => mergeFeishuConfig(this.deps.getFeishuConfig()) })
+      const revalidated = revalidateImInboundGuard(guard.snapshot, { getConfig: () => mergeFeishuConfig(this.deps.getFeishuConfig()),
+        getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'feishu') })
       if (!revalidated.ok) throw new Error(`FEISHU_WAKE_AUTH_REVOKED:${revalidated.reason}`)
     }
 
@@ -567,7 +572,24 @@ export class RemoteCommandRouter {
       reason: accept.reason
     })
 
-    if (!accept.accept) {
+    const getGuardConfig = () => {
+      const c = mergeFeishuConfig(this.deps.getFeishuConfig())
+      return { enabled: c.enabled, remoteEnabled: c.remoteEnabled, remoteSenderAllowlist: c.remoteSenderAllowlist }
+    }
+    const authorizeIngress = () => authorizeImInboundMessage({
+      channel: 'feishu', senderId: msg.senderOpenId, messageId: msg.messageId,
+      isGroup: msg.chatType === 'group', getConfig: getGuardConfig,
+      getPolicyRules: () => loadEffectivePolicyRules(this.deps.db, 'feishu'),
+      getPolicyRevision: () => readImPolicyAuthorizationRevision(this.deps.db),
+      subscribePolicyChanges: (listener) => getDefaultAgentRuntime().policyAuthorizationChanges.subscribe(msg.messageId, 'feishu', listener),
+      requestApproval: (request, signal) => requestImIngressApproval({ ...request, db: this.deps.db, messageText: msg.content, signal })
+    })
+    let earlyGuard: Awaited<ReturnType<typeof authorizeIngress>> | undefined
+    if (!accept.accept && (accept.reason === 'group_disabled' || accept.reason === 'non_owner')) {
+      earlyGuard = await authorizeIngress()
+    }
+
+    if (!accept.accept && !earlyGuard?.ok) {
       logFeishuCliEvent('info', 'feishu.inbound.reject', { reason: accept.reason })
       if (accept.reason === 'too_long') {
         await sendScopedReply(msg, ownerOpenId, '消息过长，请控制在 4000 字以内')
@@ -653,19 +675,7 @@ export class RemoteCommandRouter {
       return
     }
 
-    const getGuardConfig = () => {
-      const c = mergeFeishuConfig(this.deps.getFeishuConfig())
-      return {
-        enabled: c.enabled,
-        remoteEnabled: c.remoteEnabled,
-        remoteSenderAllowlist: c.remoteSenderAllowlist
-      }
-    }
-    const guard = evaluateImInboundGuard({
-      channel: 'feishu',
-      senderId: msg.senderOpenId,
-      getConfig: getGuardConfig
-    })
+    const guard = earlyGuard ?? await authorizeIngress()
     if (!guard.ok) {
       logFeishuCliEvent('warn', 'feishu.inbound.guard_reject', { reason: guard.reason })
       return

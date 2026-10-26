@@ -23,6 +23,7 @@ export type SettingsSecurityModel = SecuritySettingsModelPayload
  */
 export function buildSettingsSecurityModel(args: {
   packages: Partial<Record<ExecutionLane, PolicyPackage>>
+  policyRevisions?: Partial<Record<'desktop' | 'im', number>>
   deniedTools: string[]
   cache: DecisionCacheEntry[]
   rules: SecuritySettingsRuleView[]
@@ -30,6 +31,7 @@ export function buildSettingsSecurityModel(args: {
   haveAuditLog: boolean
 }): SecuritySettingsModelPayload {
   return {
+    ...(args.policyRevisions ? { policyRevisions: args.policyRevisions } : {}),
     packages: {
       desktop: args.packages.desktop ?? DEFAULT_POLICY_PACKAGES.desktop,
       wechat: args.packages.wechat ?? DEFAULT_POLICY_PACKAGES.wechat,
@@ -50,10 +52,12 @@ export function buildSettingsSecurityModel(args: {
 export function toRuleViews(
   rules: PolicyRule[],
   overrides: Array<{ ruleId: string; action: PolicyRule['action'] }>,
-  disabledRuleIds?: string[]
+  disabledRuleIds?: string[],
+  migratedLegacyDisabledRuleIds?: string[]
 ): SecuritySettingsRuleView[] {
   const byId = new Map(overrides.map((o) => [o.ruleId, o]))
   const disabled = new Set(disabledRuleIds ?? [])
+  const migrated = new Set(migratedLegacyDisabledRuleIds ?? [])
   return rules.map((rule) => {
     const o = byId.get(rule.id)
     return {
@@ -64,7 +68,8 @@ export function toRuleViews(
       enabled: (rule.locked && rule.action !== 'deny') || !disabled.has(rule.id),
       locked: rule.locked === true,
       reason: rule.reason,
-      overridden: o != null && o.action !== rule.action,
+      overridden: o != null,
+      ...(migrated.has(rule.id) ? { migratedFromLegacyDisabled: true } : {}),
       ...(rule.match?.lane ? { lanes: rule.match.lane } : {}),
       ...(rule.match ? {
         capabilities: [...new Set([

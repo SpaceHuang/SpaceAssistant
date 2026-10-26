@@ -53,7 +53,6 @@ import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
 import { createDesktopAgentRuntime } from '../runtime/desktopAgentRuntime'
 import { getDefaultAgentRuntime, setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { readFileExecutor } from '../tools/builtinExecutors'
-import { writeDisabledPolicyRuleIds } from './policyRulesRuntime'
 import { clearChatCancel, registerChatCancel } from '../chatCancelRegistry'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -782,14 +781,13 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     }
   })
 
-  it.each(['authorization-change', 'revoke', 'cancel'] as const)('嵌套 Approval Agent 在 Hosted executor 已 claim 后遇到 %s 时记录 unknown terminal 且不重试', async (termination) => {
+  it.each(['revoke', 'cancel'] as const)('嵌套 Approval Agent 在 Hosted executor 已 claim 后遇到 %s 时记录 unknown terminal 且不重试', async (termination) => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
     expect(modelId).toBeTruthy()
     const previousRuntime = getDefaultAgentRuntime()
     const runtime = createDesktopAgentRuntime()
     const workDir = await mkdtemp(path.join(os.tmpdir(), `approval-hosted-post-claim-${termination}-`))
     await writeFile(path.join(workDir, 'evidence.txt'), 'sensitive evidence')
-    if (termination === 'authorization-change') writeDisabledPolicyRuleIds(deps.db, ['automation-sensitive-path-deny'])
     setDefaultAgentRuntime(runtime)
     let providerCalls = 0
     let hostedHistory: { read(id: string): Promise<{ events: Array<{ kind: string; payload: unknown }> }> } | undefined
@@ -838,10 +836,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       await entered
       expect(readFileExecutor.execute).toHaveBeenCalledOnce()
       expect(executorSignal?.aborted).toBe(false)
-      if (termination === 'authorization-change') {
-        writeDisabledPolicyRuleIds(deps.db, [])
-        expect(runtime.policyAuthorizationChanges.publish('automation')).toBeGreaterThan(0)
-      } else if (termination === 'revoke') {
+      if (termination === 'revoke') {
         expect(runtime.toolRevocations.revokeToolForLane('automation', 'read_file')).toBeGreaterThan(0)
       } else runtime.chatCancels.signalChatCancel(requestId)
       expect(executorSignal?.aborted).toBe(true)
@@ -850,7 +845,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       const history = await hostedHistory!.read(requestId)
       expect(history.events.at(-1)).toMatchObject({
         kind: 'invocation-interrupted',
-        payload: termination === 'cancel' ? { status: 'cancelled' } : { status: 'interrupted', reason: termination === 'revoke' ? 'authorization-revoked' : 'authorization-changed' }
+        payload: termination === 'cancel' ? { status: 'cancelled' } : { status: 'interrupted', reason: 'authorization-revoked' }
       })
       expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({
         toolCallId: `approval-read-after-claim-${termination}`, executionOutcome: 'unknown-after-dispatch', invocationDisposition: termination === 'cancel' ? 'cancelled' : 'authorization-invalidated'
@@ -862,104 +857,6 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       if (termination === 'revoke') runtime.toolRevocations.revokeToolForLane('automation', 'read_file')
       runtime.toolRevocations.clearToolRevocationRequest(requestId)
       runtime.chatCancels.clear(requestId)
-      writeDisabledPolicyRuleIds(deps.db, [])
-      setDefaultAgentRuntime(previousRuntime)
-      await rm(workDir, { recursive: true, force: true })
-    }
-  })
-
-  it('嵌套 Approval Agent 在 Hosted dispatch claim 前策略版本变化时不执行 read_file', async () => {
-    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
-    expect(modelId).toBeTruthy()
-    const previousRuntime = getDefaultAgentRuntime()
-    const runtime = createDesktopAgentRuntime()
-    const workDir = await mkdtemp(path.join(os.tmpdir(), 'approval-hosted-policy-change-'))
-    await writeFile(path.join(workDir, '.env'), 'TOKEN=secret')
-    writeDisabledPolicyRuleIds(deps.db, ['automation-sensitive-path-deny'])
-    setDefaultAgentRuntime(runtime)
-    let providerCalls = 0
-    let hostedHistory: { read(id: string): Promise<{ events: Array<{ kind: string; payload: unknown }> }> } | undefined
-    const originalAdmission = runtime.executionAdmission
-    const originalRead = readFileExecutor.execute
-    const executor = vi.spyOn(readFileExecutor, 'execute')
-    const invalidationReasons: string[] = []
-    let reachedClaim!: () => void
-    let releaseClaim!: () => void
-    const atClaim = new Promise<void>((resolve) => { reachedClaim = resolve })
-    const claimBarrier = new Promise<void>((resolve) => { releaseClaim = resolve })
-    let claimObservationTimer: ReturnType<typeof setTimeout> | undefined
-    runtime.executionAdmission = {
-      markPermitConsumed: (...call) => originalAdmission.markPermitConsumed(...call),
-      beginDispatch: async (...call) => {
-        reachedClaim()
-        await claimBarrier
-        return originalAdmission.beginDispatch(...call)
-      },
-      invalidate: (binding, reason) => { invalidationReasons.push(reason); originalAdmission.invalidate(binding, reason) },
-      settle: (...call) => originalAdmission.settle(...call)
-    }
-    mockRunToolChatSession.mockImplementation(async (agentInvocation: never, ports: never, runOptions: never) => {
-      const invocationRecord = agentInvocation as unknown as { profile: { providerRouteId?: string }; trace: { requestId: string; turnId: string; windowId?: string } }
-      const routeId = invocationRecord.profile.providerRouteId!
-      runtime.toolRevocations.registerToolRevocationRequest(invocationRecord.trace.requestId, 'automation', invocationRecord.trace.requestId)
-      const configured = runtime.modelProviders.getRoute(routeId)
-      if (!configured) throw new Error('approval Hosted policy route missing')
-      runtime.modelProviders.register(configured.profile, { providerId: 'hosted-approval-policy-change-fixture', stream: async function* () {
-        providerCalls += 1
-        if (providerCalls === 1) {
-          yield { type: 'tool-call', toolCallId: 'approval-read-policy-change', toolName: 'read_file', input: { path: '.env' } } as const
-          yield { type: 'usage', inputTokens: 3, outputTokens: 4 } as const
-          yield { type: 'finish', reason: 'tool-calls' } as const
-          return
-        }
-        yield { type: 'text-delta', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"policy changed before dispatch"}}' } as const
-        yield { type: 'usage', inputTokens: 3, outputTokens: 8 } as const
-        yield { type: 'finish', reason: 'stop' } as const
-      } })
-      hostedHistory = (ports as unknown as { history: typeof hostedHistory }).history
-      const callback = (runOptions as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<{ result: { content: Array<{ text: string }> } }> }).onHostedTurnHandoff
-      return callback({
-        authorizedToolNames: new Set(['read_file']),
-        request: {
-          messages: [{ role: 'user', id: 'req-approval-policy-version-change:approval-user', content: 'nested approval evidence' }],
-          tools: [{ name: 'read_file', description: 'Read evidence', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }],
-          maxTokens: 128,
-          credentials: { apiKey: 'approval-key' }
-        },
-        currentUserMessageId: 'req-approval-policy-version-change:approval-user',
-        requiredUserMessage: { id: 'req-approval-policy-version-change:approval-user', message: { role: 'user', id: 'req-approval-policy-version-change:approval-user', content: 'nested approval evidence' } },
-        windowId: invocationRecord.trace.windowId
-      }).then((outcome) => ({ ok: true, content: outcome.result.content, stopReason: 'end_turn' }))
-    })
-
-    try {
-      const execution = runApprovalAgent({ ...deps, workDir, getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, model: modelId, baseUrl: 'https://approval-policy-change.example.com', credentialRef: 'llm-service:svc-approval-policy-change' }, invocation({ requestId: 'req-approval-policy-version-change' }))
-      await Promise.race([atClaim, new Promise<never>((_, reject) => { claimObservationTimer = setTimeout(async () => {
-        const id = (mockRunToolChatSession.mock.calls.at(-1)?.[0] as { trace?: { requestId?: string } } | undefined)?.trace?.requestId
-        const events = id && hostedHistory ? (await hostedHistory.read(id)).events.map(({ kind, payload }) => ({ kind, payload })) : []
-        reject(new Error(`claim was not reached; providerCalls=${providerCalls}; history=${JSON.stringify(events)}`))
-      }, 2000) })])
-      if (claimObservationTimer) clearTimeout(claimObservationTimer)
-      expect(executor).not.toHaveBeenCalled()
-      writeDisabledPolicyRuleIds(deps.db, [])
-      expect(runtime.policyAuthorizationChanges.publish('automation')).toBeGreaterThan(0)
-      releaseClaim()
-      await expect(execution).resolves.toMatchObject({ ok: false, cause: 'unavailable' })
-      expect(providerCalls).toBe(1)
-      expect(invalidationReasons).toContain('authorization-changed')
-      expect(executor).not.toHaveBeenCalled()
-      const hostedInvocation = mockRunToolChatSession.mock.calls.at(-1)![0] as { trace: { requestId: string } }
-      const history = await hostedHistory!.read(hostedInvocation.trace.requestId)
-      expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'approval-read-policy-change', reason: 'AUTHORIZATION_STALE' }) }))
-      expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'authorization-changed' } })
-    } finally {
-      if (claimObservationTimer) clearTimeout(claimObservationTimer)
-      releaseClaim()
-      const invocationRecord = mockRunToolChatSession.mock.calls.at(-1)?.[0] as { trace?: { requestId?: string } } | undefined
-      if (invocationRecord?.trace?.requestId) runtime.toolRevocations.clearToolRevocationRequest(invocationRecord.trace.requestId)
-      writeDisabledPolicyRuleIds(deps.db, [])
-      readFileExecutor.execute = originalRead
       setDefaultAgentRuntime(previousRuntime)
       await rm(workDir, { recursive: true, force: true })
     }

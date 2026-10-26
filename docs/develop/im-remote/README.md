@@ -20,6 +20,7 @@
 
 ## 在途（in-flight）
 
+- [IM指令权限预检与集中审批技术方案.md](./in-flight/IM指令权限预检与集中审批技术方案.md) —— 技术方案草稿：IM 先行用请求级预检合并权限申请；漏项仍走现有运行时审批；达到试点门槛后再评估定时任务迁移。
 - [2026-10-11-im-security-review-improvement-development-plan.md](./in-flight/2026-10-11-im-security-review-improvement-development-plan.md) —— 实施方案草案：本文的新类型/字段/模块名是建议设计，**当前仓库尚未实现**（核验：`rg -n 'imPolicy|imSecurityPolicy' electron/` 无匹配；但依赖能力已落地：`1d4c9bcd` intent tracking、`8f1a21fc` 远程确认渠道归属、`71efa790` durable async IM approvals、`36edb110` Track isolation）
 
 > **2026-10-14 核验更正（原判 C 有误）**：`remote-im-async-interaction-design.md`（`8148f307` 分支合入）、`wechat-confirmation-prompt-delivery-failure-fix-plan-2026-10-10.md`（`CONFIRMATION_UNAVAILABLE` 见 `electron/remote/imRemoteAgent.test.ts`）经核验**已实现**，已移入 `../archive/im-remote/`。

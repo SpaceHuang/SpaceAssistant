@@ -8,6 +8,9 @@ import configReducer from '../../store/configSlice'
 import { changeAppLocale } from '../../i18n/localeSync'
 import type { SecuritySettingsModelPayload } from '../../../shared/confirmation/settingsCenter'
 import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_POLICY_RULES } from '../../../shared/policy/defaultRules'
+import { LANE_PROFILES } from '../../../shared/policy/policyPackages'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 const MODEL: SecuritySettingsModelPayload = {
   packages: { desktop: 'standard', wechat: 'standard', feishu: 'standard', automation: 'standard' },
@@ -121,7 +124,6 @@ describe('SecuritySettingsTab（§7 五区）', () => {
       securityWritePolicy: vi.fn().mockResolvedValue({ status: 'committed', revision: 6 }),
       securitySetPolicyPackage: vi.fn().mockResolvedValue({ ok: true }),
       securitySetRuleOverride: vi.fn().mockResolvedValue({ ok: true }),
-      securitySetRuleEnabled: vi.fn().mockResolvedValue({ ok: true }),
       securityRemoveRuleOverride: vi.fn().mockResolvedValue({ ok: true, removed: 1 }),
       securityListDecisionCache: vi.fn().mockResolvedValue([
         {
@@ -143,7 +145,28 @@ describe('SecuritySettingsTab（§7 五区）', () => {
     } as typeof window.api
   })
 
+  it('English rule rows localize every visible default rule reason', async () => {
+    await changeAppLocale('en-US')
+    const allDesktopRules = DEFAULT_POLICY_RULES.map((rule) => ({
+      id: rule.id, when: rule.when, action: rule.action, defaultAction: rule.action,
+      enabled: true, locked: rule.locked ?? false, reason: rule.reason, overridden: false,
+      ...(rule.match?.lane ? { lanes: [...rule.match.lane] } : {})
+    }))
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({ ...MODEL, rules: allDesktopRules })
+    try {
+      renderTab()
+      await waitFor(() => expect(screen.getByRole('table').querySelectorAll('tbody tr').length).toBeGreaterThan(0))
+      const rendered = screen.getByRole('table').textContent ?? ''
+      expect(rendered).not.toMatch(/[\u3400-\u9fff]/)
+    } finally {
+      await changeAppLocale('zh-CN')
+    }
+  })
+
   it('IM 套餐写入共同策略快照并携带读取到的 revision', { timeout: 20000 }, async () => {
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 5, snapshot: { selectedPackage: 'custom' }
+    })
     renderTab()
     const panel = await openLaneTab('IM 远程')
     const packageSelect = (await within(panel).findAllByRole('combobox'))[0]!
@@ -311,7 +334,7 @@ describe('SecuritySettingsTab（§7 五区）', () => {
     expect(within(panel).getByText('universal-no-lane')).toBeTruthy()
     expect(within(panel).queryByText('im-write-ask')).toBeNull()
     expect(within(panel).queryByText('remote-shell-disabled')).toBeNull()
-    // 已移除独立的「链路硬约束」主开关，系统保护规则用「启用/不启用」开关
+    // 已移除独立的「链路硬约束」主开关
     expect(within(panel).queryByText('链路硬约束')).toBeNull()
   })
 
@@ -324,33 +347,73 @@ describe('SecuritySettingsTab（§7 五区）', () => {
     expect(within(panel).getByText('im-write-ask')).toBeTruthy()
   })
 
-  it('IM 远程 Tab 展示系统保护规则（locked）的「启用/不启用」开关，不渲染锁定标记', { timeout: 20000 }, async () => {
+  it('IM 远程 Tab 在 custom 套餐下允许配置原 locked 规则动作', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL, packages: { ...MODEL.packages, wechat: 'custom' }
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {}, migratedLegacyDisabledRuleIds: ['remote-shell-disabled'] }
+    })
     renderTab()
     const panel = await openLaneTab('IM 远程')
     expect(await within(panel).findByText('im-write-ask')).toBeTruthy()
     expect(within(panel).getByText('remote-shell-disabled')).toBeTruthy()
-    // locked 系统保护规则用「启用/不启用」Switch，不再显示「锁定」标记
-    expect(within(panel).queryByText('锁定')).toBeNull()
     const ruleRow = within(panel).getByText('remote-shell-disabled').closest('tr')!
-    const sw = ruleRow.querySelector('.ant-switch')!
-    expect(sw).toBeTruthy()
-    expect(sw.className).toContain('ant-switch-checked')
+    expect(ruleRow.querySelector('.ant-switch')).toBeNull()
+    expect(within(ruleRow as HTMLElement).getByRole('combobox')).toBeTruthy()
+    expect(within(ruleRow as HTMLElement).getByText('由旧停用设置迁移')).toBeTruthy()
     // 桌面规则不出现在微信 Tab
     expect(within(panel).queryByText('script-clean-allow-desktop')).toBeNull()
   })
 
-  it('IM 系统保护规则开关通过共同快照禁用 locked deny', { timeout: 20000 }, async () => {
+  it('IM 原 locked 规则动作通过共同快照保存并遵守 revision', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL, packages: { ...MODEL.packages, wechat: 'custom' }
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {} }
+    })
     renderTab()
     const panel = await openLaneTab('IM 远程')
-    const ruleRow = (await within(panel).findByText('remote-shell-disabled')).closest('tr')!
-    const sw = ruleRow.querySelector('.ant-switch')!
-    fireEvent.click(sw)
+    const ruleRow = (await within(panel).findByText('im-write-ask')).closest('tr')!
+    const selector = within(ruleRow as HTMLElement).getByRole('combobox')
+    fireEvent.mouseDown(selector)
+    fireEvent.click((await within(document.body).findAllByText('直接执行')).at(-1)!)
     await waitFor(() => {
       expect(window.api.securityWritePolicy).toHaveBeenCalledWith({
         lane: 'wechat', expectedRevision: 5,
-        change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: false }
+        change: { kind: 'rule-override', ruleId: 'im-write-ask', action: 'allow' }
       })
     })
+  })
+
+  it('IM 规则展示只读取 IM 覆盖，不继承桌面动作或恢复默认状态', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL, rules: MODEL.rules.map((rule) => rule.id === 'mcp-tool-ask' ? { ...rule, action: 'deny', overridden: true } : rule)
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5, snapshot: { selectedPackage: 'custom', ruleOverrides: {} }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    const row = (await within(panel).findByText('mcp-tool-ask')).closest('tr')!
+    expect(row.querySelector('.ant-select-selection-item')?.textContent).toContain('人工批准')
+    expect(within(row as HTMLElement).queryByRole('button', { name: '恢复默认' })).toBeNull()
+  })
+
+  it('IM 覆盖动作显示对应的恢复默认入口', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue(MODEL)
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'deny' } }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    const row = (await within(panel).findByText('mcp-tool-ask')).closest('tr')!
+    expect(row.querySelector('.ant-select-selection-item')?.textContent).toContain('禁止')
+    expect(within(row as HTMLElement).getByRole('button', { name: '恢复默认' })).toBeTruthy()
   })
 
   it('切换套餐调用 securitySetPolicyPackage（standard 无二次确认）', { timeout: 20000 }, async () => {
@@ -360,7 +423,7 @@ describe('SecuritySettingsTab（§7 五区）', () => {
     fireEvent.mouseDown(select)
     fireEvent.click(await screen.findByText('严格'))
     await waitFor(() => {
-      expect(window.api.securitySetPolicyPackage).toHaveBeenCalledWith({ lane: 'desktop', package: 'strict' })
+      expect(window.api.securitySetPolicyPackage).toHaveBeenCalledWith({ lane: 'desktop', package: 'strict', expectedRevision: 0 })
     })
   })
 
@@ -398,6 +461,53 @@ describe('SecuritySettingsTab（§7 五区）', () => {
 })
 
 describe('生效动作与动作域（P2：显示=实际，动作域按 lane）', () => {
+  it('桌面非自定义套餐显示套餐动作，同时保留休眠覆盖的恢复入口', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, desktop: 'standard' },
+      rules: MODEL.rules.map((rule) => rule.id === 'mcp-tool-ask'
+        ? { ...rule, action: 'deny', defaultAction: 'ask', overridden: true }
+        : rule)
+    })
+    await changeAppLocale('zh-CN')
+    renderTab()
+    const panel = await openLaneTab('桌面')
+    const row = (await within(panel).findByText('mcp-tool-ask')).closest('tr')!
+    expect(within(row as HTMLElement).getByText(/自动/)).toBeTruthy()
+    expect(within(row as HTMLElement).getByRole('button', { name: '恢复默认' })).toBeTruthy()
+  })
+
+  it('逐条显示默认动作对应的审批频率说明', { timeout: 20000 }, async () => {
+    const scopedRules = [
+      { id: 'default-every-time', when: 'invocation', action: 'confirm-every-time', defaultAction: 'confirm-every-time', enabled: true, locked: true,
+        reason: 'always confirm', overridden: false },
+      { id: 'default-ask-frequency', when: 'invocation', action: 'ask', defaultAction: 'ask', enabled: true, locked: false,
+        reason: 'ask when matched', overridden: false },
+      { id: 'default-auto-frequency', when: 'invocation', action: 'auto-evaluator', defaultAction: 'auto-evaluator', enabled: true, locked: false,
+        reason: 'agent review', overridden: false },
+      { id: 'default-allow-frequency', when: 'invocation', action: 'allow', defaultAction: 'allow', enabled: true, locked: false,
+        reason: 'direct by default', overridden: false }
+    ]
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({ ...MODEL, packages: { ...MODEL.packages, desktop: 'standard' }, rules: scopedRules })
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    expect(within((await within(panel).findByText('default-every-time')).closest('tr')!).getByText('每次操作都需真人确认')).toBeTruthy()
+    expect(within((await within(panel).findByText('default-ask-frequency')).closest('tr')!).getByText('命中规则时请求人工批准')).toBeTruthy()
+    expect(within((await within(panel).findByText('default-auto-frequency')).closest('tr')!).getByText('交由安全审核 Agent 评估')).toBeTruthy()
+    expect(within((await within(panel).findByText('default-allow-frequency')).closest('tr')!).getByText('默认不要求审批')).toBeTruthy()
+  })
+
+  it('英文界面显示本地化的默认审批频率说明', async () => {
+    await changeAppLocale('en-US')
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({ ...MODEL, rules: [
+      { id: 'default-every-time', when: 'invocation', action: 'confirm-every-time', defaultAction: 'confirm-every-time', enabled: true, locked: true,
+        reason: 'always confirm', overridden: false }
+    ] })
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    expect(within((await within(panel).findByText('default-every-time')).closest('tr')!).getByText('Human confirmation is required every time')).toBeTruthy()
+  })
+
   it('IM 规则显示 shared resolver 的四种最终动作和各自适用能力', { timeout: 20000 }, async () => {
     const scopedRules = [
       { id: 'im-low-risk-create', when: 'invocation', action: 'ask', defaultAction: 'ask', enabled: true, locked: false,
@@ -414,7 +524,8 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     })
     renderTab()
     const panel = await openLaneTab('IM 远程')
-    expect(await within(panel).findByText(/禁止|Forbidden/)).toBeTruthy()
+    const directReadRow = (await within(panel).findByText('im-direct-read')).closest('tr')!
+    expect(within(directReadRow).getAllByText(/直接执行|Execute directly/).length).toBeGreaterThan(0)
     expect((await within(panel).findAllByText(/直接执行|Execute directly/)).length).toBeGreaterThan(0)
     expect((await within(panel).findAllByText(/人工批准|Manual approval/)).length).toBeGreaterThan(0)
     const writeRow = (await within(panel).findByText('im-low-risk-create')).closest('tr')!
@@ -426,7 +537,7 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     renderTab()
     const panel = await screen.findByRole('tabpanel')
     const row = (await within(panel).findByText('mcp-tool-ask')).closest('tr')!
-    expect(within(row as HTMLElement).getByText(/自动审核|Automatic review/)).toBeTruthy()
+    expect(within(row as HTMLElement).getAllByText(/自动审核|Automatic review/).length).toBeGreaterThan(0)
     // 非 custom 档只读：不渲染动作 Select
     expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
   })
@@ -435,6 +546,9 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
       ...MODEL,
       packages: { ...MODEL.packages, desktop: 'custom' }
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 5, snapshot: { selectedPackage: 'custom' }
     })
     renderTab()
     const panel = await screen.findByRole('tabpanel')
@@ -450,7 +564,8 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
       expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({
         ruleId: 'mcp-tool-ask',
         action: 'auto-evaluator',
-        lane: 'desktop'
+        lane: 'desktop',
+        expectedRevision: 5
       })
     })
   })
@@ -465,6 +580,141 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     const row = (await within(panel).findByText('shell-precheck-auto-allow')).closest('tr')!
     const select = within(row as HTMLElement).getByRole('combobox')
     expect(select.closest('.ant-select')!.className).not.toContain('ant-select-disabled')
-    expect(within(row as HTMLElement).getByText(/自动审核|Automatic review/)).toBeTruthy()
+    expect(within(row as HTMLElement).getAllByText(/自动审核|Automatic review/).length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    { locale: 'zh-CN', askLabel: '人工批准', allowLabel: '直接执行' },
+    { locale: 'en-US', askLabel: 'Manual approval', allowLabel: 'Execute directly' }
+  ])('自定义套餐桌面：confirm-every-time 在 $locale 映射为可编辑动作并保存', { timeout: 20000 }, async ({ locale, askLabel, allowLabel }) => {
+    await changeAppLocale(locale)
+    const setRuleOverride = vi.fn().mockResolvedValue({ ok: true })
+    window.api.securitySetRuleOverride = setRuleOverride
+    const humanConfirmRule = {
+      id: 'desktop-human-confirm-label',
+      when: 'invocation',
+      action: 'confirm-every-time',
+      defaultAction: 'confirm-every-time',
+      enabled: true,
+      locked: true,
+      reason: '需要真人逐次确认',
+      overridden: false,
+      lanes: ['desktop']
+    } as unknown as SecuritySettingsModelPayload['rules'][number]
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, desktop: 'custom' },
+      rules: [...MODEL.rules, humanConfirmRule]
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'desktop', policyBehaviorVersion: 'desktop-v1', revision: 5, snapshot: { selectedPackage: 'custom' }
+    })
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('desktop-human-confirm-label')).closest('tr')!
+    const select = within(row as HTMLElement).getByRole('combobox')
+    expect(within(row as HTMLElement).getByText(askLabel)).toBeTruthy()
+    expect(within(row as HTMLElement).queryByText(/^confirm-every-time$/)).toBeNull()
+    fireEvent.mouseDown(select)
+    fireEvent.click((await within(document.body).findAllByText(allowLabel)).at(-1)!)
+    await waitFor(() => {
+      expect(setRuleOverride).toHaveBeenCalledWith({
+        ruleId: 'desktop-human-confirm-label', action: 'allow', lane: 'desktop', expectedRevision: 5
+      })
+    })
+  })
+
+  it('自定义套餐逐条覆盖：适用的每条默认规则均可编辑且显示完整动作域', { timeout: 30000 }, async () => {
+    const rules = DEFAULT_POLICY_RULES.filter((rule) => !rule.match?.lane || rule.match.lane.includes('desktop')).map((rule) => ({
+      id: rule.id,
+      when: rule.when,
+      action: rule.action,
+      defaultAction: rule.action,
+      enabled: true,
+      locked: rule.locked === true,
+      reason: rule.reason,
+      overridden: false,
+      ...(rule.match?.lane ? { lanes: rule.match.lane } : {})
+    }))
+
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, desktop: 'custom' },
+      rules
+    })
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    for (const rule of rules) {
+      const row = (await within(panel).findByText(rule.id)).closest('tr')!
+      if (rule.id === 'mcp-account-unauthorized-deny') {
+        expect(within(row as HTMLElement).getByText('MCP 账户未获授权访问请求的数据范围')).toBeTruthy()
+      }
+      const selector = within(row as HTMLElement).getByRole('combobox')
+      expect(selector.closest('.ant-select')!.className, rule.id).not.toContain('ant-select-disabled')
+      expect(within(row as HTMLElement).getAllByText(/^(禁止|直接执行|人工批准|自动审核)$/).length).toBeGreaterThan(0)
+      fireEvent.mouseDown(selector.closest('.ant-select-selector')!)
+      await waitFor(() => {
+        const optionLabels = Array.from(document.querySelectorAll('.ant-select-item-option-content')).map((option) => option.textContent?.trim()).slice(-4)
+        expect(optionLabels).toEqual(['禁止', '直接执行', '人工批准', '自动审核'])
+      })
+      fireEvent.mouseDown(selector.closest('.ant-select-selector')!)
+    }
+    expect(within(panel).getAllByRole('combobox')).toHaveLength(rules.length + 1) // 套餐选择器 + 每条适用规则
+    expect(LANE_PROFILES.desktop.availableActions).toEqual(['deny', 'allow', 'ask', 'auto-evaluator'])
+  })
+
+  it('IM 自定义套餐逐条覆盖：适用的每条默认规则均可编辑且显示完整动作域', { timeout: 30000 }, async () => {
+    const rules = DEFAULT_POLICY_RULES.filter((rule) => !rule.match?.lane || rule.match.lane.includes('wechat')).map((rule) => ({
+      id: rule.id,
+      when: rule.when,
+      action: rule.action,
+      defaultAction: rule.action,
+      enabled: true,
+      locked: rule.locked === true,
+      reason: rule.reason,
+      overridden: false,
+      ...(rule.match?.lane ? { lanes: rule.match.lane } : {})
+    }))
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, wechat: 'custom' },
+      rules
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {} }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    for (const rule of rules) {
+      const row = (await within(panel).findByText(rule.id)).closest('tr')!
+      if (rule.id === 'remote-browser-disabled') {
+        expect(within(row as HTMLElement).getByText('远程会话未启用浏览器工具')).toBeTruthy()
+      }
+      if (rule.id === 'remote-outbound-budget-pause-wechat') {
+        expect(within(row as HTMLElement).getByText('远程出站消息发送预算已用尽')).toBeTruthy()
+      }
+      const selector = within(row as HTMLElement).getByRole('combobox')
+      expect(selector.closest('.ant-select')!.className, rule.id).not.toContain('ant-select-disabled')
+      fireEvent.mouseDown(selector.closest('.ant-select-selector')!)
+      await waitFor(() => {
+        const optionLabels = Array.from(document.querySelectorAll('.ant-select-item-option-content')).map((option) => option.textContent?.trim()).slice(-3)
+        expect(optionLabels).toEqual(['禁止', '直接执行', '人工批准'])
+      })
+      fireEvent.mouseDown(selector.closest('.ant-select-selector')!)
+    }
+    expect(within(panel).getAllByRole('combobox')).toHaveLength(rules.length + 1)
+    expect(LANE_PROFILES.wechat.availableActions).toEqual(['deny', 'allow', 'ask'])
+  })
+
+  it('旧版 IM 策略显示 IM 专属说明，不复用桌面标准套餐文案', async () => {
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1,
+      snapshot: { selectedPackage: 'standard' }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    expect(within(panel).getByText('当前 IM 远程仍保留升级前的策略行为；查看上方规则变化后，可选择切换到新版标准策略。')).toBeTruthy()
+    expect(within(panel).queryByText(/标准：桌面普通出站/)).toBeNull()
   })
 })

@@ -1,0 +1,16 @@
+{
+  "ingressWechatTitle": "WeChat message approval",
+  "ingressFeishuTitle": "Feishu message approval",
+  "ingressMessage": "Rule \"{{ruleId}}\" requires approval before this message can be processed.",
+  "ingressDetails": "Sender: {{senderId}}\nMessage ID: {{messageId}}\n\nMessage: {{excerpt}}",
+  "emptyMessage": "(empty message)",
+  "ingressApprove": "Approve and continue processing this message",
+  "reject": "Reject",
+  "exposureTitle": "Approve tool access",
+  "exposureMessage": "Rule \"{{ruleId}}\" requires approval before exposing this tool to the {{lane}} lane.",
+  "exposureDetails": "Lane: {{lane}}\nTool: {{toolName}}\n\nApproval applies only to this tool in this request.",
+  "exposureApprove": "Approve and expose this tool",
+  "feishuLane": "Feishu",
+  "wechatLane": "WeChat",
+  "desktopLane": "Desktop"
+}

@@ -508,20 +508,24 @@ describe('runWeChatRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('wechat', 'wechat_reply')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      if (termination === 'cancel') await expect(runningAgent).rejects.toThrow(/cancelled/i)
-      else await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
-      expect(providerCalls).toBe(1)
+      if (termination === 'authorization-change') {
+        await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '回复授权已变化，未发送消息。' })
+        expect(providerCalls).toBe(2)
+      } else {
+        if (termination === 'cancel') await expect(runningAgent).rejects.toThrow(/cancelled/i)
+        else await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
+        expect(providerCalls).toBe(1)
+      }
       expect(executeReply).not.toHaveBeenCalled()
       expect(reply).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId, reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        toolCallId, reason: termination === 'authorization-change' ? 'POLICY_DENY' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
-      expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted',
-        payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' }
-      })
+      expect(history.events.at(-1)).toMatchObject(termination === 'authorization-change'
+        ? { kind: 'invocation-completed', payload: { status: 'completed' } }
+        : { kind: 'invocation-interrupted', payload: { status: termination === 'cancel' ? 'cancelled' : 'interrupted' } })
     } finally {
       releaseClaim()
       executeReply.mockRestore()
@@ -966,17 +970,30 @@ describe('runWeChatRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('wechat', 'switch_work_dir')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      if (termination === 'cancel') await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'cancelled' })
-      else await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
-      expect(providerCalls).toBe(1)
-      expect(executeSwitch).not.toHaveBeenCalled()
-      expect(getSession(args.db, session.id)?.workDirProfileId).toBe('current-profile')
+      if (termination === 'authorization-change') {
+        await expect(running).resolves.toMatchObject({ ok: true, summary: '准入变化后未切换工作目录。' })
+        expect(providerCalls).toBe(2)
+      } else {
+        if (termination === 'cancel') await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'cancelled' })
+        else await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
+        expect(providerCalls).toBe(1)
+      }
+      if (termination === 'authorization-change') {
+        expect(executeSwitch).toHaveBeenCalledOnce()
+        expect(getSession(args.db, session.id)?.workDirProfileId).toBe('target-profile')
+      } else {
+        expect(executeSwitch).not.toHaveBeenCalled()
+        expect(getSession(args.db, session.id)?.workDirProfileId).toBe('current-profile')
+      }
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
-      expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: `wechat-workdir-${termination}`,
-        reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
-      })
-      expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      if (termination === 'authorization-change') {
+        expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ success: true })
+      } else {
+        expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
+          toolCallId: `wechat-workdir-${termination}`, reason: termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        })
+        expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      }
     } finally {
       releaseClaim()
       runtime.chatCancels.clear(requestId)
@@ -1469,7 +1486,7 @@ describe('runWeChatRemoteAgent', () => {
     }
   })
 
-  it.each(['authorization-change', 'revoke', 'cancel'] as const)('WeChat Hosted switch_session rejects %s before renderer dispatch claim', async (termination) => {
+  it.each(['revoke', 'cancel'] as const)('WeChat Hosted switch_session rejects %s before renderer dispatch claim', async (termination) => {
     const previousRuntime = getDefaultAgentRuntime()
     const runtime = createDesktopAgentRuntime()
     setDefaultAgentRuntime(runtime)
@@ -1541,7 +1558,8 @@ describe('runWeChatRemoteAgent', () => {
     try {
       const running = runWeChatRemoteAgent(context)
       await atClaim
-      expect(executeSwitch).not.toHaveBeenCalled()
+      if (termination === 'authorization-change') expect(executeSwitch).toHaveBeenCalledOnce()
+      else expect(executeSwitch).not.toHaveBeenCalled()
       expect(mockRequestRendererSessionSwitch).not.toHaveBeenCalled()
       if (termination === 'authorization-change') {
         const changed = readPolicyPackages(args.db)
@@ -1553,17 +1571,26 @@ describe('runWeChatRemoteAgent', () => {
         expect(runtime.toolRevocations.revokeToolForLane('wechat', 'switch_session')).toBe(1)
       } else runtime.chatCancels.signalChatCancel(requestId)
       releaseClaim()
-      if (termination === 'cancel') await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'cancelled' })
-      else await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
-      expect(providerCalls).toBe(1)
+      if (termination === 'authorization-change') {
+        await expect(running).resolves.toMatchObject({ ok: true, summary: '准入变化后未切换微信会话。' })
+        expect(providerCalls).toBe(2)
+      } else {
+        if (termination === 'cancel') await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'cancelled' })
+        else await expect(running).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
+        expect(providerCalls).toBe(1)
+      }
       expect(executeSwitch).not.toHaveBeenCalled()
       expect(mockRequestRendererSessionSwitch).not.toHaveBeenCalled()
       expect(context.remoteContext.outboundSessionId).toBe(callerSession.id)
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
-      expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId, reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
-      })
-      expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      if (termination === 'authorization-change') {
+        expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ success: true })
+      } else {
+        expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
+          toolCallId, reason: termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        })
+        expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      }
     } finally {
       releaseClaim()
       runtime.chatCancels.clear(requestId)
@@ -1988,9 +2015,14 @@ describe('runWeChatRemoteAgent', () => {
 
     try {
       const runningAgent = runWeChatRemoteAgent(context)
-      if (termination === 'cancel') await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'cancelled' })
-      else await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
-      expect(providerCalls).toBe(1)
+      if (termination === 'authorization-change') {
+        await expect(runningAgent).resolves.toMatchObject({ ok: true, summary: '授权变化后脚本未执行。' })
+        expect(providerCalls).toBe(2)
+      } else {
+        if (termination === 'cancel') await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'cancelled' })
+        else await expect(runningAgent).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'interrupted' })
+        expect(providerCalls).toBe(1)
+      }
       expect(executeScript).not.toHaveBeenCalled()
       await expect(fs.access(markerPath)).rejects.toThrow()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(requestId)
@@ -1999,7 +2031,7 @@ describe('runWeChatRemoteAgent', () => {
       })
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
         toolCallId: `wechat-run-script-${termination}`,
-        reason: termination === 'authorization-change' ? 'AUTHORIZATION_STALE' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
+        reason: termination === 'authorization-change' ? 'POLICY_DENY' : termination === 'revoke' ? 'REVOKED' : 'REQUEST_CANCELLED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {

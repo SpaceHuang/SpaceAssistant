@@ -14,7 +14,7 @@ import {
   type SessionEventSink
 } from '../sessionEvents'
 import type { CanonicalLedgerProjectionTarget } from '../sessionLedgerOutbox'
-import { sessionEventProjectionMatches, sessionEventProjectionSchemasCompatible } from '../sessionLedgerProjectionCompatibility'
+import { sessionEventProjectionMatches, sessionEventProjectionSchemasCompatible, toolCallProjectionPayloadMatches, toolResultProjectionPayloadMatches } from '../sessionLedgerProjectionCompatibility'
 
 /** Applies a canonical outbox target through the existing idempotent ledger projection primitive. */
 export async function projectCanonicalSessionLedgerTarget(
@@ -66,6 +66,12 @@ export async function projectCanonicalSessionLedgerTarget(
 }
 
 function projectionPayloadMatches(kind: string, actual: SessionEvent, expected: SessionEventInput): boolean {
+  if (kind === 'tool-result' && actual.type === 'tool_result' && expected.type === 'tool_result') {
+    return toolResultProjectionPayloadMatches(actual.payload, expected.payload)
+  }
+  if (kind.startsWith('tool-call:') && actual.type === 'tool_call' && expected.type === 'tool_call') {
+    return toolCallProjectionPayloadMatches(actual.payload, expected.payload)
+  }
   if (kind !== 'invocation-terminal' || actual.type !== 'turn_end' || expected.type !== 'turn_end') {
     return sessionEventProjectionMatches(actual, expected)
   }

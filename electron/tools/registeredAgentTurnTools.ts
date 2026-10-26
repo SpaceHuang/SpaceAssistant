@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
+import { createPermitBoundToolExecutionPort, ToolExecutionRejectedError } from '../../packages/agent-sdk/src/toolExecutionPort'
 import type { ExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import type { PermitBinding, SafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
 import type { ToolPreparationStage } from '../../packages/agent-sdk/src/turn'
@@ -17,9 +17,36 @@ export type ExecutorUnhandledSettlement = { rethrow: true; error: unknown }
 
 /** A deferred call was rejected before the executor dispatch claim, so no tool side effect started. */
 export class DeferredToolPreDispatchError extends Error {
+  readonly failureCode: string
+  readonly failureType: string
+  readonly failureSite: string
+
   constructor(cause: unknown) {
     super('DEFERRED_TOOL_PRE_DISPATCH_REJECTED', { cause })
     this.name = 'DeferredToolPreDispatchError'
+    const chain: unknown[] = []
+    let current: unknown = cause
+    for (let depth = 0; depth < 5 && current && !chain.includes(current); depth += 1) {
+      chain.push(current)
+      current = typeof current === 'object' && current !== null && 'cause' in current
+        ? (current as { cause?: unknown }).cause
+        : undefined
+    }
+    const stableToken = (value: unknown): string | undefined => typeof value === 'string' && /^[A-Z][A-Z0-9_:-]{0,95}$/.test(value) ? value : undefined
+    const diagnostic = chain.flatMap((item) => {
+      if (!item || typeof item !== 'object') return []
+      const record = item as Record<string, unknown>
+      const message = item instanceof Error ? item.message : ''
+      const suffix = message.match(/(?:^|:)([A-Z][A-Z0-9_:-]{0,95})$/)?.[1]
+      return [stableToken(record.reasonCode), stableToken(record.reason), stableToken(record.code), stableToken(suffix)].filter((value): value is string => Boolean(value))
+    })[0]
+    const root = chain[0]
+    const rootName = root instanceof Error ? root.name : root && typeof root === 'object' && typeof (root as { name?: unknown }).name === 'string' ? (root as { name: string }).name : ''
+    this.failureType = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(rootName) ? rootName : typeof root
+    this.failureCode = diagnostic ?? 'UNKNOWN_PRE_DISPATCH_FAILURE'
+    const stack = root instanceof Error ? root.stack ?? '' : ''
+    const site = stack.match(/((?:electron|packages)\/[A-Za-z0-9_.\/-]+:\d+:\d+)/)?.[1]
+    this.failureSite = site ?? 'UNKNOWN_FAILURE_SITE'
   }
 }
 
@@ -82,10 +109,13 @@ export function createRegisteredAgentTurnTools(input: {
   discardPreparedTool(call: TurnToolCall): void
   getPreparedCall(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): TurnToolCall | undefined
   getPreparedFacts(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): unknown
+  getPolicyDecisionMetadata(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): { ruleId: string; factsHash: string } | undefined
   updateExecutionContext(call: TurnToolCall, update: (context: Record<string, unknown>) => void): void
   toolExecution: ReturnType<typeof createPermitBoundToolExecutionPort<TurnToolCall, TurnToolResult>>
   executeDeferred(call: TurnToolCall, input: {
     confirmationReceipt: string
+    confirmationPolicyRevision?: string
+    authorizeInitial?(initial: PermitBinding): Promise<{ kind: 'allow' } | { kind: 'deny'; reasonCode?: string }>
     authorize(initial: PermitBinding, recheck: PermitBinding): Promise<{ kind: 'allow'; permitId: string } | { kind: 'deny'; reasonCode?: string }>
   }): Promise<TurnToolResult>
   toolResourceKeys(call: TurnToolCall): readonly string[] | undefined
@@ -169,7 +199,7 @@ export function createRegisteredAgentTurnTools(input: {
         record.runtimeContext = { ...refreshed, ...safetyOwned }
       }
       if (stage.replanAfterFreshApproval) {
-        if (!stage.confirmation?.receipt.trim()) throw new Error('FRESH_APPROVAL_REQUIRED_FOR_REPLAN')
+        if (!stage.policyChanged && !stage.confirmation?.receipt.trim()) throw new Error('FRESH_APPROVAL_REQUIRED_FOR_REPLAN')
         const planningContext = {
           requestId: input.requestId,
           toolUseId: call.toolCallId,
@@ -223,6 +253,15 @@ export function createRegisteredAgentTurnTools(input: {
   const getPreparedFacts = (identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): unknown => {
     const record = prepared.get(JSON.stringify([identity.invocationId, identity.toolCallId]))
     return record ? record.registeredTool.getPreparedFacts?.(record.handle.prepared) : undefined
+  }
+
+  const getPolicyDecisionMetadata = (identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>) => {
+    const record = prepared.get(JSON.stringify([identity.invocationId, identity.toolCallId]))
+    const context = record?.runtimeContext
+    if (!context || typeof context !== 'object' || Array.isArray(context)) return undefined
+    const value = context as Record<string, unknown>
+    return typeof value.decisionRuleId === 'string' && typeof value.policyFactsHash === 'string'
+      ? { ruleId: value.decisionRuleId, factsHash: value.policyFactsHash } : undefined
   }
 
   const updateExecutionContext = (call: TurnToolCall, update: (context: Record<string, unknown>) => void): void => {
@@ -299,23 +338,41 @@ export function createRegisteredAgentTurnTools(input: {
 
   const executeDeferred = async (call: TurnToolCall, request: {
     confirmationReceipt: string
+    confirmationPolicyRevision?: string
+    authorizeInitial?(initial: PermitBinding): Promise<{ kind: 'allow' } | { kind: 'deny'; reasonCode?: string }>
     authorize(initial: PermitBinding, recheck: PermitBinding): Promise<{ kind: 'allow'; permitId: string } | { kind: 'deny'; reasonCode?: string }>
   }): Promise<TurnToolResult> => {
     if (!request.confirmationReceipt.trim()) throw new Error('DEFERRED_CONFIRMATION_RECEIPT_REQUIRED')
-    let dispatchClaimed = false
-    try {
-      const initial = await prepareTool(call, { kind: 'initial' })
-      const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt, answerer: 'user' } })
-      if (!sameRecheckSubject(initial, recheck)) throw new Error('DEFERRED_RECHECK_BINDING_CHANGED')
-      const authorization = await request.authorize(initial, recheck)
-      if (authorization.kind !== 'allow') throw new Error(`DEFERRED_SAFETY_RECHECK_DENIED:${authorization.reasonCode ?? 'POLICY_DENY'}`)
-      return await toolExecution.execute(call, authorization.permitId, () => { dispatchClaimed = true })
-    } catch (error) {
-      if (!dispatchClaimed) throw new DeferredToolPreDispatchError(error)
-      throw error
-    } finally {
-      discardPreparedTool(call)
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let dispatchClaimed = false
+      try {
+        const initial = await prepareTool(call, { kind: 'initial' })
+      if (request.authorizeInitial) {
+        const initialAuthorization = await request.authorizeInitial(initial)
+        if (initialAuthorization.kind !== 'allow') {
+          if (initialAuthorization.reasonCode === 'FRESH_APPROVAL_REQUIRED') throw new Error('FRESH_APPROVAL_REQUIRED')
+          throw new Error(`DEFERRED_INITIAL_POLICY_DENIED:${initialAuthorization.reasonCode ?? 'POLICY_DENY'}`)
+        }
+      }
+        const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt, answerer: 'user' } })
+        if (!sameRecheckSubject(initial, recheck)) throw new Error('DEFERRED_RECHECK_BINDING_CHANGED')
+        const authorization = await request.authorize(initial, recheck)
+        if (authorization.kind !== 'allow') throw new Error(`DEFERRED_SAFETY_RECHECK_DENIED:${authorization.reasonCode ?? 'POLICY_DENY'}`)
+        return await toolExecution.execute(call, authorization.permitId, () => { dispatchClaimed = true })
+      } catch (error) {
+        // Final-check boundary: AUTHORIZATION_STALE is emitted before executor entry; rebuild and reauthorize
+        // the same deferred call. Cancellation, revocation, and post-entry failures remain terminal.
+        if (error instanceof ToolExecutionRejectedError && error.reason === 'AUTHORIZATION_STALE' && attempt < 3) {
+          discardPreparedTool(call)
+          continue
+        }
+        if (!dispatchClaimed || error instanceof ToolExecutionRejectedError) throw new DeferredToolPreDispatchError(error)
+        throw error
+      } finally {
+        discardPreparedTool(call)
+      }
     }
+    throw new DeferredToolPreDispatchError(new Error('AUTHORIZATION_STALE'))
   }
 
   return {
@@ -323,6 +380,7 @@ export function createRegisteredAgentTurnTools(input: {
     discardPreparedTool,
     getPreparedCall,
     getPreparedFacts,
+    getPolicyDecisionMetadata,
     updateExecutionContext,
     toolExecution,
     executeDeferred,
@@ -386,6 +444,7 @@ async function createBinding(input: {
     planDigest: handle.prepared.planDigest,
     factsDigest: handle.prepared.factsDigest,
     authorizationVersion,
+    ...(stage.kind === 'recheck' && stage.policyChanged ? { policyChanged: true as const } : {}),
     phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck'
   })
 }
@@ -411,7 +470,7 @@ function sameCall(left: TurnToolCall, right: TurnToolCall): boolean {
 }
 
 function sameBinding(left: PermitBinding, right: PermitBinding): boolean {
-  return left.requestId === right.requestId && left.turnId === right.turnId && left.invocationId === right.invocationId && left.toolCallId === right.toolCallId && left.capabilityId === right.capabilityId && left.inputSnapshotHash === right.inputSnapshotHash && left.planDigest === right.planDigest && left.factsDigest === right.factsDigest && left.authorizationVersion === right.authorizationVersion && left.phase === right.phase
+  return left.requestId === right.requestId && left.turnId === right.turnId && left.invocationId === right.invocationId && left.toolCallId === right.toolCallId && left.capabilityId === right.capabilityId && left.inputSnapshotHash === right.inputSnapshotHash && left.planDigest === right.planDigest && left.factsDigest === right.factsDigest && left.authorizationVersion === right.authorizationVersion && left.policyChanged === right.policyChanged && left.phase === right.phase
 }
 
 function stableSerialize(value: unknown): string {

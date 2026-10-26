@@ -99,4 +99,26 @@ describe('InMemoryExecutionAdmissionCoordinator', () => {
     coordinator.markPermitConsumed('next-permit', binding)
     await expect(coordinator.beginDispatch('next-permit', binding)).resolves.toMatchObject({ ok: true })
   })
+
+  it('clears a policy-stale fence for a fresh claim without reopening old permits', async () => {
+    const coordinator = new InMemoryExecutionAdmissionCoordinator()
+    coordinator.markPermitConsumed('old-permit', binding)
+    coordinator.invalidate({ requestId: binding.requestId, invocationId: binding.invocationId }, 'authorization-changed')
+    coordinator.clearAuthorizationInvalidation(binding)
+    await expect(coordinator.beginDispatch('old-permit', binding)).resolves.toMatchObject({ ok: false, reason: 'PERMIT_NOT_CONSUMED' })
+
+    const freshBinding = { ...binding, authorizationVersion: 'v2' }
+    coordinator.markPermitConsumed('fresh-permit', freshBinding)
+    await expect(coordinator.beginDispatch('fresh-permit', freshBinding)).resolves.toMatchObject({ ok: true })
+  })
+
+  it.each(['cancelled', 'revoked'] as const)('does not clear a terminal %s fence', async (reason) => {
+    const coordinator = new InMemoryExecutionAdmissionCoordinator()
+    coordinator.markPermitConsumed('permit', binding)
+    coordinator.invalidate({ requestId: binding.requestId, invocationId: binding.invocationId }, reason)
+    coordinator.clearAuthorizationInvalidation(binding)
+    await expect(coordinator.beginDispatch('permit', binding)).resolves.toMatchObject({
+      ok: false, reason: reason === 'cancelled' ? 'CANCELLED' : 'REVOKED'
+    })
+  })
 })

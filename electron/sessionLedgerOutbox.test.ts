@@ -19,6 +19,7 @@ import {
 } from './sessionLedgerOutbox'
 import { getSessionEventSink, readSessionEvents, type SessionEventSink } from './sessionEvents'
 import { projectCanonicalSessionLedgerTarget } from './runtime/sessionLedgerOutboxProjector'
+import { toolResultProjectionPayloadMatches } from './sessionLedgerProjectionCompatibility'
 
 function appendCanonicalEvent(conn: ReturnType<typeof getDbConnection>, sessionId: string, eventId: string) {
   runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, [{
@@ -230,6 +231,50 @@ describe('canonical session ledger outbox', () => {
     } finally {
       await sink.close()
       await fs.rm(tempRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('acknowledges a canonical tool result when the ledger already has additive execution diagnostics', async () => {
+    const db = createMemoryAppDb()
+    databases.push(db)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-ledger-result-diagnostics-'))
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p', path: root, isDefault: true }]))
+    const session = createSession(db, { name: 'tool result execution diagnostics', workDirProfileId: 'p' })
+    const conn = getDbConnection(db)
+    const readiness = conn.prepare('SELECT ledger_location_key FROM session_ledger_projection_state WHERE session_id=?')
+      .get(session.id) as { ledger_location_key: string }
+    appendCanonicalEvent(conn, session.id, 'result-diagnostics-canonical-event')
+    const target: CanonicalLedgerProjectionTarget = {
+      ledgerLocationKey: readiness.ledger_location_key, sessionId: session.id, sessionGeneration: session.generation,
+      canonicalEventId: 'result-diagnostics-canonical-event', projectionKind: 'tool-result',
+      expectedEvents: [{ type: 'tool_result', payload: {
+        toolUseId: 'diagnostic-tool', stepId: 'diagnostic-step', result: { success: true, data: { marker: 'kept' } }
+      } }],
+      expectedEventIds: ['tool_result:diagnostic-tool']
+    }
+    const sink = getSessionEventSink(root, session.id, session.createdAt)
+    try {
+      await sink.appendCritical({ type: 'tool_result', payload: {
+        toolUseId: 'diagnostic-tool', stepId: 'diagnostic-step',
+        result: { success: true, data: { marker: 'kept' }, executionOutcome: 'succeeded', executorEntry: 'entered' }
+      } })
+      runInTransaction(conn, () => enqueueCanonicalLedgerProjectionTargetInTransaction(conn, target))
+
+      const drained = await drainCanonicalLedgerProjectionOutbox(conn, readiness.ledger_location_key,
+        (pending) => projectCanonicalSessionLedgerTarget(sink, pending))
+
+      expect(drained).toEqual({ projected: 1 })
+      expect(conn.prepare('SELECT status FROM session_ledger_projection_outbox WHERE canonical_event_id=?')
+        .get('result-diagnostics-canonical-event')).toEqual({ status: 'acked' })
+      expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result'))
+        .toMatchObject([{ payload: { result: { executionOutcome: 'succeeded', executorEntry: 'entered' } } }])
+      expect(toolResultProjectionPayloadMatches({
+        toolUseId: 'diagnostic-tool', stepId: 'diagnostic-step',
+        result: { success: true, data: { marker: 'kept' }, executorEntry: 'unrecognized' }
+      }, target.expectedEvents[0]!.payload)).toBe(false)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
     }
   })
 

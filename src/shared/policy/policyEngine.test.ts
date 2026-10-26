@@ -50,6 +50,11 @@ function cacheWith(decision: 'allow' | 'deny'): DecisionCacheView {
   }
 }
 
+function allowCacheForRequestedKey(lane: 'desktop' | 'automation'): DecisionCacheView {
+  return { lookup: (key) => ({ id: 'policy-boundary-cache', key, decision: 'allow', lane, scope: 'persistent',
+    createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' }) }
+}
+
 function deps(overrides: Partial<PolicyEngineDeps> = {}): PolicyEngineDeps {
   return {
     cache: emptyCache(),
@@ -59,7 +64,178 @@ function deps(overrides: Partial<PolicyEngineDeps> = {}): PolicyEngineDeps {
   }
 }
 
+describe('INV-03 unified action arbitration regression probes', () => {
+  const mcpFacts = mkFacts('mcp_tool', 'execute', [{ kind: 'mcp-tool', serverId: 'server', toolName: 'lookup' }], 'low')
+  const validAllowCache: DecisionCacheView = { lookup: (key) => ({ id: 'prior-allow', key, decision: 'allow', lane: '*',
+    scope: 'persistent', createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' }) }
+
+  it('默认 MCP ask 优先于有效的旧 allow 缓存', () => {
+    expect(decide(mcpFacts, { ...mkContext('desktop'), policyTier: 'custom' }, DEFAULT_POLICY_RULES,
+      deps({ cache: validAllowCache, migrationComplete: true })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'user' })
+  })
+
+  it('条件已满足的默认 allow 不绕过另一条独立 ask', () => {
+    const rules = [
+      { id: 'configured-allow', when: 'invocation' as const, action: 'allow' as const,
+        configRequires: { config: 'actRequiresConfirm', equals: false }, reason: 'allow' },
+      { id: 'independent-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'ask' }
+    ]
+    expect(decide(mcpFacts, mkContext('desktop'), rules, deps({ config: { actRequiresConfirm: false } })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'independent-ask' })
+  })
+
+  it('askUnless 只降低本规则动作，不隐藏其他匹配 ask', () => {
+    const rules = [
+      { id: 'a-ask-unless', when: 'invocation' as const, action: 'ask' as const,
+        askUnless: { config: 'larkCliWriteRequiresConfirm', equals: false }, reason: 'conditional' },
+      { id: 'b-user-ask', when: 'invocation' as const, action: 'ask' as const, userOverride: true, reason: 'user ask' }
+    ]
+    expect(decide(mcpFacts, { ...mkContext('desktop'), policyTier: 'custom' }, rules,
+      deps({ config: { larkCliWriteRequiresConfirm: false } })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'b-user-ask', answerer: 'user' })
+  })
+
+  it('用户 MCP deny 仍覆盖由完整事实推导的公开只读调用', () => {
+    const facts = mkFacts('mcp__server__search', 'read', [
+      { kind: 'mcp-tool', serverId: 'server', toolName: 'search' }, { kind: 'mcp-readonly' },
+        { kind: 'mcp-invocation', serverId: 'srv', toolName: 'search', querySource: 'public', accountAuthorization: 'authorized', actionClass: 'read',
+        completeness: 'complete', dataDestinations: [], dataSources: [], sideEffect: 'read' }
+    ] as ContentFacts['signals'], 'low')
+    const rules = resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'custom' },
+      overrides: [{ ruleId: 'mcp-tool-ask', action: 'deny' }], rules: DEFAULT_POLICY_RULES })
+    expect(decide(facts, { ...mkContext('desktop'), policyTier: 'custom' }, rules, deps({ migrationComplete: true })))
+      .toMatchObject({ type: 'deny', ruleId: 'mcp-tool-ask' })
+  })
+
+  it.each(['doc_write', 'calendar'] as const)('用户 IM 写入 deny 保留原匹配域：%s', (category) => {
+    const lane = 'feishu' as const
+    const rules = resolvePolicyRules({ lane, packages: { [lane]: 'custom' },
+      overrides: [{ ruleId: 'im-write-ask', action: 'deny' }], rules: DEFAULT_POLICY_RULES })
+    const facts = mkFacts('run_lark_cli', 'write', [{ kind: 'lark-subcommand', impact: 'low_write', category, completeness: 'complete' } as never], 'low')
+    const defaults = resolvePolicyRules({ lane, packages: { [lane]: 'custom' }, rules: DEFAULT_POLICY_RULES })
+    expect(decide(facts, { ...mkContext(lane), policyTier: 'custom' }, defaults,
+      deps({ config: { larkCliWriteRequiresConfirm: false }, migrationComplete: true })))
+      .toMatchObject({ type: 'auto-allow', ruleId: 'im-lark-low-write-review' })
+    expect(decide(facts, { ...mkContext(lane), policyTier: 'custom' }, rules,
+      deps({ config: { larkCliWriteRequiresConfirm: false }, migrationComplete: true })))
+      .toMatchObject({ type: 'deny', ruleId: 'im-write-ask' })
+  })
+})
+
 describe('decide：脚本规则族（规范条目顺序）', () => {
+  it('显式 allow 覆盖同一规则的 locked、humanRequired 与逐次确认默认语义', () => {
+    const rules = [{ id: 'user-selected', when: 'invocation' as const, action: 'allow' as const,
+      userOverride: true as const, locked: true, humanRequired: true, reason: 'r' }]
+    const result = decide(mkFacts('write_file', 'write', [], 'high'), mkContext('desktop'), rules, deps())
+    expect(result).toMatchObject({ type: 'auto-allow', ruleId: 'user-selected' })
+  })
+
+  it('同一条多规则集合同时有 allow override 和普通 ask 时仍由 ask 优先', () => {
+    const rules = [
+      { id: 'user-allow', when: 'invocation' as const, action: 'allow' as const, userOverride: true as const, reason: 'r1' },
+      { id: 'independent-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r2' }
+    ]
+    expect(decide(mkFacts('write_file', 'write', [], 'high'), mkContext('desktop'), rules, deps()))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'independent-ask', answerer: 'user' })
+  })
+
+  it('多规则优先级：独立 deny 高于显式 ask override', () => {
+    const rules = [
+      { id: 'user-ask', when: 'invocation' as const, action: 'ask' as const, userOverride: true as const, reason: 'r1' },
+      { id: 'independent-deny', when: 'invocation' as const, action: 'deny' as const, reason: 'r2' }
+    ]
+    expect(decide(mkFacts('write_file', 'write', [], 'high'), mkContext('desktop'), rules, deps()))
+      .toMatchObject({ type: 'deny', ruleId: 'independent-deny' })
+  })
+
+  it('explicit allow override cannot bypass the deniedTools policy boundary', () => {
+    const allowOverride = { id: 'custom-allow', when: 'invocation' as const, action: 'allow' as const, userOverride: true as const, reason: 'custom allow' }
+    expect(decide(mkFacts('write_file', 'write', [], 'high'), mkContext('desktop'), [allowOverride],
+      deps({ config: { deniedTools: ['write_file'] } }))).toMatchObject({ type: 'deny', ruleId: 'denied-tools' })
+  })
+
+  it('independent ask outranks custom automatic review in either rule order', () => {
+    const facts = mkFacts('write_file', 'write', [], 'high')
+    const context = mkContext('desktop')
+    const automatic = { id: 'custom-auto', when: 'invocation' as const, action: 'auto-evaluator' as const, userOverride: true as const, reason: 'custom automatic review' }
+    const ask = { id: 'independent-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'independent ask' }
+    for (const rules of [[automatic, ask], [ask, automatic]]) {
+      expect(decide(facts, context, rules, deps())).toMatchObject({ type: 'require-confirm', ruleId: 'independent-ask', answerer: 'user' })
+    }
+
+    const allow = { id: 'custom-allow', when: 'invocation' as const, action: 'allow' as const, userOverride: true as const, reason: 'custom allow' }
+    const automaticIndependent = { id: 'independent-auto', when: 'invocation' as const, action: 'auto-evaluator' as const, reason: 'independent automatic review' }
+    for (const rules of [[allow, ask], [ask, allow]]) {
+      expect(decide(facts, context, rules, deps())).toMatchObject({ type: 'require-confirm', ruleId: 'independent-ask', answerer: 'user' })
+    }
+    for (const rules of [[allow, automaticIndependent], [automaticIndependent, allow]]) {
+      expect(decide(facts, context, rules, deps())).toMatchObject({ type: 'require-confirm', ruleId: 'independent-auto', answerer: 'agent' })
+    }
+  })
+
+  it('所有匹配规则统一按 deny > ask > auto > allow 裁决且不依赖排列顺序', () => {
+    const facts = mkFacts('write_file', 'write', [], 'high')
+    const context = mkContext('desktop')
+    const make = (id: string, action: PolicyAction) => ({ id, when: 'invocation' as const, action, userOverride: true as const, reason: id })
+    const cases: Array<[PolicyAction[], string, string]> = [
+      [['allow', 'deny'], 'deny', 'deny'],
+      [['allow', 'ask'], 'require-confirm', 'ask'],
+      [['auto-evaluator', 'ask'], 'require-confirm', 'ask'],
+      [['allow', 'auto-evaluator'], 'require-confirm', 'auto-evaluator']
+    ]
+    for (const [actions, type, ruleId] of cases) {
+      const rules = actions.map((action, index) => make(action === 'ask' ? 'ask' : action, action))
+      const expected = type === 'deny' ? { type, ruleId } : type === 'require-confirm'
+        ? { type, ruleId: ruleId === 'ask' ? 'ask' : 'auto-evaluator', answerer: ruleId === 'ask' ? 'user' : 'agent' }
+        : { type, ruleId }
+      expect(decide(facts, context, rules, deps()), actions.join(',')).toMatchObject(expected)
+      expect(decide(facts, context, [...rules].reverse(), deps()), actions.join(',')).toMatchObject(expected)
+    }
+    const tiedAsks = [make('ask-b', 'ask'), make('ask-a', 'ask')]
+    expect(decide(facts, context, tiedAsks, deps())).toMatchObject({ type: 'require-confirm', ruleId: 'ask-a' })
+    expect(decide(facts, context, [...tiedAsks].reverse(), deps())).toMatchObject({ type: 'require-confirm', ruleId: 'ask-a' })
+  })
+
+  it('默认规则集合中的 ask 优先于 allow，即使没有显式覆盖', () => {
+    const facts = mkFacts('probe', 'execute', [], 'medium')
+    const rules = [
+      { id: 'default-allow', when: 'invocation' as const, action: 'allow' as const, reason: 'allow' },
+      { id: 'default-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'ask' }
+    ]
+    expect(decide(facts, mkContext('desktop', { policyTier: 'custom' }), rules, deps()))
+      .toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'default-ask' })
+  })
+
+  it('默认规则集合中的 ask 优先于 auto-evaluator 的快速批准', () => {
+    const facts = mkFacts('probe', 'execute', [], 'medium')
+    const rules = [
+      { id: 'default-auto', when: 'invocation' as const, action: 'auto-evaluator' as const, reason: 'auto' },
+      { id: 'default-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'ask' }
+    ]
+    const evaluator = vi.fn(() => ({ approve: true as const, reason: 'fast-path' }))
+    expect(decide(facts, mkContext('desktop', { policyTier: 'custom' }), rules, deps({ autoEvaluator: evaluator })))
+      .toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'default-ask' })
+    expect(evaluator).not.toHaveBeenCalled()
+  })
+
+  it('显式 auto-evaluator 在旧 allow 缓存前执行审核', () => {
+    const facts = mkFacts('mcp.test.read', 'read', [{ kind: 'mcp-tool', serverId: 'mcp.test', toolName: 'read' }])
+    const rule = { ...DEFAULT_POLICY_RULES.find(({ id }) => id === 'mcp-tool-ask')!, action: 'auto-evaluator' as const, userOverride: true as const }
+    const evaluator = vi.fn(() => ({ approve: false as const, reason: 'needs agent review' }))
+    const decision = decide(facts, mkContext('desktop'), [rule], deps({ cache: allowCacheForRequestedKey('desktop'), autoEvaluator: evaluator }))
+    expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'agent' })
+    expect(evaluator).toHaveBeenCalledOnce()
+  })
+
+  it('automation 的默认明确 deny 在旧 allow 缓存前生效', () => {
+    const facts = mkFacts('mcp.test.read', 'read', [
+      { kind: 'mcp-tool', serverId: 'mcp.test', toolName: 'read' },
+      { kind: 'automation-mcp-permission', status: 'missing' }
+    ] as ContentFacts['signals'])
+    expect(decide(facts, mkContext('automation'), DEFAULT_POLICY_RULES, deps({ cache: allowCacheForRequestedKey('automation') })))
+      .toMatchObject({ type: 'deny', ruleId: 'automation-mcp-permission-missing-deny' })
+  })
   it('unmodeled-call 只提供同会话 exact-content 记忆；动态执行仍逐次真人确认', () => {
     const digest = 'a'.repeat(64)
     const unknownScript = mkFacts('run_script', 'execute', [
@@ -77,7 +253,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
     ], 'high')
     const dynamic = decide(dynamicScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
-    expect(dynamic).toMatchObject({ type: 'require-confirm', ruleId: 'script-path-unknown-confirm', answerer: 'user', memoryTiers: [] })
+    expect(dynamic).toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm', answerer: 'user', memoryTiers: [] })
   })
 
   it('脚本内容记忆只在当前会话按完全相同的 SHA-256 键查找', () => {
@@ -96,10 +272,10 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
       }
     }
     expect(decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache }))).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
-    expect(lookups).toContainEqual({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's1' })
+    expect(lookups).toContainEqual(expect.objectContaining({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's1' }))
     lookups.length = 0
     expect(decide(facts, { ...mkContext('desktop'), sessionId: 's2' }, DEFAULT_POLICY_RULES, deps({ cache }))).toMatchObject({ type: 'require-confirm' })
-    expect(lookups).toContainEqual({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's2' })
+    expect(lookups).toContainEqual(expect.objectContaining({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's2' }))
   })
 
   it('可疑脚本、动态执行和缺少分类/摘要时都不提供记忆且不消费缓存', () => {
@@ -355,9 +531,9 @@ describe('decide：IM effective action 覆盖契约', () => {
     expect(browserRead).toMatchObject({ type: 'require-confirm', ruleId: 'im-browser-act-review', answerer: 'agent' })
     expect(browserDanger).toMatchObject({ type: 'require-confirm', ruleId: 'im-browser-act-danger-human', answerer: 'user' })
     expect(browserUnclassified).toMatchObject({ type: 'require-confirm', ruleId: 'browser-act-ask-remote', answerer: 'agent' })
-    expect(larkDocWrite).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-low-write-review', answerer: 'agent' })
-    expect(larkSelf).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
-    expect(larkDirect).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-direct-review', answerer: 'agent' })
+    expect(larkDocWrite).toMatchObject({ type: 'require-confirm', ruleId: 'lark-write-ask', answerer: 'user' })
+    expect(larkSelf).toMatchObject({ type: 'require-confirm', ruleId: 'lark-write-ask', answerer: 'user' })
+    expect(larkDirect).toMatchObject({ type: 'require-confirm', ruleId: 'lark-write-ask', answerer: 'user' })
     expect(larkGroup).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-group-human', answerer: 'user' })
     expect(larkMessageUnknown).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-target-unknown-human', answerer: 'user' })
     const larkUnknown = decide(mkFacts('run_lark_cli', 'execute', [
@@ -466,7 +642,7 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
     ], deps())
     expect(candidate).toMatchObject({ type: 'require-confirm', ruleId: 'im-time-query-review', answerer: 'agent', disposition: 'auto-eligible' })
     expect(explicit).toMatchObject({ type: 'require-confirm', ruleId: 'explicit-human', answerer: 'user', disposition: 'human-required' })
-    expect(floor).toMatchObject({ type: 'require-confirm', ruleId: 'human-floor', answerer: 'user', disposition: 'human-required' })
+    expect(floor).toMatchObject({ type: 'require-confirm', ruleId: 'human-floor', answerer: 'agent', disposition: 'auto-eligible' })
   })
 
   it('write_file 快通道批准 → 自动放行（default-write-execute-ask 经 transform 变 auto）', () => {
@@ -545,7 +721,7 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
     expect(lookup).not.toHaveBeenCalled()
   })
 
-  it('legacy default MCP ask still honors an existing session allow cache', () => {
+  it('legacy default MCP ask remains above a prior explicit session allow cache', () => {
     const lookup = vi.fn((key: import('../confirmation/types').CacheKey) => ({
       id: 'session-mcp-allow', key, decision: 'allow' as const, lane: 'wechat' as const, scope: 'session' as const,
       createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' as const
@@ -556,8 +732,25 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
       [{ id: 'mcp-tool-ask', when: 'invocation', match: { signals: ['mcp-tool'] }, action: 'ask', reason: 'MCP tool call requires confirmation' }],
       deps({ cache: { lookup } })
     )
-    expect(decision).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
-    expect(lookup).toHaveBeenCalledOnce()
+    expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'user' })
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
+  it('any matching ask outranks a cached allow regardless of specificity, rule source, or cache kind', () => {
+    const mcpFacts = mkFacts('mcp_tool', 'execute', [{ kind: 'mcp-tool', serverId: 'server', toolName: 'tool' }])
+    const shellFacts = mkFacts('run_shell', 'execute', [{ kind: 'command-sequence', commands: [{ verb: 'echo', args: ['ok'], signature: 'echo ok' }], persistable: true }])
+    const cachedAllow = (kind: 'mcp-tool' | 'shell-command') => ({ lookup: (key: import('../confirmation/types').CacheKey) => ({
+      id: 'old-allow', key: { ...key, kind }, decision: 'allow' as const, lane: 'desktop' as const, scope: 'persistent' as const,
+      createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' as const
+    }) })
+    const rules = [
+      { id: 'specific-default-ask', when: 'invocation' as const, match: { toolName: 'mcp_tool', signals: ['mcp-tool'] }, action: 'ask' as const, cacheableAsk: true as const, reason: 'default' },
+      { id: 'user-ask', when: 'invocation' as const, action: 'ask' as const, userOverride: true as const, reason: 'user' }
+    ]
+    expect(decide(mcpFacts, mkContext('desktop'), rules, deps({ cache: cachedAllow('mcp-tool') })))
+      .toMatchObject({ type: 'require-confirm', ruleId: 'user-ask', answerer: 'user' })
+    expect(decide(shellFacts, mkContext('desktop'), [{ id: 'default-shell-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'ask' }], deps({ cache: cachedAllow('shell-command') })))
+      .toMatchObject({ type: 'require-confirm', answerer: 'user' })
   })
 
   it.each([
@@ -619,7 +812,7 @@ describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 
     ])
     const result = decide(facts, { ...mkContext('feishu'), policyTier: 'standard' }, rules,
       deps({ transform: (rule) => effectiveActionFor('feishu', 'standard', rule) }))
-    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
+    expect(result).toMatchObject({ type: 'require-confirm', ruleId: 'outbound-incomplete-standard-review', answerer: 'agent' })
   })
 
   it('sensitive outbound in standard IM requires human approval through an explicit policy rule', () => {
@@ -768,7 +961,7 @@ describe('decide：远程写会话信任（decision_cache remote-write）', () =
     expect(sensitive).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-sensitive-path-confirm', answerer: 'user' })
   })
 
-  it('会话写信任（remote-write allow 缓存）→ 远程写免确认（cache-hit 先于 im-write-ask）', () => {
+  it('用户选择的本会话远程写信任可复用于同会话调用', () => {
     const cache: DecisionCacheView = {
       lookup: () => ({
         id: 'rw',
@@ -789,8 +982,7 @@ describe('decide：远程写会话信任（decision_cache remote-write）', () =
       DEFAULT_POLICY_RULES,
       deps({ cache })
     )
-    expect(d.type).toBe('auto-allow')
-    expect(d.type === 'auto-allow' && d.ruleId).toBe('cache-hit')
+    expect(d).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
   })
 
   it('非远程链路（桌面）不消费 remote-write 会话信任，写文件走确认', () => {
@@ -980,15 +1172,14 @@ describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）',
     { kind: 'mcp-readonly', serverId: 'srv', toolName: 'query' }
   ]
 
-  it('桌面：server 声明只读注解 → 自动放行（需求文档背书的产品决策）', () => {
+  it('桌面：只读 allow 与通用 MCP ask 同时命中时 ask 优先', () => {
     const d = decide(
       mkFacts('mcp__srv__query', 'read', mcpReadonlySignals, 'medium'),
       mkContext('desktop'),
       DEFAULT_POLICY_RULES,
       deps()
     )
-    expect(d.type).toBe('auto-allow')
-    expect(d.type === 'auto-allow' && d.ruleId).toBe('mcp-readonly-allow')
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'mcp-tool-ask', answerer: 'user' })
   })
 
   it('远程链路：server 自我声明的只读注解不免确认（不可信输入不得静默执行）', () => {
@@ -1034,6 +1225,7 @@ describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）',
         completeness: 'complete', missingFacts: [], argNames: ['query'], argsDigest: 'digest', argsTruncated: false
       }
     ])
+    expect(signalTokenSet(trustedFacts).has('mcp-public-read')).toBe(true)
     const imStandard = (rule: Parameters<typeof imEffectiveActionFor>[2]) => imEffectiveActionFor('im', 'standard', rule)
     for (const lane of ['wechat', 'feishu'] as const) {
       expect(decide(trustedFacts, mkContext(lane), DEFAULT_POLICY_RULES, deps({ transform: imStandard })))

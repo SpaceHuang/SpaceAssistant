@@ -14,6 +14,7 @@ import { decryptSecret } from './secureApiKey';
 import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry';
 import { createRemoteAuthorizationEpochStore } from './remote/remoteAuthorizationEpochStore';
 import { createDeferredTodoStore } from './confirmation/deferredTodoStore';
+import { persistFeishuConfig } from './feishu/feishuIpc';
 
 vi.mock('electron', () => ({
   app: { getLocale: () => 'zh-CN' },
@@ -207,9 +208,89 @@ describe('config:set API Key transaction boundary', () => {
     expect(todos.get('close-reenable-todo', { channel: 'feishu', identityKey: 'identity-a', ownerId: 'owner-a', authorizationEpoch: 1, originSessionId: 'origin', rule })?.status).toBe('invalidated');
     await setConfig({}, { feishu: { remoteEnabled: true } });
     expect(epochStore.current('feishu')).toBe(2);
-    await setConfig({}, { feishu: { remoteSenderAllowlist: ['owner-b'] } });
+    persistFeishuConfig(db, { remoteSenderAllowlist: ['owner-b'] });
     expect(epochStore.current('feishu')).toBe(3);
     expect(todos.claimForDispatch('close-reenable-todo', { channel: 'feishu', identityKey: 'identity-a', ownerId: 'owner-a', authorizationEpoch: 1, rule })).toBeNull();
     unregister();
+  });
+
+  it('does not let a stale global settings snapshot disable a newly bound WeChat owner', async () => {
+    const temp = createTempDatabase('sa-config-wechat-runtime-state-');
+    cleanup = temp.cleanup;
+    const db = temp.db;
+    setConfigValue(db, 'config.wechat', JSON.stringify({
+      enabled: true,
+      loggedIn: true,
+      remoteEnabled: true,
+      remoteSenderAllowlist: ['bound-owner@wechat'],
+    }));
+    const epochStore = createRemoteAuthorizationEpochStore(db);
+    remoteAuthorizationRegistry.bindPersistentEpochStore(epochStore);
+    const initialEpoch = epochStore.current('wechat');
+    const ipc = makeIpc();
+    registerConfigIpc(ipc as unknown as IpcMain, makeContext(db));
+
+    await ipc.getHandler('config:set')!({}, {
+      wechat: {
+        enabled: false,
+        loggedIn: false,
+        remoteEnabled: false,
+        remoteSenderAllowlist: [],
+        remoteTypingEnabled: false,
+      },
+    });
+
+    const stored = JSON.parse(getConfigValue(db, 'config.wechat')!) as Record<string, unknown>;
+    expect(stored).toMatchObject({
+      enabled: true,
+      loggedIn: true,
+      remoteEnabled: true,
+      remoteSenderAllowlist: ['bound-owner@wechat'],
+      remoteTypingEnabled: false,
+    });
+    expect(epochStore.current('wechat')).toBe(initialEpoch);
+  });
+
+  it('does not let a stale global settings snapshot erase the Feishu owner binding', async () => {
+    const temp = createTempDatabase('sa-config-feishu-runtime-state-');
+    cleanup = temp.cleanup;
+    const db = temp.db;
+    setConfigValue(db, 'config.feishu', JSON.stringify({
+      enabled: true,
+      appConfigured: true,
+      userAuthorized: true,
+      userDisplay: 'Owner',
+      remoteEnabled: true,
+      remoteSenderAllowlist: ['ou_bound-owner'],
+    }));
+    const epochStore = createRemoteAuthorizationEpochStore(db);
+    remoteAuthorizationRegistry.bindPersistentEpochStore(epochStore);
+    const initialEpoch = epochStore.current('feishu');
+    const ipc = makeIpc();
+    registerConfigIpc(ipc as unknown as IpcMain, makeContext(db));
+
+    await ipc.getHandler('config:set')!({}, {
+      feishu: {
+        enabled: true,
+        appConfigured: true,
+        userAuthorized: true,
+        userDisplay: 'Owner',
+        remoteEnabled: true,
+        remoteSenderAllowlist: [],
+        remoteProgressMode: 'summary',
+      },
+    });
+
+    const stored = JSON.parse(getConfigValue(db, 'config.feishu')!) as Record<string, unknown>;
+    expect(stored).toMatchObject({
+      enabled: true,
+      appConfigured: true,
+      userAuthorized: true,
+      userDisplay: 'Owner',
+      remoteEnabled: true,
+      remoteSenderAllowlist: ['ou_bound-owner'],
+      remoteProgressMode: 'summary',
+    });
+    expect(epochStore.current('feishu')).toBe(initialEpoch);
   });
 });

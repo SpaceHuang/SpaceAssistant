@@ -324,7 +324,7 @@ export function validateHistoryTransition(previous: readonly HistoryEvent[], inc
     if (event.kind === 'approval-resolved') {
       if (typeof payload?.approved !== 'boolean') throw new HistoryBatchError('approval resolution requires an approved boolean')
       if (payload.outcome !== undefined) {
-        const outcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled']
+        const outcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled', 'invalidated']
         if (typeof payload.outcome !== 'string' || !outcomes.includes(payload.outcome) || payload.approved !== (payload.outcome === 'approved')) {
           throw new HistoryBatchError('approval outcome conflicts with approved boolean')
         }

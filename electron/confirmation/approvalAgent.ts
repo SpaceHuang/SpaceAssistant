@@ -51,6 +51,8 @@ export { APPROVAL_READONLY_TOOLS }
 export interface ApprovalAgentDeps {
   /** P3：父调用规则集上界（嵌套交集；缺省 = 无上界约束）。 */
   policyRuleFloor?: import('../../src/shared/confirmation/types').PolicyRule[]
+  /** Live parent policy floor; refreshed when the parent authorization changes. */
+  resolvePolicyRuleFloor?: () => import('../../src/shared/confirmation/types').PolicyRule[]
   db: AppDatabase
   sessionStorage: SessionStorage
   historyForSession?: (sessionId: string) => import('../../packages/agent-sdk/src/history').HistoryPort
@@ -391,7 +393,9 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       effort: 'off',
       // P7（偏差 16）：封闭只读工具集平移为按调用裁剪声明（数据化实例，白名单内容不变）
       toolsTrim: { allow: APPROVAL_READONLY_TOOLS },
-      ...(deps.policyRuleFloor ? { policyRuleFloor: deps.policyRuleFloor } : {}),
+      ...(deps.resolvePolicyRuleFloor
+        ? { policyRuleFloor: deps.resolvePolicyRuleFloor(), resolvePolicyRuleFloor: deps.resolvePolicyRuleFloor }
+        : deps.policyRuleFloor ? { policyRuleFloor: deps.policyRuleFloor } : {}),
       sessionId,
       lane: 'automation',
       internalConfirmExemption: 'approval-agent',

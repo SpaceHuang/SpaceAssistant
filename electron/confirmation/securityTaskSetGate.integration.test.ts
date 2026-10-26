@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getDbConnection, openSqliteDatabase } from '../database'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { commitImPolicySnapshot } from './imPolicyStore'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot } from './imPolicyStore'
 import { createAgentRuntime } from '../runtime/agentRuntime'
 import { resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { runHostedAgentTurn } from '../../packages/agent-sdk/src/turn'
@@ -267,6 +267,12 @@ describe('fixed task-set actual gate shadow integration', () => {
     dbs.push(db)
     if (lane === 'im-standard') {
       commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+        updatedAt: 1, eventId: `security-observed-mcp-search-${lane}-policy` })
+    } else {
+      // Host authorization exposes the tool; a persisted rule override supplies
+      // the separate policy authorization required by this zero-review benchmark.
+      commitDesktopPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'desktop-v1',
+        snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'allow' } },
         updatedAt: 1, eventId: `security-observed-mcp-search-${lane}-policy` })
     }
     const serverId = `security-observed-search-${lane}`

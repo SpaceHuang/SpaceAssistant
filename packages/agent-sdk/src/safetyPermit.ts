@@ -8,6 +8,8 @@ export type PermitBinding = Readonly<{
   planDigest: string
   factsDigest: string
   authorizationVersion: string
+  /** Marks a fresh policy pass after an executor-not-entered authorization invalidation. */
+  policyChanged?: true
   phase: 'initial-compat' | 'recheck'
 }>
 
@@ -21,6 +23,8 @@ export interface SafetyPermitStore {
   consume(permitId: string, expected: PermitBinding): Promise<PermitConsumeResult>
   invalidateInvocation(requestId: string, reason: 'cancelled' | 'revoked' | 'expired'): void
   invalidateBinding(requestId: string, invocationId: string, reason: 'cancelled' | 'revoked' | 'authorization-changed'): void
+  /** Clear only a prior policy-version fence after a fresh binding passed the current-version check. */
+  clearAuthorizationInvalidation(requestId: string, invocationId: string): void
   clearInvocation(requestId: string): void
   settle(permitId: string): void
 }
@@ -89,6 +93,11 @@ export class InMemorySafetyPermitStore implements SafetyPermitStore {
     }
   }
 
+  clearAuthorizationInvalidation(requestId: string, invocationId: string): void {
+    const key = bindingKey(requestId, invocationId)
+    if (this.invalidBindings.get(key) === 'AUTHORIZATION_STALE') this.invalidBindings.delete(key)
+  }
+
   clearInvocation(requestId: string): void {
     this.invalidRequests.delete(requestId)
     for (const key of this.invalidBindings.keys()) {
@@ -106,7 +115,7 @@ function bindingKey(requestId: string, invocationId: string): string { return JS
 function sameBinding(a: PermitBinding, b: PermitBinding): boolean {
   const keys: Array<keyof PermitBinding> = [
     'requestId', 'turnId', 'invocationId', 'toolCallId', 'capabilityId', 'inputSnapshotHash',
-    'planDigest', 'factsDigest', 'authorizationVersion', 'phase'
+    'planDigest', 'factsDigest', 'authorizationVersion', 'policyChanged', 'phase'
   ]
   return keys.every((key) => a[key] === b[key])
 }

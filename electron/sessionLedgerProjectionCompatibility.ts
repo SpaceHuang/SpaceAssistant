@@ -30,14 +30,6 @@ export function toolCallProjectionPayloadMatches(
   return payloadsMatch('tool_call', actual, expected)
 }
 
-/** Accepts tool_result records across the versioned additive artifact-reference change. */
-export function toolResultProjectionPayloadMatches(
-  actual: Readonly<Record<string, unknown>>,
-  expected: Readonly<Record<string, unknown>>
-): boolean {
-  return payloadsMatch('tool_result', actual, expected)
-}
-
 /** Compares event identity/schema separately from payload fields, after a declared upcast path. */
 export function sessionEventProjectionSchemasCompatible(actual: SessionEventSchemaRecord, expected: SessionEventSchemaRecord): boolean {
   const normalizedActual = normalizeSessionEventSchema(actual)
@@ -111,4 +103,33 @@ function pruneEmptyParents(root: Record<string, unknown>, counterpart: Record<st
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+/** Accepts execution diagnostics added by the live tool-result projection when canonical recovery replays its base result. */
+export function toolResultProjectionPayloadMatches(
+  actual: Readonly<Record<string, unknown>>,
+  expected: Readonly<Record<string, unknown>>
+): boolean {
+  const compatibleActual = { ...actual }
+  const compatibleExpected = { ...expected }
+  const actualResult = actual.result
+  const expectedResult = expected.result
+  if (!actualResult || typeof actualResult !== 'object' || Array.isArray(actualResult) ||
+    !expectedResult || typeof expectedResult !== 'object' || Array.isArray(expectedResult)) {
+    return isDeepStrictEqual(compatibleActual, compatibleExpected)
+  }
+  const nextActualResult = { ...(actualResult as Record<string, unknown>) }
+  const nextExpectedResult = { ...(expectedResult as Record<string, unknown>) }
+  const allowedDiagnostics: Readonly<Record<string, readonly unknown[]>> = {
+    executionOutcome: ['succeeded', 'known-failure', 'unknown-after-dispatch', 'not-dispatched'],
+    executorEntry: ['not-entered', 'entered', 'unknown']
+  }
+  for (const [key, values] of Object.entries(allowedDiagnostics)) {
+    if (nextExpectedResult[key] === undefined && nextActualResult[key] !== undefined && values.includes(nextActualResult[key])) {
+      delete nextActualResult[key]
+    }
+  }
+  compatibleActual.result = nextActualResult
+  compatibleExpected.result = nextExpectedResult
+  return payloadsMatch('tool_result', compatibleActual, compatibleExpected)
 }

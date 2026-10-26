@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getConfigValue, openSqliteDatabase, setConfigValue, type AppDatabase } from '../database'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { PolicyRuleStore } from './policyRuleStore'
 import { getDbConnection } from '../database'
-import { commitImPolicySnapshot } from './imPolicyStore'
+import { commitDesktopPolicySnapshot, commitImPolicySnapshot } from './imPolicyStore'
+import { ensureImPolicySnapshotAtStartup } from './legacyImConfigBoundary'
+import { authorizeImInboundMessage } from '../remote/imInboundGuard'
+import { registerPolicyIpc } from '../ipc/policyIpc'
 import {
   DEFAULT_SECURITY_AUDIT_RETENTION_DAYS,
   DISABLED_POLICY_RULE_IDS_CONFIG_KEY,
@@ -11,6 +14,7 @@ import {
   loadEffectivePolicyRules,
   resolveEffectivePolicyRulesWithOrigin,
   readDisabledPolicyRuleIds,
+  readDesktopMigratedLegacyDisabledRuleIds,
   readPolicyPackages,
   readSecurityAuditRetentionDays,
   writeDisabledPolicyRuleIds,
@@ -39,7 +43,7 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
 
     const overriddenDb = db()
     commitImPolicySnapshot(getDbConnection(overriddenDb), {
-      policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard', ruleOverrides: { 'mcp-tool-ask': 'ask' } },
+      policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'custom', ruleOverrides: { 'mcp-tool-ask': 'ask' } },
       updatedAt: 1, eventId: 'explicit-mcp-ask'
     })
     const explicitRule = resolveEffectivePolicyRulesWithOrigin(overriddenDb, 'wechat').rules.find((rule) => rule.id === 'mcp-tool-ask')
@@ -53,6 +57,14 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(loadEffectivePolicyRules(d, 'feishu')).toBe(DEFAULT_POLICY_RULES)
     expect(loadEffectivePolicyRules(d, 'automation')).toBe(DEFAULT_POLICY_RULES)
     expect(readPolicyPackages(d).desktop).toBe('standard')
+  })
+
+  it('没有 IM snapshot 时 runtime 不再消费旧 disabled 列表', () => {
+    const d = db()
+    writeDisabledPolicyRuleIds(d, ['remote-shell-disabled'])
+    expect(loadEffectivePolicyRules(d, 'wechat').find((rule) => rule.id === 'remote-shell-disabled'))
+      .toMatchObject({ action: 'deny' })
+    expect(resolveEffectivePolicyRulesWithOrigin(d, 'wechat').disabledRuleIds).toEqual([])
   })
 
   it('新版 IM 标准将 im-write-ask 解析为审核 Agent 候选，但敏感路径仍是人工确认底线', () => {
@@ -82,32 +94,30 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
   })
 
-  it('普通规则与 locked deny 保护规则可禁用，但 locked ask 不可禁用', () => {
+  it('disabled 存储仅供 migration 使用，不再直接改变任何 lane 的 runtime 规则', () => {
     const d = db()
     // 未禁用：标准套餐返回 DEFAULT_POLICY_RULES 引用（快路径）
     expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
     expect(readDisabledPolicyRuleIds(d)).toEqual([])
-    // 禁用普通规则：该规则被剔除，返回新数组（不是引用）
     writeDisabledPolicyRuleIds(d, ['im-write-ask'])
-    const rules = loadEffectivePolicyRules(d, 'wechat')
-    expect(rules).not.toBe(DEFAULT_POLICY_RULES)
-    expect(rules.find((r) => r.id === 'im-write-ask')).toBeUndefined()
-    expect(rules.find((r) => r.id === 'script-network-ask-desktop')).toBeTruthy()
-    // disabled 集合读写往返
+    expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
+    expect(loadEffectivePolicyRules(d, 'wechat').find((r) => r.id === 'im-write-ask')).toBeTruthy()
     writeDisabledPolicyRuleIds(d, ['a', 'b', 'a', 'automation-sensitive-path-deny', 'automation-default-confirm'])
     expect(readDisabledPolicyRuleIds(d)).toEqual(['a', 'b', 'automation-sensitive-path-deny'])
-    expect(loadEffectivePolicyRules(d, 'automation').some((rule) => rule.id === 'automation-sensitive-path-deny')).toBe(false)
+    expect(loadEffectivePolicyRules(d, 'automation').find((rule) => rule.id === 'automation-sensitive-path-deny'))
+      .toMatchObject({ action: 'deny' })
   })
 
-  it('历史 disabled locked ask 会被 fail-safe 清理且 ask 规则继续生效', () => {
+  it('runtime 读取不会清理 legacy disabled IDs，也不会按其剔除规则', () => {
     const d = db()
     setConfigValue(d, DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify(['automation-default-confirm', 'im-write-ask']))
     const rules = loadEffectivePolicyRules(d, 'feishu')
     expect(loadEffectivePolicyRules(d, 'automation').find((r) => r.id === 'automation-default-confirm')).toBeTruthy()
-    expect(readDisabledPolicyRuleIds(d)).toEqual(['im-write-ask'])
+    expect(rules.find((rule) => rule.id === 'im-write-ask')).toBeTruthy()
+    expect(readDisabledPolicyRuleIds(d)).toEqual(['automation-default-confirm', 'im-write-ask'])
   })
 
-  it('custom 套餐：policy_rules 覆盖生效；locked 覆盖被忽略', () => {
+  it('custom 套餐：policy_rules 覆盖生效；locked override 仅在 custom 下生效', () => {
     const d = db()
     const packages = readPolicyPackages(d)
     packages.feishu = 'custom'
@@ -117,7 +127,134 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     store.setOverride({ ruleId: 'remote-shell-disabled', action: 'allow', params: {} })
     const rules = loadEffectivePolicyRules(d, 'feishu')
     expect(rules.find((r) => r.id === 'im-write-ask')?.action).toBe('allow')
-    expect(rules.find((r) => r.id === 'remote-shell-disabled')?.action).toBe('deny')
+    expect(rules.find((r) => r.id === 'remote-shell-disabled')).toMatchObject({ action: 'allow', userOverride: true })
+  })
+
+  it('custom 套餐允许验证后的 locked ingress/exposure override 生效', () => {
+    const d = db()
+    const packages = readPolicyPackages(d)
+    packages.wechat = 'custom'
+    writePolicyPackages(d, packages)
+    const store = new PolicyRuleStore(getDbConnection(d))
+    store.setOverride({ ruleId: 'im-no-wechat-send', action: 'allow', params: {} })
+    store.setOverride({ ruleId: 'ingress-feishu-group-deny', action: 'ask', params: {} })
+    const rules = loadEffectivePolicyRules(d, 'wechat')
+    expect(rules.find((rule) => rule.id === 'im-no-wechat-send')).toMatchObject({ action: 'allow', userOverride: true })
+    expect(rules.find((rule) => rule.id === 'ingress-feishu-group-deny')).toMatchObject({ action: 'ask', userOverride: true })
+  })
+
+  it('IM override resolution never mutates defaults or another lane', () => {
+    const d = db()
+    const defaults = structuredClone(DEFAULT_POLICY_RULES)
+    commitImPolicySnapshot(getDbConnection(d), {
+      policyBehaviorVersion: 'im-v1.6',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'im-no-wechat-send': 'allow' } },
+      updatedAt: 1, eventId: 'im-override-default-isolation'
+    })
+
+    try {
+      expect(resolveEffectivePolicyRulesWithOrigin(d, 'wechat').rules.find((rule) => rule.id === 'im-no-wechat-send'))
+        .toMatchObject({ action: 'allow', userOverride: true })
+      expect(loadEffectivePolicyRules(d, 'desktop').find((rule) => rule.id === 'im-no-wechat-send')?.action)
+        .toBe(defaults.find((rule) => rule.id === 'im-no-wechat-send')?.action)
+      expect(DEFAULT_POLICY_RULES).toEqual(defaults)
+    } finally {
+      DEFAULT_POLICY_RULES.splice(0, DEFAULT_POLICY_RULES.length, ...defaults)
+    }
+  })
+
+  it.each(['im-v1.6', 'im-standard-v2'] as const)('%s retains inactive overrides outside custom', (version) => {
+    for (const selectedPackage of ['strict', 'standard', 'loose'] as const) {
+      const d = db()
+      commitImPolicySnapshot(getDbConnection(d), {
+        policyBehaviorVersion: version,
+        snapshot: { selectedPackage, ruleOverrides: { 'remote-shell-disabled': 'allow' } },
+        updatedAt: 1, eventId: `${version}-${selectedPackage}-dormant-override`
+      })
+      const rule = resolveEffectivePolicyRulesWithOrigin(d, 'wechat').rules.find((entry) => entry.id === 'remote-shell-disabled')
+      expect(rule).toMatchObject({ action: 'deny' })
+      expect(rule?.userOverride).toBeUndefined()
+    }
+  })
+
+  it('IM snapshot ingress ask reaches the production loader and inbound approval gate', async () => {
+    const d = db()
+    commitImPolicySnapshot(getDbConnection(d), {
+      policyBehaviorVersion: 'im-v1.6',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: {} },
+      updatedAt: 1, eventId: 'ingress-ask-loader-gate'
+    })
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    registerPolicyIpc({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } as never, d)
+    const writeResult = await handlers.get('policy:write')!({}, { lane: 'wechat', expectedRevision: 1,
+      change: { kind: 'rule-override', ruleId: 'ingress-direct-other-deny', action: 'ask' } })
+    expect(writeResult).toMatchObject({ status: 'committed', revision: 2 })
+    const getPolicyRules = () => loadEffectivePolicyRules(d, 'wechat')
+    const requestApproval = vi.fn(async () => true)
+
+    const result = await authorizeImInboundMessage({
+      channel: 'wechat', senderId: 'external-sender', messageId: 'incoming-1',
+      getConfig: () => ({ enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['owner'] }),
+      getPolicyRules,
+      requestApproval
+    })
+
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({ channel: 'wechat', senderId: 'external-sender',
+      messageId: 'incoming-1', ruleId: 'ingress-direct-other-deny', policyRevision: expect.any(String) }), expect.any(AbortSignal))
+    expect(result.ok).toBe(true)
+  })
+
+  it('desktop snapshot 是 package 与 override 的统一真源，并随提交递增 revision/epoch', () => {
+    const d = db()
+    const conn = getDbConnection(d)
+    const seed = commitDesktopPolicySnapshot(conn, {
+      expectedRevision: 0, policyBehaviorVersion: 'desktop-v1',
+      snapshot: { selectedPackage: 'custom', ruleOverrides: { 'remote-shell-disabled': 'allow' } },
+      updatedAt: 1, eventId: 'desktop-seed'
+    })
+    expect(seed).toEqual({ status: 'committed', revision: 1 })
+    expect(readPolicyPackages(d).desktop).toBe('custom')
+    expect(loadEffectivePolicyRules(d, 'desktop').find((rule) => rule.id === 'remote-shell-disabled'))
+      .toMatchObject({ action: 'allow', userOverride: true })
+    expect(conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()).toEqual({ epoch: 1 })
+    expect(commitDesktopPolicySnapshot(conn, {
+      expectedRevision: 0, policyBehaviorVersion: 'desktop-v1', snapshot: {}, updatedAt: 2, eventId: 'desktop-stale'
+    })).toEqual({ status: 'conflict', currentRevision: 1 })
+    expect(conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='desktop'").get()).toEqual({ epoch: 1 })
+  })
+
+  it('desktop rule view exposes known migration source IDs from the snapshot', () => {
+    const d = db()
+    commitDesktopPolicySnapshot(getDbConnection(d), { policyBehaviorVersion: 'desktop-v1', snapshot: {
+      selectedPackage: 'custom', ruleOverrides: { 'remote-shell-disabled': 'allow' },
+      migratedLegacyDisabledRuleIds: ['remote-shell-disabled', 'unknown-future-rule']
+    }, updatedAt: 1, eventId: 'desktop-migration-source' })
+    expect(readDesktopMigratedLegacyDisabledRuleIds(d)).toEqual(['remote-shell-disabled'])
+  })
+
+  it('桌面快照启用后仍保留旧配置中的 IM package，直至 IM 自身快照迁移完成', () => {
+    const d = db()
+    setConfigValue(d, 'config.policyPackages', JSON.stringify({ ...readPolicyPackages(d), feishu: 'custom' }))
+    commitDesktopPolicySnapshot(getDbConnection(d), {
+      expectedRevision: 0, policyBehaviorVersion: 'desktop-v1', snapshot: { selectedPackage: 'custom', ruleOverrides: {} },
+      updatedAt: 1, eventId: 'desktop-package-preserve-im'
+    })
+    expect(readPolicyPackages(d)).toMatchObject({ desktop: 'custom', feishu: 'custom' })
+  })
+
+  it('启动迁移后 desktop snapshot 以 allow override 表达旧 disabled 并清空旧值', () => {
+    const d = db()
+    const disabledId = 'script-network-ask-desktop'
+    writeDisabledPolicyRuleIds(d, [disabledId])
+    commitDesktopPolicySnapshot(getDbConnection(d), {
+      expectedRevision: 0, policyBehaviorVersion: 'desktop-v1', snapshot: { selectedPackage: 'custom', ruleOverrides: {} },
+      updatedAt: 1, eventId: 'desktop-retain-legacy-disabled'
+    })
+    ensureImPolicySnapshotAtStartup(d)
+    expect(readDisabledPolicyRuleIds(d)).toEqual([])
+    expect(loadEffectivePolicyRules(d, 'desktop').find((rule) => rule.id === disabledId))
+      .toMatchObject({ action: 'allow', userOverride: true })
+    expect(resolveEffectivePolicyRulesWithOrigin(d, 'desktop').disabledRuleIds).toEqual([])
   })
 
   it('listPolicyRulesWithOverrides：返回默认规则 + overridden 标记', () => {
