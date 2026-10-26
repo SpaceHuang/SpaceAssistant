@@ -224,7 +224,7 @@ describe('session transcript projection P2 read path', () => {
     }
   })
 
-  it.skipIf(!runStoragePerf)('measures file-backed cold C-scope visits after a valid legacy proof and no-op startup', async () => {
+  it.skipIf(!runStoragePerf)('measures file-backed cold C-scope visits after a valid transcript proof and no-op startup', async () => {
     const temp = createTempDatabase('session-projection-cold-scope-perf-')
     const blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
     let host: ReturnType<typeof createSqliteSessionStorageHost> | undefined
@@ -248,6 +248,7 @@ describe('session transcript projection P2 read path', () => {
         payload: { messages: messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) }
       }], 0)
       conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
       conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
       expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
       expect(refreshSessionTranscriptParityProof(db, session.id)).toBe(true)
@@ -303,7 +304,10 @@ describe('session transcript projection P2 read path', () => {
       const memoryBefore = process.memoryUsage()
       const walBytesBefore = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
       const historySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+      const shadowHistorySpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscriptForShadow')
+      const historyReadCount = () => historySpy.mock.calls.length + shadowHistorySpy.mock.calls.length
       historySpy.mockClear()
+      shadowHistorySpy.mockClear()
       let candidateHistoryReads = 0
       for (let sample = 0; sample < 30; sample += 1) {
         const authorityStarted = performance.now()
@@ -313,7 +317,7 @@ describe('session transcript projection P2 read path', () => {
         expect(authority.messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
           .toEqual(messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
 
-        const historyReadsBeforeCandidate = historySpy.mock.calls.length
+        const historyReadsBeforeCandidate = historyReadCount()
         const started = performance.now()
         eventLoopDelay.reset()
         const prepared = await readChatMessagesAfterPreparation(readStorage, { sessionId: session.id, limit: 80 })
@@ -321,8 +325,9 @@ describe('session transcript projection P2 read path', () => {
         mainBlockSamples.push(eventLoopDelay.max / 1_000_000)
         expect(prepared.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
           .toEqual(authority.messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })))
-        candidateHistoryReads += historySpy.mock.calls.length - historyReadsBeforeCandidate
-        expect(historySpy.mock.calls.length).toBe(historyReadsBeforeCandidate)
+        const candidateReads = historyReadCount() - historyReadsBeforeCandidate
+        candidateHistoryReads += candidateReads
+        expect(candidateReads).toBe(1)
         await backgroundPreparations.at(-1)
         const current = stateStore.get(session.id, scopeKey)
         expect(current?.status).toBe('valid')
@@ -335,7 +340,7 @@ describe('session transcript projection P2 read path', () => {
       const memoryAfter = process.memoryUsage()
       const walBytes = await fs.stat(`${temp.dbPath}-wal`).then(({ size }) => size).catch(() => 0)
       const maxMainBlockMs = Math.max(...mainBlockSamples)
-      const historyReads = historySpy.mock.calls.length
+      const historyReads = historyReadCount()
       eventLoopDelay.disable()
       process.stdout.write(`cold-C-scope authorityP50=${percentile(authoritySamples, 0.5).toFixed(2)}ms ` +
         `authorityP95=${percentile(authoritySamples, 0.95).toFixed(2)}ms preparedP50=${percentile(coldVisitSamples, 0.5).toFixed(2)}ms ` +
@@ -351,7 +356,7 @@ describe('session transcript projection P2 read path', () => {
         `quiesceBP95=${percentile(baselineQuiesceSamples, 0.95).toFixed(2)}ms ` +
         `quiesceCP95=${percentile(candidateQuiesceSamples, 0.95).toFixed(2)}ms samples=30\n`)
       expect(historyReads).toBeGreaterThan(0)
-      expect(candidateHistoryReads).toBe(0)
+      expect(candidateHistoryReads).toBe(coldVisitSamples.length)
       expect(coldVisitSamples).toHaveLength(30)
       expect(candidateStartupSamples).toHaveLength(30)
       expect(sliceSamples.reduce((sum, sample) => sum + sample.sourceRows, 0)).toBeGreaterThan(0)

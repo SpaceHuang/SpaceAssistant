@@ -10,6 +10,7 @@ import {advanceProcessGeneration} from '../database/processGeneration'
 import {createSqliteProjectionBuildTask,createSqliteSessionStorageHost} from './sqliteSessionStorage'
 import {readChatMessagesAfterPreparation} from './public/readMessages'
 import {readSessionTranscriptProjection} from './infrastructure/sqlite/sessionTranscriptProjection'
+import {refreshSessionTranscriptParityProof} from './infrastructure/sqlite/sessionTranscriptProjection'
 it('rejects a prepared chat read when its canonical source spill has disappeared',async()=>{
  const temp=createTempDatabase('audit-source-spill-');let host:ReturnType<typeof createSqliteSessionStorageHost>|undefined
  try{
@@ -54,6 +55,29 @@ it('does not serve retained mirror content on a cold read after canonical source
   host=createSqliteSessionStorageHost(db,{storage:{projectionBlobRoot:blobRoot},startup:{recoverHistory:async()=>({interruptedCount:0,repairFailureCount:0}),recoverSessionLedgers:async()=>({repairFailureCount:0})},maintenanceTasks:[task]})
   await fs.rm(path.join(path.dirname(temp.dbPath),'spill',locator))
   await expect(readChatMessagesAfterPreparation(host.storage,{sessionId:session.id})).rejects.toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+ }finally{await host?.lifecycle.stop({deadlineMs:5000});temp.cleanup()}
+})
+
+it('serves a healthy canonical cold read through History without waiting for projection construction',async()=>{
+ const temp=createTempDatabase('audit-canonical-cold-read-');let host:ReturnType<typeof createSqliteSessionStorageHost>|undefined
+ try{
+  const db=temp.db,conn=getDbConnection(db),session=createSession(db,{name:'audit canonical cold read'}),body='canonical cold body '.repeat(5000)
+  appendMessage(db,{id:'audit-cold-fast-user',sessionId:session.id,role:'user',content:body,timestamp:1,status:'sent'})
+  await new SqliteAgentHistory(conn,1,Date.now,session.id).appendBatch([{invocationId:'audit-cold-fast-inv',turnId:'audit-cold-fast-turn',sequence:1,schemaVersion:1,
+    eventId:'audit-cold-fast-event',idempotencyKey:'audit-cold-fast-event',kind:'invocation-context-committed',payload:{messages:[{id:'audit-cold-fast-user',role:'user',content:body,timestamp:1}]}}],0)
+  const stored=JSON.parse(conn.prepare("SELECT payload_json FROM agent_history_events WHERE event_id='audit-cold-fast-event'").get()!.payload_json as string)
+  const locator=stored.messages[0].content.__spaceassistant_spill_v1.locator
+  conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+  conn.prepare("UPDATE messages SET content_storage_state='canonical-backed-dual-write' WHERE session_id=?").run(session.id)
+  expect(readSessionTranscriptProjection(db,session.id).source).toBe('canonical:L2')
+  expect(refreshSessionTranscriptParityProof(db,session.id)).toBe(true)
+  const generation=advanceProcessGeneration(conn),blobRoot=path.join(path.dirname(temp.dbPath),'projection-blobs')
+  const task=createSqliteProjectionBuildTask({db,dbPath:temp.dbPath,blobRoot,processGeneration:()=>generation,connectionEpoch:()=>generation,now:Date.now})
+  host=createSqliteSessionStorageHost(db,{storage:{projectionBlobRoot:blobRoot},startup:{recoverHistory:async()=>({interruptedCount:0,repairFailureCount:0}),recoverSessionLedgers:async()=>({repairFailureCount:0})},maintenanceTasks:[task]})
+  const readStorage={...host.storage,requestChatBodyV1:async()=>new Promise<void>(()=>undefined)}
+  await expect(readChatMessagesAfterPreparation(readStorage,{sessionId:session.id})).resolves.toMatchObject([{id:'audit-cold-fast-user',content:body}])
+  await fs.rm(path.join(path.dirname(temp.dbPath),'spill',locator))
+  await expect(readChatMessagesAfterPreparation(readStorage,{sessionId:session.id})).rejects.toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
  }finally{await host?.lifecycle.stop({deadlineMs:5000});temp.cleanup()}
 })
 

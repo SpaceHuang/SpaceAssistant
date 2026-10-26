@@ -1,6 +1,6 @@
 import type { AppDatabase } from '../database/sqliteStore'
 import { getDbConnection } from '../database/sqliteStore'
-import { getMessages, getSession } from '../database/operations'
+import { getSession } from '../database/operations'
 import { createSpillStoreForDatabase } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict, type SpillDescriptor } from '../storage/spillProtocol'
 import { randomUUID } from 'node:crypto'
@@ -57,10 +57,7 @@ function hasCurrentPriorChatBodyAuthority(conn: ReturnType<typeof getDbConnectio
   if (!session) return false
   const cutover = conn.prepare('SELECT write_mode FROM session_message_content_cutover WHERE session_id=?')
     .get(sessionId) as { write_mode: string } | undefined
-  // The old mirror is independently readable only in legacy mode. In canonical
-  // mode even retained mirror rows are not authority: require the prepared path,
-  // which revalidates source spill files before returning their contents.
-  if (!cutover || cutover.write_mode !== 'legacy') return false
+  if (!cutover || !['legacy', 'canonical'].includes(cutover.write_mode)) return false
   const sourceIdentityJson = readProjectionSourceIdentity(conn, sessionId, session.generation)
   if (!sourceIdentityJson) return false
   const parityScopeKey = encodeProjectionScopeKey({ scope: 'transcriptParityV1', specVersion: 1 })
@@ -192,8 +189,11 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const readChatMessagesBeforePreparation: NonNullable<SessionStorage['readChatMessagesBeforePreparation']> =
     ({ sessionId, limit, offset }) => {
       const conn = getDbConnection(db)
-      return runInTransaction(conn, () => hasCurrentPriorChatBodyAuthority(conn, sessionId)
-        ? getMessages(db, sessionId, limit ?? 500, offset ?? 0) : undefined)
+      const authorized = runInTransaction(conn, () => hasCurrentPriorChatBodyAuthority(conn, sessionId))
+      // The parity proof only makes the cold read eligible. Materialize through
+      // the canonical authority reader outside the proof transaction so source
+      // spill files are checked without holding a WAL snapshot open.
+      return authorized ? queries.readMessages({ sessionId, limit: limit ?? 500, offset: offset ?? 0 }) : undefined
     }
   const ensureChatBodyV1: NonNullable<SessionStorage['ensureChatBodyV1']> = ({ sessionId, signal }) => {
     if (!options.prepareProjection) return Promise.reject(new Error('PROJECTION_PREPARATION_UNAVAILABLE'))
