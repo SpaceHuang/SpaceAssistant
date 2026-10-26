@@ -30,6 +30,33 @@ describe('projection chat body source reducer', () => {
     expect(output.manifestDigestByMessage.get('assistant-a')).toMatch(/^[a-f0-9]{64}$/)
   })
 
+  it('preserves image and tool-use messages from canonical History during source locator reduction', () => {
+    const rows = [
+      event('rich-content', 1, 'invocation-context-committed', { messages: [
+        { id: 'image-user', role: 'user', content: [{ type: 'text', text: 'inspect this' },
+          { type: 'image', mimeType: 'image/png', data: 'aGVsbG8=' }], timestamp: 1 },
+      ] }),
+      event('rich-content', 2, 'model-response-committed', { message: { id: 'tool-assistant', role: 'assistant', content: [
+        { type: 'text', text: 'checking' }, { type: 'tool_use', id: 'lookup-1', name: 'lookup', input: { q: 'status' } },
+      ], timestamp: 2 } }),
+      event('rich-content', 3, 'invocation-completed', { status: 'completed' }),
+    ]
+    const facts: ProjectionMessageFact[] = [
+      { id: 'image-user', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy',
+        writeMode: null, storedContent: 'inspect this' },
+      { id: 'tool-assistant', role: 'assistant', timestamp: 2, sequence: 1, queueScope: 'desktop', contentStorageState: 'legacy',
+        writeMode: null, storedContent: 'checking' },
+    ]
+
+    const output = reduceProjectionInvocationChatBodySources(rows, facts)
+
+    expect(output.messages.map(({ id, role, content, sequence }) => [id, role, content, sequence])).toEqual([
+      ['image-user', 'user', 'inspect this', 0], ['tool-assistant', 'assistant', 'checking', 1],
+    ])
+    expect(output.dependenciesByMessage.get('image-user')?.map(({ eventId }) => eventId)).toEqual(rows.map(({ eventId }) => eventId))
+    expect(output.dependenciesByMessage.get('tool-assistant')?.map(({ eventId }) => eventId)).toEqual(rows.map(({ eventId }) => eventId))
+  })
+
   it('rejects missing message facts, duplicate sequences and incomplete invocation event order', () => {
     const rows = [event('invalid', 1, 'invocation-context-committed', { messages: [{ id: 'one', role: 'user', content: 'body', timestamp: 1 }] }),
       event('invalid', 2, 'invocation-completed', { status: 'completed' })]
