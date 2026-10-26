@@ -26,12 +26,14 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
   blobs: BlobStore
   sessionId: string
   reducerSpecVersion: number
+  signal?: AbortSignal
   invocations: AsyncIterable<Readonly<{ events: readonly ProjectionHistoryChunkEvent[]; messageFacts: readonly ProjectionMessageFact[] }>>
   now?: () => number
 }>): Promise<Readonly<{ kind: 'complete'; invocationCount: number; messageCount: number }>> {
   if (!input.sessionId || !Number.isSafeInteger(input.reducerSpecVersion) || input.reducerSpecVersion < 1) {
     throw new Error('PROJECTION_SOURCE_BACKFILL_INPUT_INVALID')
   }
+  throwIfAborted(input.signal)
   const conn = getDbConnection(input.db)
   const session = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(input.sessionId) as { generation: string } | undefined
   if (!session) throw new Error('SESSION_NOT_FOUND')
@@ -67,6 +69,7 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
   let invocationCount = 0
   let previousSessionSequence = 0
   for await (const invocation of input.invocations) {
+    throwIfAborted(input.signal)
     if (!invocation || !Array.isArray(invocation.events) || !invocation.events.length ||
       invocation.events[0]!.sessionSequence <= previousSessionSequence) throw new Error('PROJECTION_SOURCE_BACKFILL_ORDER_INVALID')
     const invocationId = invocation.events[0]!.invocationId
@@ -78,6 +81,7 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
     const checkpointJson = encodeCheckpoint()
     await reduceAndPublishProjectionInvocationChatBodySourcesInWorker({ events: invocation.events,
       messageFacts: invocation.messageFacts, blobs: input.blobs,
+      signal: input.signal,
       context: { sessionId: input.sessionId, sessionGeneration, sourceRevision, sourceIdentityJson, historyWatermarkJson,
         reducerSpecVersion: input.reducerSpecVersion },
       publish: (source, preparedArtifacts) => publishProjectionInvocationSourceArtifacts({ db: input.db, blobs: input.blobs,
@@ -102,6 +106,7 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
   }
 
   let messageCount = 0
+  throwIfAborted(input.signal)
   runInTransaction(conn, () => {
     if (readProjectionSourceIdentity(conn, input.sessionId, sessionGeneration) !== sourceIdentityJson) {
       throw new Error('PROJECTION_SOURCE_REVISION_CHANGED')
@@ -126,4 +131,8 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
       WHERE session_id=? AND source_revision=? AND status='backfilling'`).run((input.now ?? Date.now)(), input.sessionId, sourceRevision)
   })
   return Object.freeze({ kind: 'complete', invocationCount, messageCount })
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('PROJECTION_SOURCE_BACKFILL_CANCELLED')
 }

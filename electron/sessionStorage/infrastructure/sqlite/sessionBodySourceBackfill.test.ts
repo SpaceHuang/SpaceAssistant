@@ -71,4 +71,22 @@ describe('session body source backfill', () => {
     expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(session.id))
       .toEqual({ status: 'backfilling' })
   })
+
+  it('passes cancellation into the worker before processing a backfill invocation', async () => {
+    const temp = createTempDatabase('session-body-source-backfill-cancel-')
+    cleanup = temp.cleanup
+    const conn = getDbConnection(temp.db)
+    const session = createSession(temp.db, { name: 'source backfill cancelled' })
+    blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-body-source-backfill-cancel-blobs-'))
+    const controller = new AbortController()
+    const reason = new Error('maintenance stopped')
+    controller.abort(reason)
+
+    await expect(runSessionBodySourceBackfill({ db: temp.db, sessionId: session.id, reducerSpecVersion: 1,
+      blobs: createSessionProjectionBlobStore(blobRoot), signal: controller.signal,
+      invocations: (async function* () { throw new Error('invocation source must not be consumed after cancellation') })() }))
+      .rejects.toBe(reason)
+    expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(session.id))
+      .toEqual({ status: 'pending' })
+  })
 })
