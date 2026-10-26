@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
+import type { ProjectionWorkerSample } from '../../domain/projectionSource'
 import type { VerifiedChatBody } from './projectionChatBodyCachePayload'
 import { createProjectionChatBodyReducer } from './projectionChatBodyReducer'
 
@@ -14,6 +15,8 @@ export type ProjectionSourceEventDependency = Readonly<{
 
 export type ProjectionInvocationBodySources = Readonly<{
   invocationId: string
+  workerThreadId?: number
+  workerSample?: ProjectionWorkerSample
   replacesPriorMessages: boolean
   messages: readonly (VerifiedChatBody & Readonly<{ sequence: number }>)[]
   dependencies: readonly ProjectionSourceEventDependency[]

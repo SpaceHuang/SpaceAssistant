@@ -10,12 +10,14 @@ import { createProjectionWorkerMemorySampler } from './projectionWorkerMemorySam
 import { projectionScopeKind } from '../../domain/scopeKey'
 import { readProjectionHistorySegmentItems } from './projectionHistorySegmentReader'
 import { reduceSegmentedChatBodyContext } from './projectionSegmentedChatBodyReducer'
+import { reduceProjectionInvocationChatBodySources } from './projectionChatBodySourceReducer'
 
 if (!parentPort) throw new Error('projection history reducer worker requires a parent port')
 const memorySampler = createProjectionWorkerMemorySampler()
 const MAX_OUTPUT_MANIFEST_SEGMENT_BYTES = 16 * 1024 * 1024
 
 parentPort.once('message', (message: {
+  operation?: 'projection-build' | 'source-invocation'
   requestId: string
   stateJson: string
   events: readonly ProjectionHistoryChunkEvent[]
@@ -27,6 +29,13 @@ parentPort.once('message', (message: {
 }) => {
   void (async () => {
     const startedAt = performance.now()
+    if (message.operation === 'source-invocation') {
+      const source = reduceProjectionInvocationChatBodySources(message.events, message.messageFacts)
+      const workerSample = { durationMs: Math.max(0, performance.now() - startedAt), ...memorySampler.finish() }
+      parentPort!.postMessage({ requestId: message.requestId, result: { ...source, workerThreadId: threadId, workerSample } })
+      parentPort!.close()
+      return
+    }
     const reducer = createProjectionScopeHistoryReducer()
     let stateJson = message.stateJson
     const writeArtifact = async (root: string, locator: string, payload: string) => {

@@ -6,8 +6,10 @@ import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
+import { threadId as currentThreadId } from 'node:worker_threads'
 import type { ProjectionPendingHistoryChunkManifestRef } from '../../domain/projectionBuild'
 import type { ProjectionHistoryChunkReducerPort, ProjectionHistoryChunkReduction, ProjectionReducerArtifactStaging } from '../../application/projectionBuildCoordinator'
+import type { ProjectionInvocationBodySources } from './projectionChatBodySourceReducer'
 
 const MAX_REDUCER_WORKER_MS = 15_000
 
@@ -40,6 +42,71 @@ anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(
   })
   worker.once('exit', () => fs.rm(bootstrapPath, { force: true }, () => undefined))
   return worker
+}
+
+export function reduceProjectionInvocationChatBodySourcesInWorker(events: readonly ProjectionHistoryChunkEvent[],
+  messageFacts: readonly ProjectionMessageFact[], options: Readonly<{ signal?: AbortSignal; timeoutMs?: number;
+    workerPath?: string; createWorker?: (workerPath: string) => Worker }> = {}): Promise<ProjectionInvocationBodySources> {
+  if (options.signal?.aborted) return Promise.reject(new Error('PROJECTION_REDUCER_WORKER_ABORTED'))
+  const workerPath = options.workerPath ?? resolveWorkerPath()
+  if (!workerPath) return Promise.reject(new Error('PROJECTION_REDUCER_WORKER_ENTRY_UNAVAILABLE'))
+  let worker: Worker
+  try { worker = options.createWorker?.(workerPath) ?? (workerPath.endsWith('.ts') ? spawnSourceWorker(workerPath) : new Worker(workerPath, {
+    execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64, stackSizeMb: 4 },
+  })) }
+  catch (error) { return Promise.reject(new Error(`PROJECTION_REDUCER_WORKER_SPAWN_FAILED:${error instanceof Error ? error.message : String(error)}`)) }
+  const requestId = randomUUID()
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let result: ProjectionInvocationBodySources | undefined
+    let failure: Error | undefined
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      options.signal?.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve(result!)
+    }
+    const stop = (error: Error) => {
+      if (failure || settled) return
+      failure = error
+      void worker.terminate().catch(() => { failure = new Error('PROJECTION_REDUCER_WORKER_TERMINATION_FAILED') })
+    }
+    const onAbort = () => stop(new Error('PROJECTION_REDUCER_WORKER_ABORTED'))
+    const timer = setTimeout(() => stop(new Error('PROJECTION_REDUCER_WORKER_TIMEOUT')), options.timeoutMs ?? MAX_REDUCER_WORKER_MS)
+    options.signal?.addEventListener('abort', onAbort, { once: true })
+    worker.once('message', (message: { requestId?: string; error?: string; result?: unknown }) => {
+      if (message.requestId !== requestId) { stop(new Error('PROJECTION_REDUCER_WORKER_PROTOCOL_MISMATCH')); return }
+      if (message.error) { stop(new Error(message.error)); return }
+      if (!isProjectionInvocationBodySources(message.result) || message.result.workerThreadId === currentThreadId) {
+        stop(new Error('PROJECTION_SOURCE_REDUCER_WORKER_RESULT_INVALID'))
+        return
+      }
+      result = message.result
+    })
+    worker.once('error', (error) => { failure ??= new Error(`PROJECTION_REDUCER_WORKER_RUNTIME_FAILED:${error.message}`) })
+    worker.once('exit', (code) => finish(failure ?? (result && code === 0 ? undefined : new Error(`PROJECTION_REDUCER_WORKER_EXIT:${code}`))))
+    try { worker.postMessage({ requestId, operation: 'source-invocation', events, messageFacts, stateJson: '', scopeKey: '', finalize: true }) }
+    catch (error) { stop(error instanceof Error ? error : new Error('PROJECTION_REDUCER_WORKER_POST_FAILED')) }
+  })
+}
+
+function isProjectionInvocationBodySources(value: unknown): value is ProjectionInvocationBodySources {
+  if (!value || typeof value !== 'object') return false
+  const source = value as Partial<ProjectionInvocationBodySources>
+  return typeof source.invocationId === 'string' && Boolean(source.invocationId) && typeof source.replacesPriorMessages === 'boolean' &&
+    Array.isArray(source.messages) && source.messages.every((message) => Boolean(message && typeof message.id === 'string' && message.id &&
+      (message.role === 'user' || message.role === 'assistant') && typeof message.content === 'string' &&
+      Number.isSafeInteger(message.timestamp) && Number.isSafeInteger(message.sequence))) &&
+    Array.isArray(source.dependencies) && source.dependencies.length > 0 && source.dependencies.every((dependency) =>
+      Boolean(dependency && typeof dependency.eventId === 'string' && Number.isSafeInteger(dependency.sequence) &&
+        Number.isSafeInteger(dependency.sessionSequence) && /^[a-f0-9]{64}$/.test(dependency.digest))) &&
+    typeof source.dependencyManifestJson === 'string' && /^[a-f0-9]{64}$/.test(source.dependencyManifestDigest ?? '') &&
+    source.dependenciesByMessage instanceof Map && source.manifestDigestByMessage instanceof Map &&
+    Number.isSafeInteger(source.workerThreadId) && source.workerThreadId! > 0 && Boolean(source.workerSample &&
+      isWorkerSample(source.workerSample)) && source.messages.every((message) => source.dependenciesByMessage!.has(message.id) &&
+        source.manifestDigestByMessage!.has(message.id))
 }
 
 export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducerPort =

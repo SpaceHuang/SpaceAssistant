@@ -19,6 +19,8 @@ export async function publishProjectionInvocationSourceArtifacts(input: Readonly
   historyWatermarkJson: string
   reducerSpecVersion: number
   source: ProjectionInvocationBodySources
+  checkpointJson?: string
+  backfillRunId?: string
 }>): Promise<void> {
   if (!input.sessionId || !input.sessionGeneration || !Number.isSafeInteger(input.sourceRevision) || input.sourceRevision < 0 ||
     !Number.isSafeInteger(input.reducerSpecVersion) || input.reducerSpecVersion < 1 ||
@@ -51,6 +53,8 @@ export async function publishProjectionInvocationSourceArtifacts(input: Readonly
       assertSourceFence(conn, input)
       conn.prepare('DELETE FROM session_message_body_locator WHERE session_id=?').run(input.sessionId)
       conn.prepare('DELETE FROM session_body_source_manifest WHERE session_id=?').run(input.sessionId)
+      if (input.checkpointJson) conn.prepare('UPDATE session_body_source_state SET checkpoint_json=?,updated_at=unixepoch()*1000 WHERE session_id=?')
+        .run(input.checkpointJson, input.sessionId)
     })
     return
   }
@@ -121,6 +125,8 @@ export async function publishProjectionInvocationSourceArtifacts(input: Readonly
       conn.prepare(`DELETE FROM session_body_source_manifest WHERE session_id=? AND NOT EXISTS (
         SELECT 1 FROM session_message_body_source_event refs WHERE refs.session_id=session_body_source_manifest.session_id
           AND refs.invocation_id=session_body_source_manifest.invocation_id)`).run(input.sessionId)
+      if (input.checkpointJson) conn.prepare('UPDATE session_body_source_state SET checkpoint_json=?,updated_at=unixepoch()*1000 WHERE session_id=?')
+        .run(input.checkpointJson, input.sessionId)
     })
   } finally {
     await written[0]!.release()
@@ -128,14 +134,19 @@ export async function publishProjectionInvocationSourceArtifacts(input: Readonly
 }
 
 function assertSourceFence(conn: ReturnType<typeof getDbConnection>, input: Readonly<{ sessionId: string; sessionGeneration: string;
-  sourceRevision: number; sourceIdentityJson: string }>): void {
+  sourceRevision: number; sourceIdentityJson: string; backfillRunId?: string }>): void {
   if (readProjectionSourceIdentity(conn, input.sessionId, input.sessionGeneration) !== input.sourceIdentityJson) {
     throw new Error('PROJECTION_SOURCE_REVISION_CHANGED')
   }
-  const state = conn.prepare('SELECT source_revision,status FROM session_body_source_state WHERE session_id=?')
-    .get(input.sessionId) as { source_revision: number; status: string } | undefined
+  const state = conn.prepare('SELECT source_revision,status,checkpoint_json FROM session_body_source_state WHERE session_id=?')
+    .get(input.sessionId) as { source_revision: number; status: string; checkpoint_json: string | null } | undefined
   if (!state || state.source_revision !== input.sourceRevision || !['pending', 'backfilling'].includes(state.status)) {
     throw new Error('PROJECTION_SOURCE_REVISION_CHANGED')
+  }
+  if (input.backfillRunId) {
+    let checkpoint: { runId?: unknown } | undefined
+    try { checkpoint = JSON.parse(state.checkpoint_json ?? 'null') as typeof checkpoint } catch { /* treated as stale owner */ }
+    if (checkpoint?.runId !== input.backfillRunId) throw new Error('PROJECTION_SOURCE_BACKFILL_LEASE_LOST')
   }
 }
 
