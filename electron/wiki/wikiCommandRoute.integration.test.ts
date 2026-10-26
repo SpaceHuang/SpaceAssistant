@@ -113,4 +113,28 @@ describe('Wiki command to sourceId integration', () => {
     expect(new Set([first, second, third].flatMap(result => result.ok ? result.sources.map(source => source.sourceId) : [])).size).toBe(3)
     expect(fs.readdirSync(path.join(wikiRoot, 'raw', (await import('./wikiProjects')).computeProjectId(workDir)))).toHaveLength(3)
   })
+
+  it('rejects oversized bulk files before reading their contents for deduplication', async () => {
+    const workDir = temp('wiki-route-bulk-oversize-work-')
+    const userDataPath = temp('wiki-route-bulk-oversize-data-')
+    const config = { ...DEFAULT_WIKI_CONFIG, maxBatchIngest: 1 }
+    const wikiRoot = path.join(userDataPath, config.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
+    const sourcePath = path.join(workDir, 'oversized.md')
+    fs.closeSync(fs.openSync(sourcePath, 'w'))
+    fs.truncateSync(sourcePath, 10 * 1024 * 1024 + 1)
+    const readFile = vi.spyOn(fs.promises, 'readFile')
+
+    try {
+      const result = await importAllRawFromWorkDir(workDir, config, { userDataPath })
+
+      expect(result).toMatchObject({ ok: false, error: 'oversized.md: 仅支持 10 MiB 内的文本资料' })
+      expect(readFile.mock.calls.some(([filePath]) => path.resolve(String(filePath)) === sourcePath)).toBe(false)
+    } finally {
+      readFile.mockRestore()
+    }
+  })
 })

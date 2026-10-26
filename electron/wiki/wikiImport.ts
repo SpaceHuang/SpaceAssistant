@@ -140,7 +140,11 @@ export async function importAllRawFromWorkDir(
     const imported = await readBulkImportOrigins(resolveSharedWikiRoot(shared.userDataPath!, wikiConfig), projectId)
     const pendingCandidates: string[] = []
     for (const candidate of candidates) {
-      const bytes = await fs.readFile(resolveSafePath(workDir, candidate))
+      const absolute = resolveSafePath(workDir, candidate)
+      const stat = await fs.stat(absolute)
+      const metadata = await getFileMetadata(absolute)
+      if (!metadata.isText || stat.size > 10 * 1024 * 1024) return { ok: false, error: `${candidate}: 仅支持 10 MiB 内的文本资料` }
+      const bytes = await fs.readFile(absolute)
       const contentHash = createHash('sha256').update(bytes).digest('hex')
       if (!imported.get(candidate)?.has(contentHash)) pendingCandidates.push(candidate)
     }
@@ -153,8 +157,6 @@ export async function importAllRawFromWorkDir(
     for (const srcRelPath of candidates) {
       const absolute = resolveSafePath(workDir, srcRelPath)
       const stat = await fs.stat(absolute)
-      const metadata = await getFileMetadata(absolute)
-      if (!metadata.isText || stat.size > 10 * 1024 * 1024) return { ok: false, error: `${srcRelPath}: 仅支持 10 MiB 内的文本资料` }
       totalBytes += stat.size
       if (totalBytes > 50 * 1024 * 1024) return { ok: false, error: '可导入文本总量超过 50 MiB，请改用单文件 ingest' }
     }
