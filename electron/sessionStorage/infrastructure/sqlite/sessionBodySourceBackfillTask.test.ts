@@ -5,6 +5,7 @@ import { appendMessage, createSession } from '../../../database/operations'
 import { createTempDatabase } from '../../../database/testHelpers'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
+import { projectionSourceEventDigest } from './projectionSourceDependencyReader'
 import { createSessionBodySourceBackfillTask } from './sessionBodySourceBackfillTask'
 
 describe('session body source backfill task', () => {
@@ -20,12 +21,13 @@ describe('session body source backfill task', () => {
     blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
     const conn = getDbConnection(temp.db)
     const session = createSession(temp.db, { name: 'background source backfill' })
-    appendMessage(temp.db, { id: 'task-user', sessionId: session.id, role: 'user', content: 'task body', timestamp: 1, status: 'sent' })
+    const body = 'task-body-'.repeat(9_000)
+    appendMessage(temp.db, { id: 'task-user', sessionId: session.id, role: 'user', content: body, timestamp: 1, status: 'sent' })
     const history = new SqliteAgentHistory(conn, 1, () => 10, session.id)
     await history.appendBatch([
       { invocationId: 'task-invocation', turnId: 'task-turn', sequence: 1, schemaVersion: 1, eventId: 'task-context',
         idempotencyKey: 'task-context', kind: 'invocation-context-committed', payload: { messages: [
-          { id: 'task-user', role: 'user', content: 'task body', timestamp: 1 },
+          { id: 'task-user', role: 'user', content: body, timestamp: 1 },
         ] } },
       { invocationId: 'task-invocation', turnId: 'task-turn', sequence: 2, schemaVersion: 1, eventId: 'task-complete',
         idempotencyKey: 'task-complete', kind: 'invocation-completed', payload: { status: 'completed' } },
@@ -42,6 +44,12 @@ describe('session body source backfill task', () => {
       .toEqual({ status: 'complete' })
     expect(conn.prepare('SELECT message_id FROM session_message_body_locator WHERE session_id=?').all(session.id))
       .toEqual([{ message_id: 'task-user' }])
+    const sourceEvent = conn.prepare(`SELECT invocation_id,turn_id,sequence,event_id,idempotency_key,schema_version,kind,
+      session_seq,commit_order,created_at,payload_json FROM agent_history_events WHERE event_id='task-context'`).get() as
+      Parameters<typeof projectionSourceEventDigest>[0]
+    expect(conn.prepare(`SELECT source_digest FROM session_message_body_source_event
+      WHERE session_id=? AND message_id='task-user' AND event_id='task-context'`).get(session.id))
+      .toEqual({ source_digest: projectionSourceEventDigest(sourceEvent) })
   })
 
   it('continues to the next pending session when one session fails and is delayed for retry', async () => {
