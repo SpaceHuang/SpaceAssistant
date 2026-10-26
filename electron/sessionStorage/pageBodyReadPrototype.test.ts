@@ -293,8 +293,9 @@ describe('paged chat body read prototype (test only)', () => {
       fixtureEvent('turn-2', 4, 'model-response-committed', { message: { id: 'a2', role: 'assistant', content: [
         { type: 'image', mimeType: 'image/png', data: 'YQ==' }, { type: 'text', text: 'final answer' },
       ], toolCalls: [{ id: 'call-1', name: 'lookup', input: { q: 'x' } }], timestamp: 5 } }),
-      fixtureEvent('turn-2', 5, 'tool-call-finished', { toolCallId: 'call-1', replayContent: 'lookup result' }),
-      fixtureEvent('turn-2', 6, 'invocation-completed', { status: 'completed' }),
+      fixtureEvent('turn-2', 5, 'tool-call-started', { toolCallId: 'call-1', toolName: 'lookup' }),
+      fixtureEvent('turn-2', 6, 'tool-call-finished', { toolCallId: 'call-1', replayContent: 'lookup result' }),
+      fixtureEvent('turn-2', 7, 'invocation-completed', { status: 'completed' }),
     ]
     const facts: ProjectionMessageFact[] = [
       { id: 'u1', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'summary of prompt' },
@@ -318,9 +319,9 @@ describe('paged chat body read prototype (test only)', () => {
       body: { content: 'summary of prompt' } })
     expect(sourceIndex.get('u3')).toMatchObject({ sourceEvent: { eventId: 'turn-2-3', kind: 'replay-message-committed' },
       body: { content: 'image prompt' } })
-    expect(sourceIndex.getDependencyRecordsForTest('a2')?.map(({ eventId }) => eventId)).toContain('turn-2-5')
+    expect(sourceIndex.getDependencyRecordsForTest('a2')?.map(({ eventId }) => eventId)).toContain('turn-2-6')
     expect(sourceIndex.get('u1')?.sourceDigest).toMatch(/^[a-f0-9]{64}$/)
-    expect(sourceIndex.getDependencyRecordsForTest('a1')?.map(({ eventId }) => eventId)).toEqual(['turn-2-1', 'turn-2-2', 'turn-2-3', 'turn-2-4', 'turn-2-5', 'turn-2-6'])
+    expect(sourceIndex.getDependencyRecordsForTest('a1')?.map(({ eventId }) => eventId)).toEqual(['turn-2-1', 'turn-2-2', 'turn-2-3', 'turn-2-4', 'turn-2-5', 'turn-2-6', 'turn-2-7'])
     expect(sourceIndex.getDependencyRecordsForTest('a1')?.every(({ digest }) => /^[a-f0-9]{64}$/.test(digest))).toBe(true)
   })
 
