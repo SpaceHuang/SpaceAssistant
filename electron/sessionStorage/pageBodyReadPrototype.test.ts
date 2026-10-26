@@ -278,30 +278,38 @@ describe('paged chat body read prototype (test only)', () => {
         { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'summary answer' }], timestamp: 2 },
         { id: 'u2', role: 'user', content: 'next prompt', timestamp: 3 },
       ] }),
-      fixtureEvent('turn-2', 3, 'model-response-committed', { message: { id: 'a2', role: 'assistant', content: [
-        { type: 'tool_use', id: 'call-1', name: 'lookup', input: { q: 'x' } }, { type: 'text', text: 'final answer' },
+      fixtureEvent('turn-2', 3, 'replay-message-committed', { message: { id: 'u3', role: 'user', content: [
+        { type: 'text', text: 'image prompt' }, { type: 'image', mimeType: 'image/png', data: 'YQ==' },
       ], timestamp: 4 } }),
-      fixtureEvent('turn-2', 4, 'invocation-completed', { status: 'completed' }),
+      fixtureEvent('turn-2', 4, 'model-response-committed', { message: { id: 'a2', role: 'assistant', content: [
+        { type: 'image', mimeType: 'image/png', data: 'YQ==' }, { type: 'text', text: 'final answer' },
+      ], toolCalls: [{ id: 'call-1', name: 'lookup', input: { q: 'x' } }], timestamp: 5 } }),
+      fixtureEvent('turn-2', 5, 'tool-call-finished', { toolCallId: 'call-1', replayContent: 'lookup result' }),
+      fixtureEvent('turn-2', 6, 'invocation-completed', { status: 'completed' }),
     ]
     const facts: ProjectionMessageFact[] = [
       { id: 'u1', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'summary of prompt' },
       { id: 'a1', role: 'assistant', timestamp: 2, sequence: 1, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'summary answer' },
       { id: 'u2', role: 'user', timestamp: 3, sequence: 2, queueScope: 'desktop', contentStorageState: 'canonical-backed-dual-write', writeMode: 'canonical', storedContent: 'next prompt' },
-      { id: 'a2', role: 'assistant', timestamp: 4, sequence: 3, queueScope: 'desktop', contentStorageState: 'canonical-backed-only', writeMode: 'canonical', storedContent: '' },
+      { id: 'u3', role: 'user', timestamp: 4, sequence: 3, queueScope: 'desktop', contentStorageState: 'legacy', writeMode: null, storedContent: 'image prompt' },
+      { id: 'a2', role: 'assistant', timestamp: 5, sequence: 4, queueScope: 'desktop', contentStorageState: 'canonical-backed-only', writeMode: 'canonical', storedContent: '' },
     ]
     const authoritative = reduceAll(events, facts)
     expect(authoritative.map(({ id, content }) => [id, content])).toEqual([
-      ['u1', 'summary of prompt'], ['a1', 'summary answer'], ['u2', 'next prompt'], ['a2', 'final answer'],
+      ['u1', 'summary of prompt'], ['a1', 'summary answer'], ['u2', 'next prompt'], ['u3', 'image prompt'], ['a2', 'final answer'],
     ])
     const indexed = buildPrototype(authoritative)
-    expect(indexed.readPage(4, 2).page).toEqual(authoritative.slice(2, 4))
+    expect(indexed.readPage(5, 2).page).toEqual(authoritative.slice(3, 5))
     const sourceIndex = buildSourceFragmentPrototype(events, facts)
-    expect(sourceIndex.readPage(4, 4)).toEqual(authoritative)
+    expect(sourceIndex.readPage(5, 5)).toEqual(authoritative)
     expect(sourceIndex.get('u1')).toMatchObject({ invocationId: 'turn-2',
       sourceEvent: { eventId: 'turn-2-2', sequence: 2, sessionSequence: 2, schemaVersion: 1, kind: 'transcript-compacted' },
       body: { content: 'summary of prompt' } })
+    expect(sourceIndex.get('u3')).toMatchObject({ sourceEvent: { eventId: 'turn-2-3', kind: 'replay-message-committed' },
+      body: { content: 'image prompt' } })
+    expect(sourceIndex.get('a2')?.dependencies.map(({ eventId }) => eventId)).toContain('turn-2-5')
     expect(sourceIndex.get('u1')?.sourceDigest).toMatch(/^[a-f0-9]{64}$/)
-    expect(sourceIndex.get('a1')?.dependencies.map(({ eventId }) => eventId)).toEqual(['turn-2-1', 'turn-2-2', 'turn-2-3', 'turn-2-4'])
+    expect(sourceIndex.get('a1')?.dependencies.map(({ eventId }) => eventId)).toEqual(['turn-2-1', 'turn-2-2', 'turn-2-3', 'turn-2-4', 'turn-2-5', 'turn-2-6'])
     expect(sourceIndex.get('a1')?.dependencies.every(({ digest }) => /^[a-f0-9]{64}$/.test(digest))).toBe(true)
   })
 
