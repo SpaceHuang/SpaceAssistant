@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto'
 import type { AppDatabase } from '../../../database/sqliteStore'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { runInTransaction } from '../../../database/transaction'
-import type { ProjectionInvocationBodySources } from './projectionChatBodySourceReducer'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
 import { publishProjectionInvocationSourceArtifacts } from './projectionSourceArtifactPublisher'
 import type { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
+import { reduceAndPublishProjectionInvocationChatBodySourcesInWorker } from './projectionHistoryReducerWorkerClient'
+import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
 
 type BlobStore = ReturnType<typeof createSessionProjectionBlobStore>
 type BackfillCheckpoint = Readonly<{
@@ -25,7 +26,7 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
   blobs: BlobStore
   sessionId: string
   reducerSpecVersion: number
-  sources: AsyncIterable<ProjectionInvocationBodySources>
+  invocations: AsyncIterable<Readonly<{ events: readonly ProjectionHistoryChunkEvent[]; messageFacts: readonly ProjectionMessageFact[] }>>
   now?: () => number
 }>): Promise<Readonly<{ kind: 'complete'; invocationCount: number; messageCount: number }>> {
   if (!input.sessionId || !Number.isSafeInteger(input.reducerSpecVersion) || input.reducerSpecVersion < 1) {
@@ -65,18 +66,23 @@ export async function runSessionBodySourceBackfill(input: Readonly<{
 
   let invocationCount = 0
   let previousSessionSequence = 0
-  for await (const source of input.sources) {
-    if (!source || typeof source.invocationId !== 'string' || !source.invocationId || source.dependencies.length < 1 ||
-      !Number.isSafeInteger(source.workerThreadId) || source.workerThreadId! <= 0 || !source.workerSample ||
-      source.dependencies[0]!.sessionSequence <= previousSessionSequence) throw new Error('PROJECTION_SOURCE_BACKFILL_ORDER_INVALID')
-    const lastSessionSequence = source.dependencies.at(-1)!.sessionSequence
+  for await (const invocation of input.invocations) {
+    if (!invocation || !Array.isArray(invocation.events) || !invocation.events.length ||
+      invocation.events[0]!.sessionSequence <= previousSessionSequence) throw new Error('PROJECTION_SOURCE_BACKFILL_ORDER_INVALID')
+    const invocationId = invocation.events[0]!.invocationId
+    if (invocation.events.some((event) => event.invocationId !== invocationId)) throw new Error('PROJECTION_SOURCE_BACKFILL_ORDER_INVALID')
+    const lastSessionSequence = invocation.events.at(-1)!.sessionSequence
     if (!Number.isSafeInteger(lastSessionSequence) || lastSessionSequence <= previousSessionSequence ||
       lastSessionSequence > historyWatermarkSequence) throw new Error('PROJECTION_SOURCE_BACKFILL_ORDER_INVALID')
-    checkpoint = Object.freeze({ ...checkpoint, lastInvocationId: source.invocationId, lastSessionSequence })
+    checkpoint = Object.freeze({ ...checkpoint, lastInvocationId: invocationId, lastSessionSequence })
     const checkpointJson = encodeCheckpoint()
-    await publishProjectionInvocationSourceArtifacts({ db: input.db, blobs: input.blobs, sessionId: input.sessionId,
-      sessionGeneration, sourceRevision, sourceIdentityJson, historyWatermarkJson, reducerSpecVersion: input.reducerSpecVersion,
-      source, checkpointJson, backfillRunId: runId })
+    await reduceAndPublishProjectionInvocationChatBodySourcesInWorker({ events: invocation.events,
+      messageFacts: invocation.messageFacts, blobs: input.blobs,
+      context: { sessionId: input.sessionId, sessionGeneration, sourceRevision, sourceIdentityJson, historyWatermarkJson,
+        reducerSpecVersion: input.reducerSpecVersion },
+      publish: (source, preparedArtifacts) => publishProjectionInvocationSourceArtifacts({ db: input.db, blobs: input.blobs,
+        sessionId: input.sessionId, sessionGeneration, sourceRevision, sourceIdentityJson, historyWatermarkJson,
+        reducerSpecVersion: input.reducerSpecVersion, source, preparedArtifacts, checkpointJson, backfillRunId: runId }) })
     runInTransaction(conn, () => {
       if (readProjectionSourceIdentity(conn, input.sessionId, sessionGeneration) !== sourceIdentityJson) {
         throw new Error('PROJECTION_SOURCE_REVISION_CHANGED')

@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
-import type { ProjectionWorkerSample } from '../../domain/projectionSource'
+import type { ProjectionHistoryChunkEvent, ProjectionMessageFact, ProjectionWorkerSample } from '../../domain/projectionSource'
 import type { VerifiedChatBody } from './projectionChatBodyCachePayload'
 import { createProjectionChatBodyReducer } from './projectionChatBodyReducer'
 
@@ -18,14 +17,20 @@ export type ProjectionInvocationBodySources = Readonly<{
   workerThreadId?: number
   workerSample?: ProjectionWorkerSample
   replacesPriorMessages: boolean
-  messages: readonly (VerifiedChatBody & Readonly<{ sequence: number }>)[]
+  messages: readonly (Omit<VerifiedChatBody, 'content'> & Readonly<{ content?: string; sequence: number }>)[]
   dependencies: readonly ProjectionSourceEventDependency[]
   dependencyManifestJson: string
   dependencyManifestDigest: string
   dependenciesByMessage: ReadonlyMap<string, readonly ProjectionSourceEventDependency[]>
   manifestDigestByMessage: ReadonlyMap<string, string>
+  stagedArtifacts?: Readonly<{ manifest: StagedProjectionSourceBlob;
+    fragments: readonly Readonly<{ messageId: string; blob: StagedProjectionSourceBlob }>[] }>
 }>
 
+export type StagedProjectionSourceBlob = Readonly<{ tempLocator: string; locator: string; byteLength: number; payloadDigest: string }>
+export type PreparedProjectionSourceBlob = Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }>
+export type PreparedProjectionSourceArtifactSet = Readonly<{ manifest: PreparedProjectionSourceBlob;
+  fragmentsByMessage: ReadonlyMap<string, PreparedProjectionSourceBlob> }>
 type Operation = Readonly<{ type?: unknown; messages?: unknown; updates?: unknown }>
 
 /** Reduce one complete History invocation with the production chat-body reducer and retain its full source set. */

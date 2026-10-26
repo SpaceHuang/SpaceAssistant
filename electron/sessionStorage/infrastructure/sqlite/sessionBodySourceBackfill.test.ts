@@ -9,7 +9,6 @@ import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { runSessionBodySourceBackfill } from './sessionBodySourceBackfill'
-import { reduceProjectionInvocationChatBodySourcesInWorker } from './projectionHistoryReducerWorkerClient'
 import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from '../../domain/projectionSource'
 
 describe('session body source backfill', () => {
@@ -44,11 +43,10 @@ describe('session body source backfill', () => {
       kind: row.kind, sessionSequence: row.session_seq, commitOrder: row.commit_order, createdAt: row.created_at, payloadJson: row.payload_json }))
     const facts: ProjectionMessageFact[] = [{ id: 'backfill-user', role: 'user', timestamp: 1, sequence: 0, queueScope: 'desktop',
       contentStorageState: 'legacy', writeMode: null, storedContent: 'body' }]
-    const source = await reduceProjectionInvocationChatBodySourcesInWorker(events, facts)
     blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-body-source-backfill-blobs-'))
     const blobs = createSessionProjectionBlobStore(blobRoot)
     const result = await runSessionBodySourceBackfill({ db: temp.db, sessionId: session.id, reducerSpecVersion: 1,
-      blobs, sources: (async function* () { yield source })() })
+      blobs, invocations: (async function* () { yield { events, messageFacts: facts } })() })
 
     expect(result).toMatchObject({ kind: 'complete', invocationCount: 1, messageCount: 1 })
     expect(readProjectionSourceIdentity(conn, session.id, session.generation)).toBeTruthy()
@@ -68,7 +66,7 @@ describe('session body source backfill', () => {
     appendMessage(temp.db, { id: 'unlocated-message', sessionId: session.id, role: 'user', content: 'body', timestamp: 1, status: 'sent' })
     blobRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-body-source-incomplete-blobs-'))
     await expect(runSessionBodySourceBackfill({ db: temp.db, sessionId: session.id, reducerSpecVersion: 1,
-      blobs: createSessionProjectionBlobStore(blobRoot), sources: (async function* () {})() }))
+      blobs: createSessionProjectionBlobStore(blobRoot), invocations: (async function* () {})() }))
       .rejects.toThrow('PROJECTION_SOURCE_BACKFILL_COVERAGE_MISMATCH')
     expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(session.id))
       .toEqual({ status: 'backfilling' })

@@ -10,6 +10,8 @@ import { threadId as currentThreadId } from 'node:worker_threads'
 import type { ProjectionPendingHistoryChunkManifestRef } from '../../domain/projectionBuild'
 import type { ProjectionHistoryChunkReducerPort, ProjectionHistoryChunkReduction, ProjectionReducerArtifactStaging } from '../../application/projectionBuildCoordinator'
 import type { ProjectionInvocationBodySources } from './projectionChatBodySourceReducer'
+import type { PreparedProjectionSourceArtifactSet, StagedProjectionSourceBlob } from './projectionChatBodySourceReducer'
+import type { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 
 const MAX_REDUCER_WORKER_MS = 15_000
 
@@ -44,9 +46,54 @@ anchorRequire('tsx/esm/api').tsImport(pathToFileURL(target).href, pathToFileURL(
   return worker
 }
 
+type SourceStagingInput = Readonly<{ root: string; tempLocators: readonly string[]; sessionId: string; sessionGeneration: string;
+  sourceRevision: number; sourceIdentityJson: string; historyWatermarkJson: string; reducerSpecVersion: number }>
+type SourceBlobStore = Pick<ReturnType<typeof createSessionProjectionBlobStore>, 'withWorkerStaging'>
+type PreparedSourceBlob = Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }>
+
+export async function reduceAndPublishProjectionInvocationChatBodySourcesInWorker<T>(input: Readonly<{
+  events: readonly ProjectionHistoryChunkEvent[]
+  messageFacts: readonly ProjectionMessageFact[]
+  blobs: SourceBlobStore
+  context: Omit<SourceStagingInput, 'root' | 'tempLocators'>
+  signal?: AbortSignal
+  publish(source: ProjectionInvocationBodySources, artifacts?: PreparedProjectionSourceArtifactSet): Promise<T>
+}>): Promise<T> {
+  return input.blobs.withWorkerStaging(async (promote, stage) => {
+    const tempLocators = [stage.tempLocator]
+    for (let remaining = input.messageFacts.length; remaining > 0;) {
+      const count = Math.min(32, remaining)
+      tempLocators.push(...stage.allocate(count))
+      remaining -= count
+    }
+    const source = await reduceProjectionInvocationChatBodySourcesInWorker(input.events, input.messageFacts, {
+      signal: input.signal, staging: { ...input.context, root: stage.root, tempLocators },
+    })
+    const staged = source.stagedArtifacts
+    const { stagedArtifacts: _stagedArtifacts, ...metadata } = source
+    if (!staged) return input.publish(metadata)
+    const promoted: PreparedSourceBlob[] = []
+    try {
+      const manifest = await promote(staged.manifest)
+      promoted.push(manifest)
+      const fragments = new Map<string, PreparedSourceBlob>()
+      for (const { messageId, blob } of staged.fragments) {
+        if (fragments.has(messageId)) throw new Error('PROJECTION_SOURCE_FRAGMENT_DUPLICATE')
+        const promotedBlob = await promote(blob)
+        promoted.push(promotedBlob)
+        fragments.set(messageId, promotedBlob)
+      }
+      if (fragments.size !== metadata.messages.length) throw new Error('PROJECTION_SOURCE_FRAGMENT_COVERAGE_MISMATCH')
+      return await input.publish(metadata, { manifest, fragmentsByMessage: fragments })
+    } finally {
+      await promoted[0]?.release()
+    }
+  })
+}
+
 export function reduceProjectionInvocationChatBodySourcesInWorker(events: readonly ProjectionHistoryChunkEvent[],
   messageFacts: readonly ProjectionMessageFact[], options: Readonly<{ signal?: AbortSignal; timeoutMs?: number;
-    workerPath?: string; createWorker?: (workerPath: string) => Worker }> = {}): Promise<ProjectionInvocationBodySources> {
+    workerPath?: string; createWorker?: (workerPath: string) => Worker; staging?: SourceStagingInput }> = {}): Promise<ProjectionInvocationBodySources> {
   if (options.signal?.aborted) return Promise.reject(new Error('PROJECTION_REDUCER_WORKER_ABORTED'))
   const workerPath = options.workerPath ?? resolveWorkerPath()
   if (!workerPath) return Promise.reject(new Error('PROJECTION_REDUCER_WORKER_ENTRY_UNAVAILABLE'))
@@ -79,15 +126,21 @@ export function reduceProjectionInvocationChatBodySourcesInWorker(events: readon
     worker.once('message', (message: { requestId?: string; error?: string; result?: unknown }) => {
       if (message.requestId !== requestId) { stop(new Error('PROJECTION_REDUCER_WORKER_PROTOCOL_MISMATCH')); return }
       if (message.error) { stop(new Error(message.error)); return }
-      if (!isProjectionInvocationBodySources(message.result) || message.result.workerThreadId === currentThreadId) {
+      const candidate = message.result && typeof message.result === 'object' && 'source' in message.result
+        ? { ...(message.result as { source: ProjectionInvocationBodySources }).source,
+          stagedArtifacts: (message.result as { stagedArtifacts?: ProjectionInvocationBodySources['stagedArtifacts'] }).stagedArtifacts }
+        : message.result
+      if (!isProjectionInvocationBodySources(candidate) || candidate.workerThreadId === currentThreadId ||
+        (options.staging !== undefined && (!candidate.stagedArtifacts || !isStagedSourceArtifacts(candidate.stagedArtifacts)))) {
         stop(new Error('PROJECTION_SOURCE_REDUCER_WORKER_RESULT_INVALID'))
         return
       }
-      result = message.result
+      result = candidate
     })
     worker.once('error', (error) => { failure ??= new Error(`PROJECTION_REDUCER_WORKER_RUNTIME_FAILED:${error.message}`) })
     worker.once('exit', (code) => finish(failure ?? (result && code === 0 ? undefined : new Error(`PROJECTION_REDUCER_WORKER_EXIT:${code}`))))
-    try { worker.postMessage({ requestId, operation: 'source-invocation', events, messageFacts, stateJson: '', scopeKey: '', finalize: true }) }
+    try { worker.postMessage({ requestId, operation: 'source-invocation', events, messageFacts, stateJson: '', scopeKey: '', finalize: true,
+      ...(options.staging ? { sourceStaging: options.staging } : {}) }) }
     catch (error) { stop(error instanceof Error ? error : new Error('PROJECTION_REDUCER_WORKER_POST_FAILED')) }
   })
 }
@@ -97,7 +150,7 @@ function isProjectionInvocationBodySources(value: unknown): value is ProjectionI
   const source = value as Partial<ProjectionInvocationBodySources>
   return typeof source.invocationId === 'string' && Boolean(source.invocationId) && typeof source.replacesPriorMessages === 'boolean' &&
     Array.isArray(source.messages) && source.messages.every((message) => Boolean(message && typeof message.id === 'string' && message.id &&
-      (message.role === 'user' || message.role === 'assistant') && typeof message.content === 'string' &&
+      (message.role === 'user' || message.role === 'assistant') && (message.content === undefined || typeof message.content === 'string') &&
       Number.isSafeInteger(message.timestamp) && Number.isSafeInteger(message.sequence))) &&
     Array.isArray(source.dependencies) && source.dependencies.length > 0 && source.dependencies.every((dependency) =>
       Boolean(dependency && typeof dependency.eventId === 'string' && Number.isSafeInteger(dependency.sequence) &&
@@ -107,6 +160,17 @@ function isProjectionInvocationBodySources(value: unknown): value is ProjectionI
     Number.isSafeInteger(source.workerThreadId) && source.workerThreadId! > 0 && Boolean(source.workerSample &&
       isWorkerSample(source.workerSample)) && source.messages.every((message) => source.dependenciesByMessage!.has(message.id) &&
         source.manifestDigestByMessage!.has(message.id))
+}
+
+function isStagedSourceArtifacts(value: unknown): value is NonNullable<ProjectionInvocationBodySources['stagedArtifacts']> {
+  if (!value || typeof value !== 'object') return false
+  const artifacts = value as { manifest?: StagedProjectionSourceBlob; fragments?: readonly { messageId: string; blob: StagedProjectionSourceBlob }[] }
+  const valid = (blob: StagedProjectionSourceBlob | undefined) => Boolean(blob &&
+    /^\.projection-[0-9a-f-]{36}\.tmp$/.test(blob.tempLocator) &&
+    blob.locator === `${blob.tempLocator.slice(1, -4)}.blob` && Number.isSafeInteger(blob.byteLength) && blob.byteLength > 0 &&
+    /^[a-f0-9]{64}$/.test(blob.payloadDigest))
+  return valid(artifacts.manifest) && Array.isArray(artifacts.fragments) && artifacts.fragments.every((item) =>
+    Boolean(item && typeof item.messageId === 'string' && item.messageId && valid(item.blob)))
 }
 
 export const reduceProjectionHistoryChunkInWorker: ProjectionHistoryChunkReducerPort =

@@ -26,16 +26,11 @@ parentPort.once('message', (message: {
   finalize: boolean
   stagedChunk?: Readonly<{ root: string; manifest: ProjectionPendingHistoryChunkManifestRef }>
   staging?: ProjectionReducerArtifactStaging
+  sourceStaging?: Readonly<{ root: string; tempLocators: readonly string[]; sessionId: string; sessionGeneration: string;
+    sourceRevision: number; sourceIdentityJson: string; historyWatermarkJson: string; reducerSpecVersion: number }>
 }) => {
   void (async () => {
     const startedAt = performance.now()
-    if (message.operation === 'source-invocation') {
-      const source = reduceProjectionInvocationChatBodySources(message.events, message.messageFacts)
-      const workerSample = { durationMs: Math.max(0, performance.now() - startedAt), ...memorySampler.finish() }
-      parentPort!.postMessage({ requestId: message.requestId, result: { ...source, workerThreadId: threadId, workerSample } })
-      parentPort!.close()
-      return
-    }
     const reducer = createProjectionScopeHistoryReducer()
     let stateJson = message.stateJson
     const writeArtifact = async (root: string, locator: string, payload: string) => {
@@ -72,6 +67,71 @@ parentPort.once('message', (message: {
       } finally { await handle?.close() }
       return { tempLocator: locator, locator: `${locator.slice(1, -4)}.blob`, byteLength,
         payloadDigest: hash.digest('hex') }
+    }
+    if (message.operation === 'source-invocation') {
+      const staging = message.sourceStaging
+      if (!staging) {
+        const source = reduceProjectionInvocationChatBodySources(message.events, message.messageFacts)
+        const workerSample = { durationMs: Math.max(0, performance.now() - startedAt), ...memorySampler.finish() }
+        parentPort!.postMessage({ requestId: message.requestId, result: { ...source, workerThreadId: threadId, workerSample } })
+        parentPort!.close()
+        return
+      }
+      if (!staging || !path.isAbsolute(staging.root) || !staging.sessionId || !staging.sessionGeneration ||
+        !Number.isSafeInteger(staging.sourceRevision) || staging.sourceRevision < 0 ||
+        !Number.isSafeInteger(staging.reducerSpecVersion) || staging.reducerSpecVersion < 1 ||
+        !Array.isArray(staging.tempLocators) || staging.tempLocators.length < message.messageFacts.length + 1 ||
+        new Set(staging.tempLocators).size !== staging.tempLocators.length || staging.tempLocators.some((locator) =>
+          !/^\.projection-[0-9a-f-]{36}\.tmp$/.test(locator) || path.basename(locator) !== locator)) {
+        throw new Error('PROJECTION_SOURCE_ARTIFACT_STAGING_INVALID')
+      }
+      const source = reduceProjectionInvocationChatBodySources(message.events, message.messageFacts)
+      let identity: { sessionGeneration?: unknown; sourceRevision?: unknown; historyWatermark?: unknown; messageRevision?: unknown }
+      try { identity = JSON.parse(staging.sourceIdentityJson) as typeof identity }
+      catch { throw new Error('PROJECTION_SOURCE_ARTIFACT_IDENTITY_INVALID') }
+      if (identity.sessionGeneration !== staging.sessionGeneration || identity.sourceRevision !== staging.sourceRevision ||
+        JSON.stringify(identity.historyWatermark ?? null) !== staging.historyWatermarkJson) {
+        throw new Error('PROJECTION_SOURCE_ARTIFACT_IDENTITY_INVALID')
+      }
+      const schemaVersion = source.dependencies[0]!.schemaVersion
+      if (source.dependencies.some((dependency) => dependency.schemaVersion !== schemaVersion)) {
+        throw new Error('PROJECTION_SOURCE_ARTIFACT_SCHEMA_MISMATCH')
+      }
+      const manifestPayload = JSON.stringify({ formatVersion: 1, kind: 'chatBodyV1-source-manifest', sessionId: staging.sessionId,
+        sessionGeneration: staging.sessionGeneration, sourceRevision: staging.sourceRevision,
+        messageRevision: identity.messageRevision ?? null, historyWatermarkJson: staging.historyWatermarkJson,
+        reducerSpecVersion: staging.reducerSpecVersion, invocationId: source.invocationId, schemaVersion,
+        dependencies: source.dependencies })
+      const manifest = await writeArtifact(staging.root, staging.tempLocators[0]!, manifestPayload)
+      const fragments = [] as Array<{ messageId: string; blob: Awaited<ReturnType<typeof writeArtifactChunks>> }>
+      for (let index = 0; index < source.messages.length; index += 1) {
+        const message = source.messages[index]!
+        if (typeof message.content !== 'string') throw new Error('PROJECTION_SOURCE_BODY_CONTENT_MISSING')
+        const content = message.content
+        const envelope = JSON.stringify({ formatVersion: 1, kind: 'chatBodyV1-message', sessionId: staging.sessionId,
+          sessionGeneration: staging.sessionGeneration, sourceRevision: staging.sourceRevision, sequence: message.sequence,
+          message: { id: message.id, role: message.role, content: '', timestamp: message.timestamp } })
+        const marker = '"content":""'
+        const markerIndex = envelope.indexOf(marker)
+        if (markerIndex < 0) throw new Error('PROJECTION_SOURCE_BODY_FRAGMENT_INVALID')
+        const prefix = Buffer.from(envelope.slice(0, markerIndex + '"content":"'.length), 'utf8')
+        const suffix = Buffer.from(`"${envelope.slice(markerIndex + marker.length)}`, 'utf8')
+        async function* contentChunks(): AsyncGenerator<Buffer> {
+          yield prefix
+          for (let offset = 0; offset < content.length; offset += 16 * 1024) {
+            const encoded = JSON.stringify(content.slice(offset, offset + 16 * 1024))!
+            yield Buffer.from(encoded.slice(1, -1), 'utf8')
+          }
+          yield suffix
+        }
+        const blob = await writeArtifactChunks(staging.root, staging.tempLocators[index + 1]!, contentChunks())
+        fragments.push({ messageId: message.id, blob })
+      }
+      const metadata = { ...source, messages: source.messages.map(({ content: _content, ...message }) => message),
+        workerThreadId: threadId, workerSample: { durationMs: Math.max(0, performance.now() - startedAt), ...memorySampler.finish() } }
+      parentPort!.postMessage({ requestId: message.requestId, result: { source: metadata, stagedArtifacts: { manifest, fragments } } })
+      parentPort!.close()
+      return
     }
     const priorReducerState = message.staging?.context.priorReducerState
     if (priorReducerState) {

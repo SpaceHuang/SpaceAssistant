@@ -3,7 +3,7 @@ import type { AppDatabase } from '../../../database/sqliteStore'
 import { getDbConnection } from '../../../database/sqliteStore'
 import { runInTransaction } from '../../../database/transaction'
 import { readProjectionSourceIdentity } from './projectionSourceIdentity'
-import type { ProjectionInvocationBodySources } from './projectionChatBodySourceReducer'
+import type { PreparedProjectionSourceArtifactSet, ProjectionInvocationBodySources } from './projectionChatBodySourceReducer'
 
 type WrittenBlob = Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }>
 type BlobWriter = Readonly<{ writeMany(payloads: readonly string[]): Promise<readonly WrittenBlob[]> }>
@@ -19,6 +19,7 @@ export async function publishProjectionInvocationSourceArtifacts(input: Readonly
   historyWatermarkJson: string
   reducerSpecVersion: number
   source: ProjectionInvocationBodySources
+  preparedArtifacts?: PreparedProjectionSourceArtifactSet
   checkpointJson?: string
   backfillRunId?: string
 }>): Promise<void> {
@@ -67,13 +68,30 @@ export async function publishProjectionInvocationSourceArtifacts(input: Readonly
     sessionGeneration: input.sessionGeneration, sourceRevision: input.sourceRevision, messageRevision: identities.messageRevision ?? null,
     historyWatermarkJson: input.historyWatermarkJson, reducerSpecVersion: input.reducerSpecVersion,
     invocationId: input.source.invocationId, schemaVersion, dependencies: input.source.dependencies })
-  const fragmentPayloads = input.source.messages.map((message) => JSON.stringify({ formatVersion: 1, kind: 'chatBodyV1-message',
-    sessionId: input.sessionId, sessionGeneration: input.sessionGeneration, sourceRevision: input.sourceRevision,
-    sequence: message.sequence, message: { id: message.id, role: message.role, content: message.content, timestamp: message.timestamp } }))
-  const written = await input.blobs.writeMany([manifestPayload, ...fragmentPayloads])
-  if (written.length !== input.source.messages.length + 1) {
-    await written[0]?.release()
-    throw new Error('PROJECTION_SOURCE_ARTIFACT_WRITE_INVALID')
+  const fragmentPayloads = input.source.messages.map((message) => {
+    if (typeof message.content !== 'string') return undefined
+    return JSON.stringify({ formatVersion: 1, kind: 'chatBodyV1-message', sessionId: input.sessionId,
+      sessionGeneration: input.sessionGeneration, sourceRevision: input.sourceRevision, sequence: message.sequence,
+      message: { id: message.id, role: message.role, content: message.content, timestamp: message.timestamp } })
+  })
+  let written: readonly WrittenBlob[] | undefined
+  let manifestBlob: WrittenBlob
+  let fragmentBlobByMessage: ReadonlyMap<string, WrittenBlob>
+  if (input.preparedArtifacts) {
+    if (input.preparedArtifacts.fragmentsByMessage.size !== ids.length || ids.some((id) => !input.preparedArtifacts!.fragmentsByMessage.has(id))) {
+      throw new Error('PROJECTION_SOURCE_FRAGMENT_COVERAGE_MISMATCH')
+    }
+    manifestBlob = input.preparedArtifacts.manifest
+    fragmentBlobByMessage = input.preparedArtifacts.fragmentsByMessage
+  } else {
+    if (fragmentPayloads.some((payload) => payload === undefined)) throw new Error('PROJECTION_SOURCE_ARTIFACT_CONTENT_MISSING')
+    written = await input.blobs.writeMany([manifestPayload, ...fragmentPayloads as string[]])
+    if (written.length !== input.source.messages.length + 1) {
+      await written[0]?.release()
+      throw new Error('PROJECTION_SOURCE_ARTIFACT_WRITE_INVALID')
+    }
+    manifestBlob = written[0]!
+    fragmentBlobByMessage = new Map(input.source.messages.map((message, index) => [message.id, written![index + 1]!]))
   }
   try {
     const conn = getDbConnection(input.db)
@@ -103,7 +121,6 @@ export async function publishProjectionInvocationSourceArtifacts(input: Readonly
         if (conflict) throw new Error('PROJECTION_SOURCE_SEQUENCE_DUPLICATE')
       }
 
-      const manifestBlob = written[0]!
       conn.prepare(`INSERT INTO session_body_source_manifest(session_id,invocation_id,source_revision,manifest_locator,byte_length,sha256,
         history_watermark_json,schema_version) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session_id,invocation_id) DO UPDATE SET
         source_revision=excluded.source_revision,manifest_locator=excluded.manifest_locator,byte_length=excluded.byte_length,
@@ -114,8 +131,9 @@ export async function publishProjectionInvocationSourceArtifacts(input: Readonly
         VALUES(?,?,?,?,?,?)`)
       const insertSourceEvent = conn.prepare(`INSERT INTO session_message_body_source_event(session_id,message_id,invocation_id,event_id,
         event_sequence,session_sequence,schema_version,kind,source_digest) VALUES(?,?,?,?,?,?,?,?,?)`)
-      input.source.messages.forEach((message, index) => {
-        const blob = written[index + 1]!
+      input.source.messages.forEach((message) => {
+        const blob = fragmentBlobByMessage.get(message.id)
+        if (!blob) throw new Error('PROJECTION_SOURCE_FRAGMENT_MISSING')
         insertLocator.run(input.sessionId, message.id, message.sequence, blob.locator, blob.byteLength, blob.payloadDigest)
         const dependencies = input.source.dependenciesByMessage.get(message.id)
         if (!dependencies || dependencies.length !== input.source.dependencies.length) throw new Error('PROJECTION_SOURCE_DEPENDENCY_INCOMPLETE')
@@ -129,7 +147,7 @@ export async function publishProjectionInvocationSourceArtifacts(input: Readonly
         .run(input.checkpointJson, input.sessionId)
     })
   } finally {
-    await written[0]!.release()
+    await written?.[0]?.release()
   }
 }
 
