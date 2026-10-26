@@ -4,6 +4,7 @@ import { getDbConnection } from '../database'
 import { registerSecurityIpc } from './securityIpc'
 import type { AppIpcContext } from '../appIpc'
 import { commitDesktopPolicySnapshot, readPolicyBehaviorSnapshot } from '../confirmation/imPolicyStore'
+import { createSecuritySettingsStorage } from '../confirmation/securitySettingsStorage'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 const dbs: ReturnType<typeof createMemoryAppDb>[] = []
@@ -13,7 +14,7 @@ function registerHandlers() {
   const db = createMemoryAppDb('security-ipc-policy-contract')
   dbs.push(db)
   const registered = new Map<string, (...args: unknown[]) => unknown>()
-  const ctx = { db, getWorkDir: () => '/tmp', getUserDataPath: () => '/tmp',
+  const ctx = { db, securitySettingsStorage: createSecuritySettingsStorage(db), getWorkDir: () => '/tmp', getUserDataPath: () => '/tmp',
     backup: {}, workDirManager: {}, setWorkDir: () => undefined, getApiKey: async () => null,
     setApiKey: async () => undefined, getBrowserDetectContext: () => ({ isPackaged: false, appPath: '/tmp', devRoot: '/tmp' }) } as unknown as AppIpcContext
   registerSecurityIpc({ handle: (channel: string, fn: (...args: unknown[]) => unknown) => registered.set(channel, fn) } as never, ctx)
