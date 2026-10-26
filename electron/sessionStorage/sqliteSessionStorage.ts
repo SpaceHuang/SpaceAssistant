@@ -465,6 +465,18 @@ export function createSqliteProjectionBuildTask(input: Readonly<{
       identity: Parameters<NonNullable<ProjectionBuildSupervisorOptions['blobs']['materializeFinalView']>>[1], historyWatermarkJson: unknown, signal?: AbortSignal) =>
       blobStore.withWorkerStaging(async (promote) => {
         const result = await materializeProjectionFinalViewInWorker({ root: blobStore.root, output, identity, historyWatermarkJson, signal })
+        if (result.pagedArtifacts) {
+          const promoted: Array<Awaited<ReturnType<typeof promote>>> = []
+          for (const staged of result.pagedArtifacts.stagedBlobs) {
+            promoted.push(await promote({ tempLocator: staged.tempLocator, locator: staged.locator,
+              byteLength: staged.byteLength, payloadDigest: staged.payloadDigest }))
+          }
+          const manifestIndex = result.pagedArtifacts.stagedBlobs.findIndex(({ kind }) => kind === 'body-manifest')
+          return { ...(result.payload === undefined ? {} : { payload: result.payload }),
+            ...(manifestIndex < 0 ? {} : { blob: promoted[manifestIndex] }), byteLength: result.byteLength, payloadDigest: result.payloadDigest,
+            ...(result.pagedArtifacts.blobReferences.length ? { blobReferences: result.pagedArtifacts.blobReferences.map((reference) => ({ ...reference })) } : {}),
+            releaseArtifacts: async () => { await promoted[0]?.release() } }
+        }
         if (!result.stagedBlob) return result
         const blob = await promote(result.stagedBlob)
         return { byteLength: result.byteLength, payloadDigest: result.payloadDigest, blob }

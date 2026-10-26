@@ -100,8 +100,8 @@ export function createProjectionService(store: ProjectionStateStore, options: Re
     if (output.blobReferences !== undefined && (!Array.isArray(output.blobReferences) || output.blobReferences.length < 1 ||
       output.blobReferences.length > 100_000 || output.blobReferences.some((reference) => !reference ||
         !/^projection-[0-9a-f-]{36}\.blob$/.test(reference.locator) || !Number.isSafeInteger(reference.byteLength) || reference.byteLength < 1 ||
-        !/^[a-f0-9]{64}$/.test(reference.payloadDigest) || !['body-block','sequence-directory','id-directory'].includes(reference.kind)) ||
-      new Set(output.blobReferences.map(({ locator }) => locator)).size !== output.blobReferences.length || output.inlinePayload === undefined)) return null
+        !/^[a-f0-9]{64}$/.test(reference.payloadDigest) || !['body-block','sequence-directory','id-directory','body-manifest'].includes(reference.kind)) ||
+      new Set(output.blobReferences.map(({ locator }) => locator)).size !== output.blobReferences.length)) return null
     let source: { formatVersion?: unknown; sessionGeneration?: unknown; messageRevision?: unknown; historyWatermark?: unknown }
     try { source = JSON.parse(lease.sourceIdentityJson) as typeof source } catch { return null }
     if (source.formatVersion !== 1 || source.sessionGeneration !== lease.sessionGeneration || !Number.isSafeInteger(source.messageRevision)) return null

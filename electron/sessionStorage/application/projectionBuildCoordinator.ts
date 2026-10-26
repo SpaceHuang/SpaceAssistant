@@ -5,6 +5,7 @@ import {
   type ProjectionPendingHistoryChunkManifestRef,
 } from '../domain/projectionBuild'
 import type { SessionProjectionService, ProjectionRebuildLease } from './projectionService'
+import type { ProjectionCacheBlobReference } from './ports'
 import type { ProjectionHistoryChunkEvent, ProjectionHistoryChunkPermit, ProjectionHistoryChunkResult, ProjectionMessageFact,
   ProjectionWorkerSample } from '../domain/projectionSource'
 import { materializeProjectionOutputManifest, type ProjectionOutputBlobReader, type ProjectionOutputIdentity } from './projectionOutputManifest'
@@ -23,6 +24,8 @@ export type ProjectionBuildBlobPort = Readonly<{
       blob?: Readonly<{ locator: string; byteLength: number; payloadDigest: string; release(): Promise<void> }>
       byteLength: number
       payloadDigest: string
+    blobReferences?: readonly ProjectionCacheBlobReference[]
+    releaseArtifacts?: () => Promise<void>
     }>>
 }>
 const MAX_DERIVED_CHUNK_BLOB_BYTES = 256 * 1024 * 1024
@@ -256,6 +259,8 @@ export async function runProjectionBuildSlice(input: Readonly<{
       let payload: string
       let payloadByteLength: number
       let payloadDigest: string
+      let blobReferences: readonly ProjectionCacheBlobReference[] | undefined
+      let releaseArtifacts: (() => Promise<void>) | undefined
       let workerFinalBlob: Awaited<ReturnType<NonNullable<ProjectionBuildBlobPort['materializeFinalView']>>>['blob']
       if (output) {
         const identity = { sessionId: lease.sessionId, sessionGeneration: lease.sessionGeneration, scopeKey: lease.scopeKey,
@@ -267,6 +272,8 @@ export async function runProjectionBuildSlice(input: Readonly<{
             payload = materialized.payload ?? ''
             payloadByteLength = materialized.byteLength
             payloadDigest = materialized.payloadDigest
+            blobReferences = materialized.blobReferences
+            releaseArtifacts = materialized.releaseArtifacts
             workerFinalBlob = materialized.blob
             if (workerFinalBlob && materialized.payload !== undefined) throw new Error('PROJECTION_FINAL_VIEW_RESULT_AMBIGUOUS')
             if (!workerFinalBlob && typeof materialized.payload !== 'string') throw new Error('PROJECTION_FINAL_VIEW_RESULT_INVALID')
@@ -342,6 +349,7 @@ export async function runProjectionBuildSlice(input: Readonly<{
       try {
         const state = service.publish(lease, { sourceIdentityJson: lease.sourceIdentityJson,
           payloadGeneration: `projection-${payloadDigest}`, payloadDigest, validatedRangeJson,
+          ...(blobReferences ? { blobReferences } : {}),
           ...(finalBlob ? { blobLocator: finalBlob.locator, blobByteLength: finalBlob.byteLength } : { inlinePayload: inlinePayload! }) })
         const reconciled = state ?? service.get(lease.sessionId, lease.scopeKey)
         if (reconciled?.status === 'valid' && reconciled.sourceIdentityJson === lease.sourceIdentityJson &&
@@ -358,7 +366,8 @@ export async function runProjectionBuildSlice(input: Readonly<{
             finalViewMaterializationDurationMs }
         return { kind: 'publish-unknown', checkpoint }
       } finally {
-        if (finalBlob) await releaseBlob(finalBlob)
+        try { if (finalBlob) await releaseBlob(finalBlob) }
+        finally { if (releaseArtifacts) await releaseArtifacts() }
       }
     }
     if (result.kind !== 'chunk') {

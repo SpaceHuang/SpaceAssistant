@@ -478,6 +478,54 @@ describe('projection build coordinator', () => {
       .toEqual([230 * 1024, 30 * 1024])
   })
 
+  it('publishes paged worker artifact references under the rebuild lease', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'paged worker artifact publication', model: 'test' })
+    const scopeKey = 'session-projection:chatBodyV1:v4'
+    const service = createProjectionService(createSqliteProjectionStateStore(db), { processGeneration: () => 1,
+      connectionEpoch: () => 1, createToken: () => 'paged-worker-publication-token', now: () => 9 })
+    const uncertainService: SessionProjectionService = { ...service, publish: (candidate, output) => {
+      service.publish(candidate, output)
+      const error = new Error('paged publication commit outcome unknown')
+      error.name = 'TransactionCommitUnknownError'
+      throw error
+    } }
+    service.ensureInvalid({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })
+    const lease = service.beginRebuild({ sessionId: session.id, scopeKey, sessionGeneration: session.generation })!
+    const blockReference = { locator: 'projection-00000000-0000-4000-8000-000000000009.blob', byteLength: 12,
+      payloadDigest: 'e'.repeat(64), kind: 'body-block' as const }
+    const manifestBlobReference = { locator: 'projection-00000000-0000-4000-8000-000000000011.blob', byteLength: 35,
+      payloadDigest: createHash('sha256').update('{"formatVersion":1,"messageCount":1}').digest('hex'), kind: 'body-manifest' as const }
+    const event = { invocationId: 'paged-publish-inv', sequence: 1, eventId: 'paged-publish-event', idempotencyKey: 'paged-publish-key',
+      turnId: 'paged-publish-turn', schemaVersion: 1, kind: 'input', payloadJson: '{}', sessionSequence: 1, commitOrder: 1, createdAt: 1 }
+    const readChunk: ProjectionHistoryChunkReaderPort = async (permit, input) => input.afterSessionSequence > 0
+      ? { kind: 'complete', permit, afterSessionSequence: input.afterSessionSequence }
+      : { kind: 'chunk', permit, afterSessionSequence: 0, nextSessionSequence: 1, events: [event], messageFacts: [],
+        byteLength: Buffer.byteLength(JSON.stringify(event)), hasMore: false }
+    const blobs: ProjectionBuildBlobPort = {
+      write: async (payload) => ({ locator: 'projection-00000000-0000-4000-8000-000000000010.blob',
+        byteLength: Buffer.byteLength(payload), payloadDigest: createHash('sha256').update(payload).digest('hex'), release: async () => undefined }),
+      materializeFinalView: async () => ({ byteLength: 35, payloadDigest: manifestBlobReference.payloadDigest,
+        blob: { ...manifestBlobReference, release: async () => undefined }, blobReferences: [blockReference, manifestBlobReference] }),
+    }
+    const reducer: ProjectionHistoryReducerPort = { ...historyReducer,
+      fold: (stateJson) => ({ stateJson, resetOutput: false, outputOperations: [{ type: 'append', messages: [
+        { id: 'paged-message', role: 'user', content: 'body', timestamp: 1 }] }] }),
+      finalize: () => ({ outputOperations: [] }) }
+    const input = { service: uncertainService, lease, specVersion: 4, dbPath: db.filePath, readChunk, historyReducer: reducer,
+      blobs, limits: { maxRows: 1, maxBytes: 4096 }, maxChunksPerSlice: 1, now: () => 9 }
+
+    expect((await runProjectionBuildSlice(input)).kind).toBe('checkpointed')
+    expect((await runProjectionBuildSlice(input)).kind).toBe('published')
+    expect(getDbConnection(db).prepare(`SELECT payload_generation,locator,kind FROM session_projection_blob_references
+      WHERE session_id=? AND scope_key=? AND kind='body-block'`).get(session.id, scopeKey)).toMatchObject({
+        payload_generation: expect.stringContaining('projection-'), locator: blockReference.locator, kind: 'body-block' })
+    expect(getDbConnection(db).prepare(`SELECT locator,kind FROM session_projection_blob_references
+      WHERE session_id=? AND scope_key=? AND kind='body-manifest'`).get(session.id, scopeKey)).toEqual({ locator: manifestBlobReference.locator, kind: 'body-manifest' })
+    expect(getDbConnection(db).prepare(`SELECT blob_locator FROM session_projection_cache WHERE session_id=? AND scope_key=?`)
+      .get(session.id, scopeKey)).toEqual({ blob_locator: manifestBlobReference.locator })
+  })
+
   it('preserves the committed checkpoint when final view materialization is cancelled', async () => {
     db = createMemoryAppDb()
     const session = createSession(db, { name: 'projection final view cancellation', model: 'test' })

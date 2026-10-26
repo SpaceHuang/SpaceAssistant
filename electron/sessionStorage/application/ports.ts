@@ -17,7 +17,7 @@ export type ProjectionCacheBlobReference = Readonly<{
   locator: string
   byteLength: number
   payloadDigest: string
-  kind: 'body-block' | 'sequence-directory' | 'id-directory'
+  kind: 'body-block' | 'sequence-directory' | 'id-directory' | 'body-manifest'
 }>
 export type ProjectionCacheCandidate = ProjectionCacheCandidateBase &
   (Readonly<{ inlinePayload: string; blobLocator?: never; blobByteLength?: never }> |

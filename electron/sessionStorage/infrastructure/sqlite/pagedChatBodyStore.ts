@@ -32,8 +32,8 @@ export type PagedChatBodyManifest = Readonly<{
   messageCount: number
   firstSequence: number
   lastSequence: number
-  sequenceRoot: BlobRef
-  idRoot: BlobRef
+  sequenceRoot: BlobRef | null
+  idRoot: BlobRef | null
   manifestDigest: string
 }>
 
@@ -72,24 +72,26 @@ function json(value: unknown): string {
   return JSON.stringify(value)
 }
 
-function assertManifest(manifest: PagedChatBodyManifest): void {
+export function assertPagedChatBodyManifest(manifest: PagedChatBodyManifest): void {
   if (!manifest || manifest.formatVersion !== FORMAT_VERSION || typeof manifest.sessionId !== 'string' || !manifest.sessionId ||
     typeof manifest.sessionGeneration !== 'string' || !manifest.sessionGeneration || !Number.isSafeInteger(manifest.specVersion) ||
     (manifest.specVersion as number) < 1 || !Number.isSafeInteger(manifest.sourceRevision) || (manifest.sourceRevision as number) < 0 ||
     (manifest.messageRevision !== null && (!Number.isSafeInteger(manifest.messageRevision) || manifest.messageRevision < 0)) ||
     typeof manifest.sourceIdentityJson !== 'string' || typeof manifest.historyWatermarkJson !== 'string' ||
-    !Number.isSafeInteger(manifest.messageCount) || (manifest.messageCount as number) < 1 ||
+    !Number.isSafeInteger(manifest.messageCount) || (manifest.messageCount as number) < 0 ||
     !Number.isSafeInteger(manifest.firstSequence) || !Number.isSafeInteger(manifest.lastSequence) ||
-    manifest.firstSequence < 0 || manifest.lastSequence < manifest.firstSequence ||
-    !isBlobRef(manifest.sequenceRoot) || !isBlobRef(manifest.idRoot) || !/^[a-f0-9]{64}$/.test(manifest.manifestDigest)) {
+    (manifest.messageCount === 0 ? manifest.firstSequence !== 0 || manifest.lastSequence !== -1 || manifest.sequenceRoot !== null || manifest.idRoot !== null :
+      manifest.firstSequence < 0 || manifest.lastSequence < manifest.firstSequence || !isBlobRef(manifest.sequenceRoot) || !isBlobRef(manifest.idRoot)) ||
+    !/^[a-f0-9]{64}$/.test(manifest.manifestDigest)) {
     fail('PAGED_CHAT_BODY_MANIFEST_INVALID')
   }
   if (Object.keys(manifest).sort().join(',') !== 'firstSequence,formatVersion,historyWatermarkJson,idRoot,lastSequence,manifestDigest,messageCount,messageRevision,sequenceRoot,sessionGeneration,sessionId,sourceIdentityJson,sourceRevision,specVersion') {
     fail('PAGED_CHAT_BODY_MANIFEST_INVALID')
   }
   try {
-    const identity = JSON.parse(manifest.sourceIdentityJson) as { sessionGeneration?: unknown; messageRevision?: unknown; historyWatermark?: unknown }
-    if (!identity || identity.sessionGeneration !== manifest.sessionGeneration || identity.messageRevision !== manifest.messageRevision ||
+    const identity = JSON.parse(manifest.sourceIdentityJson) as { sessionGeneration?: unknown; sourceRevision?: unknown; messageRevision?: unknown; historyWatermark?: unknown }
+    if (!identity || identity.sessionGeneration !== manifest.sessionGeneration || identity.sourceRevision !== manifest.sourceRevision ||
+      identity.messageRevision !== manifest.messageRevision ||
       JSON.stringify(identity.historyWatermark ?? null) !== manifest.historyWatermarkJson) fail('PAGED_CHAT_BODY_MANIFEST_INVALID')
   } catch { fail('PAGED_CHAT_BODY_MANIFEST_INVALID') }
   const { manifestDigest, ...payload } = manifest
@@ -214,10 +216,11 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
         !Number.isSafeInteger(input.specVersion) || input.specVersion < 1 || !Number.isSafeInteger(input.sourceRevision) || input.sourceRevision < 0 ||
         (input.messageRevision !== null && (!Number.isSafeInteger(input.messageRevision) || input.messageRevision < 0)) ||
         typeof input.sourceIdentityJson !== 'string' || typeof input.historyWatermarkJson !== 'string' ||
-        !Array.isArray(input.messages) || input.messages.length < 1) fail('PAGED_CHAT_BODY_WRITE_REQUEST_INVALID')
+        !Array.isArray(input.messages)) fail('PAGED_CHAT_BODY_WRITE_REQUEST_INVALID')
       try {
-        const identity = JSON.parse(input.sourceIdentityJson) as { sessionGeneration?: unknown; messageRevision?: unknown; historyWatermark?: unknown }
-        if (identity.sessionGeneration !== input.sessionGeneration || identity.messageRevision !== input.messageRevision ||
+        const identity = JSON.parse(input.sourceIdentityJson) as { sessionGeneration?: unknown; sourceRevision?: unknown; messageRevision?: unknown; historyWatermark?: unknown }
+        if (identity.sessionGeneration !== input.sessionGeneration || identity.sourceRevision !== input.sourceRevision ||
+          identity.messageRevision !== input.messageRevision ||
           JSON.stringify(identity.historyWatermark ?? null) !== input.historyWatermarkJson) fail('PAGED_CHAT_BODY_WRITE_SOURCE_IDENTITY_INVALID')
       } catch { fail('PAGED_CHAT_BODY_WRITE_SOURCE_IDENTITY_INVALID') }
       const ids = new Set<string>()
@@ -257,7 +260,7 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
         }
         if (bodyOffset !== ordered.length) fail('PAGED_CHAT_BODY_WRITE_COVERAGE_INVALID')
 
-        const buildTree = async (kind: 'sequence' | 'id', leafValues: readonly (DirectoryEntry & { idEntries?: readonly Array<{ id: string; sequence: number; index: number; blob: BlobRef }>[] })[],
+        const buildTree = async (kind: 'sequence' | 'id', leafValues: readonly (DirectoryEntry & { idEntries?: readonly { id: string; sequence: number; index: number; blob: BlobRef }[] })[],
           leafSize: number): Promise<BlobRef> => {
           let level: Array<{ first: number | string; last: number | string; blob: BlobRef }> = []
           for (let offset = 0; offset < leafValues.length; offset += leafSize) {
@@ -289,7 +292,7 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
 
         const sequenceLeaves = bodyRefs.map((block) => ({ first: block.first, last: block.last,
           blob: block.blob, count: block.count }))
-        const sequenceRoot = await buildTree('sequence', sequenceLeaves, DIRECTORY_FANOUT)
+        const sequenceRoot = sequenceLeaves.length ? await buildTree('sequence', sequenceLeaves, DIRECTORY_FANOUT) : null
         const blockBySequence = new Map<number, { blockIndex: number; entryIndex: number; blob: BlobRef }>()
         bodyRefs.forEach((block, blockIndex) => {
           const values = bodyBlocks[blockIndex]!
@@ -298,20 +301,21 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
         const idLeaves = [...ordered].sort((left, right) => stableIdCompare(left.message.id, right.message.id)).map(({ sequence, message }) => {
           const position = blockBySequence.get(sequence)
           if (!position) fail('PAGED_CHAT_WRITE_COVERAGE_INVALID')
-          return { first: message.id, last: message.id, idEntries: [{ id: message.id, sequence, index: position.entryIndex, blob: position.blob }] }
+          return { first: message.id, last: message.id, blob: position.blob,
+            idEntries: [{ id: message.id, sequence, index: position.entryIndex, blob: position.blob }] }
         })
-        const idRoot = await buildTree('id', idLeaves, ID_DIRECTORY_LEAF_SIZE)
+        const idRoot = idLeaves.length ? await buildTree('id', idLeaves, ID_DIRECTORY_LEAF_SIZE) : null
         const manifestPayload = { formatVersion: FORMAT_VERSION, sessionId: input.sessionId, sessionGeneration: input.sessionGeneration,
           specVersion: input.specVersion, sourceRevision: input.sourceRevision, messageRevision: input.messageRevision,
           sourceIdentityJson: input.sourceIdentityJson, historyWatermarkJson: input.historyWatermarkJson, messageCount: ordered.length,
-          firstSequence: ordered[0]!.sequence, lastSequence: ordered.at(-1)!.sequence, sequenceRoot, idRoot }
+          firstSequence: ordered[0]?.sequence ?? 0, lastSequence: ordered.at(-1)?.sequence ?? -1, sequenceRoot, idRoot }
         const manifest: PagedChatBodyManifest = Object.freeze({ ...manifestPayload, manifestDigest: digest(json(manifestPayload)) })
         const blobReferences = promoted.map((blob) => Object.freeze({ locator: blob.locator, byteLength: blob.byteLength,
           payloadDigest: blob.payloadDigest, kind: blob.kind }))
         return { manifest, blobReferences }
       })
       let released = false
-      return Object.freeze({ manifest: staged.manifest, async release() {
+      return Object.freeze({ manifest: staged.manifest, blobReferences: staged.blobReferences, async release() {
         if (released) return
         released = true
         await promoted[0]?.release()
@@ -319,9 +323,11 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
     },
 
     async readPage(input: Readonly<{ manifest: PagedChatBodyManifest; beforeSequence: number; limit: number }>): Promise<readonly VerifiedChatBody[]> {
-      assertManifest(input.manifest)
+      assertPagedChatBodyManifest(input.manifest)
       if (!Number.isSafeInteger(input.beforeSequence) || input.beforeSequence < 0 || !Number.isSafeInteger(input.limit) ||
         input.limit < 1 || input.limit > MAX_PAGE_SIZE) fail('PAGED_CHAT_BODY_RANGE_INVALID')
+      if (input.manifest.messageCount === 0) return Object.freeze([])
+      if (!input.manifest.sequenceRoot) fail('PAGED_CHAT_BODY_MANIFEST_INVALID')
       const lower = Math.max(0, input.beforeSequence - input.limit)
       const blockEntries: DirectoryEntry[] = []
       await collectDirectory(input.manifest.sequenceRoot, 'sequence', lower, input.beforeSequence - 1, blockEntries)
@@ -336,10 +342,11 @@ export function createPagedChatBodyStore(blobs: ProjectionBlobStore) {
     },
 
     async readByIds(input: Readonly<{ manifest: PagedChatBodyManifest; messageIds: readonly string[] }>): Promise<readonly VerifiedChatBody[]> {
-      assertManifest(input.manifest)
+      assertPagedChatBodyManifest(input.manifest)
       if (!Array.isArray(input.messageIds) || input.messageIds.some((id) => typeof id !== 'string' || !id) ||
         new Set(input.messageIds).size !== input.messageIds.length) fail('PAGED_CHAT_BODY_ID_REQUEST_INVALID')
       if (input.messageIds.length === 0) return Object.freeze([])
+      if (!input.manifest.idRoot) fail('PROJECTION_CHAT_BODY_CACHE_MESSAGE_MISSING')
       const idEntries: DirectoryEntry[] = []
       const directoryCache = new Map<string, Awaited<ReturnType<typeof readDirectory>>>()
       const cachedReadDirectory = async (ref: BlobRef, kind: 'sequence' | 'id') => {

@@ -7,6 +7,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import acquireFileLock from './projectionBlobLock'
 import { runInTransaction } from '../../../database/transaction'
 import { parseProjectionBuildCheckpoint, type ProjectionBuildReducerStateManifestRef, type ProjectionPendingHistoryChunkManifestRef } from '../../domain/projectionBuild'
+import { projectionScopeKind, projectionScopeSpecVersion } from '../../domain/scopeKey'
 
 export type StagedProjectionBlob = Readonly<{
   locator: string
@@ -295,9 +296,17 @@ export function createSessionProjectionBlobStore(root: string) {
               sourceBodyReferences.push({ locator, byteLength: row.byte_length, payloadDigest: row.payload_digest })
             } catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid source body blob reference: ${String(cause)}`) }
           }
-          for (const row of conn.prepare('SELECT session_id,scope_key,source_identity_json,blob_locator,blob_byte_length,payload_digest FROM session_projection_cache WHERE blob_locator IS NOT NULL').all() as Array<{ session_id: string; scope_key: string; source_identity_json: string; blob_locator: string; blob_byte_length: number; payload_digest: string }>) {
+          for (const row of conn.prepare('SELECT session_id,scope_key,source_identity_json,payload_generation,blob_locator,blob_byte_length,payload_digest FROM session_projection_cache WHERE blob_locator IS NOT NULL').all() as Array<{ session_id: string; scope_key: string; source_identity_json: string; payload_generation: string; blob_locator: string; blob_byte_length: number; payload_digest: string }>) {
             try {
-              manifests.push({ locator: assertLocator(row.blob_locator), byteLength: row.blob_byte_length, payloadDigest: row.payload_digest,
+              const locator = assertLocator(row.blob_locator)
+              if (projectionScopeKind(row.scope_key) === 'chatBodyV1' && projectionScopeSpecVersion(row.scope_key) === 4) {
+                const manifestReference = conn.prepare(`SELECT 1 FROM session_projection_blob_references
+                  WHERE session_id=? AND scope_key=? AND payload_generation=? AND locator=? AND byte_length=? AND payload_digest=? AND kind='body-manifest'`)
+                  .get(row.session_id, row.scope_key, row.payload_generation, locator, row.blob_byte_length, row.payload_digest)
+                if (!manifestReference) throw new Error('v4 manifest blob lacks its durable GC reference')
+                continue
+              }
+              manifests.push({ locator, byteLength: row.blob_byte_length, payloadDigest: row.payload_digest,
                 sessionId: row.session_id, scopeKey: row.scope_key, sourceIdentityJson: row.source_identity_json, kind: 'final-view' })
             }
             catch (cause) { throw blobError('PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE', `invalid cache blob reference: ${String(cause)}`) }

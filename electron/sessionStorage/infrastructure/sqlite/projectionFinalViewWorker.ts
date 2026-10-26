@@ -4,6 +4,9 @@ import path from 'node:path'
 import { parentPort, threadId } from 'node:worker_threads'
 import { iterateProjectionOutputMessages, type ProjectionOutputIdentity } from '../../application/projectionOutputManifest'
 import type { ProjectionBuildOutputManifestRef } from '../../domain/projectionBuild'
+import { projectionScopeKind } from '../../domain/scopeKey'
+import type { VerifiedChatBody } from './projectionChatBodyCachePayload'
+import { writeProjectionPagedBody } from './projectionPagedBodyWriter'
 
 if (!parentPort) throw new Error('projection final view worker requires a parent port')
 
@@ -33,6 +36,23 @@ parentPort.once('message', async (message: {
         }
         return bytes.toString('utf8')
       }
+    }
+    if (message.identity.specVersion === 4 && projectionScopeKind(message.identity.scopeKey) === 'chatBodyV1') {
+      const source = JSON.parse(message.identity.sourceIdentityJson) as { sourceRevision?: unknown; messageRevision?: unknown }
+      const result = await writeProjectionPagedBody({ root: message.root,
+        messages: (async function* () {
+          for await (const projected of iterateProjectionOutputMessages(message.output, message.identity, blobs)) {
+            yield projected as unknown as VerifiedChatBody
+          }
+        })(),
+        sessionId: message.identity.sessionId, sessionGeneration: message.identity.sessionGeneration,
+        specVersion: message.identity.specVersion, sourceRevision: source.sourceRevision as number,
+        messageRevision: source.messageRevision as number | null, sourceIdentityJson: message.identity.sourceIdentityJson,
+        historyWatermarkJson: JSON.stringify(message.payloadIdentity.historyWatermarkJson ?? null) })
+      parentPort!.postMessage({ requestId: message.requestId, result: { ...(result.manifest ? { payload: result.manifest } : {}), byteLength: result.byteLength,
+        payloadDigest: result.payloadDigest, workerThreadId: threadId,
+        pagedArtifacts: { stagedBlobs: result.stagedBlobs, blobReferences: result.blobReferences } } })
+      return
     }
     const envelope = JSON.stringify({ formatVersion: message.payloadIdentity.formatVersion,
       scopeKey: message.identity.scopeKey, specVersion: message.identity.specVersion,

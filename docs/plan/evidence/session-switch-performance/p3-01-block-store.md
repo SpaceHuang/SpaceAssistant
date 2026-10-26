@@ -25,4 +25,4 @@ npm exec vitest run electron/sessionStorage/infrastructure/sqlite/pagedChatBodyS
 
 生产存储层当前使用正文块上限 64 条/256 KiB、内部目录 fanout 8、message ID 叶节点最多 512 项。相较早期原型的 8 条块，64 条减少小消息场景的物理 blob 数；现有测试证据不是跨硬件基准，不能作为 AC-7 性能通过结论。最终值由 P3 性能专项继续核对。
 
-当前产物 manifest 是写入者内存返回值，未写入 SQLite、未纳入 GC 引用根，也未接 build owner / 分代发布。并发发布、进程崩溃、孤块回收和旧库回填在 P3-02 及后续任务完成前仍未通过。
+P3-02 已将 v4 manifest 作为投影缓存 payload 原子发布，并将正文块/目录纳入 SQLite GC 引用根。并发发布、进程崩溃、孤块回收由 [P3-02 证据](p3-02-publication-recovery.md)覆盖；旧库回填与按页生产读取仍由 P3-03/P3-04 负责。

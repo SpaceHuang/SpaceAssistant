@@ -5,7 +5,9 @@ import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSession } from '../../../database/operations'
 import { createTempDatabase } from '../../../database/testHelpers'
+import { openDatabase } from '../../../database'
 import { getDbConnection } from '../../../database/sqliteStore'
+import { encodeProjectionScopeKey } from '../../domain/scopeKey'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { acceptProjectionBuildChunk, attachProjectionPendingHistoryChunk, attachProjectionStableIdIndexManifest, createProjectionBuildCheckpoint } from '../../domain/projectionBuild'
 
@@ -75,25 +77,40 @@ describe('session projection derived blob store', () => {
     root = path.join(path.dirname(temp.dbPath), 'derived-projections')
     const blobs = createSessionProjectionBlobStore(root)
     const session = createSession(temp.db, { name: 'paged body gc root', model: 'test' })
-    const staged = await blobs.write('paged body block')
-    await staged.release()
+    const [staged, manifestBlob] = await blobs.writeMany(['paged body block', 'paged body manifest'])
+    await staged!.release()
+    const dbPath = temp.dbPath
+    const scopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: 4 })
     const conn = getDbConnection(temp.db)
     conn.prepare(`INSERT INTO session_projection_state(session_id,scope_key,session_generation,status,history_watermark_json,
       message_revision,payload_generation,payload_digest,validated_range_json,updated_at)
       VALUES(?,?,?,'valid','null',0,'generation-a','${'a'.repeat(64)}','{}',1)`)
-      .run(session.id, 'session-projection:chatBodyV1:v4', session.generation)
+      .run(session.id, scopeKey, session.generation)
     conn.prepare(`INSERT INTO session_projection_cache(session_id,scope_key,payload_generation,source_identity_json,payload_digest,
-      validated_range_json,inline_payload,updated_at) VALUES(?,?,?,?,?,?,?,1)`)
-      .run(session.id, 'session-projection:chatBodyV1:v4', 'generation-a', '{}', 'a'.repeat(64), '{}', '{}')
+      validated_range_json,blob_locator,blob_byte_length,updated_at) VALUES(?,?,?,?,?,?,?, ?,1)`)
+      .run(session.id, scopeKey, 'generation-a', '{}', manifestBlob!.payloadDigest, '{}', manifestBlob!.locator, manifestBlob!.byteLength)
     conn.prepare(`INSERT INTO session_projection_blob_references(session_id,scope_key,payload_generation,locator,byte_length,payload_digest,kind)
-      VALUES(?,?,?,?,?,?,?)`).run(session.id, 'session-projection:chatBodyV1:v4', 'generation-a', staged.locator,
+      VALUES(?,?,?,?,?,?,?)`).run(session.id, scopeKey, 'generation-a', staged.locator,
         staged.byteLength, staged.payloadDigest, 'body-block')
+    conn.prepare(`INSERT INTO session_projection_blob_references(session_id,scope_key,payload_generation,locator,byte_length,payload_digest,kind)
+      VALUES(?,?,?,?,?,?,?)`).run(session.id, scopeKey, 'generation-a', manifestBlob!.locator,
+        manifestBlob!.byteLength, manifestBlob!.payloadDigest, 'body-manifest')
 
-    await expect(blobs.collectGarbage(conn)).resolves.toMatchObject({ removedCount: 0 })
-    await expect(fs.stat(path.join(root, staged.locator))).resolves.toBeDefined()
+    temp.db.close()
+    temp = undefined
+    const reopened = openDatabase(dbPath)
+    try {
+      const reopenedConn = getDbConnection(reopened)
+      await expect(blobs.collectGarbage(reopenedConn)).resolves.toMatchObject({ removedCount: 0 })
+      await expect(fs.stat(path.join(root, staged!.locator))).resolves.toBeDefined()
+      await expect(fs.stat(path.join(root, manifestBlob!.locator))).resolves.toBeDefined()
 
-    await fs.unlink(path.join(root, staged.locator))
-    await expect(blobs.collectGarbage(conn)).rejects.toMatchObject({ code: 'PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE' })
+      await fs.unlink(path.join(root, staged!.locator))
+      await expect(blobs.collectGarbage(reopenedConn)).rejects.toMatchObject({ code: 'PROJECTION_BLOB_REFERENCE_SCAN_INCOMPLETE' })
+    } finally {
+      reopened.close()
+      await fs.rm(path.dirname(dbPath), { recursive: true, force: true })
+    }
   })
 
   it('keeps source locator fragments and invocation manifests alive until their rows are removed', async () => {

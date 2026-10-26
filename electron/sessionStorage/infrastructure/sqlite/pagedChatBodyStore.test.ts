@@ -33,7 +33,7 @@ describe('paged chat body store', () => {
     const sessionGeneration = `generation-${sessionId}`
     const historyWatermarkJson = JSON.stringify([sourceRevision])
     return { sessionId, sessionGeneration, specVersion: 3, sourceRevision, messageRevision: sourceRevision,
-      sourceIdentityJson: JSON.stringify({ formatVersion: 1, sessionGeneration, messageRevision: sourceRevision,
+      sourceIdentityJson: JSON.stringify({ formatVersion: 1, sessionGeneration, sourceRevision, messageRevision: sourceRevision,
         historyWatermark: JSON.parse(historyWatermarkJson) }), historyWatermarkJson, messages: bodies }
   }
 
@@ -61,6 +61,17 @@ describe('paged chat body store', () => {
     } finally {
       await staged.release()
     }
+  })
+
+  it('represents an empty conversation without blob artifacts and returns empty pages', async () => {
+    const { store } = await createStore()
+    const staged = await store.write(writeInput('session-empty', 0, []))
+    await staged.release()
+    expect(staged.manifest).toMatchObject({ messageCount: 0, firstSequence: 0, lastSequence: -1, sequenceRoot: null, idRoot: null })
+    await expect(store.readPage({ manifest: staged.manifest, beforeSequence: 0, limit: 20 })).resolves.toEqual([])
+    await expect(store.readByIds({ manifest: staged.manifest, messageIds: [] })).resolves.toEqual([])
+    await expect(store.readByIds({ manifest: staged.manifest, messageIds: ['missing'] }))
+      .rejects.toThrow('PROJECTION_CHAT_BODY_CACHE_MESSAGE_MISSING')
   })
 
   it('isolates an oversized message and rejects duplicate message IDs or sequences before writing', async () => {

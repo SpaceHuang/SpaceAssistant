@@ -2196,7 +2196,7 @@ CREATE TABLE IF NOT EXISTS session_projection_blob_references (
   locator TEXT NOT NULL,
   byte_length INTEGER NOT NULL CHECK(byte_length > 0),
   payload_digest TEXT NOT NULL CHECK(length(payload_digest)=64),
-  kind TEXT NOT NULL CHECK(kind IN ('body-block','sequence-directory','id-directory')),
+  kind TEXT NOT NULL CHECK(kind IN ('body-block','sequence-directory','id-directory','body-manifest')),
   PRIMARY KEY(session_id,scope_key,payload_generation,locator),
   FOREIGN KEY(session_id,scope_key) REFERENCES session_projection_cache(session_id,scope_key) ON DELETE CASCADE
 );
