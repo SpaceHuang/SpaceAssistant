@@ -78,3 +78,5 @@ npm exec -- vitest run electron/sessionStorage/pageBodyReadPrototype.test.ts --r
 ```
 
 这仍是内存数据结构原型，未接 SQLite、真实文件系统发布、GC、并发 History 写入或 source locator table。C4a 的 test-only 来源定位格式矩阵通过；生产存储与并发写入仍由 C4/P3 验证。256 KiB/8 条和 fanout 8 必须在生产 block store 性能测试后冻结，不能由本原型直接带入生产常量。
+
+P3-01 存储实测初版采用 64 条/256 KiB 正文块、内部 fanout 8、ID 叶最多 512 项。相对本原型的 8 条正文块，1000 条小消息的合成测试从 125 个正文块降为 16 个；这只说明文件数随块条数变化，不代表性能阈值通过。完整基准与最终常量核验仍在后续任务。
