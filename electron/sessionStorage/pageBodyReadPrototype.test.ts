@@ -6,6 +6,8 @@ import type { ProjectionHistoryChunkEvent, ProjectionMessageFact } from './domai
 type Body = Readonly<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number; sequence: number }>
 type Leaf = Readonly<{ firstSequence: number; lastSequence: number; entries: readonly Body[]; digest: string }>
 type DirectoryNode = Readonly<{ firstSequence: number; lastSequence: number; children: readonly DirectoryNode[]; leaf?: Leaf; digest: string }>
+type IdDirectoryNode = Readonly<{ firstId: string; lastId: string; children: readonly IdDirectoryNode[];
+  entries?: readonly Body[]; digest: string }>
 
 const MAX_PROTOTYPE_BLOCK_BYTES = 256 * 1024
 const MAX_PROTOTYPE_BLOCK_MESSAGES = 8
@@ -95,6 +97,55 @@ function digestBodyBlock(entries: readonly Body[]): string {
   return createHash('sha256').update(JSON.stringify(entries), 'utf8').digest('hex')
 }
 
+function buildIdLookup(messages: readonly Body[]) {
+  const sorted = [...messages].sort((left, right) => left.id.localeCompare(right.id))
+  const leaves: IdDirectoryNode[] = []
+  for (let offset = 0; offset < sorted.length; offset += MAX_PROTOTYPE_BLOCK_MESSAGES) {
+    const entries = sorted.slice(offset, offset + MAX_PROTOTYPE_BLOCK_MESSAGES)
+    leaves.push({ firstId: entries[0]!.id, lastId: entries.at(-1)!.id, children: [], entries, digest: digestBodyBlock(entries) })
+  }
+  let level = leaves
+  while (level.length > 1) {
+    const next: IdDirectoryNode[] = []
+    for (let offset = 0; offset < level.length; offset += 8) {
+      const children = level.slice(offset, offset + 8)
+      const firstId = children[0]!.firstId
+      const lastId = children.at(-1)!.lastId
+      const digest = createHash('sha256').update(JSON.stringify({ firstId, lastId, childDigests: children.map(({ digest }) => digest) }), 'utf8').digest('hex')
+      next.push({ firstId, lastId, children, digest })
+    }
+    level = next
+  }
+  const root = level[0]
+  return {
+    lookup(id: string) {
+      let directoryNodesRead = 0
+      let bodyRecordsRead = 0
+      let directoryBytesRead = 0
+      const visit = (node: IdDirectoryNode): Body | undefined => {
+        directoryNodesRead += 1
+        directoryBytesRead += Buffer.byteLength(JSON.stringify({ firstId: node.firstId, lastId: node.lastId,
+          childDigests: node.children.map(({ digest }) => digest) }), 'utf8')
+        if (id < node.firstId || id > node.lastId) return undefined
+        if (node.entries) {
+          bodyRecordsRead += node.entries.length
+          if (digestBodyBlock(node.entries) !== node.digest) throw new Error('PROTOTYPE_ID_BLOCK_DIGEST_MISMATCH')
+          return node.entries.find((entry) => entry.id === id)
+        }
+        const digest = createHash('sha256').update(JSON.stringify({ firstId: node.firstId, lastId: node.lastId,
+          childDigests: node.children.map(({ digest }) => digest) }), 'utf8').digest('hex')
+        if (digest !== node.digest) throw new Error('PROTOTYPE_ID_DIRECTORY_DIGEST_MISMATCH')
+        for (const child of node.children) {
+          if (id >= child.firstId && id <= child.lastId) return visit(child)
+        }
+        return undefined
+      }
+      const message = root ? visit(root) : undefined
+      return { message, directoryNodesRead, bodyRecordsRead, directoryBytesRead }
+    }
+  }
+}
+
 function flattenOperations(operations: readonly unknown[]): Body[] {
   const result: Body[] = []
   for (const item of operations) {
@@ -113,6 +164,40 @@ function reduceAll(events: ProjectionHistoryChunkEvent[], facts: ProjectionMessa
   return flattenOperations([...folded.outputOperations, ...final.outputOperations]).map((message, sequence) => ({ ...message, sequence }))
 }
 
+function buildSourceFragmentPrototype(events: ProjectionHistoryChunkEvent[], facts: ProjectionMessageFact[]) {
+  const factById = new Map(facts.map((fact) => [fact.id, fact]))
+  const byInvocation = new Map<string, ProjectionHistoryChunkEvent[]>()
+  for (const event of events) byInvocation.set(event.invocationId, [...(byInvocation.get(event.invocationId) ?? []), event])
+  const fragments = new Map<string, Readonly<{ body: Body; invocationId: string; sourceEventId: string; dependencyEventIds: readonly string[]; digest: string }>>()
+  for (const [invocationId, invocationEvents] of byInvocation) {
+    const invocationOutput = reduceAll(invocationEvents, facts)
+    const dependencyEventIds = invocationEvents.map(({ eventId }) => eventId)
+    for (const candidate of invocationOutput) {
+      if (!candidate.id) continue
+      const fact = factById.get(candidate.id)
+      if (!fact) throw new Error(`prototype message fact missing: ${candidate.id}`)
+      const body = { ...candidate, sequence: fact.sequence }
+      const sourceEvent = [...invocationEvents].reverse().find((event) => {
+        const payload = JSON.parse(event.payloadJson) as Record<string, unknown>
+        const message = payload.message as { id?: unknown } | undefined
+        const messages = payload.messages as Array<{ id?: unknown }> | undefined
+        return message?.id === candidate.id || messages?.some(({ id }) => id === candidate.id)
+      })
+      if (!sourceEvent) throw new Error(`prototype source event missing: ${candidate.id}`)
+      fragments.set(candidate.id, Object.freeze({ body, invocationId, sourceEventId: sourceEvent.eventId,
+        dependencyEventIds: Object.freeze(dependencyEventIds),
+        digest: createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex') }))
+    }
+  }
+  return {
+    get: (messageId: string) => fragments.get(messageId),
+    readPage(beforeSequence: number, limit: number): Body[] {
+      return [...fragments.values()].map(({ body }) => body).sort((a, b) => a.sequence - b.sequence)
+        .filter(({ sequence }) => sequence < beforeSequence).slice(-limit)
+    }
+  }
+}
+
 function fixtureEvent(invocationId: string, sequence: number, kind: string, payload: unknown): ProjectionHistoryChunkEvent {
   return { invocationId, turnId: invocationId, sequence, eventId: `${invocationId}-${sequence}`, idempotencyKey: `${invocationId}-${sequence}`,
     schemaVersion: 1, kind, sessionSequence: sequence, commitOrder: sequence, createdAt: sequence, payloadJson: JSON.stringify(payload) }
@@ -122,10 +207,11 @@ describe('paged chat body read prototype (test only)', () => {
   it('matches the authoritative full reducer across compaction upserts, response chunks, and mixed body authority', () => {
     const events = [
       fixtureEvent('turn-1', 1, 'invocation-context-committed', { messages: [
-        { id: 'u1', role: 'user', content: 'prompt', timestamp: 1 }, { id: 'a1', role: 'assistant', content: 'old answer', timestamp: 2 },
+        { id: 'u1', role: 'user', content: 'prompt', timestamp: 1 },
       ] }),
-      fixtureEvent('turn-1', 2, 'model-response-committed', { message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'new answer' }], timestamp: 2 } }),
-      fixtureEvent('turn-1', 3, 'invocation-completed', { status: 'completed' }),
+      fixtureEvent('turn-1', 2, 'model-response-committed', { message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'new ' }], timestamp: 2 } }),
+      fixtureEvent('turn-1', 3, 'model-response-committed', { message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'answer' }], timestamp: 2 } }),
+      fixtureEvent('turn-1', 4, 'invocation-completed', { status: 'completed' }),
       fixtureEvent('turn-2', 1, 'invocation-context-committed', { messages: [
         { id: 'u1', role: 'user', content: 'prompt', timestamp: 1 },
         { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'new answer' }], timestamp: 2 },
@@ -153,6 +239,10 @@ describe('paged chat body read prototype (test only)', () => {
     ])
     const indexed = buildPrototype(authoritative)
     expect(indexed.readPage(4, 2).page).toEqual(authoritative.slice(2, 4))
+    const sourceIndex = buildSourceFragmentPrototype(events, facts)
+    expect(sourceIndex.readPage(4, 4)).toEqual(authoritative)
+    expect(sourceIndex.get('u1')).toMatchObject({ invocationId: 'turn-2', sourceEventId: 'turn-2-2', body: { content: 'summary of prompt' } })
+    expect(sourceIndex.get('a1')?.dependencyEventIds).toEqual(['turn-2-1', 'turn-2-2', 'turn-2-3', 'turn-2-4'])
   })
 
   it('keeps page directory and body reads bounded when unrelated history grows tenfold', () => {
@@ -170,6 +260,20 @@ describe('paged chat body read prototype (test only)', () => {
     expect(largeRead.bodyRecordsRead).toBeLessThanOrEqual(32)
     expect(largeRead.directoryNodesRead).toBeLessThanOrEqual(32)
     expect(largeRead.bodyRecordsRead).toBe(smallRead.bodyRecordsRead)
+  })
+
+  it('looks up one message by ID through a bounded secondary directory after tenfold history growth', () => {
+    const makeMessages = (count: number): Body[] => Array.from({ length: count }, (_, sequence) => ({ id: `m${String(sequence).padStart(5, '0')}`,
+      role: 'user', content: `body-${sequence}`, timestamp: sequence, sequence }))
+    const smallIndex = buildIdLookup(makeMessages(1_000))
+    const largeIndex = buildIdLookup(makeMessages(10_000))
+    const small = smallIndex.lookup('m00999')
+    const large = largeIndex.lookup('m09999')
+    expect(large.message?.content).toBe('body-9999')
+    expect(large.directoryNodesRead).toBeLessThanOrEqual(5)
+    expect(large.bodyRecordsRead).toBeLessThanOrEqual(MAX_PROTOTYPE_BLOCK_MESSAGES)
+    expect(large.directoryBytesRead).toBeLessThan(2_048)
+    expect(small.bodyRecordsRead).toBeLessThanOrEqual(MAX_PROTOTYPE_BLOCK_MESSAGES)
   })
 
   it('rejects a body block whose independently stored digest no longer matches', () => {
