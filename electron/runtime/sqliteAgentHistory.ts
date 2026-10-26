@@ -192,6 +192,7 @@ type CanonicalToolTransitionState = {
   toolApproval: Map<string, { approvalId: string; approved?: boolean }>
   unboundApprovalIds: Set<string>
   seenApprovalIds: Set<string>
+  invalidatedApprovalIds: Map<string, string>
   pendingApprovals: Set<string>
   approvalIdentity: Map<string, string>
   terminalSeen: boolean
@@ -204,6 +205,7 @@ function cloneToolTransitionState(state: CanonicalToolTransitionState): Canonica
     toolApproval: new Map(state.toolApproval),
     unboundApprovalIds: new Set(state.unboundApprovalIds),
     seenApprovalIds: new Set(state.seenApprovalIds),
+    invalidatedApprovalIds: new Map(state.invalidatedApprovalIds),
     pendingApprovals: new Set(state.pendingApprovals),
     approvalIdentity: new Map(state.approvalIdentity),
     terminalSeen: state.terminalSeen,
@@ -217,6 +219,7 @@ function serializeToolTransitionState(state: CanonicalToolTransitionState): stri
     approvals: [...state.toolApproval],
     unbound: [...state.unboundApprovalIds],
     seen: [...state.seenApprovalIds],
+    invalidatedApprovalIds: [...state.invalidatedApprovalIds],
     pendingApprovals: [...state.pendingApprovals],
     approvalIdentity: [...state.approvalIdentity],
     terminalSeen: state.terminalSeen,
@@ -230,6 +233,7 @@ function deserializeToolTransitionState(json: string): CanonicalToolTransitionSt
     approvals: Array<[string, { approvalId: string; approved?: boolean }]>
     unbound: string[]
     seen: string[]
+    invalidatedApprovalIds?: Array<[string, string]>
     pendingApprovals?: string[]
     approvalIdentity?: Array<[string, string]>
     terminalSeen?: boolean
@@ -243,6 +247,7 @@ function deserializeToolTransitionState(json: string): CanonicalToolTransitionSt
     toolApproval: new Map(raw.approvals),
     unboundApprovalIds: new Set(raw.unbound),
     seenApprovalIds: new Set(raw.seen),
+    invalidatedApprovalIds: new Map(raw.invalidatedApprovalIds ?? []),
     pendingApprovals: new Set(raw.pendingApprovals ?? []),
     approvalIdentity: new Map(raw.approvalIdentity ?? []),
     terminalSeen: raw.terminalSeen === true,
@@ -855,7 +860,7 @@ export class SqliteAgentHistory implements HistoryPort {
    */
   private replayCanonicalSessionToolTransitions(events: readonly HistoryEvent[], initial?: CanonicalToolTransitionState): CanonicalToolTransitionState {
     const state: CanonicalToolTransitionState = initial ? cloneToolTransitionState(initial) : {
-      pending: new Map(), toolApproval: new Map(), unboundApprovalIds: new Set(), seenApprovalIds: new Set(),
+      pending: new Map(), toolApproval: new Map(), unboundApprovalIds: new Set(), seenApprovalIds: new Set(), invalidatedApprovalIds: new Map(),
       pendingApprovals: new Set(), approvalIdentity: new Map(), terminalSeen: false, turnId: null
     }
     const { pending, toolApproval, unboundApprovalIds, seenApprovalIds } = state
@@ -988,10 +993,12 @@ export class SqliteAgentHistory implements HistoryPort {
           unboundApprovalIds.add(payload.approvalId)
         }
         if (typeof payload?.toolCallId === 'string' && payload.toolCallId.trim()) {
+          const canReuseInvalidatedId = typeof payload.approvalId === 'string' && state.invalidatedApprovalIds.get(payload.approvalId) === payload.toolCallId
           if (pending.get(payload.toolCallId) !== 'proposed' || typeof payload.approvalId !== 'string' || !payload.approvalId.trim() ||
-            toolApproval.has(payload.toolCallId) || seenApprovalIds.has(payload.approvalId)) {
+            toolApproval.has(payload.toolCallId) || (seenApprovalIds.has(payload.approvalId) && !canReuseInvalidatedId)) {
             throw new HistoryCorruptionError(event.invocationId, `canonical approval has no unique tool identity: ${event.eventId}`)
           }
+          if (canReuseInvalidatedId) state.invalidatedApprovalIds.delete(payload.approvalId)
           seenApprovalIds.add(payload.approvalId)
           toolApproval.set(payload.toolCallId, { approvalId: payload.approvalId })
         }
@@ -1000,7 +1007,10 @@ export class SqliteAgentHistory implements HistoryPort {
         if (payload.approvalId !== approval.approvalId || typeof payload.approved !== 'boolean') {
           throw new HistoryCorruptionError(event.invocationId, `canonical approval resolution identity or outcome is invalid: ${event.eventId}`)
         }
-        if (payload.outcome === 'invalidated') toolApproval.delete(payload.toolCallId)
+        if (payload.outcome === 'invalidated') {
+          toolApproval.delete(payload.toolCallId)
+          state.invalidatedApprovalIds.set(approval.approvalId, payload.toolCallId)
+        }
         else approval.approved = payload.approved
       }
     }

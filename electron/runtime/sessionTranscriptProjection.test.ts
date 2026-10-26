@@ -30,30 +30,32 @@ describe('session transcript projection P2 read path', () => {
         { id: 'approval-policy-tool', name: 'write_file', input: { path: 'a.txt' } },
         { id: 'approval-policy-allowed-tool', name: 'write_file', input: { path: 'b.txt' } }
       ] } } },
-      { kind: 'approval-waiting', payload: { toolCallId: 'approval-policy-tool', approvalId: 'approval-policy-old', answerer: 'user', reasonCode: 'confirm', requestedAt: 1 } },
-      { kind: 'approval-resolved', payload: { toolCallId: 'approval-policy-tool', approvalId: 'approval-policy-old', approved: false, outcome: 'invalidated', cause: 'authorization-changed', settledAt: 2 } },
+      { kind: 'approval-waiting', payload: { toolCallId: 'approval-policy-tool', approvalId: 'approval-policy-tool', answerer: 'user', reasonCode: 'confirm', requestedAt: 1 } },
+      { kind: 'approval-resolved', payload: { toolCallId: 'approval-policy-tool', approvalId: 'approval-policy-tool', approved: false, outcome: 'invalidated', cause: 'authorization-changed', settledAt: 2 } },
       { kind: 'approval-waiting', payload: { toolCallId: 'approval-policy-allowed-tool', approvalId: 'approval-policy-allowed-old', answerer: 'user', reasonCode: 'confirm', requestedAt: 2 } },
       { kind: 'approval-resolved', payload: { toolCallId: 'approval-policy-allowed-tool', approvalId: 'approval-policy-allowed-old', approved: false, outcome: 'invalidated', cause: 'authorization-changed', settledAt: 3 } },
-      { kind: 'approval-waiting', payload: { toolCallId: 'approval-policy-tool', approvalId: 'approval-policy-new', answerer: 'user', reasonCode: 'confirm-again', requestedAt: 4 } },
-      { kind: 'approval-resolved', payload: { toolCallId: 'approval-policy-tool', approvalId: 'approval-policy-new', approved: true, outcome: 'approved', settledAt: 5 } },
+      { kind: 'approval-waiting', payload: { toolCallId: 'approval-policy-tool', approvalId: 'approval-policy-tool', answerer: 'user', reasonCode: 'confirm-again', requestedAt: 4 } },
+      { kind: 'approval-resolved', payload: { toolCallId: 'approval-policy-tool', approvalId: 'approval-policy-tool', approved: true, outcome: 'approved', settledAt: 5 } },
       { kind: 'tool-call-started', payload: { toolCallId: 'approval-policy-tool' } },
       { kind: 'tool-call-finished', payload: { toolCallId: 'approval-policy-tool', success: true, result: { success: true, output: 'done' } } },
       { kind: 'tool-call-started', payload: { toolCallId: 'approval-policy-allowed-tool' } },
       { kind: 'tool-call-finished', payload: { toolCallId: 'approval-policy-allowed-tool', success: true, result: { success: true, output: 'allowed by policy' } } },
       { kind: 'invocation-completed', payload: { status: 'completed' } }
     ] as const
-    await history.appendBatch(events.map((entry, index) => ({
-      invocationId, turnId, sequence: index + 1, schemaVersion: 1,
-      eventId: `approval-policy-${index + 1}`, idempotencyKey: `approval-policy-${index + 1}`,
-      kind: entry.kind, payload: entry.payload
-    })), 0)
+    for (const [index, entry] of events.entries()) {
+      await history.appendBatch([{
+        invocationId, turnId, sequence: index + 1, schemaVersion: 1,
+        eventId: `approval-policy-${index + 1}`, idempotencyKey: `approval-policy-${index + 1}`,
+        kind: entry.kind, payload: entry.payload
+      }], index)
+    }
     conn.prepare("UPDATE messages SET status='completed' WHERE id=?").run(assistant.id)
 
     expect(history.readSync(invocationId).events).toHaveLength(events.length)
     const expectedMessages = [{ id: user.id, role: 'user', content: 'run tool', timestamp: 1 }, { id: 'approval-policy-assistant', role: 'assistant', content: '', timestamp: 2 }]
     expect(history.readCanonicalSessionTranscriptForShadow(session.id)).toEqual(expect.objectContaining({ kind: 'matched', messages: expectedMessages }))
     expect(history.readCompletedToolCallsForSession(invocationId, session.id, turnId)?.[0]?.approval).toMatchObject({
-      approvalId: 'approval-policy-new', status: 'approved'
+      approvalId: 'approval-policy-tool', status: 'approved'
     })
     expect(history.readCompletedToolCallsForSession(invocationId, session.id, turnId)?.[1]?.approval).toMatchObject({
       approvalId: 'approval-policy-allowed-old', status: 'cancelled'
@@ -1002,6 +1004,11 @@ describe('session transcript projection P2 read path', () => {
       ['tool-call-started', { toolCallId: 'duplicate-approval-tool-b' }],
       ['tool-call-finished', { toolCallId: 'duplicate-approval-tool-b', success: true, result: { success: true, data: 'b' } }]
     ]],
+    ['reuses invalidated approval identity across tool calls', [
+      ['approval-waiting', { toolCallId: 'invalidated-owner-tool', approvalId: 'invalidated-reused-id', answerer: 'user', reasonCode: 'confirm', requestedAt: 1 }],
+      ['approval-resolved', { toolCallId: 'invalidated-owner-tool', approvalId: 'invalidated-reused-id', approved: false, outcome: 'invalidated', cause: 'authorization-changed', settledAt: 2 }],
+      ['approval-waiting', { toolCallId: 'invalidated-other-tool', approvalId: 'invalidated-reused-id', answerer: 'user', reasonCode: 'confirm', requestedAt: 3 }]
+    ]],
     ['orphan dispatch start', [
       ['tool-call-started', { toolCallId: 'orphan-start-call' }]
     ]],
@@ -1070,10 +1077,12 @@ describe('session transcript projection P2 read path', () => {
     const proposalToolId = unapprovedDispatch ? `${unapprovedDispatch}-approval-tool`
       : _label === 'dispatch after unbound denied approval' ? 'unbound-denied-tool'
       : _label === 'duplicate approval identity across tool calls' ? 'duplicate-approval-tool-a'
+      : _label === 'reuses invalidated approval identity across tool calls' ? 'invalidated-owner-tool'
       : _label === 'proposed tool result without dispatch start' ? 'missing-start-tool' : undefined
     const unapprovedApprovalAssistant = proposalToolId
       ? appendMessage(db, { id: `${_label}-assistant`, sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming',
-          toolCalls: [proposalToolId, ...(_label === 'duplicate approval identity across tool calls' ? ['duplicate-approval-tool-b'] : [])]
+          toolCalls: [proposalToolId, ...(_label === 'duplicate approval identity across tool calls' ? ['duplicate-approval-tool-b']
+            : _label === 'reuses invalidated approval identity across tool calls' ? ['invalidated-other-tool'] : [])]
             .map((id) => ({ id, toolName: 'write_file', input: { path: 'a.txt' }, status: 'calling' as const, riskLevel: 'high' as const })) }).message
       : undefined
     const conn = getDbConnection(db)
