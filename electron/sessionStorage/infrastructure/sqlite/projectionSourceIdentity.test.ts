@@ -17,7 +17,8 @@ describe('projection source identity coverage', () => {
 
     const initial = JSON.parse(read()!) as Record<string, unknown>
     expect(initial).toMatchObject({ formatVersion: 1, sessionGeneration: session.generation,
-      messageRevision: 0, historyWatermark: null, eventCursor: null, historyStreams: [] })
+      sourceRevision: expect.any(Number), messageRevision: 0, historyWatermark: null, eventCursor: null, historyStreams: [] })
+    expect(initial.sourceRevision as number).toBeGreaterThanOrEqual(0)
 
     appendMessage(temp.db, { id: 'source-message', sessionId: session.id, role: 'user', content: 'body', timestamp: 1, status: 'sent' })
     const afterMessage = JSON.parse(read()!) as Record<string, unknown>
@@ -30,6 +31,7 @@ describe('projection source identity coverage', () => {
       payload: { messages: [{ id: 'source-message', role: 'user', content: 'body', timestamp: 1 }] } }], 0)
     const afterHistory = JSON.parse(read()!) as Record<string, unknown>
     expect(afterHistory.historyWatermark).toEqual([1, 1, 'source-event', 'source-stream'])
+    expect(afterHistory.sourceRevision).toBeGreaterThan(afterMessage.sourceRevision as number)
     expect(afterHistory.eventCursor).toBe(1)
     expect(afterHistory.historyStreams).toEqual(['source-stream'])
 

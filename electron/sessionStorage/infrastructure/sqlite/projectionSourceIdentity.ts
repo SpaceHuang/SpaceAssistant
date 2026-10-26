@@ -11,11 +11,14 @@ export function readProjectionSourceIdentity(conn: DatabaseSync, sessionId: stri
     WHERE session_id=? ORDER BY session_seq DESC LIMIT 1`).get(sessionId) as
     { session_seq: number; commit_order: number; event_id: string; invocation_id: string } | undefined
   const cursor = conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId) as { next_seq: number } | undefined
+  const bodySourceState = conn.prepare('SELECT source_revision FROM session_body_source_state WHERE session_id=?').get(sessionId) as
+    { source_revision: number } | undefined
   const historyStreams = (conn.prepare(`SELECT invocation_id FROM agent_history_streams WHERE session_id=? ORDER BY invocation_id`)
     .all(sessionId) as Array<{ invocation_id: string }>).map(({ invocation_id }) => invocation_id)
   return JSON.stringify({
     formatVersion: 1,
     sessionGeneration: session.generation,
+    sourceRevision: bodySourceState?.source_revision ?? 0,
     messageRevision: cutover?.message_revision ?? null,
     bodyAuthority: cutover ? [cutover.write_mode, cutover.cleanup_state] : null,
     historyWatermark: watermark ? [watermark.session_seq, watermark.commit_order, watermark.event_id, watermark.invocation_id] : null,
