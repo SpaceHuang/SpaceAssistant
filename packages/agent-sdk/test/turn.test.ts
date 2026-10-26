@@ -1399,7 +1399,7 @@ describe('runAgentTurn', () => {
       toolExecution: createPermitBoundToolExecutionPort({
         permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
         resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
-          capabilityId: call.toolName, authorizationVersion: prepareCount > 1 ? 'policy-v2' : 'policy-v1', phase: 'recheck' }),
+          capabilityId: call.toolName, phase: 'recheck' }),
         execute: async () => executor()
       }), confirmation
     })
@@ -1430,7 +1430,7 @@ describe('runAgentTurn', () => {
     const permits = new InMemorySafetyPermitStore()
     const history = new MemoryHistory()
     const executor = vi.fn(async () => ({ output: 'written' }))
-    const confirmation = vi.fn(async () => ({ kind: 'approved' as const, receipt: 'fresh-user-receipt', answerer: 'user' as const }))
+    const confirmation = vi.fn(async (_args: { call: { invocationId: string } }) => ({ kind: 'approved' as const, receipt: 'fresh-user-receipt', answerer: 'user' as const }))
     let prepareCount = 0
 
     await runAgentTurn({
@@ -4577,7 +4577,7 @@ describe('runAgentTurn', () => {
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const history = new MemoryHistory()
     const execute = vi.fn(async () => ({ output: 'executed once under fresh policy' }))
-    const confirmation = vi.fn(async () => {
+    const confirmation = vi.fn(async (_args: { call: { invocationId: string } }) => {
       return { kind: 'approved' as const, receipt: 'fresh-policy-approval', answerer: 'user' as const }
     })
     let authorizationVersion = 'policy-v1'
@@ -4602,6 +4602,7 @@ describe('runAgentTurn', () => {
     })
     let invalidatedAtClaim = false
     const toolExecution = {
+      ...baseExecution,
       execute(call: Parameters<typeof baseExecution.execute>[0], permitId: string, onDispatchClaimed?: (cancel: () => void) => void | Promise<void>) {
         return baseExecution.execute(call, permitId, async (cancel) => {
           await onDispatchClaimed?.(cancel)
@@ -4697,6 +4698,7 @@ describe('runAgentTurn', () => {
       subscribeAuthorizationChange: (_call, listener) => { authorizationListener = listener; return () => undefined }, execute })
     let invalidatedAtClaim = false
     const toolExecution = {
+      ...baseExecution,
       execute(call: Parameters<typeof baseExecution.execute>[0], permitId: string, onDispatchClaimed?: (cancel: () => void) => void | Promise<void>) {
         return baseExecution.execute(call, permitId, async (cancel) => {
           await onDispatchClaimed?.(cancel)
