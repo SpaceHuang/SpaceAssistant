@@ -6,7 +6,7 @@
 
 ## 结论
 
-测试原型证明：完整权威归约后生成按消息顺序排列的不可变正文块，配合多层范围目录，可以只读固定页及相邻块；正文块摘要不匹配会拒绝读取。10 倍合成历史下，末页仍只触及 24 条正文记录与 23 个目录节点。
+测试原型证明：完整权威归约后生成按消息顺序排列的不可变正文块，配合多层范围目录，可以只读固定页及相邻块；正文块与目录摘要不匹配会拒绝读取。普通块最多 8 条、JSON 字节不超过 256 KiB；单条超过字节预算时独立成块，不拆分消息。10 倍合成历史下，末页触及 24 条正文记录与 23 个目录节点，访问到的目录描述字节低于 10 KiB。
 
 这**没有通过 AC-3/AC-4 的冷读来源定位门禁**。现有 turn/request 索引不能定位完整正文依赖：后续 invocation 的 `transcript-compacted` 可以用同一 message ID 更新此前的正文，完整归约结果取决于该后续事件。现在只有全历史 reducer 会发现这个更新。`readProjectionSourceIdentity` 还会枚举并序列化该 session 的全部 stream IDs。因此本原型不能证明无索引冷页不需要全会话工作，不能进入 P3。
 
@@ -23,14 +23,14 @@
 
 ```text
 npm exec -- vitest run electron/sessionStorage/pageBodyReadPrototype.test.ts --reporter=dot
-1 file passed; 4 passed; 0 failed; 0.56s
+1 file passed; 6 passed; 0 failed; 0.58s
 ```
 
 ## 尚未证明的要求
 
 - 本测试的页目录由完整 reducer 结果构建；没有证明冷会话如何在不先扫描/归约完整旧 History 的情况下找到页正文依赖。
 - 尚未覆盖 P2-01 矩阵中的所有旧 ledger、匿名 replay、缺 owner/order、spill 缺失/损坏与 stream schema/version 错误样本。
-- 正文块读取计数只是内存原型统计，不是 SQLite 查询计划、worker 冷路径或实际磁盘 IO 证据。
+- 256 KiB/8 条是测试候选上限，不是经生产磁盘基准选定的最终常量；正文块读取计数只是内存原型统计，不是 SQLite 查询计划、worker 冷路径或实际磁盘 IO 证据。
 - 全量 stream ID 的 source identity 仍是与历史规模线性相关的读取工作。
 
 ## 方案门禁建议
