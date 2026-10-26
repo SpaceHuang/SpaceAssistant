@@ -12,7 +12,7 @@
 
 ## 复现与差分
 
-新增 [pageBodyReadPrototype.test.ts](../../../../electron/sessionStorage/pageBodyReadPrototype.test.ts)，复用 `createProjectionChatBodyReducer`，验证：
+新增 [pageBodyReadPrototype.test.ts](../../../electron/sessionStorage/pageBodyReadPrototype.test.ts)，复用 `createProjectionChatBodyReducer`，验证：
 
 - 完整 reducer 与正文块分页结果一致，样本包含 dual-write/ canonical-only、assistant response、`tool_use` 文本提取，以及后来压缩快照改写既有 user/assistant message ID。
 - 正文块摘要损坏时返回明确失败，不产出页面。
