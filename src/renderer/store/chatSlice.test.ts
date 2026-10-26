@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addCompactionMarker, addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId, setContextProjection } from './chatSlice'
+import chatReducer, { addCompactionMarker, addMessage, removeMessage, setMessages, setChatStatus, setSession, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId, setContextProjection } from './chatSlice'
 import { setTurnFailure, mergeTurnFailures } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
@@ -156,6 +156,15 @@ describe('chatSlice', () => {
       let state = chatReducer(undefined, setTurnFailure({ messageId: 'a1', reason: 'live' }))
       state = chatReducer(state, mergeTurnFailures({ a1: '   ', a2: '' }))
       expect(state.turnFailures).toEqual({ a1: 'live' })
+    })
+
+    it('消息移除后不接纳晚到的失败原因回溯', () => {
+      const failed: Message = { id: 'removed-assistant', sessionId: 's1', role: 'assistant', content: 'partial',
+        timestamp: 1, status: 'failed', schemaVersion: 1 }
+      let state = chatReducer(undefined, setMessages([failed]))
+      state = chatReducer(state, removeMessage(failed.id))
+      state = chatReducer(state, mergeTurnFailures({ [failed.id]: 'late reason' }))
+      expect(state.turnFailures).not.toHaveProperty(failed.id)
     })
 
     it('resetChatUi 清空失败原因缓存', () => {
