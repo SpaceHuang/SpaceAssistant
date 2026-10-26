@@ -51,7 +51,7 @@ import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createTurnDisplayPublisher } from './turnDisplayPublisher'
 import { createSessionLedgerRecoveryBindings, createSessionTurnRuntime, createSqliteProjectionBuildTask,
   createSqliteSessionStorage, createSqliteSessionStorageHost, createSqliteStartupHistoryRecoveryBindings,
-  startSessionProjectionRevalidationDrain } from './sessionStorage/sqliteSessionStorage'
+  createSessionBodySourceBackfillTask, startSessionProjectionRevalidationDrain } from './sessionStorage/sqliteSessionStorage'
 import { projectionBuildSliceLogFields } from './sessionStorage/host/projectionBuildSliceLog'
 import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
 import { flushPendingSessionBackups } from './sessionBackupShutdown'
@@ -591,6 +591,11 @@ app.whenReady().then(async () => {
           if (result.kind !== 'checkpointed' && result.kind !== 'published') {
             console.warn(`[storage] projection build ${result.kind}`)
           }
+        } }),
+      createSessionBodySourceBackfillTask({ db, blobRoot: path.join(app.getPath('userData'), 'session-projections'),
+        onResult: (result) => {
+          if (result.status === 'failed') console.warn(`[storage] session body source backfill failed (${result.sessionId}):`, result.error)
+          else console.info('[storage] session body source backfill complete:', result)
         } }),
       {
         taskId: 'spill-reference-index-backfill', category: 'derived-index',

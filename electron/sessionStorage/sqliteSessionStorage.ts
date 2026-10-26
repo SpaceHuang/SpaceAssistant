@@ -38,6 +38,7 @@ import { createSessionLedgerCompactionDependencyGuard, createCanonicalSessionPro
 import { clearSessionProjectionCaches } from './infrastructure/sqlite/sessionProjectionCacheMaintenance'
 import { createProjectionScopeHistoryReducer } from './infrastructure/sqlite/projectionScopeHistoryReducer'
 import { createProjectionService } from './application/projectionService'
+import { createSessionBodySourceBackfillTask } from './infrastructure/sqlite/sessionBodySourceBackfillTask'
 import { checkpointSessionTranscriptProjection, startSessionProjectionRevalidationDrain } from './infrastructure/sqlite/sessionProjectionRevalidation'
 import { CHAT_BODY_PROJECTION_SPEC_VERSION, projectionScopeKind, projectionScopeSpecVersion } from './domain/scopeKey'
 import { createProjectionBuildLifecycleTask } from './host/projectionBuildTask'
@@ -47,6 +48,8 @@ import { encodeProjectionScopeKey } from './domain/scopeKey'
 import type { LifecycleTaskRegistration } from './host/ports'
 import type { ProjectionBuildSupervisorOptions } from './application/projectionBuildSupervisor'
 import { readPreparedChatBodiesInWorker, searchPreparedChatBodiesInWorker } from './infrastructure/sqlite/projectionChatBodyCacheWorkerClient'
+
+export { createSessionBodySourceBackfillTask }
 import { createSqliteStartupHistoryRecoveryBindings } from './infrastructure/sqlite/sessionHistoryRecoveryHost'
 import { createProjectionBlobGcTask } from './infrastructure/sqlite/projectionBlobGcTask'
 export { createSessionLedgerRecoveryBindings } from './infrastructure/sqlite/sessionLedgerRecoveryBindings'
