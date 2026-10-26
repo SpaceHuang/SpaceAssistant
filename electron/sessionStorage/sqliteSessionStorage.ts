@@ -25,6 +25,7 @@ import { createTurnRuntimeForSessionExecution } from './execution'
 import { createSqliteProjectionStateStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { createSqliteProjectionChatBodyCacheStore } from './infrastructure/sqlite/sessionProjectionStateStore'
 import { readProjectionSourceIdentity } from './infrastructure/sqlite/projectionSourceIdentity'
+import { readProjectionPageSourceSpills } from './infrastructure/sqlite/projectionSourceDependencyReader'
 import { readProjectionHistoryChunkInWorker } from './infrastructure/sqlite/projectionHistoryChunkWorkerClient'
 import { reduceProjectionHistoryChunkInWorker } from './infrastructure/sqlite/projectionHistoryReducerWorkerClient'
 import { materializeProjectionFinalViewInWorker } from './infrastructure/sqlite/projectionFinalViewWorkerClient'
@@ -121,9 +122,27 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const bodyScopeKey = encodeProjectionScopeKey({ scope: 'chatBodyV1', specVersion: CHAT_BODY_PROJECTION_SPEC_VERSION })
   const cacheStore = createSqliteProjectionChatBodyCacheStore(db)
   const cacheBlobs = options.projectionBlobRoot ? createSessionProjectionBlobStore(options.projectionBlobRoot) : undefined
-  const readSourceTruthSpillsForPreparedView = (sessionId: string, sessionGeneration: string, expectedIdentity: string):
+  const readSourceTruthSpillsForPreparedView = (sessionId: string, sessionGeneration: string, expectedIdentity: string,
+    messageIds?: readonly string[]):
     Readonly<{ root?: string; descriptors: readonly SpillDescriptor[] }> => {
     const conn = getDbConnection(db)
+    if (messageIds && messageIds.length > 0) {
+      let sourceRevision: number | undefined
+      try {
+        const identity = JSON.parse(expectedIdentity) as { sourceRevision?: unknown }
+        if (Number.isSafeInteger(identity.sourceRevision) && (identity.sourceRevision as number) >= 0) sourceRevision = identity.sourceRevision as number
+      } catch { /* The existing identity comparison below reports unavailable evidence. */ }
+      const locatorState = conn.prepare('SELECT source_revision,status FROM session_body_source_state WHERE session_id=?')
+        .get(sessionId) as { source_revision: number; status: string } | undefined
+      if (sourceRevision !== undefined && locatorState?.status === 'complete' && locatorState.source_revision === sourceRevision) {
+        if (readProjectionSourceIdentity(conn, sessionId, sessionGeneration) !== expectedIdentity) throw new Error('PROJECTION_SOURCE_IDENTITY_CHANGED')
+        const descriptors = readProjectionPageSourceSpills(conn, sessionId, sourceRevision, messageIds)
+        if (!descriptors.length) return { descriptors }
+        const sourceSpillStore = createSpillStoreForDatabase(conn)
+        if (!sourceSpillStore) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+        return { root: sourceSpillStore.root, descriptors }
+      }
+    }
     const evidence = runInTransaction(conn, () => {
       if (readProjectionSourceIdentity(conn, sessionId, sessionGeneration) !== expectedIdentity) return undefined
       const state = conn.prepare(`SELECT status,verified_generation FROM spill_reference_backfill_state
@@ -169,7 +188,7 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
     },
     readBodies: (view, messageIds, signal, recordWorkerTiming) => {
       const sourceStartedAt = performance.now()
-      const source = readSourceTruthSpillsForPreparedView(view.sessionId, view.sessionGeneration, view.sourceIdentityJson)
+      const source = readSourceTruthSpillsForPreparedView(view.sessionId, view.sessionGeneration, view.sourceIdentityJson, messageIds)
       try { recordWorkerTiming?.('source-spill-discovery', performance.now() - sourceStartedAt) } catch { /* Diagnostics must not affect the read. */ }
       return readPreparedChatBodiesInWorker({ root: cacheBlobs?.root ?? '', sourceSpillRoot: source.root,
         sourceTruthSpills: source.descriptors, view, messageIds, signal, onWorkerTiming: recordWorkerTiming })
