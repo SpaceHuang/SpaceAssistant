@@ -132,4 +132,40 @@ describe('projection history chunk worker client', () => {
       } finally { await fs.rm(stageRoot, { recursive: true, force: true }) }
     } finally { temp.cleanup() }
   }, 15_000)
+
+  it('preserves a legal source-drift message body while staging a large context event', async () => {
+    const temp = createTempDatabase('projection-source-drift-body-')
+    try {
+      const session = createSession(temp.db, { name: 'projection source drift body' })
+      const messages = Array.from({ length: 6 }, (_, index) => ({ id: `drift-body-${index}`, role: 'user',
+        content: index === 0 ? 'source-drift' : 'x'.repeat(63 * 1024), timestamp: index + 1 }))
+      for (const message of messages) appendMessage(temp.db, { id: message.id, sessionId: session.id, role: 'user',
+        content: message.content, timestamp: message.timestamp, status: 'sent' })
+      const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 10, session.id)
+      await history.appendBatch([{ invocationId: 'drift-body-inv', turnId: 'drift-body-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'drift-body-event', idempotencyKey: 'drift-body-event', kind: 'invocation-context-committed',
+        payload: { messages } }], 0)
+      const sourceIdentityJson = readProjectionSourceIdentity(getDbConnection(temp.db), session.id, session.generation)!
+      const stageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'projection-source-drift-stage-'))
+      try {
+        const tempLocator = `.projection-${randomUUID()}.tmp`
+        const staged = await readProjectionHistoryChunkInWorker({ dbPath: temp.dbPath, sessionId: session.id,
+          sessionGeneration: session.generation, scopeKey: 'scope-a', specVersion: 1, sourceIdentityJson,
+          connectionEpoch: 1, processGeneration: 1, rebuildToken: 'drift-body-token' },
+        { afterSessionSequence: 0, maxRows: 1, maxBytes: 256 * 1024,
+          staging: { root: stageRoot, tempLocator, tempLocators: Array.from({ length: 15 }, () => `.projection-${randomUUID()}.tmp`) } }, {
+          workerPath: path.join(process.cwd(), 'electron/sessionStorage/infrastructure/sqlite/projectionHistoryChunkWorker.ts'), timeoutMs: 10_000,
+        })
+        expect(staged).toMatchObject({ kind: 'staged-chunk', nextSessionSequence: 1 })
+        if (staged.kind !== 'staged-chunk') throw new Error('expected staged large context event')
+        const manifest = JSON.parse((await fs.readFile(path.join(stageRoot, tempLocator))).toString('utf8'))
+        const factLocators = new Set((manifest.factSegments as Array<{ locator: string }>).map((segment) => segment.locator))
+        const factSegments = staged.stagedSegments.filter((segment) => factLocators.has(segment.locator))
+        const facts = (await Promise.all(factSegments.map(async (segment) => JSON.parse(
+          `[${(await fs.readFile(path.join(stageRoot, segment.tempLocator))).toString('utf8').slice(1, -1)}]`))))
+          .flat() as Array<{ id: string; storedContent: string }>
+        expect(facts.find((fact) => fact.id === 'drift-body-0')?.storedContent).toBe('source-drift')
+      } finally { await fs.rm(stageRoot, { recursive: true, force: true }) }
+    } finally { temp.cleanup() }
+  }, 20_000)
 })

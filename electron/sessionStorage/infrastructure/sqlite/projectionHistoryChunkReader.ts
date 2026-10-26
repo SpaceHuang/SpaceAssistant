@@ -491,17 +491,18 @@ function stageOversizedContextEvent(
             !isCurrentLargeEvent(conn, permit, row)) return 'source-drift' as const
           const value = conn.prepare('SELECT content FROM messages WHERE session_id=? AND id=?').get(permit.sessionId, header.id) as
             { content: string } | undefined
-          return typeof value?.content === 'string' ? value.content : undefined
+          return typeof value?.content === 'string' ? { kind: 'content' as const, value: value.content } : undefined
         })
         if (content === 'source-drift') return { kind: 'source-drift', permit, afterSessionSequence: input.afterSessionSequence }
-        if (typeof content !== 'string') return undefined
+        if (!content || content.kind !== 'content') return undefined
+        const storedContent = content.value
         const fact = Object.freeze({ id: header.id, role: header.role, timestamp: header.timestamp,
           sequence: header.sequence, queueScope: header.queue_scope, contentStorageState: header.content_storage_state,
           writeMode: header.write_mode,
           ...(header.content_storage_state === 'canonical-backed-dual-write' && header.role !== 'assistant'
-            ? { storedContent: '', storedContentLength: content.length,
-                storedContentDigest: createHash('sha256').update(content, 'utf8').digest('hex') }
-            : { storedContent: content }) })
+            ? { storedContent: '', storedContentLength: storedContent.length,
+                storedContentDigest: createHash('sha256').update(storedContent, 'utf8').digest('hex') }
+            : { storedContent }) })
         const serialized = JSON.stringify(fact)
         if (!appendJsonItem(serialized, 'facts')) return undefined
         factBytes += Buffer.byteLength(serialized, 'utf8') + (factCount > 0 ? 1 : 0)
