@@ -8,6 +8,7 @@ import { SqliteAgentHistory } from '../../../runtime/sqliteAgentHistory'
 import { createSessionProjectionBlobStore } from './sessionProjectionBlobStore'
 import { projectionSourceEventDigest } from './projectionSourceDependencyReader'
 import type { AppDatabase } from '../../../database/sqliteStore'
+import { createSqliteSessionStorageHost } from '../../sqliteSessionStorage'
 import { createSessionBodySourceBackfillTask } from './sessionBodySourceBackfillTask'
 
 describe('session body source backfill task', () => {
@@ -147,5 +148,29 @@ describe('session body source backfill task', () => {
     await vi.waitFor(() => expect(conn.prepare('SELECT status FROM session_body_source_state WHERE session_id=?').get(session.id))
       .toEqual({ status: 'complete' }), { timeout: 10_000 })
     expect(results).toEqual([{ sessionId: session.id, status: 'complete', messageCount: 1 }])
+  })
+
+  it('wakes the registered backfill after a new History commit', async () => {
+    const temp = createTempDatabase('session-body-source-backfill-task-wake-')
+    cleanup = temp.cleanup
+    blobRoot = path.join(path.dirname(temp.dbPath), 'projection-blobs')
+    const task = createSessionBodySourceBackfillTask({ db: temp.db, blobRoot, idleDelayMs: 60_000 })
+    const host = createSqliteSessionStorageHost(temp.db, { storage: { projectionBlobRoot: blobRoot },
+      startup: { recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+        recoverSessionLedgers: async () => ({ repairFailureCount: 0 }) }, maintenanceTasks: [task] })
+    taskStop = () => { void host.lifecycle.stop({ deadlineMs: 5_000 }) }
+    host.lifecycle.allowBackgroundWork()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    const session = createSession(temp.db, { name: 'wake source backfill' })
+    appendMessage(temp.db, { id: 'wake-message', sessionId: session.id, role: 'user', content: 'body', timestamp: 1, status: 'sent' })
+    const history = host.storage.execution.historyFor({ sessionId: session.id })
+    await history.appendBatch([{ invocationId: 'wake-invocation', turnId: 'wake-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'wake-context', idempotencyKey: 'wake-context', kind: 'invocation-context-committed', payload: {
+        messages: [{ id: 'wake-message', role: 'user', content: 'body', timestamp: 1 }],
+      } }], 0)
+
+    await vi.waitFor(() => expect(getDbConnection(temp.db).prepare('SELECT status FROM session_body_source_state WHERE session_id=?')
+      .get(session.id)).toEqual({ status: 'complete' }), { timeout: 10_000 })
   })
 })

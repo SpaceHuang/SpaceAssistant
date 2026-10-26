@@ -78,6 +78,7 @@ export function createSessionTurnRuntime(storage: SessionStorage, options: Omit<
 /** SQLite composition root. Consumers receive bound ports and never receive the database handle. */
 export function createSqliteSessionStorage(db: AppDatabase, options: {
   prepareProjection?: NonNullable<SessionStorage['prepareProjection']>
+  requestBodySourceBackfill?: () => void
   projectionBlobRoot?: string
   getTurnRuntime?: () => import('../turnRuntime').TurnRuntime
   getWorkDirForSession?: (sessionId: string) => string | undefined
@@ -235,7 +236,8 @@ export function createSqliteSessionStorage(db: AppDatabase, options: {
   const requestChatBodyV1: NonNullable<SessionStorage['requestChatBodyV1']> = async ({ sessionId }) => {
     await ensureChatBodyV1({ sessionId })
   }
-  const execution = createSessionExecutionStore(db, queries, { getTurnRuntime: options.getTurnRuntime, ensureChatBodyV1 })
+  const execution = createSessionExecutionStore(db, queries, { getTurnRuntime: options.getTurnRuntime, ensureChatBodyV1,
+    requestBodySourceBackfill: options.requestBodySourceBackfill })
   const contexts = createSessionStorageContextRouter(async ({ sessionId, isBusy }) => {
     const session = queries.readSession(sessionId)
     const workDir = options.getWorkDirForSession?.(sessionId)
@@ -435,6 +437,7 @@ export function createSqliteSessionStorageHost(db: AppDatabase, input: {
   })
   const storage = createSqliteSessionStorage(db, {
     ...input.storage,
+    requestBodySourceBackfill: () => { lifecycle.requestMaintenance({ reason: 'scope-changed', taskId: 'session-body-source-backfill' }) },
     inspectMaintenance: () => lifecycle.inspectMaintenance(),
     prepareProjection: async (request) => {
       await lifecycle.prepareProjection(request)

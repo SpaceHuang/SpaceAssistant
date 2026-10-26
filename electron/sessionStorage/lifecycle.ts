@@ -27,7 +27,8 @@ export function createStorageLifecycleControl(input: {
     if (!record.handle) return false
     return true
   }
-  const select = (category?: NonNullable<MaintenanceState['category']>) => records.filter((record) => !category || record.task.category === category)
+  const select = (category?: NonNullable<MaintenanceState['category']>, taskId?: string) => records.filter((record) =>
+    (!category || record.task.category === category) && (!taskId || record.task.taskId === taskId))
   return Object.freeze({
     initialize: async ({ signal }: { signal?: AbortSignal } = {}) => {
       if (signal?.aborted) throw signal.reason ?? new Error('ABORTED')
@@ -36,8 +37,8 @@ export function createStorageLifecycleControl(input: {
     },
     requestMaintenance: (request: Parameters<StorageLifecycleControl['requestMaintenance']>[0]) => {
       if (stopped) return { status: 'not-needed' as const }
-      const { category } = request
-      const targets = select(category)
+      const { category, taskId } = request
+      const targets = select(category, taskId)
       if (!targets.length) return { status: 'not-needed' as const }
       const active = targets.filter(({ handle, paused }) => handle && !paused)
       for (const record of active) record.handle?.request?.(request.reason)

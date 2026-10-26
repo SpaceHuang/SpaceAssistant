@@ -44,6 +44,7 @@ export function createTurnRuntimeForSessionExecution(execution: SessionExecution
 export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQueries, options: {
   getTurnRuntime?: () => import('../turnRuntime').TurnRuntime
   ensureChatBodyV1?: (input: { sessionId: string }) => Promise<PreparedChatBodyView>
+  requestBodySourceBackfill?: () => void
 } = {}): SessionExecutionStore {
   // 压缩换入（reopenDatabaseConnection）会整体替换底层 DatabaseSync，门面身份不变；
   // 工厂期捕获连接会在换入后永久失效（database is not open），必须每方法入口现取。
@@ -95,7 +96,7 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
       turnId: input.turn.turnId, history: createSessionHistoryPort(db, input.turn.sessionId) }).prepareTurn(input, coordinator.prepareAtomic),
     claimQueuedTurn: (input) => createSessionCommitService({ sessionId: input.sessionId, invocationId: input.requestId,
       turnId: input.turnId, history: createSessionHistoryPort(db, input.sessionId) }).claimQueuedTurn(input, coordinator.claimQueuedAtomic),
-    historyFor: ({ sessionId }) => createSessionHistoryPort(db, sessionId),
+    historyFor: ({ sessionId }) => createSessionHistoryPort(db, sessionId, options.requestBodySourceBackfill),
     acceptPrepared: ({ prepared, lane, config }: { prepared: PreparedIdentity; lane: NonNullable<TurnExecutionConfig['lane']>; config: TurnExecutionConfig }): AcceptedTurn => {
       if (!prepared.userMessage?.id) throw new Error('TURN_USER_MESSAGE_MISSING')
       const transcript = readSessionTranscript(db, prepared.sessionId)
@@ -385,14 +386,19 @@ export function createSessionExecutionStore(db: AppDatabase, queries?: SessionQu
   return frozenExecution
 }
 
-function createSessionHistoryPort(db: AppDatabase, sessionId: string): SessionHistoryPort {
+function createSessionHistoryPort(db: AppDatabase, sessionId: string, requestBodySourceBackfill?: () => void): SessionHistoryPort {
   if (!sessionId.trim()) throw new Error('SESSION_SCOPE_REQUIRED')
   // 短寿命即用即抛：本 port 由调用方按次现建（historyFor 每次 createSessionHistoryPort），
   // 不跨压缩换入持有，故此处函数体内现取连接即安全；勿将其提升为长寿命单例。
   const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, sessionId)
   return Object.freeze({
     listInvocationIds: () => history.listInvocationIdsForSession(sessionId),
-    appendBatch: (events: Parameters<HistoryPort['appendBatch']>[0], expectedVersion: number, transcriptCommit?: Parameters<HistoryPort['appendBatch']>[2]) => history.appendBatch(events, expectedVersion, transcriptCommit),
+    appendBatch: async (events: Parameters<HistoryPort['appendBatch']>[0], expectedVersion: number,
+      transcriptCommit?: Parameters<HistoryPort['appendBatch']>[2]) => {
+      const result = await history.appendBatch(events, expectedVersion, transcriptCommit)
+      try { requestBodySourceBackfill?.() } catch { /* Maintenance scheduling must not alter the committed write. */ }
+      return result
+    },
     read: (invocationId: string) => history.read(invocationId),
     readLatestInvocationForSession: async (requestedSessionId: string, options?: { excludeInvocationId?: string; excludeInvocationIds?: readonly string[] }) => {
       if (requestedSessionId !== sessionId) throw new Error('SESSION_SCOPE_MISMATCH')

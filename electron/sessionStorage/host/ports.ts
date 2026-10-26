@@ -29,7 +29,7 @@ export type MaintenanceState = Readonly<{
 
 export interface StorageLifecycleControl {
   initialize(input?: { signal?: AbortSignal }): Promise<void>
-  requestMaintenance(input: { reason: MaintenanceReason; category?: MaintenanceClass }): { status: 'scheduled' | 'coalesced' | 'not-needed' }
+  requestMaintenance(input: { reason: MaintenanceReason; category?: MaintenanceClass; taskId?: string }): { status: 'scheduled' | 'coalesced' | 'not-needed' }
   prepareProjection(input: ProjectionPreparationRequest): Promise<void>
   allowBackgroundWork(): void
   pauseMaintenance(input?: { category?: MaintenanceClass }): Promise<void>

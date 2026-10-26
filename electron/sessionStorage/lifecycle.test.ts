@@ -86,6 +86,21 @@ describe('host-only storage lifecycle control', () => {
     expect(request).toHaveBeenCalledWith('capacity-pressure')
   })
 
+  it('can wake one derived-index task without waking unrelated projection work', () => {
+    const bodySourceRequest = vi.fn()
+    const projectionRequest = vi.fn()
+    const lifecycle = createStorageLifecycleControl({ tasks: [
+      { taskId: 'session-body-source-backfill', category: 'derived-index', start: () => ({ stop() {}, quiesce: async () => undefined, request: bodySourceRequest }) },
+      { taskId: 'session-projection-build', category: 'derived-index', start: () => ({ stop() {}, quiesce: async () => undefined, request: projectionRequest }) }
+    ] })
+    lifecycle.allowBackgroundWork()
+
+    expect(lifecycle.requestMaintenance({ reason: 'scope-changed', taskId: 'session-body-source-backfill' })).toEqual({ status: 'coalesced' })
+    expect(bodySourceRequest).toHaveBeenCalledWith('scope-changed')
+    expect(projectionRequest).not.toHaveBeenCalled()
+    void lifecycle.stop({ deadlineMs: 100 })
+  })
+
   it('isolates synchronous start failures and retries only the failed task', async () => {
     vi.useFakeTimers()
     try {
