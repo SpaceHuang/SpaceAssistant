@@ -137,4 +137,31 @@ describe('Wiki command to sourceId integration', () => {
       readFile.mockRestore()
     }
   })
+
+  it('preflights the cumulative scan budget before hashing candidates outside the current batch', async () => {
+    const workDir = temp('wiki-route-bulk-scan-budget-work-')
+    const userDataPath = temp('wiki-route-bulk-scan-budget-data-')
+    const config = { ...DEFAULT_WIKI_CONFIG, maxBatchIngest: 1 }
+    const wikiRoot = path.join(userDataPath, config.rootPath)
+    fs.mkdirSync(wikiRoot, { recursive: true })
+    const lifecycle = createWikiLifecycleController(wikiRoot)
+    await lifecycle.initialize({ fresh: true })
+    await lifecycle.enable()
+    const candidatePaths = Array.from({ length: 6 }, (_, index) => path.join(workDir, `${index}.md`))
+    const validText = Buffer.alloc(9 * 1024 * 1024, 0x61)
+    for (const candidatePath of candidatePaths) {
+      fs.writeFileSync(candidatePath, validText)
+    }
+    const candidatePathSet = new Set(candidatePaths.map(candidatePath => path.resolve(candidatePath)))
+    const readFile = vi.spyOn(fs.promises, 'readFile')
+
+    try {
+      const result = await importAllRawFromWorkDir(workDir, config, { userDataPath })
+
+      expect(result).toMatchObject({ ok: false, error: '可导入文本总量超过 50 MiB，请改用单文件 ingest' })
+      expect(readFile.mock.calls.some(([filePath]) => candidatePathSet.has(path.resolve(String(filePath))))).toBe(false)
+    } finally {
+      readFile.mockRestore()
+    }
+  })
 })

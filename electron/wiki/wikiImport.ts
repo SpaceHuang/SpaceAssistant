@@ -136,30 +136,29 @@ export async function importAllRawFromWorkDir(
       if (candidates.length > 250) return { ok: false, error: '可导入文本超过 250 个，请改用单文件 ingest' }
     }
     candidates.sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    const candidateFiles: Array<{ relativePath: string; absolutePath: string }> = []
+    let scanBytes = 0
+    for (const relativePath of candidates) {
+      const absolutePath = resolveSafePath(workDir, relativePath)
+      const metadata = await getFileMetadata(absolutePath)
+      if (!metadata.isText || metadata.size > 10 * 1024 * 1024) return { ok: false, error: `${relativePath}: 仅支持 10 MiB 内的文本资料` }
+      scanBytes += metadata.size
+      if (scanBytes > 50 * 1024 * 1024) return { ok: false, error: '可导入文本总量超过 50 MiB，请改用单文件 ingest' }
+      candidateFiles.push({ relativePath, absolutePath })
+    }
     const projectId = computeProjectId(workDir)
     const imported = await readBulkImportOrigins(resolveSharedWikiRoot(shared.userDataPath!, wikiConfig), projectId)
     const pendingCandidates: string[] = []
-    for (const candidate of candidates) {
-      const absolute = resolveSafePath(workDir, candidate)
-      const stat = await fs.stat(absolute)
-      const metadata = await getFileMetadata(absolute)
-      if (!metadata.isText || stat.size > 10 * 1024 * 1024) return { ok: false, error: `${candidate}: 仅支持 10 MiB 内的文本资料` }
-      const bytes = await fs.readFile(absolute)
+    for (const candidate of candidateFiles) {
+      const bytes = await fs.readFile(candidate.absolutePath)
       const contentHash = createHash('sha256').update(bytes).digest('hex')
-      if (!imported.get(candidate)?.has(contentHash)) pendingCandidates.push(candidate)
+      if (!imported.get(candidate.relativePath)?.has(contentHash)) pendingCandidates.push(candidate.relativePath)
     }
     candidates.splice(0, candidates.length, ...pendingCandidates)
     const maxBatch = Number.isSafeInteger(wikiConfig.maxBatchIngest) ? Math.max(1, Math.min(250, wikiConfig.maxBatchIngest)) : 10
     const remainingCount = Math.max(0, candidates.length - maxBatch)
     candidates.splice(maxBatch)
     const sources: Array<{ sourceId: string; sourceRevision: number; displayName: string }> = []
-    let totalBytes = 0
-    for (const srcRelPath of candidates) {
-      const absolute = resolveSafePath(workDir, srcRelPath)
-      const stat = await fs.stat(absolute)
-      totalBytes += stat.size
-      if (totalBytes > 50 * 1024 * 1024) return { ok: false, error: '可导入文本总量超过 50 MiB，请改用单文件 ingest' }
-    }
     for (const srcRelPath of candidates) {
       const result = await importRawFromWorkDir(workDir, wikiConfig, srcRelPath, shared, { projectId, relativePath: srcRelPath })
       if (!result.ok) return { ok: false, error: `${srcRelPath}: ${result.error}` }
