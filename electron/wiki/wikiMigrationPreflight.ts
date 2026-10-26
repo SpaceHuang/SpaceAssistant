@@ -20,7 +20,7 @@ export interface WikiMigrationPreflightReport {
   diagnostics: WikiMigrationDiagnostic[]
   manifestHash: string
   writesFiles: false
-  changes?: Array<{ objectKind: string; relativePath: string; oldHash: string; newBytes: string }>
+  changes?: Array<{ objectKind: string; relativePath: string; oldHash: string; oldExists: boolean; newBytes: string }>
   review: { indexNotes: Array<{ sourcePath: string; targetTitle: string; content: string }>; unclassifiedIndexContent: Array<{ sourcePath: string; content: string }>; readonlyLogArchives: Array<{ sourcePath: string; archivePath: string; sha256: string }> }
 }
 
@@ -127,7 +127,7 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
         const firstCategory = schema.valid ? schema.categories.find(category => category.status === 'active')?.id : undefined
         if (!firstCategory) { diagnostics.push({ code: 'wiki-migration-index-note-category-missing', paths: [normalized], message: 'No active category is available for the migrated index note.' }); continue }
         const body = `${serializeWikiPageMarker({ pageId, categoryId: firstCategory, summary: '', parentPageId: null, sourceRefs: [], revision: 1 })}\n# ${note.targetTitle}\n\n${note.content.trim()}\n`
-        changes.push({ objectKind: 'index-note', relativePath: targetPath, oldHash: sha(''), newBytes: body })
+        changes.push({ objectKind: 'index-note', relativePath: targetPath, oldHash: sha(''), oldExists: false, newBytes: body })
       }
       if (indexReview.unclassified.length) diagnostics.push({ code: 'wiki-migration-index-content-unclassified', paths: [normalized], message: 'Some index content could not be safely classified as generated navigation or a note.' })
       continue
@@ -136,7 +136,7 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
       if (!file.content.trim() || isGeneratedWikiLog(file.content)) continue
       const archivePath = `.wiki-service/migrations/history/${sha(normalized).slice(0, 12)}-${pathSafeBase(normalized)}`
       review.readonlyLogArchives.push({ sourcePath: normalized, archivePath, sha256 })
-      changes.push({ objectKind: 'legacy-log-archive', relativePath: archivePath, oldHash: sha(''), newBytes: file.content })
+      changes.push({ objectKind: 'legacy-log-archive', relativePath: archivePath, oldHash: sha(''), oldExists: false, newBytes: file.content })
       continue
     }
     if (kind === 'raw') continue
@@ -168,13 +168,13 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
     const pageId = `page-${sha(normalized).slice(0, 20)}`
     const marker: WikiPageMarker = { pageId, categoryId, summary: '', parentPageId: null, sourceRefs: [], revision: 1 }
     const body = `${serializeWikiPageMarker(marker)}\n${file.content.replace(/^\s+/, '')}`
-    changes.push({ objectKind: 'page', relativePath: normalized, oldHash: sha256, newBytes: body })
+    changes.push({ objectKind: 'page', relativePath: normalized, oldHash: sha256, oldExists: true, newBytes: body })
   }
   if (!parsedSchema.valid && legacyRows.length > 0) {
     const categoryBlock = `<!-- wiki-categories:start -->\n${JSON.stringify({ formatVersion: 1, categories: categories.map(({ categoryId, legacyName, description, status }) => ({ id: categoryId, name: legacyName, description, status })) }, null, 2)}\n<!-- wiki-categories:end -->`
     const rules = input.schema.replace(/^## 页面类型\s*$[\s\S]*?(?=^##\s|$(?!\n))/m, '').trim()
     const newBytes = `${rules}\n\n${categoryBlock}\n`
-    changes.push({ objectKind: 'schema', relativePath: 'SCHEMA.md', oldHash: sha(input.schema), newBytes })
+    changes.push({ objectKind: 'schema', relativePath: 'SCHEMA.md', oldHash: sha(input.schema), oldExists: true, newBytes })
   }
   const pageTitles = new Map<string, string[]>()
   for (const file of input.files) {
@@ -215,9 +215,9 @@ export function buildWikiMigrationPreflight(input: { schema: string; files: Arra
     ['wiki/log.md', 'log-projection', buildWikiLog([])],
   ] as const) {
     const existing = input.files.find(file => normalizeWikiRelativePath(file.path) === relativePath)
-    if (existing && existing.content !== newBytes) changes.push({ objectKind, relativePath, oldHash: sha(existing.content), newBytes })
+    if (existing && existing.content !== newBytes) changes.push({ objectKind, relativePath, oldHash: sha(existing.content), oldExists: true, newBytes })
   }
-  const manifestHash = sha(JSON.stringify({ files: files.map(({ path, sha256 }) => [path, sha256]), changes: changes.map(({ relativePath, oldHash, newBytes }) => [relativePath, oldHash, sha(newBytes)]), review }))
+  const manifestHash = sha(JSON.stringify({ files: files.map(({ path, sha256 }) => [path, sha256]), changes: changes.map(({ relativePath, oldHash, oldExists, newBytes }) => [relativePath, oldHash, oldExists, sha(newBytes)]), review }))
   return { categories, files, diagnostics, manifestHash, writesFiles: false, changes, review }
 }
 

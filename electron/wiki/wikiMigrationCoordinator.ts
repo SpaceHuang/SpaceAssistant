@@ -3,7 +3,7 @@ import { createWikiLifecycleController } from './wikiLifecycle'
 import { createWikiMigrationJournal, type WikiMigrationManifest } from './wikiMigrationJournal'
 import { scanWikiMigrationPreflight, type WikiMigrationPreflightReport } from './wikiMigrationPreflight'
 
-export interface WikiMigrationChange { objectKind: string; relativePath: string; newBytes: Buffer }
+export interface WikiMigrationChange { objectKind: string; relativePath: string; expectedOldHash: string; expectedOldExists: boolean; newBytes: Buffer }
 
 /** facts / lifecycle invariant: only a confirmed preflight hash may cross the migration barrier. */
 export function createWikiMigrationCoordinator(wikiRoot: string) {
@@ -29,7 +29,8 @@ export function createWikiMigrationCoordinator(wikiRoot: string) {
       if (freshReport.manifestHash !== input.preflightHash) throw new Error('wiki-migration-preflight-stale')
       const snapshot = await lifecycle.read()
       if (snapshot.lifecycle !== 'initializing') throw new Error('wiki-migration-lifecycle-invalid')
-      const changes = (report.changes ?? []).map(change => ({ objectKind: change.objectKind, relativePath: change.relativePath, newBytes: Buffer.from(change.newBytes) }))
+      const changes = (report.changes ?? []).map(change => ({ objectKind: change.objectKind, relativePath: change.relativePath,
+        expectedOldHash: change.oldHash, expectedOldExists: change.oldExists, newBytes: Buffer.from(change.newBytes) }))
       if (!changes.length) throw new Error('wiki-migration-plan-empty')
       const manifest = await journal.prepare(changes)
       await lifecycle.beginMigration(input.preflightHash, manifest.migrationId)

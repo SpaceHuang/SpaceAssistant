@@ -30,6 +30,9 @@ describe('Wiki migration coordinator', () => {
     const report = await coordinator.preflight()
     const manifest = await coordinator.migrate({ preflightHash: report.manifestHash, confirmedPreflightHash: report.manifestHash })
     expect(manifest.status).toBe('completed')
+    expect(manifest.entries.map(({ relativePath, oldHash, oldExists }) => [relativePath, oldExists,
+      oldExists ? oldHash : createHash('sha256').update('').digest('hex')])).toEqual(
+      report.changes?.map(({ relativePath, oldHash, oldExists }) => [relativePath, oldExists, oldHash]))
     expect(await readFile(path.join(root, 'SCHEMA.md'), 'utf8')).toContain('wiki-categories:start')
     expect(await readFile(path.join(root, 'wiki/entities/old.md'), 'utf8')).toContain('wiki-page:start')
     expect(await lifecycle.read()).toMatchObject({ lifecycle: 'domain_ready', preflightHash: report.manifestHash })

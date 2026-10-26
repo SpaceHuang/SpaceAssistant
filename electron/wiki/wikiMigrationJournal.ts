@@ -31,15 +31,25 @@ export function createWikiMigrationJournal(options: { store: WikiFileStore; mark
   const lockPath = `${options.store.root}/.wiki-domain-lock`
 
   return {
-    prepare(changes: Array<{ objectKind: string; relativePath: string; newBytes: Buffer }>): Promise<WikiMigrationManifest> {
+    prepare(changes: Array<{ objectKind: string; relativePath: string; expectedOldHash: string; expectedOldExists: boolean; newBytes: Buffer }>): Promise<WikiMigrationManifest> {
       return withWikiWriteMutex(lockPath, async () => {
         if (!changes.length) throw new WikiMigrationJournalError('wiki-migration-plan-empty')
         const migrationId = randomUUID()
-        const entries: WikiMigrationEntry[] = []
+        const preparedChanges: Array<{ index: number; change: typeof changes[number]; relativePath: string; oldSnapshot: Awaited<ReturnType<typeof currentFile>> }> = []
+        const targets = new Set<string>()
         for (const [index, change] of changes.entries()) {
           const relativePath = normalizeTarget(options.store, change.relativePath)
-          if (entries.some(entry => entry.relativePath === relativePath)) throw new WikiMigrationJournalError('wiki-migration-plan-duplicate-target')
+          if (targets.has(relativePath)) throw new WikiMigrationJournalError('wiki-migration-plan-duplicate-target')
+          targets.add(relativePath)
           const oldSnapshot = await currentFile(options.store, relativePath)
+          const oldHash = oldSnapshot ? hash(oldSnapshot.bytes) : null
+          if ((oldSnapshot !== undefined) !== change.expectedOldExists || (change.expectedOldExists && oldHash !== change.expectedOldHash)) {
+            throw new WikiMigrationJournalError('wiki-migration-target-changed')
+          }
+          preparedChanges.push({ index, change, relativePath, oldSnapshot })
+        }
+        const entries: WikiMigrationEntry[] = []
+        for (const { index, change, relativePath, oldSnapshot } of preparedChanges) {
           const oldBytes = oldSnapshot?.bytes
           const stagingPath = `.wiki-service/migrations/${migrationId}/staging/${index}.payload`
           await options.store.writeImmutable(stagingPath, change.newBytes)
@@ -47,7 +57,7 @@ export function createWikiMigrationJournal(options: { store: WikiFileStore; mark
             objectKind: change.objectKind,
             relativePath,
             oldExists: !!oldBytes,
-            oldHash: oldBytes ? hash(oldBytes) : null,
+            oldHash: oldBytes === undefined ? null : hash(oldBytes),
             newHash: hash(change.newBytes),
             stagingPath,
             step: 'pending',

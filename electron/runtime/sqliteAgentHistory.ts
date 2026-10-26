@@ -894,7 +894,7 @@ export class SqliteAgentHistory implements HistoryPort {
           throw new HistoryCorruptionError(event.invocationId, 'approval resolution requires an approved boolean')
         }
         if (payload.outcome !== undefined) {
-          const outcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled']
+          const outcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled', 'invalidated']
           if (typeof payload.outcome !== 'string' || !outcomes.includes(payload.outcome) || payload.approved !== (payload.outcome === 'approved')) {
             throw new HistoryCorruptionError(event.invocationId, 'approval outcome conflicts with approved boolean')
           }
@@ -1000,7 +1000,8 @@ export class SqliteAgentHistory implements HistoryPort {
         if (payload.approvalId !== approval.approvalId || typeof payload.approved !== 'boolean') {
           throw new HistoryCorruptionError(event.invocationId, `canonical approval resolution identity or outcome is invalid: ${event.eventId}`)
         }
-        approval.approved = payload.approved
+        if (payload.outcome === 'invalidated') toolApproval.delete(payload.toolCallId)
+        else approval.approved = payload.approved
       }
     }
     return state
@@ -1818,7 +1819,7 @@ export class SqliteAgentHistory implements HistoryPort {
         } else if (event.kind === 'approval-resolved' && typeof payload?.toolCallId === 'string') {
           const waiting = approvalWaits.get(payload.toolCallId)
           if (!waiting) continue // Legacy approval lifecycle has no card metadata to rebuild.
-          const validOutcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled']
+          const validOutcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled', 'invalidated']
           if (typeof payload.approved !== 'boolean' || typeof payload.outcome !== 'string' || !validOutcomes.includes(payload.outcome) ||
             typeof payload.settledAt !== 'number' || !Number.isFinite(payload.settledAt) ||
             payload.approved !== (payload.outcome === 'approved') ||
@@ -1829,7 +1830,7 @@ export class SqliteAgentHistory implements HistoryPort {
           approval.status = payload.outcome === 'approved' ? 'approved'
             : payload.outcome === 'timeout' ? 'timed-out'
               : payload.outcome === 'unavailable' ? 'unavailable'
-                : payload.outcome === 'cancelled' ? 'cancelled' : 'denied'
+                : payload.outcome === 'cancelled' || payload.outcome === 'invalidated' ? 'cancelled' : 'denied'
           approval.settledAt = payload.settledAt
           approval.revision = 2
           if (typeof payload.cause === 'string') approval.cause = payload.cause as NonNullable<typeof approval.cause>

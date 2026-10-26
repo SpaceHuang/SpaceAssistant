@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -141,7 +142,8 @@ describe('wiki review recovery regressions', () => {
     await lifecycle.initialize()
     await store.write('wiki/legacy.md', 'before migration')
     const journal = createWikiMigrationJournal({ store })
-    const manifest = await journal.prepare([{ objectKind: 'page', relativePath: 'wiki/legacy.md', newBytes: Buffer.from('migrated') }])
+    const expectedOldHash = createHash('sha256').update('before migration').digest('hex')
+    const manifest = await journal.prepare([{ objectKind: 'page', relativePath: 'wiki/legacy.md', expectedOldHash, expectedOldExists: true, newBytes: Buffer.from('migrated') }])
     await lifecycle.beginMigration('preflight-hash', manifest.migrationId)
     await journal.apply(manifest.migrationId)
     await store.write('wiki/legacy.md', 'external drift after completion')
