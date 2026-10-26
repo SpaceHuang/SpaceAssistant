@@ -1,7 +1,17 @@
 # P2-03 正文块与目录候选格式
 
 日期：2026-10-27  
-范围：测试原型与既有性能证据；不创建生产文件格式、数据库表或迁移。
+范围：test-only 格式原型、用户决策记录与生产契约；本阶段不创建生产数据库表或迁移。
+
+## D-3 已批准契约
+
+用户选择 A：增加持久定位记录，并接受旧会话首次在后台分段回填；回填完成前可能等消息，但 UI 主线程保持响应，且不能返回部分定位页。
+
+- SQLite v116 派生状态：`session_body_source_state` 保存单调 source revision、回填状态和 checkpoint；`session_body_source_manifest` 保存 invocation 级依赖清单引用与 watermark；`session_message_body_locator` 以 `(session_id,message_id)` 唯一定位单消息正文片段；`session_message_body_source_event` 记录完整 reducer 来源事件坐标和摘要，并关联同 revision 的 invocation manifest。按 `(session_id,sequence)` 与 message ID 建索引。
+- 文件 blob 保存独立正文片段、共享 invocation 依赖清单和按页正文块；SQLite 只保存 locator、长度、摘要和引用，避免把大正文块写入 WAL。片段先在事务外 staging/校验，再与 canonical event 引用和 source revision 在同一 SQLite 事务提交。同步 append helper 的直接调用者必须在事务前准备片段；不含正文的事件显式走空 locator 分支。
+- History event insert/update/delete、stream insert/update/delete（含 owner/schema/version）及 message identity/body revision trigger 推进 canonical `source_revision` 并置 locator 状态为 pending。locator/checkpoint 自身写入不推进来源 revision。发布/回填必须匹配 revision、generation、History watermark 与 reducer 规格版本。回填以安全 checkpoint 分批提交，来源 revision 变化时丢弃旧批次并重扫；仅在尾部校验覆盖、唯一性、摘要和完整 reducer 对拍后置 `complete`。
+- 磁盘 schema 版本从 115 升至 116，DDL 使用现有迁移事务。旧二进制不能打开 v116 数据库；回退用未升级数据库副本或迁移前备份。派生表可删除重建，canonical History 与 spill 不改写。
+- 此决定关闭 P2-03 的人类决策等待；迁移 SQL、触发器和实际 staging API 仍属于 P3/P4 的代码验收，不在此文档宣称已实现。
 
 ## 候选正文块
 
@@ -50,13 +60,13 @@
 | History source spill 缺失、长度/摘要不符或依赖清单不完整 | 不返回派生正文 | 保持不可用并记录稳定内部失败类 | 原 History reader 同样必须校验；若 source 已损坏则维持当前错误，不能拿旧镜像补正文 |
 | 文件/数据库暂时不可读 | 不返回部分页 | 按现有维护重试策略重试，不把瞬时失败标永久损坏 | 通过现有 storage 错误通路返回 |
 
-以上是 P2 候选契约，不新增 IPC 错误或用户文案；最终是否可以对所有缺索引会话走旧 reader，仍需按 D-3 选择确认。任何回退都不能绕过 canonical spill 的长度/摘要检查。
+以上契约不新增 IPC 错误或用户文案。未完成索引的页面按 D-3=A 等待后台回填，必要时调用现有权威 reader；任何回退都不能绕过 canonical spill 的长度/摘要检查。
 
 ## Schema 与包回退边界
 
 当前代码的 `DB_SCHEMA_VERSION` 为 115（`electron/database/schema.ts`）；`runMigrations` 会在磁盘版本高于当前二进制支持版本时抛 `DatabaseUpgradeRequiredError`（`electron/database/migrations.ts`）。因此 locator 状态若落 SQLite，候选迁移至少是 v115→v116，属于前向迁移：旧包不能继续打开升级后的同一数据库。P4 回退必须启动未升级数据库副本或恢复迁移前备份；“旧二进制忽略新表即可降级”与当前实现冲突。
 
-候选迁移只允许新增派生 locator / source-revision 状态及必要索引/触发器，不改写或删除 `messages`、canonical History、spill 与旧读表；DDL 在现有 `runInTransaction` 里原子执行，历史回填不在启动迁移事务内运行。回退只需清理新派生状态并丢弃新缓存文件，权威源保持可由旧路径读取。具体表布局、外键/触发器列表、v116 迁移测试和旧包副本演练仍须在 D-3=A 后冻结；此处没有执行 schema 变更。
+迁移只新增上述派生 locator/source-revision 状态及必要索引/触发器，不改写或删除 `messages`、canonical History、spill 与旧读表；DDL 在现有 `runInTransaction` 里原子执行，历史回填不在启动迁移事务内运行。回退只清理新派生状态并丢弃新缓存文件，权威源保持可由旧路径读取。v116 迁移测试和旧包副本演练仍未执行。
 
 ## 原型验证
 
@@ -67,4 +77,4 @@ npm exec -- vitest run electron/sessionStorage/pageBodyReadPrototype.test.ts --r
 1 file passed; 11 passed; 0 failed; 0.60s
 ```
 
-这仍是内存数据结构原型，未接 SQLite、真实文件系统发布、GC、并发 History 写入或 source locator table；C4a 的来源定位全格式矩阵尚未通过。256 KiB/8 条和 fanout 8 必须在生产 block store 性能测试后冻结，不能由本原型直接带入生产常量。D-3 未获批准前，以上发布/迁移契约仅作候选方案。
+这仍是内存数据结构原型，未接 SQLite、真实文件系统发布、GC、并发 History 写入或 source locator table。C4a 的 test-only 来源定位格式矩阵通过；生产存储与并发写入仍由 C4/P3 验证。256 KiB/8 条和 fanout 8 必须在生产 block store 性能测试后冻结，不能由本原型直接带入生产常量。
