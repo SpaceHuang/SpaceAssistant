@@ -152,6 +152,12 @@ export function ChatView() {
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const viewportRef = useRef<ChatMessageViewportHandle>(null)
   const stickToBottomRef = useRef(true)
+  const displayRequestGenerationRef = useRef(store.getState().chat.displayGeneration)
+  const nextDisplayRequestGeneration = useCallback(() => {
+    const next = Math.max(displayRequestGenerationRef.current, store.getState().chat.displayGeneration) + 1
+    displayRequestGenerationRef.current = next
+    return next
+  }, [])
   const pendingSessionSwitchRenderTraceRef = useRef<{
     metadata: NonNullable<ReturnType<typeof readSessionSwitchTraceMetadata>>; pageSize: number; storeCommitMs: number; dispatchCompletedAt: number
   } | null>(null)
@@ -215,11 +221,7 @@ export function ChatView() {
     viewportRef.current?.scrollToBottom('smooth')
   }, [])
 
-  /**
-   * 消息页统一入口：终态失败原因只存在主进程 turn 记录里，重开页面/切换会话拿不到 projection 事实，
-   * 所以每次拉页都按 assistantMessageId 回查一次，历史失败气泡才不会只剩通用提示。
-   * 回溯按 messageId 归并，晚到的结果也不会串到别的会话。
-   */
+  /** Fetch page data only; failure diagnostics are requested after the page has been committed. */
   const fetchMessagePage = useCallback(
     async (payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
       const requestStartedAt = performance.now()
@@ -233,33 +235,37 @@ export function ChatView() {
         throw error
       }
       const pageRequestMs = performance.now() - requestStartedAt
-      const failureReasonStartedAt = performance.now()
-      let reasons: Awaited<ReturnType<typeof loadTurnFailureReasons>>
-      try {
-        reasons = await loadTurnFailureReasons(page.entries.map((entry) => entry.message))
-      } catch (error) {
-        const metadata = readSessionSwitchTraceMetadata(page)
-        if (metadata) emitRendererSessionSwitchTrace({ metadata, outcome: 'error', pageSize: page.entries.length,
-          stages: [
-            { name: 'renderer-page-request', durationMs: pageRequestMs, outcome: 'ok' },
-            { name: 'failure-reason-hydration', durationMs: performance.now() - failureReasonStartedAt, outcome: 'error' }
-          ] })
-        throw error
-      }
-      const failureReasonHydrationMs = performance.now() - failureReasonStartedAt
       const traceMetadata = readSessionSwitchTraceMetadata(page)
       if (traceMetadata) emitRendererSessionSwitchTrace({
         metadata: traceMetadata, outcome: 'ok', pageSize: page.entries.length,
-        stages: [
-          { name: 'renderer-page-request', durationMs: pageRequestMs, outcome: 'ok' },
-          { name: 'failure-reason-hydration', durationMs: failureReasonHydrationMs, outcome: 'ok' }
-        ]
+        stages: [{ name: 'renderer-page-request', durationMs: pageRequestMs, outcome: 'ok' }]
       })
-      if (Object.keys(reasons).length > 0) dispatch(mergeTurnFailures(reasons))
       return page
     },
-    [dispatch]
+    []
   )
+
+  const hydratePageFailureReasons = useCallback(async (
+    page: Awaited<ReturnType<typeof window.api.chatGetMessagePage>>,
+    targetSessionId: string,
+    displayRequestGeneration: number
+  ) => {
+    const startedAt = performance.now()
+    let reasons: Awaited<ReturnType<typeof loadTurnFailureReasons>> = {}
+    let outcome: 'ok' | 'error' = 'ok'
+    try {
+      reasons = await loadTurnFailureReasons(page.entries.map((entry) => entry.message))
+    } catch {
+      outcome = 'error'
+    }
+    const metadata = readSessionSwitchTraceMetadata(page)
+    if (metadata) emitRendererSessionSwitchTrace({ metadata, outcome, pageSize: page.entries.length,
+      stages: [{ name: 'failure-reason-hydration', durationMs: performance.now() - startedAt, outcome }] })
+    if (Object.keys(reasons).length === 0) return
+    const current = store.getState().chat
+    if (current.currentSessionId !== targetSessionId || current.displayGeneration !== displayRequestGeneration) return
+    dispatch(mergeTurnFailures({ sessionId: targetSessionId, displayGeneration: displayRequestGeneration, reasons }))
+  }, [dispatch])
 
   useEffect(() => {
     if (!sessionId) {
@@ -267,7 +273,8 @@ export function ChatView() {
       return
     }
     let cancelled = false
-    const generation = beginContextSummarySession(sessionId)
+    const summaryGeneration = beginContextSummarySession(sessionId)
+    const generation = nextDisplayRequestGeneration()
     void (async () => {
       const page = await fetchMessagePage({ sessionId, limit: SESSION_SWITCH_MESSAGE_PAGE_SIZE })
       if (cancelled) return
@@ -286,10 +293,11 @@ export function ChatView() {
         metadata: renderTraceMetadata, pageSize: page.entries.length, storeCommitMs, dispatchCompletedAt: performance.now()
       }
       initLiveSessionFromStore(sessionId)
+      void hydratePageFailureReasons(page, sessionId, generation)
       try {
         const baseline = await window.api.chatGetContextHistorySummaryBaseline({ sessionId })
         if (cancelled) return
-        applyContextSummaryDbBaseline(sessionId, generation, baseline.entries)
+        applyContextSummaryDbBaseline(sessionId, summaryGeneration, baseline.entries)
         bumpContextSummary()
       } catch {
         // 校准失败保留空 base + 后续 override
@@ -298,7 +306,7 @@ export function ChatView() {
     return () => {
       cancelled = true
     }
-  }, [sessionId, dispatch, bumpContextSummary, fetchMessagePage])
+  }, [sessionId, dispatch, bumpContextSummary, fetchMessagePage, hydratePageFailureReasons, nextDisplayRequestGeneration])
 
   useLayoutEffect(() => {
     const pending = pendingSessionSwitchRenderTraceRef.current
@@ -320,7 +328,9 @@ export function ChatView() {
 
   const loadPreviousPage = useCallback(async () => {
     if (!sessionId) return { loaded: false as const, beforeSequence: null as number | null }
-    return loadPreviousDisplayPage({
+    const displayRequestGeneration = store.getState().chat.displayGeneration
+    let loadedPage: Awaited<ReturnType<typeof window.api.chatGetMessagePage>> | undefined
+    const result = await loadPreviousDisplayPage({
       sessionId,
       getState: () => {
         const s = store.getState().chat
@@ -332,11 +342,17 @@ export function ChatView() {
           displayGeneration: s.displayGeneration
         }
       },
-      fetchPage: (payload) => fetchMessagePage(payload),
+      fetchPage: async (payload) => {
+        const page = await fetchMessagePage(payload)
+        loadedPage = page
+        return page
+      },
       setLoading: (loading) => dispatch(setLoadingBefore(loading)),
       prepend: (payload) => dispatch(prependDisplayPage(payload))
     })
-  }, [sessionId, dispatch, fetchMessagePage])
+    if (result.loaded && loadedPage) void hydratePageFailureReasons(loadedPage, sessionId, displayRequestGeneration)
+    return result
+  }, [sessionId, dispatch, fetchMessagePage, hydratePageFailureReasons])
 
   useEffect(() => {
     if (!sessionId) {
@@ -394,8 +410,10 @@ export function ChatView() {
   const reloadSessionMessagesFromDb = useCallback(
     async (targetSessionId: string) => {
       if (store.getState().chat.currentSessionId !== targetSessionId) return
-      const generation = store.getState().chat.displayGeneration + 1
+      const generation = nextDisplayRequestGeneration()
       const page = await fetchMessagePage({ sessionId: targetSessionId, limit: 60 })
+      const current = store.getState().chat
+      if (current.currentSessionId !== targetSessionId || current.displayGeneration >= generation) return
       dispatch(
         setDisplayPage({
           entries: page.entries,
@@ -404,8 +422,11 @@ export function ChatView() {
           generation
         })
       )
+      if (store.getState().chat.displayGeneration === generation) {
+        void hydratePageFailureReasons(page, targetSessionId, generation)
+      }
     },
-    [dispatch, fetchMessagePage]
+    [dispatch, fetchMessagePage, hydratePageFailureReasons, nextDisplayRequestGeneration]
   )
 
   // 偏差 11:入站消息等 Storage 变更统一由失效通知驱动重取(主进程广播 session:<id>:messages);

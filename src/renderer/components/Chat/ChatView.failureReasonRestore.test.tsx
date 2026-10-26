@@ -16,7 +16,7 @@ import {
 } from '../../../shared/domainTypes'
 import { changeAppLocale } from '../../i18n/localeSync'
 import { store } from '../../store'
-import { resetChatUi, setSession } from '../../store/chatSlice'
+import { resetChatUi, setScrollToMessageId, setSession } from '../../store/chatSlice'
 import { setConfig } from '../../store/configSlice'
 import { setSessions } from '../../store/sessionSlice'
 
@@ -192,6 +192,23 @@ describe('ChatView 失败原因回溯', () => {
     expect(await screen.findByText('延迟补齐的具体原因')).toBeDefined()
   })
 
+  it('向前翻页时先 prepend 消息，再等待失败原因补齐', async () => {
+    let resolveReasons!: (value: Array<{ assistantMessageId: string; message: string }>) => void
+    vi.mocked(window.api.chatGetMessagePage).mockImplementation(async ({ beforeSequence }) => beforeSequence === undefined
+      ? { entries: [{ message: userMessage, sequence: 2 }], oldestSequence: 2, hasMoreBefore: true }
+      : { entries: [{ message: failedAssistant, sequence: 1 }], oldestSequence: 1, hasMoreBefore: false })
+    vi.mocked(window.api.chatGetMessageSequence).mockResolvedValue(1)
+    vi.mocked(window.api.chatGetTurnErrors).mockImplementation(() => new Promise((resolve) => { resolveReasons = resolve }))
+    renderChatView()
+
+    expect(await screen.findByText('hello')).toBeDefined()
+    act(() => store.dispatch(setScrollToMessageId(failedAssistant.id)))
+    expect(await screen.findByText('partial')).toBeDefined()
+    expect(window.api.chatGetTurnErrors).toHaveBeenCalledWith({ assistantMessageIds: ['a-failed'] })
+    resolveReasons([{ assistantMessageId: 'a-failed', message: '翻页补齐的具体原因' }])
+    expect(await screen.findByText('翻页补齐的具体原因')).toBeDefined()
+  })
+
   beforeEach(async () => {
     vi.clearAllMocks()
     await changeAppLocale('zh-CN')
@@ -265,7 +282,7 @@ describe('ChatView 失败原因回溯', () => {
     expect(await screen.findByText('第二次 A 的新原因')).toBeDefined()
 
     act(() => resolveFirstA([{ assistantMessageId: 'a-failed', message: '第一次 A 的旧原因' }]))
-    await waitFor(() => expect(store.getState().chat.turnFailures['a-failed']).toBe('第一次 A 的旧原因'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(store.getState().chat.turnFailures['a-failed']).toBe('第二次 A 的新原因')
     expect(screen.queryByText('第一次 A 的旧原因')).toBeNull()
   })
@@ -289,6 +306,9 @@ describe('ChatView 失败原因回溯', () => {
     renderChatView()
 
     expect(await screen.findByText('partial')).toBeDefined()
+    await waitFor(() => expect(window.api.chatGetTurnErrors).toHaveBeenCalledWith({ assistantMessageIds: ['a-failed'] }))
+    expect(await screen.findByText('回复未能完成。你可以重试生成，或基于已有上下文继续对话。')).toBeDefined()
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(screen.queryByText('会话模型「claude-sonnet-4-20250514」当前不可用（未知模型），请在设置中重新选择模型')).toBeNull()
   })
 

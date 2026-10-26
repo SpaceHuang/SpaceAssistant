@@ -125,6 +125,7 @@ export const chatSlice = createSlice({
       }>
     ) {
       const { entries, oldestSequence, hasMoreBefore, generation } = action.payload
+      if (generation < state.displayGeneration) return
       state.displayGeneration = generation
       state.displayEntries = mergeDisplayEntries([], entries)
       state.oldestSequence = oldestSequence
@@ -191,6 +192,7 @@ export const chatSlice = createSlice({
     },
     removeDisplayMessage(state, action: PayloadAction<string>) {
       state.displayEntries = state.displayEntries.filter((e) => e.message.id !== action.payload)
+      delete state.turnFailures[action.payload]
       syncMessagesFromEntries(state)
     },
     patchMessage(state, action: PayloadAction<{ id: string; patch: Partial<Message> }>) {
@@ -203,6 +205,7 @@ export const chatSlice = createSlice({
     },
     removeMessage(state, action: PayloadAction<string>) {
       state.displayEntries = state.displayEntries.filter((m) => m.message.id !== action.payload)
+      delete state.turnFailures[action.payload]
       syncMessagesFromEntries(state)
     },
     setChatStatus(
@@ -245,10 +248,18 @@ export const chatSlice = createSlice({
     ) {
       state.turnFailures[action.payload.messageId] = action.payload.reason
     },
-    /** 重开页面回溯：把主进程按 assistantMessageId 查到的历史原因并入缓存（空白原因不写入） */
-    mergeTurnFailures(state, action: PayloadAction<TurnFailureReasons>) {
-      for (const [messageId, reason] of Object.entries(action.payload)) {
-        if (reason?.trim()) state.turnFailures[messageId] = reason
+    /** 只将当前显示页中当前会话、当前代次的历史失败原因并入缓存。 */
+    mergeTurnFailures(state, action: PayloadAction<{
+      sessionId: string
+      displayGeneration: number
+      reasons: TurnFailureReasons
+    }>) {
+      const { sessionId, displayGeneration, reasons } = action.payload
+      if (state.currentSessionId !== sessionId || state.displayGeneration !== displayGeneration) return
+      const visibleMessages = new Map(state.displayEntries.map(({ message }) => [message.id, message]))
+      for (const [messageId, reason] of Object.entries(reasons)) {
+        const message = visibleMessages.get(messageId)
+        if (message?.sessionId === sessionId && reason?.trim()) state.turnFailures[messageId] = reason
       }
     },
     resetChatUi(state) {

@@ -221,6 +221,14 @@ describe('ChatBubble streaming render', () => {
     expect(screen.getByText(/会话模型「claude-sonnet-4-20250514」当前不可用/)).toBeDefined()
   })
 
+  it('保留很长且没有空格的失败原因，交给失败区换行显示', () => {
+    const longReason = '路径'.repeat(2048)
+    render(<ChatBubble message={assistantMessage({ status: 'failed' })} failureReason={longReason} />)
+
+    const reason = document.querySelector('.chat-message-error__reason')
+    expect(reason?.textContent).toContain(longReason)
+  })
+
   it('凭据读取失败提供直达模型服务设置的入口', () => {
     const onOpenModelSettings = vi.fn()
     render(<ChatBubble message={assistantMessage({ status: 'failed' })} failureReason="LLM_KEY_ACCESS_DENIED" onOpenModelSettings={onOpenModelSettings} />)
